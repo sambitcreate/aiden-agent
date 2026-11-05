@@ -44,3 +44,11 @@ export function getPeerHostManager(): PeerHostManager {
   });
   return current;
 }
+
+/**
+ * The supervisor if something already started it, else undefined. Readers
+ * that must not cause peer traffic (the Dock badge) use this.
+ */
+export function peekPeerHostManager(): PeerHostManager | undefined {
+  return manager;
+}

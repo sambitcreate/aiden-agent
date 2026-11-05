@@ -6,3 +6,7 @@
 - The old text Assistant dock panel was removed on main (Aiden Live orb), so the dock scope parameter was dropped during the 2026-09-26 merge.
 - `use-held-modifier-reveal.ts` + `held-modifier-reveal.ts` replace the sidebar's inline Command-hold effect (500 ms delay, hides on release/blur/visibility change).
 - Coverage: pure decision/modifier unit tests plus the e2e "holding Command reveals chat shortcuts and typing outside a field lands in the composer" in `tests/e2e/chat-shell-interactions.spec.ts`. Source-grep tests from the original PR were removed per AGENTS.md.
+
+## Per-key cost (2026-10-29)
+
+Both global keydown handlers run on every key typed in the composer. Their page checks (dialog/menu/popover `querySelector` searches, `getClientRects`, `closest`) are getters on the context objects, and `decideComposerTypeFocus` / `resolveCommandForKeyEvent` read the event's own facts first, so ordinary typing and unmatched keys never search the page. Keep new expensive checks as getters and after the cheap ones; `composer-type-focus.test.ts` and `command-system-core.test.ts` check that settled keys read none of them.

@@ -61,6 +61,7 @@ function harness(): Harness {
       };
     },
     callTool: async (_params, options) => {
+      options.beforeSend();
       events.push("call");
       requestSignals.push(options.signal);
       assert.equal(options.timeoutMs, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
@@ -146,6 +147,7 @@ test("mutation raw boundary fences and invokes the client exactly once without a
     },
     listTools: async () => ({ tools: [] }),
     callTool: (_params, options) => {
+      options.beforeSend();
       rawCalls += 1;
       h.events.push("raw-client-call");
       assert.equal(options.signal, signal);
@@ -177,7 +179,7 @@ test("mutation raw boundary fences and invokes the client exactly once without a
   );
   assert.equal(
     h.events.indexOf("raw-client-call"),
-    h.events.indexOf("final-authority-ledger-budget-fence") + 1,
+    h.events.lastIndexOf("config-fence") + 1,
   );
 });
 
@@ -267,7 +269,8 @@ test("configuration drift at the immediate raw-call fence prevents dispatch", as
     connect: async () => undefined,
     close: async () => undefined,
     listTools: async () => ({ tools: [] }),
-    callTool: async () => {
+    callTool: async (_params, options) => {
+      options.beforeSend();
       rawCallStarted = true;
       return { content: [] };
     },
@@ -538,6 +541,25 @@ test("isolated child inventory follows pages and rejects credential revocation b
       assert.deepEqual(cursors, [undefined, "next"]);
     }
   }
+});
+
+test("child reads and mutations stop before spending authority on a withdrawn tool", async () => {
+  const h = harness();
+  let revision = 0;
+  const original = h.dependencies.createClient;
+  h.dependencies.createClient = () => ({ ...original(), get inventoryRevision() { return revision; } });
+  const signal = new AbortController().signal;
+  await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies,
+    operation: async (client) => {
+      await client.listTools(signal);
+      revision++;
+      const spend = () => h.events.push("spend");
+      await assert.rejects(client.callTool("lookup", {}, signal, spend), /inventory changed/u);
+      await assert.rejects(client.callToolRaw!("lookup", {}, signal, spend), /inventory changed/u);
+      assert.ok(!h.events.includes("spend"));
+      assert.ok(!h.events.includes("call"));
+    },
+  });
 });
 
 test("child regular and raw calls validate success, preserve server errors and block required tasks", async () => {

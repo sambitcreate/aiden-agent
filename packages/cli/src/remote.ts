@@ -37,6 +37,11 @@ import { nextScheduledRuns, systemTimezone, validateTimezone } from "../../../ma
 import { scheduledSettingsPatch } from "../../../main/services/scheduled-settings-core.js";
 import { createCliGitService } from "./git-commands.ts";
 import { createCliRemoteWorktrees } from "./remote-worktrees.ts";
+import { AidenRemoteHostFeedService } from "../../../main/services/aiden-remote-host-feed.js";
+import { createAidenRemoteHostFeedSource } from "../../../main/services/aiden-remote-host-feed-source.js";
+import { AidenRemoteHostRunService } from "../../../main/services/aiden-remote-host-runs.js";
+import { AidenRemoteServiceError } from "../../../main/services/aiden-remote-errors.js";
+import { liveRunAttention } from "../../../main/services/chat-pending-attention.js";
 
 const BONJOUR_RETRY_MS = 30_000;
 
@@ -190,6 +195,11 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   });
   let botSessions: import("../../../main/services/aiden-remote-bot-session.js").AidenRemoteBotSessionService | undefined;
   let chatApi: Awaited<ReturnType<typeof createCliRemoteChats>> | undefined;
+  // Host-wide runs and the `/host/events` feed for paired desktops, rebuilt with each Remote start as on the desktop.
+  let hostFeed: AidenRemoteHostFeedService | undefined;
+  let hostRuns: AidenRemoteHostRunService | undefined;
+  let detachHostFeed: (() => void) | undefined;
+  const closeHostFeed = () => { detachHostFeed?.(); detachHostFeed = undefined; hostFeed?.close(); hostFeed = undefined; };
   const tailscale = new AidenRemoteTailscaleController(await createSystemTailscaleCommandRunner(), { outcomeStore: {
     begin: (outcome) => state.beginTailscalePendingOutcome(outcome), snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
     commit: (ownership) => state.commitTailscaleOutcome(ownership), clear: () => state.clearTailscalePendingOutcome(),
@@ -203,9 +213,39 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
       await botSessions?.close();
       const botApi = createCliRemoteBots(agentDir, instanceId, bots, chats, chatApi, idempotency, persistIdempotency);
       botSessions = botApi.botSessions;
+      const api = chatApi;
+      hostRuns = new AidenRemoteHostRunService({ registry: chats.runs, now: Date.now, controls: {
+        cancel: (runId) => chats.llmClient.cancelRun(runId),
+        // A phone-owned approval settles through the stream service so its device records stay consistent.
+        approve: ({ chatId, approvalId, decision, scope }) => {
+          // This host keeps no remembered approvals, so only a one-time decision applies.
+          if (scope !== undefined && scope !== "once") throw new AidenRemoteServiceError("invalid_request", "This host only applies one-time approval decisions.", 400);
+          return api.streams.respondApprovalFromHost(chatId, approvalId, decision) || chats.llmClient.approveAsHost(approvalId, decision);
+        },
+        // CLI runs ask no questions and take no input while running.
+        answer: () => "rejected",
+        admitInput: async () => ({ admitted: false, reason: "run_not_active", committed: false }),
+      } });
+      closeHostFeed();
+      const feed = new AidenRemoteHostFeedService({ now: Date.now,
+        attentionSummary: (runId) => { const run = chats.runs.summary(runId); return run ? liveRunAttention(run.chatId, chats.runs)?.summary : undefined; },
+        liveRuns: () => chats.runs.list(),
+        // No live Bot summaries on this host, so Bot rows carry no Needs you, Failed or last reply.
+        source: createAidenRemoteHostFeedSource({ chats: api.chats, listWorkspaces: () => workspaces.application.list(),
+          repositoryIdentity: git.gitCachedRepositoryIdentity, listBots: () => botApi.bots.list() }),
+      });
+      hostFeed = feed;
+      const detachers = [
+        chats.onActivityChange(() => feed.invalidate()),
+        chats.chatStore.onIndexChanged(() => feed.invalidate()),
+        api.onInboxChanged(() => feed.invalidate()),
+        workspaces.configStore.onWorkspacesChanged(() => feed.invalidate()),
+        chats.runs.onChange((summary, removed) => feed.noteRun(summary, removed)),
+      ];
+      detachHostFeed = () => { for (const detach of detachers) detach(); };
       return {
         ...botApi,
-        chats: chatApi.chats, streams: chatApi.streams, models: chatApi.models,
+        chats: chatApi.chats, streams: chatApi.streams, models: chatApi.models, hostFeed: feed, hostRuns,
         schedules: new AidenRemoteScheduleService({ application: scheduleApplication, models: chatApi.models, idempotency, persistIdempotency }),
         workspaceBrowser: browser,
         workspaces: new AidenRemoteWorkspaceService({ application: workspaces.application, browser, idempotency, persistIdempotency }),
@@ -223,13 +263,21 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   });
   return { service, state, workspaces, roots, bots,
     async start() { await service.initialize(); await service.setEnabled(true); const status = await service.status(); if (!status.running) throw new Error(status.error ?? "Remote listeners could not start."); },
-    async stop() { await botSessions?.close(); await chats.stop(); await service.stopAndSettle(); await speech.stop(); await scheduledMcp.close(); if (!options.bots) await bots.stop(); },
+    async stop() { closeHostFeed(); chatApi?.stopInbox(); await botSessions?.close(); await chats.stop(); await service.stopAndSettle(); await speech.stop(); await scheduledMcp.close(); if (!options.bots) await bots.stop(); },
     async command(args: string[]) {
       const [action = "status", value] = args;
       switch (action) {
         case "status": return service.status();
         case "devices": return state.listDevices();
-        case "revoke": { if (!value) throw new Error("Provide a paired device id."); const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, value); await bots.application.revokeNoticeAudience(value); return { revoked }; }
+        case "revoke": {
+          if (!value) throw new Error("Provide a paired device id.");
+          // As on the desktop: drain host-wide and Bot subscriptions before and after the revocation fence; no run is cancelled.
+          const drain = () => { hostFeed?.revokeDevice(value); hostRuns?.revokeDevice(value); botSessions?.revokeDevice(value); };
+          drain();
+          const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, value);
+          drain();
+          await bots.application.revokeNoticeAudience(value); return { revoked };
+        }
         case "pair": { if (value !== "lan" && value !== "tailscale") throw new Error("Usage: remote pair lan|tailscale"); return value === "tailscale" ? beginTailscalePairing(service, tailscale) : service.beginPairing(value); }
         case "pair-status": return service.pairingStatus() ?? { state: "none" };
         case "pair-cancel": { if (!value) throw new Error("Provide a pairing session id."); return { closed: await service.closePairing(value) }; }

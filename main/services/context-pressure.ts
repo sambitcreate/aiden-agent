@@ -159,7 +159,8 @@ async function ambientContextOptions(
   contextWindow: number,
   supportsImages: boolean,
 ): Promise<GenerationContextOptions | undefined> {
-  const chat = await chatStore.get(chatId);
+  // Only the chat's settings are needed here, so leave stored image files unread.
+  const chat = await chatStore.getWithImageReferences(chatId);
   if (!chat) return undefined;
   const { workspaceId, workspace, folderPath, permission, instructionRoots } =
     await currentInstructionScope(chat.workspaceId);
@@ -269,7 +270,8 @@ export async function chatContextPressure(
   chatId: string,
   draft?: { draftText?: string } & DraftContextPressureSelection,
 ): Promise<ChatContextPressureV1 | null> {
-  const chat = await chatStore.get(chatId);
+  // Runs on every draft refresh: read the chat's settings without its image files.
+  const chat = await chatStore.getWithImageReferences(chatId);
   if (!chat) return null;
   // The composer selection leads the persisted chat pair — a model the user
   // just picked in the picker must price the next request before it commits.

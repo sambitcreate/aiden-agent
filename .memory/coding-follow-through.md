@@ -31,3 +31,17 @@ Open: native phone cards, CLI support, hand check on a real Mac.
 ## macOS marker-visibility limitation, 2026-10-26
 
 CI on the countdown PR exposed that Apple platform executables such as `/bin/sh` and `/bin/sleep` hide their launch environment from `ps -E`. The crash-leftover fixture now uses Node descendants, with a readiness signal after installing its TERM handler, to exercise real observable environment markers, late-spawn cleanup and bystander protection. Production ownership checks are unchanged. If the original leader is gone and a descendant's marker is unobservable, recovery skips that descendant and does not retain its record; this pre-existing limitation remains unresolved and is documented in `docs/coding-follow-through.md`. Do not weaken ownership verification to make that case pass.
+
+## Lifecycle fixes — 2026-11-02
+
+Workspace access changes and managed-worktree removal cancel generations, drain command handoffs and checks, and confirm tracked jobs stopped. Active checks, follows and pending notices hold an empty chat in its workspace. Check commands start behind a pipe until the shared process ledger records the group identity. Recovery runs before startup deletes worktrees or admits new processes. PR polls carry an abort signal through the GitHub read and each failed-job log, and legacy follow records resolve ownership from the chat.
+
+The macOS Electron regression suite is `test:e2e:follow-through`. It kills Electron during a real check, verifies recovery in the same profile, exercises a replaced then removed Git worktree, and revokes a restored follow without contacting GitHub.
+
+Check recovery records carry chat and workspace ownership. A failed signal leaves the record in place and workspace revocation or removal fails until Aiden verifies that no live process remains in the group.
+
+Workspace changes suspend polling and interrupt check attempts before draining jobs. They end the follows and clear the checks only after the permission save, workspace removal, or managed Git destructive boundary. Rejected operations resume polling and keep waiting checks. Chat moves verify retained process liveness while configuration admission is held.
+
+A check whose process cleanup cannot be confirmed returns to waiting with its prior attempt count and posts an informational notice without waking the agent. Workspace cleanup still fails until the group exits.
+
+A failed check-ledger admission keeps the shell gated and leaves the check waiting without a wake or a spent attempt. After verified exit, a failed ledger release is logged and the command keeps its actual result. The stale durable entry is rechecked during recovery.

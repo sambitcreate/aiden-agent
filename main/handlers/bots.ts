@@ -1,3 +1,9 @@
+import { registerBotAccessRequestHandlers } from "./bot-access-requests.js";
+import { registerBotPlanHandlers } from "./bot-plans.js";
+import { registerBotAllowedHandlers, registerBotApprovalDecisionHandler } from "./bot-allowed.js";
+import { botPlans } from "../services/bot-plans/plans-main.js";
+import { answerBotAccessRequest } from "../services/bot-runtime/bot-access-requests-main.js";
+import { publicBotApprovalPrompt } from "../services/bot-runtime/bot-approvals.js";
 import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { botApplicationService } from "../services/bot-application-service-main.js";
@@ -14,6 +20,7 @@ import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js"
 import {
   botLiveProjection,
   botSessionRuntime,
+  botAllowList,
   dismissBotConnection,
   grantBotConnection,
 } from "../services/bot-runtime/bot-session-main.js";
@@ -58,7 +65,6 @@ import {
   parseBotId,
   parseBotSend,
   parseBotSessionAction,
-  parseBotApprovalDecision,
   parseBotUpdate,
   parseBotWithdraw,
 } from "./bot-params.js";
@@ -207,13 +213,20 @@ export function registerBotHandlers(): void {
     parseBotId,
   });
   // Bot tool approvals: any desktop window may answer; the first answer wins.
-  ipcMain.handle("bots:approve", async (_event, input: unknown) => {
-    const { waitId, decision } = parseBotApprovalDecision(input);
-    return { decided: botApprovals.decide(waitId, decision) };
+  registerBotApprovalDecisionHandler({ handle: (channel, handler) => ipcMain.handle(channel, handler), approvals: botApprovals });
+  registerBotAllowedHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    allowed: botAllowList,
+    onChange: listener => botAllowList.onChange(listener),
+    botExists: botExistsIn(botApplicationService),
+    broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
   });
-  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)));
+  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)).map(publicBotApprovalPrompt));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
   registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
+  // Access decisions go through the host authorizer; no renderer grants access.
+  registerBotAccessRequestHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), answer: answerBotAccessRequest });
+  registerBotPlanHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), plans: botPlans });
   // Bot hand-off cards: any desktop window may answer; the first answer wins. Open needs the app's own document.
   registerBotHandoffHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

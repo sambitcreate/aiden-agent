@@ -34,3 +34,10 @@ Branch `claude/audit-fix-remote-server`. Fixes audit 07 (the Aiden Remote HTTPS/
 - Progress and stream reconnect backoff waits at least the requested delay.
 - A chat send refused with a retryable 429 is saved under a fresh Idempotency-Key and resent automatically after the delay, at most 3 times in a row; after that, Retry is left to the person. A fresh key is required: these 429s are thrown inside the idempotent action, so the ledger settles the key as rejected and a same-key replay answers `409 internal_error` (`retryable: false`). Possible follow-up: throw them as `AidenOperationNotExecutedError` so the key is released.
 - These 429s all happen before the user message is appended. Turn start reserves attachments (as the Bot message route does) instead of consuming them: every refusal before the append restores them, and the append commits them. A resend under a fresh key can reuse the same attachmentIds.
+
+## Approved pairing withdrawal
+- Desktop pairing-request withdrawal uses the same runtime revocation transaction as Remove access. It closes the withdrawn device’s feeds, streams and relays and preserves the state fence, cleanup retries and other devices.
+- A two-desktop HTTPS regression opens host feeds with delivered grants and verifies a later Bot update reaches only the retained peer.
+
+## Mobile stream retry delay
+- iOS and Android stream recovery retain a server-requested Retry-After minimum across network loss and return. Offline time and device sleep count toward the delay; Android screen wake and activity resume recheck it even if network availability does not change. Normal interrupted-backoff refund and cancellation remain intact.

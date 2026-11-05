@@ -225,6 +225,13 @@ export async function createConfinedWorkspaceFile(
   return { device: header[1]!, inode: header[2]! };
 }
 
+/** Private, exclusive creation for explicitly transferred environment secrets. */
+export async function createPrivateConfinedWorkspaceFile(root: ManagedWorktreeRootIdentity, relativePath: string, content: Buffer, signal?: AbortSignal): Promise<void> {
+  if (content.length > 128 * 1024) throw new ManagedWorktreeFileIoError("invalid_input");
+  const output = await runConfinedFile(["create-private", root.path, root.device, root.inode, relativePath, String(content.length)], signal, content);
+  if (!/^c ([0-9]+) ([0-9]+)\n$/u.test(output.toString("ascii"))) throw new ManagedWorktreeFileIoError("io_failed");
+}
+
 /**
  * Create or replace a regular file beneath `root`. The helper walks every
  * component with descriptor-relative, no-follow opens (creating missing

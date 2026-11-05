@@ -10,6 +10,7 @@
 // rejects the wait with the abort reason, so nothing is recorded. After a quit
 // or crash, Resume asks again under the same `waitId`.
 
+import type { BrowserApprovalTarget } from "../browser/approval.js";
 import {
   BOT_HANDOFF_RESULT_ENTRY_KIND,
   botHandoffAnswerOf,
@@ -22,6 +23,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { BotRuleHandoffRecord, BotRuleHandoffRequest, BotRuleHandoffRowTarget } from "./bot-extension.js";
 
 export interface BotHandoffRequest extends BotPendingHandoff {
+  browserTarget?: Readonly<BrowserApprovalTarget>;
   signal: AbortSignal | undefined;
 }
 
@@ -39,6 +41,7 @@ export function ruleHandoffRequest(request: BotRuleHandoffRequest, target?: BotH
     kind: "action",
     action: request.action,
     why: request.why,
+    ...(request.browserTarget && { browserTarget: request.browserTarget }),
     ...(request.open === undefined ? {} : { open: { url: request.open.url } }),
     ...(target === undefined ? {} : { target }),
     source: "rule",
@@ -105,6 +108,7 @@ export interface BotHandoffs {
   answer(botId: string, waitId: string, value: unknown): BotHandoffAnswerOutcome;
   /** Cards waiting on the person, oldest first; for one Bot when `botId` is given. */
   pending(botId?: string): BotPendingHandoff[];
+  browserTarget(botId: string, waitId: string): Readonly<BrowserApprovalTarget> | undefined;
   get(botId: string, waitId: string): BotPendingHandoff | undefined;
   /** Called with the Bot id whenever its waiting cards change (opened, answered, withdrawn). */
   onChange(listener: (botId: string) => void): () => void;
@@ -113,6 +117,7 @@ export interface BotHandoffs {
 }
 
 interface Waiting {
+  browserTarget?: Readonly<BrowserApprovalTarget>;
   prompt: BotPendingHandoff;
   settle(answer: BotHandoffAnswer | null, reason?: unknown): void;
 }
@@ -171,7 +176,7 @@ export function createBotHandoffs(): BotHandoffs {
           if (answer) resolve(answer);
           else reject(reason);
         };
-        waiting.set(request.waitId, { prompt, settle });
+        waiting.set(request.waitId, { prompt, settle, browserTarget: request.browserTarget });
         request.signal?.addEventListener("abort", onAbort, { once: true });
         each(changeListeners, prompt.botId);
       });
@@ -191,6 +196,11 @@ export function createBotHandoffs(): BotHandoffs {
     pending(botId) {
       const all = [...waiting.values()].map((entry) => entry.prompt);
       return botId === undefined ? all : all.filter((prompt) => prompt.botId === botId);
+    },
+
+    browserTarget(botId, waitId) {
+      const entry = waiting.get(waitId);
+      return entry?.prompt.botId === botId ? entry.browserTarget : undefined;
     },
 
     get(botId, waitId) {

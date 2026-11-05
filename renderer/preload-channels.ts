@@ -72,6 +72,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:command",
   "app:navigate",
   "app:update-state",
+  /** The main window's maximize or full-screen state changed: `WindowControlsState`. Linux Aiden title bar only. */
+  "app:window-state",
   "assistant-live:event",
   "chat:approval",
   "chat:artifact",
@@ -88,6 +90,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:timeline",
   "chat:todo",
   "chat:tool",
+  /** Crash reporting started or stopped: `{sending}`. Raw error fields go to main only while it is on. */
+  "analytics:sending-changed",
   "bots:changed",
   "bots:memory:changed",
   /** A Bot's event routines changed, or a watch saved a check: `{botId}`. Its profile re-reads the list. */
@@ -97,6 +101,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:connections:setup",
   "bots:approval",
   "bots:approval-settled",
+  "bots:allowed:changed",
   /** A Bot's question, approval, hand-off or issue appeared or settled: `{botId}`. The Bots sidebar re-reads its row. */
   "bots:attention",
   "botComputers:changed",
@@ -107,6 +112,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "devices:recordings",
   "chats:activity-changed",
   "chats:read-markers-changed",
+  /** Inbox Pin, Done or Snooze changed: the full triage snapshot. */
+  "chats:triage-changed",
   "chats:changed",
   "chats:metadata-updated",
   /** A chat's design mode changed: `{chatId, designMode}`. */

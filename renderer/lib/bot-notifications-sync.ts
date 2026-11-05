@@ -30,6 +30,8 @@ export async function invalidateForBotsChanged(queryClient: QueryClient, payload
     queryClient.invalidateQueries({ queryKey: queryKeys.botTelegramTargets }),
     // A routine change (a wake-up set, cancelled or switched off) names its Bot.
     queryClient.invalidateQueries({ queryKey: botId ? queryKeys.botRoutines(botId) : ["bot-routines"] }),
+    // Profile-wide Bot settings can change from a paired phone.
+    ...(!botId ? [queryClient.invalidateQueries({ queryKey: queryKeys.settings })] : []),
   ]);
 }
 

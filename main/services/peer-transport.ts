@@ -30,13 +30,27 @@ export interface PeerRequest {
    * as an attachment upload. Capped at `MAX_PEER_UPLOAD_BYTES`.
    */
   maxBodyBytes?: number;
+  /**
+   * Revision 50 (`attachments:raw`): a picture sent as its own bytes instead
+   * of `body`, with its percent-encoded name in `Aiden-Attachment-Name`.
+   */
+  rawBody?: PeerRawBody;
   /** SSE resume cursor sent as `Last-Event-ID`. */
   lastEventId?: string;
+  runCheckpoint?: boolean;
   /**
    * Streams only: called once the host accepted the stream, before any frame.
    * A resumed feed may legitimately send nothing until something changes.
    */
   onOpen?(): void;
+}
+
+/** A picture upload's bytes (revision 50). */
+export interface PeerRawBody {
+  contentType: "image/png" | "image/jpeg";
+  /** `encodeAidenRemoteAttachmentName` of the file name. */
+  encodedName: string;
+  data: Buffer;
 }
 
 /** How a stream ended without an error: the host closed it, or the 5-minute session cap fired. */
@@ -382,6 +396,7 @@ function headers(input: PeerRequest, mode: ReadMode): Record<string, string> {
       throw new Error("Invalid peer credential.");
     result.Authorization = `Bearer ${input.credential}`;
   }
+  if (input.runCheckpoint) result["Aiden-Run-Checkpoint"] = "1";
   for (const [name, value] of [
     ["Idempotency-Key", input.idempotencyKey],
     ["If-Match", input.revision],
@@ -425,8 +440,18 @@ export class PeerTransport {
     const streaming = mode === "events";
     const target = peerRequestUrl(this.trust.endpoint, input.path);
     const requestHeaders = headers(input, mode);
-    const body =
-      input.body === undefined
+    const raw = input.rawBody;
+    if (
+      raw &&
+      (input.body !== undefined ||
+        (raw.contentType !== "image/png" && raw.contentType !== "image/jpeg") ||
+        !/^[A-Za-z0-9%._~-]{1,2048}$/u.test(raw.encodedName) ||
+        raw.data.length === 0)
+    )
+      throw new Error("Invalid peer picture upload.");
+    const body = raw
+      ? raw.data
+      : input.body === undefined
         ? undefined
         : Buffer.from(JSON.stringify(input.body));
     const maxBodyBytes = Math.min(
@@ -436,9 +461,10 @@ export class PeerTransport {
     if (body && body.length > maxBodyBytes)
       throw new Error("Peer request is too large.");
     if (body) {
-      requestHeaders["Content-Type"] = "application/json";
+      requestHeaders["Content-Type"] = raw?.contentType ?? "application/json";
       requestHeaders["Content-Length"] = String(body.length);
     }
+    if (raw) requestHeaders["Aiden-Attachment-Name"] = raw.encodedName;
     if (input.signal?.aborted) throw new PeerTransportError("unavailable");
     const deadlineMs =
       !streaming && input.timeoutMs !== undefined

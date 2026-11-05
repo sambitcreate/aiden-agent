@@ -1,3 +1,7 @@
+import type { BotPlanView } from "../../../renderer/shared/bot-plans.js";
+import type { BotPendingAccessRequest } from "../../../renderer/shared/bot-access-requests.js";
+import { BOT_MESSAGE_LIMITS, BOT_MESSAGE_STATUS_ENTRY_KIND, type BotMessageStatusEntryData } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "./bot-input-entry.js";
 // Live projection of each Bot's durable conversation to renderer windows
 // (spec §6.5, plan Task 1.4).
 //
@@ -145,8 +149,47 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
   return entry.kind === BOT_NOTICE_ENTRY_KIND && typeof entry.data === "object" && entry.data !== null;
 }
 
+/** Display only the clean metadata committed atomically with the admitted input. */
+function botMessageInputOf(value: unknown): Omit<Extract<BotTranscriptEntry, {type: "bot_message"}>, "id" | "at"> | null {
+  if (typeof value !== "object" || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    (data.kind !== "request" && data.kind !== "reply") ||
+    typeof data.deliveryId !== "string" || !data.deliveryId ||
+    typeof data.botId !== "string" || !data.botId ||
+    typeof data.botName !== "string" || typeof data.text !== "string" ||
+    typeof data.deadline !== "number" || !Number.isFinite(data.deadline)
+  ) return null;
+  return {
+    type: "bot_message", kind: data.kind, botId: data.botId,
+    botName: data.botName.slice(0, 80),
+    text: data.text.slice(0, data.kind === "request" ? BOT_MESSAGE_LIMITS.messageChars : BOT_MESSAGE_LIMITS.replyChars),
+  };
+}
+
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["bot_message_status", "connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
+
+/** Host-owned saved notices still validate and bound text before reaching any display. */
+function botMessageStatusOf(value: unknown): BotMessageStatusEntryData | null {
+  if (typeof value !== "object" || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    typeof data.deliveryId !== "string" || typeof data.botId !== "string" || typeof data.botName !== "string" ||
+    typeof data.outcome !== "string" ||
+    !["waiting_approval", "silent", "expired", "gave_up", "failed", "replied_while_paused"].includes(data.outcome)
+  ) return null;
+  if (data.waitId !== undefined && typeof data.waitId !== "string") return null;
+  return {
+    deliveryId: data.deliveryId,
+    botId: data.botId,
+    botName: data.botName.slice(0, 80),
+    outcome: data.outcome as BotMessageStatusEntryData["outcome"],
+    ...(typeof data.waitId === "string" ? { waitId: data.waitId } : {}),
+    ...(typeof data.summary === "string" ? { summary: data.summary.slice(0, 160) } : {}),
+    ...(typeof data.text === "string" ? { text: data.text.slice(0, BOT_MESSAGE_LIMITS.replyChars) } : {}),
+  };
+}
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -277,6 +320,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   /** `retryText`: the typed message Retry resends if this turn fails. */
   type Turn = { start: number; silent: boolean; retryText: string | null };
   const mapped: Array<{ entry: BotTranscriptEntry; turn: Turn | null }> = [];
+  const seenBotStatuses = new Set<string>();
   let pendingRoutine: string | undefined;
   let pendingHidden = false;
   /** File tool calls aimed at the default location (the Bot's folder), by call id. */
@@ -373,6 +417,17 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         );
         if (routines.length > 0) {
           mapped.push({ entry: { id, type: "routines_skipped", since: notice.since, routines }, turn: null });
+        }
+      }
+      continue;
+    }
+    if (record.kind === BOT_MESSAGE_STATUS_ENTRY_KIND) {
+      const data = botMessageStatusOf(record.data);
+      if (data) {
+        const key = JSON.stringify([data.deliveryId, data.outcome, data.waitId ?? ""]);
+        if (!seenBotStatuses.has(key)) {
+          seenBotStatuses.add(key);
+          mapped.push({ entry: {id, type: "bot_message_status", data}, turn: null });
         }
       }
       continue;
@@ -479,14 +534,21 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     const message = firstMessage(record);
-    if (record.kind === "pi.user" && message?.role === "user") {
+    if (isBotInputEntryKind(record.kind) && message?.role === "user") {
       const content = message.content as UserContent;
       const text = textOf(content);
       turn = {
         start: mapped.length,
         silent: false,
-        retryText: pendingHidden || pendingRoutine !== undefined || !text.trim() ? null : text,
+        retryText: pendingHidden || pendingRoutine !== undefined || record.kind === BOT_MESSAGE_INPUT_KIND || !text.trim() ? null : text,
       };
+      if (record.kind === BOT_MESSAGE_INPUT_KIND) {
+        const input = botMessageInputOf(record.data);
+        pendingRoutine = undefined;
+        pendingHidden = false;
+        if (input) mapped.push({entry: {...input, id, at: message.timestamp}, turn});
+        continue;
+      }
       if (pendingHidden) {
         pendingHidden = false;
         pendingRoutine = undefined;
@@ -722,7 +784,7 @@ function inputAnswered(entries: readonly EntryRecord[]): boolean {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const kind = entries[index]!.kind;
     if (kind === "pi.assistant") return true;
-    if (kind === "pi.user") return false;
+    if (isBotInputEntryKind(kind)) return false;
   }
   return false;
 }
@@ -923,6 +985,10 @@ export interface BotLiveProjectionDeps {
   question?(botId: string): BotPendingQuestion | null;
   /** The hand-off card the Bot is waiting on right now, if any. */
   handoff?(botId: string): BotPendingHandoff | null;
+  /** Public card from the host bridge; authorization never enters this feed. */
+  accessRequest?(botId: string): BotPendingAccessRequest | null;
+  /** Public waiting-first plan view; never the stored proposal or authorization. */
+  plan?(botId: string): Promise<BotPlanView | null>;
   /**
    * Classify queued submission ids: `true` for a routine's input or the hidden
    * self-intro, `false` for the person's own message. Decided from durable
@@ -970,6 +1036,10 @@ export interface BotLiveProjection {
   refreshQuestion(botId: string): Promise<void>;
   /** The Bot's pending hand-off changed (opened, answered, withdrawn): push a `handoff` event. */
   refreshHandoff(botId: string): Promise<void>;
+  /** Publish the current access-request attempt or its removal. */
+  refreshAccessRequest(botId: string): Promise<void>;
+  /** Re-read the plan and publish a changed identity, revision or removal. */
+  refreshPlan(botId: string): Promise<void>;
   /** The person pressed Stop: the running turn reads "Stopping" until it ends. Ignored when nothing runs. */
   notifyStopping(botId: string): void;
   /**
@@ -984,6 +1054,14 @@ export interface BotLiveProjection {
   refreshActivity(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
   summary(botId: string): Promise<BotLiveSummary>;
+  /** Host-feed signals from runtime state and an already-open feed only. */
+  inboxSignals(botId: string): Promise<Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt">>;
+  /**
+   * The summary's `needsYou` alone, without reading the transcript: an open
+   * question, hand-off, access request, pending plan, approval or issue, and never for an unavailable Bot
+   * with no open feed. The Dock badge reads it on every recount.
+   */
+  needsYou(botId: string): Promise<boolean>;
   /** Stop every feed (the Bot was deleted, or the app is quitting). */
   close(botId?: string): Promise<void>;
 }
@@ -1005,6 +1083,8 @@ interface Feed {
   state: BotSessionState;
   question: BotPendingQuestion | null;
   handoff: BotPendingHandoff | null;
+  accessRequest: BotPendingAccessRequest | null;
+  plan: BotPlanView | null;
   activity: BotLiveActivity | null;
   queued: BotQueuedMessage[];
   /** Which queued inputs are the person's own (fail closed, throttled retries). */
@@ -1040,6 +1120,33 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   /** Bots whose next run is a Resume. */
   const resumingBots = new Set<string>();
   const feeds = new Map<string, Feed>();
+  // A closed Bot's preview and last reply, kept with the newest entry they were
+  // read through. Every transcript change (a turn, a reset, a compaction, an
+  // edit) appends an entry, so one newest-entry read tells a list refresh (the
+  // Remote host feed asks on every chat or Bot change) whether the transcript
+  // needs reading again.
+  type BotTranscriptSummary = Pick<BotLiveSummary, "preview" | "updatedAt" | "lastReplyAt">;
+  const transcriptSummaries = new Map<string, { key: string } & BotTranscriptSummary>();
+
+  async function transcriptSummary(botId: string, conversation: Conversation): Promise<BotTranscriptSummary> {
+    const newest = await conversation.entries({ order: "descending" }, 1, undefined, BACKGROUND_CONTEXT);
+    const key = `${conversation.id}:${newest.items[0]?.id ?? ""}`;
+    const cached = transcriptSummaries.get(botId);
+    if (cached?.key === key) {
+      const { key: _key, ...summary } = cached;
+      return summary;
+    }
+    const view = await conversation.context(BACKGROUND_CONTEXT);
+    const entries = projectBotTranscript(view.entries);
+    const preview = botTranscriptPreview(entries);
+    const summary: BotTranscriptSummary = {
+      preview: preview?.text ?? null,
+      updatedAt: preview?.at ?? null,
+      lastReplyAt: botLastReplyAt(entries),
+    };
+    transcriptSummaries.set(botId, { key, ...summary });
+    return summary;
+  }
   const opening = new Map<string, Promise<Feed>>();
   const subscribers = new Map<string, Set<Subscriber>>();
   /** Where each Bot's last feed stopped, so `seq` keeps rising across epochs. */
@@ -1058,6 +1165,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       state: feed.state,
       question: feed.question,
       handoff: feed.handoff,
+      accessRequest: feed.accessRequest,
+      plan: feed.plan,
       activity: feed.activity,
       queued: feed.queued,
     };
@@ -1120,7 +1229,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   }
 
   function waitingOn(feed: Feed): boolean {
-    return feed.question !== null || feed.handoff !== null || deps.approvalPending?.(feed.botId) === true;
+    return feed.question !== null || feed.handoff !== null || feed.accessRequest !== null || feed.plan?.status === "pending" || deps.approvalPending?.(feed.botId) === true;
   }
 
   /** Null unless the session is running: a paused Bot keeps `pi.live.run` but is not working. */
@@ -1290,6 +1399,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
         handoff: deps.handoff?.(botId) ?? null,
+        accessRequest: deps.accessRequest?.(botId) ?? null,
+        plan: await deps.plan?.(botId) ?? null,
         activity: null,
         queued: [],
         classifier,
@@ -1382,15 +1493,51 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     });
   }
 
+  /** Read inside the feed queue so an old refresh cannot restore a settled attempt. */
+  function syncAccessRequest(feed: Feed): Promise<void> {
+    return enqueueWork(feed, async () => {
+      const accessRequest = deps.accessRequest?.(feed.botId) ?? null;
+      if (accessRequest?.waitId === feed.accessRequest?.waitId) return;
+      feed.accessRequest = accessRequest;
+      emit(feed, { type: "access_request", accessRequest });
+      updateActivity(feed);
+    });
+  }
+
+  /** Read inside the feed queue so concurrent refreshes cannot restore an older plan. */
+  function syncPlan(feed: Feed): Promise<void> {
+    return enqueueWork(feed, async () => {
+      const plan = await deps.plan?.(feed.botId) ?? null;
+      if (plan?.planId === feed.plan?.planId && plan?.revision === feed.plan?.revision) return;
+      feed.plan = plan;
+      emit(feed, { type: "plan", plan });
+      updateActivity(feed);
+    });
+  }
+
+  /** Whether the person owes this Bot an answer: the same sources the chat shows. */
+  async function needsYouNow(botId: string): Promise<boolean> {
+    return (
+      (deps.question?.(botId) ?? null) !== null ||
+      (deps.handoff?.(botId) ?? null) !== null ||
+      (deps.accessRequest?.(botId) ?? null) !== null ||
+      deps.approvalPending?.(botId) === true ||
+      (await deps.plan?.(botId))?.status === "pending" ||
+      (await deps.issuePending?.(botId)) === true
+    );
+  }
+
   return {
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
       const feed = await openFeed(botId);
       // A new subscriber gets current connect-card statuses, not the feed's last view.
       await reproject(feed).catch((error) => report(botId, error));
-      // A question or hand-off asked or settled while no feed was open is caught up here.
+      // A question, hand-off or access request opened or settled while no feed was open is caught up here.
       await syncQuestion(feed).catch((error) => report(botId, error));
       await syncHandoff(feed).catch((error) => report(botId, error));
+      await syncAccessRequest(feed).catch((error) => report(botId, error));
+      await syncPlan(feed).catch((error) => report(botId, error));
       let set = subscribers.get(botId);
       if (!set) subscribers.set(botId, (set = new Set()));
       set.add(subscriber);
@@ -1469,14 +1616,39 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       await syncHandoff(feed);
     },
 
+    async refreshAccessRequest(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      await syncAccessRequest(feed);
+    },
+
+    async refreshPlan(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      await syncPlan(feed);
+    },
+
+    async needsYou(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) {
+        if ((await deps.state(botId)).kind === "unavailable") return false;
+      }
+      return needsYouNow(botId);
+    },
+
+    async inboxSignals(botId) {
+      const feed = feeds.get(botId);
+      const state = feed && !feed.ended ? feed.state : await deps.state(botId);
+      return {
+        state,
+        needsYou: state.kind !== "unavailable" && await needsYouNow(botId),
+        lastReplyAt: feed && !feed.ended ? botLastReplyAt(feed.entries) : null,
+      };
+    },
+
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYouNow = async () =>
-        (deps.question?.(botId) ?? null) !== null ||
-        (deps.handoff?.(botId) ?? null) !== null ||
-        deps.approvalPending?.(botId) === true ||
-        (await deps.issuePending?.(botId)) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
@@ -1486,7 +1658,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           preview: preview?.text ?? null,
           updatedAt: preview?.at ?? null,
           state: feed.state,
-          needsYou: await needsYouNow(),
+          needsYou: await needsYouNow(botId),
           lastReplyAt: botLastReplyAt(feed.entries),
         };
       }
@@ -1494,16 +1666,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       if (state.kind === "unavailable") {
         return { botId, preview: null, updatedAt: null, state, needsYou: false, lastReplyAt: null };
       }
-      const view = await (await deps.conversation(botId)).context(BACKGROUND_CONTEXT);
-      const entries = projectBotTranscript(view.entries);
-      const preview = botTranscriptPreview(entries);
+      const conversation = await deps.conversation(botId);
+      const transcript = await transcriptSummary(botId, conversation);
       return {
         botId,
-        preview: preview?.text ?? null,
-        updatedAt: preview?.at ?? null,
+        ...transcript,
         state,
-        needsYou: await needsYouNow(),
-        lastReplyAt: botLastReplyAt(entries),
+        needsYou: await needsYouNow(botId),
       };
     },
 

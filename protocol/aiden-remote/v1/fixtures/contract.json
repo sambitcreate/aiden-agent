@@ -1,5 +1,9 @@
 {
-  "contractRevision": 47,
+  "botMessagingDetail": {"id": "bot_fixture_01", "name": "Scout", "purpose": "Finds the signal in a busy week", "instructions": "Find the important signal, explain it plainly, and keep the owner in control.", "avatar": {"semantic": {"version": 1, "shape": "orb", "color": "rose"}, "asset": {"assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024}}, "health": "ready", "sessionState": "idle", "access": {"botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills."}, "modelSelection": {"providerId": "provider_fixture", "modelId": "model_fixture"}, "visionModelSelection": {"providerId": "provider_fixture", "modelId": "vision_model_fixture"}, "createdAt": "2026-08-18T17:00:00.000Z", "updatedAt": "2026-08-18T18:45:00.000Z", "revision": "bot_revision_7", "botMessaging": {"receive": true, "send": true}},
+  "botMessagingPatch": {"botMessaging": {"receive": false}},
+  "botMessagingSettings": {"enabled": false},
+  "botMessageNotification": {"id": "bot-message-fixture-01", "kind": "message", "botId": "bot_fixture_01", "botName": "Scout", "routineName": "COS replied", "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "The calendar is ready."},
+  "contractRevision": 58,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -108,7 +112,7 @@
       "bot-memory-v1",
       "bot-proactive-v1",
       "speech-request-gzip-v1",
-      "chat-ui-panels-v1"
+      "chat-triage-v1"
     ],
     "connectionMode": "both",
     "minimumClientVersion": "1.0.0",
@@ -126,7 +130,13 @@
         "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
         "activity": "active",
         "rowState": "needs_approval",
-        "unread": false
+        "unread": false,
+        "attentionSince": "2026-08-18T19:01:08.000Z",
+        "runStartedAt": "2026-08-18T19:01:00.000Z",
+        "lastAssistantMessageId": "reply-fixture-02",
+        "lastAssistantAt": "2026-08-18T19:01:05.000Z",
+        "inboxBucket": "needs_you",
+        "inboxSortAt": "2026-08-18T19:01:08.000Z"
       },
       {
         "id": "chat_fixture_summary_01",
@@ -139,7 +149,13 @@
         "activity": "idle",
         "rowState": "idle",
         "unread": true,
-        "lastRunFailed": true
+        "lastRunFailed": true,
+        "lastAssistantAt": "2026-08-18T19:01:00.000Z",
+        "triageRevision": 3,
+        "pinnedAt": "2026-08-18T18:45:00.000Z",
+        "snoozedUntil": "2026-08-19T09:00:00.000Z",
+        "inboxBucket": "needs_you",
+        "inboxSortAt": "2026-08-18T19:01:00.000Z"
       }
     ],
     "nextCursor": "cur_eyJ2IjoxLCJzbmFwc2hvdElkIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwib2Zmc2V0IjoyLCJleHBpcmVzQXQiOjE3ODcwNzk5MDAwMDB9.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
@@ -169,6 +185,18 @@
       "createdAt": "2026-08-18T18:10:00.000Z",
       "updatedAt": "2026-08-18T18:10:00.000Z",
       "revision": "workspace_revision_1"
+    },
+    {
+      "id": "default",
+      "name": "No workspace",
+      "permission": "ask",
+      "memoryEnabled": true,
+      "hasFolder": true,
+      "isManagedWorktree": false,
+      "noWorkspace": true,
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-08-18T17:00:00.000Z",
+      "revision": "workspace_revision_2"
     }
   ],
   "browser": {
@@ -1555,12 +1583,12 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 47,
+    "contractRevision": 58,
     "pairingRequests": true
   },
   "hostFeedEvents": [
     { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
-    { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false } },
+    { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false, "attentionSummary": "Allow a write operation?" } },
     { "protocolVersion": 1, "streamId": "host", "sequence": 2, "timestamp": "2026-08-18T19:02:02.000Z", "type": "workspace.remove", "terminal": false, "payload": { "id": "workspace_fixture_02" } }
   ],
   "runEvents": [
@@ -1695,6 +1723,37 @@
         "matchCode": "086098"
       }
     ]
+  },
+  "runCheckpoint": {
+    "protocolVersion": 1,
+    "streamId": "run-1",
+    "sequence": 90,
+    "timestamp": "2026-10-05T10:00:00Z",
+    "type": "snapshot",
+    "terminal": false,
+    "payload": {
+      "runId": "run-1",
+      "chatId": "chat-1",
+      "reason": "gap",
+      "epoch": "host-epoch",
+      "state": "working",
+      "pendingApprovalIds": [],
+      "pendingQuestionIds": [],
+      "approvals": [],
+      "questions": [],
+      "replyText": "Checked the build.",
+      "replyReasoning": "Reviewing results",
+      "timeline": {
+        "version": 3,
+        "generationId": "run-1",
+        "status": "running",
+        "startedAt": 1000,
+        "steps": [
+          { "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "run_command", "label": "Build", "status": "completed", "startedAt": 1000, "updatedAt": 1100, "contentOffset": 0 }
+        ]
+      },
+      "nextSequence": 91
+    }
   },
   "phoneRunEvents": [
     {
@@ -2571,6 +2630,188 @@
       }
     }
   },
+  "botAccessRequests": {
+    "capability": "bot:access-requests",
+    "folder": {
+      "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "folder",
+      "label": "Reports",
+      "place": "~/Documents/Reports",
+      "why": "Read the reports for your summary.",
+      "choices": [
+        "not_now",
+        "always",
+        "once"
+      ]
+    },
+    "wholeMac": {
+      "waitId": "55b1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "whole_mac",
+      "label": "your whole Mac",
+      "why": "Find the files you asked me to organize.",
+      "choices": [
+        "not_now",
+        "once"
+      ]
+    },
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_55",
+      "seq": 50,
+      "state": "running",
+      "interrupted": false,
+      "entries": [],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "accessRequest": {
+        "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+        "target": "folder",
+        "label": "Reports",
+        "place": "~/Documents/Reports",
+        "why": "Read the reports for your summary.",
+        "choices": [
+          "not_now",
+          "always",
+          "once"
+        ]
+      }
+    },
+    "events": [
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 51,
+        "type": "access_request",
+        "payload": {
+          "accessRequest": {
+            "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+            "target": "folder",
+            "label": "Reports",
+            "place": "~/Documents/Reports",
+            "why": "Read the reports for your summary.",
+            "choices": [
+              "not_now",
+              "always",
+              "once"
+            ]
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 52,
+        "type": "access_request",
+        "payload": {
+          "accessRequest": null
+        }
+      }
+    ],
+    "answer": {
+      "request": {
+        "choice": "always"
+      },
+      "response": {
+        "answered": true,
+        "savedForFuture": true
+      }
+    },
+    "expired": {
+      "error": {
+        "code": "access_request_expired",
+        "message": "This access request is no longer waiting.",
+        "requestId": "request_fixture_55",
+        "retryable": false
+      }
+    },
+    "issue": {
+      "id": "issue_fixture_access_01",
+      "kind": "access_needed",
+      "title": "Allow Reports",
+      "body": "Read the reports for your summary.",
+      "actions": [
+        {
+          "kind": "dismiss_access"
+        },
+        {
+          "kind": "allow_folder"
+        }
+      ],
+      "createdAt": "2026-11-03T09:00:00.000Z",
+      "resolved": false
+    },
+    "legacy": {
+      "session": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 50,
+        "state": "running",
+        "interrupted": false,
+        "entries": [
+          {
+            "type": "message",
+            "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+            "role": "assistant",
+            "text": "Scout needs you on your Mac: allow access to Reports"
+          }
+        ],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "events": [
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_55",
+          "seq": 51,
+          "type": "entry",
+          "payload": {
+            "entry": {
+              "type": "message",
+              "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+              "role": "assistant",
+              "text": "Scout needs you on your Mac: allow access to Reports"
+            }
+          }
+        },
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_55",
+          "seq": 52,
+          "type": "snapshot",
+          "payload": {
+            "session": {
+              "botId": "bot_fixture_01",
+              "epoch": "epoch_fixture_55",
+              "seq": 52,
+              "state": "running",
+              "interrupted": false,
+              "entries": [],
+              "hasOlder": false,
+              "question": null,
+              "approval": null
+            }
+          }
+        }
+      ],
+      "settledSession": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 52,
+        "state": "running",
+        "interrupted": false,
+        "entries": [],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      }
+    }
+  },
   "scheduleCards": {
     "capability": "schedule:cards",
     "streamApproval": {
@@ -3274,6 +3515,41 @@
       "now": "2026-10-27T09:10:00.000Z"
     }
   },
+  "chatNewWorktree": {
+    "request": {
+      "text": "Fix the login bug"
+    },
+    "response": {
+      "chat": {
+        "id": "chat_fixture_new_worktree",
+        "workspaceId": "workspace_fixture_worktree",
+        "title": "New chat",
+        "providerId": "provider_fixture",
+        "modelId": "model_fixture",
+        "messages": [],
+        "createdAt": "2026-10-29T09:00:00.000Z",
+        "updatedAt": "2026-10-29T09:00:04.000Z",
+        "revision": "chat_revision_new_worktree_2"
+      },
+      "branch": "aiden/fix-the-login-bug"
+    },
+    "notEmpty": {
+      "error": {
+        "code": "operation_stale",
+        "message": "This chat already has messages, so it stays in its workspace.",
+        "requestId": "request_fixture_48",
+        "retryable": false
+      }
+    },
+    "failed": {
+      "error": {
+        "code": "git_capability_denied",
+        "message": "Aiden couldn't fetch main from its remote on your Mac. Check the Mac's network, then try again.",
+        "requestId": "request_fixture_49",
+        "retryable": false
+      }
+    }
+  },
   "spending": {
     "chat": {
       "spending": {
@@ -3345,6 +3621,1325 @@
           "currentRevision": "sp_fixture_chat_2"
         }
       }
+    }
+  },
+  "backgroundJobs": {
+    "list": {
+      "jobs": [
+        {
+          "id": "job_1a2b3c4d",
+          "label": "Run the dev server",
+          "state": "running",
+          "startedAt": "2026-10-29T09:00:00.000Z",
+          "ports": [5173]
+        },
+        {
+          "id": "job_5e6f7a8b",
+          "label": "npm run api > api.log &",
+          "state": "running",
+          "startedAt": "2026-10-29T08:58:00.000Z",
+          "fromCommand": true,
+          "ports": [3000, 5173]
+        },
+        {
+          "id": "job_00000001",
+          "label": "Run the unit tests",
+          "state": "failed",
+          "startedAt": "2026-10-29T08:50:00.000Z",
+          "endedAt": "2026-10-29T08:52:10.000Z",
+          "exitCode": 1,
+          "ports": []
+        }
+      ]
+    },
+    "stop": {
+      "jobId": "job_1a2b3c4d",
+      "request": {},
+      "response": {
+        "jobs": [
+          {
+            "id": "job_5e6f7a8b",
+            "label": "npm run api > api.log &",
+            "state": "running",
+            "startedAt": "2026-10-29T08:58:00.000Z",
+            "fromCommand": true,
+            "ports": [3000, 5173]
+          },
+          {
+            "id": "job_1a2b3c4d",
+            "label": "Run the dev server",
+            "state": "stopped",
+            "startedAt": "2026-10-29T09:00:00.000Z",
+            "endedAt": "2026-10-29T09:05:00.000Z",
+            "endReason": "person",
+            "ports": []
+          },
+          {
+            "id": "job_00000001",
+            "label": "Run the unit tests",
+            "state": "failed",
+            "startedAt": "2026-10-29T08:50:00.000Z",
+            "endedAt": "2026-10-29T08:52:10.000Z",
+            "exitCode": 1,
+            "ports": []
+          }
+        ]
+      }
+    },
+    "notFound": {
+      "error": {
+        "code": "not_found",
+        "message": "This chat has no such background job.",
+        "requestId": "request_fixture_41",
+        "retryable": false
+      }
+    }
+  },
+  "rawUploads": {
+    "capability": "attachments:raw",
+    "request": {
+      "method": "POST",
+      "path": "/chats/chat_fixture_01/attachments",
+      "contentType": "image/png",
+      "contentLength": 70,
+      "nameHeader": "Aiden-Attachment-Name",
+      "name": "Café photo.png",
+      "encodedName": "Caf%C3%A9%20photo.png",
+      "bodyBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAgIBUKX1cwAAAABJRU5ErkJggg=="
+    },
+    "response": {
+      "id": "att_RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+      "name": "Café photo.png",
+      "mimeType": "image/png",
+      "kind": "image",
+      "size": 70,
+      "expiresAt": "2026-11-02T07:10:00.000Z"
+    },
+    "withoutGrant": {
+      "error": {
+        "code": "capability_denied",
+        "message": "This device does not have access to that Aiden capability.",
+        "requestId": "request_fixture_50",
+        "retryable": false
+      }
+    }
+  },
+  "botPlans": {
+    "capability": "bot:plans",
+    "pending": {
+      "planId": "plan-fixture-56",
+      "status": "pending",
+      "title": "Prepare the weekly review",
+      "why": "Collect the updates and prepare a draft.",
+      "steps": [
+        {
+          "text": "Collect the updates",
+          "status": "pending"
+        },
+        {
+          "text": "Prepare a draft",
+          "status": "pending"
+        }
+      ],
+      "items": [
+        {
+          "line": "Google Calendar · create events (up to 5)",
+          "details": [
+            "Create event"
+          ],
+          "used": 0,
+          "max": 5
+        },
+        {
+          "line": "Commands · in its own folder",
+          "details": []
+        },
+        {
+          "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+          "details": [
+            "/Volumes/Backup/Family Photos",
+            "Read and change · allowed once, for this plan only"
+          ]
+        },
+        {
+          "line": "Files · read ~/Documents/Tax Records",
+          "details": [
+            "~/Documents/Tax Records"
+          ]
+        }
+      ],
+      "from": "COS"
+    },
+    "active": {
+      "planId": "plan-fixture-56",
+      "status": "active",
+      "title": "Prepare the weekly review",
+      "why": "Collect the updates and prepare a draft.",
+      "steps": [
+        {
+          "text": "Collect the updates",
+          "status": "done"
+        },
+        {
+          "text": "Prepare a draft",
+          "status": "pending"
+        }
+      ],
+      "items": [
+        {
+          "line": "Google Calendar · create events (up to 5)",
+          "details": [
+            "Create event"
+          ],
+          "used": 0,
+          "max": 5
+        },
+        {
+          "line": "Commands · in its own folder",
+          "details": []
+        },
+        {
+          "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+          "details": [
+            "/Volumes/Backup/Family Photos",
+            "Read and change · allowed once, for this plan only"
+          ]
+        },
+        {
+          "line": "Files · read ~/Documents/Tax Records",
+          "details": [
+            "~/Documents/Tax Records"
+          ]
+        }
+      ],
+      "from": "COS",
+      "expiresAt": "2026-11-04T13:00:00.000Z"
+    },
+    "session": {
+      "botId": "bot:00000000-0000-4000-8000-000000000056",
+      "epoch": "epoch_plan_fixture_56",
+      "seq": 0,
+      "state": "running",
+      "interrupted": false,
+      "entries": [],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "plan": {
+        "planId": "plan-fixture-56",
+        "status": "pending",
+        "title": "Prepare the weekly review",
+        "why": "Collect the updates and prepare a draft.",
+        "steps": [
+          {
+            "text": "Collect the updates",
+            "status": "pending"
+          },
+          {
+            "text": "Prepare a draft",
+            "status": "pending"
+          }
+        ],
+        "items": [
+          {
+            "line": "Google Calendar · create events (up to 5)",
+            "details": [
+              "Create event"
+            ],
+            "used": 0,
+            "max": 5
+          },
+          {
+            "line": "Commands · in its own folder",
+            "details": []
+          },
+          {
+            "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+            "details": [
+              "/Volumes/Backup/Family Photos",
+              "Read and change · allowed once, for this plan only"
+            ]
+          },
+          {
+            "line": "Files · read ~/Documents/Tax Records",
+            "details": [
+              "~/Documents/Tax Records"
+            ]
+          }
+        ],
+        "from": "COS"
+      }
+    },
+    "events": [
+      {
+        "protocolVersion": 1,
+        "botId": "bot:00000000-0000-4000-8000-000000000056",
+        "epoch": "epoch_plan_fixture_56",
+        "seq": 0,
+        "type": "snapshot",
+        "payload": {
+          "session": {
+            "botId": "bot:00000000-0000-4000-8000-000000000056",
+            "epoch": "epoch_plan_fixture_56",
+            "seq": 0,
+            "state": "running",
+            "interrupted": false,
+            "entries": [],
+            "hasOlder": false,
+            "question": null,
+            "approval": null,
+            "plan": {
+              "planId": "plan-fixture-56",
+              "status": "pending",
+              "title": "Prepare the weekly review",
+              "why": "Collect the updates and prepare a draft.",
+              "steps": [
+                {
+                  "text": "Collect the updates",
+                  "status": "pending"
+                },
+                {
+                  "text": "Prepare a draft",
+                  "status": "pending"
+                }
+              ],
+              "items": [
+                {
+                  "line": "Google Calendar · create events (up to 5)",
+                  "details": [
+                    "Create event"
+                  ],
+                  "used": 0,
+                  "max": 5
+                },
+                {
+                  "line": "Commands · in its own folder",
+                  "details": []
+                },
+                {
+                  "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+                  "details": [
+                    "/Volumes/Backup/Family Photos",
+                    "Read and change · allowed once, for this plan only"
+                  ]
+                },
+                {
+                  "line": "Files · read ~/Documents/Tax Records",
+                  "details": [
+                    "~/Documents/Tax Records"
+                  ]
+                }
+              ],
+              "from": "COS"
+            }
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot:00000000-0000-4000-8000-000000000056",
+        "epoch": "epoch_plan_fixture_56",
+        "seq": 1,
+        "type": "plan",
+        "payload": {
+          "plan": {
+            "planId": "plan-fixture-56",
+            "status": "active",
+            "title": "Prepare the weekly review",
+            "why": "Collect the updates and prepare a draft.",
+            "steps": [
+              {
+                "text": "Collect the updates",
+                "status": "done"
+              },
+              {
+                "text": "Prepare a draft",
+                "status": "pending"
+              }
+            ],
+            "items": [
+              {
+                "line": "Google Calendar · create events (up to 5)",
+                "details": [
+                  "Create event"
+                ],
+                "used": 0,
+                "max": 5
+              },
+              {
+                "line": "Commands · in its own folder",
+                "details": []
+              },
+              {
+                "line": "Files · change /Volumes/Backup/Family Photos for this plan",
+                "details": [
+                  "/Volumes/Backup/Family Photos",
+                  "Read and change · allowed once, for this plan only"
+                ]
+              },
+              {
+                "line": "Files · read ~/Documents/Tax Records",
+                "details": [
+                  "~/Documents/Tax Records"
+                ]
+              }
+            ],
+            "from": "COS",
+            "expiresAt": "2026-11-04T13:00:00.000Z"
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot:00000000-0000-4000-8000-000000000056",
+        "epoch": "epoch_plan_fixture_56",
+        "seq": 2,
+        "type": "plan",
+        "payload": {
+          "plan": null
+        }
+      }
+    ],
+    "readOnlyFolderPlan": {
+      "planId": "plan-read-only-folder-56",
+      "status": "pending",
+      "title": "Prepare the weekly review",
+      "why": "Collect the updates and prepare a draft.",
+      "steps": [
+        {
+          "text": "Collect the updates",
+          "status": "pending"
+        },
+        {
+          "text": "Prepare a draft",
+          "status": "pending"
+        }
+      ],
+      "items": [
+        {
+          "line": "Files · read /Volumes/Archive/Tax Records for this plan",
+          "details": [
+            "/Volumes/Archive/Tax Records",
+            "Read only · allowed once, for this plan only"
+          ]
+        }
+      ],
+      "from": "COS"
+    },
+    "respond": {
+      "request": {
+        "decision": "approve"
+      },
+      "response": {
+        "planId": "plan-fixture-56",
+        "status": "active"
+      }
+    },
+    "expired": {
+      "error": {
+        "code": "plan_expired",
+        "requestId": "request-plan-fixture-56",
+        "message": "This plan is no longer waiting.",
+        "retryable": false
+      }
+    },
+    "legacy": {
+      "session": {
+        "botId": "bot:00000000-0000-4000-8000-000000000056",
+        "epoch": "epoch_plan_fixture_56",
+        "seq": 0,
+        "state": "running",
+        "interrupted": false,
+        "entries": [],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "events": [
+        {
+          "protocolVersion": 1,
+          "botId": "bot:00000000-0000-4000-8000-000000000056",
+          "epoch": "epoch_plan_fixture_56",
+          "seq": 0,
+          "type": "snapshot",
+          "payload": {
+            "session": {
+              "botId": "bot:00000000-0000-4000-8000-000000000056",
+              "epoch": "epoch_plan_fixture_56",
+              "seq": 0,
+              "state": "running",
+              "interrupted": false,
+              "entries": [],
+              "hasOlder": false,
+              "question": null,
+              "approval": null
+            }
+          }
+        },
+        {
+          "protocolVersion": 1,
+          "botId": "bot:00000000-0000-4000-8000-000000000056",
+          "epoch": "epoch_plan_fixture_56",
+          "seq": 1,
+          "type": "state",
+          "payload": {
+            "state": "running",
+            "interrupted": false
+          }
+        }
+      ]
+    }
+  },
+  "botAllowed": {
+    "capability": "bot:allowed",
+    "list": {
+      "botId": "bot:00000000-0000-4000-8000-000000000057",
+      "entries": [
+        {
+          "id": "allowed-rule-01",
+          "kind": "rule",
+          "what": "Google Calendar · Create event",
+          "addedAt": "2026-11-04T12:00:00.000Z",
+          "uses": 0
+        },
+        {
+          "id": "allowed-site-01",
+          "kind": "rule",
+          "what": "Click on amazon.com",
+          "addedAt": "2026-11-04T12:00:00.000Z",
+          "uses": 12,
+          "lastUsedAt": "2026-11-04T12:00:00.000Z"
+        },
+        {
+          "id": "folder_root_1",
+          "kind": "folder",
+          "what": "Folder · ~/Documents/Reports 1",
+          "addedAt": "2026-11-03T12:00:00.000Z"
+        }
+      ]
+    },
+    "paginated": {
+      "firstPage": {
+        "botId": "bot:00000000-0000-4000-8000-000000000057",
+        "entries": [
+          {
+            "id": "allowed-rule-01",
+            "kind": "rule",
+            "what": "Google Calendar · Create event",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-02",
+            "kind": "rule",
+            "what": "Connected app · Action 2",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-03",
+            "kind": "rule",
+            "what": "Connected app · Action 3",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-04",
+            "kind": "rule",
+            "what": "Connected app · Action 4",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-05",
+            "kind": "rule",
+            "what": "Connected app · Action 5",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-06",
+            "kind": "rule",
+            "what": "Connected app · Action 6",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-07",
+            "kind": "rule",
+            "what": "Connected app · Action 7",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-08",
+            "kind": "rule",
+            "what": "Connected app · Action 8",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-09",
+            "kind": "rule",
+            "what": "Connected app · Action 9",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-10",
+            "kind": "rule",
+            "what": "Connected app · Action 10",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-11",
+            "kind": "rule",
+            "what": "Connected app · Action 11",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-12",
+            "kind": "rule",
+            "what": "Connected app · Action 12",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-13",
+            "kind": "rule",
+            "what": "Connected app · Action 13",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-14",
+            "kind": "rule",
+            "what": "Connected app · Action 14",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-15",
+            "kind": "rule",
+            "what": "Connected app · Action 15",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-16",
+            "kind": "rule",
+            "what": "Connected app · Action 16",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-17",
+            "kind": "rule",
+            "what": "Connected app · Action 17",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-18",
+            "kind": "rule",
+            "what": "Connected app · Action 18",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-19",
+            "kind": "rule",
+            "what": "Connected app · Action 19",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-20",
+            "kind": "rule",
+            "what": "Connected app · Action 20",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-21",
+            "kind": "rule",
+            "what": "Connected app · Action 21",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-22",
+            "kind": "rule",
+            "what": "Connected app · Action 22",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-23",
+            "kind": "rule",
+            "what": "Connected app · Action 23",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-24",
+            "kind": "rule",
+            "what": "Connected app · Action 24",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-25",
+            "kind": "rule",
+            "what": "Connected app · Action 25",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-26",
+            "kind": "rule",
+            "what": "Connected app · Action 26",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-27",
+            "kind": "rule",
+            "what": "Connected app · Action 27",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-28",
+            "kind": "rule",
+            "what": "Connected app · Action 28",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-29",
+            "kind": "rule",
+            "what": "Connected app · Action 29",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-30",
+            "kind": "rule",
+            "what": "Connected app · Action 30",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-31",
+            "kind": "rule",
+            "what": "Connected app · Action 31",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-32",
+            "kind": "rule",
+            "what": "Connected app · Action 32",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-33",
+            "kind": "rule",
+            "what": "Connected app · Action 33",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-34",
+            "kind": "rule",
+            "what": "Connected app · Action 34",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-35",
+            "kind": "rule",
+            "what": "Connected app · Action 35",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-36",
+            "kind": "rule",
+            "what": "Connected app · Action 36",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-37",
+            "kind": "rule",
+            "what": "Connected app · Action 37",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-38",
+            "kind": "rule",
+            "what": "Connected app · Action 38",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-39",
+            "kind": "rule",
+            "what": "Connected app · Action 39",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-40",
+            "kind": "rule",
+            "what": "Connected app · Action 40",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-41",
+            "kind": "rule",
+            "what": "Connected app · Action 41",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-42",
+            "kind": "rule",
+            "what": "Connected app · Action 42",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-43",
+            "kind": "rule",
+            "what": "Connected app · Action 43",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-44",
+            "kind": "rule",
+            "what": "Connected app · Action 44",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-45",
+            "kind": "rule",
+            "what": "Connected app · Action 45",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-46",
+            "kind": "rule",
+            "what": "Connected app · Action 46",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-47",
+            "kind": "rule",
+            "what": "Connected app · Action 47",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-48",
+            "kind": "rule",
+            "what": "Connected app · Action 48",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-49",
+            "kind": "rule",
+            "what": "Connected app · Action 49",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-50",
+            "kind": "rule",
+            "what": "Connected app · Action 50",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          }
+        ],
+        "nextCursor": "cur_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "nextPage": {
+        "botId": "bot:00000000-0000-4000-8000-000000000057",
+        "entries": [
+          {
+            "id": "folder_root_1",
+            "kind": "folder",
+            "what": "Folder · ~/Documents/Reports 1",
+            "addedAt": "2026-11-03T12:00:00.000Z"
+          },
+          {
+            "id": "folder_root_2",
+            "kind": "folder",
+            "what": "Folder · ~/Documents/Reports 2",
+            "addedAt": "2026-11-03T12:00:00.000Z"
+          },
+          {
+            "id": "folder_root_3",
+            "kind": "folder",
+            "what": "Folder · ~/Documents/Reports 3",
+            "addedAt": "2026-11-03T12:00:00.000Z"
+          }
+        ]
+      },
+      "afterRemove": {
+        "botId": "bot:00000000-0000-4000-8000-000000000057",
+        "entries": [
+          {
+            "id": "allowed-rule-02",
+            "kind": "rule",
+            "what": "Connected app · Action 2",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-03",
+            "kind": "rule",
+            "what": "Connected app · Action 3",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-04",
+            "kind": "rule",
+            "what": "Connected app · Action 4",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-05",
+            "kind": "rule",
+            "what": "Connected app · Action 5",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-06",
+            "kind": "rule",
+            "what": "Connected app · Action 6",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-07",
+            "kind": "rule",
+            "what": "Connected app · Action 7",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-08",
+            "kind": "rule",
+            "what": "Connected app · Action 8",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-09",
+            "kind": "rule",
+            "what": "Connected app · Action 9",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-10",
+            "kind": "rule",
+            "what": "Connected app · Action 10",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-11",
+            "kind": "rule",
+            "what": "Connected app · Action 11",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-12",
+            "kind": "rule",
+            "what": "Connected app · Action 12",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-13",
+            "kind": "rule",
+            "what": "Connected app · Action 13",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-14",
+            "kind": "rule",
+            "what": "Connected app · Action 14",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-15",
+            "kind": "rule",
+            "what": "Connected app · Action 15",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-16",
+            "kind": "rule",
+            "what": "Connected app · Action 16",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-17",
+            "kind": "rule",
+            "what": "Connected app · Action 17",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-18",
+            "kind": "rule",
+            "what": "Connected app · Action 18",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-19",
+            "kind": "rule",
+            "what": "Connected app · Action 19",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-20",
+            "kind": "rule",
+            "what": "Connected app · Action 20",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-21",
+            "kind": "rule",
+            "what": "Connected app · Action 21",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-22",
+            "kind": "rule",
+            "what": "Connected app · Action 22",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-23",
+            "kind": "rule",
+            "what": "Connected app · Action 23",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-24",
+            "kind": "rule",
+            "what": "Connected app · Action 24",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-25",
+            "kind": "rule",
+            "what": "Connected app · Action 25",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-26",
+            "kind": "rule",
+            "what": "Connected app · Action 26",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-27",
+            "kind": "rule",
+            "what": "Connected app · Action 27",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-28",
+            "kind": "rule",
+            "what": "Connected app · Action 28",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-29",
+            "kind": "rule",
+            "what": "Connected app · Action 29",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-30",
+            "kind": "rule",
+            "what": "Connected app · Action 30",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-31",
+            "kind": "rule",
+            "what": "Connected app · Action 31",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-32",
+            "kind": "rule",
+            "what": "Connected app · Action 32",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-33",
+            "kind": "rule",
+            "what": "Connected app · Action 33",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-34",
+            "kind": "rule",
+            "what": "Connected app · Action 34",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-35",
+            "kind": "rule",
+            "what": "Connected app · Action 35",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-36",
+            "kind": "rule",
+            "what": "Connected app · Action 36",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-37",
+            "kind": "rule",
+            "what": "Connected app · Action 37",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-38",
+            "kind": "rule",
+            "what": "Connected app · Action 38",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-39",
+            "kind": "rule",
+            "what": "Connected app · Action 39",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-40",
+            "kind": "rule",
+            "what": "Connected app · Action 40",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-41",
+            "kind": "rule",
+            "what": "Connected app · Action 41",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-42",
+            "kind": "rule",
+            "what": "Connected app · Action 42",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-43",
+            "kind": "rule",
+            "what": "Connected app · Action 43",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-44",
+            "kind": "rule",
+            "what": "Connected app · Action 44",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-45",
+            "kind": "rule",
+            "what": "Connected app · Action 45",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-46",
+            "kind": "rule",
+            "what": "Connected app · Action 46",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-47",
+            "kind": "rule",
+            "what": "Connected app · Action 47",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-48",
+            "kind": "rule",
+            "what": "Connected app · Action 48",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-49",
+            "kind": "rule",
+            "what": "Connected app · Action 49",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "allowed-rule-50",
+            "kind": "rule",
+            "what": "Connected app · Action 50",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 0
+          },
+          {
+            "id": "folder_root_1",
+            "kind": "folder",
+            "what": "Folder · ~/Documents/Reports 1",
+            "addedAt": "2026-11-03T12:00:00.000Z"
+          }
+        ],
+        "nextCursor": "cur_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+      },
+      "afterRemoveNextPage": {
+        "botId": "bot:00000000-0000-4000-8000-000000000057",
+        "entries": [
+          {
+            "id": "folder_root_2",
+            "kind": "folder",
+            "what": "Folder · ~/Documents/Reports 2",
+            "addedAt": "2026-11-03T12:00:00.000Z"
+          },
+          {
+            "id": "folder_root_3",
+            "kind": "folder",
+            "what": "Folder · ~/Documents/Reports 3",
+            "addedAt": "2026-11-03T12:00:00.000Z"
+          }
+        ]
+      }
+    },
+    "remove": {
+      "request": {},
+      "response": {
+        "botId": "bot:00000000-0000-4000-8000-000000000057",
+        "entries": [
+          {
+            "id": "allowed-site-01",
+            "kind": "rule",
+            "what": "Click on amazon.com",
+            "addedAt": "2026-11-04T12:00:00.000Z",
+            "uses": 12,
+            "lastUsedAt": "2026-11-04T12:00:00.000Z"
+          },
+          {
+            "id": "folder_root_1",
+            "kind": "folder",
+            "what": "Folder · ~/Documents/Reports 1",
+            "addedAt": "2026-11-03T12:00:00.000Z"
+          }
+        ]
+      }
+    },
+    "denied": {
+      "error": {
+        "code": "capability_denied",
+        "message": "This device cannot read the Bot allow list.",
+        "requestId": "request-allowed-fixture-57",
+        "retryable": false
+      }
+    },
+    "approval": {
+      "waitId": "approval-fixture-57",
+      "toolCallId": "call-fixture-57",
+      "toolName": "create_event",
+      "summary": "Create the review event",
+      "canAllow": true,
+      "alwaysCount": 3
+    },
+    "legacyApproval": {
+      "waitId": "approval-fixture-57",
+      "toolCallId": "call-fixture-57",
+      "toolName": "create_event",
+      "summary": "Create the review event",
+      "canAllow": true
+    },
+    "accessRequest": {
+      "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "folder",
+      "label": "Reports",
+      "place": "~/Documents/Reports",
+      "why": "Read the reports for your summary.",
+      "choices": [
+        "not_now",
+        "always",
+        "once"
+      ],
+      "approvalCount": 3
+    },
+    "legacyAccessRequest": {
+      "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "folder",
+      "label": "Reports",
+      "place": "~/Documents/Reports",
+      "why": "Read the reports for your summary.",
+      "choices": [
+        "not_now",
+        "always",
+        "once"
+      ]
     }
   }
 }

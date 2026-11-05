@@ -222,6 +222,10 @@ export function applyRemoteBotSessionEvent(
       return next({});
     case "handoff":
       return { ...next({}), handoff: event.payload.handoff };
+    case "plan":
+    case "access_request":
+      // Paired desktops remain a legacy audience and use the host notice line.
+      return next({});
     case "issues":
       // Contract revision 42: Bot issue cards are a phone surface in this
       // revision; the Mac reads the same cards from its own Bot transcript.

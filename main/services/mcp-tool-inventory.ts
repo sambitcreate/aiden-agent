@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import Ajv, { type ValidateFunction } from "ajv";
 import addFormats from "ajv-formats";
 import type { CallToolResult, ServerCapabilities, Tool } from "@earendil-works/pi-mcp";
@@ -155,8 +156,13 @@ function createOutputSchemaAjv(): Ajv {
  * share one Ajv. A schema that declares `$id` gets its own Ajv: Ajv registers
  * ids per instance, so unrelated tools reusing an id would otherwise collide.
  */
-export function createMcpToolCallGuard(tools: readonly { name: string; outputSchema?: unknown; execution?: unknown }[]) {
-  const names = new Set(tools.map(({ name }) => name));
+export function createMcpToolCallGuard(
+  tools: readonly { name: string; title?: string; description?: string; inputSchema?: unknown; annotations?: unknown; outputSchema?: unknown; execution?: unknown }[],
+  assertCurrent?: () => void,
+) {
+  // Compare the operation the model saw, including the output contract used in exact Bot grants.
+  const operations = new Map(tools.map(({ name, title, description, inputSchema, outputSchema, annotations, execution }) =>
+    [name, { title, description, inputSchema, outputSchema, annotations, execution }] as const));
   const schemas = new Map<string, object>();
   const validators = new Map<string, JsonSchemaValidator>();
   const requiredTasks = new Set<string>();
@@ -186,9 +192,12 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
   return {
     /** Whether this inventory offers `name` at all. */
     has(name: string): boolean {
-      return names.has(name);
+      return operations.has(name);
     },
+    operation: (name: string) => operations.get(name),
     assertCallable(name: string): void {
+      assertCurrent?.();
+      if (!operations.has(name)) throw new Error("This MCP tool is no longer offered by its server.");
       if (requiredTasks.has(name)) throw new Error("This MCP tool requires unsupported task-based execution.");
       // Compile before dispatch so an unusable schema cannot follow a side effect.
       validatorFor(name);
@@ -208,6 +217,36 @@ export function createMcpToolCallGuard(tools: readonly { name: string; outputSch
 
 export type McpToolCallGuard = ReturnType<typeof createMcpToolCallGuard>;
 
+type ListedTool = Parameters<typeof createMcpToolCallGuard>[0][number];
+type ToolListing = { tools?: ReadonlyMap<string, ListedTool> };
+const latestToolListings = new WeakMap<object, ToolListing>();
+
+/** Bind each execution guard to the last complete listing observed on this client. */
+export async function readGuardedMcpInventory<T extends ListedTool>(
+  client: object, read: () => Promise<T[]>, assertCurrent: () => void,
+) {
+  const startedWith = latestToolListings.get(client);
+  const tools = await read();
+  assertCurrent();
+  const latest = latestToolListings.get(client);
+  const byName = new Map(tools.map(tool => [tool.name, tool]));
+  let listing = latest;
+  if (!latest?.tools || !isDeepStrictEqual(latest.tools, byName)) {
+    if (latest !== startedWith) {
+      // Conflicting overlapping listings cannot establish their order on the server.
+      latestToolListings.set(client, {});
+      throw new Error("MCP tool inventory changed during discovery.");
+    }
+    listing = { tools: byName };
+    latestToolListings.set(client, listing);
+  }
+  const guard = createMcpToolCallGuard(tools, () => {
+    assertCurrent();
+    if (latestToolListings.get(client) !== listing) throw new Error("MCP tool inventory changed.");
+  });
+  return { tools, guard };
+}
+
 /** Guarded dispatch: the call must belong to the inventory of the client carrying it. */
 export async function guardedMcpToolCall(
   guard: McpToolCallGuard,
@@ -215,9 +254,8 @@ export async function guardedMcpToolCall(
   params: McpToolCallParams,
   options?: McpCallOptions,
 ) {
-  if (!guard.has(params.name)) throw new Error("This MCP tool is no longer offered by its server.");
   guard.assertCallable(params.name);
-  const result = await callMcpTool(client, params, options);
+  const result = await callMcpTool(client, params, { ...options, beforeSend: () => guard.assertCallable(params.name) });
   guard.validateResult(params.name, result);
   return result;
 }
@@ -229,13 +267,17 @@ export async function guardedMcpToolCall(
  * against the live client's own inventory instead.
  */
 export async function callMcpToolOnLiveClient<C extends McpRequester>(
-  discovered: { client: C; guard: McpToolCallGuard },
+  discovered: McpToolCallGuard,
   live: C,
   inventoryOf: (client: C) => Promise<{ guard: McpToolCallGuard }>,
   params: McpToolCallParams,
   options?: McpCallOptions,
 ) {
-  const guard = live === discovered.client ? discovered.guard : (await inventoryOf(live)).guard;
+  const { guard } = await inventoryOf(live);
+  options?.signal?.throwIfAborted();
+  if (guard !== discovered && guard.has(params.name) && !isDeepStrictEqual(guard.operation(params.name), discovered.operation(params.name))) {
+    throw new Error("MCP tool description, schema or effects changed. Refresh the connection before using it.");
+  }
   return guardedMcpToolCall(guard, live, params, options);
 }
 
@@ -278,25 +320,37 @@ export const MCP_TOOL_INVENTORY_TTL_MS = 30_000;
  */
 export function createMcpToolInventoryCache<T>(options: { ttlMs?: number; now?: () => number } = {}) {
   const now = options.now ?? Date.now;
-  const watched = new WeakSet<object>();
+  const revisions = new WeakMap<object, object>();
   const entries = new WeakMap<object, { pending: Promise<T>; expiresAt: number }>();
   return {
     /** Register before connect so a change during initialization is not missed. */
     watch(client: McpNotificationSource): void {
-      watched.add(client);
-      client.onNotification(MCP_TOOL_LIST_CHANGED, () => { entries.delete(client); });
+      revisions.set(client, {});
+      client.onNotification(MCP_TOOL_LIST_CHANGED, () => {
+        revisions.set(client, {});
+        entries.delete(client);
+      });
     },
-    load(client: McpCapabilitySource, read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-      if (!watched.has(client)) return untilAborted(read(), signal);
+    load(client: McpCapabilitySource, read: (assertCurrent: () => void) => Promise<T>, signal?: AbortSignal, fresh = false): Promise<T> {
+      const revision = revisions.get(client);
+      const assertCurrent = () => {
+        if (revisions.get(client) !== revision) throw new Error("MCP tool inventory changed. Refresh the connection before using it.");
+      };
+      const load = async () => {
+        const result = await read(assertCurrent);
+        assertCurrent();
+        return result;
+      };
+      if (!revision || fresh) return untilAborted(load(), signal);
       const announcesChanges = client.serverCapabilities?.tools?.listChanged === true;
-      if (!announcesChanges && options.ttlMs === undefined) return untilAborted(read(), signal);
+      if (!announcesChanges && options.ttlMs === undefined) return untilAborted(load(), signal);
       let entry = entries.get(client);
       if (entry && entry.expiresAt <= now()) {
         entries.delete(client);
         entry = undefined;
       }
       if (!entry) {
-        const loading = read();
+        const loading = load();
         const created = { pending: loading, expiresAt: Number.POSITIVE_INFINITY };
         entry = created;
         entries.set(client, created);
@@ -309,6 +363,7 @@ export function createMcpToolInventoryCache<T>(options: { ttlMs?: number; now?: 
     },
     /** Drop a client's entry (it closed or is being replaced). */
     forget(client: object): void {
+      revisions.set(client, {});
       entries.delete(client);
     },
   };

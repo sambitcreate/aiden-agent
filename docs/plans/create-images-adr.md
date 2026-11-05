@@ -2,7 +2,7 @@
 
 > **Reconciled with ADR-F (2026-10-07):** the shared studio asset store's record field is `mediaType` and `put` takes `{ bytes, declaredMimeType? }`; holder keys are `images-workflow:<id>` and `images-run:<id>`; grants come from `studioAssetGrants.issue(owner, assetId, rendition)` → `aiden-asset://grant/<token>`. The provider port keeps Pi's `mimeType` naming; the coordinator maps `mimeType` → `declaredMimeType` at `put`. Validation accepts PNG/JPEG/WebP.
 
-Status: Proposed. Needs owner approval (Phase 0 gate).
+Status: Accepted. CI-1 merged in [#382](https://github.com/sambitcreate/aiden-agent/pull/382) and [#383](https://github.com/sambitcreate/aiden-agent/pull/383) (2026-10-08).
 Date: 2026-10-07
 Baseline: `main` @ `bd232b85` (Pi 1.0.3)
 Parent plan: [design-studio-create-images-rebuild-plan.md](design-studio-create-images-rebuild-plan.md), §6 ADR-CI and §9 Track CI
@@ -49,10 +49,14 @@ interface ImageGenerationPort {
 }
 ```
 
+*Amended 2026-10-31:* `ImageModelOption` also carries `maxReferences` (the model's `inputLimits.images.maxPerRequest`, capped at 4), and the port gains `preflight(request)`, which runs every local check (registry load, unknown/disabled model, auto router, reference support and limits, 8 MiB / 40 MP) and returns either a failure or `send()`. The executor runs `preflight` before claiming the ledger request, so a refusal that never left the machine is not counted or shown as "may have been billed". `listModels` returns `[]` when the registry fails to load. Output items that are not PNG/JPEG/WebP are dropped before the 4-image cap, and a reply with no usable images shows the model's text (one line, at most 280 characters).
+
+*Amended 2026-11-02.* Generate reserves room for up to four images and 8 MiB across all running workflows that share the asset store. Each stored image reduces the outstanding reservation. Finishing or abandoning the attempt releases the balance. The port checks the selected model against the configured image providers in preflight. Its `send(claim)` callback records the ledger claim after Pi resolves the image credential and immediately before provider dispatch. Removing the key while the step is queued or preparing leaves the attempt unsent. A provider response, including an authentication error returned by the provider, keeps the submitted timestamp.
+
 - **Implementation.** `createPiImageGenerationPort({ models, providerLabel, onUsage })` takes `models: Pick<Models, "getAvailableOfType" | "getModelOfType" | "generateImages">`, the same `Pick` that `PiModelToolsHost` uses. Production passes `providerRegistry.models`.
 - **Shared validation.** Extract `validImages` from `pi-model-tools.ts` into an exported `parseGeneratedImages()` in `main/services/pi-model-image-output.ts`. This is a behavior-preserving move, and `generate_image` keeps using it. References reuse `resolvePiModelImageInputs` bounds through an `ImageContent` adapter.
 - **Usage.** Each provider call records exactly one usage entry through `modelOperationUsageRecord(..., "create-images")`. This adds `"create-images"` to `UsageRequestSource` / `REQUEST_SOURCES`. Status is `completed`, `failed` or `cancelled`, and the record carries no prompts or paths.
-- **Picker source.** `getAvailableOfType("image")` returns only providers with complete auth, from last-known lists. The port **never** calls `models.refresh()`, so it adds no catalog network (AGENTS.md posture). It drops `openrouter/auto*`, because consent must name the real model. Without a configured provider, the picker shows "Add an OpenRouter key in Settings → Providers".
+- **Picker source.** *Reconciled 2026-10-13 ([#443](https://github.com/sambitcreate/aiden-agent/pull/443)): production now passes the dedicated image-generation registry (`imageGeneration.models`, `main/services/create-images/main.ts`) instead of `providerRegistry.models`, and the empty state points to Settings → Image Generation.* `getAvailableOfType("image")` returns only providers with complete auth, from last-known lists. The port **never** calls `models.refresh()`, so it adds no catalog network (AGENTS.md posture). It drops `openrouter/auto*`, because consent must name the real model. Without a configured provider, the picker shows "Add an OpenRouter key in Settings → Providers".
 - **Direct Google: defer to CI-2, conditional.** It needs a wrapped `google` provider with hand-maintained image models plus an `@google/genai` image implementation. `@google/genai` 2.24.0 is already a dependency. Credentials would follow the `tts/credentials.ts` explicit-source pattern: a saved Google key reused only after the user opts in, or `aiden-internal:images-api-key`, failing closed. That edits `provider-registry.ts`, a shared core, and would add a second unvalidated provider before the first real image exists, which is the old branch's failure mode. Include it in CI-1 only if the owner has no OpenRouter key (Q2).
 - **Test seam: no product mock.**
   - *Unit and integration:* `createModels()` + `setProvider(createProvider({ id: "test-images", auth, models: [imageModel], images: { "test-images": { generateImages } } }))`. The fake counts calls, records signals and can return images, errors, 429s, late results and over-limit outputs. This exercises the real `Models` auth and dispatch path.
@@ -72,6 +76,8 @@ interface ImageRunConsentPlan { consentId: string; workflowId: string; workflowR
   createdAt: number; expiresAt: number }                  // expiresAt = createdAt + 5 min
 ```
 
+*Amended 2026-10-31:* `prepare` and the start re-check refuse, with node-attributed issues and no consent, a plan whose references the model cannot accept (`references_unsupported`), whose worst-case reference count exceeds the model's or Aiden's limit (`too_many_references`; each earlier Generate in the run counts as up to 4 images, reported as `pendingReferenceCount` with `pendingReferenceSteps`), or whose known references exceed 8 MiB or 40 MP (`reference_bytes`, `reference_pixels`). At most 4 runs may be active across all workflows (`too_many_runs` / `too-many-runs`). Before a paid request the executor checks the asset store has room for a worst-case output, running one garbage collection before it refuses; a storage failure after a paid request is reported as `storage-full` or `storage-failed` (never `output-invalid`), and quit waits up to 1.5 s for provider cancels.
+
 - **`prepare-run`** loads the **saved** document at `workflowRevision` and rejects a stale revision, so the renderer flushes autosave first. It builds the plan with the scheduler's planner. It stores the plan in an in-memory, single-use map keyed by a random `consentId` and bound to the requesting `rendererDocumentOwner`. It sends nothing to a provider.
 - **`start-run`** consumes the consent. It re-checks expiry, document owner, document revision, plan digest and model availability, then creates the run with `request_limit = totalRequests`.
   - The port wrapper increments `runs.requests_sent` and refuses when the limit would be exceeded. That is the hard counter from umbrella §3.4.
@@ -82,7 +88,7 @@ interface ImageRunConsentPlan { consentId: string; workflowId: string; workflowR
   - If a provider result settles successfully before the abort is observed, its images are **kept** and the attempt is `succeeded` with `cancel_requested=1`. Paid output is never silently discarded.
   - If a model returns more than 4 images, the first 4 valid ones are kept and the attempt is flagged `truncated`. The paid attempt is not failed. This reflects the old branch's Gemini interim-image lesson.
   - `cancel-run` checks that the caller is an Aiden renderer document but is not bound to the document that started the run. Stopping can only reduce spend, and a reloaded or second Images window has a new document id yet must still be able to stop a run it shows.
-- **Quit.** `shutdownAndQuit` calls `imageRuns.shutdown()`: abort all, then mark `cancelled` with reason `app-quit`. This is a one-line orchestrator registration in the `main/index.ts` hotspot.
+- **Quit.** `shutdownAndQuit` calls `imageRuns.shutdown()`: abort all, then mark `cancelled` with reason `app-quit` (since 2026-10-31 it then waits, bounded, for auto-saves; §2.11). This is a one-line orchestrator registration in the `main/index.ts` hotspot.
   - *Adjustment:* CI-1 also adds a main-side in-flight check to `confirmProtectedAction` with honest copy: "N image requests in progress. Quitting cancels them; requests already sent may still be billed." CI-4 keeps only the copy polish.
 
 ### 2.3 Persistence
@@ -121,7 +127,8 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
 - **Restart.** In the reconcile chain:
   - Run `UPDATE attempts SET state='interrupted' WHERE state IN ('queued','running')`, plus the matching `runs` update.
   - Attempts with `submitted_at` show "may have been billed". There is no resubmit.
-- **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup.
+- **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup. *Amended 2026-10-31:* the latest-output exemption applies only to nodes still in the workflow document (a deleted workflow keeps none; a workflow whose file exists but can't be read keeps all, since it is kept for repair), ordered by attempt id rather than `finished_at`. On open, Create Images reconciles its `images-*` holds against the ledger and documents, and a corrupt ledger is quarantined and recreated because it is history only.
+- *Amended 2026-10-31:* every open adds the `attempts.prompt` column and the `exports` table when missing (no `user_version` bump, no migration code); see §2.11.
 - **Assets** go to the shared store (ADR-F). Each output asset is retained by holder `images-run:<runId>`, and each Image Input asset by `images-workflow:<id>`. Prune and delete release holders. If ADR-F lands plain ref-counts, use one increment per output row. GC belongs to F.
 - **Perf target.** A synthetic 500-node run against a zero-latency fake port must spend **< 1 s total** inside ledger calls, measured by wrapping the ledger. It runs as a separate `test:create-images:perf` npm script filed into an existing CI lane (ADR-F: no new lanes), not in the default pretest chain. The old branch took 114 s.
 
@@ -156,7 +163,10 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
 
 | Module | Role | Budget |
 |---|---|---|
-| `images-home.tsx` | Workflow library (list, new from Blank/Starter, rename/duplicate/delete) | ≤ 300 |
+| `images-home.tsx` | Images home: the Workflows / All Images tabs (`?view=images`), new from Blank/Starter, rename/duplicate/delete dialogs | ≤ 300 |
+| `workflow-grid.tsx` | Workflow cards: newest image, image count, last image time, ⋯ menu | ≤ 250 |
+| `image-library.tsx`, `library-toolbar.tsx`, `library-grid.tsx` | All Images: day-sectioned grid, search, workflow/model filters with counts, sort, Save All, context menu, viewer with Open Workflow | ≤ 250 each |
+| `library-core.ts` | Electron-free search, facets, sort, day sections, Save All cap, grid arrow keys, workflow summaries | ≤ 250 |
 | `workflow-editor.tsx` | Composes `<StudioCanvas>` from `renderer/canvas/`, the tool rail and the panels | ≤ 400 |
 | `nodes/registry.ts` | `type → { definition (ports.ts), component, defaults, minSize }` | ≤ 120 |
 | `nodes/{prompt,image-input,generate-image,output}-node.tsx` | One file per node type, built on the kit's node chrome | ≤ 250 each |
@@ -173,7 +183,7 @@ UI rules:
 - Neutral focus ring on non-text controls; no ring on text inputs.
 - The client is `renderer/lib/create-images-ipc.ts`; no edits to `renderer/lib/ipc.ts`.
 
-### 2.7 IPC (12 invoke channels plus 1 notification; ≤ 15 budget)
+### 2.7 IPC (14 invoke channels plus 1 notification; ≤ 15 budget)
 
 | Channel | Request | Response |
 |---|---|---|
@@ -189,11 +199,14 @@ UI rules:
 | `imageWorkflows:cancel-run` | `{ runId }` | `{ ok }` |
 | `imageWorkflows:get-run` | `{ runId } \| { workflowId /* active or latest */ }` | `{ snapshot: RunSnapshot \| null }` |
 | `imageWorkflows:list-runs` | `{ workflowId, limit ≤ 50 }` | `{ runs: RunSummary[] }` |
+| `imageWorkflows:gallery` (amended 2026-10-31) | `{ workflowId? }` | `{ items: GalleryItem[] /* newest first, ≤ 2,000 */, saveFolderLabel }` |
+| `imageWorkflows:image-action` (amended 2026-10-31) | `{ op: "view" \| "save-as" \| "copy" \| "reveal" \| "drag", assetId } \| { op: "save-all", assetIds /* 1–200 */ } \| { op: "reveal-saved", savedId } \| { op: "reveal-folder" }` | `{ ok: true, url?, count?, savedId? } \| { ok: false, reason: "cancelled" \| "not-found" \| "unsupported" \| "failed", message? }` |
 | `imageWorkflows:run-changed` (notify) | – | `RunSnapshot` |
 
 - All channels use `ipcMain.handle` with `main/shared/guards.ts` exact-key validators and the `rendererDocumentOwner` check.
 - Handlers live in `main/handlers/create-images/`.
 - Asset display URLs come from ADR-F's grant API. Create Images adds no asset channel and no paths cross IPC: the dialog runs in main.
+- *Amended 2026-10-31:* image actions name images by asset id only, and act only on a Generate output the ledger knows or an Image Input held by a workflow (`images-workflow:<id>`); anything else is `not-found`. Dialogs, the clipboard, the file manager and native drag stay in main. See §2.11.
 
 ### 2.8 CI-1 node set (schema v1)
 
@@ -246,6 +259,18 @@ UI rules:
   - Both checked against iOS/Android only if the transcript artifact contract changes, which is not expected.
 - **CI-3 / CI-4.** Unchanged, except that the quit-copy item shrinks to polish.
 
+### 2.11 Amendment (2026-10-31): see, explore, save
+
+Owner decisions: (a) keep each request's prompt locally so history can show it; (b) always auto-save every generated image to a visible folder; (c) a per-workflow history plus a cross-workflow library.
+
+- **Prompts in the ledger.** `attempts.prompt` holds the exact prompt text a Generate request sends, written in the same transaction as the request claim, and returned as `AttemptSnapshot.prompt` and `GalleryItem.prompt`. It is deleted with its run by retention or workflow delete. Prompts never go into usage records, analytics, logs or file names.
+- **Additive schema, no migration.** `user_version` stays 1. Every open adds the `attempts.prompt` column and the `exports (asset_id PRIMARY KEY, path, exported_at)` table when they are missing, so an older ledger gains them and keeps its history.
+- **Auto-save (supersedes the Q5 "userData only" answer).** After an attempt's images are stored, held and recorded, each is written in the background to `<Pictures>/Aiden/Create Images/<YYYY-MM-DD>/<HHMMSS> <workflow title> <sha8>.<ext>` (local time; the title made file-system safe, "Image" when empty, and cut between graphemes to at most 80 UTF-16 units and 180 UTF-8 bytes so the whole name, with a ` (n)` suffix, stays well under Linux's 255-byte name limit). Each file is written to a hidden `.aiden-<uuid>.tmp` staging file in the same folder and then hard-linked to its visible name, which fails if the name exists, so a ` (n)` suffix is tried; a write cut short never leaves a truncated image under the real name (volumes without hard links get the visible name created exclusively and written in place, removed on failure). A staging file left by a forced quit or crash is removed by the first export of the next session, which looks in the 14 newest day folders only and skips staging files this process is still writing (a Save As or Save All into a day folder). `exports` records asset → path. An asset already exported whose file still exists is not written again; a moved or deleted copy is written again by Reveal or drag. Failures are reported to the warning hook with the error code only (the fs message names the path, and so the workflow title), and never fail or delay the run. Quit waits up to 3 s for pending auto-saves after the runs settle, before the ledger and then the asset store close (main's image-runs quit budget is 5 s), so a save in progress is finished and recorded. `app.getPath("pictures")` is `~/Pictures` on macOS and the XDG pictures folder on Linux. Export records of images no remaining run names are dropped with pruning; the files are the person's and stay.
+- **Gallery.** `imageWorkflows:gallery` lists every succeeded Generate output the ledger knows (including latest outputs kept past retention), newest first by finish time, optionally for one workflow, each image once, capped at `GALLERY_MAX_ITEMS`. "Once" is per asset, and assets are content-addressed: byte-identical images from two runs show only under the newer run, so the older History group lists one fewer. Accepted, since identical provider output is vanishingly rare and every surface keys images by asset id. Items carry the run's state, the current workflow and Generate node titles (absent when gone), prompt, provider and model, `saved` (an export is recorded and its file exists now) and a document-bound `thumb-512` grant. `saveFolderLabel` is display text ("Pictures › Aiden › Create Images"); no absolute path crosses IPC.
+- **Image actions.** `view` returns a document-bound `original` grant; `save-as` opens a Save dialog in Downloads, offering the auto-saved name (overwrite confirmed by the dialog; the bytes are staged beside the target and renamed over it, so a failed write keeps the file it would replace); `save-all` opens a folder picker in Downloads and writes up to `SAVE_ALL_MAX_IMAGES` de-duplicated images under unique names; `copy` decodes with `nativeImage` and answers `unsupported` when it can't (some WebP); `reveal` and `drag` first make sure the auto-saved copy exists; `reveal-folder` creates and opens the folder. Save All authorizes every id in one pass over the ledger before the dialog opens (any unknown id refuses the whole request); a single-image action uses a targeted ledger lookup. A successful `save-as` or `save-all` returns an opaque `savedId`, and so does a `save-all` that wrote only some of its images (`failed` with "Aiden saved N of M images."); `reveal-saved` shows that file or folder (the last 50 saves of the session, held only in main), so the toast's Show in Finder never needs a path.
+- **Library (renderer).** The Images home has two views on the shared `Tabs`: **Workflows** (a card per workflow with its newest image, image count and the time of its last image, all from the all-workflows gallery) and **All Images** (the gallery newest first in local-day sections, "Today", "Yesterday", then the date). Search matches every whitespace-separated term, case-insensitively, against the prompt, the model id and display name, and the workflow and node titles; the workflow and model filters list counts that follow the search and each other; images of deleted workflows share one "Deleted workflows" choice; a sort puts the oldest first. A thumbnail opens the shared viewer over the filtered set with **Open Workflow** (disabled once the workflow is gone); closing the viewer returns focus to that image's thumbnail, found by asset id, wherever it now is; right-click offers Save…, Copy Image, Show in Finder and Open Workflow; **Save All…** saves the filtered set up to `SAVE_ALL_MAX_IMAGES` and says when more exist. The grid is one Tab stop moved by the arrow keys, Home and End. The view is the `/images` route's `view` search param, so Back from a workflow returns to All Images; the search and filters themselves reset when the home unmounts. The logic lives in `library-core.ts`; no new IPC.
+- **Tests never touch the real Pictures folder.** `CreateImagesRuntime` writes nothing outside userData unless given `saveRoot` (unit and handler tests pass a temporary folder). The E2E bootstrap (`tests/e2e/electron-test-bootstrap.cjs`) sets Electron's `pictures` path inside the fixture's temporary home, and `assertRuntimeIsolation` fails a launch whose Pictures folder escapes it. With `AIDEN_EXPERIMENTAL_CREATE_IMAGES` off nothing opens, so nothing is saved.
+
 ## 3. Owner decisions (2026-10-07)
 
 - **Q1/Q2:** OpenRouter in CI-1 with default `google/gemini-3.1-flash-image`; direct Google deferred to CI-2. The owner has an OpenRouter key for CI-1.10.
@@ -260,7 +285,7 @@ UI rules:
 | Q2 | Do you have an OpenRouter key for CI-1.10, or should direct Google be in CI-1? | Use OpenRouter in CI-1 and direct Google in CI-2. Pull Google forward only if OpenRouter is not an option for you. |
 | Q3 | Caps | Concurrency default 2 and max 4; `count` ≤ 4 per node; **≤ 16 provider requests per run** in CI-1. Raise this with CI-3 batching. |
 | Q4 | Cost estimate | Show "Estimate unavailable" in CI-1, because catalog token pricing does not model per-image pricing, and show the reported cost after each attempt. In CI-2, consider "last reported cost for this model" from local usage history. |
-| Q5 | Where generated images live | userData asset store only in CI-1, with Download/Reveal in CI-2. No auto-export folder (the old branch's forced external folder and Finder sync are dropped). |
+| Q5 | Where generated images live | userData asset store only in CI-1, with Download/Reveal in CI-2. No auto-export folder (the old branch's forced external folder and Finder sync are dropped). *Superseded 2026-10-31 by §2.11: every generated image is also auto-saved to `Pictures/Aiden/Create Images`.* |
 | Q6 | Aspect ratio | Leave it out of CI-1 and use prompt wording. Revisit only through a per-API `onPayload` adapter (OpenRouter `image_config`) if live use shows a need. |
 
 ## 4. Risks

@@ -15,3 +15,9 @@ Decisions:
 Not verified on a real Mac from the cloud container: the owner needs to install iMCP, set it up in Settings → Connectors and accept iMCP's "Allow aiden-agent" prompt and the Local Network prompt for imcp-server.
 
 Review round 1 (Pullfrog, 2026-10-26): Manage → Save and the dialog's switch dropped the saved `exposure`/`hiddenTools` (main's parser stores absent fields as cleared). Fixed in the iMCP dialog. The HTTP preset dialog (`mcp-preset-setup.tsx` `build()`) and the custom connector editor (`mcp-settings.tsx` `build()`) had the same pre-existing gap; the owner said fix it, so #590 fixes all three, covered by the "keeps the model access" tests in `mcp-settings.test.tsx`. Any new dialog that rebuilds a saved McpServer must carry `exposure`/`hiddenTools`. Note: a test that waits for the custom editor to close after a successful Save hangs the test process (microtask loop in the test DOM); wait on the `mcp:save` call instead.
+
+## Approved executable identity — 2026-11-02
+
+The desktop checks both signatures at setup and at every launch. The universal launcher uses a macOS launch requirement for Developer ID team TTY35UM57S and identifier imcp-server. These match the installed iMCP 1.8.0 distribution. The stored approval still names the selected Applications path. CLI discovery skips old imported iMCP preset records, which remain removable.
+
+The Settings Open action rechecks the originating document after bundle probes and immediately before invoking the OS open operation. The per-launch signed server requirement is separate.

@@ -1,3 +1,6 @@
+import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
+import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
 // reaches a Bot's one durable conversation through this service.
 //
@@ -28,6 +31,8 @@ import type { AssistantMessage, ImageContent, Models, TextContent } from "@earen
 import {
   AssistantEntry,
   type Conversation,
+  type Cursor,
+  GenerationTask,
   type Harness,
   HarnessInspection,
   HarnessSettings,
@@ -35,6 +40,8 @@ import {
   type SettledSubmissionRecord,
   SubmissionId,
   SubmissionRecord,
+  type TaskId,
+  ToolTask,
   UserInput,
 } from "@earendil-works/pi-durable";
 import {
@@ -78,6 +85,7 @@ export type BotSessionState =
 
 /** A transcript notice entry; `data` of `aiden.bot-notice`. */
 export type BotNotice =
+  | ({ notice: "bot_message"; requestId: string } & BotMessageInputMetadata)
   | { notice: "interrupted"; submissionId: string }
   | { notice: "session_reset"; movedTo: string }
   /** Precedes a routine's input: the turn is labelled with the routine name. */
@@ -111,6 +119,8 @@ export interface BotInputAttachment {
 }
 
 export interface BotSendInput {
+  ifIdle?: boolean;
+  botMessage?: BotMessageInputMetadata;
   text: string;
   attachments?: readonly BotInputAttachment[];
   requestId: string;
@@ -128,6 +138,7 @@ export interface BotSendInput {
 }
 
 export type BotSessionErrorReason =
+  | "bot_busy"
   | "needs_model"
   | "model_error"
   | "unavailable"
@@ -161,6 +172,7 @@ function authorityOf(error: unknown): string | undefined {
 
 function defaultMessage(reason: BotSessionErrorReason): string {
   switch (reason) {
+    case "bot_busy": return "This Bot is busy.";
     case "needs_model":
       return "This Bot needs an AI model.";
     case "model_error":
@@ -185,6 +197,7 @@ function defaultMessage(reason: BotSessionErrorReason): string {
 export type BotWithdrawResult = "withdrawn" | "started" | "gone";
 
 export interface BotSessionService {
+  canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
   submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
@@ -222,6 +235,8 @@ export interface BotSessionService {
 }
 
 export interface BotSessionRuntime extends BotSessionService {
+  /** Read-only task observation for collecting message replay receipts. Never resumes scheduling. */
+  awaitMessageTaskSettlement(botId: string, taskId: string, signal: AbortSignal): Promise<boolean>;
   /** Startup: remove orphaned Bot sessions and record interrupted Bots. Never resumes. */
   initialize(): Promise<{ removedOrphans: string[]; interrupted: string[] }>;
   /** The Bot's conversation, opened lazily (for live projection). */
@@ -290,6 +305,8 @@ export interface BotSessionServiceDeps {
   onStateChange?(botId: string, state: BotSessionState): void;
   /** `resume` restarted an interrupted turn (not called for replays, blocked or no-op resumes). */
   onResumed?(botId: string): void;
+  /** A running reply was aborted by Stop, or an interrupted turn was dismissed. Must not await a plan serial. */
+  onStopped?(botId: string): void;
   onReport?(botId: string, error: unknown): void;
   /** Which Bots the person paused. Default: `<profileDir>/bot-service/bot-pauses.json`. */
   pauses?: BotPauseStore;
@@ -424,7 +441,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     // `hiddenSubmissions` is latent: the only hidden sender (the self-intro) already has the
     // `intro:` prefix. Any future hidden sender needs a durable request-id prefix, because this
     // set is lost on restart.
-    return requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
+    return isBotMessageRequestId(requestId) || requestId.startsWith("routine:") || requestId.startsWith(BOT_INTRO_REQUEST_PREFIX) || hiddenSubmissions.has(String(record.id));
   }
 
   function requireHost(): BotHarnessHost {
@@ -455,7 +472,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   }
 
   async function writeNotice(conversation: Conversation, notice: BotNotice): Promise<void> {
-    await conversation.submit({ type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: notice } }, ctx);
+    await conversation.submit({ type: "write", ...(notice.notice === "bot_message" ? {requestId: `bot-message-notice:${notice.requestId}`} : {}), entry: { kind: BOT_NOTICE_ENTRY_KIND, data: {...notice} } }, ctx);
   }
 
   /**
@@ -526,9 +543,9 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
   /**
    * Bind the Bot's current model and reload its extension before anything runs.
-   * The registry always holds the attended tool set: the input may queue behind
-   * other turns, so its own ingress rules are applied when its run makes each
-   * request and call (`turnAllows` in `bot-extension.ts`), never here.
+   * Preparation installs the attended set because a competing input can win
+   * admission after the idle snapshot. Each request and call applies its own
+   * ingress rules (`turnAllows` in `bot-extension.ts`).
    */
   async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
     const resolved = await modelFor(botId);
@@ -685,6 +702,42 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return currentState(botId);
     },
 
+    canRetryRoutineRequest(botId, requestId) {
+      return serialize(botId, async () => {
+        const { conversation } = await openBot(botId);
+        return conversation.commit(async (tx) => {
+          const record = await tx.submissionByRequest(conversation.id, requestId);
+          if (record?.type !== "input" || record.status !== "unanswered") return false;
+          if (record.entry === undefined) return true; // Settled before placement.
+          if (!await tx.entry(record.entry)) return false;
+          // A routine is placed as a follow-up. Pi creates its first generation
+          // in the same commit, after all the inputs it serves. Entries and
+          // tasks share a monotonically increasing ID space. Walk back to that
+          // generation, ignoring later turns and including any co-placed inputs.
+          const query = { conversationId: conversation.id, order: "descending" as const };
+          const toolOwners = new Set<TaskId>();
+          let safe = false;
+          let cursor: Cursor | undefined;
+          do {
+            const page = await tx.scanTasks(query, 64, cursor);
+            for (const task of page.items) {
+              if (task.id < record.entry) return safe;
+              if (task.kind === ToolTask.definition.name && task.owner) toolOwners.add(task.owner);
+              if (task.kind === GenerationTask.definition.name) {
+                // A completed generation may already have handed off to a
+                // successor. An aborted one may have started a tool task.
+                safe = task.state.status === "terminal" &&
+                  (task.state.outcome.status === "failed" || task.state.outcome.status === "aborted") &&
+                  !toolOwners.has(task.id);
+              }
+            }
+            cursor = page.next;
+          } while (cursor);
+          return safe;
+        }, ctx);
+      });
+    },
+
     submissionForRequest(botId, requestId) {
       return serialize(botId, async () => {
         const { conversation } = await openBot(botId);
@@ -694,10 +747,17 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     },
 
     send(botId, input) {
+      if (input.botMessage && (input.label !== undefined || input.hidden !== undefined)) return Promise.reject(new TypeError("Bot messages cannot be labelled or hidden."));
+      const turn = botMessageTurnOf(input.requestId);
+      if (isBotMessageRequestId(input.requestId) !== (input.botMessage !== undefined) || (input.botMessage && (
+        (turn.kind !== "message" && turn.kind !== "reply") || turn.deliveryId !== input.botMessage.deliveryId ||
+        (turn.kind === "message" ? input.botMessage.kind !== "request" || turn.fromBotId !== input.botMessage.botId : input.botMessage.kind !== "reply") ||
+        !Number.isFinite(input.botMessage.deadline)))) return Promise.reject(new TypeError("Bot message provenance does not match the request."));
       return serialize(botId, async () => {
         const { conversation, registry } = await openBot(botId);
         const existing = await lookupRequest(conversation, input.requestId);
         if (existing !== undefined) return { submissionId: String(existing.id), deduped: true };
+        if (input.botMessage && input.botMessage.deadline <= Date.now()) throw new BotSessionError("unavailable", "This Bot message expired.");
         // After the dedupe lookup, so a redelivered request still reports its submission.
         await assertNotPaused(botId);
         const spendingRefusal = await deps.spendingRefusal?.(botId);
@@ -705,6 +765,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
+        if (input.ifIdle && before.kind !== "idle") throw new BotSessionError("bot_busy");
         await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
@@ -716,12 +777,15 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (input.hidden === true) {
           await writeNotice(conversation, { notice: "hidden_input", requestId: input.requestId });
         }
+        if (input.botMessage && input.botMessage.deadline <= Date.now()) throw new BotSessionError("unavailable", "This Bot message expired.");
+        if (input.botMessage) await writeNotice(conversation, {notice: "bot_message", requestId: input.requestId, ...input.botMessage});
         const submission = await conversation.submit(
           {
             type: "input",
             content: userContent(input),
+            ...(input.botMessage ? {entry: {kind: BOT_MESSAGE_INPUT_KIND, data: {...input.botMessage}}} : input.label !== undefined ? {entry: {kind: BOT_ROUTINE_INPUT_KIND}} : {}),
             requestId: input.requestId,
-            whenBusy: input.whenBusy ?? "followUp",
+            whenBusy: input.ifIdle ? "reject" : input.whenBusy ?? "followUp",
           },
           ctx,
         );
@@ -769,6 +833,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         // Pending tool calls settle against the Bot's tools while aborting.
         await registry.refresh().catch(() => undefined);
         await dismissPaused(conversation, before.submissionId);
+        deps.onStopped?.(botId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));
       });
@@ -780,6 +845,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind !== "running") return before;
         const { conversation } = await openBot(botId);
         await conversation.abort(ctx);
+        deps.onStopped?.(botId);
         return publish(botId, await currentState(botId));
       });
     },
@@ -816,6 +882,69 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         for (const effect of deps.deleteEffects ?? []) await effect(botId);
         await recordPendingDelete(botId, false);
       });
+    },
+
+    async awaitMessageTaskSettlement(botId, taskId, signal) {
+      if (signal.aborted || deleted.has(botId)) return false;
+      const id = Number(taskId) as TaskId;
+      if (!Number.isSafeInteger(id)) return false;
+      const owner = requireHost();
+      // Inspection keeps a corrupt-session recovery notice for the next real
+      // open. A task absent from the live graph cannot replay, including after
+      // recovery replaced its session with an empty one.
+      const inspection = await owner.inspect(botId);
+      const live = inspection.tasks.find((task) => task.record.id === id)?.record;
+      if (!live) return true;
+      if (live.kind !== ToolTask.definition.name) return false;
+      if (signal.aborted || deleted.has(botId)) return false;
+      const opened = await owner.open(botId);
+      if (opened.recoveredCorruptFile !== undefined) {
+        await writeNotice(opened.conversation, {
+          notice: "session_reset",
+          movedTo: opened.recoveredCorruptFile,
+        });
+      }
+      const record = await opened.harness.getTask(id, ctx);
+      if (live.conversationId !== opened.conversation.id) return false;
+      if (!record) return true;
+      if (
+        record.kind !== ToolTask.definition.name ||
+        record.conversationId !== opened.conversation.id
+      )
+        return false;
+      if (
+        record.state.status === "terminal" ||
+        record.state.status === "completing"
+      )
+        return true;
+      const { context, cancel } = withCancel(ctx);
+      const onAbort = () => cancel(signal.reason);
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        const watch = await opened.harness.watchTaskGraph(context);
+        try {
+          return await new Promise<boolean>((resolve) => {
+            const check = (graph: typeof watch.value) => {
+              const task = graph.tasks[taskId];
+              if (!task || task.state.status === "completing") resolve(true);
+            };
+            check(watch.value);
+            watch.start(async (graph) => {
+              check(graph);
+            });
+            void watch.closed.then(() => resolve(false));
+          });
+        } finally {
+          await watch.stop();
+        }
+      } catch (error) {
+        if (!signal.aborted) throw error;
+        return false;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+        cancel();
+      }
     },
 
     async awaitReply(botId, submissionId, signal) {
@@ -863,9 +992,22 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       await service.appendEntry(botId, BOT_NOTICE_ENTRY_KIND, { notice: "silent", submissionId });
     },
 
-    async appendEntry(botId, kind, data) {
-      const { conversation } = await openBot(botId);
-      await conversation.commit((tx) => tx.appendEntry(conversation.id, { kind, data }), ctx);
+    appendEntry(botId, kind, data) {
+      return serialize(botId, async () => {
+        const {conversation} = await openBot(botId);
+        const effectId = data && typeof data === "object" && !Array.isArray(data) ? data.effectId : undefined;
+        await conversation.commit(async tx => {
+          if (typeof effectId === "string") {
+            let cursor: Cursor | undefined;
+            do {
+              const page = await tx.scanEntries({conversationId: conversation.id}, 500, cursor);
+              if (page.items.some(e => e.kind === kind && (e.data as {effectId?: string} | undefined)?.effectId === effectId)) return;
+              cursor = page.next;
+            } while (cursor !== undefined);
+          }
+          await tx.appendEntry(conversation.id, {kind, data});
+        }, ctx);
+      });
     },
 
     pause(botId, by) {

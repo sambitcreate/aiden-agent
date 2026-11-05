@@ -11,18 +11,24 @@ const LABELS: Record<BrowserLinkOpening, string> = {
 };
 const MOD = isMacPlatform() ? "⌘" : "Ctrl";
 
-export function LinksSettings() {
+export function LinksSettings({ embedded = false }: { embedded?: boolean }) {
   const [value, setValue] = React.useState<BrowserLinkOpening | null>(null);
+  const revision = React.useRef(0);
 
   React.useEffect(() => {
     let live = true;
+    const reading = revision.current;
     void browserApi
       .linkPreference()
-      .then((next) => live && setValue(next))
-      .catch(() => live && setValue("ask"));
+      .then((next) => live && reading === revision.current && setValue(next))
+      .catch(() => live && reading === revision.current && setValue("ask"));
     const off = browserApi.onEvent((event) => {
-      if (event.type === "state" && event.state.defaults) setValue(event.state.defaults.linkOpening);
-      else if (event.type === "link-preference") setValue(event.linkOpening);
+      const next = event.type === "state" ? event.state.defaults?.linkOpening
+        : event.type === "link-preference" ? event.linkOpening : undefined;
+      if (next !== undefined) {
+        revision.current += 1;
+        setValue(next);
+      }
     });
     return () => {
       live = false;
@@ -32,17 +38,18 @@ export function LinksSettings() {
 
   const change = (next: BrowserLinkOpening) => {
     const previous = value;
+    const writing = ++revision.current;
     setValue(next);
     void browserApi.setLinkPreference(next).catch((error: unknown) => {
+      if (writing !== revision.current) return;
       setValue(previous);
       toast.error(error instanceof Error ? error.message : "Couldn't save this setting.");
     });
   };
 
-  return (
-    <FieldSet>
+  const field = (
       <Field
-        label="Open links in"
+        label={embedded ? "Open chat links in" : "Open links in"}
         description={`Local dev servers always open in Aiden. ${MOD}-click a link to open it in the other browser.`}
       >
         <Select
@@ -50,7 +57,7 @@ export function LinksSettings() {
           onValueChange={(next) => change(next as BrowserLinkOpening)}
           disabled={value === null}
         >
-          <SelectTrigger aria-label="Open links in">
+          <SelectTrigger size="small" aria-label={embedded ? "Open chat links in" : "Open links in"}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -62,6 +69,6 @@ export function LinksSettings() {
           </SelectContent>
         </Select>
       </Field>
-    </FieldSet>
   );
+  return embedded ? field : <FieldSet>{field}</FieldSet>;
 }

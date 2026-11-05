@@ -39,7 +39,7 @@ function finiteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function isWakeUpMarker(value: unknown): value is { setAt: number } {
+function isWakeUpMarker(value: unknown): value is NonNullable<ScheduledTask["wakeUp"]> {
   return (
     !!value &&
     typeof value === "object" &&
@@ -179,6 +179,10 @@ function assertBotRoutineShape(task: {
   }
 }
 
+function observeQueuedRetries(fires: ScheduledTask["pendingRoutineFires"]) {
+  return fires?.map((fire) => fire.retry ? { ...fire, observeOnly: true as const } : fire);
+}
+
 function normalizeInput(
   input: ScheduledTaskInput,
   existing: ScheduledTask | undefined,
@@ -297,6 +301,9 @@ function normalizeInput(
   ) {
     throw new Error("Pick a time in the future for this routine.");
   }
+  const retiredRetries = existing && (!enabled || !existing.enabled || existing.prompt !== prompt ||
+    existing.cron !== cron || existing.timezone !== timezone);
+  const pending = retiredRetries ? observeQueuedRetries(existing.pendingRoutineFires) : existing?.pendingRoutineFires;
   return {
     id: existing?.id ?? cleanOptional(input.id, 160) ?? randomUUID(),
     name,
@@ -305,9 +312,7 @@ function normalizeInput(
     cron,
     timezone,
     nextRunAt,
-    ...(botId !== undefined && existing?.pendingRoutineFires?.length
-      ? { pendingRoutineFires: existing.pendingRoutineFires }
-      : {}),
+    ...(botId !== undefined && pending?.length ? { pendingRoutineFires: pending } : {}),
     lastRunAt: existing?.lastRunAt,
     workspaceId,
     providerId,
@@ -331,7 +336,7 @@ function normalizeInput(
       : {}),
     // Set once, when the Bot sets a wake-up; an edit never adds or removes it.
     ...(botId !== undefined && isWakeUpMarker(existing ? existing.wakeUp : input.wakeUp)
-      ? { wakeUp: { setAt: (existing ? existing.wakeUp : input.wakeUp)!.setAt } }
+      ? { wakeUp: existing ? existing.wakeUp : input.wakeUp }
       : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
@@ -363,7 +368,7 @@ export function botRoutineRetryRequestId(failedRunId: string, attempt: 1 | 2): s
 function storedRoutineRetry(value: unknown, requestId: unknown, taskId: string): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const retry = value as Record<string, unknown>;
-  return Object.keys(retry).length === 2 &&
+  return Object.keys(retry).length === (retry.verifiedToolFree === true ? 3 : 2) &&
     (retry.attempt === 1 || retry.attempt === 2) &&
     typeof retry.failedRunId === "string" && retry.failedRunId.length <= 200 &&
     retry.failedRunId.startsWith(`routine:${taskId}:`) &&
@@ -515,7 +520,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
       ? { sourceProposalId: task.sourceProposalId }
       : {}),
-    ...(botId !== undefined && isWakeUpMarker(task.wakeUp) ? { wakeUp: { setAt: task.wakeUp.setAt } } : {}),
+    ...(botId !== undefined && isWakeUpMarker(task.wakeUp) ? { wakeUp: task.wakeUp } : {}),
     notify: task.notify !== false,
     lastResult: scheduleError
       ? "error"
@@ -716,6 +721,31 @@ export function createScheduleStore(
     };
   }
 
+  async function changeEnabled(id: string, enabled: boolean, options?: { clearRoutineRetriesExcept: string }) {
+    return tasks.update((draft) => {
+      const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+      const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+      if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+      if (enabled) assertAssistantScheduleExecutionBoundary(existing);
+      const timestamp = now();
+      const task: ScheduledTask = {
+        ...existing,
+        enabled,
+        ...(!enabled && !options && existing.pendingRoutineFires?.length && { pendingRoutineFires: observeQueuedRetries(existing.pendingRoutineFires) }),
+        ...(options && {
+          pendingRoutineFires: existing.pendingRoutineFires?.filter((fire) =>
+            !fire.retry || fire.requestId === options.clearRoutineRetriesExcept),
+        }),
+        nextRunAt: enabled
+          ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
+          : undefined,
+        updatedAt: nextTaskRevision(timestamp, existing.updatedAt),
+      };
+      draft[index] = task;
+      return { task: structuredClone(task), previous: existing };
+    });
+  }
+
   return {
     list,
     get,
@@ -729,26 +759,13 @@ export function createScheduleStore(
       return (await saveWithRollback(input, isCurrent)).task;
     },
 
-    restoreIfRevision,
+    async setEnabled(id: string, enabled: boolean, options?: { clearRoutineRetriesExcept: string }): Promise<ScheduledTask> {
+      return (await changeEnabled(id, enabled, options)).task;
+    },
 
-    async setEnabled(id: string, enabled: boolean): Promise<ScheduledTask> {
-      return tasks.update((draft) => {
-        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
-        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
-        if (!existing) throw new Error(`Scheduled task ${id} not found.`);
-        if (enabled) assertAssistantScheduleExecutionBoundary(existing);
-        const timestamp = now();
-        const task: ScheduledTask = {
-          ...existing,
-          enabled,
-          nextRunAt: enabled
-            ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
-            : undefined,
-          updatedAt: nextTaskRevision(timestamp, existing.updatedAt),
-        };
-        draft[index] = task;
-        return structuredClone(task);
-      });
+    async pauseWithRollback(id: string) {
+      const { task, previous } = await changeEnabled(id, false);
+      return { task, rollback: () => restoreIfRevision(id, task.updatedAt, previous) };
     },
 
     updateRuntime,
@@ -791,7 +808,7 @@ export function createScheduleStore(
      */
     async addRoutineRetry(
       id: string,
-      retry: { failedRunId: string; attempt: 1 | 2; at: number },
+      retry: { failedRunId: string; attempt: 1 | 2; at: number; verifiedToolFree?: true },
     ): Promise<boolean> {
       return tasks.update((draft) => {
         const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
@@ -808,7 +825,7 @@ export function createScheduleStore(
             requestId,
             prompt: existing.prompt ?? "",
             name: existing.name,
-            retry: { failedRunId: retry.failedRunId, attempt: retry.attempt },
+            retry: { failedRunId: retry.failedRunId, attempt: retry.attempt, ...(retry.verifiedToolFree && { verifiedToolFree: true }) },
           }],
           updatedAt: nextTaskRevision(now(), existing.updatedAt),
         };

@@ -16,7 +16,7 @@ import {
 } from "radix-ui";
 import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
+import { ArrowDownToLine, PanelLeft, Check, ChevronDown, ChevronRight, Menu, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
@@ -42,6 +42,13 @@ import {
   type CompactSidebarFocusState,
 } from "../lib/compact-sidebar-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import {
+  collapsedHeaderInset,
+  leadingClusterOffset,
+  useTrailingWindowControlsClearance,
+  useWindowChrome,
+} from "../lib/window-chrome";
+import { windowControlsApi } from "../lib/ipc";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -413,10 +420,13 @@ const SplitContext = React.createContext<{
 
 /**
  * Left padding that keeps a full-width header clear of the window controls and
- * the leading sidebar-toggle/history cluster while the sidebar is collapsed.
- * The cluster starts at 90px and holds up to three 28px actions.
+ * the leading sidebar-toggle/history cluster while the sidebar is collapsed,
+ * or undefined while it is open. See `collapsedHeaderInset` for the geometry.
  */
-export const SPLIT_VIEW_COLLAPSED_HEADER_INSET = 190;
+export function useSplitViewCollapsedHeaderInset(): number | undefined {
+  const chrome = useWindowChrome();
+  return React.useContext(SplitContext)?.collapsed === true ? collapsedHeaderInset(chrome) : undefined;
+}
 
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
 export function useSplitViewCollapsed(): boolean {
@@ -632,6 +642,7 @@ function SplitViewRoot({
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
+  const chrome = useWindowChrome();
   const splitContext = React.useMemo(
     () => ({
       collapsed,
@@ -710,10 +721,12 @@ function SplitViewRoot({
           ref={setLeadingAnchor}
           inert={contentModalOpen ? true : undefined}
           aria-hidden={contentModalOpen ? true : undefined}
+          data-leading-cluster
           className={cn(
-            "absolute left-[90px] top-0 z-40 flex h-13 items-center gap-0.5",
+            "absolute top-0 z-40 flex h-13 items-center gap-0.5",
             contentModalOpen && "pointer-events-none",
           )}
+          style={{ left: leadingClusterOffset(chrome) }}
         />
       </div>
     </SplitContext.Provider>
@@ -721,17 +734,48 @@ function SplitViewRoot({
 }
 
 /**
+ * Linux main menu: with Aiden's own title bar there is no menu bar, so this
+ * opens the same File, Edit, View, Go, Chat, Window and Help menus as a popup.
+ */
+function WindowMenuButton() {
+  const open = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    void windowControlsApi.showMenu({ x: rect.left, y: rect.bottom + 4 }).catch(() => {
+      toast.error("Aiden couldn't open the menu.");
+    });
+  };
+  return (
+    <Button
+      iconOnly
+      size="small"
+      variant="bar"
+      data-window-menu
+      className="no-drag"
+      aria-label="Main menu"
+      aria-haspopup="menu"
+      title="Main menu"
+      onClick={open}
+    >
+      <Menu />
+    </Button>
+  );
+}
+
+/**
  * The sidebar toggle, portaled beside the window controls so it stays put
  * whether the sidebar is open or collapsed. `children` follow it in the same
- * cluster (history navigation).
+ * cluster (history navigation). With Aiden's Linux title bar the main menu
+ * button leads the cluster.
  */
 function SidebarToggle({ children }: { children?: React.ReactNode }) {
   const context = React.useContext(SplitContext);
+  const chrome = useWindowChrome();
   const shortcut = useShortcutLabel("sidebar.toggle");
   const shortcutBinding = useShortcutBinding("sidebar.toggle");
   if (!context) return null;
   const cluster = (
     <>
+      {chrome === "aiden" ? <WindowMenuButton /> : null}
       <Button
         iconOnly
         size="small"
@@ -761,6 +805,8 @@ export function Sidebar({
   onSearchChange,
   actions,
   footer,
+  belowList,
+  listRegionRef,
   children,
 }: React.PropsWithChildren<{
   searchable?: boolean;
@@ -769,6 +815,10 @@ export function Sidebar({
   onSearchChange?: (value: string) => void;
   actions?: React.ReactNode;
   footer?: React.ReactNode;
+  /** Pinned under the scrolling list, above the footer; it doesn't scroll with the list. */
+  belowList?: React.ReactNode;
+  /** The scrolling list and `belowList` together, for keyboard movement that spans both. */
+  listRegionRef?: React.Ref<HTMLDivElement>;
 }>) {
   const viewport = React.useRef<HTMLDivElement>(null);
   const [atTop, setAtTop] = React.useState(true);
@@ -834,14 +884,17 @@ export function Sidebar({
           </label>
         </div>
       ) : null}
-      <div
-        ref={viewport}
-        data-scroll-top={atTop}
-        data-scroll-bottom={atBottom}
-        className="scroll-edge-mask dimmable min-h-0 flex-1 overflow-y-auto"
-        onScroll={(event) => updateScrollEdges(event.currentTarget)}
-      >
-        {children}
+      <div ref={listRegionRef} className="flex min-h-0 flex-1 flex-col">
+        <div
+          ref={viewport}
+          data-scroll-top={atTop}
+          data-scroll-bottom={atBottom}
+          className="scroll-edge-mask dimmable min-h-0 flex-1 overflow-y-auto"
+          onScroll={(event) => updateScrollEdges(event.currentTarget)}
+        >
+          {children}
+        </div>
+        {belowList}
       </div>
       {footer}
     </div>
@@ -1066,7 +1119,9 @@ export function ScrollArea({
   const jumpSettleTimerRef = React.useRef(0);
   const autoScrollRef = React.useRef(autoScrollToBottom);
   const streamingRef = React.useRef(streaming);
-  const split = React.useContext(SplitContext);
+  const collapsedInset = useSplitViewCollapsedHeaderInset();
+  const headerRef = React.useRef<HTMLElement>(null);
+  const trailingClearance = useTrailingWindowControlsClearance(headerRef);
 
   autoScrollRef.current = autoScrollToBottom;
   streamingRef.current = streaming;
@@ -1346,7 +1401,11 @@ export function ScrollArea({
       <header
         data-toolbar
         className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4 transition-[padding] duration-300 ease-emphasized motion-reduce:transition-none"
-        style={{ paddingLeft: split?.collapsed ? SPLIT_VIEW_COLLAPSED_HEADER_INSET : undefined }}
+        ref={headerRef}
+        style={{
+          paddingLeft: collapsedInset,
+          paddingRight: trailingClearance ? trailingClearance + 4 : undefined,
+        }}
       >
         <div className="no-drag flex shrink-0 items-center">{leading}</div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -1797,7 +1856,7 @@ export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(function Content({ className, sideOffset = 6, ...props }, ref) {
+>(function Content({ className, sideOffset = 6, onCloseAutoFocus, ...props }, ref) {
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
@@ -1810,6 +1869,16 @@ export const DropdownMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event);
+          // An item that opened a dialog has already moved focus into it. Sending
+          // focus back to the menu button now would pull it out of whatever the
+          // person has started typing in the dialog.
+          const active = document.activeElement;
+          if (!event.defaultPrevented && active instanceof Element && active.closest('[role="dialog"], [role="alertdialog"]')) {
+            event.preventDefault();
+          }
+        }}
       />
     </DropdownMenuPrimitive.Portal>
   );
@@ -1844,6 +1913,45 @@ export const DropdownMenuItem = React.forwardRef<
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
       {...props}
     />
+  );
+});
+// A submenu row: its trigger highlights while the submenu is open, and its
+// chevron points the way the submenu opens.
+const menuSubTriggerClass = cn(
+  menuItemClass,
+  "data-[state=open]:bg-fill-accent data-[state=open]:text-fill-accent-foreground data-[state=open]:**:text-current",
+);
+const menuSubChevron = <ChevronRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-tertiary" />;
+export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
+export const DropdownMenuSubTrigger = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & { icon?: string }
+>(function SubTrigger({ className, icon: _icon, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
+      {children}
+      {menuSubChevron}
+    </DropdownMenuPrimitive.SubTrigger>
+  );
+});
+export const DropdownMenuSubContent = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
+>(function SubContent({ className, sideOffset = 4, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.SubContent
+        ref={ref}
+        data-slot="popover-content"
+        sideOffset={sideOffset}
+        className={cn(
+          menuContentClass,
+          "origin-[var(--radix-dropdown-menu-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
   );
 });
 export const DropdownMenuCheckboxItem = React.forwardRef<
@@ -1986,6 +2094,39 @@ export const ContextMenuItem = React.forwardRef<
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
       {...props}
     />
+  );
+});
+
+export const ContextMenuSub = ContextMenuPrimitive.Sub;
+export const ContextMenuSubTrigger = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger> & { icon?: string }
+>(function ContextSubTrigger({ className, icon: _icon, children, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
+      {children}
+      {menuSubChevron}
+    </ContextMenuPrimitive.SubTrigger>
+  );
+});
+export const ContextMenuSubContent = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
+>(function ContextSubContent({ className, sideOffset = 4, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.SubContent
+        ref={ref}
+        data-slot="popover-content"
+        sideOffset={sideOffset}
+        className={cn(
+          menuContentClass,
+          "origin-[var(--radix-context-menu-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
   );
 });
 

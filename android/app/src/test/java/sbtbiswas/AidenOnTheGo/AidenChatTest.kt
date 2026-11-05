@@ -67,6 +67,36 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 
 class AidenChatTest {
     @Test
+    fun adjacentRecordingAndImageKeepCallOrder() {
+        for (imageFirst in listOf(false, true)) {
+            val imageCall = if (imageFirst) 1 else 2
+            val recordingCall = if (imageFirst) 2 else 1
+            fun step(call: Int, name: String) = AidenAgentStep(
+                id = "tool-$call", order = call - 1, kind = AidenAgentStep.Kind.TOOL, toolCallId = "call-$call", toolName = name,
+                label = name, status = AidenAgentStepStatus.COMPLETED, startedAt = 1000.0, updatedAt = 2000.0,
+                finishedAt = 2000.0, contentOffset = 0
+            )
+            val image = step(imageCall, "display_image")
+            val recording = step(recordingCall, "browser_recording_stop").copy(recording = AidenBrowserRecordingRecap(
+                id = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", mimeType = "video/mp4", durationMs = 2000, sizeBytes = 100
+            ))
+            val timeline = AidenGenerationTimeline(
+                version = 3, generationId = "g", status = AidenGenerationTimelineStatus.COMPLETED, startedAt = 1000.0,
+                finishedAt = 2000.0, steps = if (imageFirst) listOf(image, recording) else listOf(recording, image)
+            )
+            val photo = AidenMessageAttachment(id = "photo", name = "Photo.png", mimeType = "image/png", kind = AidenAttachmentKind.IMAGE, size = 10, toolCallId = "call-$imageCall")
+            val rows = AidenChronologicalProjection.rows("After.", "", timeline, images = listOf(photo))!!
+            val media = rows.mapNotNull { row -> when (row.kind) {
+                AidenChronologicalRow.Kind.IMAGES -> "photo"
+                AidenChronologicalRow.Kind.RECORDING -> "recording"
+                else -> null
+            } }
+            assertEquals(if (imageFirst) listOf("photo", "recording") else listOf("recording", "photo"), media)
+            assertEquals(setOf("photo"), AidenChronologicalProjection.placedImageIds(rows))
+        }
+    }
+
+    @Test
     fun repeatedFailedRetryKeepsTheOriginalAndLaterDraftExactlyOnce() {
         assertEquals("First\n\nLater", AidenDraftSendReconciliation.failedDraft("First", "First\n\nLater"))
         assertEquals("First", AidenDraftSendReconciliation.failedDraft("First", "First"))
@@ -114,7 +144,7 @@ class AidenChatTest {
                 val cache = AidenChatCache(root)
                 val coordinator = AidenRemoteCoordinator(installations, root, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
                 coordinator.refreshClient()
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 owners.put("chat", model)
                 withTimeout(5_000) { model.isLoading.first { !it } }
                 model.updateDraft("Later draft")
@@ -174,7 +204,7 @@ class AidenChatTest {
                 val drafts = AidenChatDraftStore(root)
                 val coordinator = AidenRemoteCoordinator(installations, root, cache, drafts, scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
                 coordinator.refreshClient()
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 owners.put("chat", model)
                 withTimeout(5_000) { model.isLoading.first { !it } }
                 withTimeout(5_000) { while (chatReads.get() < 1) yield() }
@@ -334,7 +364,7 @@ class AidenChatTest {
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("read", model)
                 withTimeout(5_000) { model.isLoading.first { !it } }
                 assertNull(withContext(Dispatchers.IO) { reports.poll(200, TimeUnit.MILLISECONDS) })
@@ -440,7 +470,8 @@ class AidenChatTest {
                 coordinator.refreshClient()
                 val model = AidenChatViewModel(
                     initial.id, coordinator, cache, drafts, initial,
-                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(300L, 300L, 300L))
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(300L, 300L, 300L)),
+                    recoveryClock = { System.nanoTime() / 1_000_000 }
                 )
                 viewModels.put("stream", model)
                 yield()
@@ -525,7 +556,8 @@ class AidenChatTest {
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
                 val model = AidenChatViewModel(
                     settled.id, coordinator, cache, drafts, settled,
-                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(50L, 50L, 50L))
+                    visualSnapshotRefresh = AidenVisualSnapshotRefreshPolicy(delaysMillis = listOf(50L, 50L, 50L)),
+                    recoveryClock = { System.nanoTime() / 1_000_000 }
                 )
                 viewModels.put("visual", model)
                 if (snapshotArrives) {
@@ -608,7 +640,7 @@ class AidenChatTest {
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
-                val model = AidenChatViewModel("chat-mac", coordinator, cache, drafts, initial, foreignRunAttach = attach)
+                val model = AidenChatViewModel("chat-mac", coordinator, cache, drafts, initial, foreignRunAttach = attach, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("foreign", model)
                 try {
                     body(model)
@@ -1889,7 +1921,7 @@ class AidenChatTest {
                 )
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("recording", model)
                 assertTrue(model.canPlayBrowserRecordings)
 
@@ -2285,7 +2317,7 @@ class AidenChatTest {
                     scope = CoroutineScope(dispatcher + Job().apply { cancel() }))
                 coordinator.refreshClient()
                 val otherOwner = if (independentOwner) {
-                    AidenChatViewModel(initial.id, coordinator, cache, drafts, initial).also {
+                    AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 }).also {
                         viewModels.put("other", it)
                         withContext(Dispatchers.IO) { check(initialLoadArrived.await(5, TimeUnit.SECONDS)) }
                     }
@@ -2294,7 +2326,7 @@ class AidenChatTest {
                 if (failDiskWrite) {
                     File(cache.root, "chats").apply { deleteRecursively(); writeText("blocked directory") }
                 }
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("chat", model)
                 // Sample between every task on the main thread, where Compose
                 // reads state for a frame: the reply must always be on screen
@@ -2414,7 +2446,7 @@ class AidenChatTest {
                         val drafts = AidenChatDraftStore(root)
                         val coordinator = AidenRemoteCoordinator(store, root, cache, drafts, scope = CoroutineScope(main + Job().apply { cancel() }))
                         coordinator.refreshClient()
-                        val sender = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                        val sender = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                         owners.put("sender", sender)
                         yield(); withTimeout(5_000) { sender.isLoading.first { !it } }
                         sender.updateDraft("Hello")
@@ -2422,7 +2454,7 @@ class AidenChatTest {
                         sender.send()
                         withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
                         remote.set(if (mode in listOf("missing", "inverse_missing", "ordered_posts")) settled.copy(messages = settled.messages.drop(1)) else settled)
-                        val other = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                        val other = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                         owners.put("other", other)
                         if (mode.startsWith("inverse")) {
                             withContext(Dispatchers.IO) { check(getArrived.await(5, TimeUnit.SECONDS)) }
@@ -2605,7 +2637,7 @@ class AidenChatTest {
                     scope = CoroutineScope(dispatcher + Job().apply { cancel() })
                 )
                 coordinator.refreshClient()
-                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("chat", model)
                 yield()
                 withTimeout(5_000) { model.isLoading.first { !it } }
@@ -2624,6 +2656,105 @@ class AidenChatTest {
                 assertEquals(2, sendKeys.size)
             }
         } finally {
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun stopDropsTheUploadInFlightAndWaitingBatchesButKeepsWhatReachedTheMac() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-upload-stop-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val secondArrived = CountDownLatch(1)
+        val releaseSecond = CountDownLatch(1)
+        val uploadedNames = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-stop", workspaceId = "workspace-stop", title = "Stop uploads",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-stop"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-stop/attachments" -> {
+                    val name = json.parseToJsonElement(request.body.readUtf8()).jsonObject["name"]!!.jsonPrimitive.content
+                    uploadedNames.add(name)
+                    if (name == "second") {
+                        // Hold the second upload so Stop lands while it is in flight.
+                        secondArrived.countDown()
+                        releaseSecond.await(5, TimeUnit.SECONDS)
+                    }
+                    MockResponse().setResponseCode(201).setBody(json.encodeToString(AidenAttachmentReference(
+                        id = "att_" + name.padEnd(43, 'x'), name = name, mimeType = "text/plain",
+                        kind = AidenAttachmentKind.TEXT, size = 1, expiresAt = Instant.now().plusSeconds(600)
+                    )))
+                }
+                "/api/aiden/v1/chats/chat-stop" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-stop", deviceId = "device-stop",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat, recoveryClock = { System.nanoTime() / 1_000_000 })
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                val text = { name: String -> AidenAttachmentUpload.Text(name = name, mimeType = "text/plain", text = "x") }
+                val picked = launch(start = CoroutineStart.UNDISPATCHED) {
+                    model.prepareAndUpload(listOf("first", "second")) { text(it) }
+                }
+                val waiting = launch(start = CoroutineStart.UNDISPATCHED) {
+                    model.prepareAndUpload(listOf("third")) { text(it) }
+                }
+                try {
+                    withContext(Dispatchers.IO) { assertTrue(secondArrived.await(5, TimeUnit.SECONDS)) }
+                    val sending = withTimeout(5_000) { model.uploadProgress.first { it?.index == 1 } }!!
+                    assertEquals(2, sending.count)
+                    assertTrue(sending.percent >= 50)
+                    assertEquals(listOf("first"), model.pendingAttachments.value.map { it.name })
+
+                    model.cancelUploads()
+                    withTimeout(5_000) { picked.join(); waiting.join() }
+
+                    assertTrue(picked.isCancelled)
+                    assertTrue(waiting.isCancelled)
+                    // The picture that reached the Mac stays ready to send; the bar is gone.
+                    assertEquals(listOf("first"), model.pendingAttachments.value.map { it.name })
+                    assertNull(model.uploadProgress.value)
+                    assertEquals(0, model.preparingAttachmentBatches.value)
+                    assertFalse(model.isUploadingAttachment.value)
+                    // The batch waiting its turn never reached the Mac.
+                    assertEquals(listOf("first", "second"), uploadedNames.toList())
+                } finally {
+                    releaseSecond.countDown()
+                    picked.cancelAndJoin()
+                    waiting.cancelAndJoin()
+                }
+            }
+        } finally {
+            releaseSecond.countDown()
             runBlocking(dispatcher) { viewModels.clearAndJoin() }
             Dispatchers.resetMain()
             dispatcher.close()
@@ -2686,7 +2817,7 @@ class AidenChatTest {
                     scope = CoroutineScope(dispatcher + Job().apply { cancel() })
                 )
                 coordinator.refreshClient()
-                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("chat", model)
                 yield()
                 withTimeout(5_000) { model.isLoading.first { !it } }
@@ -2768,7 +2899,7 @@ class AidenChatTest {
                 // A fresh store is the process-restart read path, not the ViewModel's memory.
                 val reopened = AidenChatDraftStore(directory)
                 if (!purgeWhileSending && !checkPreparation && newerText.isEmpty()) {
-                    val restored = AidenChatViewModel(initialChat.id, coordinator, cache, reopened, initialChat)
+                    val restored = AidenChatViewModel(initialChat.id, coordinator, cache, reopened, initialChat, recoveryClock = { System.nanoTime() / 1_000_000 })
                     viewModels.put("restored", restored)
                     withTimeout(5_000) { restored.isLoading.first { !it } }
                     restored.updateDraft("Later edit")
@@ -2916,7 +3047,7 @@ class AidenChatTest {
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
                 cache.saveActiveStream(AidenChatCache.ActiveStream("device-control", "stream-control", "turn-control", 0), "instance-control", chat.id)
-                val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
+                val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("control", model)
                 // Both prompts pending: the approval gates the tool and wins.
                 withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
@@ -3016,7 +3147,7 @@ class AidenChatTest {
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
                 cache.saveActiveStream(AidenChatCache.ActiveStream("device-control", "stream-control", "turn-control", 0), "instance-control", chat.id)
-                val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat)
+                val model = AidenChatViewModel(chat.id, coordinator, cache, drafts, chat, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("control", model)
                 withTimeout(5_000) { model.pendingApproval.first { it?.id == "approval-current" } }
                 if (scenario == "approval-fallback-before") {
@@ -4193,7 +4324,7 @@ class AidenChatTest {
                 coordinator.refreshClient()
                 cache.saveActiveStream(AidenChatCache.ActiveStream("device-ended", "stream-ended", "turn-ended", 0),
                     "instance-ended", initial.id)
-                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 model = vm
                 owners.put("chat", vm)
                 withTimeout(5_000) { vm.isLoading.first { !it } }
@@ -4310,7 +4441,7 @@ class AidenChatTest {
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
                 cache.saveActiveStream(AidenChatCache.ActiveStream("device-gap", "stream-gap", "turn-gap", 0),
                     "instance-gap", initial.id)
-                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                val vm = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 model = vm
                 owners.put("chat", vm)
                 withTimeout(5_000) { vm.isLoading.first { !it } }
@@ -5081,7 +5212,7 @@ class AidenChatTest {
             initial: AidenChat? = null,
             ioDispatcher: CoroutineDispatcher = Dispatchers.IO
         ): AidenChatViewModel {
-            val model = AidenChatViewModel(chatId, coordinator, cache, drafts, initial, ioDispatcher = ioDispatcher)
+            val model = AidenChatViewModel(chatId, coordinator, cache, drafts, initial, ioDispatcher = ioDispatcher, recoveryClock = { System.nanoTime() / 1_000_000 })
             viewModels.put("fork-${opened++}", model)
             withTimeout(5_000) { model.isLoading.first { !it } }
             withTimeout(5_000) { model.chat.first { it != null } }

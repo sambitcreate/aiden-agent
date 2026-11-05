@@ -9,8 +9,8 @@ import {
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+import { hostInboxPlacement, type HostInboxSignals, type InboxBucket } from "../../renderer/shared/inbox-state.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
-import { WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL } from "../../renderer/shared/workspace-folder-presence.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   isToolStep,
@@ -49,6 +49,13 @@ import {
   type ChatReadMarkersSnapshot,
   type ChatRowState,
 } from "../../renderer/shared/chat-row-state.js";
+import type {
+  ChatTriageEntry,
+  ChatTriagePatch,
+  ChatTriageResult,
+  ChatTriageSnapshot,
+  ChatTriageWrite,
+} from "../../renderer/shared/chat-triage.js";
 import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
@@ -94,6 +101,8 @@ import {
   parseAidenRemoteChatProjection,
   parseAidenRemoteSkillCatalog,
   parseAidenRemoteChatContextPressure,
+  parseAidenRemoteChatNewWorktreeRequest,
+  type AidenRemoteChatNewWorktreeRequest,
   projectAidenRemoteContextPressure,
   type AidenRemoteChatContextPressure,
   type AidenRemoteContextPressure,
@@ -198,6 +207,8 @@ export interface AidenRemoteMessageOutcomeProjection {
 export interface AidenRemoteAttachmentContent {
   bytes: Buffer;
   mimeType: string;
+  /** SHA-256 of a stored image's bytes, sent as the response's ETag. */
+  sha256?: string;
 }
 
 /**
@@ -259,11 +270,54 @@ export interface AidenRemoteChatSummaryProjection {
   lastRunFailed?: true;
   /** Additive (protocol revision 21): fork lineage, without its summary. */
   forkedFrom?: Omit<AidenRemoteChatForkLineageProjection, "summary">;
+  /**
+   * Additive (protocol revision 52, `inbox-signals-v1`): when the live run's
+   * oldest pending approval was raised, or else its oldest question. Absent
+   * without one.
+   */
+  attentionSince?: string;
+  /** Additive (protocol revision 52): when the chat's live run started. Absent without a live run. */
+  runStartedAt?: string;
+  /** Additive (protocol revision 52): when the newest assistant output arrived. */
+  lastAssistantAt?: string;
+  /** Exact reply a read from this summary may acknowledge. */
+  lastAssistantMessageId?: string;
+  /**
+   * Additive (protocol revision 52): the chat's triage revision, which a
+   * client compares with its own writes. Present whenever the chat has a
+   * triage entry, with `pinnedAt`, `doneAt` and `snoozedUntil` as set.
+   */
+  triageRevision?: number;
+  pinnedAt?: string;
+  doneAt?: string;
+  snoozedUntil?: string;
+  /**
+   * Additive (protocol revision 52, `inbox-signals-v1`): the Inbox bucket the
+   * host's own placement rules give the row (`hostInboxPlacement`), with the
+   * time it orders by within that bucket. Computed from state as the host
+   * knows it: the row counts as not open, no recent window applies (an old
+   * read chat is `earlier`), and a snooze is judged on the host's clock, so a
+   * client rechecks `snoozedUntil` and the recent window against its own.
+   */
+  inboxBucket?: InboxBucket;
+  inboxSortAt?: string;
 }
+
+/** The revision-50 fields `freezeSummaryPage` adds to a row. */
+type InboxSignalField =
+  | "attentionSince"
+  | "runStartedAt"
+  | "lastAssistantAt"
+  | "triageRevision"
+  | "pinnedAt"
+  | "doneAt"
+  | "snoozedUntil"
+  | "inboxBucket"
+  | "inboxSortAt";
 
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
-  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed"
+  "titlePending" | "activity" | "rowState" | "unread" | "lastRunFailed" | InboxSignalField
 > & { lastAssistantAt?: number; lastAssistantSequence?: number; lastAssistantFailed?: boolean };
 
 /** Shared, main-owned read markers used for honest unread summaries. */
@@ -271,6 +325,107 @@ export interface AidenRemoteChatReadMarkers {
   snapshot(): Promise<ChatReadMarkersSnapshot>;
   /** Resolves false when the chat or message no longer exists. */
   markRead(chatId: string, throughMessageId?: string): Promise<boolean>;
+}
+
+/** Shared, main-owned Inbox triage (Pin, Done, Snooze) behind `POST /chats/{chatId}/triage`. */
+export interface AidenRemoteChatTriage {
+  snapshot(): Promise<ChatTriageSnapshot>;
+  set(chatId: string, patch: ChatTriagePatch, write?: ChatTriageWrite): Promise<ChatTriageResult>;
+  /** Clear a snooze, and only a snooze, because the person wrote in the chat. */
+  wake?(chatId: string): Promise<unknown>;
+}
+
+/** The answer to a triage write: the chat's triage after it, times in RFC 3339. */
+export interface AidenRemoteChatTriageProjection {
+  chatId: string;
+  revision: number;
+  updatedAt: string;
+  pinnedAt?: string;
+  doneAt?: string;
+  snoozedUntil?: string;
+}
+
+/** A chat's live-run times (revision 51), epoch milliseconds. */
+export interface AidenRemoteChatRunTimes {
+  /** When the run's oldest pending approval was raised, or else its oldest question. */
+  attentionSince?: number;
+  /** When the run started. */
+  runStartedAt?: number;
+}
+
+function isoTime(at: number | undefined): string | undefined {
+  if (at === undefined || !Number.isSafeInteger(at) || at < 0) return undefined;
+  const date = new Date(at);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+/**
+ * A summary row's revision-50 fields: each time in RFC 3339, and the triage
+ * entry's revision with whichever of Pin, Done and Snooze it holds. A field
+ * whose time is unknown or out of range is left out. With `placement` (the
+ * row's state and the host's clock) it adds `inboxBucket` and `inboxSortAt`,
+ * placed from exactly the fields the row reports.
+ */
+export function inboxSignalFields(
+  lastAssistantAt: number | undefined,
+  run: AidenRemoteChatRunTimes | undefined,
+  triage: ChatTriageEntry | undefined,
+  placement?: { rowState: ChatRowState; unread: boolean; failed: boolean; updatedAt: string; now: number },
+): Pick<AidenRemoteChatSummaryProjection, InboxSignalField> {
+  const fields: Pick<AidenRemoteChatSummaryProjection, InboxSignalField> = {};
+  const updatedAt = placement ? Date.parse(placement.updatedAt) : Number.NaN;
+  if (placement && Number.isSafeInteger(updatedAt)) {
+    // Only the times this row reports, so the bucket never reads a time the row leaves out.
+    const optional = (key: keyof HostInboxSignals, at: number | undefined) =>
+      isoTime(at) === undefined ? {} : { [key]: at };
+    const triageUsable = triage && Number.isSafeInteger(triage.revision) && triage.revision > 0 ? triage : undefined;
+    const signals: HostInboxSignals = {
+      rowState: placement.rowState,
+      unread: placement.unread,
+      failed: placement.failed,
+      updatedAt,
+      ...optional("lastAssistantAt", lastAssistantAt),
+      ...optional("attentionSince", run?.attentionSince),
+      ...optional("runStartedAt", run?.runStartedAt),
+      ...optional("pinnedAt", triageUsable?.pinnedAt),
+      ...optional("doneAt", triageUsable?.doneAt),
+      ...optional("snoozedUntil", triageUsable?.snoozedUntil),
+    };
+    const { bucket, sortAt } = hostInboxPlacement(signals, placement.now);
+    const inboxSortAt = isoTime(sortAt);
+    if (inboxSortAt) {
+      fields.inboxBucket = bucket;
+      fields.inboxSortAt = inboxSortAt;
+    }
+  }
+  const attentionSince = isoTime(run?.attentionSince);
+  const runStartedAt = isoTime(run?.runStartedAt);
+  const lastAssistant = isoTime(lastAssistantAt);
+  if (attentionSince) fields.attentionSince = attentionSince;
+  if (runStartedAt) fields.runStartedAt = runStartedAt;
+  if (lastAssistant) fields.lastAssistantAt = lastAssistant;
+  if (triage && Number.isSafeInteger(triage.revision) && triage.revision > 0) {
+    fields.triageRevision = triage.revision;
+    const pinnedAt = isoTime(triage.pinnedAt);
+    const doneAt = isoTime(triage.doneAt);
+    const snoozedUntil = isoTime(triage.snoozedUntil);
+    if (pinnedAt) fields.pinnedAt = pinnedAt;
+    if (doneAt) fields.doneAt = doneAt;
+    if (snoozedUntil) fields.snoozedUntil = snoozedUntil;
+  }
+  return fields;
+}
+
+export function projectAidenRemoteChatTriage(chatId: string, entry: ChatTriageEntry | null): AidenRemoteChatTriageProjection {
+  const iso = (at: number) => new Date(at).toISOString();
+  return {
+    chatId,
+    revision: entry?.revision ?? 0,
+    updatedAt: iso(entry?.updatedAt ?? 0),
+    ...(entry?.pinnedAt !== undefined ? { pinnedAt: iso(entry.pinnedAt) } : {}),
+    ...(entry?.doneAt !== undefined ? { doneAt: iso(entry.doneAt) } : {}),
+    ...(entry?.snoozedUntil !== undefined ? { snoozedUntil: iso(entry.snoozedUntil) } : {}),
+  };
 }
 
 export interface AidenRemoteChatSummaryPage {
@@ -629,6 +784,8 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
       ? {
           lastAssistantAt: meta.lastAssistantAt,
           lastAssistantSequence: meta.lastAssistantSequence,
+          ...(meta.lastAssistantMessageId && SAFE_ID.test(meta.lastAssistantMessageId)
+            ? { lastAssistantMessageId: meta.lastAssistantMessageId } : {}),
           ...(meta.lastAssistantFailed === true ? { lastAssistantFailed: true } : {}),
         }
       : {}),
@@ -774,7 +931,7 @@ export function projectAidenRemoteChatMessagesWindow(
       chatId: chat.id,
       revision: chatRevision(chat),
       messages,
-      hasOlder: true,
+      hasOlder: first > 0,
       workspaceId: persistedChatWorkspaceId(chat.workspaceId),
       ...(chat.botId ? { botId: chat.botId } : {}),
       title: boundedUnicodeScalarPrefix(chat.title, 1_024),
@@ -786,16 +943,22 @@ export function projectAidenRemoteChatMessagesWindow(
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
       ...(forkedFrom ? { forkedFrom } : {}),
     };
-    const size = () => Buffer.byteLength(JSON.stringify(window), "utf8");
-    let bytes = size();
-    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages.length > 1) {
-      messages.shift();
-      first += 1;
-      bytes = size();
+    let bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
+    let dropped = 0;
+    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && dropped < messages.length - 1) {
+      // Each removed leading message also removes its following comma.
+      bytes -= Buffer.byteLength(JSON.stringify(messages[dropped]), "utf8") + 1;
+      if (dropped === 0 && !window.hasOlder) bytes -= 1; // false becomes true.
+      dropped += 1;
+    }
+    if (dropped) {
+      window.hasOlder = true;
+      messages.splice(0, dropped);
+      first += dropped;
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages[0]) {
       withoutReasoning(messages[0]);
-      bytes = size();
+      bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
       throw new AidenRemoteServiceError(
@@ -874,12 +1037,15 @@ export function projectAidenRemoteChat(
   }
 }
 
-function parseCreate(input: unknown): { workspaceId: string; providerId?: string; model?: string } {
+function parseCreate(
+  input: unknown,
+): { workspaceId: string; providerId?: string; model?: string; noWorkspace?: true } {
   const record = ownRecord(input);
   if (
     !record ||
-    !exactKeys(record, ["workspaceId"], ["providerId", "modelId"]) ||
+    !exactKeys(record, ["workspaceId"], ["providerId", "modelId", "noWorkspace"]) ||
     !boundedString(record.workspaceId, 128) ||
+    (record.noWorkspace !== undefined && record.noWorkspace !== true) ||
     (record.providerId !== undefined && !boundedString(record.providerId, 256)) ||
     (record.modelId !== undefined && !boundedString(record.modelId, 256))
   ) {
@@ -889,6 +1055,7 @@ function parseCreate(input: unknown): { workspaceId: string; providerId?: string
     workspaceId: safeId(record.workspaceId, "workspace"),
     ...(typeof record.providerId === "string" ? { providerId: record.providerId } : {}),
     ...(typeof record.modelId === "string" ? { model: record.modelId } : {}),
+    ...(record.noWorkspace === true ? { noWorkspace: true as const } : {}),
   };
 }
 
@@ -1001,6 +1168,50 @@ function parseMarkRead(input: unknown): { throughMessageId?: string } {
   return hasOwnKey(record, "throughMessageId")
     ? { throughMessageId: safeId(record.throughMessageId as string, "message") }
     : {};
+}
+
+const RFC3339_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u;
+
+/**
+ * `POST /chats/{chatId}/triage` body: `{pinned?, done?, snoozeUntil?, ifRevision?}`.
+ * The acting device computes a snooze preset on its own clock and sends the
+ * absolute time; `snoozeUntil: null` wakes the chat.
+ */
+export function parseAidenRemoteChatTriage(input: unknown): { patch: ChatTriagePatch; ifRevision?: number } {
+  const invalid = () => new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
+  const record = ownRecord(input);
+  if (!record || !exactKeys(record, [], ["pinned", "done", "snoozeUntil", "restoreDoneAt", "ifRevision"])) throw invalid();
+  const patch: ChatTriagePatch = {};
+  if (hasOwnKey(record, "pinned")) {
+    if (typeof record.pinned !== "boolean") throw invalid();
+    patch.pinned = record.pinned;
+  }
+  if (hasOwnKey(record, "done")) {
+    if (typeof record.done !== "boolean") throw invalid();
+    patch.done = record.done;
+  }
+  if (hasOwnKey(record, "restoreDoneAt")) {
+    const value = record.restoreDoneAt;
+    if (patch.done !== true || !hasOwnKey(record, "ifRevision") || typeof value !== "string" ||
+      value.length > 40 || !RFC3339_TIME.test(value)) throw invalid();
+    patch.restoreDoneAt = Date.parse(value);
+    if (!Number.isSafeInteger(patch.restoreDoneAt) || patch.restoreDoneAt < 0) throw invalid();
+  }
+  if (hasOwnKey(record, "snoozeUntil")) {
+    const value = record.snoozeUntil;
+    if (value === null) patch.snoozeUntil = null;
+    else {
+      if (typeof value !== "string" || value.length > 40 || !RFC3339_TIME.test(value)) throw invalid();
+      const at = Date.parse(value);
+      if (!Number.isSafeInteger(at) || at <= 0) throw invalid();
+      patch.snoozeUntil = at;
+    }
+  }
+  if (Object.keys(patch).length === 0) throw invalid();
+  if (!hasOwnKey(record, "ifRevision")) return { patch };
+  const ifRevision = record.ifRevision;
+  if (typeof ifRevision !== "number" || !Number.isSafeInteger(ifRevision) || ifRevision < 0) throw invalid();
+  return { patch, ifRevision };
 }
 
 function hasOwnKey(record: Record<string, unknown>, key: string): boolean {
@@ -1145,6 +1356,8 @@ export class AidenRemoteChatService {
         & Partial<Pick<ChatApplicationService, "listSummaryMetadata">>;
       chatStore: {
         get(id: string): Promise<Chat | null>;
+        /** A stored image's bytes; chats reach this service with stored images by hash only. */
+        readImage?(sha256: string, size: number): Promise<Uint8Array | undefined>;
         appendMessage(
           id: string,
           message: Omit<ChatMessage, "id" | "createdAt"> & { id?: string; createdAt?: number },
@@ -1211,6 +1424,23 @@ export class AidenRemoteChatService {
        */
       spendingRefusal?: (chat: Pick<Chat, "id" | "botId">) => Promise<string | undefined>;
       attachments?: AidenRemoteAttachmentStore;
+      /**
+       * Contract revision 53: makes (or, for the same chat, finds again) the
+       * managed worktree a phone's first message asked for, from the chat's
+       * workspace. Absent: `chat:new-worktree` is neither offered nor served.
+       * Errors it throws as `AidenRemoteServiceError` reach the phone as they
+       * are, so they must never carry a path.
+       */
+      newWorktrees?: {
+        create(
+          deviceId: string,
+          sourceWorkspaceId: string,
+          text: string,
+          chatId: string,
+        ): Promise<{ workspaceId: string; branch: string }>;
+        /** The branch of the worktree New worktree made for this chat, when the chat is in it. */
+        worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined>;
+      };
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       /**
@@ -1220,10 +1450,21 @@ export class AidenRemoteChatService {
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
       /**
-       * Whether a workspace's folder was moved or deleted, so a paired device
-       * hears why before its message is stored. Absent: never refused here.
+       * Why a workspace's turns are refused when its folder (or its managed
+       * worktree's checkout) was moved or deleted, so a paired device hears
+       * why before its message is stored. Undefined, or absent: not refused.
        */
-      workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
+      workspaceFolderRefusal?: (workspaceId: string) => Promise<string | undefined>;
+      /**
+       * No workspace chats keep a hidden folder each: `target` gives the
+       * workspace a new chat that asked for `noWorkspace` goes to, and
+       * `release` lets go of a hidden folder a moved chat left empty. Absent:
+       * workspaces are used as requested.
+       */
+      noWorkspace?: {
+        target(workspaceId: string): Promise<string>;
+        release(workspaceId: string): Promise<void>;
+      };
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -1276,6 +1517,13 @@ export class AidenRemoteChatService {
       activitySnapshot?: () => ChatActivitySnapshot;
       /** Enables `unread` summaries and `POST /chats/{chatId}/read`. */
       readMarkers?: AidenRemoteChatReadMarkers;
+      /** Enables `POST /chats/{chatId}/triage` (`chat-triage-v1`) and the summaries' triage fields. */
+      triage?: AidenRemoteChatTriage;
+      /**
+       * Revision 52: a chat's live-run times, epoch milliseconds, for the
+       * summaries' `attentionSince` and `runStartedAt`. Undefined without a live run.
+       */
+      runTimes?: (chatId: string) => AidenRemoteChatRunTimes | undefined;
       /** Enables `POST /chats/{chatId}/fork` (`chat-fork-v1`). */
       forks?: {
         service: Pick<ChatForkService, "fork" | "supportsSummaries">;
@@ -1408,20 +1656,34 @@ export class AidenRemoteChatService {
     const activeChatIds = new Set(activity?.activeChatIds ?? this.options.activeChatIds?.() ?? []);
     const approvalChatIds = new Set(activity?.approvalChatIds ?? []);
     const inputChatIds = new Set(activity?.inputChatIds ?? []);
-    // A marker read failure hides unread dots rather than failing the list.
-    const markers = await this.options.readMarkers?.snapshot().catch(() => null);
-    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => ({
-      ...summary,
-      ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
-      titlePending: this.options.isTitlePending?.(summary.id) === true,
-      activity: activeChatIds.has(summary.id) ? "active" : "idle",
-      rowState: chatRowState({
+    // A marker or triage read failure leaves those fields out rather than failing the list.
+    const [markers, triage] = await Promise.all([
+      this.options.readMarkers?.snapshot().catch(() => null),
+      this.options.triage?.snapshot().catch(() => null),
+    ]);
+    const now = this.summaryNow();
+    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => {
+      const rowState = chatRowState({
         active: activeChatIds.has(summary.id),
         needsApproval: approvalChatIds.has(summary.id),
         needsInput: inputChatIds.has(summary.id),
-      }),
-      unread: isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence),
-    }));
+      });
+      const unread = isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence);
+      return {
+        ...summary,
+        ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
+        titlePending: this.options.isTitlePending?.(summary.id) === true,
+        activity: activeChatIds.has(summary.id) ? "active" : "idle",
+        rowState,
+        unread,
+        ...inboxSignalFields(
+          lastAssistantAt,
+          activeChatIds.has(summary.id) ? this.options.runTimes?.(summary.id) : undefined,
+          triage?.chats[summary.id],
+          { rowState, unread, failed: lastAssistantFailed === true, updatedAt: summary.updatedAt, now },
+        ),
+      };
+    });
   }
 
   /** Whether this host can record read markers for `POST /chats/{chatId}/read`. */
@@ -1442,6 +1704,46 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
     }
     await readMarkers.markRead(chatId, throughMessageId);
+  }
+
+  /** Whether this host keeps Inbox triage (`chat-triage-v1`). */
+  get supportsTriage(): boolean {
+    return this.options.triage !== undefined;
+  }
+
+  /**
+   * Pin, mark done or snooze a chat for every surface paired to this host.
+   * Replays of the same Idempotency-Key answer with the first result, and an
+   * `ifRevision` that no longer matches is a `revision_conflict` carrying the
+   * chat's current triage revision.
+   */
+  async setTriage(deviceId: string, chatId: string, key: string, input: unknown): Promise<AidenRemoteChatTriageProjection> {
+    const triage = this.options.triage;
+    if (!triage) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const resourceId = safeId(chatId, "chat");
+    const parsed = parseAidenRemoteChatTriage(input);
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    return this.executeIdempotent(
+      { deviceId, route: "POST /chats/{id}/triage", resourceId, key },
+      parsed,
+      async () => {
+        const result = await triage.set(chatId, parsed.patch, parsed.ifRevision === undefined ? {} : { ifRevision: parsed.ifRevision });
+        if (result.ok) return projectAidenRemoteChatTriage(chatId, result.entry);
+        if (result.code === "revision_conflict") {
+          throw new AidenRemoteServiceError(
+            "revision_conflict",
+            "The chat changed since this was read.",
+            409,
+            false,
+            { currentRevision: String(result.entry?.revision ?? 0) },
+          );
+        }
+        throw new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
+      },
+    );
   }
 
   private async executeIdempotent<T>(
@@ -1784,14 +2086,12 @@ export class AidenRemoteChatService {
     }
     const attachment = matches[0]!;
     if (attachment.kind === "image") {
-      if (
-        (attachment.mimeType !== "image/png" && attachment.mimeType !== "image/jpeg") ||
-        typeof attachment.data !== "string"
-      ) {
+      if (attachment.mimeType !== "image/png" && attachment.mimeType !== "image/jpeg") {
         throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
       }
-      const bytes = Buffer.from(attachment.data, "base64");
+      const bytes = await this.imageBytes(attachment);
       if (
+        !bytes ||
         bytes.length === 0 ||
         bytes.length > MAX_IMAGE_BYTES ||
         bytes.length !== attachment.size ||
@@ -1800,14 +2100,50 @@ export class AidenRemoteChatService {
       ) {
         throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
       }
-      return { bytes, mimeType: attachment.mimeType };
+      return {
+        bytes,
+        mimeType: attachment.mimeType,
+        ...(attachment.sha256 ? { sha256: attachment.sha256 } : {}),
+      };
     }
     throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
+  }
+
+  /** An image's bytes: inline in an older chat, otherwise from its own file. */
+  /** The attachments with each stored image's bytes read back from its file, for staging a new upload. */
+  private async withImageBytes(attachments: readonly Attachment[]): Promise<Attachment[]> {
+    return Promise.all(
+      attachments.map(async (attachment) => {
+        if (attachment.kind !== "image" || attachment.data !== undefined) return attachment;
+        const bytes = await this.imageBytes(attachment);
+        return bytes ? { ...attachment, data: bytes.toString("base64") } : attachment;
+      }),
+    );
+  }
+
+  private async imageBytes(attachment: Attachment): Promise<Buffer | undefined> {
+    if (typeof attachment.data === "string") return Buffer.from(attachment.data, "base64");
+    if (!attachment.sha256 || !this.options.chatStore.readImage) return undefined;
+    const bytes = await this.options.chatStore.readImage(attachment.sha256, attachment.size).catch(() => undefined);
+    return bytes ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) : undefined;
   }
 
   revokeDevice(deviceId: string): void {
     this.attachments.revokeDevice(deviceId);
   }
+
+  /**
+   * Runs one phone create or move at a time while No workspace folders are in play, so two
+   * requests aimed at the same empty hidden folder cannot both see it free and share it.
+   */
+  private assigningNoWorkspace<T>(assign: () => Promise<T>): Promise<T> {
+    if (!this.options.noWorkspace) return assign();
+    const run = this.noWorkspaceAssignments.then(assign, assign);
+    this.noWorkspaceAssignments = run.catch(() => undefined);
+    return run;
+  }
+
+  private noWorkspaceAssignments: Promise<unknown> = Promise.resolve();
 
   async create(deviceId: string, key: string, input: unknown): Promise<AidenRemoteChatProjection> {
     const parsed = parseCreate(input);
@@ -1820,15 +2156,22 @@ export class AidenRemoteChatService {
           const selection = parsed.providerId || parsed.model
             ? await this.options.models.resolve(parsed.providerId, parsed.model)
             : undefined;
-          const created = await this.options.application.create(
-            {
-              workspaceId: parsed.workspaceId,
-              ...(selection
-                ? { providerId: selection.providerId, model: selection.modelId }
-                : {}),
-            },
-            owner,
-          );
+          const created = await this.assigningNoWorkspace(async () => {
+            // Only a phone that knows the Chats group (revision 51) asks for a folder of its own;
+            // an older phone keeps the workspace it named, as it always has.
+            const workspaceId = parsed.noWorkspace
+              ? ((await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId)
+              : parsed.workspaceId;
+            return this.options.application.create(
+              {
+                workspaceId,
+                ...(selection
+                  ? { providerId: selection.providerId, model: selection.modelId }
+                  : {}),
+              },
+              owner,
+            );
+          });
           if (!created) throw new AidenRemoteServiceError("internal_error", "Aiden could not create the chat.", 500);
           this.options.notifyChanged?.(created.id);
           return projectAidenRemoteChat(created);
@@ -1867,11 +2210,122 @@ export class AidenRemoteChatService {
         { deviceId, route: "POST /chats/{id}/move", resourceId: safeId(chatId, "chat"), key },
         { revision, ...parsed },
         async () => {
-          const moved = await this.options.application.moveEmptyToWorkspace(chatId, parsed.workspaceId, {
-            assertCurrent: (chat) => requireRevision(revision, chat),
+          // The release runs inside the same turn, so no other assignment can claim the folder
+          // between the emptiness check and its removal.
+          const moved = await this.assigningNoWorkspace(async () => {
+            const previous = (await this.options.application.list()).find((entry) => entry.id === chatId);
+            const workspaceId = parsed.workspaceId;
+            const moved = await this.options.application.moveEmptyToWorkspace(chatId, workspaceId, {
+              assertCurrent: (chat) => requireRevision(revision, chat),
+            });
+            const left = previous ? persistedChatWorkspaceId(previous.workspaceId) : undefined;
+            // Best effort: the move is already saved, so a failed release must not turn it into an
+            // error (startup clears hidden folders left without a chat).
+            if (left && left !== workspaceId) await this.options.noWorkspace?.release(left).catch(() => undefined);
+            return moved;
           });
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);
+        },
+      );
+    } catch (error) {
+      return this.mapOperationError(error);
+    }
+  }
+
+  /** Whether this host makes worktrees for phones' first messages (`chat:new-worktree`). */
+  get supportsNewWorktrees(): boolean {
+    return this.options.newWorktrees !== undefined;
+  }
+
+  /**
+   * Contract revision 53: put an empty chat in a new managed worktree made
+   * from its workspace, named from the message about to be sent, so that
+   * message runs there. The worktree is keyed by the chat, so a retry never
+   * makes a second one. An empty chat that is already in the worktree made
+   * for it (an earlier attempt finished after the phone stopped waiting)
+   * answers with that worktree, whatever revision or key the retry carries. A chat that
+   * already has messages stays where it is.
+   */
+  async moveToNewWorktree(
+    deviceId: string,
+    chatId: string,
+    revision: string,
+    key: string,
+    input: unknown,
+  ): Promise<{ chat: AidenRemoteChatProjection; branch: string }> {
+    const newWorktrees = this.options.newWorktrees;
+    if (!newWorktrees) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    let parsed: AidenRemoteChatNewWorktreeRequest;
+    try {
+      parsed = parseAidenRemoteChatNewWorktreeRequest(input);
+    } catch {
+      throw new AidenRemoteServiceError("invalid_request", "The new worktree request is invalid.", 400);
+    }
+    const notEmpty = () =>
+      new AidenRemoteServiceError(
+        "operation_stale",
+        "This chat already has messages, so it stays in its workspace.",
+        409,
+      );
+    try {
+      return await this.executeIdempotent(
+        { deviceId, route: "POST /chats/{id}/worktree", resourceId: safeId(chatId, "chat"), key },
+        // The revision stays out of the digest: a phone that kept its key after
+        // a lost answer retries with the chat's newer revision, and must get
+        // the worktree rather than a refusal. The action checks the revision.
+        { text: parsed.text },
+        async () => {
+          const chat = await this.chat(chatId);
+          if (chat.messages.length === 0 && chat.workspaceId) {
+            const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId);
+            if (branch) return { chat: projectAidenRemoteChat(chat), branch };
+          }
+          // Messages first: appending one changes the revision, and a chat that
+          // has them must answer operation_stale, not a revision conflict.
+          if (chat.messages.length > 0) throw notEmpty();
+          requireRevision(revision, chat);
+          if (!chat.workspaceId) {
+            throw new AidenRemoteServiceError("workspace_unavailable", "This chat has no workspace to make a worktree from.", 409);
+          }
+          const sourceWorkspaceId = chat.workspaceId;
+          let created: { workspaceId: string; branch: string };
+          try {
+            created = await newWorktrees.create(deviceId, sourceWorkspaceId, parsed.text, chatId);
+          } catch (error) {
+            if (error instanceof AidenRemoteServiceError) throw error;
+            throw new AidenRemoteServiceError(
+              "git_capability_denied",
+              "Aiden couldn't make the worktree on your Mac. Try again, or send without New worktree.",
+              409,
+            );
+          }
+          let moved: Chat;
+          try {
+            moved = await this.options.application.moveEmptyToWorkspace(chatId, created.workspaceId, {
+              assertCurrent: (current) => {
+                if (current.messages.length > 0) throw notEmpty();
+                // Moved elsewhere while the worktree was being made: that choice stands.
+                requireRevision(revision, current);
+              },
+            }) as Chat;
+          } catch (error) {
+            if (error instanceof AidenRemoteServiceError) throw error;
+            const current = await this.chat(chatId).catch(() => undefined);
+            if (current && current.messages.length > 0) throw notEmpty();
+            throw new AidenRemoteServiceError(
+              "operation_in_progress",
+              "The chat is busy. Try again in a moment.",
+              409,
+              true,
+            );
+          }
+          this.options.notifyChanged?.(chatId);
+          return { chat: projectAidenRemoteChat(moved), branch: created.branch };
         },
       );
     } catch (error) {
@@ -1909,8 +2363,15 @@ export class AidenRemoteChatService {
       } else {
         const visual = parseChatUiVisuals(message.uiVisuals)?.find((candidate) => candidate.id === visualId);
         if (!visual) throw unavailable();
-        const attachments = visualSnapshotImages(visual, safeStoredAttachments(message.attachments) ?? [])
-          .flatMap((attachment) => (attachment.data ? [{ id: attachment.id, mimeType: attachment.mimeType, data: attachment.data }] : []));
+        const attachments = (
+          await Promise.all(
+            // Stored images carry no bytes in the chat; read them back first so
+            // the same eligibility rules as the desktop apply.
+            visualSnapshotImages(visual, await this.withImageBytes(safeStoredAttachments(message.attachments) ?? [])).map(
+              async (attachment) => (attachment.data ? [{ id: attachment.id, mimeType: attachment.mimeType, data: attachment.data }] : []),
+            ),
+          )
+        ).flat();
         source = { kind: "ui", title: projected.title, visual, attachments, ...(projected.layout ? { layout: projected.layout } : {}) };
       }
       try {
@@ -2086,7 +2547,7 @@ export class AidenRemoteChatService {
           this.options.notifyChanged?.(forked.id);
           const prefill = prefillSource();
           const staged = prefill && prefill.stored.length > 0
-            ? this.attachments.stage(deviceId, forked.id, prefill.stored).staged
+            ? this.attachments.stage(deviceId, forked.id, await this.withImageBytes(prefill.stored)).staged
             : [];
           return this.forkResult(forked, prefill && { text: prefill.text, attachments: staged });
         },
@@ -2359,18 +2820,14 @@ export class AidenRemoteChatService {
             // this check is enforced on the generation: it checks again once
             // registered, and the pause stops the chat's running work.
             await this.refuseIfBotPaused(authoritative);
-            if (
-              workspaceId &&
-              !authoritative.botId &&
-              (await this.options.workspaceFolderMissing?.(workspaceId)) === true
-            ) {
+            const folderRefusal =
+              workspaceId && !authoritative.botId
+                ? await this.options.workspaceFolderRefusal?.(workspaceId)
+                : undefined;
+            if (folderRefusal) {
               // Nothing ran, so the same send runs once the folder is back.
               throw new AidenOperationNotExecutedError(
-                new AidenRemoteServiceError(
-                  "workspace_unavailable",
-                  WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
-                  409,
-                ),
+                new AidenRemoteServiceError("workspace_unavailable", folderRefusal, 409),
               );
             }
             taken = parsed.attachmentIds === undefined
@@ -2468,6 +2925,9 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            // The person wrote in it, so a snoozed chat is back. Never blocks
+            // or fails the send; Pin and Done are left alone.
+            void this.options.triage?.wake?.(chatId).catch(() => undefined);
             taken?.commit();
             turn.settleAsyncWork();
             const started = await startSurfaceGeneration(

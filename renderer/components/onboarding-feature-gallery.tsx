@@ -237,7 +237,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Meet your Bots",
     description:
-      "Start with a helper for a job, like planning meals or keeping up with email. Each Bot keeps one chat, remembers what matters to you, and can check in on a schedule.",
+      "Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan on desktop or phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes.",
     icon: Bot,
     size: "standard",
   },
@@ -300,6 +300,14 @@ export const onboardingFeatures: OnboardingFeature[] = [
     title: "Aiden On The Go",
     description: "Connect your phone or tablet with a guided setup and one-time code. Add custom providers from the paired client; connections and keys stay on your Mac.",
     icon: Smartphone,
+    size: "standard",
+  },
+  {
+    id: "peerProjects",
+    group: "control",
+    title: "Projects on paired computers",
+    description: "Clone a local repository onto a paired computer from the new-chat machine menu. Choose an approved destination and optionally copy selected environment files. Git credentials stay on each computer; environment files are never selected automatically.",
+    icon: FolderGit2,
     size: "standard",
   },
   {

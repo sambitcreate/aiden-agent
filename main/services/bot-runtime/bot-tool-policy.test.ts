@@ -1,10 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
-import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botRunUnattended, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
 
 const QUESTION = "ask_user_question";
 const HANDOFF = "hand_off";
+
+test("plan tools allow only genuine-person or strict message-request ingress for every input", async () => {
+  const message = "bot:jester:1:00112233-4455-4677-8899-aabbccddeeff";
+  const reply = "botreply:00112233-4455-4677-8899-aabbccddeeff";
+  for (const tool of ["propose_plan", "plan_step"]) {
+    for (const ids of [[undefined], ["person"], [message], ["person", message], [undefined, message]]) assert.equal(botIngressAllowsTool(tool, ids), true, `${tool}: ${ids}`);
+    for (const ids of [[], ["routine:x"], ["tg:1"], ["intro:bot"], [reply], ["bot:jester:1:d1"], ["botreply:bad"], [message, reply], ["person", "routine:x"]]) assert.equal(botIngressAllowsTool(tool, ids), false, `${tool}: ${ids}`);
+    assert.deepEqual(await botToolVerdict(tool, bareFacts(), { botMessage: true }), { allowed: true });
+    for (const turn of [{ routine: true }, { telegram: true }, { routine: true, botMessage: true }]) assert.deepEqual(await botToolVerdict(tool, bareFacts(), turn), { allowed: false, reason: "Plans are off for this Bot turn." });
+  }
+});
+
+test("request_access is offered only to scoped Custom Bots and remains callable to raise unattended issues", async () => {
+  const base = bareFacts();
+  for (const [accessMode, mode, allowed, reason] of [
+    ["custom", "scoped", true, undefined], ["full", "full_mac", false, "This Bot can already use your whole Mac."],
+    ["custom", "full_mac", false, "This Bot can already use your whole Mac."], ["custom", "off", false, "File access is off for this Bot."],
+  ] as const) {
+    const facts = { ...base, authority: { ...base.authority, accessMode, files: { mode } } as BotRuntimeEffectiveAuthority };
+    const verdict = await botToolVerdict("request_access", facts);
+    assert.deepEqual(verdict, allowed ? { allowed: true } : { allowed: false, reason });
+  }
+  const message = "bot:ada:1:00112233-4455-4677-8899-aabbccddeeff", reply = "botreply:00112233-4455-4677-8899-aabbccddeeff";
+  for (const ids of [["routine:t:1"], ["tg:1"], [message], [reply], ["desk", message]]) {
+    assert.equal(botRunUnattended(ids), true);
+    assert.equal(botIngressAllowsTool("request_access", ids), true);
+  }
+  assert.equal(botRunUnattended(["desk", "remote:phone"]), false);
+  assert.equal(botIngressAllowsTool("request_access", []), false);
+});
 
 /** A Bot with no grants at all: cards need none, so only the turn decides. */
 function bareFacts(): BotToolFacts {
@@ -154,4 +184,12 @@ test("a Bot sets its own wake-ups only in turns a person started, and never from
     undefined,
     "a wake-up needs no approval card",
   );
+});
+
+test('Bot-message ingress withholds unattended tools and enforces the hop chain', () => {
+ const d = '00112233-4455-4677-8899-aabbccddeeff';
+ for(const name of ['ask_user_question','hand_off','sign_in','browser','routines','subagent','propose_skill','wake_up']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),false,name);
+ for(const name of ['run_command','mcp__mail__send']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),true);
+ for(const ids of [[undefined],['remote:d:k'],[`bot:J:1:${d}`]]) assert.equal(botIngressAllowsTool('message_bot',ids),true);
+ for(const ids of [[`bot:J:2:${d}`],[undefined,`botreply:${d}`],['routine:t:1'],['tg:1'],['intro:x']]) assert.equal(botIngressAllowsTool('message_bot',ids),false);
 });

@@ -1,3 +1,4 @@
+import { newChatUuid } from "../../renderer/shared/chat-identity.js";
 import { randomUUID } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type { ChatHtmlArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
@@ -175,7 +176,7 @@ export function createChatForkService(deps: ChatForkServiceDependencies) {
     caller: ChatForkCaller,
     assertCurrent: () => void,
   ): Promise<Chat> {
-    const targetChatId = deps.newChatId?.() ?? randomUUID();
+    const targetChatId = deps.newChatId?.() ?? newChatUuid(randomUUID);
     let preparedHtmlArtifacts: ChatHtmlArtifactV1[] = [];
     let journalForked = false;
     let copied: Chat;

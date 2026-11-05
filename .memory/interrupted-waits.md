@@ -8,3 +8,7 @@ Branch: `claude/project-thread-euhzg4-questions`. Desktop only (Mac and Linux); 
 - `chats:interruptedWaits` returns the waits only when the chat's latest run is interrupted and `askedAt >= run.startedAt`, so Stop or a new message hides it (a later run exists).
 - Renderer: `chat-pane.tsx` rebuilds the question as a synthetic prompt (promptId = waitId) with the "restarted" `AskUserQuestionExpiryNotice`; submitting sends `formatRecoveredAskUserQuestionAnswers` as a normal message and then dismisses. Closing the card dismisses and leaves the Resume card. An approval wait only adds its summary to the Resume card. The Resume card waits for the waits query so it never flashes before a question. Answers use the shared `formatAskUserQuestionAnswers` ("Skipped" included).
 - Tests: `interrupted-reply.test.ts`, `ask-user-question-coordinator.test.ts`, `tests/e2e/interrupted-question-resume.spec.ts`.
+
+## November 2, 2026
+
+The desktop Resume card describes a saved approval request and asks the person to check the action before trying it again. A crash can preserve the request even after an approved side effect happened. A saved wait gives no authority to run a tool.

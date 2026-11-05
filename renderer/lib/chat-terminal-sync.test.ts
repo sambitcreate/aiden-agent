@@ -233,6 +233,28 @@ test("terminal cache sync ignores attached, malformed, and replayed payloads", (
   unsubscribe();
 });
 
+test("a detached saved UUID accepts only its own terminal transcript", () => {
+  const owner = detached("local-stream", "d2492706-6417-42f1-974d-0c12a2fad0b4");
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const completed: Chat[] = [];
+  const unsubscribe = subscribeDetachedTerminalChats(
+    (channel, handler) => { listeners.set(channel, handler); return () => listeners.delete(channel); },
+    (updated) => { completed.push(updated); },
+  );
+  const durable = chat(owner.chatId, "durable");
+  const done = listeners.get("chat:done")!;
+  done({ streamId: owner.streamId, chat: durable });
+  assert.deepEqual(completed, []);
+  rememberDetachedLifecycleStream(owner);
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), true);
+  done({ streamId: "other-stream", chat: durable });
+  assert.deepEqual(completed, []);
+  done({ streamId: owner.streamId, chat: durable });
+  assert.deepEqual(completed, [durable]);
+  assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), false);
+  unsubscribe();
+});
+
 test("terminal-free start rejection routes a detached stream through fallback", () => {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const fallbacks: string[] = [];
@@ -468,8 +490,8 @@ test("a replacement renderer refetches after delayed main-process settlement", (
 });
 
 test("a provisional stale read survives a missed settlement event until authoritative refetch", async () => {
-  const stale = chat("chat-missed-settlement", "stale before old owner persisted");
-  const durable = chat("chat-missed-settlement", "durable with subagent references");
+  const stale = chat("d2492706-6417-42f1-974d-0c12a2fad0b4", "stale before old owner persisted");
+  const durable = chat(stale.id, "durable with subagent references");
   const response = parseChatReadResponse({
     chat: stale,
     imageArtifactRecoveryPending: false,
@@ -478,13 +500,13 @@ test("a provisional stale read survives a missed settlement event until authorit
       chatId: stale.id,
       workspaceId: stale.workspaceId,
     },
-  });
+  }, stale.id);
   assert.ok(response?.reconciliation);
 
   let replacementCache = response.chat;
   // chats:settled has already fired into the old renderer. The IPC read result
   // itself installs a retained marker before the replacement shell subscribes.
-  rememberChatReadReconciliation(response.reconciliation);
+  rememberChatReadReconciliation(response.reconciliation, stale.id);
   assert.equal(isDetachedLifecycleChatDraining(stale.id, stale.workspaceId), true);
 
   const idleOutcomes = [false, true];
@@ -523,7 +545,7 @@ test("a provisional stale read survives a missed settlement event until authorit
 });
 
 test("an inactive snapshot repairs a missed terminal without clearing active work", () => {
-  const staleOwner = detached("missed-terminal", "chat-missed-terminal", "workspace-1");
+  const staleOwner = detached("missed-terminal", "d2492706-6417-42f1-974d-0c12a2fad0b4", "workspace-1");
   const activeOwner = detached("still-running", "chat-still-running", "workspace-1");
   rememberDetachedLifecycleStream(staleOwner, {
     content: "Durable response that outlived the route",
@@ -581,7 +603,7 @@ test("chat read reconciliation metadata is bounded, content-free, and owner-boun
       imageArtifactRecoveryPending: true,
       imageArtifactRecoveryUnavailable: false,
       reconciliation: null,
-    }),
+    }, stale.id),
     {
       chat: stale,
       imageArtifactRecoveryPending: true,
@@ -595,7 +617,7 @@ test("chat read reconciliation metadata is bounded, content-free, and owner-boun
       imageArtifactRecoveryPending: false,
       imageArtifactRecoveryUnavailable: true,
       reconciliation: null,
-    }),
+    }, stale.id),
     {
       chat: stale,
       imageArtifactRecoveryPending: false,
@@ -627,8 +649,32 @@ test("chat read reconciliation metadata is bounded, content-free, and owner-boun
       },
     },
   ]) {
-    assert.equal(parseChatReadResponse(response), null);
+    assert.equal(parseChatReadResponse(response, stale.id), null);
   }
+});
+
+test("only an exact requested read accepts a saved UUID rejected by the child privacy filter", () => {
+  const id = "d2492706-6417-42f1-974d-0c12a2fad0b4";
+  const owner = { chatId: id, workspaceId: "workspace-1" };
+  const response = {
+    chat: chat(id, "saved reply"),
+    imageArtifactRecoveryPending: false,
+    imageArtifactRecoveryUnavailable: false,
+    reconciliation: owner,
+  };
+  assert.deepEqual(parseChatReadResponse(response, id), response);
+  assert.deepEqual(parseChatReadResponse({ ...response, chat: null }, id)?.reconciliation, owner);
+  assert.equal(parseChatReadResponse(response, "chat-other"), null);
+  assert.equal(parseChatReadResponse({ ...response, chat: null }, "chat-other"), null);
+  assert.equal(parseChatReadResponse({ ...response, reconciliation: null }, "chat-other"), null);
+  assert.equal(parseChatReadResponse({ ...response, reconciliation: { ...owner, workspaceId: "other" } }, id), null);
+  assert.equal(parseChatSettlementNotification(owner), null);
+  rememberChatReadReconciliation(owner, "chat-other");
+  assert.equal(isDetachedLifecycleChatDraining(id, owner.workspaceId), false);
+  for (const value of ["/private/path", id + "\n", "550e8400-e29b-41d4-a716-2f612f622f63"]) {
+    assert.equal(parseChatReadResponse({ ...response, chat: chat(value, "alien"), reconciliation: null }, id), null);
+  }
+  assert.equal(parseChatReadResponse({ ...response, chat: chat("/private/path", "unsafe"), reconciliation: null }, "/private/path"), null);
 });
 
 test("authoritative reconciliation stops without refetching after a deletion tombstone", async () => {
@@ -740,7 +786,7 @@ test("a settled stream's release survives a competing read cancelling its refres
 });
 
 test("an observed run shows as the chat's live projection until it is cleared", () => {
-  const owner = detached("phone-run", "chat-observed", "workspace-1");
+  const owner = detached("phone-run", "d2492706-6417-42f1-974d-0c12a2fad0b4", "workspace-1");
   let notifications = 0;
   const unsubscribe = subscribeDetachedLifecycleStreams(() => notifications++);
   try {

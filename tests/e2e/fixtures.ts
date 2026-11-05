@@ -587,7 +587,7 @@ async function closeMockLmStudio(mock: MockLmStudio): Promise<void> {
   await withTimeout(closed, "deterministic LM Studio server shutdown", PROCESS_EXIT_TIMEOUT_MS);
 }
 
-function isolatedAppEnvironment(): Record<string, string> {
+export function isolatedAppEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};
   const passthrough =
     process.platform === "linux"
@@ -677,6 +677,7 @@ async function assertRuntimeIsolation(
     userDataDir: electronApp.getPath("userData"),
     sessionDataDir: electronApp.getPath("sessionData"),
     appHomeDir: electronApp.getPath("home"),
+    picturesDir: electronApp.getPath("pictures"),
     configDir: process.env.AIDEN_CONFIG_DIR ?? "",
     homeDir: process.env.HOME ?? "",
     xdgCacheDir: process.env.XDG_CACHE_HOME ?? "",
@@ -714,6 +715,12 @@ async function assertRuntimeIsolation(
   if (path.resolve(runtime.appHomeDir) !== homeDir) {
     throw new Error(
       `Electron ignored the isolated home root: expected ${homeDir}, received ${runtime.appHomeDir}.`,
+    );
+  }
+  // Create Images auto-saves generated images under Pictures; it must stay inside the fixture.
+  if (!path.resolve(runtime.picturesDir).startsWith(`${homeDir}${path.sep}`)) {
+    throw new Error(
+      `Electron's Pictures folder escaped the isolated home: expected inside ${homeDir}, received ${runtime.picturesDir}.`,
     );
   }
   if (
@@ -878,7 +885,13 @@ async function terminateOwnedProcess(child: ChildProcess): Promise<void> {
 /** Close Electron and fail observably if its test-owned main process leaks. */
 export async function closeAiden(app: ElectronApplication | undefined): Promise<void> {
   if (!app) return;
-  const child = app.process();
+  let child: ReturnType<ElectronApplication["process"]>;
+  try {
+    child = app.process();
+  } catch {
+    // Playwright drops the process handle of an app a test crashed on purpose.
+    return;
+  }
   const pid = child.pid;
   let closeError: unknown;
   try {

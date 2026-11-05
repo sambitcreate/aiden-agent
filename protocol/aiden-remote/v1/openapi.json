@@ -781,6 +781,11 @@
                   },
                   "modelId": {
                     "type": "string"
+                  },
+                  "noWorkspace": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Contract revision 51. Sent by a phone starting a chat under Chats (workspaceId names a hidden No workspace record): the host saves the chat in a hidden folder of its own, a fresh one when the named record already holds a chat. Without it the chat stays in the workspace named."
                   }
                 },
                 "additionalProperties": false
@@ -944,6 +949,107 @@
         }
       }
     },
+    "/chats/{chatId}/triage": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "setChatTriage",
+        "description": "Pin, mark done or snooze a chat in the Inbox. Each field present is set and the others are kept (last writer wins per field); snoozeUntil null wakes the chat. The acting device computes snooze presets in its own time zone and sends an absolute time. With ifRevision, the write lands only when the chat's triage revision still matches (0 for a chat with no triage), so an Undo never overwrites a newer change; a mismatch answers 409 revision_conflict with currentRevision. Triage lives outside the chat and never changes its revision. Bot chats are refused. Available only when the server advertises chat-triage-v1.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "pinned": {
+                    "type": "boolean"
+                  },
+                  "done": {
+                    "type": "boolean"
+                  },
+                  "restoreDoneAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "maxLength": 40,
+                    "description": "Original Done time to restore on Undo. Requires done=true and ifRevision."
+                  },
+                  "snoozeUntil": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "maxLength": 40
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ifRevision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "dependentSchemas": {
+                  "restoreDoneAt": {
+                    "required": ["done", "ifRevision"],
+                    "properties": { "done": { "const": true } }
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "pinned"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "done"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "snoozeUntil"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The chat's triage after the write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatTriage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/move": {
       "parameters": [
         {
@@ -997,6 +1103,86 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Chat"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/worktree": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "moveChatToNewWorktree",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "x-aiden-capabilities": [
+          "chat:write",
+          "git:write",
+          "chat:new-worktree"
+        ],
+        "description": "Contract revision 53. New worktree for a phone's first message: the Mac makes a managed worktree from the chat's workspace (from the repository's default branch, fetched from its remote when there is one) on a branch named from text (aiden/<first words>), then moves the still-empty chat into the worktree's workspace and returns it. Send the turn afterwards as usual. One worktree per chat. For 24 hours the same Idempotency-Key and body replay a 200 answer as it was; after a refusal the key is settled and a same-key retry answers 409 internal_error, not the first refusal, so a client mints a new key after any answer. An empty chat already in the worktree this route made for it answers 200 with it whatever the revision or key. 409 revision_conflict for a stale If-Match, checked again at the move; 409 operation_stale when the chat already has messages; 409 git_capability_denied when Git could not make it (the message says why, without a path); 409 workspace_unavailable when the workspace has no folder or no access. It can take a while when the base is fetched.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The chat, now in the new worktree's workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "chat",
+                    "branch"
+                  ],
+                  "properties": {
+                    "chat": {
+                      "$ref": "#/components/schemas/Chat"
+                    },
+                    "branch": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  },
+                  "additionalProperties": false
                 }
               }
             }
@@ -1450,6 +1636,7 @@
       ],
       "post": {
         "operationId": "uploadChatAttachment",
+      "description": "Stages one image or text file for this device's next turn in the chat. Since contract revision 50, a device holding attachments:raw may instead send one picture as its raw image/png or image/jpeg bytes, with an exact Content-Length (at most 8 MiB) and the file name, percent-encoded UTF-8, in Aiden-Attachment-Name. Both return the same single-use reference; without attachments:raw a raw upload is 403 capability_denied.",
         "x-aiden-archived-access": "mutation_blocked",
         "x-aiden-capability": "chat:write",
         "parameters": [
@@ -1463,6 +1650,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -1648,6 +1845,96 @@
         }
       }
     },
+      "/chats/{chatId}/jobs": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/ProtocolVersion"
+          }
+        ],
+        "get": {
+          "operationId": "listChatBackgroundJobs",
+          "x-aiden-archived-access": "readable",
+          "x-aiden-capability": "chat:read",
+          "x-aiden-capabilities": [
+            "chat:read",
+            "chat:jobs"
+          ],
+          "description": "Contract revision 49. What the agent left running for this chat on the Mac (a dev server, a watcher, a long test run), running jobs first, then the ones that ended recently in this session of the Mac app. fromCommand marks processes a run_command call left running, which have no exit code. ports are the TCP ports a running job listens on, on the Mac (localhost there, not on the phone). The list is not pushed: read it again after a reply settles or while it is on screen.",
+          "responses": {
+            "200": {
+              "description": "The chat's background jobs",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/BackgroundJobs"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/Error"
+            }
+          }
+        }
+      },
+      "/chats/{chatId}/jobs/{jobId}/stop": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^job_[0-9a-f]{8}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProtocolVersion"
+          }
+        ],
+        "post": {
+          "operationId": "stopChatBackgroundJob",
+          "x-aiden-capability": "chat:write",
+          "x-aiden-capabilities": [
+            "chat:write",
+            "chat:jobs"
+          ],
+          "description": "Contract revision 49. Stops a job and everything it started: politely first, forced after a few seconds, and only processes that carry the job's own marker. Returns once it has ended, with the chat's list. A job that already ended is returned as it is. The body is an empty object. 404 not_found for a job this chat does not have.",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "maxProperties": 0
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "The chat's background jobs after the stop",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/BackgroundJobs"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/Error"
+            }
+          }
+        }
+      },
     "/chats/{chatId}/visuals/{visualId}/document": {
       "parameters": [
         {
@@ -2095,7 +2382,7 @@
       ],
       "post": {
         "operationId": "uploadBotAttachment",
-        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
+        "description": "Contract revision 33, only on hosts announcing bot-attachments-v1. Stages one image or text file for this device's next message to the Bot. Since contract revision 50, a device holding attachments:raw may send one picture as its raw bytes instead, as on POST /chats/{chatId}/attachments. The reference is single-use, expires after ten minutes and is spent only by POST /bots/{botId}/messages for the same Bot and device.",
         "x-aiden-capability": "bot:write",
         "x-aiden-capabilities": [
           "bot:read",
@@ -2108,6 +2395,16 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AttachmentUpload"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "$ref": "#/components/schemas/RawAttachmentUpload"
               }
             }
           }
@@ -6118,7 +6415,7 @@
       ],
       "get": {
         "operationId": "hostEvents",
-        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts.",
+        "description": "Contract revision 19 host feed (host-events-v1), granted to paired mac and linux devices only. The first event is a snapshot of every chat summary, workspace (with an optional credential-free repository identity) and, for bot:read devices, Bot. Later events upsert or remove one chat, workspace or Bot, or report a run.state change. Event ids are <epoch>:<sequence>; a missing, foreign-epoch or expired cursor (more than 1,000 events or 8 MiB behind) receives a fresh snapshot instead of a replay. A snapshot larger than 256 KiB arrives as consecutive snapshot frames: every frame but the last carries partial: true and no SSE id, and only the final frame carries the id, so an interrupted snapshot is retried whole on resume. A heartbeat comment is sent every 15 seconds. The feed never reads transcripts. Since revision 52, right after a runs:observe device's snapshot the host also sends that device a run.state (with attentionSummary) for each run still waiting; those entries take sequences every other device skips, and each pass uses at most half the journal's event and byte retention.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "host:events",
         "parameters": [
@@ -6233,6 +6530,12 @@
         "x-aiden-capability": "runs:observe",
         "parameters": [
           {
+            "name": "Aiden-Run-Checkpoint",
+            "in": "header",
+            "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
+            "schema": { "type": "string", "const": "1" }
+          },
+          {
             "$ref": "#/components/parameters/ChatId"
           }
         ],
@@ -6268,6 +6571,12 @@
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
+          {
+            "name": "Aiden-Run-Checkpoint",
+            "in": "header",
+            "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
+            "schema": { "type": "string", "const": "1" }
+          },
           {
             "name": "runId",
             "in": "path",
@@ -6908,6 +7217,290 @@
                   "type": "string",
                   "contentEncoding": "binary",
                   "maxLength": 134217728
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/messaging": {
+      "parameters": [{"$ref": "#/components/parameters/ProtocolVersion"}],
+      "put": {
+        "operationId": "updateBotMessaging",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:write",
+          "bot:messaging"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotMessagingSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authoritative Bot messaging settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotMessagingSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Set whether Bots can message each other",
+        "description": "Revision 54. Requires bot:write and negotiated bot:messaging. Exact boolean enabled. Changes gate new sends only; accepted deliveries finish. No inference or catalog access."
+      }
+    },
+    "/bots/{botId}/allowed": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotAllowed",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:allowed"
+        ],
+        "description": "Revision 57. Combined rules and selected folders, sorted newest date then ID, with opaque device-and-Bot-bound cursors. Pages of 50 share a complete immutable snapshot for 2 minutes. Cache: 64 snapshots globally, 4 per device, aggregate 8 MiB; over-capacity complete views are refused, never truncated. Unknown Bot is 404. Foreign, expired or evicted cursors are refreshable 400 invalid_request; restart without cursor.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The first or requested immutable page, at most 50 rows. No private targets or authorization metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAllowedList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/allowed/{entryId}/remove": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "entryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "removeBotAllowed",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:allowed"
+        ],
+        "description": "Revision 57. Remove only this Bot entry. Exact empty JSON body, no query. Naturally idempotent; no Idempotency-Key required. Success including an already-gone entry invalidates this device/Bot snapshots and returns a fresh first page; load its subsequent pages. Never republishes consent or removes another Bot folder/root.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The first or requested immutable page, at most 50 rows. No private targets or authorization metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAllowedList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/plans/{planId}/respond": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "planId",
+          "in": "path",
+          "required": true,
+          "description": "The exact plan ID returned by the Bot session.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "respondBotPlan",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:plans"
+        ],
+        "description": "Revision 56. Respond to an exact plan with approve, not_now or stop. Requires Idempotency-Key. Duplicate success replays its original receipt. Unknown decision is 400 invalid_request. A settled, missing or expired plan is 409 plan_expired, a pre-effect refusal that leaves no durable rejected key. Transient errors permit retry with the same key and exact plan identity; first answer wins. Unwired hosts return 404. not_now returns stopped; other statuses come from the exact host plan.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPlanRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The host authorized and settled the answer, or replayed its original receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPlanRespondReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/access-requests/{waitId}/answer": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "waitId",
+          "in": "path",
+          "required": true,
+          "description": "The current access request waitId.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "answerBotAccessRequest",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:access-requests"
+        ],
+        "description": "Revision 55. Answer an offered access choice. Requires Idempotency-Key; a repeat replays the receipt even after the card settles or a response is lost. An unoffered choice is 400 invalid_request. A settled or expired request is 409 access_request_expired. Unwired hosts return 404.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotAccessAnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The host authorized and settled the answer, or replayed its original receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAccessAnswerReceipt"
                 }
               }
             }
@@ -7671,12 +8264,19 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs",
+                "attachments:raw",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true
@@ -7714,12 +8314,19 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs",
+                "attachments:raw",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true
@@ -7844,7 +8451,7 @@
             "type": "array",
             "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place. Contract revision 42 adds bot:issues, which any device type may negotiate while the server lists it in serverCapabilities (a host without the issue act route answers not_found): it grants no authority and opts the device into the Bot session issues list and frame, the summary issueCount, issue items in the routine notification feed, and the issue act route, which still needs bot:read and bot:write. Phones request it in its own call. Contract revision 43 adds bot:handoff-on-mac, negotiated like bot:handoff-notes beside bot:handoffs: it grants no authority and opts the device into onMac on hand-off cards whose step is on the Bot's own screen.",
             "minItems": 1,
-            "maxItems": 16,
+            "maxItems": 23,
             "items": {
               "enum": [
                 "tasks:read",
@@ -7860,12 +8467,19 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs",
+                "attachments:raw",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true
@@ -7912,12 +8526,19 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs",
+                "attachments:raw",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true
@@ -8577,6 +9198,11 @@
           "isManagedWorktree": {
             "type": "boolean"
           },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 51. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
+          },
           "branchName": {
             "type": "string"
           },
@@ -8669,6 +9295,54 @@
               }
             },
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode",
+              "selection",
+              "url",
+              "files"
+            ],
+            "properties": {
+              "mode": {
+                "const": "clone"
+              },
+              "selection": {
+                "type": "string",
+                "pattern": "^sel_[A-Za-z0-9_-]{43}$"
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "files": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "content"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 80,
+                      "pattern": "^\\.(?:env|dev\\.vars)(?:\\.[A-Za-z0-9_-][A-Za-z0-9_.-]*)?$"
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 131072
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false,
+            "description": "Desktop-only, requires workspace:manage and workspace:browse. Clones into a new repository-name child of the selected approved folder. Optional ignored root-level environment text files are at most 128 KiB each and 512 KiB total. Request cancellation stops the clone before publication when possible; a lost reply must be reconciled before a fresh request."
           }
         ]
       },
@@ -8925,6 +9599,12 @@
           }
         },
         "additionalProperties": false
+      },
+      "RawAttachmentUpload": {
+        "description": "Contract revision 50 (attachments:raw): one picture's raw bytes, at most 8 MiB, with an exact Content-Length and the file name, percent-encoded UTF-8, in the Aiden-Attachment-Name header. The host checks the bytes, type and dimensions exactly as for the JSON upload.",
+        "type": "string",
+        "format": "binary",
+        "maxLength": 8388608
       },
       "AttachmentUpload": {
         "oneOf": [
@@ -10169,6 +10849,9 @@
           },
           "maxBots": {
             "const": 256
+          },
+          "messaging": {
+            "$ref": "#/components/schemas/BotMessagingSettings"
           }
         },
         "additionalProperties": false
@@ -10702,6 +11385,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "botMessaging": {
+            "$ref": "#/components/schemas/BotMessaging",
+            "description": "Revision 54, only for devices holding bot:messaging. Absent switches default on."
           }
         },
         "additionalProperties": false
@@ -10796,6 +11483,9 @@
           "chatActivity": {
             "description": "Contract revision 30, only on hosts announcing bot-activity-v1. Absent keeps the saved choice.",
             "$ref": "#/components/schemas/BotChatActivity"
+          },
+          "botMessaging": {
+            "$ref": "#/components/schemas/BotMessagingPatch"
           }
         },
         "additionalProperties": false
@@ -11058,6 +11748,43 @@
         },
         "additionalProperties": false
       },
+      "ChatTriage": {
+        "type": "object",
+        "description": "A chat's Inbox triage on its host (chat-triage-v1). revision starts at 1 and rises with every write; pass it back as ifRevision.",
+        "required": [
+          "chatId",
+          "revision",
+          "updatedAt"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "pinnedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "doneAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snoozedUntil": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
       "ChatSummary": {
         "type": "object",
         "description": "Transcript-free regular-chat projection. Harmless additive fields are tolerated, while clients still apply the recursive private-field denial policy.",
@@ -11139,6 +11866,63 @@
                 "$ref": "#/components/schemas/ChatForkLineageRow"
               }
             ]
+          },
+          "attentionSince": {
+            "description": "Additive in contract revision 52 (inbox-signals-v1). While a live run waits on an approval or question, when the oldest pending approval was raised, or else the oldest question. Absent otherwise.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "runStartedAt": {
+            "description": "Additive in contract revision 52. While a run is live, when it started. Absent otherwise.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastAssistantMessageId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "description": "Message boundary for read actions on this Inbox row."
+          },
+          "lastAssistantAt": {
+            "description": "Additive in contract revision 52. When the chat's newest assistant output (or failed turn) was persisted. Absent before the first reply.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "pinnedAt": {
+            "description": "Additive in contract revision 52. When the chat was pinned in the Inbox. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "doneAt": {
+            "description": "Additive in contract revision 52. When the chat was marked done. Newer output brings it back. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "snoozedUntil": {
+            "description": "Additive in contract revision 52. When the chat's snooze ends. Present only with triageRevision.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "triageRevision": {
+            "description": "Additive in contract revision 52. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "inboxBucket": {
+            "description": "Additive in contract revision 52 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). Later hosts may send values outside this list; a client places those rows itself, as it does a bucket without an inboxSortAt. Present only with inboxSortAt.",
+            "enum": [
+              "needs_you",
+              "pinned",
+              "updates",
+              "earlier",
+              "working",
+              "snoozed",
+              "done"
+            ]
+          },
+          "inboxSortAt": {
+            "description": "Additive in contract revision 52. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt (else updatedAt), newest first; earlier by updatedAt, newest first; working by runStartedAt (else updatedAt), oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": true
@@ -13709,6 +14493,10 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "unborn": {
+                "const": true,
+                "description": "Present when the repository has no commits yet; the current branch is listed although it has none."
               }
             },
             "additionalProperties": false
@@ -14298,6 +15086,95 @@
           }
         }
       },
+        "BackgroundJobs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "jobs"
+          ],
+          "description": "Contract revision 49 (chat:jobs).",
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "$ref": "#/components/schemas/BackgroundJob"
+              }
+            }
+          }
+        },
+        "BackgroundJob": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "label",
+            "state",
+            "startedAt",
+            "ports"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^job_[0-9a-f]{8}$"
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "The agent's short label, else the command."
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "exited",
+                "failed",
+                "stopped"
+              ]
+            },
+            "startedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "endedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Present exactly when the job is not running."
+            },
+            "exitCode": {
+              "type": "integer",
+              "description": "Only for exited or failed jobs whose exit code is known."
+            },
+            "endReason": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person",
+                "output-limit",
+                "chat-deleted",
+                "access-changed",
+                "app-quit"
+              ],
+              "description": "Present exactly when the job is stopped."
+            },
+            "fromCommand": {
+              "type": "boolean",
+              "const": true,
+              "description": "A run_command call left these processes running; they have no exit code."
+            },
+            "ports": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "description": "TCP ports it listens on, on the Mac; empty unless it runs."
+            }
+          }
+        },
       "MemorySettings": {
         "type": "object",
         "required": [
@@ -14418,7 +15295,9 @@
           "memory_blocked",
           "routine_proposal_not_found",
           "bot_paused",
-          "handoff_expired"
+          "handoff_expired",
+          "access_request_expired",
+          "plan_expired"
         ]
       },
       "ErrorDetails": {
@@ -15284,6 +16163,11 @@
           "isManagedWorktree": {
             "type": "boolean"
           },
+          "noWorkspace": {
+            "type": "boolean",
+            "const": true,
+            "description": "Contract revision 51. Present only on a hidden folder Aiden made for one chat without a workspace. Clients list those chats under one Chats group instead of a workspace each."
+          },
           "branchName": {
             "type": "string"
           },
@@ -15718,6 +16602,19 @@
                       "items": {
                         "type": "object"
                       }
+                    },
+                    "replyText": {
+                      "description": "Complete public text through this cursor, only on an opted-in live gap snapshot. Absent when unavailable.",
+                      "type": "string",
+                      "maxLength": 32768
+                    },
+                    "replyReasoning": {
+                      "description": "Complete displayable parent reasoning through this cursor, only on an opted-in live gap snapshot.",
+                      "type": "string",
+                      "maxLength": 32768
+                    },
+                    "timeline": {
+                      "$ref": "#/components/schemas/GenerationTimeline"
                     },
                     "nextSequence": {
                       "type": "integer",
@@ -16492,6 +17389,28 @@
             "items": {
               "$ref": "#/components/schemas/BotIssue"
             }
+          },
+          "accessRequest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotAccessRequest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Revision 55. Present only for bot:access-requests holders."
+          },
+          "plan": {
+            "description": "Revision 56. Present only for bot:plans holders. null clears the current plan; absence means the capability is not negotiated.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "unevaluatedProperties": false
@@ -16520,7 +17439,8 @@
               "preflight_failed",
               "routine_failed",
               "routine_paused",
-              "run_stalled"
+              "run_stalled",
+              "access_needed"
             ]
           },
           "title": {
@@ -16588,7 +17508,9 @@
               "open_chat",
               "resume_routine",
               "stop_run",
-              "keep_waiting"
+              "keep_waiting",
+              "allow_folder",
+              "dismiss_access"
             ]
           },
           "routineId": {
@@ -16599,7 +17521,8 @@
             "description": "Present exactly on resume_routine."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "allow_folder and dismiss_access require bot:access-requests beside bot:issues. dismiss_access is offered only on access_needed issues."
       },
       "BotIssueActRequest": {
         "type": "object",
@@ -16744,15 +17667,51 @@
               "queued",
               "handoff",
               "issues",
-              "closed"
+              "closed",
+              "access_request",
+              "plan"
             ]
           },
           "payload": {
-            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances.",
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances. Revision 55 access_request carries {accessRequest: BotAccessRequest | null} only for bot:access-requests holders. Legacy phones and paired desktops receive an assistant access-notice entry, removed by an authoritative snapshot on settlement or replacement. Revision 56 plan carries {plan: BotPlan | null} only for bot:plans holders. Other devices receive a state frame at the same sequence.",
             "type": "object"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "plan"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "plan"
+                  ],
+                  "properties": {
+                    "plan": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BotPlan"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ]
       },
       "BotMessageRequest": {
         "type": "object",
@@ -17121,10 +18080,11 @@
                   "maxLength": 160
                 },
                 "kind": {
-                  "description": "Contract revision 42: absent means routine. An issue item carries no routineId or status, and routineName is the card's title.",
+                  "description": "Absent means routine. Issue and message items carry neither routineId nor status. Message items require bot:messaging, revision 54.",
                   "enum": [
                     "routine",
-                    "issue"
+                    "issue",
+                    "message"
                   ]
                 },
                 "botId": {
@@ -17164,7 +18124,46 @@
                   "maxLength": 160
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "issue",
+                          "message"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "routineId"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "else": {
+                    "required": [
+                      "routineId",
+                      "status"
+                    ]
+                  }
+                }
+              ]
             }
           },
           "now": {
@@ -17673,8 +18672,130 @@
         },
         "additionalProperties": false
       },
+      "BotAllowedEntry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "rule"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "uses": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastUsedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt",
+              "uses"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "uses": {
+                      "const": 0
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "lastUsedAt"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "folder"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BotAllowedList": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/BotAllowedEntry"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "botId",
+          "entries"
+        ],
+        "additionalProperties": false
+      },
       "BotApproval": {
-        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it.",
+        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it. An offered Always answer also requires bot:allowed and scope always; other Bot cards remain once-only. The receipt acknowledges the choice, not durable grant publication.",
         "type": "object",
         "required": [
           "waitId",
@@ -17707,9 +18828,31 @@
           },
           "canAllow": {
             "type": "boolean"
+          },
+          "alwaysCount": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Revision 57, only bot:allowed holders on an offered card. No private class key."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "alwaysCount"
+              ]
+            },
+            "then": {
+              "properties": {
+                "canAllow": {
+                  "const": true
+                }
+              }
+            }
+          }
+        ]
       },
       "BotQuestionAnswerReceipt": {
         "type": "object",
@@ -18138,6 +19281,419 @@
           }
         },
         "additionalProperties": false
+      },
+      "BotMessagingSettings": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessaging": {
+        "type": "object",
+        "required": [
+          "receive",
+          "send"
+        ],
+        "properties": {
+          "receive": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessagingPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "receive": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPlan": {
+        "type": "object",
+        "required": [
+          "planId",
+          "status",
+          "title",
+          "why",
+          "steps",
+          "items"
+        ],
+        "properties": {
+          "planId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "active",
+              "finished",
+              "stopped",
+              "expired"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": [
+                "text",
+                "status"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "done",
+                    "skipped"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "required": [
+                "line",
+                "details"
+              ],
+              "properties": {
+                "line": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120,
+                  "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                },
+                "details": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                  }
+                },
+                "used": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 25
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 25
+                }
+              },
+              "additionalProperties": false,
+              "dependentRequired": {
+                "used": [
+                  "max"
+                ],
+                "max": [
+                  "used"
+                ]
+              },
+              "allOf": [
+                {"if":{"properties":{"max":{"const":1}},"required":["max"]},"then":{"properties":{"used":{"maximum":1}}}},
+                {"if":{"properties":{"max":{"const":2}},"required":["max"]},"then":{"properties":{"used":{"maximum":2}}}},
+                {"if":{"properties":{"max":{"const":3}},"required":["max"]},"then":{"properties":{"used":{"maximum":3}}}},
+                {"if":{"properties":{"max":{"const":4}},"required":["max"]},"then":{"properties":{"used":{"maximum":4}}}},
+                {"if":{"properties":{"max":{"const":5}},"required":["max"]},"then":{"properties":{"used":{"maximum":5}}}},
+                {"if":{"properties":{"max":{"const":6}},"required":["max"]},"then":{"properties":{"used":{"maximum":6}}}},
+                {"if":{"properties":{"max":{"const":7}},"required":["max"]},"then":{"properties":{"used":{"maximum":7}}}},
+                {"if":{"properties":{"max":{"const":8}},"required":["max"]},"then":{"properties":{"used":{"maximum":8}}}},
+                {"if":{"properties":{"max":{"const":9}},"required":["max"]},"then":{"properties":{"used":{"maximum":9}}}},
+                {"if":{"properties":{"max":{"const":10}},"required":["max"]},"then":{"properties":{"used":{"maximum":10}}}},
+                {"if":{"properties":{"max":{"const":11}},"required":["max"]},"then":{"properties":{"used":{"maximum":11}}}},
+                {"if":{"properties":{"max":{"const":12}},"required":["max"]},"then":{"properties":{"used":{"maximum":12}}}},
+                {"if":{"properties":{"max":{"const":13}},"required":["max"]},"then":{"properties":{"used":{"maximum":13}}}},
+                {"if":{"properties":{"max":{"const":14}},"required":["max"]},"then":{"properties":{"used":{"maximum":14}}}},
+                {"if":{"properties":{"max":{"const":15}},"required":["max"]},"then":{"properties":{"used":{"maximum":15}}}},
+                {"if":{"properties":{"max":{"const":16}},"required":["max"]},"then":{"properties":{"used":{"maximum":16}}}},
+                {"if":{"properties":{"max":{"const":17}},"required":["max"]},"then":{"properties":{"used":{"maximum":17}}}},
+                {"if":{"properties":{"max":{"const":18}},"required":["max"]},"then":{"properties":{"used":{"maximum":18}}}},
+                {"if":{"properties":{"max":{"const":19}},"required":["max"]},"then":{"properties":{"used":{"maximum":19}}}},
+                {"if":{"properties":{"max":{"const":20}},"required":["max"]},"then":{"properties":{"used":{"maximum":20}}}},
+                {"if":{"properties":{"max":{"const":21}},"required":["max"]},"then":{"properties":{"used":{"maximum":21}}}},
+                {"if":{"properties":{"max":{"const":22}},"required":["max"]},"then":{"properties":{"used":{"maximum":22}}}},
+                {"if":{"properties":{"max":{"const":23}},"required":["max"]},"then":{"properties":{"used":{"maximum":23}}}},
+                {"if":{"properties":{"max":{"const":24}},"required":["max"]},"then":{"properties":{"used":{"maximum":24}}}}
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Revision 56, bot:plans holders only. Display-only plan with bounded text. Bot-written text is redacted; host-formatted file items disclose the enforced folder location, access mode and temporary-grant lifetime. No Bot/item IDs, authorization, runtime request identities, raw proposal, binding, model tool names or revision. Counted items carry both used and max, with used <= max."
+      },
+      "BotPlanRespondRequest": {
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "not_now",
+              "stop"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPlanRespondReceipt": {
+        "type": "object",
+        "required": [
+          "planId",
+          "status"
+        ],
+        "properties": {
+          "planId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "finished",
+              "stopped",
+              "expired"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotAccessRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "waitId",
+          "target",
+          "label",
+          "why",
+          "choices"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,64}$"
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "whole_mac"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "allOf": [
+              {
+                "pattern": "\\S"
+              },
+              {
+                "not": {
+                  "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                }
+              }
+            ]
+          },
+          "place": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(~/|/)"
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400,
+            "allOf": [
+              {
+                "pattern": "\\S"
+              },
+              {
+                "not": {
+                  "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                }
+              }
+            ]
+          },
+          "choices": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "not_now",
+                "always",
+                "once"
+              ]
+            },
+            "enum": [
+              [
+                "not_now",
+                "once"
+              ],
+              [
+                "not_now",
+                "always",
+                "once"
+              ]
+            ]
+          },
+          "approvalCount": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Revision 57. Only bot:allowed plus bot:access-requests holders, for a folder offering Always."
+          }
+        },
+        "description": "Revision 55, bot:access-requests holders only. Public display card; no authorization, root identity, tool call or logical request id. Exact choices in order are [not_now, once] or, for a persistable folder, [not_now, always, once]. Whole Mac has label 'your whole Mac' and no place or always. Nonblank text, no control characters. place is a bounded display path, never an API identifier.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "target": {
+                  "const": "whole_mac"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "label": {
+                  "const": "your whole Mac"
+                },
+                "choices": {
+                  "const": [
+                    "not_now",
+                    "once"
+                  ]
+                }
+              },
+              "not": {
+                "required": [
+                  "place"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "approvalCount"
+              ]
+            },
+            "then": {
+              "properties": {
+                "target": {
+                  "const": "folder"
+                },
+                "choices": {
+                  "const": [
+                    "not_now",
+                    "always",
+                    "once"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "BotAccessAnswerRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "choice"
+        ],
+        "properties": {
+          "choice": {
+            "type": "string",
+            "enum": [
+              "once",
+              "always",
+              "not_now"
+            ]
+          }
+        }
+      },
+      "BotAccessAnswerReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "answered"
+        ],
+        "properties": {
+          "answered": {
+            "type": "boolean",
+            "const": true
+          },
+          "savedForFuture": {
+            "type": "boolean",
+            "const": true,
+            "description": "Records the exact earlier durable folder approval, including a replay after removal. It does not confirm current saved access or issue temporary run access."
+          }
+        }
       }
     }
   }

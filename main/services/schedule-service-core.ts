@@ -18,7 +18,7 @@ export type ScheduledRunTrigger =
   | { kind: "manual"; key: string }
   | { kind: "catch_up"; missedRunId: string; missedAt: number }
   /** A delayed retry of a failed Bot routine fire, replayed from its pending entry. */
-  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2 }
+  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2; verifiedToolFree?: true; observeOnly?: true }
   /** An event routine's run: what happened, as untrusted data for the Bot. */
   | { kind: "event"; eventId: string; source: "file_change" | "webhook" | "watch"; payload: string };
 
@@ -53,7 +53,7 @@ type DispatchResult =
  * already claimed by the Cron, or its fire time has not arrived yet. Running
  * it would execute early under a future fire's idempotency key.
  */
-class UnclaimableScheduledFire extends Error {}
+export class UnclaimableScheduledFire extends Error {}
 
 const ignoreUnclaimableFire = (error: unknown): void => {
   if (!(error instanceof UnclaimableScheduledFire)) throw error;
@@ -358,15 +358,13 @@ export function createScheduleServiceCore(
           : undefined;
         if (options.automatic && options.recovery && !pendingFire)
           throw new UnclaimableScheduledFire(`Routine ${taskId} has no pending fire to recover.`);
-        // A retry replayed after the routine's next regular fire came due (the
-        // Mac slept, Aiden was closed) is stale: that fire replaces it.
-        if (
-          pendingFire?.retry &&
-          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime)
-        ) {
-          await store.settleRoutineFire(task.id, pendingFire.requestId);
-          throw new UnclaimableScheduledFire(`Routine ${taskId}'s retry was replaced by its next fire.`);
-        }
+        // A superseded retry can still owe an admitted answer or delivery.
+        // The executor checks both receipts before deciding to drop it.
+        const observeOnly = pendingFire?.retry && (
+          pendingFire.observeOnly || pendingFire.prompt !== task.prompt ||
+          (task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) ||
+          (task.lastRunAt ?? 0) > pendingFire.fireTime
+        );
         const claimed = options.automatic && !options.recovery
           ? await advanceBeforeRun(task, fireTime!, isCurrent)
           : task;
@@ -378,7 +376,7 @@ export function createScheduleServiceCore(
         }
         state.executionStarted = true;
         const trigger: ScheduledRunTrigger = pendingFire?.retry
-          ? { kind: "retry", requestId: pendingFire.requestId, ...pendingFire.retry }
+          ? { kind: "retry", requestId: pendingFire.requestId, ...pendingFire.retry, ...(observeOnly && { observeOnly: true }) }
           : options.automatic
           ? { kind: "automatic", fireTime: fireTime! }
           : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
@@ -588,9 +586,8 @@ export function createScheduleServiceCore(
     pendingRetryAt.clear();
   }
 
-  async function rearmCurrentTask(previous: ScheduledTask | undefined): Promise<void> {
-    if (!previous?.enabled) return;
-    const current = await store.get(previous.id);
+  async function rearmCurrentTask(id: string): Promise<void> {
+    const current = await store.get(id);
     if (current?.enabled) await schedule(current);
   }
 
@@ -801,11 +798,18 @@ export function createScheduleServiceCore(
         try {
           await store.remove(id);
         } catch (error) {
-          await rearmCurrentTask(current);
+          await rearmCurrentTask(id);
           throw error;
         }
         dependencies.broadcast({ taskId: id, removed: true });
       });
+    },
+
+    // Called by the active run itself. User-facing edits wait for that run to settle.
+    async pauseAfterFailedRun(id: string, activeRunId: string): Promise<void> {
+      await store.setEnabled(id, false, { clearRoutineRetriesExcept: activeRunId });
+      stopJob(id);
+      dependencies.broadcast({ taskId: id });
     },
 
     async pause(
@@ -821,26 +825,23 @@ export function createScheduleServiceCore(
         stopJob(id);
         await cancelAndSettle(id);
         if (options.signal?.aborted) {
-          if (current?.enabled) await schedule(current);
+          await rearmCurrentTask(id);
           throwIfAborted(options.signal, "pause");
         }
-        let task: ScheduledTask;
+        let paused: Awaited<ReturnType<ScheduleStore["pauseWithRollback"]>>;
         try {
-          task = await store.setEnabled(id, false);
+          paused = await store.pauseWithRollback(id);
         } catch (error) {
-          await rearmCurrentTask(current);
+          await rearmCurrentTask(id);
           throw error;
         }
         if (options.signal?.aborted) {
-          if (current) {
-            const restored = await store.setEnabled(id, current.enabled);
-            if (current.enabled) await schedule(restored);
-            else stopJob(id);
-          }
+          await paused.rollback();
+          await rearmCurrentTask(id);
           throwIfAborted(options.signal, "pause");
         }
         dependencies.broadcast({ taskId: id });
-        return task;
+        return paused.task;
       });
     },
 

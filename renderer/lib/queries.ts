@@ -58,6 +58,12 @@ import type {
 export const queryKeys = {
   providers: ["providers"] as const,
   chats: ["chats"] as const,
+  /**
+   * Not under `chats`: chat-list updaters (`setQueriesData({ queryKey: chats })`)
+   * would otherwise rewrite it as a chat list. Its key carries the chat list's
+   * `dataUpdatedAt`, so a chat-list refetch still rereads it.
+   */
+  pendingAttention: ["chatPendingAttention"] as const,
   bots: ["bots"] as const,
   bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
   botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
@@ -67,6 +73,7 @@ export const queryKeys = {
   botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
   /** One Bot's routines (the Routines panel); `["bot-routines"]` matches every Bot's. */
   botRoutines: (id: string) => ["bot-routines", id] as const,
+  botAllowed: (id?: string) => ["bot-allowed", id ?? "all"] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -313,10 +320,11 @@ export function useAllRegularChats(enabled = true) {
   });
 }
 
-export function useBots(includeArchived = false) {
+export function useBots(includeArchived = false, enabled = true) {
   return useQuery({
     queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],
     queryFn: () => botsApi.list(includeArchived),
+    enabled,
   });
 }
 

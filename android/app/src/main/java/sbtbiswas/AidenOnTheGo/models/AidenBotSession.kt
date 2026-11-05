@@ -20,6 +20,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonTransformingSerializer
 import kotlinx.serialization.json.buildJsonObject
@@ -450,9 +451,11 @@ data class AidenBotApproval(
     val toolCallId: String,
     val toolName: String,
     val summary: String,
-    val canAllow: Boolean
+    val canAllow: Boolean,
+    val alwaysCount: Int? = null
 ) {
     init {
+        require(alwaysCount == null || (canAllow && alwaysCount in 3..20))
         AidenBotWire.validateString(waitId, "waitId", MAX_WAIT_ID_LENGTH)
         if (!WAIT_ID.matches(waitId)) throw AidenBotContractException.InvalidField("waitId")
         AidenBotWire.validateString(toolCallId, "toolCallId", MAX_TOOL_CALL_ID_LENGTH)
@@ -466,6 +469,7 @@ data class AidenBotApproval(
         put("toolName", JsonPrimitive(toolName))
         put("summary", JsonPrimitive(summary))
         put("canAllow", JsonPrimitive(canAllow))
+        alwaysCount?.let { put("alwaysCount", JsonPrimitive(it)) }
     }
 
     companion object {
@@ -478,7 +482,7 @@ data class AidenBotApproval(
 
         fun parse(element: JsonElement): AidenBotApproval {
             val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("approval")
-            if (obj.keys != KEYS) throw AidenBotContractException.InvalidField("approval")
+            if (!obj.keys.containsAll(KEYS) || (obj.keys - (KEYS + "alwaysCount")).isNotEmpty()) throw AidenBotContractException.InvalidField("approval")
             fun string(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
                 ?: throw AidenBotContractException.InvalidField(key)
             val canAllow = (obj["canAllow"] as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.content
@@ -487,6 +491,7 @@ data class AidenBotApproval(
                 toolCallId = string("toolCallId"),
                 toolName = string("toolName"),
                 summary = string("summary"),
+                alwaysCount = aidenBotApprovalCount(obj, "alwaysCount"),
                 canAllow = when (canAllow) {
                     "true" -> true
                     "false" -> false
@@ -741,6 +746,100 @@ object AidenBotSessionActivitySerializer :
     override fun transformDeserialize(element: JsonElement): JsonElement = element.refusingNullLiterals("activity", "app")
 }
 
+/** Contract revision 55: the public access card contains no authorization or path to send back. */
+@Serializable
+enum class AidenBotAccessRequestChoice {
+    @SerialName("once") ONCE,
+    @SerialName("always") ALWAYS,
+    @SerialName("not_now") NOT_NOW
+}
+@Serializable
+enum class AidenBotAccessTarget { @SerialName("folder") FOLDER, @SerialName("whole_mac") WHOLE_MAC }
+
+@Serializable(with = AidenBotAccessRequestSerializer::class)
+data class AidenBotAccessRequest(
+    val waitId: String, val target: AidenBotAccessTarget, val label: String,
+    val place: String? = null, val why: String, val choices: List<AidenBotAccessRequestChoice>, val approvalCount: Int? = null
+) {
+    init {
+        require(approvalCount == null || (target == AidenBotAccessTarget.FOLDER && AidenBotAccessRequestChoice.ALWAYS in choices && approvalCount in 3..20))
+        AidenBotHandoffWire.validateWaitId(waitId)
+        fun text(value: String, max: Int) {
+            if (value.isBlank() || value.codePointCount(0, value.length) > max ||
+                value.any { it.code in 0..8 || it.code in 14..31 || it.code in 127..159 }) throw AidenBotContractException.InvalidField("accessRequest.text")
+        }
+        text(label, 120); text(why, 400)
+        place?.let {
+            text(it, 512)
+            if (target != AidenBotAccessTarget.FOLDER || !(it.startsWith("~/") || it.startsWith("/")))
+                throw AidenBotContractException.InvalidField("accessRequest.place")
+        }
+        if (target == AidenBotAccessTarget.WHOLE_MAC && (label != "your whole Mac" || place != null))
+            throw AidenBotContractException.InvalidField("accessRequest")
+        if (choices != listOf(AidenBotAccessRequestChoice.NOT_NOW, AidenBotAccessRequestChoice.ONCE) &&
+            !(target == AidenBotAccessTarget.FOLDER && choices == listOf(AidenBotAccessRequestChoice.NOT_NOW, AidenBotAccessRequestChoice.ALWAYS, AidenBotAccessRequestChoice.ONCE)))
+            throw AidenBotContractException.InvalidField("accessRequest.choices")
+    }
+    fun toJson(): JsonObject = buildJsonObject {
+        put("waitId", waitId); put("target", if (target == AidenBotAccessTarget.FOLDER) "folder" else "whole_mac")
+        put("label", label); place?.let { put("place", it) }; put("why", why)
+        approvalCount?.let { put("approvalCount", JsonPrimitive(it)) }
+        put("choices", AidenBotWireJson.json.encodeToJsonElement(ListSerializer(AidenBotAccessRequestChoice.serializer()), choices))
+    }
+    companion object {
+        fun parse(element: JsonElement): AidenBotAccessRequest {
+            val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("accessRequest")
+            if (!obj.keys.containsAll(setOf("waitId", "target", "label", "why", "choices")) ||
+                (obj.keys - setOf("waitId", "target", "label", "place", "why", "choices", "approvalCount")).isNotEmpty())
+                throw AidenBotContractException.InvalidField("accessRequest")
+            fun text(key: String): String {
+                val value = obj[key] as? JsonPrimitive
+                if (value == null || !value.isString) throw AidenBotContractException.InvalidField(key)
+                return value.content
+            }
+            val target = when (text("target")) { "folder" -> AidenBotAccessTarget.FOLDER; "whole_mac" -> AidenBotAccessTarget.WHOLE_MAC
+                else -> throw AidenBotContractException.InvalidField("target") }
+            val choices = obj["choices"] as? JsonArray ?: throw AidenBotContractException.InvalidField("choices")
+            return AidenBotAccessRequest(text("waitId"), target, text("label"),
+                if (obj.containsKey("place")) text("place") else null, text("why"),
+                choices.map { AidenBotWireJson.json.decodeFromJsonElement(AidenBotAccessRequestChoice.serializer(), it) }, aidenBotApprovalCount(obj, "approvalCount"))
+        }
+    }
+}
+object AidenBotAccessRequestSerializer : KSerializer<AidenBotAccessRequest> {
+    override val descriptor = JsonObject.serializer().descriptor
+    override fun serialize(encoder: Encoder, value: AidenBotAccessRequest) = (encoder as JsonEncoder).encodeJsonElement(value.toJson())
+    override fun deserialize(decoder: Decoder): AidenBotAccessRequest = AidenBotAccessRequest.parse((decoder as JsonDecoder).decodeJsonElement())
+}
+@Serializable
+data class AidenBotAccessAnswerRequest(val choice: AidenBotAccessRequestChoice)
+@Serializable(with = AidenBotAccessAnswerReceiptSerializer::class)
+data class AidenBotAccessAnswerReceipt(val answered: Boolean, val savedForFuture: Boolean? = null) {
+    init {
+        if (!answered) throw AidenBotContractException.InvalidField("answered")
+        if (savedForFuture == false) throw AidenBotContractException.InvalidField("savedForFuture")
+    }
+}
+object AidenBotAccessAnswerReceiptSerializer : KSerializer<AidenBotAccessAnswerReceipt> {
+    override val descriptor = JsonObject.serializer().descriptor
+    override fun serialize(encoder: Encoder, value: AidenBotAccessAnswerReceipt) =
+        (encoder as JsonEncoder).encodeJsonElement(buildJsonObject {
+            put("answered", true)
+            if (value.savedForFuture == true) put("savedForFuture", true)
+        })
+    override fun deserialize(decoder: Decoder): AidenBotAccessAnswerReceipt {
+        val body = (decoder as JsonDecoder).decodeJsonElement() as? JsonObject
+            ?: throw AidenBotContractException.InvalidField("accessAnswer")
+        if (body.keys.any { it !in setOf("answered", "savedForFuture") } || body["answered"] != JsonPrimitive(true)) {
+            throw AidenBotContractException.InvalidField("accessAnswer")
+        }
+        if ("savedForFuture" in body && body["savedForFuture"] != JsonPrimitive(true)) {
+            throw AidenBotContractException.InvalidField("savedForFuture")
+        }
+        return AidenBotAccessAnswerReceipt(true, if ("savedForFuture" in body) true else null)
+    }
+}
+
 // Contract revision 42 (`bot:issues`): the Bot's host-owned "Needs you" cards.
 
 /** The bounds the Mac's own issue parsers use. */
@@ -766,7 +865,8 @@ enum class AidenBotIssueKind {
     @SerialName("preflight_failed") PREFLIGHT_FAILED,
     @SerialName("routine_failed") ROUTINE_FAILED,
     @SerialName("routine_paused") ROUTINE_PAUSED,
-    @SerialName("run_stalled") RUN_STALLED
+    @SerialName("run_stalled") RUN_STALLED,
+    @SerialName("access_needed") ACCESS_NEEDED
 }
 
 /**
@@ -778,11 +878,15 @@ enum class AidenBotIssueActionKind {
     @SerialName("open_chat") OPEN_CHAT,
     @SerialName("resume_routine") RESUME_ROUTINE,
     @SerialName("stop_run") STOP_RUN,
-    @SerialName("keep_waiting") KEEP_WAITING
+    @SerialName("keep_waiting") KEEP_WAITING,
+    @SerialName("allow_folder") ALLOW_FOLDER,
+    @SerialName("dismiss_access") DISMISS_ACCESS
 }
 
 /** One action a card offers, exactly as the host sends it. `routineId` only on RESUME_ROUTINE. */
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotIssueActionSerializer::class)
 data class AidenBotIssueAction(
     val kind: AidenBotIssueActionKind,
     val routineId: String? = null
@@ -795,6 +899,18 @@ data class AidenBotIssueAction(
             }
             else -> if (routineId != null) throw AidenBotContractException.InvalidField("issue.action.routineId")
         }
+    }
+}
+
+/** The revision-55 dismiss action is exactly {kind}, including no routineId:null. */
+object AidenBotIssueActionSerializer :
+    JsonTransformingSerializer<AidenBotIssueAction>(AidenBotIssueAction.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val body = element as? JsonObject ?: return element
+        if (body["kind"] == JsonPrimitive("dismiss_access") && body.keys != setOf("kind")) {
+            throw AidenBotContractException.InvalidField("issue.action")
+        }
+        return element
     }
 }
 
@@ -823,7 +939,14 @@ data class AidenBotIssue(
         if (resolved && actions.isNotEmpty()) {
             throw AidenBotContractException.InvalidCombination("settled issue with actions")
         }
+        if (kind != AidenBotIssueKind.ACCESS_NEEDED && actions.any { it.kind == AidenBotIssueActionKind.DISMISS_ACCESS }) {
+            throw AidenBotContractException.InvalidCombination("dismiss access on ordinary issue")
+        }
     }
+
+    /** Revision 55 vocabulary is shown only after this device holds the access opt-in. */
+    fun isAvailable(accessRequests: Boolean = false): Boolean = accessRequests ||
+        (kind != AidenBotIssueKind.ACCESS_NEEDED && actions.none { it.kind == AidenBotIssueActionKind.ALLOW_FOLDER || it.kind == AidenBotIssueActionKind.DISMISS_ACCESS })
 
     companion object {
         /** At most [AidenRemoteIssueWire.MAX_CARDS] cards, each with its own id. */
@@ -909,6 +1032,8 @@ data class AidenBotSession(
      * always sent the key, as `null` when nothing waits; an older phone never is.
      */
     val handoff: AidenBotHandoff? = null,
+    val accessRequest: AidenBotAccessRequest? = null,
+    val plan: AidenRemoteBotPlan? = null,
     /**
      * Revision 42 (`bot:issues` devices only): the Bot's "Needs you" cards, oldest first. Null
      * from an older Mac or a device without the grant; an empty list means no card is open.
@@ -959,13 +1084,15 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         // A hand-off is written only when one waits, so an older Mac's session reads back as it came.
         val handoff = value.handoff?.let { mapOf("handoff" to it.toJson()) } ?: emptyMap()
         // Revision 42: the list is written only when this session carries one at all.
+        val plan = value.plan?.let { mapOf("plan" to it.toJson()) } ?: emptyMap()
+        val accessRequest = value.accessRequest?.let { mapOf("accessRequest" to it.toJson()) } ?: emptyMap()
         val issues = value.issues?.let {
             mapOf("issues" to jsonEncoder.json.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), it))
         } ?: emptyMap()
         jsonEncoder.encodeJsonElement(
             JsonObject(
                 body + ("question" to (value.question?.toJson() ?: JsonNull)) +
-                    ("approval" to (value.approval?.toJson() ?: JsonNull)) + handoff + issues
+                    ("approval" to (value.approval?.toJson() ?: JsonNull)) + handoff + accessRequest + plan + issues
             )
         )
     }
@@ -983,11 +1110,13 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val readable = JsonArray(rawEntries.filter { AidenBotSessionEntry.unknownType(it) == null })
         // Revision 37: `handoff` reaches only `bot:handoffs` devices, as `null` when nothing waits.
         val handoff = body["handoff"]?.let { if (it is JsonNull) null else AidenBotHandoff.parse(it) }
+        val plan = body["plan"]?.let { if (it is JsonNull) null else AidenRemoteBotPlan.parse(it) }
+        val accessRequest = body["accessRequest"]?.let { if (it is JsonNull) null else AidenBotAccessRequest.parse(it) }
         // Revision 42: `issues` reaches only `bot:issues` devices; absent from every other session.
         val issues = body["issues"]?.let { if (it is JsonNull) null else AidenBotIssue.parseList(it) }
         val fields = jsonDecoder.json.decodeFromJsonElement(
             AidenBotSessionFields.serializer(),
-            JsonObject(body - "question" - "approval" - "handoff" - "issues" + ("entries" to readable))
+            JsonObject(body - "question" - "approval" - "handoff" - "accessRequest" - "plan" - "issues" + ("entries" to readable))
         )
         return AidenBotSession(
             botId = fields.botId,
@@ -1004,6 +1133,8 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             activity = fields.activity,
             queued = fields.queued,
             handoff = handoff,
+            accessRequest = accessRequest,
+            plan = plan,
             issues = issues
         )
     }
@@ -1106,6 +1237,8 @@ sealed class AidenBotSessionEventPayload {
     data class Activity(val activity: AidenBotSessionActivity?) : AidenBotSessionEventPayload()
     /** Revision 37: the step the Bot handed back appeared (non-null) or was settled (null). */
     data class Handoff(val handoff: AidenBotHandoff?) : AidenBotSessionEventPayload()
+    data class Plan(val plan: AidenRemoteBotPlan?) : AidenBotSessionEventPayload()
+    data class AccessRequest(val accessRequest: AidenBotAccessRequest?) : AidenBotSessionEventPayload()
     /** Revision 42: the Bot's issue cards, oldest first; an empty list clears them. */
     data class Issues(val issues: List<AidenBotIssue>) : AidenBotSessionEventPayload() {
         init {
@@ -1155,6 +1288,8 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.Activity -> "activity"
             is AidenBotSessionEventPayload.Queued -> "queued"
             is AidenBotSessionEventPayload.Handoff -> "handoff"
+            is AidenBotSessionEventPayload.Plan -> "plan"
+            is AidenBotSessionEventPayload.AccessRequest -> "access_request"
             is AidenBotSessionEventPayload.Issues -> "issues"
             AidenBotSessionEventPayload.Closed -> "closed"
         }
@@ -1194,6 +1329,8 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             is AidenBotSessionEventPayload.Handoff -> buildJsonObject {
                 put("handoff", p.handoff?.toJson() ?: JsonNull)
             }
+            is AidenBotSessionEventPayload.Plan -> buildJsonObject { put("plan", p.plan?.toJson() ?: JsonNull) }
+            is AidenBotSessionEventPayload.AccessRequest -> buildJsonObject { put("accessRequest", p.accessRequest?.toJson() ?: JsonNull) }
             is AidenBotSessionEventPayload.Issues -> buildJsonObject {
                 put("issues", wire.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), p.issues))
             }
@@ -1280,6 +1417,16 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
                 payload.requireKeys(setOf("handoff"))
                 val element = payload.getValue("handoff")
                 AidenBotSessionEventPayload.Handoff(if (element is JsonNull) null else AidenBotHandoff.parse(element))
+            }
+            "plan" -> {
+                payload.requireKeys(setOf("plan"))
+                val element = payload.getValue("plan")
+                AidenBotSessionEventPayload.Plan(if (element is JsonNull) null else AidenRemoteBotPlan.parse(element))
+            }
+            "access_request" -> {
+                payload.requireKeys(setOf("accessRequest"))
+                val element = payload.getValue("accessRequest")
+                AidenBotSessionEventPayload.AccessRequest(if (element is JsonNull) null else AidenBotAccessRequest.parse(element))
             }
             "issues" -> {
                 payload.requireKeys(setOf("issues"))

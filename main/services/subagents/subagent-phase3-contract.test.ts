@@ -951,7 +951,7 @@ test("independent child egress rollbacks are evaluated before Web Search readine
   const webRollout = llm.indexOf("const childWebRollout = subagentChildWebEnabled()");
   const webReadiness = llm.indexOf("await webSearchService.availability()", webRollout);
   const mcpRollout = llm.indexOf("const childMcpRollout = subagentChildMcpEnabled()");
-  const mcpInventory = llm.indexOf("resolveProductionSubagentMcpInventory(signal)", mcpRollout);
+  const mcpInventory = llm.indexOf("resolveProductionSubagentMcpInventory(", mcpRollout);
   assert.ok(webRollout >= 0);
   assert.ok(webReadiness > webRollout);
   assert.match(llm.slice(webRollout, webReadiness), /childWebRollout\s*&&/u);

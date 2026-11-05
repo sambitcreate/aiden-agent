@@ -20,7 +20,7 @@ import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/t
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
-import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
+import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
@@ -58,8 +58,10 @@ import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
+import { useInboxDockBadgeSync } from "../lib/use-sidebar-view";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
+import { WindowControls } from "../components/window-controls";
 
 export function RootView() {
   useTheme();
@@ -149,7 +151,7 @@ function RootContent() {
       return (async () => {
         try {
           await reconcileChatCacheAfterIdle(owner.chatId);
-          const snapshot = parseChatActivitySnapshot(await chatsApi.activitySnapshot());
+          const snapshot = parseChatActivitySnapshot(await chatsApi.activitySnapshot(), new Set([owner.chatId]));
           if (!snapshot || !captured) return;
           clearInactiveDetachedLifecycleChat(captured, new Set(snapshot.activeChatIds));
         } catch {
@@ -220,7 +222,7 @@ function RootContent() {
         toast.info(navigationBlockedReason);
         return;
       }
-      void navigate({ to });
+      void navigate(to === "/bots" ? botListLocation() : { to });
     },
     [navigate, navigationBlockedReason],
   );
@@ -343,7 +345,7 @@ function RootContent() {
   const newChatActions = React.useMemo<NewChatActions>(
     () => ({
       openNewChatIn: async (workspaceId, options) => {
-        let gitMode: ChatDraftGitMode | undefined;
+        let gitMode: ChatDraftGitMode | undefined = options?.gitMode;
         if (options?.newWorktree) {
           // ⌥↵: only a repository with a commit can start a new worktree.
           // A local status read; nothing is created until the first send.
@@ -356,7 +358,7 @@ function RootContent() {
             .catch(() => undefined);
           if (git?.isRepo && !git.unborn) gitMode = "worktree";
         }
-        await openNewChatIn(workspaceId, undefined, gitMode ? { gitMode } : {});
+        await openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
@@ -484,6 +486,7 @@ function RootContent() {
   }, [queryClient]);
 
   useBotNotificationsSync(queryClient);
+  useInboxDockBadgeSync(appApi.setInboxDockBadge, capabilities.badgeCount);
 
   React.useEffect(
     () =>
@@ -544,10 +547,11 @@ function RootContent() {
   React.useEffect(() => {
     let disposed = false;
     const reconcileInactiveOwners = (payload: unknown) => {
-      const snapshot = parseChatActivitySnapshot(payload);
+      const owners = pendingDetachedLifecycleChats();
+      const snapshot = parseChatActivitySnapshot(payload, new Set(owners.map(owner => owner.chatId)));
       if (!snapshot) return;
       const activeChatIds = new Set(snapshot.activeChatIds);
-      for (const owner of pendingDetachedLifecycleChats()) {
+      for (const owner of owners) {
         if (!activeChatIds.has(owner.chatId)) void reconcileDetachedLifecycleChat(owner);
       }
     };
@@ -634,6 +638,7 @@ function RootContent() {
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <WindowControls />
         <KeyboardRegions />
         <KeyboardShortcutsDialog />
         <WorkspaceSettingsDialog />

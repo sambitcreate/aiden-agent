@@ -2,20 +2,16 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { crashReporter } from "electron";
 
-import {
-  RENDERER_DIAGNOSTIC_KINDS,
-  normalizeDiagnosticErrorType,
-  type RendererDiagnosticKind,
-  type RendererDiagnosticPolicy,
-  type RendererDiagnosticReport,
-} from "../../renderer/shared/diagnostics.js";
+import type { RendererDiagnosticKind, RendererDiagnosticPolicy } from "../../renderer/shared/diagnostics.js";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
+import { analyticsService } from "../services/analytics/analytics-main.js";
 import { chatStore } from "../services/chat-store.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
 import { rendererDiagnosticClassification, type DiagnosticEventName } from "../services/diagnostics-contract.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { createRendererDiagnosticRateLimiter } from "../services/renderer-diagnostic-rate.js";
+import { parseRendererReport } from "../services/renderer-diagnostic-report.js";
 import {
   createDiagnosticExport,
   deleteAllDiagnosticData,
@@ -24,8 +20,6 @@ import {
   pruneExpiredDiagnosticCrashDumps,
 } from "../services/diagnostic-support.js";
 
-const RENDERER_CONTEXTS = new Set(["root", "router", "subtree", "window"]);
-const SAFE_REFERENCE = /^RD-[A-Za-z0-9-]{8,80}$/u;
 const MAIN_RATE_WINDOW_MS = 60_000;
 const MAIN_MAX_PER_KEY = 3;
 const MAIN_MAX_PER_WINDOW = 60;
@@ -39,32 +33,6 @@ const registeredRateDocuments = new Set<string>();
 
 function diagnosticOwner(event: Electron.IpcMainInvokeEvent) {
   return rendererDocumentOwner(event, () => new Error("Untrusted diagnostics sender."));
-}
-
-function parseRendererReport(value: unknown): RendererDiagnosticReport {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid renderer diagnostic report.");
-  }
-  const input = value as Record<string, unknown>;
-  if (!RENDERER_DIAGNOSTIC_KINDS.includes(input.kind as RendererDiagnosticKind)) {
-    throw new Error("Invalid renderer diagnostic kind.");
-  }
-  if (typeof input.errorType !== "string" || normalizeDiagnosticErrorType(input.errorType) !== input.errorType) {
-    throw new Error("Invalid renderer diagnostic error type.");
-  }
-  if (typeof input.context !== "string" || !RENDERER_CONTEXTS.has(input.context)) {
-    throw new Error("Invalid renderer diagnostic context.");
-  }
-  if (typeof input.referenceId !== "string" || !SAFE_REFERENCE.test(input.referenceId)) {
-    throw new Error("Invalid renderer diagnostic reference.");
-  }
-  if (
-    input.suppressed !== undefined &&
-    (!Number.isSafeInteger(input.suppressed) || Number(input.suppressed) < 1 || Number(input.suppressed) > 10_000)
-  ) {
-    throw new Error("Invalid renderer diagnostic suppression count.");
-  }
-  return input as unknown as RendererDiagnosticReport;
 }
 
 const RENDERER_EVENT_NAMES: Readonly<Record<RendererDiagnosticKind, DiagnosticEventName>> = {
@@ -90,12 +58,13 @@ export function registerDiagnosticHandlers(): void {
       runtimeProfile: profile.id,
       windowMs: MAIN_RATE_WINDOW_MS,
       maxPerKey: MAIN_MAX_PER_KEY,
+      errorDetails: rendererForwardingEnabled && await analyticsService().sendsErrorDetails(),
     };
   });
 
   ipcMain.handle("diagnostics:renderer-event", async (event, value: unknown) => {
     const owner = diagnosticOwner(event);
-    const report = parseRendererReport(value);
+    const { report, errorDetails } = parseRendererReport(value);
     if (!registeredRateDocuments.has(owner.documentId)) {
       registeredRateDocuments.add(owner.documentId);
       owner.onInvalidated(() => {
@@ -121,7 +90,7 @@ export function registerDiagnosticHandlers(): void {
         referenceId: durableReferenceId,
         suppressed: report.suppressed ?? 0,
       },
-    });
+    }, errorDetails ? { rawError: errorDetails } : undefined);
     return { accepted: true, referenceId: durableReferenceId };
   });
 

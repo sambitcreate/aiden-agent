@@ -128,6 +128,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     let resumeGate = TestGate()
     let sendGate = TestGate()
     let stopGate = TestGate()
+    /// Holds each upload once armed, after it is recorded.
+    let uploadGate = TestGate()
     /// Holds each Resume until `releaseResume()`.
     var holdResume: Bool {
         get { resumeGate.isArmed }
@@ -267,6 +269,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
             _uploads.append(upload)
             return (_uploads.count - 1, _uploadFailures.contains(_uploads.count - 1))
         }
+        await uploadGate.pass()
+        try Task.checkCancellation()
         if fails { throw URLError(.networkConnectionLost) }
         let (name, mimeType, kind, size): (String, String, String, Int) = switch upload {
         case let .image(name, mimeType, data): (name, mimeType, "image", data.count)
@@ -1581,6 +1585,46 @@ final class AidenBotSessionApprovalTests: XCTestCase {
         return .server(statusCode: status, body: body)
     }
 
+    func testAlwaysScopeRetriesRetainExactChoiceAndAnotherScopeUsesAnotherKey() async throws {
+        let offered = String(approvalJSON().dropLast()) + ",\"alwaysCount\":3}"
+        let (model, transport) = try await loadedModel(approval: offered)
+        await model.answerApproval(.allow, scope: .always)
+        XCTAssertTrue(transport.approvals.isEmpty, "A decoded offer alone does not grant the capability")
+        model.allowedSupported = true
+        for scope: AidenApprovalScope in [.always, .once, .always] {
+            transport.nextApprovalError = URLError(.networkConnectionLost)
+            await model.answerApproval(.allow, scope: scope)
+            XCTAssertEqual(model.approval?.waitId, waitID)
+        }
+        XCTAssertEqual(transport.approvals.map(\.scope), [.always,nil,.always])
+        XCTAssertEqual(transport.approvals[0].key,transport.approvals[2].key)
+        XCTAssertNotEqual(transport.approvals[0].key,transport.approvals[1].key)
+        await model.answerApproval(.allow, scope: .always)
+        XCTAssertEqual(model.approvalSuccessNotice,"Always allow requested.")
+        XCTAssertEqual(transport.approvals[2].key,transport.approvals[3].key)
+    }
+
+    func testLateAlwaysFailureCannotRestoreAReplacedOrClearedHostCard() async throws {
+        for clear in [false,true] {
+            let offered=String(approvalJSON().dropLast()) + ",\"alwaysCount\":3}"
+            let (model,transport)=try await loadedModel(approval:offered)
+            model.allowedSupported=true
+            let entered=expectation(description:"approval sent")
+            transport.approvalEntered=entered
+            transport.answerGate.hold()
+            transport.nextApprovalError=URLError(.networkConnectionLost)
+            let request=Task { await model.answerApproval(.allow,scope:.always) }
+            await fulfillment(of:[entered],timeout:2)
+            let next=clear ? "null" : offered.replacingOccurrences(of:waitID,with:"replacement-57")
+            let raw="{\"protocolVersion\":1,\"botId\":\"bot_fixture_01\",\"epoch\":\"epoch_1\",\"seq\":1,\"type\":\"approval\",\"payload\":{\"approval\":\(next)}}"
+            _ = await model.apply(try JSONDecoder().decode(AidenBotSessionEvent.self,from:Data(raw.utf8)))
+            transport.answerGate.release()
+            await request.value
+            XCTAssertEqual(model.approval?.waitId,clear ? nil : "replacement-57")
+            XCTAssertNil(model.approvalSuccessNotice)
+        }
+    }
+
     func testSnapshotApprovalIsAllowedOnceByItsWaitIDAndClearsOnTheReceipt() async throws {
         let (model, transport) = try await loadedModel(approval: approvalJSON())
         XCTAssertEqual(model.approval?.waitId, waitID)
@@ -1681,6 +1725,7 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
     var nextAnswerError: Error?
     private(set) var approvals: [(waitId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, key: UUID)] = []
     /// Thrown by the next approval response instead of a resolution.
+    var approvalEntered: XCTestExpectation?
     var nextApprovalError: Error?
     let answerGate = TestGate()
 
@@ -1739,6 +1784,7 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
         idempotencyKey: UUID
     ) async throws -> AidenApprovalResponse {
         approvals.append((id, decision, scope, idempotencyKey))
+        approvalEntered?.fulfill(); approvalEntered = nil
         await answerGate.pass()
         if let error = nextApprovalError {
             nextApprovalError = nil
@@ -3718,6 +3764,27 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(second.outgoing.first?.status, .sent(submissionId: "17"))
     }
 
+    func testCancelledRequestCannotReturnAReceiptFromCancellation() async throws {
+        for _ in 0..<100 {
+            let gate = TestGate()
+            gate.hold()
+            let caller = Task {
+                try await aidenBotWithin(.seconds(30)) {
+                    await gate.pass()
+                    return "receipt"
+                }
+            }
+            try await waitUntil({ gate.isHolding }, what: "the request")
+            caller.cancel()
+            do {
+                _ = try await caller.value
+                XCTFail("A cancelled request must not take the receipt returned on cancellation.")
+            } catch is CancellationError {
+                // The result remains ambiguous so the idempotency key is retained.
+            }
+        }
+    }
+
     func testACancelledCallerNeverLeavesItsRequestRunning() async throws {
         // An already-cancelled caller never starts the request.
         let untouched = LiveRequests()
@@ -4648,6 +4715,34 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
         XCTAssertNil(model.reattach(failed.id, into: ""), "it comes back once")
     }
 
+    func testStopDropsTheUploadInFlightButKeepsWhatReachedTheMac() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = try await loaded(transport)
+        // The first upload goes through; the second waits on the Mac.
+        transport.uploadGate.hold()
+        transport.uploadGate.release()
+        defer { transport.uploadGate.releaseAll() }
+        let attaching = Task { await model.attach([photo, notes, photo]) }
+        let deadline = Date().addingTimeInterval(5)
+        while !transport.uploadGate.isHolding {
+            guard Date() < deadline else { return XCTFail("Timed out waiting for the second upload") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(model.uploadProgress?.index, 1)
+        XCTAssertEqual(model.uploadProgress?.count, 3)
+        XCTAssertEqual(model.uploadProgress?.title, "Sending 2 of 3")
+
+        model.cancelUploads()
+        _ = await attaching.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["receipt.png"], "what reached the Mac stays ready to send")
+        XCTAssertNil(model.uploadProgress, "the bar goes away")
+        XCTAssertFalse(model.isAttaching)
+        XCTAssertTrue(model.canAttach, "the + opens again")
+        XCTAssertEqual(transport.uploads.count, 2, "the third picture never left the phone")
+        XCTAssertTrue(transport.removedAttachmentIds.isEmpty, "Stop doesn't take the staged photo off the Mac")
+    }
+
     func testAMacWithoutBotAttachmentsOffersNoPlus() async throws {
         let transport = FakeBotSessionTransport()
         let model = try await loaded(transport, supported: false)
@@ -4663,6 +4758,17 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
 /// A transport that serves one snapshot and records hand-off answers,
 /// open-on-Mac requests, and pause and resume.
 private final class HandoffTransport: AidenBotSessionTransport, @unchecked Sendable {
+    private(set) var accessAnswers: [(waitId: String, key: UUID, request: AidenBotAccessAnswerRequest)] = []
+    var accessAnswerError: Error?
+    var accessAnswerResponse = #"{"answered":true}"#
+    var accessGate: TestGate?
+    func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt {
+        accessAnswers.append((waitId, idempotencyKey, request))
+        await accessGate?.pass()
+        if let error = accessAnswerError { accessAnswerError = nil; throw error }
+        return try JSONDecoder().decode(AidenBotAccessAnswerReceipt.self, from: Data(accessAnswerResponse.utf8))
+    }
+
     let snapshot: AidenBotSession
     private(set) var answers: [(waitId: String, key: UUID, request: AidenBotHandoffAnswerRequest)] = []
     private(set) var opens: [(waitId: String, key: UUID)] = []
@@ -5218,5 +5324,437 @@ final class AidenBotIssueTests: XCTestCase {
         XCTAssertTrue(sent)
         XCTAssertEqual(transport.issueRequests.first?.request.action.kind, .openChat)
         XCTAssertTrue(model.openIssues.contains(where: { $0.id == card.id }), "opening a surface fixes nothing")
+    }
+}
+
+extension AidenBotSessionTests {
+    private func messagingFixture() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: AidenBotSessionTests.self).url(forResource: "contract", withExtension: "json"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    func testMessagingDetailListAndStrictBooleanBounds() throws {
+        let root = try messagingFixture()
+        let sharedDetail = try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessagingDetail"])))
+        XCTAssertEqual(sharedDetail.botMessaging, AidenBotMessaging(receive: true, send: true))
+        let sharedPatch = try AidenRemoteJSONDecoder.decode(AidenBotIdentityPatch.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessagingPatch"])))
+        XCTAssertEqual(sharedPatch.botMessaging?.receive, false)
+        XCTAssertNil(sharedPatch.botMessaging?.send)
+        let sharedSettings = try AidenRemoteJSONDecoder.decode(AidenBotMessagingSettings.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessagingSettings"])))
+        XCTAssertFalse(sharedSettings.enabled)
+        let sharedNotification = try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(root["botMessageNotification"])))
+        XCTAssertEqual(sharedNotification.kind, .message)
+        var detail = try XCTUnwrap(root["botDetail"] as? [String: Any])
+        detail["botMessaging"] = ["receive": false, "send": true]
+        let decoded = try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: detail))
+        XCTAssertEqual(decoded.botMessaging, AidenBotMessaging(receive: false, send: true))
+        var list = try XCTUnwrap(root["botList"] as? [String: Any])
+        list["messaging"] = ["enabled": false]
+        let bots = try AidenRemoteJSONDecoder.decode(AidenBotList.self, from: JSONSerialization.data(withJSONObject: list))
+        XCTAssertEqual(bots.messaging?.enabled, false)
+        XCTAssertEqual(try bots.removing(botID: decoded.id).messaging?.enabled, false)
+        detail.removeValue(forKey: "botMessaging")
+        XCTAssertNil(try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: detail)).botMessaging)
+        for invalid in [#"{}"#, #"{"receive":null}"#, #"{"receive":"false"}"#, #"{"receive":1}"#, #"{"send":true,"path":"private"}"#] {
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotMessagingPatch.self, from: Data(invalid.utf8)))
+        }
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotMessagingSettings.self, from: Data(#"{"enabled":"false"}"#.utf8)))
+        detail["botMessaging"] = ["receive": true]
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: detail)))
+    }
+
+    func testMessagingChangedFieldRequestAndGlobalPutUseContractHeaders() async throws {
+        let root = try messagingFixture()
+        var detail = try XCTUnwrap(root["botDetail"] as? [String: Any])
+        detail["botMessaging"] = ["receive": false, "send": true]
+        MessagingURLProtocol.response = try JSONSerialization.data(withJSONObject: detail)
+        MessagingURLProtocol.requests = []
+        defer { MessagingURLProtocol.requests = []; MessagingURLProtocol.response = Data() }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MessagingURLProtocol.self]
+        let client = AidenRemoteClient(endpoint: URL(string: "https://messaging.test/api/aiden/v1")!, credential: "test-only", session: URLSession(configuration: configuration))
+        let id = try XCTUnwrap(detail["id"] as? String)
+        _ = try await client.updateBotIdentity(id: id, revision: "revision_current", patch: AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(receive: false)))
+        let patch = try XCTUnwrap(MessagingURLProtocol.requests.first)
+        XCTAssertEqual(patch.method, "PATCH")
+        XCTAssertEqual(patch.path, "/api/aiden/v1/bots/\(id)")
+        XCTAssertEqual(patch.revision, "revision_current")
+        XCTAssertEqual(patch.protocolVersion, "1")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: patch.body) as? [String: Any])
+        XCTAssertEqual(Set(body.keys), ["botMessaging"])
+        XCTAssertEqual(body["botMessaging"] as? [String: Bool], ["receive": false])
+        MessagingURLProtocol.response = Data(#"{"enabled":false}"#.utf8)
+        let settings = try await client.setBotMessaging(enabled: false)
+        XCTAssertFalse(settings.enabled)
+        let put = try XCTUnwrap(MessagingURLProtocol.requests.last)
+        XCTAssertEqual(put.method, "PUT")
+        XCTAssertEqual(put.path, "/api/aiden/v1/bots/messaging")
+        XCTAssertEqual(put.protocolVersion, "1")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: put.body) as? [String: Bool], ["enabled": false])
+    }
+
+    func testMessagingGlobalOptimismRollbackAndLostAnswerReconcile() async {
+        let context = AidenRemoteRequestContext(instanceId: "mac", deviceId: "phone", generation: 1)
+        let model = AidenBotMessagingModel()
+        model.adopt(AidenBotMessagingSettings(enabled: true), context: context)
+        await model.save(enabled: false, context: context, send: {
+            XCTAssertEqual(model.settings?.enabled, false)
+            XCTAssertTrue(model.isSaving)
+            throw URLError(.networkConnectionLost)
+        }, read: { AidenBotMessagingSettings(enabled: true) }, isCurrent: { true })
+        XCTAssertEqual(model.settings?.enabled, true)
+        XCTAssertNotNil(model.error)
+        XCTAssertFalse(model.isSaving)
+        await model.save(enabled: false, context: context, send: {
+            throw URLError(.networkConnectionLost)
+        }, read: { AidenBotMessagingSettings(enabled: false) }, isCurrent: { true })
+        XCTAssertEqual(model.settings?.enabled, false)
+        XCTAssertNil(model.error)
+        model.adopt(AidenBotMessagingSettings(enabled: true), context: context, generation: 0)
+        XCTAssertEqual(model.settings?.enabled, false, "A list read started before Save must not replace its result")
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: nil, canWrite: true, saving: false))
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: model.settings, canWrite: true, saving: false))
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: false, saving: false))
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: true, saving: true))
+        XCTAssertTrue(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: true, saving: false))
+        let other = AidenRemoteRequestContext(instanceId: "other", deviceId: "phone", generation: 2)
+        XCTAssertNil(model.value(for: other))
+        model.adopt(nil, context: other)
+        XCTAssertNil(model.settings, "An older host has no messaging state or controls")
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.botMessaging))
+        XCTAssertTrue(AidenRemoteCoordinator.capabilitiesAskedForAlone.contains([.botMessaging]))
+    }
+
+    func testMessagingIdentitySaveUsesNewestRevisionAndRollsBackToHostFields() async throws {
+        var detail = try XCTUnwrap(try messagingFixture()["botMessagingDetail"] as? [String: Any])
+        func decoded(_ object: [String: Any]) throws -> AidenBotDetail {
+            try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        var authoritative = try decoded(detail)
+        var revisions: [String] = []
+        var loseResponse = false
+        let saver = AidenBotIdentitySaver(send: { patch, revision in
+            revisions.append(revision)
+            if loseResponse { throw URLError(.networkConnectionLost) }
+            let next = try XCTUnwrap(patch.botMessaging).applying(to: XCTUnwrap(authoritative.botMessaging))
+            detail["botMessaging"] = ["receive": next.receive, "send": next.send]
+            detail["revision"] = "revision_next"
+            authoritative = try decoded(detail)
+            return authoritative
+        }, refresh: { authoritative })
+        saver.adopt(authoritative)
+        let originalRevision = authoritative.revision
+        let first = try AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(receive: false))
+        let saved = await saver.save(first)
+        XCTAssertEqual(saved, .saved(authoritative))
+        XCTAssertEqual(authoritative.botMessaging, AidenBotMessaging(receive: false, send: true))
+        loseResponse = true
+        let second = try AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(send: false))
+        let failed = await saver.save(second)
+        XCTAssertEqual(failed, .failed(authoritative: authoritative))
+        XCTAssertFalse(second.isSatisfied(by: authoritative))
+        XCTAssertEqual(authoritative.botMessaging, AidenBotMessaging(receive: false, send: true))
+        XCTAssertEqual(revisions, [originalRevision, "revision_next"])
+    }
+
+    func testMessagingNotificationOpensBotChatAndKeepsRedactedPreview() throws {
+        let item = try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: Data(#"{"id":"message_1","kind":"message","botId":"bot_fixture_01","botName":"COS","routineName":"COS replied","finishedAt":"2026-11-03T12:00:00.000Z","preview":"[redacted]"}"#.utf8))
+        let request = AidenBotRoutineNotifier.request(for: item, instanceId: "mac-1")
+        XCTAssertEqual(item.kind, .message)
+        XCTAssertEqual(request.content.body, "COS replied: [redacted]")
+        XCTAssertEqual(request.content.userInfo[AidenRunAlertNotifier.deepLinkUserInfoKey] as? String,
+                       AidenDeepLink.botChatURL(instanceId: "mac-1", botId: "bot_fixture_01")?.absoluteString)
+        XCTAssertNil(item.routineId)
+        XCTAssertNil(item.status)
+        let emptyPreview = try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: Data(#"{"id":"message_2","kind":"message","botId":"bot_fixture_01","botName":"COS","routineName":"COS replied","finishedAt":"2026-11-03T12:00:00.000Z","preview":""}"#.utf8))
+        XCTAssertEqual(AidenBotRoutineNotifier.request(for: emptyPreview, instanceId: "mac-1").content.body, "COS replied")
+    }
+
+    func testMessagingLabelAndPausedSavedAnswerRemainVisibleWithoutResume() async throws {
+        let clean = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: Data(#"{"id":"request_1","type":"message","role":"user","label":"Jester asked","text":"Check the calendar"}"#.utf8))
+        let saved = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: Data(#"{"id":"reply_1","type":"message","role":"user","label":"COS","text":"COS replied while this Bot was paused.\nThere are three events."}"#.utf8))
+        let transport = FakeBotSessionTransport()
+        let model = await loadedModel(transport, try session(seq: 1, state: .paused, entries: [clean, saved]))
+        XCTAssertEqual(model.entries, [clean, saved])
+        guard case .message(let row) = model.entries[0], case .message(let answer) = model.entries[1] else { return XCTFail("Expected visible messages") }
+        XCTAssertEqual(row.label, "Jester asked")
+        XCTAssertEqual(row.text, "Check the calendar")
+        XCTAssertFalse(row.text.contains("<bot_message"))
+        XCTAssertEqual(answer.label, "COS")
+        XCTAssertTrue(answer.text.contains("There are three events."))
+        XCTAssertTrue(transport.resumeKeys.isEmpty)
+        XCTAssertTrue(transport.sendKeys.isEmpty)
+        let excessive = #"{"id":"reply_2","type":"message","role":"user","label":"COS","text":""# + String(repeating: "x", count: AidenBotSessionWire.maxTextLength + 1) + #""}"#
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: Data(excessive.utf8)))
+    }
+}
+
+private final class MessagingURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Request {
+        let method: String?
+        let path: String?
+        let revision: String?
+        let protocolVersion: String?
+        let body: Data
+    }
+    nonisolated(unsafe) static var response = Data()
+    nonisolated(unsafe) static var requests: [Request] = []
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "messaging.test" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var body = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                body.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        Self.requests.append(Request(method: request.httpMethod, path: request.url?.path,
+            revision: request.value(forHTTPHeaderField: "If-Match"),
+            protocolVersion: request.value(forHTTPHeaderField: "Aiden-Protocol-Version"), body: body))
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.response)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+// MARK: Revision 55 access requests
+@MainActor
+final class AidenBotAccessRequestsTests: XCTestCase {
+    private func section() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        XCTAssertEqual(root["contractRevision"] as? Int, 58)
+        return try XCTUnwrap(root["botAccessRequests"] as? [String: Any])
+    }
+    private func decode<T: Decodable>(_ type: T.Type, _ object: Any) throws -> T {
+        try AidenRemoteJSONDecoder.decode(type, from: JSONSerialization.data(withJSONObject: object))
+    }
+    private func session() throws -> AidenBotSession { try decode(AidenBotSession.self, section()["session"]!) }
+    private func model() async throws -> (AidenBotSessionModel, HandoffTransport) {
+        let transport = HandoffTransport(snapshot: try session())
+        let model = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport)
+        await model.load()
+        return (model, transport)
+    }
+    private func event(card: Any, seq: Int) throws -> AidenBotSessionEvent {
+        try decode(AidenBotSessionEvent.self, ["protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_55", "seq": seq,
+            "type": "access_request", "payload": ["accessRequest": card]])
+    }
+
+    func testFixtureCardChoicesSnapshotFramesIssueAndLegacySettlement() async throws {
+        let section = try section()
+        let folder = try decode(AidenRemoteBotAccessRequest.self, section["folder"]!)
+        let mac = try decode(AidenRemoteBotAccessRequest.self, section["wholeMac"]!)
+        XCTAssertEqual(folder.choices, [.notNow, .always, .once])
+        XCTAssertEqual(mac.choices, [.notNow, .once])
+        XCTAssertNil(mac.place)
+        XCTAssertEqual(mac.label, "your whole Mac")
+        let issue = try decode(AidenRemoteBotIssue.self, section["issue"]!)
+        XCTAssertEqual(issue.kind, .accessNeeded)
+        XCTAssertFalse(issue.isAvailable())
+        XCTAssertTrue(issue.isAvailable(accessRequests: true))
+        XCTAssertEqual(issue.actions.map(\.kind), [.dismissAccess, .allowFolder])
+        let answer = try XCTUnwrap(section["answer"] as? [String: Any])
+        let receipt = try decode(AidenBotAccessAnswerReceipt.self, answer["response"]!)
+        XCTAssertEqual(receipt.savedForFuture, true)
+        let (model, _) = try await model()
+        XCTAssertEqual(model.accessRequest, folder)
+        for raw in try XCTUnwrap(section["events"] as? [[String: Any]]) {
+            await model.apply(try decode(AidenBotSessionEvent.self, raw))
+        }
+        XCTAssertNil(model.accessRequest)
+        let legacy = try XCTUnwrap(section["legacy"] as? [String: Any])
+        let transport = HandoffTransport(snapshot: try decode(AidenBotSession.self, legacy["session"]!))
+        let legacyModel = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport)
+        await legacyModel.load()
+        XCTAssertEqual(legacyModel.entries.count, 1)
+        for raw in try XCTUnwrap(legacy["events"] as? [[String: Any]]) {
+            await legacyModel.apply(try decode(AidenBotSessionEvent.self, raw))
+        }
+        XCTAssertTrue(legacyModel.entries.isEmpty, "The settling snapshot removes the legacy notice")
+    }
+
+    func testMalformedCardsFailClosed() throws {
+        let section = try section()
+        let folder = try XCTUnwrap(section["folder"] as? [String: Any])
+        let mac = try XCTUnwrap(section["wholeMac"] as? [String: Any])
+        let invalid: [[String: Any]] = [
+            folder.merging(["choices": ["once", "not_now"]]) { _, new in new },
+            folder.merging(["choices": ["not_now", "once", "once"]]) { _, new in new },
+            folder.merging(["label": String(repeating: "x", count: 121)]) { _, new in new },
+            folder.merging(["why": "   "]) { _, new in new },
+            folder.merging(["why": String(repeating: "x", count: 401)]) { _, new in new },
+            folder.merging(["waitId": "../wait"]) { _, new in new },
+            folder.merging(["place": "~"]) { _, new in new },
+            folder.merging(["place": "relative/path"]) { _, new in new },
+            folder.merging(["authorization": ["root": "/private"]]) { _, new in new },
+            mac.merging(["choices": ["not_now", "always", "once"]]) { _, new in new },
+            mac.merging(["label": "Mac"]) { _, new in new },
+            mac.merging(["place": "/"]) { _, new in new },
+        ]
+        for object in invalid { XCTAssertThrowsError(try decode(AidenRemoteBotAccessRequest.self, object)) }
+        XCTAssertThrowsError(try decode(AidenBotAccessAnswerReceipt.self, ["answered": false]))
+        XCTAssertThrowsError(try decode(AidenBotAccessAnswerReceipt.self, ["answered": "true"]))
+        XCTAssertThrowsError(try decode(AidenBotAccessAnswerReceipt.self, ["answered": true, "extra": true]))
+    }
+
+    func testEveryOfferedChoiceAnswersOnceAndWholeMacRefusesAlwaysLocally() async throws {
+        for choice in [AidenBotAccessChoice.notNow, .always, .once] {
+            let (model, transport) = try await model()
+            let sent = await model.answerAccessRequest(choice)
+            XCTAssertTrue(sent)
+            XCTAssertEqual(transport.accessAnswers.count, 1)
+            XCTAssertEqual(transport.accessAnswers.first?.request.choice, choice)
+            XCTAssertEqual(transport.accessAnswers.first?.waitId, try session().accessRequest?.waitId)
+            XCTAssertNil(model.accessRequest)
+            let duplicate = await model.answerAccessRequest(choice)
+            XCTAssertFalse(duplicate)
+        }
+        let (model, transport) = try await model()
+        await model.apply(try event(card: section()["wholeMac"]!, seq: 51))
+        let invalid = await model.answerAccessRequest(.always)
+        XCTAssertFalse(invalid)
+        XCTAssertTrue(transport.accessAnswers.isEmpty)
+        XCTAssertEqual(model.accessRequest?.choices, [.notNow, .once])
+    }
+
+    func testUncertainAlwaysThenNotNowSendsNewChoiceAndKey() async throws {
+        let (model, transport) = try await model()
+        transport.accessAnswerError = URLError(.networkConnectionLost)
+        let lost = await model.answerAccessRequest(.always)
+        XCTAssertFalse(lost)
+        XCTAssertNotNil(model.accessRequest)
+        XCTAssertEqual(model.errorMessage, "That answer wasn't sent. Please try again.")
+        let declined = await model.answerAccessRequest(.notNow)
+        XCTAssertTrue(declined)
+        XCTAssertEqual(transport.accessAnswers.map(\.request.choice), [.always, .notNow])
+        XCTAssertNotEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        XCTAssertNil(model.accessRequest)
+    }
+
+    func testSameChoiceUncertainRetryReusesBodyAndKey() async throws {
+        let body = try decode(AidenRemoteErrorEnvelope.self, ["error": ["code": "internal_error", "message": "Unknown outcome", "requestId": "access-test", "retryable": false]]).error
+        for failure: Error in [URLError(.networkConnectionLost), AidenRemoteClientError.server(statusCode: 503, body: body)] {
+            let (model, transport) = try await model()
+            transport.accessAnswerError = failure
+            _ = await model.answerAccessRequest(.always)
+            let retried = await model.answerAccessRequest(.always)
+            XCTAssertTrue(retried)
+            XCTAssertEqual(transport.accessAnswers.map(\.request.choice), [.always, .always])
+            XCTAssertEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        }
+    }
+
+    func testHostFirstAnswerWinsAndFreshWaitCanStillBeAnswered() async throws {
+        let (model, transport) = try await model()
+        transport.accessAnswerError = URLError(.networkConnectionLost)
+        _ = await model.answerAccessRequest(.always)
+        let body = try decode(AidenRemoteErrorEnvelope.self, section()["expired"]!).error
+        transport.accessAnswerError = AidenRemoteClientError.server(statusCode: 409, body: body)
+        let expired = await model.answerAccessRequest(.notNow)
+        XCTAssertFalse(expired)
+        XCTAssertEqual(transport.accessAnswers.map(\.request.choice), [.always, .notNow])
+        XCTAssertNotEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        XCTAssertNil(model.accessRequest)
+        XCTAssertEqual(model.errorMessage, "That card was already answered or closed.")
+        let duplicate = await model.answerAccessRequest(.once)
+        XCTAssertFalse(duplicate)
+        await model.apply(try event(card: section()["wholeMac"]!, seq: 51))
+        let fresh = await model.answerAccessRequest(.once)
+        XCTAssertTrue(fresh)
+        XCTAssertNotEqual(transport.accessAnswers[0].waitId, transport.accessAnswers[2].waitId)
+    }
+
+    func testCommittedAlwaysShowsSuccessAndCannotRetryTheOldCard() async throws {
+        let (model, transport) = try await model()
+        transport.accessAnswerError = URLError(.networkConnectionLost)
+        _ = await model.answerAccessRequest(.always)
+        transport.accessAnswerResponse = #"{"answered":true,"savedForFuture":true}"#
+        let saved = await model.answerAccessRequest(.always)
+        XCTAssertTrue(saved)
+        XCTAssertNil(model.accessRequest)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.accessSuccessNotice, "Folder approval recorded.")
+        XCTAssertFalse(model.canAnswerAccessRequest)
+        let retry = await model.answerAccessRequest(.once)
+        XCTAssertFalse(retry)
+        XCTAssertEqual(transport.accessAnswers.count, 2)
+        XCTAssertEqual(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+    }
+
+    func testDismissAccessPostsOfferedActionAndDropsIssue() async throws {
+        var object = try XCTUnwrap(section()["session"] as? [String: Any])
+        var issue = try XCTUnwrap(section()["issue"] as? [String: Any])
+        issue["actions"] = [["kind": "dismiss_access"]]
+        object["issues"] = [issue]
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try decode(AidenBotSession.self, object)))
+        let model = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport)
+        await model.load()
+        let card = try XCTUnwrap(model.openIssues.first)
+        let action = try XCTUnwrap(card.actions.first)
+        let sent = await model.actOnIssue(card, action: action)
+        XCTAssertTrue(sent)
+        XCTAssertTrue(model.openIssues.isEmpty)
+        XCTAssertEqual(transport.issueRequests.first?.request.action.kind, .dismissAccess)
+        XCTAssertEqual(transport.issueRequests.first?.issueId, card.id)
+        let duplicate = await model.actOnIssue(card, action: action)
+        XCTAssertFalse(duplicate)
+        XCTAssertEqual(transport.issueRequests.count, 1)
+    }
+
+    func testAccessReceiptAcceptsOnlyAbsentOrTrueFutureFlag() throws {
+        _ = try decode(AidenBotAccessAnswerReceipt.self, ["answered": true])
+        _ = try decode(AidenBotAccessAnswerReceipt.self, ["answered": true, "savedForFuture": true])
+        for flag: Any in [false, "true", 1, NSNull()] {
+            XCTAssertThrowsError(try decode(AidenBotAccessAnswerReceipt.self, ["answered": true, "savedForFuture": flag]))
+        }
+        for extra in ["authorization", "grant", "unknown"] {
+            XCTAssertThrowsError(try decode(AidenBotAccessAnswerReceipt.self, ["answered": true, extra: true]))
+        }
+    }
+
+    func testDismissAccessActionIsClosedAndLimitedToAccessIssues() throws {
+        var issue = try XCTUnwrap(section()["issue"] as? [String: Any])
+        issue["actions"] = [["kind": "dismiss_access"]]
+        let card = try decode(AidenRemoteBotIssue.self, issue)
+        XCTAssertFalse(card.isAvailable())
+        XCTAssertTrue(card.isAvailable(accessRequests: true))
+        XCTAssertEqual(AidenBotSessionModel.issueActionTitle(card.actions[0]), "Not now")
+        issue["kind"] = "run_stalled"
+        XCTAssertThrowsError(try decode(AidenRemoteBotIssue.self, issue))
+        for action: [String: Any] in [["kind": "dismiss_access", "routineId": "routine-1"],
+                                      ["kind": "dismiss_access", "routineId": NSNull()],
+                                      ["kind": "dismiss_access", "authorization": true], ["kind": "dismiss_unknown"]] {
+            XCTAssertThrowsError(try decode(AidenBotIssueAction.self, action))
+        }
+    }
+
+    func testFeedReplacementWinsOverFailedAnswerAndDuplicateTap() async throws {
+        let (model, transport) = try await model()
+        let gate = TestGate(); gate.hold(); transport.accessGate = gate
+        transport.accessAnswerError = URLError(.networkConnectionLost)
+        let answer = Task { await model.answerAccessRequest(.once) }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !gate.isHolding && ContinuousClock.now < deadline { await Task.yield() }
+        XCTAssertTrue(gate.isHolding)
+        guard gate.isHolding else { answer.cancel(); return }
+        XCTAssertNil(model.accessRequest, "Claim before the request completes")
+        let duplicate = await model.answerAccessRequest(.always)
+        XCTAssertFalse(duplicate)
+        let replacement = try section()["wholeMac"]!
+        await model.apply(try event(card: replacement, seq: 51))
+        gate.release()
+        let sent = await answer.value
+        XCTAssertFalse(sent)
+        XCTAssertEqual(model.accessRequest?.target, .wholeMac)
+        XCTAssertEqual(transport.accessAnswers.count, 1)
     }
 }

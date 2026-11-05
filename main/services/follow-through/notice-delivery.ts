@@ -79,6 +79,10 @@ export class NoticeDelivery {
     return next;
   }
 
+  hasPending(chatId: string): boolean {
+    return this.chains.has(chatId);
+  }
+
   /** Wakes left in the current hour for a chat. */
   wakesLeft(chatId: string): number {
     return MAX_WAKES_PER_CHAT_PER_HOUR - this.recentWakes(chatId).length;

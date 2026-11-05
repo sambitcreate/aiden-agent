@@ -1,4 +1,5 @@
 import type { Attachment } from "./types.js";
+import { isImageSha256 } from "./chat-image-store.js";
 import {
   imageBytesMatchMime,
   isCanonicalRasterImageMimeType,
@@ -80,6 +81,28 @@ function decodedBase64Prefix(value: string): Buffer {
   return Buffer.from(value.slice(0, encodedChars), "base64");
 }
 
+const MAX_IMAGE_SIDE = 65_535;
+
+/**
+ * The file reference of an image kept in the chat image store: its hash and,
+ * when known, its pixel size. Only stored histories carry one; a renderer
+ * append always sends the bytes.
+ */
+function storedImageReference(
+  attachment: Record<string, unknown>,
+  size: number,
+): Pick<Attachment, "sha256" | "width" | "height"> | undefined {
+  if (!isImageSha256(attachment.sha256) || size <= 0) return undefined;
+  const side = (value: unknown) =>
+    Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= MAX_IMAGE_SIDE;
+  return {
+    sha256: attachment.sha256,
+    ...(side(attachment.width) && side(attachment.height)
+      ? { width: attachment.width as number, height: attachment.height as number }
+      : {}),
+  };
+}
+
 function parseAttachment(value: unknown, index: number, mode: AttachmentParseMode): Attachment {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Invalid attachment at index ${index}.`);
@@ -106,6 +129,19 @@ function parseAttachment(value: unknown, index: number, mode: AttachmentParseMod
   }
   if (attachment.kind === "image") {
     const data = attachment.data;
+    if (mode === "stored") {
+      const stored = storedImageReference(attachment, size);
+      if (stored && data === undefined) {
+        if (!mimeType.startsWith("image/") || size > MAX_IMAGE_BYTES) {
+          throw new Error("Invalid image attachment data.");
+        }
+        return { id, name, mimeType, kind: "image", size, ...stored };
+      }
+      if (stored) {
+        const parsed = parseAttachment({ ...attachment, sha256: undefined }, index, mode);
+        return { ...parsed, ...stored };
+      }
+    }
     const decodedBytes =
       typeof data === "string" && data.length <= MAX_IMAGE_BASE64_CHARS
         ? base64DecodedBytes(data)
@@ -166,6 +202,20 @@ function parseAttachmentsWithLimit(
     parsed.push(attachment);
   }
   return parsed;
+}
+
+/**
+ * Stored attachments in the exact shape a new message carries: an image whose
+ * file could not be read back (a reference with no bytes) is left out, so the
+ * rest of the message still goes through `parseAttachments`.
+ */
+export function withReadableImages(attachments: readonly Attachment[] | undefined): Attachment[] {
+  return (attachments ?? []).flatMap((attachment) => {
+    if (attachment.kind !== "image") return [attachment];
+    if (attachment.data === undefined) return [];
+    const { id, name, mimeType, kind, size, data } = attachment;
+    return [{ id, name, mimeType, kind, size, data }];
+  });
 }
 
 export function parseAttachments(value: unknown): Attachment[] | undefined {

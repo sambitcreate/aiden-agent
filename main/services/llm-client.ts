@@ -112,6 +112,9 @@ import {
   recordRunNotification,
   recordRunSettled,
 } from "./host-runs-main.js";
+import { chatTriage } from "./chat-triage-main.js";
+import { pendingAttentionRecorder } from "./chat-pending-attention-main.js";
+import type { HostRunPendingPrompt } from "./host-run-registry.js";
 import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,
@@ -595,6 +598,8 @@ interface ActiveGeneration {
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
+  /** Nobody attends this run's prompts, so a refused one is not left for the Inbox. */
+  promptsUnattended: boolean;
   computerUse?: ComputerUseController;
   /** Set when a computer_use or fill_form call first reaches the access gate. */
   computerUseActivated?: boolean;
@@ -621,6 +626,7 @@ const initializing = new Map<
     cancelRequested: boolean;
     cancellationOrigin?: GenerationCancellationOrigin;
     rendererDetached: boolean;
+    promptsUnattended: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
     formFill?: FormFillService;
@@ -637,6 +643,12 @@ const runInputAdmission = createChatRunInputAdmission({
   isChatDeleting: (chatId) => chatDeletionGate.isDeleting(chatId),
   appendMessage: (chatId, message, meta) => chatStore.appendMessage(chatId, message, meta),
   readChat: (chatId) => chatStore.get(chatId),
+  // A steer or follow-up is the person writing in the chat, so it ends a snooze.
+  onPersonWrote: (chatId) => {
+    void chatTriage.wake(chatId).catch((error: unknown) => {
+      logger.warn("inbox", "Could not end the chat's snooze after its steer or follow-up.", error);
+    });
+  },
 });
 const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();
@@ -890,6 +902,18 @@ function forgetInterruptedWait(waitId: string): void {
   });
 }
 
+/**
+ * A prompt asked after its window left the chat is refused unpublished. Keep
+ * it for the Inbox's Unavailable row, unless nobody was ever going to attend
+ * the run or Aiden is quitting.
+ */
+function recordShortCircuitedPrompt(streamId: string, prompt: HostRunPendingPrompt & { id: string }): void {
+  if (quitInProgress) return;
+  const runtime = active.get(streamId) ?? initializing.get(streamId);
+  if (!runtime?.rendererDetached || runtime.promptsUnattended) return;
+  pendingAttentionRecorder.promptShortCircuited(streamId, prompt);
+}
+
 const approvals = new ToolApprovalCoordinator(
   (prompt) => {
     if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
@@ -916,6 +940,12 @@ const approvals = new ToolApprovalCoordinator(
       decision: outcome === "allowed" ? "allow" : outcome === "denied" ? "deny" : "cancelled",
     });
   },
+  (prompt) =>
+    recordShortCircuitedPrompt(prompt.streamId, {
+      id: prompt.approvalId,
+      type: "approval_required",
+      payload: { summary: prompt.summary },
+    }),
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -943,6 +973,12 @@ const questionnaires = new AskUserQuestionCoordinator(
       outcome: response.timedOut ? "expired" : response.cancelled ? "cancelled" : "answered",
     });
   },
+  (prompt) =>
+    recordShortCircuitedPrompt(prompt.streamId, {
+      id: prompt.promptId,
+      type: "question_required",
+      payload: { questions: prompt.questions },
+    }),
 );
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
@@ -1283,7 +1319,7 @@ async function prepareGeneration(
   const subagentWebEnabled = subagentWebAvailability?.ready === true;
   const discoveredSubagentMcpInventory =
     allowSubagents && childMcpRollout && subagentRunStore.selection === "v2"
-      ? await resolveProductionSubagentMcpInventory(signal)
+      ? await resolveProductionSubagentMcpInventory(signal, { disabledMcpServerIds: workspaceDisabledMcpServerIds })
       : [];
   const botSubagentMcpConnectionIdentities =
     botContext && discoveredSubagentMcpInventory.length > 0
@@ -1295,9 +1331,7 @@ async function prepareGeneration(
         discoveredSubagentMcpInventory,
         botSubagentMcpConnectionIdentities,
       )
-    : discoveredSubagentMcpInventory.filter(
-        (scope) => !workspaceDisabledMcpServerIds?.includes(scope.serverId),
-      );
+    : discoveredSubagentMcpInventory;
   const subagentShellBinary = resolveSubagentShellRunnerBinary();
   const subagentShellEnabled =
     allowSubagents &&
@@ -1684,6 +1718,28 @@ async function prepareGeneration(
   })
     ? { onLate: (late: McpLateDiscovery) => { lateMcpDiscovery = late; } }
     : undefined;
+  // Background jobs and pull request follows: workspace chats with folder
+  // access, on the Mac and Linux desktop. Their news reaches the chat later.
+  const followThroughAvailable =
+    !botContext &&
+    !assistantMode &&
+    Boolean(params.chatId) &&
+    Boolean(workspace) &&
+    Boolean(folderPath) &&
+    permission !== "none" &&
+    permission !== "read-only" &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    hostPlatformCapabilities().backgroundJobs;
+  // What a run_command call leaves running becomes one of the chat's background jobs.
+  const shellLeftovers =
+    followThroughAvailable && params.chatId && workspace && folderPath
+      ? (await import("./follow-through/follow-through-main.js")).runCommandLeftovers({
+          chatId: params.chatId,
+          workspaceId: workspace.id,
+          cwd: folderPath,
+        })
+      : undefined;
   let tools = (
     await buildAgentTools({
       mcpDeferral,
@@ -1705,6 +1761,7 @@ async function prepareGeneration(
       browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
       deviceTools,
       ...(deviceShimDir ? { shellPathPrefix: deviceShimDir } : {}),
+      ...(shellLeftovers ? { shellLeftovers } : {}),
       allowScheduling: schedulingAllowed,
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
@@ -1771,20 +1828,7 @@ async function prepareGeneration(
     const webFetchTool = await webFetchService.toolForGeneration();
     if (webFetchTool) tools.push(webFetchTool);
   }
-  // Background jobs and pull request follows: workspace chats with folder
-  // access, on the Mac and Linux desktop. Their news reaches the chat later.
-  if (
-    !botContext &&
-    !assistantMode &&
-    params.chatId &&
-    workspace &&
-    folderPath &&
-    permission !== "none" &&
-    permission !== "read-only" &&
-    options.usageSource === "chat" &&
-    options.interactionSurface !== "telegram" &&
-    hostPlatformCapabilities().backgroundJobs
-  ) {
+  if (followThroughAvailable && params.chatId && workspace && folderPath) {
     const { createFollowThroughTools } = await import("./follow-through/follow-through-tools-main.js");
     tools.push(
       ...createFollowThroughTools({
@@ -2281,6 +2325,7 @@ export const llmClient = {
       cancelRequested: false,
       cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
       rendererDetached: false,
+      promptsUnattended: Boolean(options.unattended),
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
       loadMonitor: undefined as LoadMonitorState | undefined,
@@ -2304,6 +2349,7 @@ export const llmClient = {
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
             recordRunBegin(hostRunRegistry, streamId, params.chatId, owner);
+            pendingAttentionRecorder.runBegan(params.chatId);
             chatProgressEvents.begin(params.chatId, streamId);
           },
         );
@@ -2606,6 +2652,7 @@ export const llmClient = {
     const spendingOwner: SpendingOwner = authoritativeBot
       ? { kind: "bot", id: authoritativeBot.id }
       : { kind: "chat", id: params.chatId };
+    let dispatchSpendingRefusal: string | undefined;
     const spendingMeter = createSpendingMeter({
       spending,
       owner: spendingOwner,
@@ -3506,15 +3553,19 @@ export const llmClient = {
         onError: (error) =>
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
-      // Outermost, so a usage-limit wait is neither timed as pace nor warmed:
-      // a request turned away before any reply waits and sends again, same model.
+      // A retry can wait while the chat's balance or limit changes. Check it
+      // again at dispatch, after waiting and before starting the provider call.
       const observedStream: typeof realStream = harnessProvider
         ? pace.wrap(warmedStream)
         : spendingMeter.wrap(
-            withUsageLimitWait(
-              pace.wrap(warmedStream),
-              usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
-            ),
+            withUsageLimitWait(pace.wrap(warmedStream), {
+              ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
+              beforeSendRefusal: async () => {
+                await spendingMeter.settled();
+                dispatchSpendingRefusal = await spending.refusal(spendingOwner);
+                return dispatchSpendingRefusal;
+              },
+            }),
           );
       const promptCacheTtl = promptCacheTtlMs(model);
       candidate = new PiAgentRuntimeHarness({
@@ -3663,16 +3714,12 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        finishTurn: async (turn) => {
-          if (attendedAssistant) {
-            const decision = endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)(turn);
-            if (decision) return decision;
-          }
-          // The step that crossed the spending limit has finished: end here, so
-          // the chat shows its limit notice rather than a failed reply.
-          if (harnessProvider) return undefined;
+        finishTurn: attendedAssistant
+          ? endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)
+          : undefined,
+        spendingLimitReached: harnessProvider ? undefined : async () => {
           await spendingMeter.settled();
-          return (await spending.block(spendingOwner).catch(() => undefined)) ? { action: "end" } : undefined;
+          return Boolean(await spending.block(spendingOwner).catch(() => undefined));
         },
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
@@ -4628,6 +4675,7 @@ export const llmClient = {
       cancelRequested: initialization.cancelRequested,
       cancellationOrigin: initialization.cancellationOrigin,
       rendererDetached: initialization.rendererDetached,
+      promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
       ...(subagentSupervisor
@@ -4859,8 +4907,9 @@ export const llmClient = {
           }
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
+        const spendingError = runtimeOutcome.kind === "provider_failed" ? dispatchSpendingRefusal : undefined;
         const finalError =
-          emergencyError ??
+          emergencyError ?? spendingError ??
           (runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
               ? "The model reached its output limit."
@@ -4880,7 +4929,7 @@ export const llmClient = {
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed" ? runtimeOutcome.providerFailure : undefined,
+            runtimeOutcome.kind === "provider_failed" && !spendingError ? runtimeOutcome.providerFailure : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
@@ -5068,6 +5117,8 @@ export const llmClient = {
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();
+    // Kept for the Inbox's Unavailable row; a quit's withdrawals are interrupted waits instead.
+    if (!quitInProgress) pendingAttentionRecorder.runDetached(streamId);
     approvals.detachStream(streamId);
     questionnaires.detachStream(streamId);
     logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);

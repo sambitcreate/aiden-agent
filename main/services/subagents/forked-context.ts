@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { AssistantMessage, ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { MAX_IMAGE_BYTES, MAX_TEXT_CHARS } from "../attachments.js";
+import { isImageSha256 } from "../chat-image-store.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { sanitizeSubagentText } from "./safe-text.js";
@@ -138,7 +139,13 @@ function parseAttachments(value: unknown): readonly ForkContextAttachment[] | un
   if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS_PER_MESSAGE) {
     throw new Error("Forked subagent context contains invalid message attachments.");
   }
-  return Object.freeze(value.map(parseAttachment));
+  // An image whose file is gone comes back as a bare reference; leave it out
+  // rather than refuse the whole chat, as the export and model turns do.
+  return Object.freeze(value.filter((item) => !isUnreadableStoredImage(item)).map(parseAttachment));
+}
+
+function isUnreadableStoredImage(value: unknown): boolean {
+  return isRecord(value) && value.kind === "image" && value.data === undefined && isImageSha256(value.sha256);
 }
 
 function revisionHash(value: unknown): string {

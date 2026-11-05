@@ -6,6 +6,7 @@ import {
   lastViewedBotId,
   parseBotSidebarPreferences,
   serializeBotSidebarPreferences,
+  withBotReplySeen,
   withBotViewed,
   withoutMissingBots,
   withPinnedBot,
@@ -71,6 +72,19 @@ test("viewing and the seen reply only move forward, pinning replaces the one pin
   const pruned = withoutMissingBots({ ...pinned, lastViewed: { b1: 50, gone: 70 }, seenReplyAt: { gone: 60 } }, live);
   assert.deepEqual(pruned, { since: 1, pinnedBotId: null, lastViewed: { b1: 50 }, seenReplyAt: {} });
   assert.equal(withoutMissingBots(pruned, live), pruned, "nothing to prune keeps the same record");
+});
+
+test("marking a reply read clears unread without changing which Bot was last viewed", () => {
+  const start = { since: 1, pinnedBotId: null, lastViewed: { b1: 90, b2: 50 }, seenReplyAt: { b2: 30 } };
+  const live = new Set(["b1", "b2"]);
+  assert.equal(isBotUnread(start, "b2", 70), true);
+  const seen = withBotReplySeen(start, "b2", 70);
+  assert.equal(isBotUnread(seen, "b2", 70), false);
+  assert.equal(lastViewedBotId(seen, live), "b1", "`/bots` still opens the Bot the person last viewed");
+  assert.deepEqual(seen.lastViewed, start.lastViewed);
+  assert.equal(isBotUnread(seen, "b2", 80), true, "a reply newer than the one marked read is news");
+  assert.equal(withBotReplySeen(seen, "b2", 60), seen, "an older reply changes nothing");
+  assert.equal(withBotReplySeen(seen, "b2", null), seen, "no reply changes nothing");
 });
 
 test("the last viewed Bot is the newest view among Bots that still exist", () => {

@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   parseBotAccessUpdateInput,
   parseBotApprovalDecision,
+  parseBotAllowedList,
+  parseBotAllowedRemove,
   parseBotChatCreate,
   parseBotCreate,
   parseBotCreateWithAccess,
@@ -144,6 +146,9 @@ test("Resume and Dismiss take an exact Bot id and a bounded request id", () => {
 });
 
 test("a desktop Bot message carries text or images and its send UUID as request id", () => {
+  for (const requestId of ["routine:daily:42", "routine:task:42:retry-1", "tg:42", "remote:phone:key", "intro:bot"]) {
+    assert.throws(() => parseBotSend({ botId: "bot:1", text: "send it", requestId }), /request id/u);
+  }
   assert.deepEqual(parseBotSend({ botId: "bot:1", text: "hi", requestId: "8f1c" }), {
     botId: "bot:1",
     text: "hi",
@@ -188,8 +193,25 @@ test("a Bot approval answer names its waitId and allow or deny, nothing else", (
   assert.throws(() => parseBotApprovalDecision({ waitId, decision: "always" }), /decision/u);
   assert.throws(() => parseBotApprovalDecision({ waitId: "a/b", decision: "allow" }), /approval id/u);
   assert.throws(() => parseBotApprovalDecision({ waitId: "x".repeat(65), decision: "allow" }), /approval id/u);
-  assert.throws(() => parseBotApprovalDecision({ waitId, decision: "allow", scope: "always" }), /fields/u);
+  assert.deepEqual(parseBotApprovalDecision({ waitId, decision: "allow", scope: "always" }), { waitId, decision: "allow", scope: "always" });
+  for (const fields of [{ decision: "deny", scope: "always" }, { decision: "allow", scope: "chat" }, { decision: "allow", scope: null }, { decision: "allow", extra: true }]) {
+    assert.throws(() => parseBotApprovalDecision({ waitId, ...fields }), /Invalid bot approval fields/u);
+  }
   assert.throws(() => parseBotApprovalDecision(null), /fields/u);
+});
+
+test("allowed-list requests select one Bot or all and removals name one bounded entry", () => {
+  assert.equal(parseBotAllowedList(undefined), undefined);
+  assert.equal(parseBotAllowedList({}), undefined);
+  assert.equal(parseBotAllowedList({ botId: "bot:ada" }), "bot:ada");
+  assert.deepEqual(parseBotAllowedRemove({ botId: "bot:ada", entryId: "folder_root_a" }), { botId: "bot:ada", entryId: "folder_root_a" });
+  for (const input of [null, [], "bot:ada", { botId: "../bot" }, { botId: "bot:ada", extra: true }]) {
+    assert.throws(() => parseBotAllowedList(input));
+  }
+  for (const entryId of ["", "../rule", "rule/x", "a\\b", "x".repeat(81), "rule\n", 42]) {
+    assert.throws(() => parseBotAllowedRemove({ botId: "bot:ada", entryId }), /entry id/u);
+  }
+  assert.throws(() => parseBotAllowedRemove({ botId: "bot:ada", entryId: "rule", target: "other" }), /fields/u);
 });
 
 test("a hand-off answer names its Bot, its waitId and Done or Skip, with a bounded note, and says which part is wrong", () => {
@@ -248,4 +270,10 @@ test("the own-wake-ups switch crosses IPC only as a boolean", () => {
   for (const selfWakeUps of ["off", 0, null]) {
     assert.throws(() => parseBotUpdate({ ...base, selfWakeUps }), /wake-up|Invalid/u);
   }
+});
+
+test('messaging switch IPC rejects non-booleans',()=>{
+ const base={id:'bot-1',expectedRevision:'botrev:one',name:'Ada',instructions:'help',avatar:{version:1,shape:'hex',color:'sun'}};
+ assert.throws(()=>parseBotUpdate({...base,messagesOtherBots:'yes'}),/messaging/);
+ assert.equal(parseBotUpdate({...base,acceptsBotMessages:false}).acceptsBotMessages,false);
 });

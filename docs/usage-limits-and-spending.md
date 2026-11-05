@@ -2,7 +2,7 @@
 
 Aiden handles two kinds of limits on the Mac and Linux desktop app: the ones a provider sets (rate limits and plan windows), and the dollar limits the owner sets. Both live in **Settings → Limits & spending**. Nothing about either leaves the computer. The two settings travel with Aiden's portable settings like other preferences; the saved waits and the spending ledger stay on this computer only.
 
-The CLI does not wait for usage limits or keep spending limits yet.
+The CLI does not wait for provider usage limits. Its Bot runner records paid response costs in the profile-local `spending.json` and enforces the monthly Bot and routine-run limits configured in the profile's `aiden.json`. It uses the same API-key versus subscription classification as desktop. The CLI has no Limits & spending editor or temporary spending-allowance controls.
 
 ## Waiting out a provider's usage limit
 
@@ -68,7 +68,7 @@ Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set t
 ### What happens at the limit
 
 - From **80%** of the limit, the chat or Bot shows a quiet line above the composer: "This chat has used $4.10 of its $5.00 limit."
-- The request that crosses the limit still finishes its step, so nothing is cut off mid-answer. The next request is refused with a clear line, for example "This chat reached its $5.00 spending limit. Allow more to keep going." The chat's or Bot's message box shows the same line and sends nothing until more is allowed. Telegram chats with a Bot get the same line.
+- The request that crosses the limit still finishes its step, so nothing is cut off mid-answer. In a foreground chat, a cut-off reply keeps its text. Once the step reaches the cap, automatic retries, continuations and model summaries stop. If a reply used reduced history, pi-vcc can still save the required checkpoint locally. Aiden reports a compaction failure if it cannot save that checkpoint within the limit. Chats and helpers also check the current limit before sending a request after a provider wait. A lowered cap or spending by another helper takes effect before the retry; Allow more permits it again. The next user request is refused with a clear line, for example "This chat reached its $5.00 spending limit. Allow more to keep going." The chat's or Bot's message box shows the same line and sends nothing until more is allowed. Telegram chats with a Bot get the same line.
 - The reached notice offers **Allow $X more**, which adds the limit's amount again (a $5 limit becomes $10). A chat keeps its extra amount; a Bot's extra amount ends with its month. When a Bot's month starts over, an open Bot chat can send again without being reopened.
 - A **routine run** that reaches its limit stops: "This routine run reached its $X spending limit. The next run starts fresh." There is no Allow more for a run.
 

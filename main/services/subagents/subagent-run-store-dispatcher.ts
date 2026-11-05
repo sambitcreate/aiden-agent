@@ -1,3 +1,4 @@
+import type { McpToolCallNotSentError } from "./subagent-effect-v2.js";
 import {
   adaptSubagentRunSnapshotV2ToV1,
   parseSubagentRunSnapshot,
@@ -161,10 +162,10 @@ export function createSubagentRunStoreDispatcher(
       return options.v2.markEffectDispatchStarted(value);
     },
 
-    async cancelEffectBeforeDispatch(value: unknown) {
+    async cancelEffectBeforeDispatch(value: unknown, unsent?: McpToolCallNotSentError) {
       requireInitialized();
       if (options.selection !== "v2") throw new Error("Durable subagent effects require V2 persistence.");
-      return options.v2.cancelEffectBeforeDispatch(value);
+      return options.v2.cancelEffectBeforeDispatch(value, unsent);
     },
 
     async finishEffect(value: unknown) {

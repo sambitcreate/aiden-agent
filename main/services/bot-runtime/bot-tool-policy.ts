@@ -1,3 +1,6 @@
+import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_PLAN_STEP_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME } from "../../../renderer/shared/bot-plans.js";
+import { BOT_REQUEST_ACCESS_TOOL_NAME } from "../../../renderer/shared/bot-access-requests.js";
 // Which tools a Bot may use, and which need the person's approval.
 //
 // This is the legacy Bot classification from `llm-client.ts`
@@ -66,6 +69,7 @@ export interface BotToolFacts {
 /** The turn being prepared, for offer-time rules. */
 export interface BotToolTurn {
   /** Telegram turns get no routine tool, as on the legacy path. */
+  botMessage?: boolean;
   telegram?: boolean;
   /** Routine runs get no question or hand-off card: nobody is waiting on the other end. */
   routine?: boolean;
@@ -76,10 +80,16 @@ export type BotToolVerdict = { allowed: true } | { allowed: false; reason: strin
 /** The ingress rules of one input, from its request id. */
 export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> & { intro: boolean } {
   return {
+    botMessage: isBotMessageRequestId(requestId),
     telegram: requestId?.startsWith("tg:") ?? false,
     routine: requestId?.startsWith("routine:") ?? false,
     intro: requestId?.startsWith(BOT_INTRO_REQUEST_PREFIX) ?? false,
   };
+}
+
+/** Use the shared turn classifier, including A's message and reply kinds. */
+export function botRunUnattended(requestIds: readonly (string | undefined)[]): boolean {
+  return requestIds.some((id) => { const turn = botTurnOf(id); return turn.routine || turn.telegram || turn.botMessage; });
 }
 
 const UNATTENDED_WITHHELD = new Set<string>([
@@ -103,6 +113,12 @@ const UNATTENDED_WITHHELD = new Set<string>([
  * every input allows it.
  */
 export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
+  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return requestIds.length > 0 && requestIds.every(id => {
+    const kind = botMessageTurnOf(id).kind;
+    return kind === "person" || kind === "message";
+  });
+  if (name === BOT_REQUEST_ACCESS_TOOL_NAME) return requestIds.length > 0 && requestIds.every((id) => !botTurnOf(id).intro);
+  if (name === BOT_MESSAGE_TOOL_NAME) return botMessageChainOf(requestIds).canSend;
   // A routine's notepad belongs to routine runs alone: a person's turn, or a
   // run a person's message joined, never sees it.
   if (name === ROUTINE_NOTES_TOOL) {
@@ -113,13 +129,13 @@ export function botIngressAllowsTool(name: string, requestIds: readonly (string 
   if (name === WAKE_UP_TOOL) {
     return requestIds.every((requestId) => {
       const turn = botTurnOf(requestId);
-      return !turn.routine && !turn.intro;
+      return !turn.routine && !turn.intro && !turn.botMessage;
     });
   }
   return requestIds.every((requestId) => {
     const turn = botTurnOf(requestId);
     if (turn.intro) return false;
-    if (turn.telegram || turn.routine) return !UNATTENDED_WITHHELD.has(name);
+    if (turn.telegram || turn.routine || turn.botMessage) return !UNATTENDED_WITHHELD.has(name);
     return true;
   });
 }
@@ -142,6 +158,13 @@ export async function botToolVerdict(
   args?: unknown,
 ): Promise<BotToolVerdict> {
   const { authority } = facts;
+  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
+  if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
+    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: "This Bot can already use your whole Mac." };
+    return verdict(authority.files.mode === "scoped", "File access is off for this Bot.");
+  }
+  if (name === BOT_MESSAGE_TOOL_NAME) return verdict(!turn.telegram && !turn.routine, "Messaging other Bots is off for this turn.");
+  if (turn.botMessage && (UNATTENDED_WITHHELD.has(name) || name === WAKE_UP_TOOL)) return {allowed: false, reason: "This tool is not available on a Bot-message turn."};
   if (name === INSPECT_IMAGE_TOOL_NAME) {
     return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
   }

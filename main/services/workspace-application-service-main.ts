@@ -35,13 +35,15 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
   workspaceOperationRegistry,
   createScratchWorkspaceDirectory,
   realpath: (value) => fs.realpath(value),
-  stat: (value) => fs.stat(value),
+  stat: (value) => fs.stat(value, { bigint: true }),
   removeEmptyDirectory: (value) => fs.rmdir(value),
   noWorkspace: {
     createDirectory: async () =>
       createScratchWorkspaceDirectory(await ensureUserDataDir("chat-folders")),
     workspaceIdsWithChats: async () =>
       new Set((await chatStore.list()).map((chat) => chat.workspaceId).filter((id): id is string => Boolean(id))),
+    chatIdsIn: async (workspaceId) =>
+      (await chatStore.list()).filter((chat) => chat.workspaceId === workspaceId).map((chat) => chat.id),
     trash: (folderPath) => shell.trashItem(folderPath),
   },
   createId: defaultWorkspaceId,

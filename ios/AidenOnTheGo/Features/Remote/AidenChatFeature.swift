@@ -400,7 +400,8 @@ enum AidenChatModelAuthority {
         selectedProviderId: String?,
         selectedModelId: String?,
         selectedThinkingLevel: String?,
-        remembered: AidenChatModelSelection? = nil
+        remembered: AidenChatModelSelection? = nil,
+        hasExplicitSelection: Bool = false
     ) -> AidenChatModelSelection {
         if chat.isBotChat {
             let provider = catalog?.providers.first { $0.id == chat.providerId }
@@ -413,16 +414,23 @@ enum AidenChatModelAuthority {
         }
 
         guard let catalog else {
+            if !hasExplicitSelection, !chat.messages.isEmpty,
+               let providerId = chat.providerId, let modelId = chat.modelId {
+                return AidenChatModelSelection(
+                    providerId: providerId, modelId: modelId,
+                    thinkingLevel: selectedProviderId == providerId && selectedModelId == modelId ? selectedThinkingLevel : nil
+                )
+            }
             return AidenChatModelSelection(
                 providerId: selectedProviderId,
                 modelId: selectedModelId,
                 thinkingLevel: selectedThinkingLevel
             )
         }
-        // A chat that already has messages keeps its own model. The remembered
-        // per-host choice (passed only until the user picks in this chat)
-        // seeds a new chat, or one whose model this phone can't use.
-        if remembered != nil, !chat.messages.isEmpty, let own = ownSelection(
+        // Cache-seeded selections are not user choices. Until the person picks,
+        // a populated chat follows its refreshed host pair, even without a
+        // remembered default. Explicit unsent choices stay with this chat.
+        if !hasExplicitSelection, !chat.messages.isEmpty, let own = ownSelection(
             chat: chat,
             catalog: catalog,
             selectedProviderId: selectedProviderId,
@@ -431,7 +439,7 @@ enum AidenChatModelAuthority {
         ) {
             return own
         }
-        if let remembered = rememberedSelection(remembered, in: catalog) {
+        if !hasExplicitSelection, let remembered = rememberedSelection(remembered, in: catalog) {
             return remembered
         }
         var providerId = selectedProviderId
@@ -1455,6 +1463,20 @@ final class AidenChatViewModel {
     /// later refresh keeps earlier pages the reader loaded.
     @ObservationIgnored private var hasSettledTranscriptWindow = false
     private(set) var isStarting = false
+    /// Revision 53: the first message starts this chat in a new worktree on
+    /// the Mac. Shown only while `offersNewWorktree`.
+    var startsInNewWorktree = false
+    /// The Mac is making the worktree; the message waits above a Cancel.
+    private(set) var isSettingUpWorktree = false
+    /// What a `git:read` branch list showed for this chat's workspace, if read.
+    private(set) var workspaceHasCommits: Bool?
+    @ObservationIgnored private var worktreeSetupTask: Task<AidenChatNewWorktree, Error>?
+    /// Cancel was pressed during this setup. A task that already finished
+    /// ignores `cancel()`, so the press is kept here too.
+    @ObservationIgnored private var worktreeSetupCanceled = false
+    /// One key per chat and message, so a retry after a lost reply finds the
+    /// worktree the Mac already made instead of failing on the moved chat.
+    @ObservationIgnored private var worktreeAttempt: (text: String, key: UUID)?
     /// The busy send pill's mode. Resets to Queue when the run ends.
     private(set) var runInputMode: AidenStreamInputMode = .queue
     private(set) var streamState: AidenStreamState? {
@@ -1543,6 +1565,11 @@ final class AidenChatViewModel {
         }
     }
     private(set) var isUploadingAttachment = false
+    /// How far the attachments being uploaded have got; nil while none are.
+    private(set) var uploadProgress: AidenUploadProgress?
+    @ObservationIgnored private var uploadProgressID: UUID?
+    /// Stop on the progress bar keeps the pictures that already reached the Mac.
+    @ObservationIgnored private var stopKeepsStagedUploads = false
     let appControlsCache = AidenAppControlCache()
     private(set) var taskProgress: AidenRemoteChatTaskProgress?
     private(set) var agentRoster: AidenRemoteChatAgentRoster?
@@ -1879,6 +1906,39 @@ final class AidenChatViewModel {
     var isLiveReplyUnsettled: Bool {
         isStreaming || activeStreamID != nil || foreignRunIsLive
     }
+    var offersNewWorktree: Bool {
+        guard !isReadOnlyPresentation, !isRemoved else { return false }
+        return AidenNewWorktreeAvailability.isOffered(
+            chat: chat,
+            workspace: coordinator.workspaces.first { $0.id == chat.workspaceId },
+            server: coordinator.server,
+            hasCommits: workspaceHasCommits
+        )
+    }
+
+    /// Reads the workspace's branches when this phone holds `git:read`, so New
+    /// worktree is hidden for a folder that is not a repository or has no
+    /// commits. Without the grant, or when the read fails, the Mac decides.
+    func refreshNewWorktreeRepository() async {
+        guard !isReadOnlyPresentation, !chat.isBotChat, chat.messages.isEmpty,
+              coordinator.server?.capabilities.contains(.chatNewWorktree) == true,
+              coordinator.server?.capabilities.contains(.gitRead) == true,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        let workspaceId = chat.workspaceId
+        guard let result = try? await coordinator.remoteClient(for: context).gitBranches(workspaceId: workspaceId),
+              !isRemoved, coordinator.isCurrent(context), chat.workspaceId == workspaceId else { return }
+        workspaceHasCommits = AidenNewWorktreeAvailability.hasCommits(result)
+    }
+
+    /// Stops waiting for the worktree. The message goes back to the composer.
+    /// If the Mac finishes anyway, the chat is in the worktree next time it
+    /// loads, still empty.
+    func cancelWorktreeSetup() {
+        guard worktreeSetupTask != nil else { return }
+        worktreeSetupCanceled = true
+        worktreeSetupTask?.cancel()
+    }
+
     var canSend: Bool {
         guard !isReadOnlyPresentation, !isRemoved, pendingSend == nil, sendRecoveryError == nil else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
@@ -3072,6 +3132,13 @@ final class AidenChatViewModel {
             presentedError = String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
             return
         }
+        // The chat stopped qualifying while the chip was on: keep the message
+        // rather than send it to the main checkout.
+        if retryAttempt == nil, startsInNewWorktree, !offersNewWorktree {
+            startsInNewWorktree = false
+            presentedError = AidenNewWorktreeCopy.noLongerOffered
+            return
+        }
         guard let context = authority ?? (try? coordinator.requestContext(for: instanceId)),
               coordinator.isCurrent(context) else { return }
         // A saved send is only ever sent with the device credential it was made under.
@@ -3087,6 +3154,7 @@ final class AidenChatViewModel {
             attachments: submittedAttachments,
             skill: submittedSkill.map(AidenSkillInvocation.init(entry:))
         )
+        let makesWorktree = retryAttempt == nil && startsInNewWorktree && offersNewWorktree
         let previousUpdatedAt = chat.updatedAt
         let optimisticID = "local-\(UUID().uuidString.lowercased())"
         let now = Date()
@@ -3133,6 +3201,44 @@ final class AidenChatViewModel {
             key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments)
         let idempotencyKey = attempt.key
         do {
+            if makesWorktree {
+                // Revision 53: the Mac makes the worktree and moves this empty
+                // chat into it before the message is sent there.
+                let key = worktreeAttempt?.text == text ? worktreeAttempt!.key : UUID()
+                worktreeAttempt = (text, key)
+                let client = try coordinator.remoteClient(for: context)
+                let chatId = chat.id
+                let revision = chat.revision
+                let setup = Task {
+                    try await client.moveChatToNewWorktree(id: chatId, revision: revision, text: text, idempotencyKey: key)
+                }
+                worktreeSetupTask = setup
+                worktreeSetupCanceled = false
+                isSettingUpWorktree = true
+                defer {
+                    isSettingUpWorktree = false
+                    worktreeSetupTask = nil
+                }
+                let moved: AidenChatNewWorktree
+                do {
+                    moved = try await withTaskCancellationHandler {
+                        try await setup.value
+                    } onCancel: {
+                        setup.cancel()
+                    }
+                } catch {
+                    if AidenNewWorktreeRetry.spendsKey(error) { worktreeAttempt = nil }
+                    throw error
+                }
+                guard !isRemoved, coordinator.isCurrent(context) else { return }
+                chat.workspaceId = moved.chat.workspaceId
+                chat.revision = moved.chat.revision
+                startsInNewWorktree = false
+                worktreeAttempt = nil
+                Task { await coordinator.refreshWorkspaces() }
+                // Canceled as the worktree arrived: the chat stays there, unsent.
+                if setup.isCancelled || worktreeSetupCanceled { throw CancellationError() }
+            }
             let session: AidenChatDraftStore.Session
             if let existing = draftSession { session = existing }
             else {
@@ -3256,8 +3362,13 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             chat.messages.removeAll { $0.id == optimisticID }
             chat.updatedAt = previousUpdatedAt
-            if draft.isEmpty { draft = text }
-            if pendingAttachments.isEmpty { pendingAttachments = submittedAttachments }
+            // A Cancel can come long after the send (New worktree waits on a
+            // fetch), so keep anything typed meanwhile beside the message.
+            draft = AidenDraftSendReconciliation.failedDraft(submitted: text, current: draft)
+            pendingAttachments = AidenDraftSendReconciliation.failedAttachments(
+                submitted: submittedAttachments,
+                current: pendingAttachments
+            )
             streamState = nil
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
@@ -3423,18 +3534,37 @@ final class AidenChatViewModel {
         composerGeneration &+= 1
         isUploadingAttachment = true
         presentedError = nil
-        defer { isUploadingAttachment = false }
+        let progressID = UUID()
+        uploadProgressID = progressID
+        stopKeepsStagedUploads = false
+        defer {
+            isUploadingAttachment = false
+            if uploadProgressID == progressID {
+                uploadProgressID = nil
+                uploadProgress = nil
+            }
+        }
+        // Revision 50: a Mac that granted `attachments:raw` takes a picture as its own bytes.
+        let rawImages = coordinator.server?.supportsRawUploads == true
+        let batch = Array(uploads.prefix(10 - pendingAttachments.count))
         var failedCount = 0
         var acceptedReferences: [AidenAttachmentReference] = []
-        for upload in uploads.prefix(10 - pendingAttachments.count) {
+        for (index, upload) in batch.enumerated() {
             if isRemoved || Task.isCancelled {
                 await cleanupCancelledUpload(acceptedReferences)
                 return uploads.count
             }
+            uploadProgress = AidenUploadProgress(index: index, count: batch.count, fraction: 0)
             do {
                 let reference = try await uploadClient.uploadAttachment(
                     chatId: chat.id,
-                    upload: upload
+                    upload: upload,
+                    rawImages: rawImages,
+                    progress: { [weak self] fraction in
+                        Task { @MainActor in
+                            self?.recordUploadProgress(fraction, index: index, id: progressID)
+                        }
+                    }
                 )
                 guard reference.isValid() else { throw AidenRemoteClientError.invalidResponse }
                 ownedUploadReferences[reference.id] = (reference, context, uploadClient)
@@ -3495,10 +3625,30 @@ final class AidenChatViewModel {
         return failedCount
     }
 
+    /// A late report from an earlier upload or batch never moves the bar back.
+    private func recordUploadProgress(_ fraction: Double, index: Int, id: UUID) {
+        guard uploadProgressID == id, let current = uploadProgress, current.index == index,
+              let next = current.advanced(to: fraction) else { return }
+        uploadProgress = next
+    }
+
+    /// Stop on the progress bar: the upload in flight is dropped; what already
+    /// reached the Mac stays ready to send, as on Android.
+    func cancelUploads() {
+        guard isUploadingAttachment else { return }
+        stopKeepsStagedUploads = true
+        cancelAttachmentPreparation()
+        uploadTask?.cancel()
+    }
+
     private func cleanupCancelledUpload(
         _ references: [AidenAttachmentReference]
     ) async {
-        for reference in references { await cleanupOwnedAttachment(reference.id) }
+        // A closed chat drops everything; Stop keeps the attachments already shown.
+        let kept = stopKeepsStagedUploads && !isRemoved ? Set(pendingAttachments.map(\.id)) : []
+        for reference in references where !kept.contains(reference.id) {
+            await cleanupOwnedAttachment(reference.id)
+        }
     }
 
     private func cleanupOwnedAttachment(_ id: String) async {
@@ -4351,7 +4501,8 @@ final class AidenChatViewModel {
             selectedThinkingLevel: selectedThinkingLevel,
             remembered: hasExplicitModelSelection || isReadOnlyFixture || chat.isBotChat
                 ? nil
-                : modelPreferenceStore.selection(for: instanceId)
+                : modelPreferenceStore.selection(for: instanceId),
+            hasExplicitSelection: hasExplicitModelSelection
         )
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId
@@ -5610,6 +5761,8 @@ struct AidenChatDetailView: View {
     @State private var simulatorViewer: AidenSimulatorViewerModel?
     @State private var simulatorRefreshEpoch = 0
     @State private var spending = AidenSpendingNoticeModel()
+    @State private var backgroundJobs = AidenBackgroundJobsModel()
+    @State private var showsBackgroundJobs = false
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -5710,6 +5863,22 @@ struct AidenChatDetailView: View {
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .task(id: backgroundJobsRefreshKey) {
+            // Not pushed: read after each reply settles, and every few seconds
+            // while something runs or the list is open. Only while the app
+            // is in front: a backgrounded app never polls the Mac.
+            guard scenePhase == .active else { return }
+            await backgroundJobs.refresh(chatId: model.chat.id, transport: backgroundJobsTransport)
+            while !Task.isCancelled, backgroundJobsTransport != nil,
+                  backgroundJobs.runningCount > 0 || showsBackgroundJobs {
+                try? await Task.sleep(for: .seconds(showsBackgroundJobs ? 3 : 10))
+                guard !Task.isCancelled else { return }
+                await backgroundJobs.refresh(chatId: model.chat.id, transport: backgroundJobsTransport)
+            }
+        }
+        .task(id: newWorktreeRefreshKey) {
+            await model.refreshNewWorktreeRepository()
+        }
         .task(id: spendingRefreshKey) {
             await spending.refresh(owner: spendingOwner, transport: spendingTransport)
         }
@@ -5752,6 +5921,13 @@ struct AidenChatDetailView: View {
         .sheet(item: $botSheet) { botSheetContent($0) }
         .sheet(item: $progressSheet) { progressSheet in
             AidenChatProgressSheet(kind: progressSheet, model: model)
+        }
+        .sheet(isPresented: $showsBackgroundJobs) {
+            AidenBackgroundJobsSheet(
+                model: backgroundJobs,
+                canStop: allowsMutations && coordinator?.server?.capabilities.contains(.chatWrite) == true,
+                onStop: { jobId in Task { await backgroundJobs.stop(jobId, transport: backgroundJobsTransport) } }
+            )
         }
         .sheet(item: $forkSummaryRequest) { request in
             AidenForkSummarySheet { focus in
@@ -6012,6 +6188,41 @@ struct AidenChatDetailView: View {
         return try? coordinator.remoteClient()
     }
 
+    /// Revision 49: a Workspace chat's background jobs, once this phone holds `chat:jobs`.
+    private var backgroundJobsTransport: AidenBackgroundJobTransport? {
+        guard !model.chat.isBotChat, let coordinator,
+              coordinator.server?.capabilities.contains(.chatJobs) == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    private var backgroundJobsRefreshKey: String {
+        [
+            model.chat.id,
+            coordinator?.activeInstanceId ?? "",
+            String(coordinator?.server?.capabilities.contains(.chatJobs) == true),
+            String(model.isStreaming),
+            String(model.chat.messages.count),
+            String(chatLoadEpoch),
+            String(showsBackgroundJobs),
+            String(scenePhase == .active),
+        ].joined(separator: "|")
+    }
+
+    /// Revision 53: New worktree sits beside the composer's chips until the
+    /// chat's first message, and stays hidden while that message is on its way.
+    private var showsNewWorktreeChip: Bool {
+        allowsMutations && model.offersNewWorktree && !model.isSettingUpWorktree
+    }
+
+    private var newWorktreeRefreshKey: String {
+        [
+            model.chat.id,
+            model.chat.workspaceId,
+            coordinator?.activeInstanceId ?? "",
+            String(coordinator?.server?.capabilities.contains(.chatNewWorktree) == true),
+        ].joined(separator: "|")
+    }
+
     /// Re-read after each reply settles and after a send the Mac refused.
     private var spendingRefreshKey: String {
         [
@@ -6045,13 +6256,26 @@ struct AidenChatDetailView: View {
                     }.font(.footnote)
                 }.padding(12).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16)).padding(.bottom, 8)
             }
-            if simulators.deviceCount > 0 {
-                HStack {
-                    AidenSimulatorDeviceButton(count: simulators.deviceCount) {
-                        simulatorViewer = simulators.makeViewer(coordinator: coordinator)
+            if model.isSettingUpWorktree {
+                AidenNewWorktreeSetupRow { model.cancelWorktreeSetup() }
+            }
+            if simulators.deviceCount > 0 || backgroundJobs.runningCount > 0 || showsNewWorktreeChip {
+                HStack(spacing: 8) {
+                    if simulators.deviceCount > 0 {
+                        AidenSimulatorDeviceButton(count: simulators.deviceCount) {
+                            simulatorViewer = simulators.makeViewer(coordinator: coordinator)
+                        }
+                    }
+                    AidenBackgroundJobsChip(running: backgroundJobs.runningCount) {
+                        showsBackgroundJobs = true
+                    }
+                    if showsNewWorktreeChip {
+                        AidenNewWorktreeChip(isOn: $model.startsInNewWorktree)
+                            .disabled(model.isStarting)
                     }
                     Spacer(minLength: 0)
                 }
+                .padding(.horizontal, simulators.deviceCount > 0 ? 0 : 4)
                 .padding(.bottom, 4)
             }
             AidenChatProgressControls(
@@ -9886,6 +10110,11 @@ private struct AidenComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let progress = model.uploadProgress {
+                AidenUploadProgressRow(progress: progress, onCancel: model.cancelUploads)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             if !visiblePendingAttachments.isEmpty || !attachmentPicker.committingAssets.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -9975,7 +10204,8 @@ private struct AidenComposerView: View {
                         .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
                         .opacity(model.isUploadingAttachment || model.isPreparingAttachments ? 0.48 : 1)
                         .overlay(alignment: .bottomTrailing) {
-                            if model.isUploadingAttachment || model.isPreparingAttachments {
+                            // While the upload bar shows progress, it is the only spinner.
+                            if model.uploadProgress == nil, model.isUploadingAttachment || model.isPreparingAttachments {
                                 ProgressView()
                                     .controlSize(.mini)
                                     .padding(3)

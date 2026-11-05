@@ -23,6 +23,11 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
   const { botSessionRuntime, botSpendingStop } = await import("./bot-runtime/bot-session-main.js");
   const runtime = await botSessionRuntime();
   return {
+    wakeUpAllowed: async (botId, generation) => {
+      const { botStore } = await import("./bot-store.js");
+      return await botStore.wakeUpGeneration(botId) === (generation ?? "");
+    },
+    canRetryRoutineRequest: (botId, requestId) => runtime.canRetryRoutineRequest(botId, requestId),
     submissionForRequest: (botId, requestId) => runtime.submissionForRequest(botId, requestId),
     send: (botId, input) => runtime.send(botId, input),
     state: (botId) => runtime.state(botId),

@@ -24,8 +24,13 @@ function fakeTransport() {
   const immediate: AnalyticsMessage[] = [];
   let state: "open" | "shut" | "discarded" = "open";
   const transport: PostHogTransport = {
+    revokeQueue: () => { queued.length = 0; },
     capture: (message) => void (state === "open" && queued.push(message)),
-    captureNow: async (message) => void immediate.push(message),
+    captureOptOut: async (message) => void immediate.push(message),
+    captureNow: async (message) => {
+      immediate.push(message);
+      return true;
+    },
     flush: async () => void sent.push(...queued.splice(0)),
     shutdown: async () => {
       sent.push(...queued.splice(0));
@@ -148,7 +153,7 @@ test("a launch after an unclean exit or an update is labelled, and the update is
   t.after(crashed.cleanup);
   writeFileSync(join(crashed.runDirectory, RUN_MARKER_FILE), "");
   await crashed.service.start();
-  assert.equal(crashed.events()[0]!.properties.launch_kind, "after_crash");
+  assert.equal(crashed.events().find((message) => message.event === "app_opened")!.properties.launch_kind, "after_crash");
 
   const updated = harness({ initial: { ...shown, lastVersion: "1.39.2" } });
   t.after(updated.cleanup);
@@ -304,7 +309,7 @@ test("switching off then back on while the opt-out is still sending leaves it on
     createTransport: async () => {
       const fake = fakeTransport();
       if (created.length === 0) {
-        fake.transport.captureNow = (message) => new Promise((resolve) => {
+        fake.transport.captureOptOut = (message) => new Promise((resolve) => {
           fake.immediate.push(message);
           releaseDisabled = () => resolve();
         });
@@ -329,6 +334,33 @@ test("switching off then back on while the opt-out is still sending leaves it on
   assert.equal(created.length, 2);
   assert.equal(created[0]!.state(), "discarded");
   assert.equal(created[1]!.state(), "open");
+});
+
+test("quit drains queued consent changes and shuts down the re-enabled transport", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
+  await h.service.start();
+  const originalId = h.stored().installId;
+  assert.ok(originalId);
+
+  const off = h.service.setEnabled(false);
+  const on = h.service.setEnabled(true);
+  const quit = h.service.shutdown();
+  await Promise.all([off, on, quit]);
+
+  const newId = h.stored().installId;
+  assert.ok(newId && newId !== originalId);
+  assert.deepEqual(h.transports.map(transport => transport.state()), ["discarded", "shut"]);
+  assert.deepEqual(h.transports.flatMap(transport => transport.immediate.map(m => [m.event, m.distinctId])),
+    [["analytics_disabled", originalId]]);
+  assert.deepEqual(h.transports[0]!.sent, []);
+  assert.deepEqual(h.transports[1]!.sent.map(m => [m.event, m.distinctId]), [["app_active", newId]]);
+
+  // No hourly callback should record another day once shutdown has finished.
+  const lastActiveDay = h.stored().lastActiveDay;
+  h.setClock(new Date(2026, 9, 31, 9));
+  await h.tick();
+  assert.equal(h.stored().lastActiveDay, lastActiveDay);
 });
 
 test("switching off and back on while startup is still connecting leaves sending on", async (t) => {
@@ -392,6 +424,10 @@ test("finishing onboarding starts sending and reports a custom provider without 
   await h.service.onboardingFinished("incomplete");
   assert.equal(h.transports.length, 0);
 
+  await h.service.onboardingFinished("deferred");
+  assert.equal(h.transports.length, 0, "completion alone cannot acknowledge an unread row");
+  assert.equal(h.stored().noticeShownAt, undefined);
+  await h.service.markNoticeShown();
   await h.service.onboardingFinished("completed", "my-company-gateway");
   const finished = h.events().find((message) => message.event === "onboarding_finished");
   assert.deepEqual([finished!.properties.outcome, finished!.properties.provider_id], ["completed", "custom"]);

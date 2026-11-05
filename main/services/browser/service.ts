@@ -406,7 +406,7 @@ export class BrowserService {
    * Hold a Bot's tab for the person (a sign-in or hand-off card, or a
    * takeover). Whatever the Bot had queued or approved on it stops.
    */
-  hold(workspaceId: string, tabId: string, hold: BrowserHold): void {
+  hold(workspaceId: string, tabId: string, hold: BrowserHold, show = false): void {
     if (!botIdForBrowserWorkspace(workspaceId)) throw new Error("Only a Bot's tab can be held for the person.");
     if (!hold || typeof hold.holdId !== "string" || !hold.holdId || !["sign_in", "handoff", "takeover"].includes(hold.reason))
       throw new Error("Invalid browser hold.");
@@ -415,7 +415,9 @@ export class BrowserService {
     tab.state.heldForPerson = { reason: hold.reason };
     tab.queue.interrupt();
     this.watchHeldFields(tab);
+    if (show) this.activateTab(tab);
     this.emit(workspaceId);
+    if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId });
   }
   /** Release a hold. Anything the Bot had approved before it is stale. Unknown holds are ignored. */
   release(workspaceId: string, holdId: string): void {
@@ -866,6 +868,23 @@ export class BrowserService {
       // A crash after navigation started still needs recovery, even while the
       // main-frame response is pending. Renderer recreation resets ownership.
       if (!wc.isCrashed() || navigationSupersededCrash) return;
+      // Reported once this handler returns: the only timer it starts is the
+      // recovery below, and a diagnostic write arms the health file's save timer.
+      // A report that fails must not stop the page recovering.
+      queueMicrotask(() => {
+        try {
+          writeDiagnosticEvent({
+            level: "error",
+            area: "electron",
+            event: "browser-tab-process-gone",
+            outcome: "failed",
+            code: "renderer-crashed",
+            fields: { reason: details.reason, exitCode: details.exitCode },
+          });
+        } catch {
+          /* Diagnostics never outrank recovery. */
+        }
+      });
       this.cancelCrashRecovery(tab);
       tab.navigationCommand = undefined;
       tab.queue.interrupt();

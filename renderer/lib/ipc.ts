@@ -1,9 +1,13 @@
+import type { PeerProjectSource } from "../shared/peer-project-clone";
+import { BOT_PLAN_CHANNELS, type BotPlanDecision } from "../shared/bot-plans.js";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
+import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import { parseWindowControlsState, type WindowControlsState } from "../shared/window-chrome";
 import {
   parseUsageLimitWaits,
   USAGE_LIMITS_CHANGED_CHANNEL,
@@ -136,6 +140,7 @@ import type {
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import type { WebFetchRendererSnapshot } from "../shared/web-fetch-settings";
+import type { TranscriptImage } from "../shared/transcript-images";
 import type {
   WebKeyPoolId,
   WebSearchKeyPoolRendererState,
@@ -290,6 +295,7 @@ import type {
   PeerRunSubscription,
   PeerRunTarget,
 } from "../shared/peer-host";
+import type { ChatTriagePatch, ChatTriageResult } from "../shared/chat-triage";
 import type { PeerOperation } from "../shared/peer-operation";
 import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../shared/peer-bot-session";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
@@ -414,6 +420,25 @@ export const appApi = {
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
+  /** Whether the app icon shows the Inbox's Needs you count; main does the counting. */
+  setInboxDockBadge: (enabled: boolean) => invoke<void>("app:setInboxDockBadge", enabled),
+};
+
+/** The window controls Aiden draws in its own top bar on Linux. */
+export const windowControlsApi = {
+  state: async (): Promise<WindowControlsState | null> =>
+    parseWindowControlsState(await invoke<unknown>("app:window:getState")),
+  minimize: () => invoke<boolean>("app:window:minimize"),
+  toggleMaximize: async (): Promise<WindowControlsState | null> =>
+    parseWindowControlsState(await invoke<unknown>("app:window:toggleMaximize")),
+  close: () => invoke<boolean>("app:window:close"),
+  /** Opens the app menu (File, Edit, View…) at a point in the window, in CSS pixels. */
+  showMenu: (point: { x: number; y: number }) => invoke<boolean>("app:window:showMenu", point),
+  onStateChanged: (handler: (state: WindowControlsState) => void) =>
+    onNotification<unknown>("app:window-state", (payload) => {
+      const state = parseWindowControlsState(payload);
+      if (state) handler(state);
+    }),
 };
 
 export const appUpdatesApi = {
@@ -812,6 +837,10 @@ export const webFetchApi = {
     invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractAccountId", accountId),
 };
 
+export const transcriptImagesApi = {
+  load: (url: string) => invoke<TranscriptImage>("chat:loadTranscriptImage", url),
+};
+
 // ── Telegram remote control ──────────────────────────────────────────
 export interface TelegramStatus {
   enabled: boolean;
@@ -1016,6 +1045,9 @@ export const modelsApi = {
 
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
+  peerClonePreview: (workspaceId: string) => invoke<PeerProjectSource>("workspaces:peerClonePreview", workspaceId),
+  peerClone: (input: { cloneId: string; hostId: string; workspaceId: string; selection: string; files: string[] }) => invoke<PeerOperationOutcome>("workspaces:peerClone", input),
+  cancelPeerClone: (cloneId: string) => invoke<boolean>("workspaces:peerCloneCancel", cloneId),
   list: () => invoke<Workspace[]>("workspaces:list"),
   memoryFacts: (workspaceId: string) =>
     invoke<import("../../main/services/workspace-memory-facts").WorkspaceMemoryFactView[]>(
@@ -1072,6 +1104,9 @@ export const workspacesApi = {
   /** Whether the workspace's folder is still on disk. */
   folderPresence: (workspaceId: string) =>
     invoke<WorkspaceFolderPresenceResult>("workspaces:folderPresence", workspaceId),
+  /** Put back an Aiden-managed worktree whose folder was deleted, on its branch as it stands now. */
+  restoreDeletedWorktree: (workspaceId: string) =>
+    invoke<Workspace>("workspaces:restoreDeletedWorktree", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
@@ -1436,12 +1471,15 @@ export const chatsApi = {
   readMarkers: () => invoke<unknown>("chats:readMarkers"),
   markRead: (id: string, throughMessageId?: string) =>
     invoke<boolean>("chats:markRead", id, throughMessageId),
+  triage: () => invoke<unknown>("chats:triage"),
+  setTriage: (id: string, patch: ChatTriagePatch, ifRevision?: number) =>
+    invoke<ChatTriageResult>("chats:setTriage", id, patch, ifRevision),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
-    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));
+    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id), id);
     if (!response) throw new Error("The chat read response was invalid.");
     if (response.reconciliation) {
-      rememberChatReadReconciliation(response.reconciliation);
+      rememberChatReadReconciliation(response.reconciliation, id);
     }
     return response.chat
       ? {
@@ -1615,6 +1653,9 @@ export const chatsApi = {
     invoke<{ path: string }>("chats:saveImageToDownloads", { chatId, attachmentId }),
   copyImage: (chatId: string, attachmentId: string) =>
     invoke<boolean>("chats:copyImage", { chatId, attachmentId }),
+  /** A stored image's base64 bytes, to reuse it in a new message. */
+  imageData: (chatId: string, attachmentId: string) =>
+    invoke<{ data: string }>("chats:imageData", { chatId, attachmentId }),
   /** Reveal a file saved by saveImageToDownloads in Finder. */
   showSavedImage: (filePath: string) => invoke<boolean>("chats:showSavedImage", filePath),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
@@ -1629,6 +1670,10 @@ export const chatsApi = {
   /** The questions and approvals the interrupted reply was waiting on, questions first. */
   interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
   dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
+  /** What each listed local chat is waiting on, for the Inbox; unknown chats and idle ones are left out. */
+  pendingAttention: (ids: readonly string[]) => invoke<ChatPendingAttention[]>("chats:pendingAttention", [...ids]),
+  /** Dismiss a chat's Unavailable prompts (those settled when its window left). */
+  dismissDetachedAttention: (id: string) => invoke<void>("chats:dismissDetachedAttention", id),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
@@ -1741,14 +1786,26 @@ export const botsApi = {
       submissionId,
     }),
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
-  approve: (waitId: string, decision: "allow" | "deny") =>
-    invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  approve: (waitId: string, decision: "allow" | "deny", scope?: "always") =>
+    invoke<{ decided: boolean }>("bots:approve", { waitId, decision, ...(scope === undefined ? {} : { scope }) }),
+  allowedList: (botId?: string) =>
+    invoke<import("../shared/tool-approval-scope").BotAllowedEntry[]>("bots:allowed:list", botId === undefined ? {} : { botId }),
+  removeAllowed: (botId: string, entryId: string) =>
+    invoke<{ removed: boolean }>("bots:allowed:remove", { botId, entryId }),
+  onAllowedChanged: (handler: (payload: { botId: string }) => void) =>
+    onNotification("bots:allowed:changed", handler),
   /**
    * Answer the Bot's A–E question by its wait id; `answered` is false once the
    * question is no longer waiting (answered elsewhere or withdrawn).
    */
   answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
     invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  /** Answer only the offered choice for this live authorization attempt. */
+  answerAccessRequest: (botId: string, waitId: string, choice: import("../shared/bot-access-requests").BotAccessChoice) =>
+    invoke<{ answered: boolean; savedForFuture?: true }>("bots:answerAccessRequest", { botId, waitId, choice }),
+  /** Answer or stop the exact plan shown by the host. */
+  respondPlan: (input: { botId: string; planId: string; decision: BotPlanDecision }) =>
+    invoke<{ result: "done" | "not_waiting" }>(BOT_PLAN_CHANNELS.respond, input),
   /**
    * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
    * optional note; `answered` is false once the card is no longer waiting.
