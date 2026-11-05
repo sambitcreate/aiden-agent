@@ -147,3 +147,43 @@ Owner: `recoverChatDeletions` in `daemon-chats.ts`, over the `daemon-chat-deleti
 Recovery runs in `serve` for every server. A failure there is logged and closes only those chats. `createCliRemoteChats` runs it again and still fails startup, because Remote must not list a chat whose deletion is stuck.
 
 **Defect fixed:** recovery lived only in `createCliRemoteChats`, so `aiden serve --no-remote` neither finished a committed deletion nor closed the chat to new turns.
+
+## C15: schedule consent publication
+
+Owner: `approvedMutation` in `createCliScheduler` (`schedules.ts`) over `assertScheduleApproval` (`schedule-tool-approval.ts`). Two booleans became one `phase`.
+
+| Event | Prior | Next | Effect |
+|---|---|---|---|
+| command with consent | none | `first_write` | snapshot, expiry and receipt verified at entry |
+| durable write verified | `first_write` | `follow_on` | task checked once; later writes check only the environment |
+| verification fails | `first_write` or `follow_on` | `closed` | abort, so the shared lifecycle rolls back |
+| command ends | any | `closed` | consent can never be used again |
+
+No producer of consent remains in `src` since the model-facing tool was retired; only this guard is live. It had no tests, so `tests/schedule-consent.test.mjs` covers valid, reused, expired, cancelled, mismatched, and environment or task changed after review, and revocation between the entry check and the write.
+
+## Triage of the remaining `cli-native` entries
+
+"Retained" means already explicit or fenced, with the listed coverage, and no conversion here would add a guarantee. None of these was reproduced as a defect.
+
+| Entry | On the serve path | Disposition |
+|---|---|---|
+| C05 service install | No, admin command | Deferred: #733 and the subagent upgrade branch both change `service.ts`. Covered by `tests/service.test.mjs`. |
+| C06 pairing presentation | Startup only | Retained: presentation, and #733 changes `serve-command.ts`. |
+| C07 Tailscale health wait | Startup only | Retained: single settlement and a byte bound, covered by `tests/reachability.test.mjs`. |
+| C08 Linux Bonjour | Yes, Linux | Retained: generation and child identity already fence late callbacks. Not exercised against real avahi here. |
+| C12 Bot pause | Yes | Deferred to P6: the shared pause store and durable runtime own it. It reuses `stopChatWork`, which now waits on C09 settlement. |
+| C13 durable Bot migration | Admin command | Retained: `preparing` and `enabled` are already an explicit durable marker. |
+| C16 scheduled execution | Yes | Deferred to P6: the shared scheduler owns timing and revisions; drain already awaits `stopAndSettle`. |
+| C17 inference metering | Yes | Retained: an algorithmic streaming counter, deferred after P6 by the plan. |
+| C18, C19 child inference and worker RPC | Yes, through Bot subagents | Blocked: the subagent upgrade branch rewrites `subagent-process.ts` and `subagent-worker.ts`. Revisit after it lands. |
+| C20 MCP connection incarnation | Yes | Retained: entry identity fences every await, covered by the MCP pool cases in `tests/parity.test.mjs`. |
+| C21 terminal provider auth | No | Skipped: interactive terminal only. |
+| C22 speech worker | Yes, through Remote | Retained: worker and client identity already fence late exits, and Remote stop awaits `speech.stop()`. |
+| C23 avatar decoder | Yes, through Remote Bots | Retained: bounded slots with `finally` cleanup, deferred after P6 by the plan. |
+| C24 lease and JSON publication | Yes | Retained: idempotent release and a failed publication that releases its guard. C03, C14 and C15 rely on it unchanged. |
+| C25, C30, C31 credentials | Reads only | Retained: per-file queue plus lease; migrations are explicit transactions outside the daemon's turn path. |
+| C26 todo restore | Yes, inside sessions | Retained: `restoreEpoch` fences late restores, covered by the todo cases in `tests/parity.test.mjs`. |
+| C27 advisor availability | Yes, inside sessions | Retained: the shared advisor runtime owns attempts, deferred after P6 by the plan. |
+| C28 Bot inventory invalidation | Yes | Deferred to P6 with the shared Bot authority owners. |
+| C29 MCP config migration | Store construction | Retained: an explicit publish-then-retire transaction. |
+| C32 usage accounting | Yes | Deferred to P6: receipt and aggregate already publish together. |
