@@ -43,7 +43,8 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
     // on timeout so a hang shows its stderr instead of a clean exit.
     // Chromium refuses to start as root (a container) unless its sandbox is off.
     const sandbox = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
-    const run = await promisify(execFile)(electron, ["--disable-gpu", ...sandbox, entry], {
+    // Compare the fixture's exact CSS red in sRGB, independently of the host display profile.
+    const run = await promisify(execFile)(electron, ["--disable-gpu", "--force-color-profile=srgb", ...sandbox, entry], {
       timeout: 75_000,
       killSignal: "SIGKILL",
       env: {

@@ -1,10 +1,11 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ArrowRight, Camera, Check, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, Minus, MoreVertical, PictureInPicture2, Plus, RadioTower, RotateCw, Settings2, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, MoreVertical, PictureInPicture2, Plus, RadioTower, RotateCw, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
 import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
 import { browserApi } from "../lib/ipc";
 import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed, browserOcclusionMutated, browserOcclusionScrolled } from "../lib/browser-ui-state";
-import { Button, DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Input, Text, toast } from "./ui";
+import { Button, Input, Text, toast } from "./ui";
+import { BrowserMenuButton, type BrowserMenuOption } from "./browser-menu-button";
 import { BrowserSettings } from "./browser-settings";
 import { BrowserFloatingFrame } from "./browser-floating-frame";
 import { BrowserAnnotationEditor } from "./browser-annotation-editor";
@@ -41,8 +42,6 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   const [error, setError] = React.useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = React.useState(0);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const [menuOpen, setMenuOpen] = React.useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = React.useState(false);
   const [pickerActive, setPickerActive] = React.useState(false);
   const [annotation, setAnnotation] = React.useState<{ tabId: string; snapshot: BrowserSnapshot; initial?: BrowserAnnotation } | null>(null);
   const [annotationPending, setAnnotationPending] = React.useState(false);
@@ -157,7 +156,6 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     let disposed = false;
     let previous = "";
     let occluders: HTMLElement[] = [];
-    const presentationKey = `${workspaceId}:${tabId}`;
     const present = () => {
       frame = 0;
       if (disposed) return;
@@ -166,12 +164,16 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       const overlay = bounds
         ? browserNativeViewObstructed(bounds, occluders.map((element) => element.getBoundingClientRect()))
         : false;
-      const visible = surfaceActive && ready && !annotation && !settingsOpen && !menuOpen && !profileMenuOpen && !overlay && Boolean(bounds);
+      const visible = surfaceActive && ready && !annotation && !settingsOpen && !overlay && Boolean(bounds);
       const command: BrowserCommand = { action: "present", tabId, visible, ...(bounds ? { bounds } : {}) };
       const key = JSON.stringify(command);
       if (previous === key) return;
       previous = key;
-      void enqueueBrowserPresentation(presentationKey, async () => { if (!disposed) await browserApi.command(workspaceId, command); }).catch(() => undefined);
+      void enqueueBrowserPresentation(async () => {
+        if (!disposed && previous === key) await browserApi.command(workspaceId, command);
+      }).catch(() => {
+        if (previous === key) previous = "";
+      });
     };
     const schedule = () => { if (!frame) frame = window.requestAnimationFrame(present); };
     presentationRef.current = schedule;
@@ -188,9 +190,9 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       disposed = true; window.cancelAnimationFrame(frame); resize.disconnect(); overlays.disconnect();
       if (presentationRef.current === schedule) presentationRef.current = null;
       window.removeEventListener("resize", schedule); window.removeEventListener("scroll", scrolled, true); document.removeEventListener("transitionend", schedule, true);
-      void enqueueBrowserPresentation(presentationKey, () => browserApi.command(workspaceId, { action: "present", tabId, visible: false })).catch(() => undefined);
+      void enqueueBrowserPresentation(() => browserApi.command(workspaceId, { action: "present", tabId, visible: false })).catch(() => undefined);
     };
-  }, [workspaceId, tab?.id, tab?.floating, surfaceActive, ready, annotation, settingsOpen, menuOpen, profileMenuOpen]);
+  }, [workspaceId, tab?.id, tab?.floating, surfaceActive, ready, annotation, settingsOpen]);
 
   const submitAddress = React.useCallback((url: string) => {
     if (!url.trim()) return;
@@ -286,6 +288,9 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     return () => window.removeEventListener("keydown", keyboard, true);
   }, [surfaceActive, annotate, tab, run]);
 
+  // A menu belongs to the tab and surface that opened it.
+  const menuOwner = JSON.stringify([workspaceId, tab?.id, surfaceActive]);
+  const defaultProfile = tab?.profileId ?? visibleState?.defaults.profileId;
   const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId}>
     <div className="browser-tab-strip">
       <div style={integratedTabs && !tab?.floating ? { display: "none" } : undefined} className="browser-tabs" role="tablist" aria-label="Browser tabs">
@@ -302,10 +307,14 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
         </div>)}
       </div>
       <Button variant="transparent" size="small" iconOnly aria-label="New browser tab" title="New browser tab" onClick={() => void run({ action: "create" }).then(() => addressRef.current?.focus())}><Plus /></Button>
-      {bot ? null : <DropdownMenu open={profileMenuOpen} onOpenChange={setProfileMenuOpen}>
-        <DropdownMenuTrigger asChild><Button variant="transparent" size="small" className="browser-profile-button" title="Browser profile" aria-label="Choose browser profile">{visibleState?.profiles.find((profile) => profile.id === tab?.profileId)?.name ?? "Default"}</Button></DropdownMenuTrigger>
-        <DropdownMenuContent align="end"><DropdownMenuLabel>Open a new tab in</DropdownMenuLabel>{visibleState?.profiles.map((profile) => <DropdownMenuItem key={profile.id} onSelect={() => void run({ action: "create", profileId: profile.id })}>{profile.name}{profile.id === tab?.profileId ? <Check className="ml-auto size-3.5" /> : null}</DropdownMenuItem>)}<DropdownMenuSeparator /><DropdownMenuItem onSelect={() => setSettingsOpen(true)}>Browser settings…</DropdownMenuItem></DropdownMenuContent>
-      </DropdownMenu>}
+      {bot ? null : <BrowserMenuButton scope={menuOwner} className="browser-profile-button" title="Browser profile" aria-label="Choose browser profile"
+        options={[
+          { label: "Open a new tab in" },
+          ...(visibleState?.profiles ?? []).map((profile) => ({
+            label: profile.name, checked: profile.id === defaultProfile, select: () => void run({ action: "create", profileId: profile.id }),
+          })),
+          null, { label: "Browser settings…", select: () => setSettingsOpen(true) },
+        ]}>{visibleState?.profiles.find((profile) => profile.id === defaultProfile)?.name ?? "Default"}</BrowserMenuButton>}
     </div>
     <div className="browser-chrome" data-loading={tab?.loading ?? false}>
       <div className="browser-control-group" role="group" aria-label="Browser navigation">
@@ -318,7 +327,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       </form>
       {bot ? null : <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>}
       {integratedTabs && tab && (tab.audible || tab.muted) ? <Button variant="transparent" size="small" iconOnly aria-label={tab.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}>{tab.muted ? <VolumeX /> : <Volume2 />}</Button> : null}
-      <BrowserMoreMenu bot={bot} tab={tab} state={visibleState} open={menuOpen} onOpenChange={setMenuOpen} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
+      <BrowserMoreMenu scope={menuOwner} bot={bot} tab={tab} state={visibleState} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
     </div>
     {tab?.viewport.mode === "responsive" ? <BrowserDeviceToolbar tab={tab} run={run} /> : null}
     {pickerActive ? <div className="browser-picker-status" role="status">Select an element or highlighted text. Press Esc to cancel.</div> : null}
@@ -364,34 +373,53 @@ export function BrowserEmptyState({ state, loadFailed = false, onRetryLoad, onOp
   </div>;
 }
 
-function BrowserMoreMenu({ bot = false, tab, state, open, onOpenChange, run, onCapture, onSettings, onDock }: { bot?: boolean; tab: BrowserTab | null; state: BrowserState | null; open: boolean; onOpenChange: (open: boolean) => void; run: RunCommand; onCapture: (record: boolean) => Promise<void>; onSettings: () => void; onDock?: () => void }) {
-  const captureShiftRef = React.useRef(false);
-  const disabled = !tab?.url;
-  const profileId = tab?.profileId ?? state?.defaults.profileId ?? "default";
-  return <DropdownMenu open={open} onOpenChange={onOpenChange}>
-    <DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly aria-label="Browser menu" title="Browser menu"><MoreVertical /></Button></DropdownMenuTrigger>
-    <DropdownMenuContent align="end" className="browser-more-menu">
-      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "open_external", tabId: tab.id })}><ExternalLink />Open in system browser</DropdownMenuItem>
-      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "reload", tabId: tab.id, ignoreCache: true })}>Hard reload</DropdownMenuItem>
-      {bot ? null : <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "devtools", tabId: tab.id })}>Open DevTools</DropdownMenuItem>}
-      <DropdownMenuSeparator />
-      {bot ? null : <><DropdownMenuItem disabled={disabled || Boolean(tab?.error)} onPointerDown={(event) => { captureShiftRef.current = event.shiftKey; }} onKeyDown={(event) => { captureShiftRef.current = event.shiftKey; }} onSelect={() => { void onCapture(captureShiftRef.current); captureShiftRef.current = false; }}><Camera />{tab?.recording ? "Stop recording" : "Capture screenshot"}<span className="ml-auto text-mini opacity-70">⇧ record</span></DropdownMenuItem>
-      <DropdownMenuItem disabled={disabled || Boolean(tab?.error)} onSelect={() => void onCapture(true)}>{tab?.recording ? "Stop recording" : "Record browser"}</DropdownMenuItem>
-      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "float", tabId: tab.id, floating: !tab.floating }).then((result) => { if (result && tab.floating) onDock?.(); })}><PictureInPicture2 />{tab?.floating ? "Return to Environment" : "Float browser over chat"}</DropdownMenuItem>
-      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "picture_in_picture", tabId: tab.id, enabled: !tab.pictureInPicture })}>{tab?.pictureInPicture ? "Close separate preview window" : "Open separate preview window"}</DropdownMenuItem></>}
-      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "viewport", tabId: tab.id, viewport: { ...tab.viewport, mode: tab.viewport.mode === "fill" ? "responsive" : "fill" } })}>{tab?.viewport.mode === "responsive" ? "Hide device toolbar" : "Show device toolbar"}</DropdownMenuItem>
-      <DropdownMenuSeparator />
-      <DropdownMenuLabel>Appearance</DropdownMenuLabel>
-      {(["system", "light", "dark"] as const).map((appearance) => <DropdownMenuCheckboxItem key={appearance} checked={tab?.appearance === appearance} disabled={disabled} onCheckedChange={() => tab && void run({ action: "appearance", tabId: tab.id, appearance })}>{appearance[0].toUpperCase() + appearance.slice(1)}</DropdownMenuCheckboxItem>)}
-      <DropdownMenuSeparator />
-      <div className="browser-zoom-row"><span>Zoom</span><Button variant="transparent" size="small" iconOnly disabled={disabled || (tab?.zoom ?? 1) <= .25} aria-label="Zoom out" onClick={() => tab && void run({ action: "zoom", tabId: tab.id, zoom: [...ZOOM_STEPS].reverse().find((value) => value < tab.zoom - .001) ?? .25 })}><Minus /></Button><button type="button" className="browser-zoom-reset" disabled={disabled} aria-label="Reset zoom" onClick={() => tab && void run({ action: "zoom", tabId: tab.id, zoom: 1 })}>{Math.round((tab?.zoom ?? 1) * 100)}%</button><Button variant="transparent" size="small" iconOnly disabled={disabled || (tab?.zoom ?? 1) >= 5} aria-label="Zoom in" onClick={() => tab && void run({ action: "zoom", tabId: tab.id, zoom: ZOOM_STEPS.find((value) => value > tab.zoom + .001) ?? 5 })}><Plus /></Button></div>
-      {bot ? null : <><DropdownMenuSeparator />
-      <DropdownMenuLabel>Profile: {state?.profiles.find((profile) => profile.id === profileId)?.name ?? "Default"}</DropdownMenuLabel>
-      <DropdownMenuItem onSelect={() => void run({ action: "clear_cookies", profileId })}>Clear cookies</DropdownMenuItem>
-      <DropdownMenuItem onSelect={() => void run({ action: "clear_cache", profileId })}>Clear cache</DropdownMenuItem>
-      <DropdownMenuSeparator /><DropdownMenuItem onSelect={onSettings}><Settings2 />Browser settings…</DropdownMenuItem></>}
-    </DropdownMenuContent>
-  </DropdownMenu>;
+function BrowserMoreMenu({ scope, bot, tab, state, run, onCapture, onSettings, onDock }: {
+  scope: string; bot: boolean; tab: BrowserTab | null; state: BrowserState | null; run: RunCommand;
+  onCapture: (record: boolean) => Promise<void>; onSettings: () => void; onDock?: () => void;
+}) {
+  const pageItem = (label: string, select: (page: BrowserTab) => void): BrowserMenuOption => ({
+    label, disabled: !tab?.url, select: () => { if (tab) select(tab); },
+  });
+  const options: BrowserMenuOption[] = [
+    pageItem("Open in system browser", page => void run({ action: "open_external", tabId: page.id })),
+    pageItem("Hard reload", page => void run({ action: "reload", tabId: page.id, ignoreCache: true })),
+  ];
+  if (!bot) {
+    options.push(pageItem("Open DevTools", page => void run({ action: "devtools", tabId: page.id })), null);
+    const canCapture = Boolean(tab?.url && !tab.error && !tab.crashed);
+    if (!tab?.recording) options.push({ label: "Capture screenshot (⇧ to record)", disabled: !canCapture, select: shift => void onCapture(shift) });
+    options.push(
+      { label: tab?.recording ? "Stop recording" : "Record browser", disabled: !tab?.recording && !canCapture, select: () => void onCapture(true) },
+      pageItem(tab?.floating ? "Return to Environment" : "Float browser over chat", async page => {
+        const result = await run({ action: "float", tabId: page.id, floating: !page.floating });
+        if (result && page.floating) onDock?.();
+      }),
+      pageItem(tab?.pictureInPicture ? "Close separate preview window" : "Open separate preview window",
+        page => void run({ action: "picture_in_picture", tabId: page.id, enabled: !page.pictureInPicture })),
+    );
+  }
+  options.push(pageItem(tab?.viewport.mode === "responsive" ? "Hide device toolbar" : "Show device toolbar",
+    page => void run({ action: "viewport", tabId: page.id, viewport: { ...page.viewport, mode: page.viewport.mode === "fill" ? "responsive" : "fill" } })),
+    null, { label: "Appearance" });
+  for (const appearance of ["system", "light", "dark"] as const) {
+    options.push({ label: appearance[0].toUpperCase() + appearance.slice(1), checked: tab?.appearance === appearance,
+      disabled: !tab?.url, select: () => tab && void run({ action: "appearance", tabId: tab.id, appearance }) });
+  }
+  const zoom = tab?.zoom ?? 1;
+  const zoomItem = (label: string, value?: number): BrowserMenuOption => ({
+    label, disabled: !tab?.url || value === undefined, select: () => { if (tab && value !== undefined) void run({ action: "zoom", tabId: tab.id, zoom: value }); },
+  });
+  options.push(null, { label: `Zoom · ${Math.round(zoom * 100)}%` },
+    zoomItem("Zoom out", [...ZOOM_STEPS].reverse().find(step => step < zoom - .001)), zoomItem("Reset zoom", 1),
+    zoomItem("Zoom in", ZOOM_STEPS.find(step => step > zoom + .001)));
+  if (!bot) {
+    const profileId = tab?.profileId ?? state?.defaults.profileId ?? "default";
+    options.push(null, { label: `Profile: ${state?.profiles.find(profile => profile.id === profileId)?.name ?? "Default"}` },
+      { label: "Clear cookies", select: () => void run({ action: "clear_cookies", profileId }) },
+      { label: "Clear cache", select: () => void run({ action: "clear_cache", profileId }) },
+      null, { label: "Browser settings…", select: onSettings });
+  }
+  return <BrowserMenuButton scope={scope} iconOnly aria-label="Browser menu" title="Browser menu" options={options}><MoreVertical /></BrowserMenuButton>;
 }
 
 export function BrowserDeviceToolbar({ tab, run }: { tab: BrowserTab; run: RunCommand }) {

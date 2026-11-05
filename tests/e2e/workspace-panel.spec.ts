@@ -10,6 +10,8 @@ import {
   waitForToastsToClear,
 } from "./fixtures";
 
+import { observeNextBrowserMenu } from "./browser-native-menu";
+
 test.use({ workspaceSeed: true });
 
 test("workspace launcher opens tools on demand and returns after closing the last tab", async ({
@@ -456,8 +458,11 @@ test("browser creation and background selection preserve address focus while str
   await expect(tabs.first()).toBeFocused();
   await page.keyboard.press("End");
   await expect(tabs.last()).toBeFocused();
+  const tabMenu = await observeNextBrowserMenu(aiden.app);
+  const firstTitle = (await tabs.first().innerText()).trim();
   await panel.getByRole("button", { name: "Open tabs", exact: true }).click();
-  await page.getByRole("menuitem").first().click();
+  await tabMenu.waitForOpen();
+  await tabMenu.close(firstTitle);
   await expect(tabs.first()).toBeFocused();
   await address.focus();
   await page.evaluate(async (workspaceId) => {

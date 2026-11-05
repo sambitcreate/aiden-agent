@@ -34,7 +34,6 @@ test("annotation keeps selected text and offers keyboard-accessible element sele
 test("native browser hides behind app overlays and never closes tabs on panel hide", () => {
   const source = readFileSync(new URL("./browser-panel.tsx", import.meta.url), "utf8");
   assert.ok(source.includes('action: "present", tabId, visible: false'));
-  assert.ok(source.includes('enqueueBrowserPresentation(presentationKey'));
   assert.ok(source.includes("browserNativeViewObstructed"));
   assert.ok(source.includes("visibleBrowserNativeOccluders"));
   assert.ok(source.includes('action: "annotate", tabId: tab.id, enabled: false'));

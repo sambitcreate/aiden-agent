@@ -1137,6 +1137,9 @@ export interface TerminalSnapshot {
 }
 
 export const browserApi = {
+  popupMenu: (id: string, point: { x: number; y: number }, items: import("../shared/browser").BrowserMenuItem[]) =>
+    invoke<import("../shared/browser").BrowserMenuChoice | null>("browser:popup-menu", id, point, items),
+  dismissMenu: (id: string) => invoke<void>("browser:dismiss-menu", id),
   getState: (workspaceId: string) =>
     invoke<import("../shared/browser").BrowserState>("browser:get-state", workspaceId),
   command: (workspaceId: string, command: import("../shared/browser").BrowserCommand) =>

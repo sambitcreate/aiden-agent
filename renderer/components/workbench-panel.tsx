@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui";
+import { BrowserMenuButton } from "./browser-menu-button";
 import { cn } from "../lib/ui-utils";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
@@ -105,6 +106,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
 }: WorkbenchTabStripProps<T>) {
   const toggleShortcut = useShortcutLabel("environment.toggle");
   const toggleShortcutBinding = useShortcutBinding("environment.toggle");
+  const selectedBrowser = tabs.find(entry => entry.selected && entry.viewId === "browser");
   const tabMenuSelectionRef = React.useRef(false);
   const headerRef = React.useRef<HTMLElement>(null);
   const trailingClearance = useTrailingWindowControlsClearance(headerRef);
@@ -133,7 +135,11 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
         })}
       </div>
       {newTab ? <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={busy} aria-label={newTab.label} onClick={newTab.onOpen}><Plus /></Button> : null}
-      {tabMenu ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
+      {tabMenu && selectedBrowser ? <BrowserMenuButton scope={selectedBrowser.id} iconOnly className="no-drag" aria-label="Open tabs"
+        options={tabs.map(entry => ({ label: entry.label, checked: entry.selected, disabled: busy, select: () => {
+          onSelectTab(entry);
+          requestAnimationFrame(() => activeTabRef.current?.focus());
+        } }))}><List /></BrowserMenuButton> : tabMenu ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="transparent" size="small" iconOnly className="no-drag" aria-label="Open tabs"><List /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (tabMenuSelectionRef.current) { event.preventDefault(); tabMenuSelectionRef.current = false; requestAnimationFrame(() => activeTabRef.current?.focus()); } }}>{tabs.map((entry) => <DropdownMenuItem key={entry.id} disabled={busy} onSelect={() => { tabMenuSelectionRef.current = true; onSelectTab(entry); }}>{entry.label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
       <Button variant="transparent" size="small" iconOnly onClick={onClose} aria-label={closeLabel} aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`${closeTitle} (${toggleShortcut})`} className="no-drag"><PanelRightClose /></Button>
     </header>
   );
