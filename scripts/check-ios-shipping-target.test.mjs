@@ -76,6 +76,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenTranscriptPolish.swift",
   "AidenOnTheGo/Features/Chat/AidenChatPolicies.swift",
   "AidenOnTheGo/Features/Chat/AidenReadAloud.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatImages.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
@@ -138,6 +139,7 @@ const appSourcePaths = [
 // used to read that one file read all of them, in the order the code used to appear.
 const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatPolicies.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatImages.swift",
   "AidenOnTheGo/Features/Chat/AidenReadAloud.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
 ];
