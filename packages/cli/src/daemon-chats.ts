@@ -10,6 +10,7 @@ import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import { assertBotRuntimeProviderSelection } from "../../../main/services/bot-runtime-authority.js";
 import { mkdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
@@ -26,7 +27,8 @@ import { ChatTurnAdmission } from "../../../main/services/chat-turn-admission.js
 import { ChatDeletionGate } from "../../../main/services/chat-deletion-gate.js";
 import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
 import { createCliModelRuntime } from "./providers.ts";
-import { acquireLease } from "./state.ts";
+import { acquireLease, JsonStore, readJson } from "./state.ts";
+import { deleteCliBotSubagentHistory } from "./bot-subagents.ts";
 import { DaemonGenerationRun, DaemonTurnOwner } from "./daemon-turn-lifecycle.ts";
 import { createDaemonApprovals } from "./daemon-approvals.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
@@ -68,6 +70,12 @@ export function createDaemonChats(agentDir: string) {
   const recorders = createHostRunRecorders((_scope, message) => process.stderr.write(`aiden: ${message}\n`));
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
+  // A journal deletion is a durable roll-forward checkpoint, including after a crash:
+  // its chat stays closed from here until recoverChatDeletions finishes the job.
+  const tombstones = new JsonStore<string[]>(join(agentDir, "daemon-chat-deletions.json"), []);
+  const interrupted = new Map<string, () => void>();
+  try { for (const id of new Set(readJson<string[]>(tombstones.file, []))) interrupted.set(id, deletion.begin(id)); }
+  catch { process.stderr.write("aiden: Could not read unfinished chat deletions.\n"); }
   const turns = new DaemonTurnOwner<DaemonGenerationRun<AgentSession>>({ admission, isDeleting: (id) => deletion.isDeleting(id) });
   const approvals = createDaemonApprovals({
     raised: (prompt) => activity.requestAttention(prompt.approvalId, prompt.streamId, "approval"),
@@ -307,6 +315,16 @@ export function createDaemonChats(agentDir: string) {
   }
   return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
     /** Every activity change (a run began or ended, an approval was raised or settled). */
+    /** Finishes deletions a crash interrupted. Repeatable: a failure leaves its tombstone and its chat closed. */
+    async recoverChatDeletions() {
+      for (const [id, reopen] of [...interrupted]) {
+        await deleteCliBotSubagentHistory(agentDir, id);
+        await rm(sessionPath(id), { force: true });
+        if (await chatStore.get(id)) await chatStore.remove(id);
+        await tombstones.update((values) => { for (let index = values.indexOf(id); index >= 0; index = values.indexOf(id)) values.splice(index, 1); });
+        interrupted.delete(id); reopen();
+      }
+    },
     onActivityChange(listener: (snapshot: ChatActivitySnapshot) => void) { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; },
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
     /** Closes intake before its first await, so no ingress stopping alongside it can begin a turn. */

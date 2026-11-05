@@ -132,3 +132,18 @@ Owners: `remoteDaemonCommand` (`daemon-control.ts`) and the socket handler in `s
 **Defect fixed:** both ends parsed their whole buffer, so a frame followed by more bytes in the same chunk failed as bad JSON, while the same bytes in two chunks succeeded. Each end now reads only its first frame, and its ceiling applies to that frame alone.
 
 **Defect fixed:** when the chunk that crossed the 8 MiB ceiling also completed the frame, the client destroyed the socket and then parsed and returned the reply anyway, so the ceiling did not hold on the last chunk.
+
+## C14: interrupted chat deletion
+
+Owner: `recoverChatDeletions` in `daemon-chats.ts`, over the `daemon-chat-deletions.json` tombstones and `ChatDeletionGate`. The file format is unchanged.
+
+| Event | Prior | Next | Effect |
+|---|---|---|---|
+| daemon constructed | tombstone on disk | chat closed | `ChatDeletionGate` held, so `beginChatTurn` refuses |
+| recovery | closed | closed | bot history, journal, then chat record removed, each repeatable |
+| tombstone removed | closed | gone | gate released |
+| any step fails | closed | closed | tombstone kept, retried on the next start |
+
+Recovery runs in `serve` for every server. A failure there is logged and closes only those chats. `createCliRemoteChats` runs it again and still fails startup, because Remote must not list a chat whose deletion is stuck.
+
+**Defect fixed:** recovery lived only in `createCliRemoteChats`, so `aiden serve --no-remote` neither finished a committed deletion nor closed the chat to new turns.
