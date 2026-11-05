@@ -398,6 +398,25 @@ test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lan
   assert.ok(registry.lanes.some((lane) => lane.preserved.includes("ios-release-policy")));
 });
 
+test("the Xcode 27 iOS check never gates a PR or release builds", async () => {
+  const { jobs } = parse(await readFile(workflowUrl, "utf8"));
+  assert.equal(jobs.ios["runs-on"], "macos-26");
+  assert.equal(jobs.ios.env.DEVELOPER_DIR, "/Applications/Xcode_26.6.app/Contents/Developer");
+  assert.equal(jobs.ios["continue-on-error"], undefined, "the Xcode 26.6 job must stay blocking");
+  const preview = jobs["ios-27"];
+  assert.equal(preview["runs-on"], "xcode-27");
+  assert.equal(preview.env.DEVELOPER_DIR, "/Applications/Xcode_27.1.app/Contents/Developer");
+  assert.equal(preview["continue-on-error"], true, "the preview image must not block");
+  assert.equal(preview.if, jobs.ios.if, "both iOS jobs run for the same changes");
+  assert.ok(!jobs.required.needs.includes("ios-27"), "the required gate must not wait on the preview job");
+  assert.ok(!("ios-27" in REQUIRED_JOB_RULES));
+  const commands = (job) => job.steps.filter((step) => step.run?.includes("xcodebuild")).map((step) => step.run);
+  assert.deepEqual(commands(preview), commands(jobs.ios), "the preview runs the same xcodebuild steps");
+  const upload = (job) => job.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(upload(preview).uses, upload(jobs.ios).uses);
+  assert.notEqual(upload(preview).with.name, upload(jobs.ios).with.name, "result artifacts must not collide");
+});
+
 test("foreground Electron smoke is a required package command in desktop verification", async () => {
   const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
