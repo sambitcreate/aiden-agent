@@ -344,7 +344,7 @@ const OPENROUTER_CATALOG = {
   data: [{ id: "acme/painter-2", name: "Acme: Painter 2", architecture: { input_modalities: ["text"], output_modalities: ["image"] } }],
 };
 
-test("Fetch latest models is single-flight per provider: concurrent presses make one request", async (t) => {
+test("Fetch latest models is single-flight per provider: concurrent presses make one request", { timeout: 30_000 }, async (t) => {
   let answer: (() => void) | undefined;
   let arrived = () => {};
   const nextRequest = () => new Promise<void>((resolve) => (arrived = resolve));
