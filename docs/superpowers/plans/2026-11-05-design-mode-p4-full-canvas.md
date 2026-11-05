@@ -1,6 +1,6 @@
 # Design mode P4: the full canvas
 
-Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 (awaiting the owner's screenshot OK); P4e next. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
+Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 and approved by the owner; P4e in progress ([P4e plan](2026-11-05-design-mode-p4e-comments.md)). Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
 
 **Goal:** the canvas does everything in the owner's 2026-11-05 reference screenshots of a design canvas (owner chose "add everything shown"). That is the original P4 (point, comment, draw, and send comments to Aiden) plus:
 - drawing tools;
@@ -108,6 +108,8 @@ As built (2026-11-05):
 - **Print mode and paper:** Flow or Fixed, Letter or A4, set on artboard and file frames (side panel) and used by PDF export.
 
 ### P4e: point, comment, draw marks, send to Aiden (the original P4)
+
+Detailed plan: [P4e](2026-11-05-design-mode-p4e-comments.md).
 
 As the spec describes in §5.5 and §5.6:
 - the bridge, picking, the Comment tool (C), and pins with anchored, stale and lost states;

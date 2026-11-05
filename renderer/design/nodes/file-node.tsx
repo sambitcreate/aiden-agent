@@ -8,6 +8,7 @@ import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
 import { FrameTitle } from "./frame-title";
 import { cn } from "../../lib/ui-utils";
+import { parseDesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 import { designUrl } from "../../shared/design-canvas/url";
 import type { DesignNode } from "../canvas-adapter-core";
@@ -27,16 +28,6 @@ import { DesignNodeResizer, FrameSkeleton, MissingFrame, useRetiringFrame } from
 export const DESIGN_FRAME_READY_TIMEOUT_MS = 2000;
 
 const SANDBOX = "allow-scripts";
-
-type BridgeMessage = { type: "aiden-design:ready" | "aiden-design:resize"; docHeight: number };
-
-function parseBridgeMessage(data: unknown): BridgeMessage | null {
-  if (!data || typeof data !== "object") return null;
-  const { type, docHeight } = data as Record<string, unknown>;
-  if (type !== "aiden-design:ready" && type !== "aiden-design:resize") return null;
-  if (typeof docHeight !== "number" || !Number.isFinite(docHeight) || docHeight < 0) return null;
-  return { type, docHeight };
-}
 
 export type FileFrameProps = {
   frame: DesignFrame;
@@ -99,8 +90,8 @@ export function FileFrame({
       const guest = iframeRef.current?.contentWindow;
       // A detached frame has no window; a sourceless message must never match.
       if (!guest || event.source !== guest) return;
-      const message = parseBridgeMessage(event.data);
-      if (!message) return;
+      const message = parseDesignBridgeMessage(event.data);
+      if (!message || (message.type !== "ready" && message.type !== "resize")) return;
       reportedFor.current = iframeRef.current?.getAttribute("src") ?? null;
       clearMissingTimer();
       setDocHeight(Math.round(message.docHeight));
@@ -139,6 +130,7 @@ export function FileFrame({
       >
         <iframe
           ref={iframeRef}
+          data-frame-id={frame.id}
           title={frame.title}
           sandbox={SANDBOX}
           src={src}

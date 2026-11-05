@@ -53,6 +53,13 @@ test("F2 renames the selected frame and N adds a note, but not with a modifier o
   assert.equal(resolveDesignCanvasKey(key("KeyN"), { editable: true, platform: "darwin" }), null, "typing n in a note");
 });
 
+test("C turns on the comment tool, but Command-C still copies", () => {
+  assert.deepEqual(resolveDesignCanvasKey(key("KeyC"), mac), { type: "comment" });
+  assert.equal(resolveDesignCanvasKey(key("KeyC", { metaKey: true }), mac), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyC", { ctrlKey: true }), other), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyC"), { editable: true, platform: "other" }), null, "typing c in a comment");
+});
+
 test("inside a text field every design key is left to the field, so Command-Z undoes typing", () => {
   const editable = { editable: true, platform: "darwin" } as const;
   for (const event of [

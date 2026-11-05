@@ -71,3 +71,20 @@ test("an undo never shows a page that no longer exists", () => {
   const undone = changesBetween(back, two)(gone);
   assert.ok(undone.pages.some((page) => page.id === undone.activePageId));
 });
+
+test("undoing a comment edit keeps comments someone else changed, and a comment goes with its frame", () => {
+  const comment = (id: string, frameId?: string) => ({
+    id, pageId: "page-1", ...(frameId ? { frameId } : {}), x: 0, y: 0, note: id, state: "open" as const, anchorState: "anchored" as const, createdAt: "2026-11-05T10:00:00.000Z",
+  });
+  const pinned = comment("pinned", "frame");
+  const before: DesignCanvas = { ...state("frame"), comments: [comment("mine"), pinned] };
+  const after: DesignCanvas = { ...before, comments: [{ ...comment("mine"), note: "edited" }, pinned] };
+  // Aiden's turn marks the pinned comment resolved while the edit is on screen.
+  const meanwhile: DesignCanvas = { ...after, comments: [after.comments[0]!, { ...pinned, state: "resolved" }] };
+  const undone = changesBetween(after, before)(meanwhile);
+  assert.equal(undone.comments.find((entry) => entry.id === "mine")?.note, "mine");
+  assert.equal(undone.comments.find((entry) => entry.id === "pinned")?.state, "resolved");
+
+  const removed = changesBetween(before, { ...before, frames: [] })({ ...before });
+  assert.deepEqual(removed.comments.map((entry) => entry.id), ["mine"], "removing a frame removes its comments");
+});

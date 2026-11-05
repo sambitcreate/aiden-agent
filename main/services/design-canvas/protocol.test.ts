@@ -6,6 +6,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
+import { DESIGN_BRIDGE_SOURCE } from "./bridge-source.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { designResponse, registerDesignProtocol } from "./protocol.js";
 
@@ -109,7 +110,7 @@ test("the bridge script is served as JavaScript under the same CSP", async (t) =
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/javascript/u);
   assert.equal(response.headers.get("content-security-policy"), CSP);
-  assert.match(await response.text(), /aiden-design:ready/u);
+  assert.equal(await response.text(), DESIGN_BRIDGE_SOURCE);
 });
 
 test("vendored libraries come through readLibrary and unknown names are not found", async (t) => {

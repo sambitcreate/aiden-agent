@@ -30,12 +30,21 @@ export type DesignFrame = {
   createdBy: "person" | "aiden";
 };
 
+/** A box in a page's own CSS pixels, from the top left of its document. */
+export type DesignRect = { x: number; y: number; w: number; h: number };
+
 export type DesignCommentAnchor = {
+  /** Written into the source as `data-aiden-comment`; the same as the comment's id. */
   commentId: string;
   selector: string;
   text: string;
   tag: string;
+  /** The nearest `data-aiden-src` stamp, `file:line`. */
   sourcePath?: string;
+  /** Where the element was when last found. */
+  rect?: DesignRect;
+  /** Where the pin sits, in the page's CSS pixels; it moves with the element. */
+  point?: [number, number];
 };
 
 export type DesignComment = {
@@ -51,6 +60,10 @@ export type DesignComment = {
   state: "open" | "sent" | "resolved";
   anchorState: "anchored" | "stale" | "lost";
   createdAt: string;
+  /** An open comment waiting in the tray to go to Aiden. */
+  queued?: true;
+  sentAt?: string;
+  resolvedAt?: string;
 };
 
 export type DesignViewport = { x: number; y: number; zoom: number };
@@ -346,6 +359,11 @@ function parseComment(value: unknown, pageId: string): DesignComment | null {
   if (anchor) comment.anchor = anchor;
   const marks = parseMarks(value.marks);
   if (marks) comment.marks = marks;
+  if (value.queued === true && comment.state === "open") comment.queued = true;
+  const sentAt = timestamp(value.sentAt);
+  if (sentAt && comment.state !== "open") comment.sentAt = sentAt;
+  const resolvedAt = timestamp(value.resolvedAt);
+  if (resolvedAt && comment.state === "resolved") comment.resolvedAt = resolvedAt;
   return comment;
 }
 
@@ -367,8 +385,35 @@ function parseAnchor(value: unknown): DesignCommentAnchor | undefined {
     text: text.slice(0, DESIGN_CANVAS_LIMITS.noteChars),
     tag: tag.slice(0, MAX_TAG_CHARS),
   };
-  if (isDesignRelativePath(value.sourcePath)) anchor.sourcePath = value.sourcePath;
+  if (typeof value.sourcePath === "string" && isSourceStamp(value.sourcePath)) anchor.sourcePath = value.sourcePath;
+  const rect = parseRect(value.rect);
+  if (rect) anchor.rect = rect;
+  if (Array.isArray(value.point) && value.point.length === 2) {
+    const px = finite(value.point[0]);
+    const py = finite(value.point[1]);
+    if (px !== undefined && py !== undefined) anchor.point = [clampCoord(px), clampCoord(py)];
+  }
   return anchor;
+}
+
+function parseRect(value: unknown): DesignRect | undefined {
+  if (!isRecord(value)) return undefined;
+  const x = finite(value.x);
+  const y = finite(value.y);
+  const w = finite(value.w);
+  const h = finite(value.h);
+  if (x === undefined || y === undefined || w === undefined || h === undefined) return undefined;
+  return { x: clampCoord(x), y: clampCoord(y), w: Math.max(0, clampCoord(w)), h: Math.max(0, clampCoord(h)) };
+}
+
+function timestamp(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_TIMESTAMP_CHARS ? value : undefined;
+}
+
+/** A source stamp: a workspace-relative path with an optional `:line`. */
+export function isSourceStamp(value: string): boolean {
+  const match = /^(.*?)(?::(\d{1,7}))?$/u.exec(value);
+  return Boolean(match && isDesignRelativePath(match[1]));
 }
 
 function parseMarks(value: unknown): DesignComment["marks"] {

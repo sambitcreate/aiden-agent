@@ -1059,6 +1059,8 @@
         "renderer/shared/design-canvas/schema.test.ts",
         "renderer/shared/design-canvas/canvas-summary.test.ts",
         "renderer/shared/design-canvas/pages.test.ts",
+        "renderer/shared/design-canvas/comments.test.ts",
+        "main/services/design-canvas/bridge-source.test.ts",
         "renderer/design/design-mode-consent.test.tsx",
         "renderer/lib/quick-view-layout.test.ts",
         "renderer/lib/environment-panel-state.test.ts",
