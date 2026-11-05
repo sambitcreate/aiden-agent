@@ -335,6 +335,126 @@ test("revoking grants makes a running response ask again on its next call", asyn
   assert.equal(d.cards.length, 2);
 });
 
+test("a revocation that lands while the grant is being read cannot pass on the stale read", async () => {
+  const cards: string[] = [];
+  let reads = 0;
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => {
+      reads += 1;
+      if (reads > 1) return false;
+      // The store answered with the old grant, then Always allow was turned off.
+      revokeComputerUseGrants();
+      return true;
+    },
+    status: async () => READY,
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "denied" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_DECLINED_REASON,
+  });
+  assert.deepEqual(cards, ["call-1"]);
+});
+
+test("a cached grant does not outlive a revocation that lands during the readiness probe", async () => {
+  let onStatus = () => {};
+  let granted = true;
+  let status = NEEDS_PERMISSIONS;
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => granted,
+    status: async () => {
+      onStatus();
+      return status;
+    },
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "denied" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  // The first call caches the grant. Setup is still missing, so it does not pass.
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  status = READY;
+  onStatus = () => {
+    onStatus = () => {};
+    granted = false;
+    revokeComputerUseGrants();
+  };
+  assert.equal((await gate.authorize("call-2")).allowed, false);
+  assert.deepEqual(cards, ["call-2"]);
+});
+
+test("grants revoked on every read end in a refusal, not an endless retry", async () => {
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => {
+      revokeComputerUseGrants();
+      return true;
+    },
+    status: async () => READY,
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "allowed" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_RESETTING_REASON,
+  });
+  assert.deepEqual(cards, []);
+});
+
+test("a reset that starts during the grant read refuses instead of passing or asking", async () => {
+  let finishClearing = () => {};
+  let startedReset: Promise<unknown> | undefined;
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => {
+      startedReset ??= resetComputerUseGrants({
+        cancelActivatedStreams: () => undefined,
+        clearAlwaysAllow: () => new Promise<void>((resolve) => { finishClearing = resolve; }),
+        clearChatGrants: async () => 0,
+      });
+      return true;
+    },
+    status: async () => READY,
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "allowed" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_RESETTING_REASON,
+  });
+  assert.deepEqual(cards, []);
+  finishClearing();
+  await startedReset;
+});
+
 test("reset chat permissions clears every chat's grant and Always allow, and stops live Computer Use", async (t) => {
   const d = await desktop(t);
   const first = await d.chatStore.create({ title: "First" });

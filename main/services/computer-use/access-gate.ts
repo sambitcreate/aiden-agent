@@ -41,6 +41,9 @@ let resetsInProgress = 0;
 export const COMPUTER_USE_RESETTING_REASON =
   "Computer Use permissions are being reset. Ask again in a moment.";
 
+/** Reads a decision may repeat when grants keep being revoked underneath it. */
+const MAX_DECIDE_ATTEMPTS = 3;
+
 export function computerUseGrantRevision(): number {
   return grantRevision;
 }
@@ -166,6 +169,7 @@ export function createComputerUseAccessGate(
   const decide = async (
     toolCallId: string,
     signal?: AbortSignal,
+    attempt = 1,
   ): Promise<ComputerUseAccessDecision> => {
     if (declined)
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
@@ -191,6 +195,13 @@ export function createComputerUseAccessGate(
           error,
         );
       }
+    }
+    // A revocation during the awaits above makes both the cached grant and this
+    // read stale. Decide again so a passed grant is current at this point.
+    if (revision !== grantRevision) {
+      return attempt < MAX_DECIDE_ATTEMPTS
+        ? decide(toolCallId, signal, attempt + 1)
+        : { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
     }
     if (grantedAt === revision) {
       if (status.ready) {

@@ -141,3 +141,61 @@ Fixed defect, reproduced at the ledger boundary: an authorized plan could be con
 ### `backend:M191` Git snapshots, `backend:M067` schedule script claims — retained
 
 Reusable until expiry, bounded, and bound to device and workspace. Code read only, no new tests.
+
+## P2c: provider and MCP auth
+
+No code changed in this slice. The owners already separate the proposed phases, and the required races already have tests.
+
+### `backend:M078` provider auth flow — retained
+
+`session.phase` is `authenticating` or `committing`. The synchronous move to `committing` is the linearization point: abort wins before it, commit wins after it, and `abortSession` is a no-op once committing. `cancel` reports `finishing` rather than a false cancellation. Logout is its own transaction with `logoutInProgress` and `logoutCompletion`, and `shutdown` waits for both. `provider-auth-flow-core.test.ts` covers late credentials, owner loss, timeout cleanup, commit and shutdown.
+
+### `backend:M082` MCP OAuth operation gate — retained
+
+Generations are per server, and an interactive operation also holds `interactive` and its signal. `invalidate`, `cancel` and `suspend` all move the generation, so a stale writer fails `canMutate` however it was started. A background snapshot is not current while an interactive sign-in owns the server.
+
+### `backend:M083` MCP OAuth tokens and commit — retained
+
+Sign-in fills a private `McpOAuthSessionTransaction`, and the old session stays durable until the single commit in `authorizeMcpServerWithRuntime`. Every store write passes the operation's currency check. A failed commit restores the previous session only while the operation is still current.
+
+### `backend:M084` OAuth loopback, `backend:M181` callback consumption — retained
+
+The loopback answers once and closes on every terminal path. The callback state is consumed by the authorization flow, and its tests cover rejection without consumption and issuer binding.
+
+### `backend:M085` MCP admission and cleanup — retained
+
+`createMcpAdmissionQueue` and `McpPendingJournalState` already hold the ordering and the `unknown/empty/pending` state in a pure module.
+
+### `backend:M163` configuration and credential migration — deferred
+
+Not reviewed in this pass. It is a persisted migration, so it overlaps P4d.
+
+## P2d: remaining consent adapters
+
+### `backend:M119` Computer Use access gate — retained, one fix
+
+`grantRevision` and `resetsInProgress` fence cached grants across streams.
+
+Fixed defect, reproduced by test: `decide` captured the revision before its awaited status and grant reads and compared later state against that captured value, so a revocation during either read went unnoticed. Turning off Always allow, or starting a reset, while a read was in flight let that one call pass on the stale answer. `decide` now starts again when the revision has moved, so it re-reads the grant, or refuses if a reset is running. It retries at most three times, then refuses. A card answered after a revocation still counts: that answer is the person's fresh decision.
+
+### `backend:M123` Bot computer takeover — retained
+
+`takeOver` aborts in-flight actions and `run` refuses while the person holds control. Both happen synchronously, so no await separates the check from the action starting.
+
+### `clients:N38` Android new-chat consent — retained
+
+`AidenNewChatLinkConsent` is target-scoped and consumes the approval before suspending. No change.
+
+### Client approval views (`clients:C20`, `clients:N14`, `clients:C33`, `clients:C53`, `clients:N02`) — retained
+
+These stay read-only projections of host authority. Nothing in P2 changed a wire shape, an approval projection or a host expiry, so the mobile suites were not affected and were not run.
+
+### `backend:M166` analytics consent — deferred
+
+PRs #732, #733 and #734 are changing analytics now.
+
+### Not reviewed in this pass — deferred
+
+Transition review was not done for these, and no claim is made about them: `backend:M009`, `M010`, `M031`, `M033`, `M065`, `M066`, `M076`, `M099`, `M109`, `M110`, `M127`, `M164`, `M171`, `M180`, `M189`, `M197`, and `clients:C10`, `C35`, `C56`, `C63`, `C64`, `C67`, `C71`, `C74`, `C50`, `C51`, `C52`, `N10`, `N12`, `N24`, `N26`, `N34`.
+
+`backend:M009` and `M010` also sit on Lane A's ownership vocabulary.
