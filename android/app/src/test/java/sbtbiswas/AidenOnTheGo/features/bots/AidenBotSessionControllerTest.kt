@@ -1,5 +1,9 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -1182,6 +1186,52 @@ class AidenBotSessionControllerTest {
         assertEquals(1, controller.state.value.outgoing.size)
         controller.frame(AidenBotSessionEventPayload.Entry(userEntry("entry_42", "Yes.")))
         assertTrue(controller.state.value.outgoing.isEmpty())
+    }
+
+    private fun outboxDeliveryFixture(): kotlinx.serialization.json.JsonObject {
+        val relative = "protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json"
+        val root = generateSequence(java.io.File(System.getProperty("user.dir")!!).absoluteFile) { it.parentFile }
+            .first { java.io.File(it, relative).isFile }
+        return kotlinx.serialization.json.Json.parseToJsonElement(java.io.File(root, relative).readText()).jsonObject
+    }
+
+    @Test
+    fun failuresThatMayHaveReachedTheMacKeepTheirKeyByTheSharedFixture() {
+        for (element in outboxDeliveryFixture().getValue("classification").jsonArray) {
+            val row = element.jsonObject
+            val error = serverError(
+                row.getValue("status").jsonPrimitive.int,
+                AidenRemoteErrorCode(row.getValue("code").jsonPrimitive.content)
+            )
+            assertEquals(
+                row.getValue("name").jsonPrimitive.content,
+                row.getValue("ambiguous").jsonPrimitive.boolean,
+                aidenBotMessageFailureIsAmbiguous(error)
+            )
+        }
+    }
+
+    @Test
+    fun everyFailedSendTakesTheStepBothPhonesAgreeOn() {
+        val fixture = outboxDeliveryFixture()
+        val maxAttempts = fixture.getValue("maxConnectionAttempts").jsonPrimitive.int
+        for (element in fixture.getValue("steps").jsonArray) {
+            val row = element.jsonObject
+            // Android has no Bot attachment sending.
+            if (row["iosOnly"]?.jsonPrimitive?.boolean == true) continue
+            val step = aidenBotOutboxFailureStep(
+                ambiguous = row.getValue("ambiguous").jsonPrimitive.boolean,
+                attempts = row.getValue("attempts").jsonPrimitive.int,
+                maxAttempts = maxAttempts,
+                echoed = row.getValue("echoed").jsonPrimitive.boolean,
+                echoNamesSubmission = row.getValue("echoNamesSubmission").jsonPrimitive.boolean
+            )
+            assertEquals(
+                row.getValue("name").jsonPrimitive.content,
+                row.getValue("step").jsonPrimitive.content.uppercase(),
+                step.name
+            )
+        }
     }
 
     @Test
