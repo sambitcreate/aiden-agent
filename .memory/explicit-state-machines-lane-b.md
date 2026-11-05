@@ -9,6 +9,12 @@ Lane B of the explicit state-machine migration: P0 baselines and P2 (authority, 
 - Pre-existing local failures, identical on base `bc663001f`: `agent-compatibility.test.ts` "forked initial context respects zero recent model budget" (`compaction-failed`), and four `scripts/aiden-remote-lan-transport-spike.test.mjs` tests because OpenSSL 4.1 rejects `x509 -days 0`. Both stop their `&&` chains, so run the later stages of `test:subagents` and `test:aiden-remote` by hand.
 - For #730 when M028 is reconciled: its publish callback sets `waiting` before `options.publish`, so a publish throw leaves the entry behind.
 
+## Status (2026-11-04)
+
+- P2 stack open: #737, #738, #739, #740. Later commits merge forward, never rebase.
+- Same-id approval replacement was first recorded as unreachable. Pullfrog reproduced it and it was fixed, so a reachability argument alone does not close a finding on code this lane added.
+- P6 not started. It needs P3, P4 and P5 boundaries, and no `feature/sm-p3*`, `p4*` or `p5*` branch exists yet. #727 to #730 also change 9 to 26 `bot-runtime` files each, so P6a and P6b would collide. Recheck `git ls-remote origin 'feature/sm-*'` first.
+
 ## Skipped CLI entries
 
 CLI work is dropped in favor of `aiden serve`: `cli-native:C11`, `C15`, `C21`, `C25`, `C30`, `C31` (P2) and every `cli-native:C*` row in P6.

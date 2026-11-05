@@ -146,6 +146,16 @@ Fixed defect, reproduced at the ledger boundary: an authorized plan could be con
 
 `ComputerUseGrantLedger.consume` deletes the grant before validating it, so a rejected attempt also burns it. The fingerprint binds generation, target revision and bound target.
 
+### `backend:M066` file and selection handles — retained
+
+`resolve` and `consumeSelection` are synchronous, so nothing can interleave between the check and the removal. A consumed or wrong-kind handle is an unknown handle. `consumeSelection` spends the handle before its callback runs, so a failed callback fails closed. A save rebinds a handle only to the inode that save installed, and discards it otherwise.
+
+### `backend:M065` Remote attachments — retained
+
+`reserve` holds a record for one send, which then spends or restores it. Revocation removes the record from the map, so a later `restore` changes only a detached object and cannot bring it back.
+
+Chat uploads hold a lease across their awaited lookup. The Bot upload and the fork `stage` do not, so a record can land after its device was revoked or its chat deleted. It cannot be spent, because only that device could send it, and it expires with the attachment TTL. This costs temporary capacity, not authority, so no code changed.
+
 ### `backend:M191` Git snapshots, `backend:M067` schedule script claims — retained
 
 Reusable until expiry, bounded, and bound to device and workspace. Code read only, no new tests.
@@ -215,6 +225,6 @@ PRs #732, #733 and #734 are changing analytics now.
 
 ### Not reviewed in this pass — deferred
 
-Transition review was not done for these, and no claim is made about them: `backend:M009`, `M010`, `M031`, `M033`, `M065`, `M066`, `M076`, `M099`, `M109`, `M110`, `M127`, `M164`, `M171`, `M180`, `M189`, `M197`, and `clients:C10`, `C35`, `C56`, `C63`, `C64`, `C67`, `C71`, `C74`, `C50`, `C51`, `C52`, `N10`, `N12`, `N24`, `N26`, `N34`.
+Transition review was not done for these, and no claim is made about them: `backend:M009`, `M010`, `M031`, `M033`, `M076`, `M099`, `M109`, `M110`, `M127`, `M164`, `M171`, `M180`, `M189`, `M197`, and `clients:C10`, `C35`, `C56`, `C63`, `C64`, `C67`, `C71`, `C74`, `C50`, `C51`, `C52`, `N10`, `N12`, `N24`, `N26`, `N34`.
 
 `backend:M009` and `M010` also sit on Lane A's ownership vocabulary.
