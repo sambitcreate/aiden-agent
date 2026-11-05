@@ -1784,19 +1784,23 @@ textarea {
   }
 
   /*
-   * With the model label gone nothing in the action row shrinks, so wrapping
-   * on its natural width is safe: it moves below "+" only when it cannot fit
-   * beside it, and its own items wrap if even a full line is too narrow.
-   * (A zero flex basis would never wrap and would overflow leftward instead.)
+   * With the model label gone nothing in the row shrinks, so wrapping on
+   * natural widths is safe. The actions join the footer row itself, so they
+   * fill the room beside "+" before taking another line: "+" stays first on
+   * the left and the rest packs to the right, Send last.
    */
   .composer-footer-row {
     flex-wrap: wrap;
+    justify-content: flex-end;
+    column-gap: 0.125rem;
+  }
+
+  .composer-footer-row > :first-child {
+    margin-inline-end: auto;
   }
 
   .composer-action-row {
-    flex: 1 1 auto;
-    flex-wrap: wrap;
-    gap: 0.25rem 0.125rem;
+    display: contents;
   }
 }
 
