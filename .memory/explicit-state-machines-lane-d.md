@@ -11,3 +11,7 @@ Started 2026-11-04. Scope: `cli-native` C09, C10, C03, C01, C02, C11, C04, then 
 - C15 converted to one `phase`. Triage of the other `C*` entries is at the end of `docs/state-machines/serve-daemon.md`.
 - C18 and C19 are blocked on the subagent upgrade branch, which rewrites those files. C05 waits on #733. C12, C16, C28 and C32 are P6.
 - No file outside `packages/cli`, `docs/state-machines` and `.memory` changed, so no mobile contract moved.
+- Cleanup hooks in `node:test` (`t.after`) run in registration order here, so stop a daemon before removing its directory. `box.stopServer` in `tests/serve-lifetime.test.mjs` does that; an earlier `t.after(serve stop)` orphaned real daemons.
+- The local shell is zsh: an unquoted `$files` is one argument, so a looped `node --test $files` silently runs nothing. Check that a pass count came back.
+- Control-socket chunks stop near 64 KiB, so a ceiling test needs a frame near the limit plus a later write, not one big write.
+- Shared-owner note: a publish callback that settles its own approval is handled by Lane B's #738, not here.
