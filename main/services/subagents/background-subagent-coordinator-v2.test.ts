@@ -164,6 +164,8 @@ async function until(
   throw new Error(`Timed out waiting for ${description}.`);
 }
 
+type Coordinator = ReturnType<typeof harness>["coordinator"];
+
 function harness() {
   const store = new MemoryStore();
   let clock = 20;
@@ -335,6 +337,41 @@ test("a child created for a launch that then fails is stopped, not abandoned", a
   assert.equal(coordinator.activeCount, 0);
   assert.equal(children.get("run-orphan")?.start, undefined);
   assert.ok(children.get("run-orphan")?.stopped, "The created child is released");
+});
+
+test("an invalidation that lands during launch still stops the created child", async () => {
+  const invalidations = [
+    ["chat deletion", (c: Coordinator) => c.chatDeleted("chat-background")],
+    ["workspace revocation", (c: Coordinator) => c.workspaceRevoked("workspace-background")],
+    ["shutdown", (c: Coordinator) => c.shutdown()],
+    ["startup reconciliation", (c: Coordinator) => c.reconcileStartup()],
+  ] as const;
+  for (const [name, invalidate] of invalidations) {
+    const { store, children, order, coordinator } = harness();
+    const release = deferred();
+    const reached = deferred();
+    const original = store.get.bind(store);
+    let armed = true;
+    // The status read has its answer, and delivers it after the run has moved on.
+    store.get = async (runId) => {
+      const answer = await original(runId);
+      if (armed && order.includes(`create:${runId}`)) {
+        armed = false;
+        reached.resolve();
+        await release.promise;
+      }
+      return answer;
+    };
+    const launching = coordinator.launch(prepared("run-invalidated"));
+    await reached.promise;
+    await invalidate(coordinator);
+    release.resolve();
+    await launching.catch(() => undefined);
+    await until(`${name} to settle`, () => coordinator.activeCount === 0);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(children.get("run-invalidated")?.start, undefined, name);
+    assert.ok(children.get("run-invalidated")?.stopped, `${name} stops the child`);
+  }
 });
 
 test("wait observes terminal work or times out, and steering is delivered only at a safe boundary", async () => {

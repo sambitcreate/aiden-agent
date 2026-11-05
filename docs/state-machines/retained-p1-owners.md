@@ -26,7 +26,7 @@ Audited by a read-only review. Except where marked, these are inspection results
 | `backend:M100` | `subagents/subagent-supervisor-core.ts` | Deferred | Cancellation, cleanup and budget settlement are spread across nested and top-level paths, so extraction would be useful. No ordering defect was found, and it needs the P5a process-settlement work first. |
 | `backend:M101` | `subagents/subagent-nesting-core.ts` | Retain | The ledger and scheduler each own their counters. |
 | `backend:M105` | `subagents/subagent-control-v2.ts` | Retain | Updates converge on `publish` and terminal cleanup. |
-| `backend:M106` | `subagents/background-subagent-coordinator-v2.ts` | Retain, two fixes | The durable lifecycle stays the authority. Launch now holds requests until `active` has the child, so a Stop cannot be acknowledged as queued, and a failed launch stops its child. Both were reproduced in `background-subagent-coordinator-v2.test.ts`. |
+| `backend:M106` | `subagents/background-subagent-coordinator-v2.ts` | Retain, two fixes | The durable lifecycle stays the authority. Launch now holds requests until `active` has the child, so a Stop cannot be acknowledged as queued, and a launch that fails or is invalidated before its child starts stops that child. All were reproduced in `background-subagent-coordinator-v2.test.ts`. |
 
 ## Renderer adapters
 

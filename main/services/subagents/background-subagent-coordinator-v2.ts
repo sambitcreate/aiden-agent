@@ -309,6 +309,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
   }
 
   private async execute(entry: ActiveBackgroundRunV2<Child>): Promise<void> {
+    let childStarted = false;
     try {
       await this.enqueue(entry, async () => {
         entry.run = await this.lifecycle.transition(
@@ -324,6 +325,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
           "Running in the background.",
         );
       });
+      childStarted = true;
       await this.dependencies.startChild(entry.child, {
         task: entry.prepared.task,
         signal: entry.cancellation.signal,
@@ -359,6 +361,10 @@ export class BackgroundSubagentCoordinatorV2<Child> {
         }
       }
     } finally {
+      // A run that moved on before its child started still owns that child.
+      if (!childStarted && !entry.cancellation.signal.aborted) {
+        this.abortEntry(entry, new Error("Background subagent could not start."));
+      }
       this.active.delete(entry.prepared.snapshot.runId);
       this.notifyTerminal(entry);
     }
