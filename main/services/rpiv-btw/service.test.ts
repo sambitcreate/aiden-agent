@@ -141,6 +141,29 @@ test("renderer invalidation cancels only the ephemeral operation", async () => {
   assert.equal(terminal?.type === "terminal" ? terminal.status : undefined, "cancelled");
 });
 
+test("an owner hook that throws cannot keep the side question's slot", async () => {
+  const app = fixture();
+  await assert.rejects(
+    app.service.start("chat-a", "Question", {
+      ...app.owner,
+      onInvalidated: () => {
+        throw new Error("owner unavailable");
+      },
+    }),
+    /owner unavailable/u,
+  );
+  await app.service.start("chat-a", "Question", {
+    ...app.owner,
+    onInvalidated: () => () => {
+      throw new Error("listener already gone");
+    },
+  });
+  await waitForTerminal(app.events);
+  await new Promise((resolve) => setImmediate(resolve));
+  await app.service.start("chat-a", "Asked again", app.owner);
+  await waitForTerminal(app.events);
+});
+
 test("detached deletion ignores late provider events after the abort grace", async () => {
   const app = fixture({ streamDelayMs: 40 });
   await app.service.start("chat-a", "Question", app.owner);
