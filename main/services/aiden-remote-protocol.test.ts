@@ -3607,7 +3607,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 58);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 59);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3694,7 +3694,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 58);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 59);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);

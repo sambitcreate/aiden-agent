@@ -3,7 +3,7 @@ package sbtbiswas.AidenOnTheGo.models
 
 import kotlinx.serialization.*
 
-/** Revision 58. Closed owner-facing records: no peer authority, tools, grants, or credentials. */
+/** Revision 59. Closed owner-facing records: no peer authority, tools, grants, or credentials. */
 object AidenPeerWire {
     const val PUBLIC_BYTES=900*1024
     const val MUTATION_BYTES=16*1024

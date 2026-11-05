@@ -676,10 +676,10 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
     /// Contract revision 50 adds `attachments:raw`, asked for alone.
     /// Contract revision 53 adds `chat:new-worktree`, asked for alone.
-    /// Contract revision 58 adds `bot:watches`, asked for alone.
-    /// Contract revision 58 adds `bot:open-work`, asked for alone.
-    /// Contract revision 58 adds `bot:routine-models`, asked for alone.
-    /// Contract revision 58 adds `bot:peers`, asked for alone.
+    /// Contract revision 59 adds `bot:watches`, asked for alone.
+    /// Contract revision 59 adds `bot:open-work`, asked for alone.
+    /// Contract revision 59 adds `bot:routine-models`, asked for alone.
+    /// Contract revision 59 adds `bot:peers`, asked for alone.
 
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
@@ -778,9 +778,9 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Open work metadata and owned evidence; also needs Bot and chat read.
     static let botOpenWork = Self(rawValue: "bot:open-work")
 
-    /// Revision 58: routine-only models, run facts and explicit unknown-cost Resume.
+    /// Revision 59: routine-only models, run facts and explicit unknown-cost Resume.
     static let botRoutineModels = Self(rawValue: "bot:routine-models")
-    /// Revision 58: approved pairs and bounded linked exchanges.
+    /// Revision 59: approved pairs and bounded linked exchanges.
     static let botPeers = Self(rawValue: "bot:peers")
 
     init(from decoder: Decoder) throws {
@@ -3937,6 +3937,9 @@ struct AidenRemoteRunQuestion: Decodable, Equatable, Sendable {
 struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
     let runId: String
     let chatId: String
+    let replyText: String?
+    let replyReasoning: String?
+    let timeline: AidenGenerationTimeline?
     let reason: String
     let state: String?
     let approvals: [AidenRemoteRunApproval]
@@ -3950,6 +3953,10 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
         runId = try values.decode(String.self, forKey: .runId)
         chatId = try values.decode(String.self, forKey: .chatId)
         reason = try boundedString(values, forKey: .reason, maxLength: 32, field: "reason", required: true)!
+        replyText = try boundedString(values, forKey: .replyText, maxLength: 32_768, field: "replyText", allowEmpty: true)
+        replyReasoning = try boundedString(values, forKey: .replyReasoning, maxLength: 32_768, field: "replyReasoning", allowEmpty: true)
+        timeline = try decodeOptionalNonNull(values, AidenGenerationTimeline.self, forKey: .timeline)
+        guard timeline?.isRendererSafe != false else { throw AidenRemoteContractError.unsafePayloadField("timeline") }
         state = try boundedString(values, forKey: .state, maxLength: 32, field: "state")
         if values.contains(.pendingApprovalIds) {
             _ = try values.decode([String].self, forKey: .pendingApprovalIds)
@@ -3972,7 +3979,7 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case runId, chatId, reason, epoch, state, pendingApprovalIds, pendingQuestionIds
-        case approvals, questions, nextSequence
+        case approvals, questions, nextSequence, replyText, replyReasoning, timeline
     }
 }
 

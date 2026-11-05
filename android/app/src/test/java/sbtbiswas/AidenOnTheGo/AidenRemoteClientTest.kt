@@ -1342,6 +1342,22 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun bothRunFeedsRequestCheckpointWithoutChangingTheirCursorOrIdentity() = runBlocking {
+        val wire = contractFixture().getValue("runCheckpoint")
+        for (knownRun in listOf(false, true)) {
+            server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "text/event-stream")
+                .setBody("id: 90\nevent: snapshot\ndata: $wire\n\n"))
+            val events = (if (knownRun) client.runEvents("run-1", after = 89) else client.currentRunEvents("chat-1")).toList()
+            val request = server.takeRequest()
+            assertEquals("1", request.getHeader("Aiden-Run-Checkpoint"))
+            assertEquals(if (knownRun) "/api/aiden/v1/runs/run-1/events?after=89" else "/api/aiden/v1/chats/chat-1/runs/current/events", request.path)
+            assertEquals(if (knownRun) "89" else null, request.getHeader("Last-Event-ID"))
+            assertEquals(listOf("run-1"), events.map { it.runId })
+            assertEquals("Checked the build.", (events.single().kind as AidenRemoteRunEvent.Kind.Snapshot).snapshot.replyText)
+        }
+    }
+
+    @Test
     fun testCurrentRunStreamAttachesToOneExternallyStartedRun() = runBlocking {
         fun frame(run: String, sequence: Int, type: String, payload: String): String =
             "id: $sequence\nevent: $type\ndata: {\"protocolVersion\":1,\"streamId\":\"$run\",\"sequence\":$sequence,\"timestamp\":\"2026-10-05T10:00:0${sequence}Z\",\"type\":\"$type\",\"terminal\":false,\"payload\":$payload}\n\n"

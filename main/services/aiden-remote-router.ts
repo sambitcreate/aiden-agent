@@ -5187,7 +5187,7 @@ export function createAidenRemoteRequestHandler(
         }
         await requireChatAccess(dependencies.chats, device, currentRunMatch[1]!, "read", "stream");
         const runId = dependencies.hostRuns.currentRunId(currentRunMatch[1]!);
-        dependencies.hostRuns.openRunEvents(device, runId, 0, response, admitDevice(device.id));
+        dependencies.hostRuns.openRunEvents(device, runId, 0, response, admitDevice(device.id), request.headers["aiden-run-checkpoint"] === "1");
         return;
       }
       const runEventsMatch = /^\/runs\/([A-Za-z0-9._:-]{1,128})\/events$/u.exec(path);
@@ -5200,7 +5200,7 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
         const chatId = dependencies.hostRuns.chatIdForRun(runEventsMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
-        dependencies.hostRuns.openRunEvents(device, runEventsMatch[1]!, after, response, admitDevice(device.id));
+        dependencies.hostRuns.openRunEvents(device, runEventsMatch[1]!, after, response, admitDevice(device.id), request.headers["aiden-run-checkpoint"] === "1");
         return;
       }
       const runControlMatch =

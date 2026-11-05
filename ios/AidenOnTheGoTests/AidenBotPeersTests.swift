@@ -104,7 +104,7 @@ private actor PeerHost: AidenBotPeersTransport {
         .server(statusCode: status, body: try peerDecode(AidenRemoteErrorEnvelope.Body.self, ["code": code, "message": "Request refused", "requestId": "peer-test", "retryable": false]))
     }
     func testNormativeRevision57AllPublicPeerShapesDecode() throws {
-        let f = try peerFixture(); XCTAssertEqual(f["contractRevision"] as? Int, 58); XCTAssertEqual(f["capability"] as? String, "bot:peers")
+        let f = try peerFixture(); XCTAssertEqual(f["contractRevision"] as? Int, 59); XCTAssertEqual(f["capability"] as? String, "bot:peers")
         let s = try peerDecode(AidenPeerSettings.self, f["settings"]!); XCTAssertEqual(s.pairs.first?.peer.name, "Researcher")
         XCTAssertEqual(try peerDecode(AidenPeerCatalog.self, f["catalog"]!).bots.count, 1)
         for key in ["approve", "describe", "revoke"] { try peerDecode(AidenPeerMutation.self, f[key]!).validate() }

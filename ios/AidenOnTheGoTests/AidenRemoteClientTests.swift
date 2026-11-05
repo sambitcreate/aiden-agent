@@ -3378,6 +3378,28 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testBothRunFeedsRequestCheckpointWithoutChangingTheirCursorOrIdentity() async throws {
+        let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
+        let wire = try JSONSerialization.data(withJSONObject: XCTUnwrap(root["runCheckpoint"]))
+        for knownRun in [false, true] {
+            AidenRemoteMockURLProtocol.handler = { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Run-Checkpoint"), "1")
+                XCTAssertEqual(request.url?.path, knownRun ? "/api/aiden/v1/runs/run-1/events" : "/api/aiden/v1/chats/chat-1/runs/current/events")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), knownRun ? "89" : nil)
+                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!
+                return (response, Data("id: 90\nevent: snapshot\ndata: ".utf8) + wire + Data("\n\n".utf8))
+            }
+            let client = makeClient()
+            let stream = knownRun ? client.runEvents(runId: "run-1", after: 89) : client.currentRunEvents(chatId: "chat-1")
+            var events: [AidenRemoteRunEvent] = []
+            for try await event in stream { events.append(event) }
+            XCTAssertEqual(events.map(\.runId), ["run-1"])
+            guard case let .snapshot(snapshot) = events.first?.kind else { return XCTFail("Expected the bounded checkpoint") }
+            XCTAssertEqual(snapshot.replyText, "Checked the build.")
+        }
+    }
+
     func testCurrentRunStreamAttachesToOneExternallyStartedRun() async throws {
         let client = makeClient()
         func frame(_ run: String, _ sequence: Int, _ type: String, _ payload: String) -> String {

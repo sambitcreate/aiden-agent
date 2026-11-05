@@ -293,11 +293,11 @@ export const AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION = 54 as const;
 export const AIDEN_REMOTE_BOT_ACCESS_REQUESTS_CONTRACT_REVISION = 55 as const;
 export const AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION = 56 as const;
 export const AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION = 57 as const;
-/** Revision58: negotiated connector-watch management; no feature-token expansion. */
-export const AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION = 58 as const;
-export const AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION = 58 as const;
-export const AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION = 58 as const;
-export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 58 as const;
+/** Revision59: negotiated connector-watch management; no feature-token expansion. */
+export const AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION = 59 as const;
+export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -1515,7 +1515,7 @@ export type AidenRemoteBotSessionEntry =
    * `retryText` is omitted when there is nothing to resend.
    */
   | { type: "failed_turn"; id: string; createdAt?: string; retryText?: string }
-  /** Revision 58, only for `bot:peers`: quiet exchange navigation, never message authority. */
+  /** Revision 59, only for `bot:peers`: quiet exchange navigation, never message authority. */
   | { type: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerBotId: string; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result"; createdAt?: string; final?: true }
   /**
    * Contract revision 27, only for devices holding `bot:cards`: the Bot saved

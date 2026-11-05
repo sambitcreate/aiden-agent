@@ -54,7 +54,7 @@ Initial capability IDs:
 | `bot:handoffs` | Opt-in, no authority of its own (contract revision 37). Delivers the Bot session `handoff` field and frame, the `paused` session state, Bot `paused` flags and the `bot_paused` error code, and opens the hand-off answer, open-on-Mac and pause routes, which still need `bot:read` and `bot:write`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without the routes), never issued by pairing. There is no `/server` feature token for it. See "Bot hand-offs and pause, revision 37". |
 | `bot:handoff-notes` | Opt-in, no authority of its own (contract revision 40). Delivers `takesNote: false` on a hand-off card that takes no note, to a device that also holds `bot:handoffs`. Offered and negotiable exactly when `bot:handoffs` is, never issued by pairing. A host before revision 40 refuses the name, so devices ask for it only when the host lists it. |
 | `bot:issues` | Opt-in, no authority of its own (contract revision 42). Delivers the Bot session `issues` list and `issues` frame, the summary `issueCount`, and issue items in the routine notification feed, and opens `POST /bots/{botId}/issues/{issueId}/act`, which still needs `bot:read` and `bot:write`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without the issue route), never issued by pairing. There is no `/server` feature token for it. See "Bot issues on phones, revision 42". |
-| `bot:routine-models` | Opt-in, no authority of its own (contract revision 58). Opens the separate routine-model settings, directory, catalog, run and Resume-status routes described below. Every read needs Bot and chat read access; catalog, save and Resume status also require Bot write. Never granted at pairing and adds no feature token. Advertised only when every required port is wired. |
+| `bot:routine-models` | Opt-in, no authority of its own (contract revision 59). Opens the separate routine-model settings, directory, catalog, run and Resume-status routes described below. Every read needs Bot and chat read access; catalog, save and Resume status also require Bot write. Never granted at pairing and adds no feature token. Advertised only when every required port is wired. |
 | `bot:handoff-on-mac` | Opt-in, no authority of its own (contract revision 43, provisional). Delivers `onMac: true` on an `action` card whose step is on the Bot's own browser or computer, to a device that also holds `bot:handoffs`. Offered, negotiated and refused by earlier hosts exactly like `bot:handoff-notes`. |
 | `schedule:cards` | Opt-in, no authority (contract revision 39). Delivers the display-only `schedule` card on scheduled-task approvals, on `GET /streams/{streamId}/approval` and on a phone's run `approval_required` events and gap snapshots. The card is sent only to a device that also holds `schedule:read`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without stream or run approvals), never issued by pairing. There is no `/server` feature token for it. See "Scheduled-task approval cards, revision 39". |
 | `bot:images` | Opt-in, no authority of its own (contract revision 45). Delivers `shared_image` Bot session entries (an image a Bot shared with `share_image`, without its bytes) and lets the device read their bytes from `GET /bots/{botId}/session/images/{entryId}`, which also needs `bot:read` and `chat:read`. Every other device gets the same entry as an assistant line. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities`, never issued by pairing. A host before revision 45 refuses the name, so devices ask for it in a call of its own. See "Bot shared images, revision 45". |
@@ -1143,7 +1143,7 @@ Revision 53 is provisional and is re-claimed at merge, after whatever `main` hol
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `chatNewWorktree`: the request, the response, the refusal for a chat that already has messages (`operation_stale`) and a fetch that failed (`git_capability_denied`). The desktop parser reads the section only when `contractRevision` is 53 or newer.
 
-### Connector watches (contract revision 58)
+### Connector watches (contract revision 59)
 
 Mac and Linux Electron hosts with Bots advertise the negotiable `bot:watches` capability only when every watch route is wired. It adds no feature token. Reads require `bot:read` and `bot:watches`; source discovery, preview and every mutation additionally require `bot:write`. Older clients receive their existing Bot/routine shapes; connector-watch bindings are never included in legacy routine lists. The standalone CLI does not wire or advertise this optional capability.
 
@@ -1170,7 +1170,7 @@ Explicit source discovery applies the same 900 KiB aggregate JSON budget before 
 
 Connector-watch admission, later authority revalidation and connector event execution retain the selected-source inventory scope. A cache miss cannot initialize an unrelated connector or borrow an unscoped pending inspection; source checks still require the already-approved live selected session.
 
-## Open work, revision 58 (`bot:open-work`)
+## Open work, revision 59 (`bot:open-work`)
 
 Hosts advertise the negotiable `bot:open-work` capability only while snapshot, person-mutation and owned-evidence routes are all wired. It adds no `/server` feature token and is never granted by pairing. The desktop host offers these routes; a CLI host that withholds the port does not advertise them. Older clients keep their existing Bot shapes.
 
@@ -1192,7 +1192,7 @@ Evidence contains item/source identity, title, text, an explicit `truncated` fla
 
 The normative fixture is `protocol/aiden-remote/v1/fixtures/bot-open-work.json`; the shared strict parsers live in `renderer/shared/bot-open-work.ts`.
 
-## Routine models and cost acknowledgement, revision 58 (`bot:routine-models`)
+## Routine models and cost acknowledgement, revision 59 (`bot:routine-models`)
 
 The desktop host advertises this post-pairing opt-in only when settings, catalog, save, run, directory and Resume-status ports are all wired. It adds no feature token and does not change older Bot/routine DTOs. The standalone CLI withholds the optional ports. All responses below are bare closed DTOs, without a surrounding resource key.
 
@@ -1217,7 +1217,7 @@ The existing `POST /bots/{botId}/resume` still accepts `{}` for ordinary Resume.
 
 Normative examples live in `protocol/aiden-remote/v1/fixtures/bot-routine-models.json`, with closed OpenAPI schemas and shared parsers in `renderer/shared/bot-routine-models.ts`, `bot-routine-model-directory.ts` and `bot-execution-resume.ts`. See [routine model behavior](bot-routine-models.md) and [unconfirmed cost recovery](usage-limits-and-spending.md#unconfirmed-bot-request-costs).
 
-## Bot peers, revision 58 (`bot:peers`)
+## Bot peers, revision 59 (`bot:peers`)
 
 This optional capability is advertised only after the complete protected host service is ready. All routes are Bot-scoped and reject queries. Settings and catalog need Bot-capability negotiation, `bot:read` and `bot:peers`; content adds `chat:read`, and mutations add `bot:write`.
 
@@ -1295,3 +1295,10 @@ The first read captures the complete combined rules and selected folders, sorted
 On a Bot approval, `alwaysCount` is sent in snapshots and approval SSE frames only to a `bot:allowed` holder and only when the host offers Always. It is an integer from 3 through 20 and is absent on Computer Use. Nonholders receive the original five fields `waitId`, `toolCallId`, `toolName`, `summary`, `canAllow`, with no private `always.key`. The shared `POST /approvals/{id}/respond` still requires `approval:respond`, `bot:read`, `bot:write` and Idempotency-Key. `{ "decision": "allow", "scope": "always" }` additionally requires the wired `bot:allowed` grant and that exact waiting card’s offer; otherwise it is `400 invalid_request`. The host forwards only the scope to its structured approval bridge, keeping person provenance and attempt fingerprints private. A response acknowledges the choice, not durable publication. Clients may say “Always allow requested.” and use the authoritative list to confirm persistence. Existing idempotent replay, expiry/refusal behavior and denied-only Computer Use remain in force.
 
 B’s folder `approvalCount` uses the same 3–20 bounds and requires both capability grants. The host selects B’s fields explicitly before parsing, so a desktop count cannot break or widen a legacy Remote card. This count does not change B’s offered choices, answer route or per-choice retry identity. The canonical `botAllowed` fixture includes the ordinary list, 50 rules plus three folders across pages, fresh pages after removal, a capability refusal, an offered approval and B’s counted folder card, alongside both exact legacy projections.
+
+
+### Live run history on attach (revision 58)
+
+On either run event route, a reader may send the header `Aiden-Run-Checkpoint: 1`. For an active run a host can answer a cold attach or an expired cursor with one `snapshot` at the current head. Its reason is `gap` and its `nextSequence` is the head plus one. Resume by run ID after the snapshot's SSE ID. The next delta belongs after the restored content. A reader without the header receives the original event sequence and gap format.
+
+The optional `replyText` and `replyReasoning` strings each contain the complete displayable stream through that cursor, including an empty string before output begins. Each is omitted if it exceeds 32,768 UTF-16 code units. The optional `timeline` holds the latest public activity timeline when its JSON fits in 128 KiB. A reset starts these values over. The usual grant-filtered pending prompts accompany the snapshot. If the complete frame would exceed the 1 MiB SSE limit, the host uses the original replay path. Completed replies are read from the chat's message window.

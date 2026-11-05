@@ -1,5 +1,5 @@
 {
-  "contractRevision": 58,
+  "contractRevision": 59,
   "capability": "bot:open-work",
   "snapshot": {
     "botId": "bot_fixture",

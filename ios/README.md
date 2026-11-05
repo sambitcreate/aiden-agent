@@ -2,6 +2,8 @@
 
 Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS and Linux. The paired desktop owns execution, persistence, providers, workspaces, and permissions; iPhone and iPad provide an authenticated remote control surface over a local network or Tailscale.
 
+Opening a chat already running on another device restores available reply text, reasoning and tool activity from a revision 58 host. The phone resumes live updates from the same point. Earlier hosts use their retained run events.
+
 If the selected computer is unavailable, choose **Switch connection** in the recovery panel to select another paired computer or pair another Aiden Agent. This remains available when a secure-identity failure prevents retrying.
 
 Public new-chat links wait through connection readiness, then require confirmation of their installation and workspace and never start dictation. iOS App Intents use a one-shot foreground action inside the app process, so the intentional voice shortcut remains available. Existing-chat widget and notification links only navigate. Unsent composer drafts and unresolved-send records remain protected device-only storage and are excluded from backups, including stores from older versions during app startup without opening a chat; backup restore does not migrate them.
@@ -47,7 +49,7 @@ The command rejects simulated or mismatched destinations, builds once, starts a 
 
 Aiden On The Go is MIT-licensed under [`LICENSE`](LICENSE). The original Hermex MIT notice is retained under `AidenOnTheGo/Resources/ThirdPartyNotices/` for adapted implementation pieces; no Hermes WebUI compatibility layer or product identity is shipped.
 
-Bot peers (Remote revision 58) are managed from a Bot’s Profile on hosts that negotiate `bot:peers`. The owner can edit the routing description shared only with approved peers, approve a named pair in both directions, revoke it, and inspect exchanges. Each Bot keeps its own rules, access and spending limits. Read-only owners can inspect settings and the local host catalog; exchange history additionally requires chat read access. Unavailable Bots remain visible and names never rebind a saved pair.
+Bot peers (Remote revision 59) are managed from a Bot’s Profile on hosts that negotiate `bot:peers`. The owner can edit the routing description shared only with approved peers, approve a named pair in both directions, revoke it, and inspect exchanges. Each Bot keeps its own rules, access and spending limits. Read-only owners can inspect settings and the local host catalog; exchange history additionally requires chat read access. Unavailable Bots remain visible and names never rebind a saved pair.
 
 Exchange details show host state, request/result text, bounded source/result evidence and a Stop action for only that linked exchange. Requested or uncertain Stop stays pending until a matching host acknowledgement; earlier effects may remain. Quiet Messaged / Message from transcript rows (including a host-marked final update) and peer-linked Open work open the same scoped exchange. A `kind: peer` final notification uses the existing foreground feed, deduplicates its stable ID, and opens the initiating Bot’s chat. Hosts omit peer content for clients without the capability.
 

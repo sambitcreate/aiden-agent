@@ -7,7 +7,7 @@ final class AidenBotPlanTests: XCTestCase {
     func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 58)
+        XCTAssertEqual(root["contractRevision"] as? Int, 59)
         return try XCTUnwrap(root["botPlans"] as? [String: Any])
     }
     func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {

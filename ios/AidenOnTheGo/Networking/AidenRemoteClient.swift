@@ -3709,7 +3709,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         return sseStream(
             path: ["chats", chatId, "runs", "current", "events"],
             after: 0,
-            parser: AidenRunSSEParser()
+            parser: AidenRunSSEParser(),
+            headers: ["Aiden-Run-Checkpoint": "1"]
         ) { event in
             try identity.check(event)
         }
@@ -3721,7 +3722,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         return sseStream(
             path: ["runs", runId, "events"],
             after: sequence,
-            parser: AidenRunSSEParser()
+            parser: AidenRunSSEParser(),
+            headers: ["Aiden-Run-Checkpoint": "1"]
         ) { event in
             try identity.check(event)
         }

@@ -1,6 +1,6 @@
 # Open work on Android
 
-On a host offering the negotiated `bot:open-work` capability (Remote revision 58), open **Bot profile → Open work**. Reading task text and owned evidence requires both Bot-read and chat-read visibility. Changes additionally need Bot-edit permission. Older hosts hide the profile entry; a restored destination explains the missing host support or visibility. No new feature token is used.
+On a host offering the negotiated `bot:open-work` capability (Remote revision 59), open **Bot profile → Open work**. Reading task text and owned evidence requires both Bot-read and chat-read visibility. Changes additionally need Bot-edit permission. Older hosts hide the profile entry; a restored destination explains the missing host support or visibility. No new feature token is used.
 
 Add a title and note to record work without starting or scheduling the Bot. Edit an item to choose Open, Waiting, Done or Dismissed; Waiting requires a reason. Done/Reopen/Dismiss are also available directly on the item. Completion says whether a person marked it done or the Bot completed it. Execution status is separate and comes from the host, including changes at an unchanged record revision.
 
@@ -18,4 +18,4 @@ Unknown transport outcomes and even a first typed `unavailable` response remain 
 
 JVM coverage is in `AidenBotOpenWorkContractTest`, `AidenBotOpenWorkClientTest` and `features.bots.AidenBotOpenWorkControllerTest`, plus journal/pairing and navigation suites. `AidenBotOpenWorkEditorUiTest` covers waiting reasons, Unicode entry and read-only controls. The normative fixture is `protocol/aiden-remote/v1/fixtures/bot-open-work.json`. Compilation, JVM tests and lint do not constitute paired-device, TalkBack or visual acceptance.
 
-Revision58 adds host-owned peer sources and exchange links when `bot:peers` is negotiated. **View exchange** opens the same Bot’s peer detail; linked Stop and source/result evidence remain owned and authorized by the host’s Open-work routes. Older audiences receive the host’s compatibility projection.
+Revision59 adds host-owned peer sources and exchange links when `bot:peers` is negotiated. **View exchange** opens the same Bot’s peer detail; linked Stop and source/result evidence remain owned and authorized by the host’s Open-work routes. Older audiences receive the host’s compatibility projection.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Remote Revision 58: person-facing connector watches. Provider bindings and polling stay on the host.
+/// Remote Revision 59: person-facing connector watches. Provider bindings and polling stay on the host.
 enum AidenBotWatchWire {
     static let intervals = [15, 30, 60]
 

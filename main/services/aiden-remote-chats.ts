@@ -931,7 +931,7 @@ export function projectAidenRemoteChatMessagesWindow(
       chatId: chat.id,
       revision: chatRevision(chat),
       messages,
-      hasOlder: true,
+      hasOlder: first > 0,
       workspaceId: persistedChatWorkspaceId(chat.workspaceId),
       ...(chat.botId ? { botId: chat.botId } : {}),
       title: boundedUnicodeScalarPrefix(chat.title, 1_024),
@@ -943,16 +943,22 @@ export function projectAidenRemoteChatMessagesWindow(
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
       ...(forkedFrom ? { forkedFrom } : {}),
     };
-    const size = () => Buffer.byteLength(JSON.stringify(window), "utf8");
-    let bytes = size();
-    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages.length > 1) {
-      messages.shift();
-      first += 1;
-      bytes = size();
+    let bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
+    let dropped = 0;
+    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && dropped < messages.length - 1) {
+      // Each removed leading message also removes its following comma.
+      bytes -= Buffer.byteLength(JSON.stringify(messages[dropped]), "utf8") + 1;
+      if (dropped === 0 && !window.hasOlder) bytes -= 1; // false becomes true.
+      dropped += 1;
+    }
+    if (dropped) {
+      window.hasOlder = true;
+      messages.splice(0, dropped);
+      first += dropped;
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages[0]) {
       withoutReasoning(messages[0]);
-      bytes = size();
+      bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
       throw new AidenRemoteServiceError(

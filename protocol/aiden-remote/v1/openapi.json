@@ -6541,6 +6541,12 @@
         "x-aiden-capability": "runs:observe",
         "parameters": [
           {
+            "name": "Aiden-Run-Checkpoint",
+            "in": "header",
+            "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
+            "schema": { "type": "string", "const": "1" }
+          },
+          {
             "$ref": "#/components/parameters/ChatId"
           }
         ],
@@ -6576,6 +6582,12 @@
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
+          {
+            "name": "Aiden-Run-Checkpoint",
+            "in": "header",
+            "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
+            "schema": { "type": "string", "const": "1" }
+          },
           {
             "name": "runId",
             "in": "path",
@@ -17826,6 +17838,19 @@
                       "items": {
                         "type": "object"
                       }
+                    },
+                    "replyText": {
+                      "description": "Complete public text through this cursor, only on an opted-in live gap snapshot. Absent when unavailable.",
+                      "type": "string",
+                      "maxLength": 32768
+                    },
+                    "replyReasoning": {
+                      "description": "Complete displayable parent reasoning through this cursor, only on an opted-in live gap snapshot.",
+                      "type": "string",
+                      "maxLength": 32768
+                    },
+                    "timeline": {
+                      "$ref": "#/components/schemas/GenerationTimeline"
                     },
                     "nextSequence": {
                       "type": "integer",

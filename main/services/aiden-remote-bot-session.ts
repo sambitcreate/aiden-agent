@@ -838,7 +838,7 @@ interface Audience {
   images: boolean;
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
-  /** `bot:peers`: closed peer exchange navigation entries (revision 58). */
+  /** `bot:peers`: closed peer exchange navigation entries (revision 59). */
   peers: boolean;
   accessRequests: boolean;
   plans: boolean;

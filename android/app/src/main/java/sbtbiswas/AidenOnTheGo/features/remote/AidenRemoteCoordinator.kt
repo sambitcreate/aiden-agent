@@ -243,19 +243,19 @@ internal suspend fun aidenRequestBotPeers(client: AidenRemoteClient, server: Aid
     aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PEERS, server, installation))
         listOf(AidenRemoteCapability.BOT_PEERS) else emptyList(), client, stillCurrent)
 
-/** Revision 58: routine-only model choices negotiate separately; no feature token. */
+/** Revision 59: routine-only model choices negotiate separately; no feature token. */
 internal suspend fun aidenRequestBotRoutineModels(client: AidenRemoteClient, server: AidenServer,
     installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ROUTINE_MODELS, server, installation))
         listOf(AidenRemoteCapability.BOT_ROUTINE_MODELS) else emptyList(), client, stillCurrent)
 
-/** Revision 58: task text is exposed only after this isolated capability negotiation. */
+/** Revision 59: task text is exposed only after this isolated capability negotiation. */
 internal suspend fun aidenRequestBotOpenWork(client: AidenRemoteClient, server: AidenServer,
     installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_OPEN_WORK, server, installation))
         listOf(AidenRemoteCapability.BOT_OPEN_WORK) else emptyList(), client, stillCurrent)
 
-/** Revision 58: watches are negotiated alone only when the host offers them. */
+/** Revision 59: watches are negotiated alone only when the host offers them. */
 internal suspend fun aidenRequestBotWatches(
     client: AidenRemoteClient,
     server: AidenServer,
@@ -738,7 +738,7 @@ class AidenRemoteCoordinator(
                     server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
                 )
-                // Revision 58: `bot:watches` goes alone, without another feature token.
+                // Revision 59: `bot:watches` goes alone, without another feature token.
                 val watchesServer = negotiateSoloCapability(
                     generation = generation, installation = installation, client = newClient,
                     server = worktreeServer, request = ::aidenRequestBotWatches

@@ -2,6 +2,8 @@
 
 The native Compose client connects to Aiden Agent over the Remote API. The host owns execution, persistence, permissions and model configuration.
 
+Opening a chat already running on another device restores available reply text, reasoning and tool activity from a revision 58 host. The phone resumes live updates from the same point. Earlier hosts use their retained run events.
+
 On hosts that negotiate `bot:messaging` in Remote contract revision 54, the Bots list offers **Bots can message each other**. Advanced → **Other Bots** has receive and send switches for each Bot. When global messaging is off, both switches are disabled with **Turned off for all Bots**. Older hosts show no messaging controls. Each change sends only its changed field; Bot identity patches carry the latest Bot revision. Optimistic saves reconcile lost responses by reading the host and roll back with an error when unsaved.
 
 Bot messages use existing labelled transcript rows, including bounded saved answers while paused. A `message` notification opens that Bot's chat, preserves the host's redacted preview and never starts or resumes a turn.

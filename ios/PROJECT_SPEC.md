@@ -182,7 +182,7 @@ ownership rules. No mobile speech setup mutations, arbitrary transcripts, direct
 requests or speech-provider credentials are permitted. Legacy servers fail closed with
 update/setup guidance; there is no silent alternate-model or on-device fallback.
 
-## Routine model management (Remote revision 58)
+## Routine model management (Remote revision 59)
 
 On hosts that offer and grant `bot:routine-models` with Bot and chat read access, Profile → **Routine models** lists every existing scheduled, event and connected-app watch routine. Each saved routine and watch also has a **Model** action. Choose **Inherit Bot model**, an exact primary provider/model and one of its host-supported thinking levels, or an explicit fallback. Saving authorizes those choices only for that routine under the Bot’s existing rules and spending limits; its default model and other routines stay unchanged. New routines initially inherit. Missing choices remain visibly unavailable until you explicitly replace or clear them; the phone never substitutes another model. The model-only catalog loads only while this foreground sheet is open, using the host’s configured providers without phone credentials. Recent run details show the chosen and actual provider, model and thinking, configured fallback reason, admission, start, scheduled time, timezone and delay.
 
@@ -194,7 +194,7 @@ The `bot:routine-models` capability is negotiated alone and never included in in
 
 Opaque IDs and revisions use the contract’s ASCII grammar. Submission IDs stay decimal strings above 2^53. Labels are bounded to 160 Unicode scalars and 640 UTF-8 bytes, timestamps to safe nonnegative integer milliseconds, catalogs to 64 providers/512 models, runs to 64, directory rows to 1024 and public responses to 900 KiB. Missing required fields, duplicate identities, unsupported thinking and private extra fields fail closed. Model sheets use native navigation, grouped forms and accessible controls. Simulator checks are regression evidence, with physical pairing, VoiceOver and real-provider acceptance deferred to release validation.
 
-## Approved Bot peers (Remote revision 58)
+## Approved Bot peers (Remote revision 59)
 
 `bot:peers` is negotiated alone, never granted by initial pairing or a feature token. Profile provides full routing-description and named bidirectional-pair management. Approval names both Bots and explains each retains its own rules, grants and spending limits; it neither authorizes protected actions nor shares unrelated history. Catalog identity and revision, pair generation and current ownership remain authoritative; unavailable choices are visible and renaming never selects another Bot.
 
