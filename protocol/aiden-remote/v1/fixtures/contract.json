@@ -3,7 +3,7 @@
   "botMessagingPatch": {"botMessaging": {"receive": false}},
   "botMessagingSettings": {"enabled": false},
   "botMessageNotification": {"id": "bot-message-fixture-01", "kind": "message", "botId": "bot_fixture_01", "botName": "Scout", "routineName": "COS replied", "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "The calendar is ready."},
-  "contractRevision": 57,
+  "contractRevision": 58,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1583,7 +1583,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 57,
+    "contractRevision": 58,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -1723,6 +1723,37 @@
         "matchCode": "086098"
       }
     ]
+  },
+  "runCheckpoint": {
+    "protocolVersion": 1,
+    "streamId": "run-1",
+    "sequence": 90,
+    "timestamp": "2026-10-05T10:00:00Z",
+    "type": "snapshot",
+    "terminal": false,
+    "payload": {
+      "runId": "run-1",
+      "chatId": "chat-1",
+      "reason": "gap",
+      "epoch": "host-epoch",
+      "state": "working",
+      "pendingApprovalIds": [],
+      "pendingQuestionIds": [],
+      "approvals": [],
+      "questions": [],
+      "replyText": "Checked the build.",
+      "replyReasoning": "Reviewing results",
+      "timeline": {
+        "version": 3,
+        "generationId": "run-1",
+        "status": "running",
+        "startedAt": 1000,
+        "steps": [
+          { "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "run_command", "label": "Build", "status": "completed", "startedAt": 1000, "updatedAt": 1100, "contentOffset": 0 }
+        ]
+      },
+      "nextSequence": 91
+    }
   },
   "phoneRunEvents": [
     {

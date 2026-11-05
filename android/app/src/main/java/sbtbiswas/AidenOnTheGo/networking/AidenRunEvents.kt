@@ -14,6 +14,7 @@ import kotlinx.serialization.json.longOrNull
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalSchedule
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalScope
+import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionContractCodec
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteRunQuestion
 import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
@@ -63,7 +64,10 @@ data class AidenRemoteRunSnapshot(
     val state: String?,
     val approvals: List<AidenRemoteRunApproval>,
     val questions: List<AidenRemoteRunQuestion>,
-    val nextSequence: Long
+    val nextSequence: Long,
+    val replyText: String? = null,
+    val replyReasoning: String? = null,
+    val timeline: AidenGenerationTimeline? = null
 )
 
 /** One frame of `/chats/{id}/runs/current/events` or `/runs/{id}/events`.
@@ -226,7 +230,7 @@ object AidenRunEventCodec {
             obj,
             setOf(
                 "runId", "chatId", "reason", "epoch", "state", "pendingApprovalIds", "pendingQuestionIds",
-                "approvals", "questions", "nextSequence"
+                "approvals", "questions", "nextSequence", "replyText", "replyReasoning", "timeline"
             ),
             label
         )
@@ -250,6 +254,12 @@ object AidenRunEventCodec {
             },
             questions = (obj["questions"] as? JsonArray ?: JsonArray(emptyList())).map { element ->
                 AidenQuestionContractCodec.parseRunQuestion(element, "$label.questions")
+            },
+            replyText = obj.optionalString("replyText", label, 32_768, allowEmpty = true),
+            replyReasoning = obj.optionalString("replyReasoning", label, 32_768, allowEmpty = true),
+            timeline = obj["timeline"]?.let {
+                json.decodeFromJsonElement(AidenGenerationTimeline.serializer(), it).takeIf { timeline -> timeline.isRendererSafe() }
+                    ?: throw AidenRemoteContractException.UnsafePayloadField("timeline")
             },
             nextSequence = nextSequence
         )

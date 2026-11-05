@@ -196,13 +196,15 @@ export function mergeNewestWindow(current: RemoteTranscript, window: RemoteMessa
     return { chatId: window.chatId, revision: window.revision, messages: [], hasOlder: false, ...model };
   }
   const overlap = current.messages.findIndex((message) => message.id === first.id);
-  if (overlap < 0) {
+  if (overlap <= 0 || !window.hasOlder) {
     return { chatId: window.chatId, revision: window.revision, messages: window.messages, hasOlder: window.hasOlder, ...model };
   }
+  const latestIds = new Set(window.messages.map((message) => message.id));
+  const earlier = current.messages.slice(0, overlap).filter((message) => !latestIds.has(message.id));
   return {
     chatId: window.chatId,
     revision: window.revision,
-    messages: [...current.messages.slice(0, overlap), ...window.messages],
+    messages: [...earlier, ...window.messages],
     hasOlder: current.hasOlder,
     ...model,
   };

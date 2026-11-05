@@ -61,6 +61,20 @@ class AidenForeignRunTest {
     }
 
     @Test
+    fun runCheckpointRestoresVisibleWorkAtItsCursor() {
+        val wire = Json.parseToJsonElement(contractText()).jsonObject.getValue("runCheckpoint")
+        val event = AidenRunEventCodec.decode(wire.toString().toByteArray())
+        val snapshot = (event.kind as AidenRemoteRunEvent.Kind.Snapshot).snapshot
+        val projection = AidenForeignRunProjection(event.runId)
+        projection.apply(event)
+        assertEquals("Checked the build.", snapshot.replyText)
+        assertEquals("Reviewing results", snapshot.replyReasoning)
+        assertEquals("run_command", projection.timeline?.steps?.single()?.toolName)
+        assertEquals(AidenStreamState.RUNNING, projection.state)
+        assertEquals(90, projection.lastSequence)
+    }
+
+    @Test
     fun phoneRunFixtureDrivesForeignRunProjectionThroughFirstResponderOutcomes() {
         val events = fixtureRunEvents()
         assertEquals(13, events.size)

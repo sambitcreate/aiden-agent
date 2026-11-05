@@ -1083,8 +1083,8 @@ async function fixture(options: {
               return "chat-1";
             },
             currentRunId: () => "run-1",
-            openRunEvents: (device, runId, after, response) => {
-              calls.push(`run-events:${device.id}:${runId}:${after}`);
+            openRunEvents: (device, runId, after, response, _admit, checkpoint) => {
+              calls.push(`run-events:${device.id}:${runId}:${after}${checkpoint ? ":checkpoint" : ""}`);
               response.writeHead(200, { "content-type": "text/event-stream" });
               response.end();
             },
@@ -4918,10 +4918,10 @@ test("a phone's run grants reach a foreign run only through its own per-chat gra
   const controlHeaders = (key: string) => ({ ...HOST_HEADERS, "content-type": "application/json", "idempotency-key": key });
   const phone = await fixture({ hostRuns: true, deviceType: "iphone", capabilities: PHONE_RUN_GRANTS });
   try {
-    const current = await fetch(`${phone.base}/chats/chat-1/runs/current/events`, { headers: HOST_HEADERS });
+    const current = await fetch(`${phone.base}/chats/chat-1/runs/current/events`, { headers: { ...HOST_HEADERS, "aiden-run-checkpoint": "1" } });
     assert.equal(current.status, 200);
     await current.text();
-    const resumed = await fetch(`${phone.base}/runs/run-1/events`, { headers: { ...HOST_HEADERS, "last-event-id": "4" } });
+    const resumed = await fetch(`${phone.base}/runs/run-1/events`, { headers: { ...HOST_HEADERS, "last-event-id": "4", "aiden-run-checkpoint": "1" } });
     assert.equal(resumed.status, 200);
     await resumed.text();
     const cancelled = await fetch(`${phone.base}/runs/run-1/cancel`, {
@@ -4939,8 +4939,8 @@ test("a phone's run grants reach a foreign run only through its own per-chat gra
     assert.deepEqual(
       phone.calls.filter((call) => call.startsWith("run-")),
       [
-        "run-events:device-authorized-12345678:run-1:0",
-        "run-events:device-authorized-12345678:run-1:4",
+        "run-events:device-authorized-12345678:run-1:0:checkpoint",
+        "run-events:device-authorized-12345678:run-1:4:checkpoint",
         "run-cancel:device-authorized-12345678:run-1:key-phone-cancel-01",
         "run-approval:device-authorized-12345678:run-1:approval-1:key-phone-approve-1",
       ],
