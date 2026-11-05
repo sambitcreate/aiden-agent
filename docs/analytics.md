@@ -25,7 +25,7 @@ Feature events fire once, at the moment the action succeeded, from the service t
 
 | Event | When | Extra fields |
 | --- | --- | --- |
-| `chat_message_sent` | A person's message started a turn or was queued for one, including a scheduled run and a message to a Bot. A message that joins a running Bot turn, Telegram chats, Design runs and Aiden's own follow-up notices are not counted. | `provider_id`, `model_id`, `in_workspace`, `thinking`, `origin`: desktop, phone, peer (another paired Mac or Linux host), bot or schedule |
+| `chat_message_sent` | A person's message started a turn or was queued for one, including a scheduled run and a message to a Bot. A message that joins a running Bot turn, a message from another Bot, Telegram chats, Design runs and Aiden's own follow-up notices are not counted. | `provider_id`, `model_id`, `in_workspace`, `thinking`, `origin`: desktop, phone, peer (another paired Mac or Linux host), bot or schedule |
 | `chat_created` | A new chat from the sidebar, a phone, the first message of a draft, or the Assistant. Bots, schedules and forks are not counted. | `workspace_kind`: folder, scratch, worktree or none |
 | `provider_connected` | A sign-in or key was saved for a built-in provider, or a custom provider was added | `provider_id`, `auth`: key, oauth or local (a custom provider on this machine or one with no key) |
 | `workspace_added` | A folder, named or scratch workspace was added. A hidden No workspace folder is not. | `kind`: folder, scratch or path (a typed path or a clone) |

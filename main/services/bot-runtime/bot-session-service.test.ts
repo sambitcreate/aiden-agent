@@ -1158,6 +1158,26 @@ test("a person's message to a Bot counts once; a repeat, a routine and a refused
   }
 });
 
+test("a message from another Bot is not a person's message", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage("answer")]));
+  const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+  try {
+    const delivered = await service.send("bot:a", {
+      text: "framed",
+      requestId: `bot:J:1:${deliveryId}`,
+      ifIdle: true,
+      ifNotInterrupted: true,
+      botMessage: { kind: "request", deliveryId, botId: "J", botName: "Jester", text: "clean", deadline: Date.now() + 60_000 },
+    });
+    await service.awaitReply("bot:a", delivered.submissionId, new AbortController().signal);
+    await analyticsSettled();
+    assert.deepEqual(sent, []);
+  } finally {
+    await service.shutdown();
+  }
+});
+
 test('Bot message inputs persist host provenance and are quiet', async () => {
   let release:()=>void=()=>undefined;
   const gate=new Promise<void>(r=>{release=r;});
