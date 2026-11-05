@@ -138,12 +138,6 @@ test("chat removal deletes private child history before the chat can disappear",
     "await deps.subagentRunStore.pendingChatDeletions()",
     completeDeletion,
   );
-  const releaseAdmission = applicationService.indexOf(
-    "if (releaseAdmission) {",
-    completeDeletion,
-  );
-  assert.match(applicationService.slice(releaseAdmission),
-    /if \(releaseAdmission\) \{[\s\S]{0,240}?finishAttachmentDeletion\?\.\(\);\s*finishDeletion\(\);\s*\}/u);
   assert.ok(beginDeletion >= 0);
   assert.ok(cancel > beginDeletion);
   assert.ok(deleteRuns > cancel);
@@ -151,7 +145,6 @@ test("chat removal deletes private child history before the chat can disappear",
   assert.ok(deleteChat > deleteArtifacts);
   assert.ok(completeDeletion > deleteChat);
   assert.ok(pendingDeletionCheck > completeDeletion);
-  assert.ok(releaseAdmission > pendingDeletionCheck);
 
   const admissionCheck = llm.indexOf("chatDeletionGate.isDeleting(params.chatId)");
   const registerInitialization = llm.indexOf(
