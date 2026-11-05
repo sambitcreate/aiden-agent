@@ -116,7 +116,7 @@ Stop decisions are pure tables in `packages/cli/src/serve-ownership.ts`. Signals
 | At the deadline | owner changed | stopped: a replacement is not the daemon asked to stop |
 | | same owner, `daemon` | KILL (its group only when `detached` and it leads the group) plus recorded MCP groups, then wait for `pidAlive` to confirm exit |
 | | same owner, `gone` or `foreign` | clear artifacts, stopped |
-| | same owner, `aiden` or `unknown` | report that the stop is unconfirmed |
+| | same owner, `aiden` or `unknown` | report that the stop is unconfirmed, keep the lock, and advise no signal |
 
 Evidence of exit is `pidAlive`, never the signal.
 
