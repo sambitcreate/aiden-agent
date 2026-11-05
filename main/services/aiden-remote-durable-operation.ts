@@ -1,6 +1,7 @@
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenOperationNotExecutedError,
+  AidenOperationReplayedRejection,
   type AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
@@ -67,12 +68,20 @@ export async function executeAidenDurableOperation<T>(
     admit = resolve;
     refuse = reject;
   });
-  const { admitted, result: pending } = ledger.begin(scope, input, async () => {
-    await admission;
-    return action();
-  });
   const operations = operationsFor(ledger);
   const operation = operationKey(scope);
+  let begun: { admitted: boolean; result: Promise<T> };
+  try {
+    begun = ledger.begin(scope, input, async () => {
+      await admission;
+      return action();
+    });
+  } catch (error) {
+    const unfinished = operations.get(operation) as Promise<T> | undefined;
+    if (error instanceof AidenOperationReplayedRejection && unfinished) return unfinished;
+    throw error;
+  }
+  const { admitted, result: pending } = begun;
   if (!admitted) return (operations.get(operation) as Promise<T> | undefined) ?? pending;
 
   const durable = settleDurably(owner, scope, pending, admit, refuse);
@@ -80,7 +89,8 @@ export async function executeAidenDurableOperation<T>(
   try {
     return await durable;
   } finally {
-    operations.delete(operation);
+    // An operation that ran nothing frees its key, so a later owner may be here.
+    if (operations.get(operation) === durable) operations.delete(operation);
   }
 }
 

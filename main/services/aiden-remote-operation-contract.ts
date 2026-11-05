@@ -41,6 +41,9 @@ export class AidenOperationContractError extends Error {
   }
 }
 
+/** A stored rejection answering a replay; the same code a caller always saw. */
+export class AidenOperationReplayedRejection extends AidenOperationContractError {}
+
 /** The external mutation may have committed, so its idempotency admission must never expire into a retry. */
 export class AidenOperationUnknownOutcomeError extends Error {
   constructor() {
@@ -689,7 +692,7 @@ export class AidenIdempotencyLedger {
       if (existing.requestDigest !== requestDigest) throw new AidenOperationContractError("idempotency_conflict");
       switch (existing.phase.kind) {
         case "rejected":
-          throw new AidenOperationContractError(existing.phase.errorCode);
+          throw new AidenOperationReplayedRejection(existing.phase.errorCode);
         case "unknown":
           throw new AidenOperationContractError("idempotency_in_flight");
         case "fulfilled": {
