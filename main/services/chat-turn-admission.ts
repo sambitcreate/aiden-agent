@@ -56,6 +56,8 @@ interface ChatTurnRecord {
   /** Apply one event and execute its effects. */
   commit(event: ChatTurnEvent): ChatTurnTransition;
   expiry: ReturnType<typeof setTimeout>;
+  /** A release callback's failure, held until pending work settles. */
+  releaseFailure?: { error: unknown };
 }
 
 /**
@@ -135,9 +137,17 @@ export class ChatTurnAdmission {
         else finalize(record);
       }
       // A failing callback must not strand the chat: its accounting is
-      // finished first, and the failure then reaches the caller as before.
-      if (failure) throw failure.error;
-      return transition;
+      // finished first, and the failure then reaches the caller. Callers run
+      // release() then settleAsyncWork() unguarded, and the expiry timer is
+      // gone, so pending work holds the failure until it has settled.
+      failure ??= record.releaseFailure;
+      if (!failure) return transition;
+      if (record.lifecycle.preparation === "pending") {
+        record.releaseFailure = failure;
+        return transition;
+      }
+      record.releaseFailure = undefined;
+      throw failure.error;
     };
     /** Events from a lease that no longer occupies the chat are ignored. */
     const currentRecord = (): ChatTurnRecord | undefined => {
