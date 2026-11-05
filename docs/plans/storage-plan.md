@@ -1,6 +1,6 @@
 # Settings → Storage
 
-**Status:** in review (2026-11-04). Desktop only. No Aiden Remote revision.
+**Status:** in review (2026-11-04; reworked 2026-11-05). Desktop only. No Aiden Remote revision.
 
 ## Why
 
@@ -10,16 +10,17 @@ Claude Desktop's `/storage` page is the model: one total, a breakdown by categor
 
 ## Outcome
 
-- **Settings → Storage** (section id `storage`, App group) shows the total, a stacked category bar with a legend, and the largest worktrees and threads with a per-row delete.
+- **Settings → Storage** (section id `storage`, App group) shows the total and a stacked category bar, a **What’s using space** card with one row per category and its action, and the largest worktrees and chats with a per-row remove or delete.
 - A **server-side endpoint** returns sizes per category plus the largest items, computed in the background and cached. The UI never waits on a scan.
-- **Three cleanups** — remove unused worktrees, delete inactive threads, clear logs — each previewing what it removes and how much it frees before the person confirms.
-- **Hard safety rules**: never remove a worktree with uncommitted or unpushed work, or one attached to an active thread; never delete a pinned, owned, or in-use thread.
+- **Cleanups**: review unused worktrees, delete one chat at a time, clear the browser cache (sign-ins kept), and clear logs. Each previews what it removes and how much it frees before the person confirms. Voice models and Bot computers link to the settings page that owns them.
+- **Hard safety rules**: never remove a worktree with uncommitted or unpushed work, one a chat is using, or one a scheduled task runs in; never delete a pinned, owned, or in-use chat.
 - Tests for the size computation and for the safety rules.
 
 ## Non-goals
 
 - **iOS and Android.** The measured profile lives on the desktop host, the removal paths are desktop-owned, and a read-only phone view would cost a new Remote revision plus two native screens for a number a phone cannot act on. Note in the PR body.
-- **Deleting caches or downloads.** Caches hold paired-device state, approvals and Bot bindings that are expensive to lose and cheap in bytes; downloads are multi-gigabyte runtimes the person would have to fetch again. Both are measured so the total is honest, neither is offered.
+- **Deleting app state or downloads from this page.** Paired-device state, approvals and Bot bindings are expensive to lose and cheap in bytes, so they stay in Other app data with no action. Voice models and Bot computers are removed from their own settings pages (Manage ›), which know how to remove them safely. Only the browser's cache is cleared here, through each browser session.
+- **Deleting chats in bulk.** Owner decision (2026-11-05): chats are deleted one at a time, from their own row. `delete-threads` must name exactly one chat.
 - **Scratch workspaces and shared memory.** `~/aiden/<slug>` and `~/.aiden/memory` live outside the profile (the latter is shared with the CLI), so they are outside the total rather than half-measured.
 - **Archiving threads.** "Archive" in the request is met by deletion behind an explicit review; a reversible archive would need a new chat state, a sidebar surface, and phone parity. Recorded as a follow-up.
 
@@ -27,9 +28,9 @@ Claude Desktop's `/storage` page is the model: one total, a breakdown by categor
 
 ### Inventory
 
-`main/services/storage-profile-inventory.ts` is the single list mapping a user-data path to a category. The scanner walks only those paths, so a new store can never be measured or cleared by accident, and adding one is a one-line change with a category decision attached.
+The scanner measures every top-level entry of the user-data profile, so the total is the whole profile. `STORAGE_PROFILE_LAYOUT` in `main/services/storage-profile-inventory.ts` only maps a top-level name to the category it is shown under; anything unnamed is Other app data. Naming an entry never makes it removable.
 
-Seven categories: worktrees, worktree snapshots, threads, artifacts, logs, caches, downloads. Caches and downloads are measured but never actionable.
+Nine categories: chats, logs and diagnostics, artifacts and images, browser data, voice and helper models, Bot computers, saved work from removed worktrees, other app data, and worktrees.
 
 ### Scan
 
@@ -38,15 +39,17 @@ Seven categories: worktrees, worktree snapshots, threads, artifacts, logs, cache
 - `report()` returns the cache synchronously and starts a scan when it is missing or older than `STORAGE_SCAN_STALE_MS` (60 s).
 - A finished scan broadcasts `storage:changed` `{ kind: "scan-finished" }`; the page re-reads.
 - `refresh()` awaits the same in-flight scan, so pressing **Measure again** twice does not start two walks.
-- The walk shares one `StorageScanBudget` across every measurement (400k entries, 64 GiB, 20 s). Hitting a bound stops the walk and sets `scan.truncated`, and the page says the total is a minimum. A silent undercount would be worse than an honest one.
+- Sizes are allocated blocks, not file length, so sparse Bot computer disks are not overstated, and a hard-linked file counts once per scan.
+- The walk shares one `StorageScanBudget` across every measurement (1M entries, 20 s). Hitting a bound stops the walk and sets `scan.truncated`, and the page says some sizes are a minimum, marking each partly measured item "At least". Every worktree and chat is still listed. A silent undercount would be worse than an honest one.
 - Symlinks are never followed (`lstat`, skip), so a workspace link cannot pull an unrelated volume into the total.
-- A worktree is measured only inside `worktrees/`; a record pointing elsewhere reports zero.
+- Each worktree is measured once, last. A worktree is measured only inside `worktrees/`; a record pointing elsewhere is listed at zero.
+- A chat's size is its transcript plus the pictures no other chat uses, which is what deleting it frees.
 
 ### Classification
 
 The protection rules (`worktreeProtectionReason`, `threadProtectionReason`) and the classifiers live in `renderer/shared/storage.ts`, and the planner in `main/services/storage-usage-core.ts` is a pure module over already-read facts — which is what makes the safety rules testable without Electron, Git, or a profile.
 
-`worktreeProtectionReason` returns the first block, most conservative first: `unknown-git-state`, `active`, `changing`, `uncommitted`, `unpushed`. `unknown-git-state` leading the order is deliberate: a Git read that failed must never be read as "clean".
+`worktreeProtectionReason` returns the first block, most conservative first: `unknown-git-state`, `unknown-routines`, `active`, `changing`, `uncommitted`, `unpushed`, `routine`. The unknown reasons lead deliberately: a Git or scheduled-task read that failed must never be read as "clean".
 
 `threadProtectionReason` returns `owned`, `active`, or `pinned`.
 
@@ -56,8 +59,8 @@ The protection rules (`worktreeProtectionReason`, `threadProtectionReason`) and 
 
 `storage:cleanup` rebuilds the plan, then re-checks each target against live facts immediately before deleting:
 
-- Worktrees: re-read `git status` and the unpushed count, plus `isChatBusy` for every chat on that workspace and `workspaceMutationGate`.
-- Threads: `llmClient.isChatBusy` and a fresh Inbox pin snapshot.
+- Worktrees: re-read `git status` and the unpushed count, the scheduled tasks, plus `isChatBusy` for every chat on that workspace and `workspaceMutationGate`.
+- Chats: `llmClient.isChatBusy`, a fresh Inbox pin snapshot, and the chat's owner.
 - Anything that became protected is reported as `skipped`, never deleted.
 
 Deletion uses Aiden's own paths, so their existing invariants still apply:
@@ -65,6 +68,9 @@ Deletion uses Aiden's own paths, so their existing invariants still apply:
 - `workspaceWorktreeApplicationService.remove` (which itself snapshots dirty work and refuses on unknown ignored files, and runs through the workspace mutation gate, terminal shutdown, schedule pause, and operation cancellation).
 - `chatApplicationService.remove` (which deletes the chat's images, subagent history, staged display and generative-UI artifacts, Pi effect and compaction journals, sourced memory, and pull-request links with it).
 - The diagnostics owner for logs, the same path `diagnostics:delete` uses, plus terminal scrollback files.
+- Each browser session for the cache (`clearCache`, `clearCodeCaches`, shader cache): the app's own session, the built-in browser's profiles and every Bot's browser. Cookies and site storage stay.
+
+Cleanups run one at a time. Removing a worktree deletes its branch only when the branch still points where Aiden created it; a branch with commits stays.
 
 ### Unpushed commits
 
@@ -82,4 +88,4 @@ Out of scope, deliberately. See Non-goals.
 
 - A reversible **archive** for threads (new chat state, sidebar surface, phone parity, one Remote revision).
 - Extending the page to a paired Mac's storage over Aiden Remote (the host runs the scan; the phone shows it read-only), which is the only way the phone could act.
-- Offering cache clearing once the paired-device and approval stores can be re-seeded without a re-pair.
+- Offering cleanup for other app data once the paired-device and approval stores can be re-seeded without a re-pair.
