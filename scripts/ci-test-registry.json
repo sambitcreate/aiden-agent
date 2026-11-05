@@ -62,6 +62,7 @@
         "main/services/chat-title-policy.test.ts",
         "main/services/chat-title-routing.test.ts",
         "main/services/chat-turn-admission.test.ts",
+        "main/services/chat-turn-admission-lifecycle.test.ts",
         "main/services/chat-workspace-authority.test.ts",
         "main/services/chat-workspace-mutation-gate.test.ts",
         "main/services/codex-provider.test.ts",

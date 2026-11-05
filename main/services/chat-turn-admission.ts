@@ -3,6 +3,22 @@ import {
   SLASH_LIMITS,
   SkillInvocationError,
 } from "../../renderer/shared/slash-commands.js";
+import {
+  INITIAL_CHAT_TURN_LIFECYCLE,
+  chatTurnSkillBytes,
+  holdsChatTurnAuthority,
+  isChatTurnReadyForHandoff,
+  transitionChatTurn,
+  transitionChatTurnSkillCustody,
+  type ChatTurnEvent,
+  type ChatTurnLifecycle,
+  type ChatTurnPool,
+  type ChatTurnPoolName,
+  type ChatTurnRejection,
+  type ChatTurnSkillCustody,
+  type ChatTurnSkillCustodyEvent,
+  type ChatTurnTransition,
+} from "./chat-turn-admission-lifecycle.js";
 
 const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_MAX_PREPARED_TURNS = 16;
@@ -34,15 +50,10 @@ export interface ChatTurnLease {
 
 interface ChatTurnRecord {
   lease: ChatTurnLease;
+  lifecycle: ChatTurnLifecycle;
   preparedSkillInvocation?: PreparedSkillInvocation;
-  skillBytes: number;
-  skillSlotReserved: boolean;
-  appendBytes: number;
-  appendSlotReserved: boolean;
-  authorityActive: boolean;
-  asyncSettled: boolean;
-  registering: boolean;
-  finalize(): void;
+  /** Apply one event and execute its effects. */
+  commit(event: ChatTurnEvent): ChatTurnTransition;
   expiry: ReturnType<typeof setTimeout>;
 }
 
@@ -96,155 +107,99 @@ export class ChatTurnAdmission {
       if (this.turns.get(chatId) !== record) return;
       this.turns.delete(chatId);
       clearTimeout(record.expiry);
-      if (record.skillSlotReserved) {
-        this.skillTurns -= 1;
-        this.skillBytes -= record.skillBytes;
-        record.skillSlotReserved = false;
-        record.skillBytes = 0;
+    };
+    const runReleaseCallbacks = (record: ChatTurnRecord): { error: unknown } | undefined => {
+      clearTimeout(record.expiry);
+      const pendingCleanups = [...cleanups];
+      cleanups.clear();
+      let failure: { error: unknown } | undefined;
+      for (const cleanup of pendingCleanups) {
+        try {
+          cleanup();
+        } catch (error) {
+          failure ??= { error };
+        }
       }
-      if (record.appendSlotReserved) {
-        this.appendTurns -= 1;
-        this.appendBytes -= record.appendBytes;
-        record.appendSlotReserved = false;
-        record.appendBytes = 0;
+      return failure;
+    };
+    const commit = (record: ChatTurnRecord, event: ChatTurnEvent): ChatTurnTransition => {
+      const transition = transitionChatTurn(record.lifecycle, event);
+      // A callback below can re-enter with another event, so the new state must
+      // already be in place.
+      record.lifecycle = transition.state;
+      let failure: { error: unknown } | undefined;
+      for (const effect of transition.effects) {
+        if (effect.type === "budget") this.charge(effect.pool, effect.turns, effect.bytes);
+        else if (effect.type === "revoked") failure = runReleaseCallbacks(record);
+        else finalize(record);
       }
+      // A failing callback must not strand the chat: its accounting is
+      // finished first, and the failure then reaches the caller as before.
+      if (failure) throw failure.error;
+      return transition;
+    };
+    /** Events from a lease that no longer occupies the chat are ignored. */
+    const currentRecord = (): ChatTurnRecord | undefined => {
+      const record = this.turns.get(chatId);
+      return record?.lease === lease ? record : undefined;
+    };
+    const reject = (event: ChatTurnEvent): ChatTurnRejection | undefined => {
+      const record = currentRecord();
+      return record ? record.commit(event).rejected : "unavailable";
     };
     const lease: ChatTurnLease = {
       chatId,
       turnId,
       ownerId,
       isActive: () => {
-        const record = this.turns.get(chatId);
-        return record?.lease === lease && record.authorityActive;
+        const record = currentRecord();
+        return record !== undefined && holdsChatTurnAuthority(record.lifecycle);
       },
       reserveAppendPayload: (bytes) => {
-        const record = this.turns.get(chatId);
-        if (
-          !record?.authorityActive ||
-          record?.lease !== lease ||
-          record.appendSlotReserved ||
-          !Number.isSafeInteger(bytes) ||
-          bytes < 0
-        ) {
-          throw new Error("This message turn is no longer available.");
-        }
-        if (
-          this.appendTurns >= this.maxAppendTurns ||
-          bytes > this.maxAppendBytes - this.appendBytes
-        ) {
+        const rejected = reject({ type: "reserve-append", bytes, pool: this.pool("append") });
+        if (rejected === "capacity") {
           throw new Error(
             "Too many messages are waiting to be saved. Try again in a moment.",
           );
         }
-        record.appendSlotReserved = true;
-        record.appendBytes = bytes;
-        this.appendTurns += 1;
-        this.appendBytes += bytes;
+        if (rejected) throw new Error("This message turn is no longer available.");
       },
       reserveSkillPreparation: () => {
-        const record = this.turns.get(chatId);
-        if (
-          !record?.authorityActive ||
-          record?.lease !== lease ||
-          record.skillSlotReserved
-        ) {
-          throw new SkillInvocationError(
-            "turn_unavailable",
-            "This skill turn is no longer available.",
-          );
-        }
-        const reservationBytes = SLASH_LIMITS.formattedInvocationBytes;
-        if (
-          this.skillTurns >= this.maxPreparedTurns ||
-          reservationBytes > this.maxPreparedBytes - this.skillBytes
-        ) {
-          throw new SkillInvocationError(
-            "turn_unavailable",
-            "Too many skill messages are waiting to start. Try again in a moment.",
-          );
-        }
-        record.skillSlotReserved = true;
-        record.skillBytes = reservationBytes;
-        this.skillTurns += 1;
-        this.skillBytes += reservationBytes;
+        const rejected = reject({
+          type: "reserve-skill",
+          bytes: SLASH_LIMITS.formattedInvocationBytes,
+          pool: this.pool("skill"),
+        });
+        if (rejected) throwSkillRejection(rejected);
       },
       prepareSkillInvocation: (invocation) => {
-        const record = this.turns.get(chatId);
-        if (
-          !record?.authorityActive ||
-          record?.lease !== lease ||
-          !record.skillSlotReserved ||
-          record.preparedSkillInvocation
-        ) {
-          throw new SkillInvocationError(
-            "turn_unavailable",
-            "This skill turn is no longer available.",
-          );
-        }
-        const invocationBytes = Buffer.byteLength(
-          invocation.formattedPrompt,
-          "utf8",
-        );
-        if (invocationBytes > record.skillBytes) {
-          throw new SkillInvocationError(
-            "turn_unavailable",
-            "Too many skill messages are waiting to start. Try again in a moment.",
-          );
-        }
-        record.preparedSkillInvocation = invocation;
-        this.skillBytes -= record.skillBytes - invocationBytes;
-        record.skillBytes = invocationBytes;
+        const rejected = reject({
+          type: "prepare-skill",
+          bytes: Buffer.byteLength(invocation.formattedPrompt, "utf8"),
+        });
+        if (rejected) throwSkillRejection(rejected);
+        currentRecord()!.preparedSkillInvocation = invocation;
       },
       settleAsyncWork: (options) => {
-        const record = this.turns.get(chatId);
-        if (!record || record.lease !== lease || record.asyncSettled) return;
-        record.asyncSettled = true;
-        if (record.appendSlotReserved && !options?.retainAppendPayloadUntilRelease) {
-          this.appendTurns -= 1;
-          this.appendBytes -= record.appendBytes;
-          record.appendSlotReserved = false;
-          record.appendBytes = 0;
-        }
-        if (!record.authorityActive && !record.registering) finalize(record);
+        currentRecord()?.commit({
+          type: "settle",
+          retainAppend: options?.retainAppendPayloadUntilRelease === true,
+        });
       },
       onReleased: (cleanup) => {
         if (!lease.isActive()) cleanup();
         else cleanups.add(cleanup);
       },
       release: () => {
-        const record = this.turns.get(chatId);
-        if (!record || record.lease !== lease || !record.authorityActive)
-          return;
-        record.authorityActive = false;
-        clearTimeout(record.expiry);
-        const pendingCleanups = [...cleanups];
-        cleanups.clear();
-        let failure: { error: unknown } | undefined;
-        for (const cleanup of pendingCleanups) {
-          try {
-            cleanup();
-          } catch (error) {
-            failure ??= { error };
-          }
-        }
-        // A failing callback must not strand the chat: its accounting is
-        // finished first, and the failure then reaches the caller as before.
-        if (record.asyncSettled && !record.registering) finalize(record);
-        if (failure) throw failure.error;
+        currentRecord()?.commit({ type: "revoke" });
       },
     };
     const expiry = setTimeout(() => lease.release(), this.leaseTtlMs);
     expiry.unref?.();
     const record: ChatTurnRecord = {
       lease,
-      skillBytes: 0,
-      skillSlotReserved: false,
-      appendBytes: 0,
-      appendSlotReserved: false,
-      authorityActive: true,
-      asyncSettled: false,
-      registering: false,
-      finalize: () => finalize(record),
+      lifecycle: INITIAL_CHAT_TURN_LIFECYCLE,
+      commit: (event) => commit(record, event),
       expiry,
     };
     this.turns.set(chatId, record);
@@ -277,8 +232,8 @@ export class ChatTurnAdmission {
     const record = this.turns.get(chatId);
     const lease = record?.lease;
     return (
-      record?.authorityActive === true &&
-      record.asyncSettled &&
+      record !== undefined &&
+      isChatTurnReadyForHandoff(record.lifecycle) &&
       lease?.turnId === turnId &&
       lease.ownerId === ownerId
     );
@@ -318,51 +273,64 @@ export class ChatTurnAdmission {
   ): boolean {
     const record = this.turns.get(chatId);
     const lease = record?.lease;
-    if (
-      !record?.authorityActive ||
-      !record.asyncSettled ||
-      record.registering ||
-      lease?.turnId !== turnId ||
-      lease.ownerId !== ownerId
-    ) {
+    if (!record || lease?.turnId !== turnId || lease.ownerId !== ownerId) {
       return false;
     }
-    const retainedSkillBytes = record.skillBytes;
-    const retainsSkillReservation = record.skillSlotReserved;
-    let transferred = false;
-    let released = !retainsSkillReservation;
-    let releaseRequested = false;
-    const releaseSkillReservation = () => {
-      if (released) return;
-      if (!transferred) {
-        releaseRequested = true;
-        return;
-      }
-      released = true;
-      this.skillTurns -= 1;
-      this.skillBytes -= retainedSkillBytes;
+    const heldSkillBytes = chatTurnSkillBytes(record.lifecycle);
+    if (record.commit({ type: "begin-registration" }).rejected) return false;
+    let custody: ChatTurnSkillCustody = heldSkillBytes === undefined ? "released" : "lease";
+    const advanceCustody = (event: ChatTurnSkillCustodyEvent): void => {
+      const next = transitionChatTurnSkillCustody(custody, event);
+      custody = next.custody;
+      if (next.refund) this.charge("skill", -1, -heldSkillBytes!);
     };
-    record.registering = true;
     try {
-      registerGeneration(record.preparedSkillInvocation, releaseSkillReservation);
+      registerGeneration(record.preparedSkillInvocation, () =>
+        advanceCustody("release-requested"));
     } catch (error) {
-      record.registering = false;
-      if (!record.authorityActive) record.finalize();
+      advanceCustody("registration-failed");
+      record.commit({ type: "registration-failed" });
       throw error;
     }
-    record.registering = false;
-    if (retainsSkillReservation) {
-      // The prompt remains charged after the append lease disappears because
-      // initialization and the active Agent still retain its expanded bytes.
-      record.skillSlotReserved = false;
-      record.skillBytes = 0;
-      transferred = true;
-      if (releaseRequested) releaseSkillReservation();
-    }
-    // A release during registration revoked authority but left finalizing to
-    // this outcome, so the skill charge above could move first.
-    if (record.authorityActive) lease.release();
-    else record.finalize();
+    // The prompt remains charged after the append lease disappears because
+    // initialization and the active Agent still retain its expanded bytes.
+    advanceCustody("transferred");
+    record.commit({ type: "registration-succeeded" });
     return true;
   }
+
+  private pool(name: ChatTurnPoolName): ChatTurnPool {
+    return name === "append"
+      ? {
+          turns: this.appendTurns,
+          bytes: this.appendBytes,
+          maxTurns: this.maxAppendTurns,
+          maxBytes: this.maxAppendBytes,
+        }
+      : {
+          turns: this.skillTurns,
+          bytes: this.skillBytes,
+          maxTurns: this.maxPreparedTurns,
+          maxBytes: this.maxPreparedBytes,
+        };
+  }
+
+  private charge(name: ChatTurnPoolName, turns: number, bytes: number): void {
+    if (name === "append") {
+      this.appendTurns += turns;
+      this.appendBytes += bytes;
+    } else {
+      this.skillTurns += turns;
+      this.skillBytes += bytes;
+    }
+  }
+}
+
+function throwSkillRejection(rejected: ChatTurnRejection): never {
+  throw new SkillInvocationError(
+    "turn_unavailable",
+    rejected === "capacity"
+      ? "Too many skill messages are waiting to start. Try again in a moment."
+      : "This skill turn is no longer available.",
+  );
 }
