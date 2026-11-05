@@ -453,7 +453,7 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
       await resizeWindow(1280, 800);
       if (tabs.length > 0) await page.getByRole("tab", { name: tab, exact: true }).click();
       if (tab === "Telegram") {
-        await page.getByText("Advanced Telegram settings", { exact: true }).click();
+        await page.getByRole("button", { name: "Advanced Telegram settings", exact: true }).click();
       }
       for (const width of [1280, 600, 390]) {
         await resizeWindow(width, 650);
@@ -472,11 +472,7 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
           )
           .toBeLessThanOrEqual(2);
         if (tab === "Telegram") {
-          for (const name of [
-            "Enable Telegram bridge",
-            "Live answer drafts",
-            "Private-chat threads",
-          ]) {
+          for (const name of ["Live answer drafts", "Private-chat threads"]) {
             const toggle = page.getByRole("switch", { name, exact: true });
             await toggle.scrollIntoViewIfNeeded();
             expect(

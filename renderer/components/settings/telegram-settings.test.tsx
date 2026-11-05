@@ -57,3 +57,38 @@ test("a bridge that is off has nothing to disconnect", async () => {
   const disconnect = await screen.findByRole("button", { name: "Disconnect" });
   assert.equal(disconnect.hasAttribute("disabled"), true);
 });
+
+test("the bridge has one on and off control, in step 3", async () => {
+  mount({ hasToken: true });
+  await screen.findByRole("button", { name: "Connect" });
+  fireEvent.click(screen.getByRole("button", { name: "Advanced Telegram settings" }));
+  const switches = await screen.findAllByRole("switch");
+  assert.deepEqual(
+    switches.map((control) => control.getAttribute("aria-label")),
+    ["Live answer drafts", "Private-chat threads"],
+  );
+});
+
+test("connection steps stay open until a token is saved", async () => {
+  mount({ hasToken: false });
+  await screen.findByText(/Copy the bot token/u);
+  cleanup();
+  mount({ hasToken: true });
+  await screen.findByRole("button", { name: "How to connect" });
+  assert.equal(screen.queryByText(/Copy the bot token/u), null);
+  fireEvent.click(screen.getByRole("button", { name: "How to connect" }));
+  await screen.findByText(/Copy the bot token/u);
+});
+
+test("the unattended-authority notice shows without opening anything", async () => {
+  for (const hasToken of [true, false]) {
+    mount({ hasToken });
+    await screen.findByText(/full unattended authority/u);
+    cleanup();
+  }
+});
+
+test("setup with no folder workspaces points at the sidebar", async () => {
+  mount({ hasToken: false });
+  await screen.findByText(/Add a folder workspace from the sidebar/u);
+});
