@@ -77,18 +77,21 @@ Linearization: the grant is checked again after the wait, so a late `allow` cann
 
 ## C03: serve admission and resource lifetime
 
-Owner: `serve` and `serveOwned` in `packages/cli/src/serve.ts`.
+Owners: `ServeLifetime` in `packages/cli/src/serve-lifetime.ts` for the control socket's phase and accepted commands, driven by `serve` and `serveOwned` in `packages/cli/src/serve.ts`.
 
 | Phase | Entered by | Control socket | Chat admission | Leaves when |
 |---|---|---|---|---|
 | lease held | `acquireLease` | absent | none yet | a throw releases the lease |
-| services starting | Remote, socket, scheduler, Telegram | answers once bound | open | ready, or failure into draining |
-| serving | `onReady` | answers | open | signal |
-| ingress closed | `closing = true` | refuses new connections and commands | `chats.stop()` closes it synchronously | |
-| services draining | `Promise.allSettled` of chats, Bots, Telegram, Remote, scheduler | clients destroyed afterwards | closed | all settled |
+| `starting` | Remote, socket, scheduler, Telegram | answers once bound | open | ready, or failure into draining |
+| `serving` | `markServing`, before `onReady` | answers | open | signal |
+| `draining`: ingress closed | `beginDrain` | refuses new connections and commands | `chats.stop()` closes it synchronously | |
+| `draining`: services | `Promise.allSettled` of chats, Bots, Telegram, Remote, scheduler | accepted commands keep running | closed | all settled |
+| `draining`: commands | `settleCommands` | clients destroyed only afterwards | closed | every accepted command answered |
 | released | socket removed, MCP recording stopped, lease released | absent | closed | process exit |
 
-Order matters at one place: `chats.stop()` must run first so no other stopping ingress can begin a turn.
+Order matters in two places: `chats.stop()` runs first so no other stopping ingress can begin a turn, and every accepted command settles before the lease is released. A hung command therefore holds shutdown: `aiden serve stop` escalates to KILL at its deadline, and a second signal ends a foreground server.
+
+**Defect fixed:** an accepted command was not tracked, so shutdown destroyed its client and released the lease while it was still changing state. The client saw `Daemon closed without a response`, and the write could land with no owner. Reproduced in `tests/serve-lifetime.test.mjs`.
 
 ## C01 and C02: daemon ownership, startup, shutdown and stale recovery
 

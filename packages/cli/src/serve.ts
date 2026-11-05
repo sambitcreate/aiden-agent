@@ -11,6 +11,7 @@ import { workspaceCommand } from "./workspaces.ts";
 import { createCliWorkspaceApplication } from "./workspace-application.ts";
 import { createCliBots } from "./bots.ts";
 import { createCliRemote } from "./remote.ts";
+import { ServeLifetime } from "./serve-lifetime.ts";
 
 type CliRemote = Awaited<ReturnType<typeof createCliRemote>>;
 
@@ -50,9 +51,9 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
   let remote: CliRemote | undefined;
   const path = daemonSocket(agentDir);
   const clients = new Set<import("node:net").Socket>();
-  let closing = false;
+  const lifetime = new ServeLifetime();
   const server = createServer((socket) => {
-    if (closing || clients.size >= 64) { socket.destroy(); return; }
+    if (!lifetime.acceptsCommands || clients.size >= 64) { socket.destroy(); return; }
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
     let buffer = "", handled = false;
     socket.setEncoding("utf8");
@@ -64,16 +65,16 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       if (!buffer.includes("\n")) return;
       handled = true;
       socket.setTimeout(610_000, () => socket.destroy());
-      void (async () => {
+      lifetime.track((async () => {
         try {
-          if (closing) throw new Error("The Aiden daemon is shutting down.");
+          if (!lifetime.acceptsCommands) throw new Error("The Aiden daemon is shutting down.");
           const request = JSON.parse(buffer);
           if (!["schedule", "remote", "bots", "workspace", "serve"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
           if (request.command === "remote" && !remote) throw new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls.");
           const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);
           socket.end(JSON.stringify({ result }) + "\n");
         } catch (error) { socket.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) + "\n"); }
-      })();
+      })());
     });
   });
   try {
@@ -92,15 +93,18 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       const status = await remote.service.status().catch(() => undefined);
       process.stderr.write(`Aiden Remote listening${status ? ` on port ${status.lanPort}${status.lanEndpoint ? ` (${status.lanEndpoint})` : ""}` : ""}. Pair a device with \`aiden remote pair lan|tailscale\`.\n`);
     } else process.stderr.write("Aiden Remote is off.\n");
+    lifetime.markServing();
     options.onReady?.();
     if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   } finally {
     // Refuse new control requests and stop accepting connections before draining.
-    closing = true;
+    lifetime.beginDrain();
     const closed = server.listening ? new Promise<void>((resolve) => server.close(() => resolve())) : Promise.resolve();
     // chats.stop() runs first and synchronously closes turn admission, so no ingress stopped
     // alongside it can begin a turn that exit would cut short.
     const settled = await Promise.allSettled([chats.stop(), bots.stop(), telegram.stopAndSettle(), remote?.stop(), runtime.service.stopAndSettle()]);
+    // An accepted command may still be changing state, and its client is owed the outcome.
+    await lifetime.settleCommands();
     for (const client of clients) client.destroy();
     await closed;
     rmSync(path, { force: true });

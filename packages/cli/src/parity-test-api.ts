@@ -7,6 +7,7 @@ export * from "./credentials.ts";
 export * from "./schedules.ts";
 export * from "./serve.ts";
 export * from "./serve-lifecycle.ts";
+export * from "./serve-lifetime.ts";
 export * from "./telegram.ts";
 export * from "./daemon-chats.ts";
 export * from "./daemon-turn-lifecycle.ts";

@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -123,6 +125,56 @@ test("the control socket answers one framed request per connection and refuses m
   // A request with no newline inside the byte ceiling is cut off, with no reply.
   assert.equal(await exchange(box.socket, "x".repeat(70_000)), "");
   assert.deepEqual(JSON.parse(await exchange(box.socket, status)), { result: { remote: { on: false } } }, "the server is still healthy");
+});
+
+test("shutdown keeps the lease until a running control command has answered", posix, async (t) => {
+  const box = sandbox(t), controller = new AbortController(), ready = Promise.withResolvers();
+  const serving = api.serve(box.agentDir, controller.signal, { onReady: ready.resolve });
+  void serving.catch(ready.reject);
+  await ready.promise;
+  const workspace = await api.remoteDaemonCommand(box.agentDir, "workspace", ["add", box.agentDir]);
+  // Workspace changes look at the chat index first, which gives the test a place to hold one.
+  const { stat } = fsPromises, reached = Promise.withResolvers(), held = Promise.withResolvers();
+  fsPromises.stat = async (...args) => {
+    if (String(args[0]).endsWith("index.json")) { reached.resolve(); await held.promise; }
+    return stat(...args);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.stat = stat; syncBuiltinESMExports(); });
+  const answer = api.remoteDaemonCommand(box.agentDir, "workspace", ["access", workspace.id, "none"]);
+  await reached.promise;
+  controller.abort();
+  let released = false;
+  void serving.then(() => { released = true; });
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+  assert.equal(released, false, "the command is still changing state");
+  assert.equal(existsSync(box.lock), true);
+  held.resolve();
+  assert.equal((await answer).access, "none", "the client hears how its command ended");
+  await serving;
+  assert.equal(existsSync(box.lock), false);
+  assert.equal(existsSync(box.socket), false);
+});
+
+test("serve phases only move forward and draining waits for every accepted command", async () => {
+  const lifetime = new api.ServeLifetime();
+  assert.equal(lifetime.acceptsCommands, true, "commands are answered while services start");
+  lifetime.markServing();
+  assert.equal(lifetime.phase, "serving");
+  const first = Promise.withResolvers(), second = Promise.withResolvers();
+  lifetime.track(first.promise); lifetime.track(second.promise);
+  lifetime.beginDrain();
+  assert.equal(lifetime.acceptsCommands, false);
+  lifetime.markServing();
+  assert.equal(lifetime.phase, "draining", "a late ready report cannot reopen the socket");
+  let settled = false;
+  const settling = lifetime.settleCommands().then(() => { settled = true; });
+  first.reject(new Error("answered already"));
+  await new Promise((resolveWait) => setImmediate(resolveWait));
+  assert.equal(settled, false);
+  second.resolve();
+  await settling;
+  assert.equal(settled, true);
 });
 
 /** A fake daemon that answers every connection with the given bytes. */
