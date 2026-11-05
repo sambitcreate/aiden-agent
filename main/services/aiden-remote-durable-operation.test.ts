@@ -184,14 +184,14 @@ test("a failed admission write runs nothing, keeps no record, and frees the key"
 test("requests joined to a refused admission fail with it, and the next one runs once", async () => {
   const ledger = new AidenIdempotencyLedger();
   let effects = 0;
-  let releaseSave!: (error?: Error) => void;
-  const saveGate = new Promise<void>((resolve, reject) => {
-    releaseSave = (error) => (error ? reject(error) : resolve());
+  let releaseSave!: (error: Error) => void;
+  const saveGate = new Promise<void>((_resolve, reject) => {
+    releaseSave = reject;
   });
   let saves = 0;
   const durable = owner(ledger, async () => {
     saves += 1;
-    if (saves <= 2) await saveGate;
+    if (saves === 1) await saveGate;
   });
   const action = async () => (effects += 1);
 
@@ -206,20 +206,69 @@ test("requests joined to a refused admission fail with it, and the next one runs
   assert.equal(effects, 1);
 });
 
-test("a failed write on a settled replay reports the failure but keeps the settled outcome", async () => {
+test("a request joined to a running action reports that action's result, whatever its own disk does", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  let finish!: (value: string) => void;
+  let effects = 0;
+  let announceStart!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStart = resolve;
+  });
+  const running = executeAidenDurableOperation(owner(ledger, async () => undefined), SCOPE, {}, () => {
+    effects += 1;
+    announceStart();
+    return new Promise<string>((done) => {
+      finish = done;
+    });
+  });
+  await started;
+  const brokenDisk = owner(ledger, async () => {
+    throw new Error("disk full");
+  });
+  const joined = executeAidenDurableOperation(brokenDisk, SCOPE, {}, async () => {
+    effects += 1;
+    return "must not run";
+  });
+  finish("committed");
+  assert.equal(await running, "committed");
+  assert.equal(await joined, "committed");
+  assert.equal(effects, 1);
+});
+
+test("a replay reports the settled outcome and writes nothing", async () => {
   const ledger = new AidenIdempotencyLedger();
   let failing = false;
+  let saves = 0;
   let effects = 0;
   const durable = owner(ledger, async () => {
+    saves += 1;
     if (failing) throw new Error("disk full");
   });
   const action = async () => ({ effect: (effects += 1) });
   const original = await executeAidenDurableOperation(durable, SCOPE, {}, action);
+  const written = saves;
 
   failing = true;
-  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("internal_error"));
-  failing = false;
   assert.deepEqual(await executeAidenDurableOperation(durable, SCOPE, {}, action), original);
+  assert.equal(saves, written);
+  assert.equal(effects, 1);
+});
+
+test("an outcome that could not be written stays unknown past the replay window in the same process", async () => {
+  let now = 1_000;
+  const ledger = new AidenIdempotencyLedger(undefined, { ttlMs: 100, now: () => now });
+  let saves = 0;
+  let effects = 0;
+  const durable = owner(ledger, async () => {
+    saves += 1;
+    if (saves === 2) throw new Error("disk lost");
+  });
+  const action = async () => (effects += 1);
+  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  // What the caller was told holds immediately, and after the window.
+  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  now += 1_000;
+  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
   assert.equal(effects, 1);
 });
 
@@ -304,7 +353,7 @@ test("generated request, failure and restart orders never run a key twice or for
   }
 });
 
-test("only reconciliation leaves unknown, and nothing leaves a settled outcome", () => {
+test("only reconciliation leaves unknown, and only a failed write unsettles an outcome", () => {
   const events: AidenOperationEvent<string>[] = [
     { type: "action_fulfilled", value: "late", expiresAt: 9 },
     { type: "action_rejected", errorCode: "internal_error", expiresAt: 9 },
@@ -318,6 +367,9 @@ test("only reconciliation leaves unknown, and nothing leaves a settled outcome",
   ];
   for (const phase of settled) {
     for (const event of events) assert.deepEqual(advanceAidenOperation(phase, event), phase, event.type);
+  }
+  for (const phase of settled) {
+    assert.equal(advanceAidenOperation(phase, { type: "outcome_unrecorded" }).kind, "unknown");
   }
   const unknown: AidenOperationPhase<string> = { kind: "unknown" };
   assert.deepEqual(
