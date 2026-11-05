@@ -75,6 +75,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenTranscriptPolish.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
+  "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
   "AidenOnTheGo/Features/Remote/AidenMarkdownContentCache.swift",
@@ -133,6 +134,7 @@ const appSourcePaths = [
 const testSources = [
   "AidenBotCacheTests.swift",
   "AidenBotAllowedTests.swift",
+  "AidenDemoHostsTests.swift",
   "AidenBotContractTests.swift",
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotHomeProfileTests.swift",

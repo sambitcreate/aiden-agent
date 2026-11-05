@@ -78,7 +78,7 @@ final class AidenMetricDiagnosticSubscriber: NSObject, MXMetricManagerSubscriber
 @main
 struct AidenOnTheGoApp: App {
     @State private var haptics: AidenHapticCenter
-    @State private var remoteCoordinator = AidenRemoteCoordinator()
+    @State private var remoteCoordinator: AidenRemoteCoordinator
     @State private var appearance = AidenAppearanceStore()
 
     init() {
@@ -88,7 +88,20 @@ struct AidenOnTheGoApp: App {
         AidenDiagnostics.record(.app, event: .launch, outcome: .started)
         let haptics = AidenHapticCenter()
         _haptics = State(initialValue: haptics)
+#if DEBUG
+        // `-AidenDemoScenario <name>` runs the real shell against fake machines.
+        if let scenario = AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) {
+            _remoteCoordinator = State(initialValue: AidenDemoHosts.coordinator(
+                scenario,
+                responder: AidenDemoResponder(),
+                haptics: haptics
+            ))
+        } else {
+            _remoteCoordinator = State(initialValue: AidenRemoteCoordinator(haptics: haptics))
+        }
+#else
         _remoteCoordinator = State(initialValue: AidenRemoteCoordinator(haptics: haptics))
+#endif
     }
 
     var body: some Scene {

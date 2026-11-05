@@ -1,0 +1,236 @@
+#if DEBUG
+import XCTest
+@testable import AidenOnTheGo
+
+@MainActor
+final class AidenDemoHostsTests: XCTestCase {
+    private func client(
+        for installation: AidenInstallation,
+        responder: AidenDemoResponder
+    ) -> AidenRemoteClient {
+        AidenRemoteClient(
+            endpoint: installation.endpoint,
+            credential: "demo-test-credential",
+            session: responder.session
+        )
+    }
+
+    private func status(
+        of path: String,
+        instanceId: String,
+        responder: AidenDemoResponder
+    ) async throws -> Int {
+        let url = try XCTUnwrap(URL(string: "https://\(instanceId).demo.invalid/api/aiden/v1\(path)"))
+        let (_, response) = try await responder.session.data(for: URLRequest(url: url))
+        return try XCTUnwrap(response as? HTTPURLResponse).statusCode
+    }
+
+    func testEveryScenarioServesRowsThatDecodeWithTheRealModels() async throws {
+        for scenario in AidenDemoScenario.allCases {
+            let responder = AidenDemoResponder()
+            let coordinator = AidenDemoHosts.coordinator(scenario, responder: responder)
+            let installations = coordinator.installationStore.installations
+            XCTAssertFalse(installations.isEmpty, "\(scenario) has no machines")
+
+            var servedMachines = 0
+            for installation in installations {
+                do {
+                    let page = try await client(for: installation, responder: responder).chatSummaries()
+                    servedMachines += 1
+                    if scenario == .empty {
+                        XCTAssertTrue(page.summaries.isEmpty, "\(scenario) must have no rows")
+                    } else {
+                        XCTAssertFalse(page.summaries.isEmpty, "\(scenario)/\(installation.instanceId) has no rows")
+                    }
+                } catch let error as URLError {
+                    // An offline machine is the only acceptable failure.
+                    XCTAssertEqual(error.code, .notConnectedToInternet, "\(scenario)/\(installation.instanceId)")
+                }
+            }
+            XCTAssertGreaterThan(servedMachines, 0, "\(scenario) has no reachable machine")
+        }
+    }
+
+    func testBusyScenarioCoversEveryRowStateTheInboxRenders() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.busy, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let page = try await client(for: installation, responder: responder).chatSummaries()
+
+        XCTAssertGreaterThanOrEqual(page.summaries.count, 12)
+        let states = Set(page.summaries.compactMap(\.rowState))
+        XCTAssertEqual(states, [.needsApproval, .needsInput, .working, .idle])
+        XCTAssertTrue(page.summaries.contains { $0.lastRunFailed })
+        XCTAssertTrue(page.summaries.contains { $0.unread })
+    }
+
+    func testUnknownPathsAreRefusedSoNoEndpointGetsInvented() async throws {
+        let responder = AidenDemoResponder()
+        _ = AidenDemoHosts.coordinator(.one, responder: responder)
+
+        let known = try await status(of: "/server", instanceId: "studio", responder: responder)
+        XCTAssertEqual(known, 200)
+        let unknown = try await status(of: "/no-such-endpoint", instanceId: "studio", responder: responder)
+        XCTAssertEqual(unknown, 404)
+        let unknownMachine = try await status(of: "/server", instanceId: "nobody", responder: responder)
+        XCTAssertEqual(unknownMachine, 404)
+    }
+
+    func testFourScenarioHasOneOfflineMachine() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        let installations = coordinator.installationStore.installations
+        XCTAssertEqual(Set(installations.map(\.instanceId)), ["studio", "laptop", "mini", "build"])
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: installations.map { ($0.instanceId, $0.name) }),
+            ["studio": "Studio Mac", "laptop": "Laptop", "mini": "Home Mini", "build": "Build Box"]
+        )
+
+        for installation in installations {
+            let machine = client(for: installation, responder: responder)
+            if installation.instanceId == "build" {
+                do {
+                    _ = try await machine.server()
+                    XCTFail("The build machine must be offline")
+                } catch let error as URLError {
+                    XCTAssertEqual(error.code, .notConnectedToInternet)
+                }
+            } else {
+                let server = try await machine.server()
+                XCTAssertEqual(server.instanceId, installation.instanceId)
+                XCTAssertEqual(server.name, installation.name)
+            }
+        }
+    }
+
+    func testOfflineMixHasTwoReachableAndTwoOfflineMachines() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.offlineMix, responder: responder)
+        var reachable = Set<String>()
+        for installation in coordinator.installationStore.installations {
+            if (try? await client(for: installation, responder: responder).server()) != nil {
+                reachable.insert(installation.instanceId)
+            }
+        }
+        XCTAssertEqual(reachable, ["studio", "mini"])
+    }
+
+    func testOldHostAdvertisesNoFeaturesAndServesChatsThroughTheLegacyList() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.oldHost, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let machine = client(for: installation, responder: responder)
+
+        let server = try await machine.server()
+        XCTAssertNil(server.serverCapabilities)
+        XCTAssertTrue(server.features.isEmpty)
+        XCTAssertFalse(installation.isBotsEligible)
+
+        let page = try await machine.preferredChatSummaries(advertised: false)
+        XCTAssertFalse(page.summaries.isEmpty)
+    }
+
+    func testCoordinatorConnectsToTheFirstMachineThroughTheRealLaunchPath() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+
+        await coordinator.start()
+
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertEqual(coordinator.server?.name, "Studio Mac")
+        XCTAssertFalse(coordinator.workspaces.isEmpty)
+        let asked = responder.requests(instanceId: "studio")
+        XCTAssertTrue(asked.contains("GET /server"))
+        XCTAssertTrue(asked.contains("GET /workspaces"))
+        // Only the selected machine is contacted on launch.
+        XCTAssertTrue(responder.requests(instanceId: "build").isEmpty)
+    }
+
+    func testOfflineActiveMachineLandsOnAConnectionIssueNotPairing() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: [AidenDemoHosts.installation(instanceId: "build", name: "Build Box")],
+            responder: responder
+        )
+        responder.fail(instanceId: "build", path: "/server", code: .notConnectedToInternet)
+
+        await coordinator.start()
+
+        guard case .offline = coordinator.connectionState else {
+            return XCTFail("Expected offline, got \(coordinator.connectionState)")
+        }
+        XCTAssertEqual(coordinator.activeInstanceId, "build", "An offline machine stays paired")
+    }
+
+    func testReplyOverridesTheDefaultAndRecordsTheRequest() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        responder.reply(
+            instanceId: "studio",
+            method: "GET",
+            path: "/chat-summaries",
+            status: 200,
+            json: Data(#"{"summaries":[]}"#.utf8)
+        )
+
+        let page = try await client(for: installation, responder: responder).chatSummaries()
+
+        XCTAssertTrue(page.summaries.isEmpty)
+        XCTAssertEqual(responder.requests(instanceId: "studio"), ["GET /chat-summaries"])
+    }
+
+    func testHeldRequestStaysPendingUntilReleased() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let release = responder.hold(instanceId: "studio", path: "/server")
+        let machine = client(for: installation, responder: responder)
+
+        let finished = LockedFlag()
+        let task = Task {
+            let server = try await machine.server()
+            finished.set()
+            return server
+        }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertFalse(finished.value, "A held request must not complete")
+        XCTAssertEqual(responder.requests(instanceId: "studio"), ["GET /server"])
+
+        release()
+        let server = try await task.value
+        XCTAssertEqual(server.instanceId, "studio")
+        XCTAssertTrue(finished.value)
+    }
+
+    func testScenarioArgumentIsParsedFromLaunchArguments() {
+        XCTAssertEqual(
+            AidenDemoScenario.requested(in: ["Aiden", "-AidenDemoScenario", "offline-mix"]),
+            .offlineMix
+        )
+        XCTAssertEqual(
+            AidenDemoScenario.requested(in: ["-AidenDemoScenario", "old-host", "-other", "x"]),
+            .oldHost
+        )
+        XCTAssertNil(AidenDemoScenario.requested(in: ["Aiden", "-AidenInboxFixture"]))
+    }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+
+    var value: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return flag
+    }
+
+    func set() {
+        lock.lock()
+        flag = true
+        lock.unlock()
+    }
+}
+#endif
