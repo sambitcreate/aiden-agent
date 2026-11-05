@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import lockfile from "proper-lockfile";
 
 const api = await import("../dist/parity-test-api.js");
 
@@ -27,6 +26,24 @@ const started = (h, launch = "foreground") => {
   return run;
 };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+/** A real process stopped inside the consent lock, until `resume()` or it is killed. */
+async function holdConsentLock(t, agentDir) {
+  const entered = join(agentDir, "lock-entered");
+  const resumeFile = join(agentDir, "lock-resume");
+  const child = spawn(process.execPath, [join(pkgDir, "tests", "fixtures", "analytics-hold-consent.mjs"), agentDir, INSTALL_ID, entered, resumeFile], { stdio: "inherit" });
+  t.after(() => child.kill("SIGKILL"));
+  const closed = once(child, "close");
+  for (const deadline = Date.now() + 30_000; !existsSync(entered);) {
+    assert.ok(Date.now() < deadline, "the holder took the lock");
+    await settle();
+  }
+  return {
+    closed,
+    kill: () => child.kill("SIGKILL"),
+    resume: () => writeFileSync(resumeFile, ""),
+  };
+}
 
 /** A temporary agent directory, optionally with consent already on disk. */
 function agentDirFor(t, state) {
@@ -358,18 +375,33 @@ test("an opt-out racing a server's first start stays off, and the server can't b
   assert.equal(JSON.parse(output).distinctId, NEW_ID, "the last event carries the ID the server had just saved");
   await run.finish();
   assert.equal(h.allowSend(), false);
-  assert.equal(existsSync(`${stateFile(h.agentDir)}.lock`), false);
 });
 
-test("a process that died holding the consent lock can't stop the switch", async (t) => {
-  const h = harness(t, { state: { ...allowed, installId: INSTALL_ID } });
-  const lock = `${stateFile(h.agentDir)}.lock`;
-  mkdirSync(lock);
-  const longAgo = new Date(Date.now() - 60_000);
-  utimesSync(lock, longAgo, longAgo);
+test("an opt-out can't take the lock from a paused process, so its late write can't undo the opt-out", async (t) => {
+  const h = harness(t, { state: allowed });
+  const holder = await holdConsentLock(t, h.agentDir);
+
+  await assert.rejects(api.telemetryCommand(h.agentDir, ["off"], h.context), /Another Aiden process/u);
+  assert.equal(readState(h.agentDir).enabled, true, "a failed opt-out says so instead of claiming success");
+
+  holder.resume();
+  await holder.closed;
+  assert.equal(readState(h.agentDir).installId, INSTALL_ID);
 
   await api.telemetryCommand(h.agentDir, ["off"], h.context);
   assert.equal(readState(h.agentDir).enabled, false);
+  assert.equal(readState(h.agentDir).installId, undefined);
+});
+
+test("a process that died holding the consent lock can't stop the switch", async (t) => {
+  const h = harness(t, { state: allowed });
+  const holder = await holdConsentLock(t, h.agentDir);
+  holder.kill();
+  await holder.closed;
+
+  await api.telemetryCommand(h.agentDir, ["off"], h.context);
+  assert.equal(readState(h.agentDir).enabled, false);
+  assert.equal(readState(h.agentDir).installId, undefined);
 });
 
 test("events shared services report reach the server's client, before and after it is ready", async (t) => {
@@ -580,7 +612,13 @@ test("a keyed client starts a request only while it holds the consent lock, and 
   const originalFetch = globalThis.fetch;
   let h;
   globalThis.fetch = async () => {
-    requests.push(lockfile.checkSync(stateFile(h.agentDir), { realpath: false, stale: 5_000 }));
+    let locked = false;
+    try {
+      api.updateServerAnalyticsState(h.agentDir, (state) => state);
+    } catch {
+      locked = true;
+    }
+    requests.push(locked);
     return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
   };
   t.after(() => { globalThis.fetch = originalFetch; });
@@ -591,10 +629,11 @@ test("a keyed client starts a request only while it holds the consent lock, and 
   assert.deepEqual(requests, [true], "`telemetry off` can't land between the consent check and the request");
 
   // Another process is changing the switch, so this batch must not leave.
-  const release = lockfile.lockSync(stateFile(h.agentDir), { realpath: false });
+  const holder = await holdConsentLock(t, h.agentDir);
   api.reportAnalyticsEvent("web_search_used", { search_provider: "brave" });
   await run.finish();
-  release();
+  holder.kill();
+  await holder.closed;
   assert.equal(requests.length, 1);
 });
 

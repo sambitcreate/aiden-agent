@@ -7,10 +7,9 @@
  */
 
 import { randomUUID as nodeRandomUUID } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { release } from "node:os";
 import { dirname, join } from "node:path";
-import lockfile from "proper-lockfile";
 import { ANALYTICS_BUILD_CONFIG, type AnalyticsBuildConfig } from "../../../main/services/analytics/analytics-build-config.js";
 import type { PostHogTransport } from "../../../main/services/analytics/analytics-client.js";
 import {
@@ -26,7 +25,8 @@ import {
 import type { AnalyticsCore, AnalyticsMessage } from "../../../main/services/analytics/analytics-core.js";
 import type { AnalyticsEventProps, AnalyticsSuperProperties } from "../../../main/services/analytics/analytics-events.js";
 import { setAnalyticsReporter, type AnalyticsReporter } from "../../../main/services/analytics/analytics-report.js";
-import { atomicJson } from "./state.ts";
+import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
+import { atomicJson, cliLeaseHelperPath, leaseGuardPath } from "./state.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
 export type ServerLaunch = AnalyticsEventProps<"server_started">["launch"];
@@ -40,10 +40,8 @@ export const CRASH_FLUSH_CAP_MS = 1_000;
 export const SERVE_EXIT_FLUSH_CAP_MS = 250;
 /** A service manager restarts a crashing server every few seconds; this stops it flooding the project. */
 export const MAX_CRASH_REPORTS_PER_DAY = 25;
-/** A process that died holding the consent lock loses it after this. */
-const CONSENT_LOCK_STALE_MS = 5_000;
-/** `aiden telemetry on|off` outwaits a dead holder, so a crash can't make the switch fail. */
-export const CONSENT_SWITCH_WAIT_MS = CONSENT_LOCK_STALE_MS + 1_000;
+/** The lock is held for milliseconds, so `aiden telemetry on|off` fails rather than wait for a stuck process. */
+export const CONSENT_SWITCH_WAIT_MS = 2_000;
 /** A waiting server's event loop is stopped, so it gives up quickly and sends nothing. */
 const SERVER_LOCK_WAIT_MS = 100;
 const LOCK_RETRY_MS = 10;
@@ -111,30 +109,24 @@ const lockRetryClock = new Int32Array(new SharedArrayBuffer(4));
 /**
  * Exclusive across processes. Every change to the consent file and every
  * request happens inside it, so once `aiden telemetry off` returns no stale
- * write can restore the old state and no new request can start. `work` must be
- * synchronous: the lock is released as soon as it returns.
+ * write can restore the old state and no new request can start. It is an OS
+ * lock, so dying releases it and no timeout can take it from a paused process.
+ * `work` must be synchronous: the lock is released as soon as it returns.
  */
 function withConsentLock<T>(agentDir: string, waitMs: number, work: () => T): T {
-  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  const file = serverAnalyticsFile(agentDir);
   const deadline = Date.now() + waitMs;
   for (;;) {
-    let unlock: () => void;
-    try {
-      unlock = lockfile.lockSync(serverAnalyticsFile(agentDir), { realpath: false, stale: CONSENT_LOCK_STALE_MS });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || Date.now() >= deadline) throw error;
-      Atomics.wait(lockRetryClock, 0, 0, LOCK_RETRY_MS);
-      continue;
-    }
-    try {
-      return work();
-    } finally {
+    const unlock = tryAcquireProcessLifetimeLock(leaseGuardPath(file), cliLeaseHelperPath());
+    if (unlock) {
       try {
+        return work();
+      } finally {
         unlock();
-      } catch {
-        // The work is done, and a lock left behind goes stale by itself.
       }
     }
+    if (Date.now() >= deadline) throw new Error(`Another Aiden process is changing ${file}. Try again.`);
+    Atomics.wait(lockRetryClock, 0, 0, LOCK_RETRY_MS);
   }
 }
 
