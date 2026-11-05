@@ -46,8 +46,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
-/// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`,
-/// `bot:handoff-on-mac` and `bot:images` the pairing holds.
+/// The audience-shaping Bot session grants the pairing currently holds.
 /// The Mac shapes a Bot session feed by these (its cards, Chat activity,
 /// hand-offs and the paused state) when the feed opens, and keeps that shape
 /// for the feed's life. A Bot chat can open from the pairing's saved features
