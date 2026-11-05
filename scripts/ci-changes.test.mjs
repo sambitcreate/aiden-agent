@@ -67,6 +67,8 @@ test("changed-area classification is conservative and table-driven", () => {
     ["tests/e2e/linux-packaging.spec.ts", select("desktop", "catalog", "linux")],
     ["renderer/shared/provider.ts", select("desktop", "catalog", "cli", "linux")],
     ["renderer/shared/appearance.ts", allTrue],
+    ["renderer/shared/generation-timeline.ts", allTrue],
+    ["renderer/shared/image-generation/aspect-ratio.ts", allTrue],
     ["renderer/shared/image-generation/placeholder-spec.ts", allTrue],
     ["main/services/chat.ts", select("desktop", "catalog", "cli", "linux")],
     ["main/services/aiden-remote-router.ts", select("desktop", "catalog", "cli", "linux", "ios", "android")],
@@ -345,11 +347,30 @@ test("a root manifest change skips the native jobs only when it touches host npm
     ["the iOS job's script", manifest({ scripts: { ...scripts, "test:ios-release": "ruby b.rb" } })],
     ["the Apple job's script", manifest({ scripts: { ...scripts, "test:native": "swift build" } })],
     ["a removed native script", manifest({ scripts: { "test:foo": scripts["test:foo"] } })],
+    ["a new hook before the Apple job", manifest({ scripts: { ...scripts, "pretest:native": "node a.mjs" } })],
+    ["a new hook after the iOS job", manifest({ scripts: { ...scripts, "posttest:ios-release": "node a.mjs" } })],
     ["an unparsable manifest", "{"],
     ["a non-object manifest", "[]"],
   ]) {
     assert.deepEqual(areasOf(manifestPullRequest(manifest({ scripts }), head)), allTrue, name);
   }
+
+  // A script the Apple job reaches through `npm run` counts, along with its hooks.
+  const nested = { ...scripts, helper: "node a.mjs", "test:native": "npm run helper && swift test" };
+  for (const [name, change] of [
+    ["the nested script", { helper: "node b.mjs" }],
+    ["the nested script's hook", { prehelper: "node b.mjs" }],
+  ]) {
+    assert.deepEqual(
+      areasOf(manifestPullRequest(manifest({ scripts: nested }), manifest({ scripts: { ...nested, ...change } }))),
+      allTrue,
+      name,
+    );
+  }
+  assert.deepEqual(
+    areasOf(manifestPullRequest(manifest({ scripts: nested }), manifest({ scripts: { ...nested, unrelated: "node c.mjs" } }))),
+    hostAreas,
+  );
 
   // Another infrastructure path in the same pull request keeps every job.
   const mixed = manifestPullRequest(

@@ -32,14 +32,26 @@ const LINUX_SPECIFIC = /(?:^|[/._-])linux(?:$|[/._-])/iu;
 const REMOTE_SERVER_PATH = /^main\/(?:services|handlers)\/(?:[^/]+\/)*aiden-remote[^/]*(?:\/.*)?$/u;
 const LOCK_FILE = /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
 const CONFIG_FILE = /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;
-// Shared renderer files that a native client mirrors by hand. The rest of
-// renderer/shared/ reaches only the desktop app and the CLI bundle.
+// Shared renderer files whose contract a native client mirrors by hand. Add a
+// file here when a native client starts mirroring it. No mobile build or test
+// reads renderer/shared/, and the wire contract is pinned by protocol/ fixtures,
+// so this only keeps those jobs running beside a change to a mirrored contract.
 const MOBILE_MIRRORED_SHARED_PATHS = new Set([
+  "renderer/shared/activity-marks.ts",
+  "renderer/shared/aiden-ui/visual.ts",
   "renderer/shared/appearance.ts",
+  "renderer/shared/ask-user-question.ts",
   "renderer/shared/bot-activity.ts",
   "renderer/shared/bots.ts",
+  "renderer/shared/browser-recording.ts",
+  "renderer/shared/generation-timeline.ts",
+  "renderer/shared/image-generation/aspect-ratio.ts",
   "renderer/shared/image-generation/placeholder-spec.ts",
   "renderer/shared/inbox-state.ts",
+  "renderer/shared/produced-file.ts",
+  "renderer/shared/visual-snapshots.ts",
+  "renderer/shared/visual-viewer.ts",
+  "renderer/shared/web-extract.ts",
 ]);
 const HOST_AREAS = Object.freeze(["desktop", "cli", "linux"]);
 // Only the unit lanes read the lane registry.
@@ -372,8 +384,30 @@ function readManifest(spawn, ref, cwd) {
   }
 }
 
+// Everything `npm run` would execute for the native jobs: each script, its pre
+// and post hooks, and any script reached through a nested `npm run`.
+function nativeJobScriptNames(scripts) {
+  const names = new Set();
+  const visit = (name) => {
+    if (names.has(name)) {
+      return;
+    }
+    names.add(name);
+    for (const [, nested] of String(scripts?.[name] ?? "").matchAll(/\bnpm run ([\w:.-]+)/gu)) {
+      visitWithHooks(nested);
+    }
+  };
+  const visitWithHooks = (name) => {
+    visit(name);
+    visit(`pre${name}`);
+    visit(`post${name}`);
+  };
+  NATIVE_JOB_NPM_SCRIPTS.forEach(visitWithHooks);
+  return names;
+}
+
 // True only when a pull request's root manifest differs in `scripts` alone and
-// leaves the npm scripts native jobs run untouched. Dependencies, overrides and
+// leaves what the native jobs execute untouched. Dependencies, overrides and
 // the app version can reach every job, so anything unreadable stays full.
 function manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd) {
   const mergeBase = invokeGit(spawn, ["merge-base", baseSha, headSha], cwd);
@@ -388,9 +422,10 @@ function manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd) {
   }
   const { scripts: baseScripts, ...baseRest } = base;
   const { scripts: headScripts, ...headRest } = head;
+  const nativeScripts = [...nativeJobScriptNames(baseScripts), ...nativeJobScriptNames(headScripts)];
   return (
     isDeepStrictEqual(baseRest, headRest) &&
-    NATIVE_JOB_NPM_SCRIPTS.every((name) => baseScripts?.[name] === headScripts?.[name])
+    nativeScripts.every((name) => baseScripts?.[name] === headScripts?.[name])
   );
 }
 

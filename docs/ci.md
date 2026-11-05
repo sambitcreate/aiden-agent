@@ -21,8 +21,9 @@ unknown paths, empty diffs and detection failures select every area, with two
 narrower cases on PRs: `scripts/ci-test-registry.json` selects `desktop`, and a
 root `package.json` change confined to `scripts` selects `desktop`, `cli` and
 `linux`. That case compares the merge base and head manifests, and stays full if
-either cannot be read or the change touches `test:native` or `test:ios-release`,
-which the Apple and iOS jobs run. Policy checks always run.
+either cannot be read or the change touches what the Apple and iOS jobs execute:
+`test:native`, `test:ios-release`, their hooks and any script they reach through
+`npm run`. Policy checks always run.
 
 Every main push runs full validation except a push that changes only the
 generated model catalog (`resources/model-capabilities.json`, reason
