@@ -7,6 +7,8 @@
 // a process outside the group holds the server's stdout.
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
+import { processGroupExists, processGroupStillRuns } from "../shared/process-group.js";
 import { StdioTransport, type McpTransport, type StdioTransportOptions } from "@earendil-works/pi-mcp";
 
 export interface McpStdioTransportOptions {
@@ -26,6 +28,9 @@ export interface McpStdioTransportOptions {
 }
 
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
+const GROUP_POLL_MS = 25;
+// SIGKILL is asynchronous and can be denied, so sending it proves nothing.
+const KILL_CONFIRM_MS = 2_000;
 const liveGroups = new Set<number>();
 const groupListeners = new Set<(groups: readonly number[]) => void>();
 let exitHookInstalled = false;
@@ -83,6 +88,15 @@ function installExitHook(): void {
   });
 }
 
+async function groupGoneWithin(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (processGroupExists(pid)) {
+    if (Date.now() >= deadline) return false;
+    await delay(GROUP_POLL_MS);
+  }
+  return true;
+}
+
 function settlesWithin(operation: Promise<unknown>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(false), ms);
@@ -103,8 +117,8 @@ const OVERSIZED_MESSAGE = /^MCP stdio message exceeds \d+ bytes$/u;
  */
 class AidenStdioTransport extends StdioTransport {
   private groupPid?: number;
-  /** Set once the process group's teardown has begun; it runs exactly once. */
-  private groupReaped = false;
+  /** The process group's teardown, which runs exactly once. */
+  private reaping?: Promise<void>;
 
   constructor(
     options: StdioTransportOptions,
@@ -114,7 +128,7 @@ class AidenStdioTransport extends StdioTransport {
     super(options);
     // Every pipe is closed, so nothing left in the group can reach Aiden. A
     // wrapper that exited on its own may still have left its server there.
-    this.onClose(() => this.reapGroup());
+    this.onClose(() => void this.reapGroup());
     // Pi drops an oversized line but keeps the connection, so a request it
     // answered would wait out its whole timeout. Close instead: pending
     // requests fail at once.
@@ -152,20 +166,26 @@ class AidenStdioTransport extends StdioTransport {
     }
     // A wrapper that already exited while its server holds the pipes never
     // reports a pipe close; the group is still reaped here.
-    this.reapGroup();
+    await this.reapGroup();
   }
 
-  /** Terminate whatever remains of the group, then forget it: SIGTERM, then SIGKILL after the grace. */
-  private reapGroup(): void {
+  /**
+   * Terminate whatever remains of the group: SIGTERM, then SIGKILL after the
+   * grace. A group is forgotten only once nothing in it runs, so whoever
+   * force-stops this process can still find one that survived.
+   */
+  private reapGroup(): Promise<void> {
     const pid = this.groupPid;
-    if (pid === undefined || this.groupReaped) return;
-    this.groupReaped = true;
-    signalGroup(pid, "SIGTERM");
-    const straggler = setTimeout(() => {
-      signalGroup(pid, "SIGKILL");
-      if (liveGroups.delete(pid)) groupsChanged();
-    }, this.graceMs);
-    straggler.unref?.();
+    if (pid === undefined) return Promise.resolve();
+    this.reaping ??= (async () => {
+      signalGroup(pid, "SIGTERM");
+      if (!(await groupGoneWithin(pid, this.graceMs))) {
+        signalGroup(pid, "SIGKILL");
+        await groupGoneWithin(pid, KILL_CONFIRM_MS);
+      }
+      if (!(await processGroupStillRuns(pid)) && liveGroups.delete(pid)) groupsChanged();
+    })();
+    return this.reaping;
   }
 }
 

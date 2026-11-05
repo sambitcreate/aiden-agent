@@ -29,3 +29,15 @@ Descendant cleanup is proved in `native/subagent-shell-runner/main.c`, which rep
 `CuaDriverHost` owns each session's bridge, broker launcher and lease directory. A runtime is reclaimed only when both children were seen to exit. If one was not, the host keeps the runtime and its directory and `shutdown()` rejects with `cleanup_unconfirmed`, which the controller already reports as a failed teardown.
 
 Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession` and `ComputerUseController` already had one close promise, exactly-once close notification and a poisoned state (`backend:M116`, `M117`, `M118`). The native broker, guard, supervisor and JSON-RPC filter (`cli-native:N01` to `N04`) were not changed; their frames and process-group identity checks are out of bounds here.
+
+## MCP stdio servers
+
+`AidenStdioTransport` in `main/services/mcp-stdio-transport.ts` keeps protocol close and group cleanup apart. `close()` resolves only when the group is gone or the wait after SIGKILL ran out. A group leaves the published list only once nothing in it runs, so whoever force-stops this process can still find a survivor. SIGKILL is sent only to a group that still exists.
+
+## Owners kept as they are
+
+| Inventory | Owner | Why |
+|---|---|---|
+| `backend:M121`, `M122` | `bot-computers/host.ts` | A failed stop counts as off only if Lume says so, an unreadable state counts as on, and the slot stays held until then. Read only; no real VM was run. |
+| `backend:M089`, `M090` | `acp/` | Shutdown waits for launches and one exit rejects pending calls. On leader exit the group gets SIGKILL and its ledger entry is released without waiting, so a descendant stuck past SIGKILL would be forgotten. Not reproduced and left as is. |
+| `backend:M102`, `M103` | `subagents/child-agent-runtime.ts`, `subagent-inference-process-core.ts` | Shutdown returns false and keeps its children when isolation or settlement is not clean. |
