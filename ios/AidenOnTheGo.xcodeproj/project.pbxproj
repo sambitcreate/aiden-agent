@@ -133,6 +133,7 @@
 		A7C20000000000000000000B /* AidenChatViewModel+ForeignRuns.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C10000000000000000000B /* AidenChatViewModel+ForeignRuns.swift */; };
 		A7C20000000000000000000D /* AidenChatCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C10000000000000000000D /* AidenChatCards.swift */; };
 		A7C20000000000000000000E /* AidenChronologicalTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C10000000000000000000E /* AidenChronologicalTranscript.swift */; };
+		A7C20000000000000000000F /* AidenChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C10000000000000000000F /* AidenChatComposer.swift */; };
 		A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */; };
 		A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */; };
 		A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */; };
@@ -308,6 +309,7 @@
 		A7C10000000000000000000B /* AidenChatViewModel+ForeignRuns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AidenChatViewModel+ForeignRuns.swift"; sourceTree = "<group>"; };
 		A7C10000000000000000000D /* AidenChatCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatCards.swift; sourceTree = "<group>"; };
 		A7C10000000000000000000E /* AidenChronologicalTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChronologicalTranscript.swift; sourceTree = "<group>"; };
+		A7C10000000000000000000F /* AidenChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatComposer.swift; sourceTree = "<group>"; };
 		A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerVoiceInputController.swift; sourceTree = "<group>"; };
 		A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentPicker.swift; sourceTree = "<group>"; };
 		A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentCamera.swift; sourceTree = "<group>"; };
@@ -674,6 +676,7 @@
 				A7C10000000000000000000B /* AidenChatViewModel+ForeignRuns.swift */,
 				A7C10000000000000000000D /* AidenChatCards.swift */,
 				A7C10000000000000000000E /* AidenChronologicalTranscript.swift */,
+				A7C10000000000000000000F /* AidenChatComposer.swift */,
 				A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */,
 			);
 			path = Chat;
@@ -999,6 +1002,7 @@
 				A7C20000000000000000000B /* AidenChatViewModel+ForeignRuns.swift in Sources */,
 				A7C20000000000000000000D /* AidenChatCards.swift in Sources */,
 				A7C20000000000000000000E /* AidenChronologicalTranscript.swift in Sources */,
+				A7C20000000000000000000F /* AidenChatComposer.swift in Sources */,
 				A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */,
 				A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */,
 				A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */,
