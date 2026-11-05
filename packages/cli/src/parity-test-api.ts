@@ -12,6 +12,7 @@ export * from "./serve-ownership.ts";
 export * from "./telegram.ts";
 export * from "./daemon-chats.ts";
 export * from "./daemon-turn-lifecycle.ts";
+export * from "./daemon-approvals.ts";
 export * from "./speech.ts";
 export * from "./remote.ts";
 export { daemonRemoteSummary, showStartupPairing } from "./serve-command.ts";

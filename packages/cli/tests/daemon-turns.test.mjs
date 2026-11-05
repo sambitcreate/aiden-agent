@@ -498,6 +498,46 @@ test("a run whose session lease cannot be removed still reports idle", { skip: p
   } finally { chmodSync(journals, 0o700); }
 });
 
+function approvalsFixture(options = {}) {
+  const raised = [], resolved = [];
+  const approvals = api.createDaemonApprovals({ raised: (prompt) => raised.push(prompt.approvalId), resolved: (id, decision) => resolved.push([id, decision]), ...options });
+  const prompt = { streamId: "stream", toolCallId: "call", toolName: "ls", summary: "List" };
+  return { approvals, prompt, raised, resolved };
+}
+
+test("an unanswered approval expires, is journaled as expired, and cannot be answered late", async () => {
+  const { approvals, prompt, resolved } = approvalsFixture({ expiryMs: 10 });
+  let published;
+  const outcome = await approvals.request(prompt, new AbortController().signal, "owner", (value) => { published = value; });
+  assert.notEqual(outcome, "allowed");
+  assert.deepEqual(resolved, [[published.approvalId, "expired"]]);
+  assert.equal(approvals.approve(published.approvalId, "allow", "owner"), false);
+});
+
+test("an approval is never published to a run that is already stopping, and a failed publish fails closed", async () => {
+  const stopped = approvalsFixture(), controller = new AbortController();
+  controller.abort();
+  assert.notEqual(await stopped.approvals.request(stopped.prompt, controller.signal, "owner", () => assert.fail("published")), "allowed");
+  assert.deepEqual([stopped.raised, stopped.resolved], [[], []], "nobody saw it, so nothing is withdrawn");
+  const broken = approvalsFixture();
+  assert.notEqual(await broken.approvals.request(broken.prompt, new AbortController().signal, "owner", () => { throw new Error("owner gone"); }), "allowed");
+  assert.deepEqual(broken.resolved.map(([id]) => id), broken.raised, "an undelivered prompt leaves no attention behind");
+});
+
+test("the journal records how a published approval really ended", async () => {
+  const { approvals, prompt, resolved } = approvalsFixture(), controller = new AbortController();
+  const answered = [];
+  const allowed = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
+  const denied = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
+  const stopped = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
+  assert.equal(approvals.approve(answered[0], "allow", "owner"), true);
+  assert.equal(approvals.approveAsHost(answered[1], "deny"), true);
+  controller.abort();
+  assert.deepEqual(await Promise.all([allowed, denied]), ["allowed", "denied"]);
+  assert.notEqual(await stopped, "allowed");
+  assert.deepEqual(resolved, [[answered[0], "allow"], [answered[1], "deny"], [answered[2], "cancelled"]]);
+});
+
 // The custody owner on its own: legal and refused events, stale leases, and
 // generated event orders against independently stated invariants.
 

@@ -60,20 +60,21 @@ Each has a reproduction in `packages/cli/tests/daemon-turns.test.mjs` that faile
 
 ## C11: daemon tool approval
 
-Owner: the `tool_call` handler plus `settleApproval` in `daemon-chats.ts`. `full` runs with no prompt, `none` blocks, `ask` prompts. Bot tools follow the capability grant instead.
+Owner: the shared `ToolApprovalCoordinator` (`main/services/tool-approval.ts`, Lane B's), which holds one-shot settlement, owner scoping and abort. `packages/cli/src/daemon-approvals.ts` adapts it and adds only the 300 s expiry, the `approval_` id and the journal decision. The `tool_call` handler in `daemon-chats.ts` keeps the grant recheck. `full` runs with no prompt, `none` blocks, `ask` prompts. Bot tools follow the capability grant instead.
 
 | Event | Prior | Guard | Next | Effect | Visible result |
 |---|---|---|---|---|---|
-| tool call, `ask` | | arguments at most 1,700 bytes | pending | registered, 300 s expiry, attention raised | `chat:approval` |
-| owner answer | pending | same owner | granted or denied | journal records the decision, attention withdrawn | `approve` returns `true` |
-| host answer | pending | `runs:control` at the caller | granted or denied | same | `approveAsHost` returns `true` |
+| tool call, `ask` | | arguments at most 1,700 bytes, run not stopping | pending | registered, expiry armed, attention raised | `chat:approval` |
+| publish throws | pending | | unavailable | attention withdrawn | tool blocked |
+| owner answer | pending | same owner | allowed or denied | journal records the decision, attention withdrawn | `approve` returns `true` |
+| host answer | pending | `runs:control` at the caller | allowed or denied | same | `approveAsHost` returns `true` |
 | any answer | not pending, or another owner | | unchanged | none | `false` |
 | expiry | pending | | expired | journal records `expired` | tool blocked |
 | turn abort | pending | | cancelled | journal records `cancelled` | tool blocked |
-| grant recheck | granted | authority current, arguments unchanged, access not `none` | dispatched | tool runs | `chat:tool` result |
-| grant recheck | granted | any check fails | blocked | none | model hears the refusal |
+| grant recheck | allowed | authority current, arguments unchanged, access not `none` | dispatched | tool runs | `chat:tool` result |
+| grant recheck | allowed | any check fails | blocked | none | model hears the refusal |
 
-Linearization: the grant is checked again after the wait, so a late `allow` cannot outrun a revocation.
+Linearization: the grant is checked again after the wait, so a late `allow` cannot outrun a revocation. The generation's own 300 s timer starts first, so in practice it ends a waiting prompt as `cancelled` before that prompt's expiry can fire.
 
 ## C03: serve admission and resource lifetime
 
