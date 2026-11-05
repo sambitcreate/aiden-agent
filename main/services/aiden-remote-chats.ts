@@ -62,6 +62,7 @@ import {
 } from "./chat-append-commit.js";
 import type { createChatApplicationService } from "./chat-application-service.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -1748,43 +1749,17 @@ export class AidenRemoteChatService {
     if (!IDEMPOTENCY_KEY.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) return this.idempotency.execute(scope, input, action);
-    let admit!: () => void;
-    let reject!: (error: unknown) => void;
-    const durable = new Promise<void>((resolve, rejectPromise) => {
-      admit = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await durable;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      admit();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this chat request.", 500);
-    }
-    let result: T | undefined;
-    let failure: unknown;
-    try {
-      result = await pending;
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The chat request may have completed, but its outcome could not be recorded.",
-        409,
-      );
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not prepare this chat request.",
+        outcomeUnrecordedMessage: "The chat request may have completed, but its outcome could not be recorded.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   private async chat(chatId: string): Promise<Chat> {

@@ -476,6 +476,7 @@
         "main/services/aiden-remote-memory-settings.test.ts",
         "main/services/aiden-remote-models.test.ts",
         "main/services/aiden-remote-opaque-handles.test.ts",
+        "main/services/aiden-remote-durable-operation.test.ts",
         "main/services/aiden-remote-operation-contract.test.ts",
         "main/services/aiden-remote-pairing.test.ts",
         "main/services/aiden-remote-pairing-requests.test.ts",

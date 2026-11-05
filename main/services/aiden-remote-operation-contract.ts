@@ -1,5 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { types as utilTypes } from "node:util";
+import {
+  advanceAidenOperation,
+  aidenOperationExpiry,
+  type AidenOperationEvent,
+  type AidenOperationPhase,
+} from "./aiden-remote-operation-state.js";
 
 export const MAX_DURABLE_OPERATION_ENTRIES = 10_000;
 export const MAX_DURABLE_JSON_DEPTH = 128;
@@ -87,13 +93,9 @@ export type AidenIdempotencyOutcome<T = unknown> =
 
 interface AidenIdempotencyEntry {
   requestDigest: string;
-  result?: Promise<unknown>;
   operationId: string;
   createdAt: number;
-  expiresAt: number | null;
-  settled: boolean;
-  settledResult?: unknown;
-  rejectionCode?: AidenOperationContractErrorCode;
+  phase: AidenOperationPhase<DurableJsonValue>;
 }
 
 function operationId(): string {
@@ -496,8 +498,6 @@ export class AidenIdempotencyLedger {
       throw new AidenOperationContractError("idempotency_capacity");
     }
     for (const entry of retained) {
-      const settled = entry.state !== "in_flight";
-      const result = entry.state === "fulfilled" ? cloneDurableResult(entry.result) : undefined;
       const restoredOperationId = entry.operationId;
       assertOperationId(restoredOperationId);
       if ([...this.entries.values()].some((existing) => existing.operationId === restoredOperationId)) {
@@ -509,15 +509,20 @@ export class AidenIdempotencyLedger {
       this.entries.set(entry.scopeDigest, {
         requestDigest: entry.requestDigest,
         operationId: restoredOperationId,
-        result: entry.state === "fulfilled" ? Promise.resolve().then(() => cloneDurableResult(result)) : undefined,
         createdAt: entry.createdAt,
-        expiresAt: settled ? entry.expiresAt : null,
-        settled,
-        settledResult: entry.state === "fulfilled" ? result : undefined,
-        rejectionCode: entry.state === "rejected" ? entry.errorCode ?? "internal_error" : undefined,
+        phase: this.restoredPhase(entry),
       });
     }
     this.assertSnapshotBudget(this.buildSnapshot());
+  }
+
+  /** No owner survives a restart, so restored in-flight work is unknown, never executing. */
+  private restoredPhase(entry: AidenIdempotencySnapshotEntry): AidenOperationPhase<DurableJsonValue> {
+    if (entry.state === "in_flight") return { kind: "unknown" };
+    const expiresAt = entry.expiresAt as number;
+    return entry.state === "fulfilled"
+      ? { kind: "fulfilled", value: cloneDurableResult(entry.result), expiresAt }
+      : { kind: "rejected", errorCode: entry.errorCode ?? "internal_error", expiresAt };
   }
 
   private get maxEntries(): number {
@@ -563,27 +568,25 @@ export class AidenIdempotencyLedger {
   private prune(now: number): void {
     if (this.clockRollbackDetected) return;
     for (const [key, entry] of this.entries) {
-      if (entry.settled && entry.expiresAt !== null && entry.expiresAt <= now) this.entries.delete(key);
+      const expiresAt = aidenOperationExpiry(entry.phase);
+      if (expiresAt !== null && expiresAt <= now) this.entries.delete(key);
     }
   }
 
   private snapshotEntry(scopeDigest: string, entry: AidenIdempotencyEntry): AidenIdempotencySnapshotEntry {
+    const { phase } = entry;
     return {
       scopeDigest,
       requestDigest: entry.requestDigest,
       operationId: entry.operationId,
-      state: !entry.settled
-        ? "in_flight"
-        : entry.rejectionCode
-          ? "rejected"
-          : "fulfilled",
-      ...(entry.rejectionCode
-        ? { errorCode: entry.rejectionCode }
-        : entry.settled
-          ? { result: cloneDurableResult(entry.settledResult) }
+      state: phase.kind === "fulfilled" || phase.kind === "rejected" ? phase.kind : "in_flight",
+      ...(phase.kind === "rejected"
+        ? { errorCode: phase.errorCode }
+        : phase.kind === "fulfilled"
+          ? { result: cloneDurableResult(phase.value) }
           : {}),
       createdAt: entry.createdAt,
-      expiresAt: entry.settled ? entry.expiresAt : null,
+      expiresAt: aidenOperationExpiry(phase),
     };
   }
 
@@ -617,14 +620,6 @@ export class AidenIdempotencyLedger {
     this.assertSnapshotBudget(snapshot);
   }
 
-  private retainUnknownOutcome(entry: AidenIdempotencyEntry): void {
-    entry.result = undefined;
-    entry.settledResult = undefined;
-    entry.rejectionCode = undefined;
-    entry.settled = false;
-    entry.expiresAt = null;
-  }
-
   private rejectionCode(error: unknown): AidenOperationContractErrorCode {
     try {
       if (error instanceof AidenOperationContractError) {
@@ -637,34 +632,28 @@ export class AidenIdempotencyLedger {
     return "internal_error";
   }
 
-  private settleRejected(
+  /**
+   * The only writer of a settled phase. The outcome holds only if it also fits
+   * the durable snapshot; otherwise the effect stands with no record, so the
+   * operation becomes unknown and the budget error goes back to the caller.
+   */
+  private settle(
     scopeDigest: string,
     entry: AidenIdempotencyEntry,
-    error: unknown,
-  ): boolean {
-    if (entry.settled) return true;
-    const rejectedEntry: AidenIdempotencyEntry = {
-      ...entry,
-      result: undefined,
-      settledResult: undefined,
-      rejectionCode: this.rejectionCode(error),
-      settled: true,
-      expiresAt: this.effectiveNow(this.now()) + this.ttlMs,
-    };
+    event: AidenOperationEvent<DurableJsonValue>,
+  ): void {
+    const phase = advanceAidenOperation(entry.phase, event);
     try {
-      this.assertPersistableSnapshot(
-        this.buildSnapshot({ scopeDigest, entry: rejectedEntry }),
-      );
-    } catch {
-      this.retainUnknownOutcome(entry);
-      return false;
+      this.assertPersistableSnapshot(this.buildSnapshot({ scopeDigest, entry: { ...entry, phase } }));
+    } catch (error) {
+      entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_lost" });
+      throw error;
     }
-    entry.result = undefined;
-    entry.settledResult = undefined;
-    entry.rejectionCode = rejectedEntry.rejectionCode;
-    entry.settled = true;
-    entry.expiresAt = rejectedEntry.expiresAt;
-    return true;
+    entry.phase = phase;
+  }
+
+  private settledExpiry(): number {
+    return this.effectiveNow(this.now()) + this.ttlMs;
   }
 
   private admit(): void {
@@ -685,12 +674,18 @@ export class AidenIdempotencyLedger {
     const existing = this.entries.get(ledgerKey);
     if (existing) {
       if (existing.requestDigest !== requestDigest) throw new AidenOperationContractError("idempotency_conflict");
-      if (existing.rejectionCode) throw new AidenOperationContractError(existing.rejectionCode);
-      if (!existing.result) throw new AidenOperationContractError("idempotency_in_flight");
-      if (existing.settled) {
-        return Promise.resolve().then(() => cloneDurableResult(existing.settledResult)) as Promise<T>;
+      switch (existing.phase.kind) {
+        case "rejected":
+          throw new AidenOperationContractError(existing.phase.errorCode);
+        case "unknown":
+          throw new AidenOperationContractError("idempotency_in_flight");
+        case "fulfilled": {
+          const { value } = existing.phase;
+          return Promise.resolve().then(() => cloneDurableResult(value)) as Promise<T>;
+        }
+        case "executing":
+          return existing.phase.result as Promise<T>;
       }
-      return existing.result as Promise<T>;
     }
     if (this.clockRollbackDetected) throw new AidenOperationContractError("idempotency_in_flight");
     this.admit();
@@ -699,12 +694,13 @@ export class AidenIdempotencyLedger {
     if ([...this.entries.values()].some((entry) => entry.operationId === restoredOperationId)) {
       throw new AidenOperationContractError("idempotency_conflict");
     }
+    // `unknown` until the owner below exists; both are written as `in_flight`,
+    // and nothing can observe the entry before this method returns.
     const entry: AidenIdempotencyEntry = {
       requestDigest,
       operationId: restoredOperationId,
       createdAt: this.effectiveNow(now),
-      expiresAt: null,
-      settled: false,
+      phase: { kind: "unknown" },
     };
     this.assertSnapshotBudget(this.buildSnapshot({ scopeDigest: ledgerKey, entry }));
     this.entries.set(ledgerKey, entry);
@@ -713,41 +709,30 @@ export class AidenIdempotencyLedger {
       .then(
         (value) => {
           let durableValue: DurableJsonValue;
-          let settledAt: number;
           try {
             durableValue = cloneDurableResult(value);
-            settledAt = this.effectiveNow(this.now()) + this.ttlMs;
-            const settledEntry: AidenIdempotencyEntry = {
-              ...entry,
-              expiresAt: settledAt,
-              settled: true,
-              settledResult: durableValue,
-              rejectionCode: undefined,
-            };
-            this.assertPersistableSnapshot(
-              this.buildSnapshot({ scopeDigest: ledgerKey, entry: settledEntry }),
-            );
+            this.settle(ledgerKey, entry, {
+              type: "action_fulfilled",
+              value: durableValue,
+              expiresAt: this.settledExpiry(),
+            });
           } catch (error) {
             // The action may already have committed an external mutation. If
             // its result cannot be durably represented, retain the stable
             // operation reference as an indefinite unknown outcome. Expiring
             // it into a retry would risk executing the mutation twice.
-            this.retainUnknownOutcome(entry);
+            entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_lost" });
             throw error instanceof AidenOperationContractError
               ? error
               : new AidenOperationContractError("internal_error");
           }
-          entry.settledResult = durableValue;
-          entry.settled = true;
-          entry.expiresAt = settledAt;
-          entry.rejectionCode = undefined;
           // Keep the stored value isolated from callers that mutate a result
           // after fulfillment. The snapshot owns its separate durable clone.
           return cloneDurableResult(durableValue);
         },
         (error) => {
           if (error instanceof AidenOperationUnknownOutcomeError) {
-            this.retainUnknownOutcome(entry);
+            entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_lost" });
             throw new AidenOperationContractError("idempotency_in_flight");
           }
           if (error instanceof AidenOperationNotExecutedError) {
@@ -755,29 +740,21 @@ export class AidenIdempotencyLedger {
             if (this.entries.get(ledgerKey) === entry) this.entries.delete(ledgerKey);
             throw error.cause;
           }
-          this.settleRejected(ledgerKey, entry, error);
+          try {
+            this.settle(ledgerKey, entry, {
+              type: "action_rejected",
+              errorCode: this.rejectionCode(error),
+              expiresAt: this.settledExpiry(),
+            });
+          } catch {
+            // The caller still learns the original failure; the record does not.
+            entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_lost" });
+          }
           throw error;
         },
       );
-    entry.result = result;
+    entry.phase = { kind: "executing", result };
     return result as Promise<T>;
-  }
-
-  /**
-   * Drop a scope entry whose wrapped action provably never ran. Only safe
-   * when the caller gates the action behind an external barrier that never
-   * opened (e.g. the two-phase durable persist in executeIdempotent failing
-   * before admission): nothing committed, so a retry must re-execute rather
-   * than replay a misleading rejection.
-   */
-  discardUnexecuted(scope: {
-    deviceId: string;
-    route: string;
-    resourceId: string;
-    key: string;
-  }): void {
-    const ledgerKey = createHash("sha256").update(canonical(scope)).digest("base64url");
-    this.entries.delete(ledgerKey);
   }
 
   reconcile<T>(operationIdToFinalize: string, outcome: AidenIdempotencyOutcome<T>): void {
@@ -786,53 +763,41 @@ export class AidenIdempotencyLedger {
     const entryRecord = [...this.entries].find(([, candidate]) => candidate.operationId === operationIdToFinalize);
     if (!entryRecord) throw new AidenOperationContractError("idempotency_in_flight");
     const [ledgerKey, entry] = entryRecord;
-    if (entry.settled) {
+    const { phase } = entry;
+    if (phase.kind === "fulfilled" || phase.kind === "rejected") {
       const durableOutcomeResult = outcome.state === "fulfilled" ? cloneDurableResult(outcome.result) : undefined;
       if (outcome.state === "rejected") assertSnapshotErrorCode(outcome.errorCode);
       const sameOutcome = outcome.state === "fulfilled"
-        ? !entry.rejectionCode && canonical(entry.settledResult) === canonical(durableOutcomeResult)
-        : entry.rejectionCode === outcome.errorCode;
+        ? phase.kind === "fulfilled" && canonical(phase.value) === canonical(durableOutcomeResult)
+        : phase.kind === "rejected" && phase.errorCode === outcome.errorCode;
       if (!sameOutcome) throw new AidenOperationContractError("idempotency_conflict");
       return;
     }
-    if (entry.result) throw new AidenOperationContractError("idempotency_in_flight");
+    if (phase.kind === "executing") throw new AidenOperationContractError("idempotency_in_flight");
     if (outcome.state === "fulfilled") {
-      let durableResult: DurableJsonValue;
-      let settledAt: number;
       try {
-        durableResult = cloneDurableResult(outcome.result);
-        settledAt = this.effectiveNow(this.now()) + this.ttlMs;
-        const settledEntry: AidenIdempotencyEntry = {
-          ...entry,
-          expiresAt: settledAt,
-          settled: true,
-          settledResult: durableResult,
-          rejectionCode: undefined,
-        };
-        this.assertPersistableSnapshot(
-          this.buildSnapshot({ scopeDigest: ledgerKey, entry: settledEntry }),
-        );
+        this.settle(ledgerKey, entry, {
+          type: "reconciled_fulfilled",
+          value: cloneDurableResult(outcome.result),
+          expiresAt: this.settledExpiry(),
+        });
       } catch (error) {
-        this.retainUnknownOutcome(entry);
         throw error instanceof AidenOperationContractError
           ? error
           : new AidenOperationContractError("internal_error");
       }
-      entry.settledResult = durableResult;
-      entry.result = Promise.resolve().then(() => cloneDurableResult(entry.settledResult));
-      entry.rejectionCode = undefined;
-      entry.settled = true;
-      entry.expiresAt = settledAt;
     } else {
       assertSnapshotErrorCode(outcome.errorCode);
       if (outcome.errorCode === undefined) {
         throw new AidenOperationContractError("internal_error");
       }
-      if (!this.settleRejected(
-        ledgerKey,
-        entry,
-        new AidenOperationContractError(outcome.errorCode),
-      )) {
+      try {
+        this.settle(ledgerKey, entry, {
+          type: "reconciled_rejected",
+          errorCode: outcome.errorCode,
+          expiresAt: this.settledExpiry(),
+        });
+      } catch {
         throw new AidenOperationContractError("internal_error");
       }
     }
