@@ -328,6 +328,58 @@ test("a Stop during launch ends the run instead of acknowledging it as queued", 
   assert.match(children.get("run-early-stop")?.stopped?.message ?? "", /stopped by its owner/u);
 });
 
+test("a Stop sent the moment a run is accepted cannot pass the launch", async () => {
+  const { store, children, coordinator } = harness();
+  const put = store.put.bind(store);
+  let stopping: Promise<unknown> | undefined;
+  // The sender learns the run from the durable record, before launch resumes.
+  store.put = async (run, expectedRevision) => {
+    const saved = await put(run, expectedRevision);
+    if (expectedRevision === null) {
+      stopping = coordinator.manage(management(store.records.get(run.snapshot.runId)!, "stop"));
+    }
+    return saved;
+  };
+  await coordinator.launch(prepared("run-instant-stop"));
+  const stopped = await stopping as { snapshot: { state: string } };
+  assert.equal(stopped.snapshot.state, "stopped");
+  await until("the launch to finish", () => coordinator.activeCount === 0);
+  assert.equal(children.get("run-instant-stop")?.start, undefined);
+});
+
+test("an invalidation that beats durable acceptance leaves no queued run behind", async () => {
+  const { store, children, coordinator } = harness();
+  const put = store.put.bind(store);
+  const reached = deferred();
+  const release = deferred();
+  let held = false;
+  store.put = async (run, expectedRevision) => {
+    if (!held && expectedRevision === null) {
+      held = true;
+      reached.resolve();
+      await release.promise;
+    }
+    return put(run, expectedRevision);
+  };
+  const launching = coordinator.launch(prepared("run-late-accept"));
+  await reached.promise;
+  await coordinator.chatDeleted("chat-background");
+  release.resolve();
+  await assert.rejects(launching, /chat was deleted/u);
+  assert.equal(store.records.get("run-late-accept")?.snapshot.state, "failed");
+  assert.equal(children.has("run-late-accept"), false, "No child is created for a dead run");
+});
+
+test("two launches of one run cannot both own it", async () => {
+  const { children, coordinator } = harness();
+  const first = coordinator.launch(prepared("run-twice"));
+  await assert.rejects(coordinator.launch(prepared("run-twice")), /already active/u);
+  await first;
+  await until("the child to start", () => Boolean(children.get("run-twice")?.start));
+  children.get("run-twice")?.done.resolve();
+  await until("the launch to finish", () => coordinator.activeCount === 0);
+});
+
 test("a child created for a launch that then fails is stopped, not abandoned", async () => {
   const { store, children, order, coordinator } = harness();
   holdStatusAfterCreate(store, order, async () => {
@@ -365,12 +417,17 @@ test("an invalidation that lands during launch still stops the created child", a
     const launching = coordinator.launch(prepared("run-invalidated"));
     await reached.promise;
     await invalidate(coordinator);
+    // The install is still stalled, so this is the invalidation's own work.
+    assert.ok(children.get("run-invalidated")?.stopped, `${name} stops the child before it returns`);
+    let stops = 0;
+    const child = children.get("run-invalidated")!;
+    Object.defineProperty(child, "stopped", { set: () => { stops += 1; } });
     release.resolve();
-    await launching.catch(() => undefined);
+    await assert.rejects(launching);
     await until(`${name} to settle`, () => coordinator.activeCount === 0);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(children.get("run-invalidated")?.start, undefined, name);
-    assert.ok(children.get("run-invalidated")?.stopped, `${name} stops the child`);
+    assert.equal(child.start, undefined, name);
+    assert.equal(stops, 0, `${name} stops the child once`);
   }
 });
 
