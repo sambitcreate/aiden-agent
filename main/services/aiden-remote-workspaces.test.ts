@@ -209,7 +209,7 @@ test("a request whose durable admission failed never ran, so the same key can st
   assert.equal(app.createCalls(), 1);
 });
 
-test("a replay that cannot refresh the ledger leaves no unhandled rejection behind", async () => {
+test("a replay answers from the ledger even while the disk refuses writes", async () => {
   let failSaves = false;
   const app = fixture([], {
     persistIdempotency: async () => {
@@ -217,22 +217,11 @@ test("a replay that cannot refresh the ledger leaves no unhandled rejection behi
     },
   });
   const key = "durable-replay-key-0001";
-  await app.service.create("device-1", key, { mode: "folderless", name: "Replayed" });
+  const created = await app.service.create("device-1", key, { mode: "folderless", name: "Replayed" });
 
-  const unhandled: unknown[] = [];
-  const record = (reason: unknown) => unhandled.push(reason);
-  process.on("unhandledRejection", record);
-  try {
-    failSaves = true;
-    await assert.rejects(
-      app.service.create("device-1", key, { mode: "folderless", name: "Replayed" }),
-      (error: unknown) => (error as { code?: string }).code === "internal_error",
-    );
-    await new Promise((resolve) => setImmediate(resolve));
-  } finally {
-    process.off("unhandledRejection", record);
-  }
-  assert.deepEqual(unhandled, []);
+  failSaves = true;
+  const replay = await app.service.create("device-1", key, { mode: "folderless", name: "Replayed" });
+  assert.deepEqual(replay, created);
   assert.equal(app.createCalls(), 1);
 });
 

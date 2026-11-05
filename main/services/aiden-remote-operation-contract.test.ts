@@ -470,7 +470,8 @@ test("a rejection that cannot fit the snapshot budget remains durably in flight"
       async () => { throw new AidenOperationContractError("revision_conflict"); },
       { operationId: "operation-tight-budget" },
     ),
-    (error) => error instanceof AidenOperationContractError && error.code === "revision_conflict",
+    // It stays unknown below, so reporting a settled rejection here would be untrue.
+    (error) => error instanceof AidenOperationContractError && error.code === "idempotency_in_flight",
   );
   const snapshot = ledger.snapshot();
   assert.equal(Buffer.byteLength(JSON.stringify(snapshot), "utf8"), inFlightBytes);
