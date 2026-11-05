@@ -367,6 +367,14 @@ test("a root manifest change skips the native jobs only when it touches host npm
       name,
     );
   }
+  for (const command of ["npm run-script helper", "npm run --silent helper", "npm run-script --silent helper"]) {
+    const spelled = { ...nested, "test:native": `${command} && swift test` };
+    assert.deepEqual(
+      areasOf(manifestPullRequest(manifest({ scripts: spelled }), manifest({ scripts: { ...spelled, helper: "node b.mjs" } }))),
+      allTrue,
+      command,
+    );
+  }
   assert.deepEqual(
     areasOf(manifestPullRequest(manifest({ scripts: nested }), manifest({ scripts: { ...nested, unrelated: "node c.mjs" } }))),
     hostAreas,

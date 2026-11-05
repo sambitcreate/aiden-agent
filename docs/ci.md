@@ -23,7 +23,7 @@ root `package.json` change confined to `scripts` selects `desktop`, `cli` and
 `linux`. That case compares the merge base and head manifests, and stays full if
 either cannot be read or the change touches what the Apple and iOS jobs execute:
 `test:native`, `test:ios-release`, their hooks and any script they reach through
-`npm run`. Policy checks always run.
+`npm run` or `npm run-script`. Policy checks always run.
 
 Every main push runs full validation except a push that changes only the
 generated model catalog (`resources/model-capabilities.json`, reason

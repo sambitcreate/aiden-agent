@@ -385,7 +385,8 @@ function readManifest(spawn, ref, cwd) {
 }
 
 // Everything `npm run` would execute for the native jobs: each script, its pre
-// and post hooks, and any script reached through a nested `npm run`.
+// and post hooks, and any script reached through a nested `npm run` or
+// `npm run-script`.
 function nativeJobScriptNames(scripts) {
   const names = new Set();
   const visit = (name) => {
@@ -393,7 +394,7 @@ function nativeJobScriptNames(scripts) {
       return;
     }
     names.add(name);
-    for (const [, nested] of String(scripts?.[name] ?? "").matchAll(/\bnpm run ([\w:.-]+)/gu)) {
+    for (const [, nested] of String(scripts?.[name] ?? "").matchAll(/\bnpm (?:run-script|run)\s+(?:-\S+\s+)*([\w:.-]+)/gu)) {
       visitWithHooks(nested);
     }
   };
