@@ -2,6 +2,14 @@
 
 Status: implemented on `feature/bots-memory-soul` (not committed by Track B). Spec: `docs/superpowers/specs/2026-10-09-bot-memory-soul-proactivity-design.md` §11, §14. Plan: `docs/plans/2026-10-09-bot-memory-soul-proactivity.md` Track B.
 
+## Renderer reload CI fixture — 2026-11-05
+
+Current-head3e261aba8 renderer-other job127436566638 in CI42081194214 failed only `a renderer reload mid-reply shows the partial reply from the fresh snapshot` (bot-chat-pane.test.tsx857): expected fox partial absent;4646passed/1failed/1skipped. Job log fetched through the job endpoint while the overall run remained active; failure excerpt `/tmp/aiden-pr726-renderer-reload-ci-failure.log`. One permitted unchanged local target passed (`...-diagnostic.log`), so the initial failure remains a flake, not a green clearance. No hosted rerun requested.
+
+The fixture used boundaryless prose, whose streaming reveal deadline1000ms equals Testing Library's default query deadline1000ms. A controlled test holding only actual streaming release callbacks reproduced the exact old assertion; releasing them in finally rendered the received fox update. Actual waits included1000,1000.0000000000002 and971.389ms. The initial bounded(990,1000] timer probe missed those cases and passed; it is not reproduction evidence. Final checked-red source/log retained at `/tmp/aiden-pr726-reload-controlled-red.test.tsx` and `/tmp/aiden-pr726-renderer-reload-controlled-red-final.log`. The original hosted scheduling interleaving was not observed directly. Identity readiness also never established live-subscription readiness; production registers its event listener before subscribe and buffers pending-snapshot events.
+
+Only the registered route test changes. It uses completed paragraph fragments to test reload/replay independently of the separate reveal-tail deadline; observes old unsubscribe and actual new subscribe; holds the second snapshot; buffers seq5 before seq4 returns; proves the fresh-only paragraph and original fox; applies seq6 and retains exact subscribe2/unsubscribe1 counts. Full chat+reveal suites125/125passed0skip/fail. Production timings, retries, streaming policy, wire and privacy fields unchanged. Whole-root ES2020 types and scoped ESLint passed. Independent GPT-6.1 Sol high review CLEAR; reviewer separately passed changed-source target1/1 (808ms), report `/tmp/aiden-pr726-renderer-reload-independent-diagnosis.md`.
+
 ## Native projection review follow-up — 2026-11-05
 
 PR726 review5789386946 on cb74df6ec and inline4483920473/PRRT_kwDOTctvDc60MUwc identify verified native gaps before the authorized merge. Android's session-feed fingerprint omits peer access, and its immutable first-open baseline misses grant loss back to the original set. Both native routine-feed notifiers recheck only peer access around local posts, so shipping message and access-needed issue grants can be removed after the host response without fencing notification progress.

@@ -834,27 +834,46 @@ test("a chat that fails to open says so, and Try again opens it", async () => {
 });
 
 test("a renderer reload mid-reply shows the partial reply from the fresh snapshot", async () => {
+  const opening = "Story opening.\n\n";
+  const fresh = `${opening}A woodland tale.\n\n`;
+  const continued = `${fresh}Once upon a time there was a fox.\n\n`;
+  let finishReload!: (value: BotLiveSnapshot) => void;
+  const reloadSnapshot = new Promise<BotLiveSnapshot>((resolve) => { finishReload = resolve; });
+  let subscribes = 0;
   const calls = await mountChat({
-    "bots:live:subscribe": () =>
-      snapshot({
-        seq: 4,
-        entries: [userEntry("u1", "Tell me a story")],
-        partial: "Once upon a time",
-        state: { kind: "running", submissionId: "s1" },
-      }),
+    "bots:live:subscribe": () => ++subscribes === 1
+      ? snapshot({
+          seq: 3,
+          entries: [userEntry("u1", "Tell me a story")],
+          partial: opening,
+          state: { kind: "running", submissionId: "s1" },
+        })
+      : reloadSnapshot,
   });
+  assert.ok(await screen.findByText("Story opening."));
   cleanup();
-  // The reloaded document mounts the chat again and subscribes once more.
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1));
   await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  // Identity can render from cache before the new live subscription exists.
+  await waitFor(() => assert.equal(subscribes, 2));
   act(() => emitBotTestNotification("bots:live:event", {
-    botId: "bot-1",
-    epoch: "epoch-1",
-    seq: 5,
-    type: "partial",
-    text: "Once upon a time there was a fox.",
+    botId: "bot-1", epoch: "epoch-1", seq: 5, type: "partial", text: continued,
   }));
-  assert.ok(await screen.findByText("Once upon a time there was a fox."));
+  assert.equal(screen.queryByText("A woodland tale."), null, "the pending snapshot has not authorized its buffered update yet");
+  await act(async () => finishReload(snapshot({
+    seq: 4,
+    entries: [userEntry("u1", "Tell me a story")],
+    partial: fresh,
+    state: { kind: "running", submissionId: "s1" },
+  })));
+  // Finished paragraphs exercise reload/replay without racing the separate
+  // one-second reveal-tail deadline against the query's one-second deadline.
+  assert.ok(await screen.findByText("A woodland tale."));
+  assert.ok(screen.getByText("Once upon a time there was a fox."));
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1", epoch: "epoch-1", seq: 6, type: "partial", text: `${continued}An owl joined the tale.\n\n`,
+  }));
+  assert.ok(await screen.findByText("An owl joined the tale."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
 });
