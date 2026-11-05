@@ -244,3 +244,7 @@ Main’s feature-event hooks are retained alongside continuity. The Bot send pat
 ### 2026-11-05 integration after Bot-browser PR #777
 
 Merged main’s held-page field-read and short-wait fixes while preserving continuity’s earlier held-observer masking regression and exact pixel controls. The browser now reads each held document on readiness and coalesces a follow-up when it loads during an active read; a Bot wait begins its condition budget after the mandatory privacy read. Browser command/authority gates, retries and release acceptance remain unchanged. Remote59, native fixtures and the package test union are unchanged.
+
+### 2026-11-05 held-browser release review follow-up
+
+A controlled native reproduction confirmed that release could discard a newly loaded document’s queued privacy scan. The host now records exact-document scan coverage; an unobserved release leaves that tab unavailable to Bot reads and probes for its lifetime. Later plaintext reads or navigation cannot recover the missing field history. A fresh tab in the same Bot profile retains the sign-in and restores ordinary use. Hold release, existing command permissions, budgets and native/Remote contracts remain unchanged; see the Browser credential-boundary guide. Packaged/physical/live acceptance remains open.

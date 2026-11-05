@@ -305,7 +305,29 @@ void app.whenReady().then(async () => {
   const personMayUse = await user(BOT_WORKSPACE, { action: "snapshot", tabId: botTab }).then(() => true, () => false);
   // What the person's own steps on the held tab load and log stays theirs.
   await navigate(BOT_WORKSPACE, botTab, `${origin}/callback?code=held-sign-in-code`);
-  await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
+  const heldLogin = webContents.getAllWebContents().find((contents) => contents.session === session.fromPartition(botBrowserPartition(BOT)));
+  assert.ok(heldLogin);
+  const loginDebugger = heldLogin.debugger;
+  const loginSend = loginDebugger.sendCommand.bind(loginDebugger);
+  let loginReady = false, loginInspected = false, finishLoginInspection!: () => void;
+  const loginInspection = new Promise<void>((resolve) => { finishLoginInspection = resolve; });
+  const onLoginReady = () => { loginReady = true; };
+  heldLogin.once("dom-ready", onLoginReady);
+  loginDebugger.sendCommand = async (...args: Parameters<typeof loginSend>) => {
+    const value = await loginSend(...args);
+    if (args[0] === "DOM.getDocument" && loginReady && value.root?.documentURL === `${origin}/login`) loginInspected = true;
+    if (args[0] === "DOM.disable" && loginInspected) finishLoginInspection();
+    return value;
+  };
+  try {
+    await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
+    await loginInspection;
+    // Let the scanner commit its observation after its final CDP cleanup.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    heldLogin.removeListener("dom-ready", onLoginReady);
+    loginDebugger.sendCommand = loginSend;
+  }
   browser.release(BOT_WORKSPACE, "wait-1");
   const released = await renderedSnapshot(botTab).catch((error: Error) => error.message);
   const afterRelease = typeof released === "string" ? released : loginAsSeen(released);
@@ -510,6 +532,74 @@ void app.whenReady().then(async () => {
     probe: await outcome(browser.probeAgentTarget(BOT_WORKSPACE, botTab, { locator: "#exp option:nth-child(5)[selected]", click: true })),
   };
 
+  // Release while the previous document's scan still owns the only reader.
+  // No Bot read may prime the newly loaded field before the person shows it.
+  step("5 release before new document observation");
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const releaseContents = webContents.getAllWebContents().find((contents) => contents.getURL() === `${origin}/saved-card` && contents.session === session.fromPartition(botBrowserPartition(BOT)));
+  assert.ok(releaseContents);
+  const releaseDebugger = releaseContents.debugger;
+  const releaseSend = releaseDebugger.sendCommand.bind(releaseDebugger);
+  let reachedOldRead!: () => void, finishOldRead!: () => void, drainedOldRead!: () => void;
+  const oldReadReached = new Promise<void>((resolve) => { reachedOldRead = resolve; });
+  const oldReadHeld = new Promise<void>((resolve) => { finishOldRead = resolve; });
+  const oldReadDrained = new Promise<void>((resolve) => { drainedOldRead = resolve; });
+  let intercepted = false, releasedOldRead = false;
+  releaseDebugger.sendCommand = async (...args: Parameters<typeof releaseSend>) => {
+    const value = await releaseSend(...args);
+    if (args[0] === "DOM.getDocument" && !intercepted) {
+      intercepted = true;
+      reachedOldRead();
+      await oldReadHeld;
+    }
+    if (args[0] === "DOM.getDocument" && releasedOldRead) drainedOldRead();
+    return value;
+  };
+  let releaseBeforeRead;
+  try {
+    browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-release-race", reason: "sign_in" });
+    await oldReadReached;
+    step("release race old scan reached");
+    const ready = new Promise<void>((resolve) => releaseContents.once("dom-ready", () => resolve()));
+    // A real page navigation is observed by BrowserService, without the
+    // fixture's user-command port aborting the deliberately held CDP read.
+    await releaseContents.loadURL(`${origin}/reveal?release-race=1`);
+    await ready;
+    step("release race latest document ready");
+    const shownType = await releaseContents.executeJavaScript("document.getElementById('show').click();document.getElementById('secret').type");
+    browser.release(BOT_WORKSPACE, "unknown-release");
+    const unknownRelease = await outcome(agent({ action: "snapshot", tabId: botTab }));
+    browser.release(BOT_WORKSPACE, "wait-release-race");
+    assert.equal(releasedOldRead, false, "release precedes the old scan's completion");
+    step("release race released before old scan");
+    const beforeDrain = await snapshot(botTab).then(
+      (shot) => ({ kind: "snapshot", leaked: JSON.stringify(shot).includes("open-sesame-77") }),
+      (error: Error) => ({ kind: "refused", message: error.message }),
+    );
+    step(`release race first snapshot ${beforeDrain.kind}`);
+    const probeBeforeDrain = await outcome(browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }));
+    step("release race probe finished");
+    releasedOldRead = true;
+    finishOldRead();
+    await oldReadDrained;
+    step("release race old scan drained");
+    const afterDrain = await outcome(agent({ action: "snapshot", tabId: botTab }));
+    const pressAfterDrain = await outcome(agent({ action: "press", tabId: botTab, key: "x" }));
+    // A later plaintext scan or ordinary navigation cannot recover missing history.
+    await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal?still-uncertain=1`);
+    const afterNavigation = await outcome(agent({ action: "snapshot", tabId: botTab }));
+    releaseBeforeRead = { shownType, unknownRelease, beforeDrain, probeBeforeDrain, afterDrain, pressAfterDrain, afterNavigation };
+  } finally {
+    releasedOldRead = true;
+    finishOldRead();
+    releaseDebugger.sendCommand = releaseSend;
+  }
+  // The person can close the uncertain tab; a fresh tab keeps the Bot's sign-in.
+  await user(BOT_WORKSPACE, { action: "close", tabId: botTab });
+  const freshTab = await opened(BOT_WORKSPACE, `${origin}/reveal?fresh-tab=1`);
+  const fresh = revealAsSeen(await renderedSnapshot(freshTab));
+  const releaseRecovery = { ...fresh, botCookies: await cookieNames(botBrowserPartition(BOT)) };
+
   // 6. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
   step("6 delete");
   await browser.clearBotProfile(BOT, BOT_WORKSPACE);
@@ -531,6 +621,8 @@ void app.whenReady().then(async () => {
         slowReads,
         remembered,
         savedMonth,
+        releaseBeforeRead,
+        releaseRecovery,
         cleared,
         expected: {
           heldRefusal: boundary.BROWSER_HELD_TAB_REFUSED,

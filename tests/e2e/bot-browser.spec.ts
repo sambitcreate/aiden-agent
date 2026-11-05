@@ -172,6 +172,19 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.remembered.snapshot.found.length).toBeGreaterThan(0);
   expect(result.remembered.snapshot.found.every((found: string) => found === "ran"), JSON.stringify(result.remembered.snapshot.found)).toBe(true);
 
+  const unobserved = "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
+  expect(result.releaseBeforeRead.shownType).toBe("text");
+  expect(result.releaseBeforeRead.unknownRelease).toBe(result.expected.heldRefusal);
+  expect(result.releaseBeforeRead.beforeDrain).toEqual({ kind: "refused", message: unobserved });
+  expect(result.releaseBeforeRead.probeBeforeDrain).toBe(unobserved);
+  expect(result.releaseBeforeRead.afterDrain).toBe(unobserved);
+  expect(result.releaseBeforeRead.pressAfterDrain).toBe(unobserved);
+  expect(result.releaseBeforeRead.afterNavigation).toBe(unobserved);
+  expect(painted(result.releaseRecovery.field)).toBe(true);
+  expect(result.releaseRecovery.leaked).toBe(false);
+  expect(result.releaseRecovery.control).toEqual(RED);
+  expect(result.releaseRecovery.botCookies).toEqual(["sid=bot"]);
+
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
   expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });
 });
