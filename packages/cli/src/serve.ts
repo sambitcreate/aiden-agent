@@ -71,7 +71,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       lifetime.track((async () => {
         try {
           if (!lifetime.acceptsCommands) throw new Error("The Aiden daemon is shutting down.");
-          const request = JSON.parse(buffer);
+          const request = JSON.parse(buffer.slice(0, buffer.indexOf("\n")));
           if (!["schedule", "remote", "bots", "workspace", "serve"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
           if (request.command === "remote" && !remote) throw new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls.");
           const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);

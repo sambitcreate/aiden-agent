@@ -158,9 +158,8 @@ test("the control socket answers one framed request per connection and refuses m
   const status = `${JSON.stringify({ command: "serve", args: ["status"] })}\n`;
   // A request may arrive in pieces; only its newline frames it.
   assert.deepEqual(JSON.parse(await exchange(box.socket, status.slice(0, 5), status.slice(5))), { result: { remote: { on: false } } });
-  // Anything after the first frame is ignored, not run as a second request.
-  const pipelined = await exchange(box.socket, status + status);
-  assert.equal(pipelined.trim().split("\n").length, 1);
+  // Anything after the first frame is ignored, however the bytes were split.
+  assert.deepEqual(JSON.parse(await exchange(box.socket, status + status)), { result: { remote: { on: false } } });
   assert.match(await exchange(box.socket, "not json\n"), /"error"/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "shell", args: [] })}\n`), /Invalid daemon command/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "serve", args: [1] })}\n`), /Invalid daemon command/u);
@@ -284,6 +283,9 @@ test("the command client settles once for every way a daemon can answer", posix,
     setTimeout(() => socket.end(`${oversized.slice(-16)}\n`), 100);
   });
   await assert.rejects(api.remoteDaemonCommand(crossing, "serve", ["status"]), /too large/u);
+  // The reply is its first frame: bytes after the newline do not turn it into an error.
+  const trailing = await fakeDaemon(t, (socket) => { socket.end(`${JSON.stringify({ result: "ok" })}\nleftover`); });
+  assert.equal(await api.remoteDaemonCommand(trailing, "serve", ["status"]), "ok");
   const missing = sandbox(t);
   await assert.rejects(api.remoteDaemonCommand(missing.agentDir, "serve", ["status"]), (error) => error.code === "ENOENT" && /not running/u.test(error.message));
 });
