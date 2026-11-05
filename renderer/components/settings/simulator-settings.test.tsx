@@ -10,7 +10,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceServiceState, DeviceToolchainState } from "../../shared/devices.js";
 import {
-  assistantSettingsSections,
+  assistantSettingsPages,
   availableSettingsDestinations,
   SETTINGS_DESTINATIONS,
   SETTINGS_SECTIONS,
@@ -80,8 +80,8 @@ test("Simulator is a settings destination hidden without the devices capability"
   assert.equal(hasSimulator(true), true);
   assert.match(read("../../main/settings-view.tsx"), /simulator: SimulatorSettings/u);
   // The assistant prompt lists Simulator only when the devices feature is on.
-  assert.equal(assistantSettingsSections({ computerUse: true, devices: false, botComputers: true }).includes("simulator"), false);
-  assert.equal(assistantSettingsSections({ computerUse: true, devices: true, botComputers: true }).includes("simulator"), true);
+  assert.equal(assistantSettingsPages({ computerUse: true, devices: false, botComputers: true }).includes("Simulator"), false);
+  assert.equal(assistantSettingsPages({ computerUse: true, devices: true, botComputers: true }).includes("Simulator"), true);
 });
 
 test("a build without the devices capability reads nothing and says so", () => {

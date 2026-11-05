@@ -51,7 +51,7 @@ While Inbox is the chosen view, and only on a host with the `badgeCount` capabil
 
 ## Aiden Live
 
-Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches (not titled "Aiden Live", so the page keeps one heading with that name). `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
 
 ## Connectors
 
@@ -72,9 +72,9 @@ Workspace settings is a pop-up, not a Settings page (`renderer/components/worksp
 
 Switches save at once on screen and roll back with a toast if saving fails. A short line under each list says changes apply from the next message. The stored off-lists (`Workspace.disabledSkills`, by canonical skill name, and `Workspace.disabledMcpServerIds`) live with the workspace in the device-local config. The main process enforces them for every chat in that workspace, including chats started from a phone and the subagents they start; Bots keep their own access, and the CLI does not read them yet.
 
-## Limits & spending
+## Context & Limits
 
-Settings → Context & Limits (section id `limits`, in the Models & Context group) has two `FieldSet` groups. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
+Settings → Context & Limits (section id `limits`, in the Models & Context group) keeps long chats manageable and bounds their cost. **Automatic compaction** has the compaction engine radios (`AppSettings.compactionEngine`), **Prompt cache** the optional warming switch (`AppSettings.cacheWarmingEnabled`), and the budget group saves a per-model compaction budget through `settingsApi.setCompactionModelBudget`. Each of the three saves only its own value. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
 
 ## Bots
 
@@ -123,8 +123,7 @@ Answers, visuals, approvals and question recaps keep their normal placement.
 Bot activity availability still follows each Bot's Quiet/Summary/Detailed level;
 the global mode and timing adjust Detailed recaps without adding hidden steps.
 
-The link row edits the same browser-service preference as Settings → Appearance,
-including Ask each time, Aiden browser and System browser. Local-file checks,
+The link row edits the browser-service preference, including Ask each time, Aiden browser and System browser. Local-file checks,
 loopback rules, modifier-click and restricted-content confirmation still apply.
 This preference remains separate from Appearance import/reset.
 

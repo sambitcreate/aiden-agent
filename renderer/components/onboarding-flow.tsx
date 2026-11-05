@@ -715,7 +715,7 @@ export function OnboardingFlow({
                   they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
                 </Text>
                 <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
-                  Settings → Memory also offers optional prompt cache warming. It is off by default;
+                  Settings → Context & Limits also offers optional prompt cache warming. It is off by default;
                   enabling it allows paid refresh requests during active desktop chats when estimated savings justify the cost.
                 </Text>
                 <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">

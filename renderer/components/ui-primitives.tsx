@@ -96,7 +96,7 @@ export function Tabs<T extends string>({
           <TabsPrimitive.Trigger
             key={item.value}
             value={item.value}
-            {...(idBase !== undefined ? { id: tabIds(idBase, item.value).tab, "aria-controls": tabIds(idBase, item.value).panel } : {})}
+            {...(idBase !== undefined ? { id: tabIds(idBase, item.value).tab, "aria-controls": item.value === value ? tabIds(idBase, item.value).panel : undefined } : {})}
             className="h-7 rounded-menu px-3 text-small text-secondary outline-none transition-[background-color,color] duration-(--motion-duration) ease-standard hover:bg-control hover:text-primary data-[state=active]:bg-control data-[state=active]:text-primary"
           >
             {item.label}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  assistantSettingsSections,
+  assistantSettingsPages,
   availableSettingsDestinations,
   availableSettingsPages,
   firstMatchingSettingsSection,
@@ -60,8 +60,8 @@ test("Bot computers appear only on Apple silicon and are found by VM words", () 
   }
   assert.equal(parseSettingsSection("botComputers"), "botComputers");
   // The assistant never offers a page this Mac can't show.
-  assert.equal(assistantSettingsSections(INTEL_MAC).includes("botComputers"), false);
-  assert.equal(assistantSettingsSections(APPLE_SILICON).includes("botComputers"), true);
+  assert.equal(assistantSettingsPages(INTEL_MAC).join().includes("Bot computers"), false);
+  assert.equal(assistantSettingsPages(APPLE_SILICON).join().includes("Bot computers"), true);
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
@@ -195,9 +195,7 @@ test("every section lives on exactly one page, and every destination has a secti
   }
 });
 
-test("the sidebar is 17 pages in 5 groups, each group in use", () => {
-  assert.equal(SETTINGS_PAGES.length, 17);
-  assert.equal(SETTINGS_GROUPS.length, 5);
+test("every sidebar group holds a page", () => {
   for (const group of SETTINGS_GROUPS) {
     assert.ok(SETTINGS_PAGES.some((page) => page.group === group), group);
   }
@@ -244,16 +242,24 @@ test("a section this host can't show opens the next tab on its page, then Provid
   assert.equal(resolveSettingsSection("tts", LINUX), "tts");
 });
 
-test("the assistant never names a section the sidebar hides", () => {
-  const reachable = (capabilities: typeof LINUX) =>
-    availableSettingsPages(capabilities).flatMap((page) => [...page.tabs, ...(page.anchors ?? [])]);
-  for (const capabilities of [APPLE_SILICON, INTEL_MAC, LINUX]) {
-    assert.deepEqual(
-      [...assistantSettingsSections(capabilities)].sort(),
-      reachable(capabilities).sort(),
-    );
-  }
-  assert.equal(assistantSettingsSections(LINUX).includes("computerUse"), false);
+test("the assistant names pages as people see them, and none this host hides", () => {
+  const pages = assistantSettingsPages(APPLE_SILICON);
+  assert.ok(pages.includes("Bots & Approvals (Bots, Tool approvals, Controls in chat)"));
+  assert.ok(pages.includes("Connections (Control this device, Control other devices, Telegram)"));
+  assert.ok(pages.includes("Appearance (Links)"));
+  assert.ok(pages.includes("Memory"));
+  assert.ok(assistantSettingsPages(INTEL_MAC).includes("Computer Use"));
+  assert.equal(assistantSettingsPages(LINUX).join().includes("Computer"), false);
+});
+
+test("search finds a tab by what the tab says", () => {
+  const connections = pageFor("peerHosts");
+  assert.equal(firstMatchingSettingsSection(connections, "this device"), "remoteAccess");
+  assert.equal(firstMatchingSettingsSection(connections, "other devices"), "peerHosts");
+});
+
+test("chat links finds the Links row", () => {
+  assert.equal(firstMatchingSettingsSection(pageFor("links"), "chat links"), "links");
 });
 
 function searchSidebar(search: string, capabilities = APPLE_SILICON) {

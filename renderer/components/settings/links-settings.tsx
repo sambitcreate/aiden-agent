@@ -17,15 +17,16 @@ export function LinksSettings({ embedded = false }: { embedded?: boolean }) {
   const [value, setValue] = React.useState<BrowserLinkOpening | null>(null);
   const revision = React.useRef(0);
   const anchor = React.useContext(SettingsAnchorContext);
+  const scrollRequest = anchor?.section === "links" ? anchor.request : null;
   const row = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    if (anchor !== "links") return;
+    if (scrollRequest === null) return;
     row.current?.scrollIntoView({
       block: "center",
       behavior: prefersReducedMotion() ? "auto" : "smooth",
     });
-  }, [anchor]);
+  }, [scrollRequest]);
 
   React.useEffect(() => {
     let live = true;

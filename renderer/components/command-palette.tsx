@@ -73,6 +73,8 @@ import {
   availableSettingsDestinations,
   availableSettingsPages,
   pageFor,
+  settingsLocation,
+  settingsTabLabel,
 } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
@@ -329,7 +331,7 @@ export function AppCommandPalette({
     return {
       destination,
       pageTitle,
-      result: staticPaletteResult(`${destination.title} ${destination.keywords.join(" ")} ${pageTitle}`),
+      result: staticPaletteResult(`${settingsTabLabel(destination.id)} ${destination.title} ${destination.keywords.join(" ")} ${pageTitle}`),
     };
   });
   // One inventory owns both rendering and selection, including static actions,
@@ -1130,15 +1132,12 @@ export function AppCommandPalette({
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
-                        void navigate({
-                          to: "/settings",
-                          search: { section: destination.id },
-                        });
+                        void navigate(settingsLocation(destination.id));
                       }}
                       className="min-h-11 px-3"
                     >
                       <Settings className="size-4 shrink-0 text-secondary" />
-                      <span className="min-w-0 flex-1 truncate">{destination.title}</span>
+                      <span className="min-w-0 flex-1 truncate">{settingsTabLabel(destination.id)}</span>
                       <ItemDetail>{pageTitle}</ItemDetail>
                       <ChevronRight className="size-4 shrink-0 text-tertiary" />
                     </PaletteResultItem>

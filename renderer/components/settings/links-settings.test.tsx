@@ -80,7 +80,7 @@ test("opening the links section scrolls the row into view, instantly under Reduc
   const { scrolls, restore } = recordScrolls();
   try {
     render(
-      <SettingsAnchorContext.Provider value="links">
+      <SettingsAnchorContext.Provider value={{ section: "links", request: 1 }}>
         <LinksSettings embedded />
       </SettingsAnchorContext.Provider>,
     );
@@ -91,7 +91,7 @@ test("opening the links section scrolls the row into view, instantly under Reduc
 
     document.documentElement.dataset.reduceMotion = "true";
     render(
-      <SettingsAnchorContext.Provider value="links">
+      <SettingsAnchorContext.Provider value={{ section: "links", request: 1 }}>
         <LinksSettings embedded />
       </SettingsAnchorContext.Provider>,
     );
@@ -99,6 +99,27 @@ test("opening the links section scrolls the row into view, instantly under Reduc
     assert.equal(scrolls[1]?.behavior, "auto");
   } finally {
     delete document.documentElement.dataset.reduceMotion;
+    restore();
+  }
+});
+
+test("asking for the links section again scrolls back to the row", async () => {
+  installBotTestIpc({ "browser:link-preference": () => "ask" });
+  const { scrolls, restore } = recordScrolls();
+  const page = (request: number) => (
+    <SettingsAnchorContext.Provider value={{ section: "links", request }}>
+      <LinksSettings embedded />
+    </SettingsAnchorContext.Provider>
+  );
+  try {
+    const view = render(page(1));
+    await flush();
+    view.rerender(page(1));
+    assert.equal(scrolls.length, 1);
+    view.rerender(page(2));
+    await flush();
+    assert.equal(scrolls.length, 2);
+  } finally {
     restore();
   }
 });

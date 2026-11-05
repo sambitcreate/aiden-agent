@@ -496,11 +496,11 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
 test("model compaction budgets validate, survive relaunch and reset to defaults", async ({ aiden }) => {
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
-  const openMemory = async () => {
+  const openContextAndLimits = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Context & Limits", exact: true }).click();
   };
-  await openMemory();
+  await openContextAndLimits();
   await page.getByRole("combobox", { name: "Model for compaction budget" }).fill("fixture/exact-model");
   await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("-1");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
@@ -516,7 +516,7 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
   await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toBeVisible();
   await aiden.relaunch();
   page = aiden.page;
-  await openMemory();
+  await openContextAndLimits();
   await page.getByRole("button", { name: "fixture/exact-model", exact: true }).click();
   await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
   await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
@@ -525,7 +525,7 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
   await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("");
   await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("");
   await page.reload();
-  await openMemory();
+  await openContextAndLimits();
   await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
 });
 
@@ -541,11 +541,11 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   await skipBotsOnboardingStep(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
-  const openMemory = async () => {
+  const openContextAndLimits = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Context & Limits", exact: true }).click();
   };
-  await openMemory();
+  await openContextAndLimits();
   const toggle = () => page.getByRole("switch", { name: "Warm prompt caches during active chats" });
   await expect(toggle()).not.toBeChecked();
   await expect(page.getByText(/Optional paid one-token requests/u)).toBeVisible();
@@ -553,7 +553,7 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   await expect(toggle()).toBeChecked();
   await aiden.relaunch();
   page = aiden.page;
-  await openMemory();
+  await openContextAndLimits();
   await expect(toggle()).toBeChecked();
   await toggle().click();
   await expect(toggle()).not.toBeChecked();
@@ -602,6 +602,8 @@ test("composer context usage visibility updates immediately from Appearance", as
   await page.locator("textarea").press("Enter");
   const meter = page.getByRole("button", { name: /^Context usage,/ });
   await expect(meter).toBeVisible();
+  // Memory lives in Settings: the chat toolbar has no manual memory manager.
+  await expect(page.getByRole("button", { name: "Open memory", exact: true })).toHaveCount(0);
   for (const enabled of [false, true]) {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
@@ -726,4 +728,10 @@ test("settings search opens the tab that matched, and the Links row on Appearanc
   const links = page.getByRole("combobox", { name: "Open chat links in", exact: true });
   await expect(links).toBeInViewport();
   await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toHaveCount(1);
+
+  // Asking again brings the row back after the page was scrolled away from it.
+  await page.getByRole("heading", { level: 1, name: "Appearance", exact: true }).scrollIntoViewIfNeeded();
+  await expect(links).not.toBeInViewport();
+  await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
+  await expect(links).toBeInViewport();
 });

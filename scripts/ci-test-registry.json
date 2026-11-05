@@ -934,6 +934,7 @@
         "renderer/components/settings/gemini-voice-setup.test.tsx",
         "renderer/components/settings/mcp-preset-icons.test.ts",
         "renderer/components/settings/mcp-settings.test.tsx",
+        "renderer/components/settings/limits-settings.test.tsx",
         "renderer/components/settings/memory-settings.test.tsx",
         "renderer/components/settings/remote-access-settings.test.tsx",
         "renderer/components/settings/settings-design.test.tsx",

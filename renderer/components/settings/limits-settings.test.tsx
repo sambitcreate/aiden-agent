@@ -1,0 +1,148 @@
+import "../../main/bots/test-dom";
+import assert from "node:assert/strict";
+import { afterEach, test } from "node:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { installBotTestIpc } from "../../main/bots/test-dom";
+import { createBotTestQueryClient } from "../../main/bots/test-providers";
+import type { AppSettings } from "../../lib/types";
+import { LimitsSettings } from "./limits-settings";
+
+afterEach(cleanup);
+
+type Held = { patch: Partial<AppSettings>; finish(): void; fail(): void };
+
+/** Holds every settings save open until the test finishes or fails it, like a slow disk. */
+async function mount(settings: Partial<AppSettings> = {}, options: { hold?: boolean } = {}) {
+  let stored: Partial<AppSettings> = { ...settings };
+  const held: Held[] = [];
+  const calls = installBotTestIpc({
+    "settings:get": () => stored,
+    "providers:list": () => [{ id: "local", models: ["fast"] }],
+    "settings:set": (value: unknown) => {
+      const patch = value as Partial<AppSettings>;
+      if (!options.hold) {
+        stored = { ...stored, ...patch };
+        return stored;
+      }
+      return new Promise((resolve, reject) => {
+        held.push({
+          patch,
+          finish() {
+            stored = { ...stored, ...patch };
+            resolve(stored);
+          },
+          fail: () => reject(new Error("disk full")),
+        });
+      });
+    },
+    "settings:setCompactionModelBudget": (modelKey: unknown, budget: unknown) => {
+      stored = {
+        ...stored,
+        compactionModelOverrides: {
+          ...stored.compactionModelOverrides,
+          [modelKey as string]: budget as { reserveTokens: number },
+        },
+      };
+      return stored;
+    },
+  });
+  render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <LimitsSettings />
+    </QueryClientProvider>,
+  );
+  // Controls stay disabled until settings have loaded.
+  const warming = await screen.findByRole("switch", { name: "Warm prompt caches during active chats" });
+  await waitFor(() => assert.equal(warming.hasAttribute("disabled"), false));
+  const saves = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  return { calls, held, saves, stored: () => stored };
+}
+
+const engineRadio = (name: RegExp) => screen.findByRole("radio", { name });
+const warmingSwitch = () => screen.findByRole("switch", { name: "Warm prompt caches during active chats" });
+
+async function chooseOption(trigger: string, option: string) {
+  fireEvent.click(await screen.findByRole("combobox", { name: trigger }));
+  fireEvent.click(await screen.findByRole("option", { name: option }));
+}
+
+test("the page leads with context settings, then usage and spending limits", async () => {
+  await mount();
+  await screen.findByRole("radiogroup", { name: "Automatic compaction engine" });
+  const titles = ["Automatic compaction", "Prompt cache", "Model compaction budgets", "Usage limits", "Spending limits"];
+  const text = document.body.textContent ?? "";
+  const positions = titles.map((title) => text.indexOf(title));
+  assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
+  assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+});
+
+test("choosing an engine saves only that choice", async () => {
+  const { saves } = await mount({ compactionEngine: "llm" });
+  const local = await engineRadio(/pi-vcc Compaction/u);
+  fireEvent.click(local);
+  await waitFor(() => assert.deepEqual(saves(), [{ compactionEngine: "vcc" }]));
+  await waitFor(() => assert.equal(local.getAttribute("aria-checked"), "true"));
+});
+
+test("cache warming can change while an engine save is still running, and both are kept", async () => {
+  const { held, stored } = await mount({ compactionEngine: "llm", cacheWarmingEnabled: false }, { hold: true });
+  fireEvent.click(await engineRadio(/pi-vcc Compaction/u));
+  await waitFor(() => assert.equal(held.length, 1));
+
+  const warming = await warmingSwitch();
+  fireEvent.click(warming);
+  await waitFor(() => assert.equal(held.length, 2));
+  assert.deepEqual(held.map((save) => save.patch), [{ compactionEngine: "vcc" }, { cacheWarmingEnabled: true }]);
+
+  await act(async () => {
+    held[0]?.finish();
+    held[1]?.finish();
+  });
+  await waitFor(() => assert.equal(warming.getAttribute("aria-checked"), "true"));
+  assert.equal((await engineRadio(/pi-vcc Compaction/u)).getAttribute("aria-checked"), "true");
+  assert.equal(stored().compactionEngine, "vcc");
+  assert.equal(stored().cacheWarmingEnabled, true);
+});
+
+test("a usage limit can change while an engine save is still running", async () => {
+  const { held } = await mount({ compactionEngine: "llm" }, { hold: true });
+  fireEvent.click(await engineRadio(/pi-vcc Compaction/u));
+  await waitFor(() => assert.equal(held.length, 1));
+
+  await chooseOption("Longest wait for a usage limit", "Up to 24 hours");
+  await waitFor(() => assert.equal(held.length, 2));
+  assert.deepEqual(held[1]?.patch, { usageLimitWaitHours: 24 });
+});
+
+test("a failed limit save puts back the limit without undoing an engine saved meanwhile", async () => {
+  const { held } = await mount({ compactionEngine: "llm", usageLimitWaitHours: 1 }, { hold: true });
+  await chooseOption("Longest wait for a usage limit", "Up to 24 hours");
+  await waitFor(() => assert.equal(held.length, 1));
+
+  const local = await engineRadio(/pi-vcc Compaction/u);
+  fireEvent.click(local);
+  await waitFor(() => assert.equal(held.length, 2));
+  await act(async () => held[1]?.finish());
+  await waitFor(() => assert.equal(local.getAttribute("aria-checked"), "true"));
+
+  await act(async () => held[0]?.fail());
+  await waitFor(() =>
+    assert.match(screen.getByRole("combobox", { name: "Longest wait for a usage limit" }).textContent ?? "", /Up to 1 hour/u),
+  );
+  assert.equal(local.getAttribute("aria-checked"), "true");
+});
+
+test("a model budget saves through its own call, without touching other settings", async () => {
+  const { calls, saves } = await mount();
+  fireEvent.change(await screen.findByLabelText("Model for compaction budget"), { target: { value: "local/fast" } });
+  fireEvent.change(screen.getByLabelText("Compaction reserved tokens"), { target: { value: "5000" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "settings:setCompactionModelBudget")?.args, [
+      "local/fast",
+      { reserveTokens: 5000 },
+    ]),
+  );
+  assert.deepEqual(saves(), []);
+});

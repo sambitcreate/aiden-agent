@@ -2,8 +2,8 @@ import * as React from "react";
 import { settingsTabLabel, type SettingsPageEntry, type SettingsSection } from "../../lib/settings-section";
 import { Tabs, tabIds } from "../ui-primitives";
 
-/** The section whose spot on the page should scroll into view, such as `links` on Appearance. */
-export const SettingsAnchorContext = React.createContext<SettingsSection | null>(null);
+/** The spot on the page to scroll into view, such as `links` on Appearance. A new `request` scrolls again. */
+export const SettingsAnchorContext = React.createContext<{ section: SettingsSection; request: number } | null>(null);
 
 /** Shared Settings page hierarchy. FieldSet and Field supply its grouped cards and rows. */
 export function SettingsPage({

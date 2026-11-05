@@ -13,7 +13,7 @@ seeing and taking over a Bot's computer, and the tools a Bot uses inside it.
 
 - **Mac with Apple silicon, macOS 26 or later.** The pinned guest is macOS 26,
   and a guest is never newer than its host. On an older macOS, Settings →
-  Bot computers explains why and offers nothing to set up.
+  Computers & VMs → Bot computers explains why and offers nothing to set up.
 - **Not on Intel Macs or Linux.** The `botComputers` platform capability
   (`main/services/host-platform-capabilities.ts`) is true only on darwin with
   arm64. Elsewhere the Settings page, its search entry and the Bot profile's

@@ -2,7 +2,7 @@
 
 import { HistoryNavButtons } from "../components/history-nav";
 import * as React from "react";
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import { Button, ScrollArea, Sidebar, SplitView } from "../components/ui";
 import {
   ChevronLeft,
@@ -56,6 +56,7 @@ import {
   SETTINGS_GROUPS,
   type SettingsPageId,
   type SettingsSection,
+  settingsLocation,
 } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { MemoryCardIcon } from "../components/memory-card-icon";
@@ -127,7 +128,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 const DESCRIPTIONS: Record<SettingsSection, string> = {
   providers: "Connect models to Aiden and manage the providers you use.",
   modelData: "Arrange your models by capability and pace. Your map stays on this device.",
-  limits: "Choose how long replies wait out a provider’s usage limit, and how much chats and Bots may spend.",
+  limits: "Choose how long chats stay manageable, how replies wait out usage limits, and how much chats and Bots may spend.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",
@@ -141,7 +142,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   bots: "Choose how every Bot handles steps that need your OK.",
   botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
-  memory: "Control what Aiden remembers and how long chats stay manageable.",
+  memory: "Control what Aiden remembers across chats and Workspaces.",
   scheduledTasks: "Manage when Aiden works in the background.",
   geminiLive: "Set up Aiden’s real-time voice, screen context, and approved actions.",
   voice: "Set up voice input, transcription, and dictation.",
@@ -158,6 +159,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const capabilities = useAppCapabilities();
   const [search, setSearch] = React.useState("");
 
+  const anchorRequest = useLocation({ select: (location) => location.state.aidenSettingsAnchor });
   const query = search.trim().toLocaleLowerCase();
   const section = resolveSettingsSection(initialSection, capabilities);
   const pages = availableSettingsPages(capabilities);
@@ -167,7 +169,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
     return target ? [{ page, target }] : [];
   });
   const open = (next: SettingsSection) =>
-    void navigate({ to: "/settings", search: { section: next }, replace: true });
+    void navigate({ ...settingsLocation(next), replace: true });
   const ActiveSection = CONTENT[section];
 
   return (
@@ -266,7 +268,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
             description={DESCRIPTIONS[section]}
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
-              <SettingsAnchorContext.Provider value={section === "links" ? section : null}>
+              <SettingsAnchorContext.Provider value={section === "links" ? { section, request: anchorRequest ?? 0 } : null}>
                 <ActiveSection />
               </SettingsAnchorContext.Provider>
             </SettingsPageTabs>

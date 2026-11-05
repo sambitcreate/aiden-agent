@@ -68,6 +68,11 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "budget",
       "cap",
       "money",
+      "compaction",
+      "compact",
+      "context",
+      "cache",
+      "warm",
     ],
   },
   { id: "skills", title: "Skills", keywords: ["instructions", "tools"] },
@@ -207,7 +212,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "links",
     title: "Links",
-    keywords: ["browser", "open links", "external", "system browser", "aiden browser", "url"],
+    keywords: ["browser", "open links", "chat links", "external", "system browser", "aiden browser", "url"],
   },
   {
     id: "shortcut",
@@ -317,9 +322,12 @@ export function availableSettingsDestinations(
   );
 }
 
-/** The sections the assistant may name and open on this host. */
-export function assistantSettingsSections(capabilities: SettingsCapabilities): SettingsSection[] {
-  return SETTINGS_SECTIONS.filter((section) => isSettingsSectionAvailable(section, capabilities));
+/** The Settings pages the assistant may name on this host, each with its tabs and spots in brackets. */
+export function assistantSettingsPages(capabilities: SettingsCapabilities): string[] {
+  return availableSettingsPages(capabilities).map((page) => {
+    const parts = [...(page.tabs.length > 1 ? page.tabs : []), ...(page.anchors ?? [])];
+    return parts.length > 0 ? `${page.title} (${parts.map(settingsTabLabel).join(", ")})` : page.title;
+  });
 }
 
 function destinationFor(section: SettingsSection): (typeof SETTINGS_DESTINATIONS)[number] {
@@ -381,10 +389,14 @@ export function firstMatchingSettingsSection(
   const sections = [...page.tabs, ...(page.anchors ?? [])];
   const matching = (context: string) =>
     sections.find((section) =>
-      matchesSettingsSearch(destinationFor(section), search, `${describe(section)} ${context}`),
+      matchesSettingsSearch(
+        destinationFor(section),
+        search,
+        `${settingsTabLabel(section)} ${describe(section)} ${context}`,
+      ),
     );
   const named = sections.find((section) =>
-    matchesSettingsSearch({ title: destinationFor(section).title, keywords: [] }, search),
+    matchesSettingsSearch({ title: settingsTabLabel(section), keywords: [] }, search),
   );
   return named ?? matching("") ?? matching(page.title);
 }

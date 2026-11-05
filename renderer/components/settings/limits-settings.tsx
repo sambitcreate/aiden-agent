@@ -12,6 +12,7 @@ import {
   type SpendingLimitsSettings,
 } from "../../shared/spending";
 import { SpendingAmountSelect } from "../spending/spending-amount-select";
+import { AutomaticCompactionGroup, CompactionBudgetGroup, PromptCacheGroup } from "./context-settings";
 import {
   DEFAULT_USAGE_LIMIT_WAIT_HOURS,
   isUsageLimitWaitHours,
@@ -29,7 +30,7 @@ const WAIT_LABELS: Record<UsageLimitWaitHours, string> = {
 
 const MONTH_DAYS = Array.from({ length: SPENDING_MONTH_START_DAY_MAX }, (_, index) => index + 1);
 
-/** Settings → Context & Limits: how long replies wait out provider usage limits, and what they may spend. */
+/** Settings → Context & Limits: how long chats stay in context, how replies wait out usage limits, and what they may spend. */
 export function LimitsSettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();
@@ -49,7 +50,11 @@ export function LimitsSettings() {
       const saved = await settingsApi.set(patch);
       queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
     } catch {
-      if (previous) queryClient.setQueryData<AppSettings>(queryKeys.settings, previous);
+      // Put back only what this save changed: another group on the page may have saved meanwhile.
+      if (previous) {
+        const restored = Object.fromEntries(Object.keys(patch).map((key) => [key, previous[key as keyof AppSettings]]));
+        queryClient.setQueryData<AppSettings>(queryKeys.settings, (current) => ({ ...(current ?? previous), ...restored }));
+      }
       toast.error(failure);
     } finally {
       setSaving(false);
@@ -77,6 +82,9 @@ export function LimitsSettings() {
 
   return (
     <div className="flex flex-col gap-6">
+      <AutomaticCompactionGroup />
+      <PromptCacheGroup />
+      <CompactionBudgetGroup />
       <FieldSet title="Usage limits">
         <Field
           label="Wait for a limit to clear"

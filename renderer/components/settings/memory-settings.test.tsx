@@ -1,35 +1,73 @@
+import "../../main/bots/test-dom";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CompactionBudgetSettings } from "./compaction-budget-settings.js";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import test from "node:test";
+import { afterEach, test } from "node:test";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { installBotTestIpc } from "../../main/bots/test-dom";
+import { createBotTestQueryClient } from "../../main/bots/test-providers";
+import type { AppSettings, Workspace } from "../../lib/types";
+import { CompactionBudgetSettings } from "./compaction-budget-settings.js";
+import { MemorySettings } from "./memory-settings";
 
-const settings = readFileSync(new URL("./memory-settings.tsx", import.meta.url), "utf8");
-const chatPane = readFileSync(new URL("../../main/chat-pane.tsx", import.meta.url), "utf8");
+afterEach(cleanup);
 
-test("Memory settings expose authoritative global and workspace switches", () => {
-  assert.match(settings, /aria-label="Use memory globally"/u);
-  assert.match(settings, /workspacesApi\.update\(workspace\.id, \{ memoryEnabled: enabled \}\)/u);
-  assert.match(settings, /Existing approved[\s\S]*stay on this device/u);
-  assert.match(settings, /Bot memory has its own scope/u);
-  assert.match(settings, /<\/FieldSet>\s*<Text as="p"[\s\S]*Existing approved/u);
-  assert.match(settings, /<\/FieldSet>\s*<Text as="p"[\s\S]*Workspace switches affect/u);
+function mount(settings: Partial<AppSettings> = {}) {
+  let stored: Partial<AppSettings> = { ...settings };
+  const workspace = { id: "w1", name: "Notes", memoryEnabled: true } as Workspace;
+  const calls = installBotTestIpc({
+    "settings:get": () => stored,
+    "settings:set": (patch: unknown) => {
+      stored = { ...stored, ...(patch as Partial<AppSettings>) };
+      return stored;
+    },
+    "workspaces:list": () => [workspace],
+    "workspaces:memoryFacts": () => [],
+    "workspaces:update": (_id: unknown, patch: unknown) => ({ ...workspace, ...(patch as Partial<Workspace>) }),
+  });
+  render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <MemorySettings />
+    </QueryClientProvider>,
+  );
+  return calls;
+}
+
+test("the global switch saves memoryEnabled and leaves workspace switches as stored preferences", async () => {
+  const calls = mount();
+  const global = await screen.findByRole("switch", { name: "Use memory globally" });
+  await waitFor(() => assert.equal(global.getAttribute("aria-checked"), "true"));
+  const workspace = await screen.findByRole("switch", { name: "Use memory in Notes" });
+  fireEvent.click(global);
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "settings:set")?.args, [{ memoryEnabled: false }]),
+  );
+  await waitFor(() => assert.equal(workspace.hasAttribute("disabled"), true));
+  assert.equal(workspace.getAttribute("aria-checked"), "true");
 });
 
-test("the chat toolbar no longer exposes the manual memory manager", () => {
-  assert.doesNotMatch(chatPane, /MemoryDialog|memoryOpen|Open memory|BrainCircuit/u);
+test("a workspace switch updates that workspace alone", async () => {
+  const calls = mount();
+  const workspace = await screen.findByRole("switch", { name: "Use memory in Notes" });
+  await waitFor(() => assert.equal(workspace.hasAttribute("disabled"), false));
+  fireEvent.click(workspace);
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "workspaces:update")?.args, ["w1", { memoryEnabled: false }]),
+  );
+  await waitFor(() => assert.equal(workspace.getAttribute("aria-checked"), "false"));
+  assert.equal(calls.some((call) => call.channel === "settings:set"), false);
 });
 
-test("automatic compaction is independently persisted and describes one-time commands", () => {
-  assert.match(settings, /settingsApi\.set\(\{ compactionEngine: engine \}\)/u);
-  assert.match(settings, /aria-label="Automatic compaction engine"/u);
-  assert.match(settings, /focus-visible:ring-focus-ring/u);
-  assert.match(settings, /orientation="vertical"/u);
-  assert.match(settings, /pi-vcc Compaction — Experimental/u);
-  assert.match(settings, /\/compact-LLM or \/compact-VCC/u);
-  assert.match(settings, /Current-chat recall works independently of memory/u);
+test("Memory says what its switches keep, and leaves compaction to Context & Limits", async () => {
+  mount();
+  await screen.findByRole("switch", { name: "Use memory globally" });
+  const text = document.body.textContent ?? "";
+  assert.match(text, /Existing approved\s+facts stay on this device/u);
+  assert.match(text, /Bot memory has its own scope/u);
+  assert.equal(screen.queryByRole("radiogroup", { name: "Automatic compaction engine" }), null);
+  assert.equal(screen.queryByRole("switch", { name: "Warm prompt caches during active chats" }), null);
+  assert.doesNotMatch(text, /Model compaction budgets/u);
 });
-
 
 test("model budget controls expose exact model suggestions, token limits and reset", () => {
   const html = renderToStaticMarkup(CompactionBudgetSettingsElement());
