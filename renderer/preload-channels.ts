@@ -154,6 +154,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "settings:appearance-changed",
   "settings:new-chat-model-changed",
   "shortcut:changed",
+  "terminal:activity",
   "terminal:data",
   "terminal:exit",
   "telegram:model-selection-changed",

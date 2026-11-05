@@ -22,6 +22,9 @@ const PTY_KILL_GRACE_MS = 2_000;
 /** Pending output that forces delivery without waiting for the window. */
 const OUTPUT_COALESCE_MAX_CHARS = 64_000;
 const MAX_SESSIONS_PER_WEB_CONTENTS = 8;
+/** How often the foreground program of each open terminal is read. */
+const FOREGROUND_POLL_MS = 1_000;
+const MAX_COMMAND_NAME_CHARS = 64;
 const MIN_COLS = 20;
 const MAX_COLS = 500;
 const MIN_ROWS = 4;
@@ -61,6 +64,10 @@ interface TerminalSession extends TerminalSessionInfo {
   /** Output already in `buffer` but not yet delivered to the renderer. */
   pendingOutput: string;
   outputTimer?: ReturnType<typeof setTimeout>;
+  /** The foreground program last reported to the renderer. */
+  foregroundCommand: string | null;
+  /** The previous poll's reading; a program must hold across two polls to be reported. */
+  foregroundCandidate: string | null;
 }
 
 export interface TerminalServiceOptions {
@@ -90,6 +97,8 @@ export interface TerminalServiceOptions {
   signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
   /** How long a hung-up shell has to exit before SIGKILL. Test seam. */
   killGraceMs?: number;
+  /** Foreground polling interval. Test seam. */
+  foregroundPollMs?: number;
 }
 
 /**
@@ -102,6 +111,19 @@ export interface TerminalHistoryStoreLike {
   append(workspaceId: string, data: string): void;
   flush(workspaceId: string): Promise<void>;
   flushAll?(): Promise<void>;
+}
+
+function commandBaseName(value: string): string {
+  // Linux reports argv[0], which can be a path; login shells carry a leading dash.
+  return path.basename(value.trim()).replace(/^-/u, "");
+}
+
+/** The foreground program's name, or null when that program is the shell itself. */
+export function foregroundCommandName(processTitle: unknown, shell: string): string | null {
+  if (typeof processTitle !== "string") return null;
+  const name = commandBaseName(processTitle);
+  if (name.length === 0 || name === commandBaseName(shell)) return null;
+  return name.slice(0, MAX_COMMAND_NAME_CHARS);
 }
 
 function terminalId(): string {
@@ -249,6 +271,7 @@ export class TerminalService {
   private readonly webContentsEpochs = new Map<number, number>();
   private spawnHelperReady: Promise<void> | undefined;
   private historyStore: TerminalHistoryStoreLike | undefined;
+  private foregroundTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly options: TerminalServiceOptions = {}) {
     this.historyStore = options.historyStore;
@@ -371,8 +394,11 @@ export class TerminalService {
       sequence: restoredHistory ? 1 : 0,
       historyWorkspaceId: workspaceId,
       pendingOutput: "",
+      foregroundCommand: null,
+      foregroundCandidate: null,
     };
     this.sessions.set(id, session);
+    this.watchForegroundCommands();
     // Observe exit before any owner callback can synchronously terminate the
     // session. A retained pending exit must always have a way to settle.
     pty.onExit(({ exitCode, signal }) => {
@@ -465,6 +491,11 @@ export class TerminalService {
     this.terminate(id, session);
   }
 
+  /** A fresh reading for decisions such as confirming a close. */
+  foregroundCommand(id: string, owner: RendererDocumentOwner): string | null {
+    return this.readForegroundCommand(this.getOwned(id, owner));
+  }
+
   closeForWebContents(webContentsId: number): void {
     this.webContentsEpochs.set(webContentsId, (this.webContentsEpochs.get(webContentsId) ?? 0) + 1);
     for (const [id, session] of this.sessions) {
@@ -545,6 +576,50 @@ export class TerminalService {
       throw new Error("Terminal session is unavailable.");
     }
     return session;
+  }
+
+  private readForegroundCommand(session: TerminalSession): string | null {
+    try {
+      return foregroundCommandName(session.pty.process, session.resolvedShell);
+    } catch {
+      // The PTY can close between the lookup and the read.
+      return null;
+    }
+  }
+
+  private watchForegroundCommands(): void {
+    if (this.foregroundTimer) return;
+    this.foregroundTimer = setInterval(
+      () => this.pollForegroundCommands(),
+      this.options.foregroundPollMs ?? FOREGROUND_POLL_MS,
+    );
+    this.foregroundTimer.unref?.();
+  }
+
+  /**
+   * node-pty reads the PTY's foreground process group, so this needs no `ps` and
+   * ignores background jobs. Prompt themes run short commands in the foreground,
+   * so a program must hold across two polls before the tab shows it; going back
+   * to the shell reports at once.
+   */
+  private pollForegroundCommands(): void {
+    if (this.sessions.size === 0) {
+      clearInterval(this.foregroundTimer);
+      this.foregroundTimer = undefined;
+      return;
+    }
+    for (const [id, session] of this.sessions) {
+      const command = this.readForegroundCommand(session);
+      const settled = command === null || command === session.foregroundCandidate;
+      session.foregroundCandidate = command;
+      if (!settled || command === session.foregroundCommand) continue;
+      session.foregroundCommand = command;
+      try {
+        session.owner.send("terminal:activity", { sessionId: id, command });
+      } catch {
+        // The exact renderer document already disappeared.
+      }
+    }
   }
 
   /** Send buffered pty output as one `terminal:data` message with the next sequence. */

@@ -50,3 +50,67 @@ test("ED3 clears saved scrollback before the visible page is reset", async () =>
     core.dispose();
   }
 });
+
+async function withCore(
+  run: (core: GhosttyTerminalCore) => void,
+  cols = 20,
+  rows = 4,
+): Promise<void> {
+  const core = await GhosttyTerminalCore.create(cols, rows, 8, 16, testTheme, () => undefined);
+  try {
+    run(core);
+  } finally {
+    core.dispose();
+  }
+}
+
+test("synchronized output follows the program's brackets and can be ended by the host", async () => {
+  await withCore((core) => {
+    assert.equal(core.isSynchronizedOutput(), false);
+    core.write("\x1b[?2026h");
+    assert.equal(core.isSynchronizedOutput(), true);
+    core.write("\x1b[?2026l");
+    assert.equal(core.isSynchronizedOutput(), false);
+    core.write("\x1b[?2026h");
+    core.endSynchronizedOutput();
+    assert.equal(core.isSynchronizedOutput(), false);
+  });
+});
+
+test("a write reports the open group closing even when the same chunk opens another", async () => {
+  await withCore((core) => {
+    core.write("\x1b[?2026h");
+    let ended = 0;
+    core.write("one\x1b[?2026l two\x1b[?2026h three", () => {
+      ended += 1;
+    });
+    assert.equal(ended, 1);
+    assert.equal(core.isSynchronizedOutput(), true);
+    assert.match(core.snapshot().rowData[0]!.text, /one two three/u);
+  });
+});
+
+test("a write inside an open group that never closes it reports nothing", async () => {
+  await withCore((core) => {
+    core.write("\x1b[?2026h");
+    let ended = 0;
+    core.write("\x1b[1mstill open", () => {
+      ended += 1;
+    });
+    assert.equal(ended, 0);
+    assert.equal(core.isSynchronizedOutput(), true);
+  });
+});
+
+test("select all reports the live range and keeps the selected text", async () => {
+  await withCore((core) => {
+    assert.equal(core.selectionRange(), null);
+    core.write("alpha\r\nbeta");
+    const range = core.selectAll();
+    assert.ok(range);
+    assert.deepEqual(core.selectionRange(), range);
+    assert.match(core.selectionText(), /alpha\s+beta/u);
+    core.clearSelection();
+    assert.equal(core.selectionRange(), null);
+  });
+});

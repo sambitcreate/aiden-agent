@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import type { GhosttyTerminalSurface } from "../lib/ghostty-terminal/surface";
 import { ghosttyThemeFromCss } from "../lib/ghostty-terminal/theme";
 import {
+  MessageSquarePlus,
   Minus,
   PanelBottomClose,
   PanelRightOpen,
@@ -16,7 +17,17 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { Button, Text, toast } from "./ui";
+import {
+  AlertDialog,
+  Button,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+  Text,
+  toast,
+} from "./ui";
 import { cn } from "../lib/ui-utils";
 import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
 import { useLinkOpener } from "../lib/link-opener";
@@ -24,6 +35,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
+import { TERMINAL_CONTEXT_UNAVAILABLE, terminalContextDelivery } from "../lib/terminal-context";
 
 export const TERMINAL_PANEL_EVENT = "aiden:terminal-panel";
 const PLACEMENT_KEY = "aiden-agent.terminal-placement";
@@ -36,6 +48,9 @@ const DEFAULT_DRAWER_HEIGHT = 232;
 const MAX_PANES = 4;
 const HEIGHT_STORAGE_KEY = "aiden-agent.terminal-height-v2";
 const TERMINAL_DRAWER_MOTION_MS = 300;
+const SELECTION_ACTION_WIDTH = 112;
+const SELECTION_ACTION_HEIGHT = 28;
+const SELECTION_ACTION_GAP = 6;
 
 type SplitDirection = "single" | "horizontal" | "vertical";
 
@@ -54,6 +69,8 @@ interface TerminalContextValue {
   moveTo: (placement: TerminalPlacement) => void;
   hide: () => void;
   sessions: TerminalSession[];
+  /** The foreground program of each session that has one running. */
+  foregroundCommands: Readonly<Record<string, string>>;
   activeId: string | undefined;
   layout: Layout;
   canOpen: boolean;
@@ -146,6 +163,7 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
   const [sidePresented, setSidePresented] = React.useState(false);
   const hide = React.useCallback(() => setOpen(false), []);
   const [sessions, setSessions] = React.useState<TerminalSession[]>([]);
+  const [foregroundCommands, setForegroundCommands] = React.useState<Readonly<Record<string, string>>>({});
   const [activeId, setActiveId] = React.useState<string>();
   const [layout, setLayout] = React.useState<Layout>({ direction: "single", ids: [] });
   const sessionsRef = React.useRef<TerminalSession[]>([]);
@@ -182,8 +200,18 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
         ids: previous.ids.filter((id) => id !== sessionId),
       }));
       setActiveId((previous) => (previous === sessionId ? undefined : previous));
+      setForegroundCommands(({ [sessionId]: _exited, ...others }) => others);
     };
     return onNotification("terminal:exit", removeExited);
+  }, []);
+
+  React.useEffect(() => {
+    const updateForeground = ({ sessionId, command }: { sessionId: string; command: string | null }) => {
+      setForegroundCommands(({ [sessionId]: _previous, ...others }) =>
+        command === null ? others : { ...others, [sessionId]: command },
+      );
+    };
+    return onNotification("terminal:activity", updateForeground);
   }, []);
 
   const create = React.useCallback((): Promise<TerminalSession | undefined> => {
@@ -293,6 +321,7 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       requestedOpen: open,
       placement, sideTarget, setSideTarget, setSidePresented, moveTo, hide,
       sessions,
+      foregroundCommands,
       activeId,
       layout,
       canOpen: Boolean(active?.folderPath && active.permission !== "none"),
@@ -316,6 +345,7 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       layout,
       newTerminal,
       open,
+      foregroundCommands,
       sessions,
       split,
       toggle,
@@ -343,13 +373,17 @@ export function TerminalSideTarget({ presented }: { presented: boolean }) {
 
 function TerminalViewport({
   session,
+  label,
   active,
+  visible,
   onFocus,
   onUnavailable,
   clearEpoch,
 }: {
   session: TerminalSession;
+  label: string;
   active: boolean;
+  visible: boolean;
   onFocus: () => void;
   onUnavailable: () => void;
   clearEpoch: number;
@@ -359,8 +393,31 @@ function TerminalViewport({
   const resizeTerminalRef = React.useRef<(() => void) | null>(null);
   const onUnavailableRef = React.useRef(onUnavailable);
   const activeRef = React.useRef(active);
+  const visibleRef = React.useRef(visible);
   onUnavailableRef.current = onUnavailable;
   activeRef.current = active;
+  visibleRef.current = visible;
+  const [selectionAction, setSelectionAction] = React.useState<{ left: number; top: number } | null>(null);
+  const [menuHasSelection, setMenuHasSelection] = React.useState(false);
+  const focusLeftTerminalRef = React.useRef(false);
+
+  const addSelectionToChat = () => {
+    const surface = surfaceRef.current;
+    const position = surface?.getSelectionPosition();
+    if (!surface || !position) return;
+    const delivered = terminalContextDelivery.capture(session.workspaceId)?.deliver({
+      label,
+      lineStart: position.start.y + 1,
+      lineEnd: position.end.y + 1,
+      text: surface.getSelection(),
+    });
+    if (!delivered) {
+      toast.error(TERMINAL_CONTEXT_UNAVAILABLE);
+      return;
+    }
+    focusLeftTerminalRef.current = true;
+    surface.clearSelection();
+  };
 
   const { openLink, canOpen } = useLinkOpener();
   // openLink/canOpen change identity when the saved preference loads or
@@ -389,13 +446,38 @@ function TerminalViewport({
         const next = await GhosttyTerminalSurface.create(hostRef.current, {
           theme: ghosttyThemeFromCss(terminalTheme()),
           font: { family: terminalFontFamily(), size: terminalFontSize() },
+          get visible() {
+            return visibleRef.current;
+          },
           onData: (data) => {
             void terminalApi.write(session.id, data).catch(() => undefined);
           },
           onResize: (cols, rows) => {
+            setSelectionAction(null);
             void terminalApi.resize(session.id, cols, rows).catch(() => undefined);
           },
-          onSelectionChange: () => undefined,
+          onSelectionChange: () => setSelectionAction(null),
+          onSelectionSettled: () => {
+            const surface = surfaceRef.current;
+            const hostBounds = hostRef.current?.getBoundingClientRect();
+            if (!surface || !hostBounds) return;
+            // A selection ending outside the viewport has no point to attach to.
+            const end = surface.getSelectionEndClientRect() ?? hostBounds;
+            const clampWithin = (value: number, size: number, limit: number) =>
+              Math.max(SELECTION_ACTION_GAP, Math.min(value, limit - size - SELECTION_ACTION_GAP));
+            setSelectionAction({
+              left: clampWithin(
+                end.right - hostBounds.left + SELECTION_ACTION_GAP,
+                SELECTION_ACTION_WIDTH,
+                hostBounds.width,
+              ),
+              top: clampWithin(
+                end.bottom - hostBounds.top + SELECTION_ACTION_GAP,
+                SELECTION_ACTION_HEIGHT,
+                hostBounds.height,
+              ),
+            });
+          },
           beforeKey: (event) => {
             if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
             return true;
@@ -430,6 +512,8 @@ function TerminalViewport({
         const writeData = (event: { sequence: number; data: string }) => {
           if (event.sequence <= lastSequence) return;
           lastSequence = event.sequence;
+          // New output can move the selection out from under the action.
+          setSelectionAction(null);
           next.write(event.data);
         };
         cancelData = onNotification<{ sessionId: string; sequence: number; data: string }>(
@@ -480,7 +564,13 @@ function TerminalViewport({
   }, [session.id]);
 
   React.useEffect(() => {
+    surfaceRef.current?.setVisible(visible);
+    if (!visible) setSelectionAction(null);
+  }, [visible]);
+
+  React.useEffect(() => {
     if (active) requestAnimationFrame(() => surfaceRef.current?.focus());
+    else setSelectionAction(null);
   }, [active]);
 
   React.useEffect(() => {
@@ -500,18 +590,86 @@ function TerminalViewport({
   }, []);
 
   return (
-    <div
-      ref={hostRef}
-      data-command-scope="terminal"
-      onMouseDown={onFocus}
-      className="relative h-full min-h-0 w-full overflow-hidden select-text"
-    />
+    <div className="relative h-full min-h-0 w-full">
+      {/* A modal menu hides the composer from assistive tech, which reads as unavailable. */}
+      <ContextMenu
+        modal={false}
+        onOpenChange={(menuOpen) => {
+          if (menuOpen) setMenuHasSelection(surfaceRef.current?.hasSelection() ?? false);
+        }}
+      >
+        <ContextMenuTrigger asChild>
+          <div
+            ref={hostRef}
+            data-command-scope="terminal"
+            onMouseDown={onFocus}
+            onWheel={() => setSelectionAction(null)}
+            className="relative h-full min-h-0 w-full overflow-hidden select-text"
+          />
+        </ContextMenuTrigger>
+        <ContextMenuContent
+          onCloseAutoFocus={(event) => {
+            // Adding to chat moved focus to the composer; don't pull it back.
+            if (focusLeftTerminalRef.current) event.preventDefault();
+            focusLeftTerminalRef.current = false;
+          }}
+        >
+          <ContextMenuItem disabled={!menuHasSelection} onSelect={addSelectionToChat}>
+            Add to chat
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!menuHasSelection}
+            onSelect={() => {
+              const selection = surfaceRef.current?.getSelection();
+              if (!selection) return;
+              void navigator.clipboard
+                .writeText(selection)
+                .catch(() => toast.error("Couldn't copy the terminal selection."));
+            }}
+          >
+            Copy
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() => {
+              void surfaceRef.current
+                ?.pasteFromClipboard(() => navigator.clipboard.readText())
+                .catch(() => toast.error("Couldn't read the clipboard."));
+            }}
+          >
+            Paste
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => surfaceRef.current?.selectAll()}>Select all</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {selectionAction ? (
+        <Button
+          variant="filled"
+          size="small"
+          className="absolute z-10"
+          style={selectionAction}
+          // Keep focus in the terminal; a press here must not end the selection.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={addSelectionToChat}
+        >
+          <MessageSquarePlus /> Add to chat
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
 export function TerminalDrawer() {
-  const { open, requestedOpen, placement, sideTarget, moveTo, sessions, activeId, layout, canOpen, toggle, newTerminal, split, select, close } =
+  const { open, requestedOpen, placement, sideTarget, moveTo, sessions, foregroundCommands, activeId, layout, canOpen, toggle, newTerminal, split, select, close } =
     useWorkspaceTerminal();
+  const [closeRequest, setCloseRequest] = React.useState<{ id: string; label: string; command: string } | null>(null);
+  // A program can finish while the question is open, and the shell with it.
+  const pendingClose = closeRequest && sessions.some((session) => session.id === closeRequest.id) ? closeRequest : null;
+  const requestClose = async (id: string, label: string) => {
+    const command = await terminalApi.foregroundCommand(id).catch(() => null);
+    if (command) setCloseRequest({ id, label, command });
+    else close(id);
+  };
   const bottomTargetRef = React.useRef<HTMLDivElement>(null);
   const [portalHost] = React.useState(() => { const node = document.createElement("div"); node.className = "h-full min-h-0"; return node; });
   React.useLayoutEffect(() => {
@@ -637,6 +795,8 @@ export function TerminalDrawer() {
           >
             {sessions.map((session, index) => {
               const selected = activeId === session.id;
+              const label = `Terminal ${index + 1}`;
+              const command = foregroundCommands[session.id];
               return (
                 <div
                   key={session.id}
@@ -654,16 +814,22 @@ export function TerminalDrawer() {
                     className="flex min-w-0 items-center gap-1.5 rounded-md outline-none transition-shadow focus-visible:bg-list-selection focus-visible:outline-none"
                   >
                     <TerminalSquare className="size-3.5 shrink-0" />
-                    <span className="max-w-28 truncate">{`Terminal ${index + 1}`}</span>
+                    <span className="max-w-28 truncate">{label}</span>
+                    {command ? (
+                      <span className="flex min-w-0 items-center gap-1 text-tertiary" title={`Running ${command}`}>
+                        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-accent" />
+                        <span className="max-w-20 truncate">{command}</span>
+                      </span>
+                    ) : null}
                   </button>
                   <button
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();
-                      close(session.id);
+                      void requestClose(session.id, label);
                     }}
                     className="rounded-full p-0.5 text-tertiary opacity-70 outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-control-active hover:text-primary active:bg-list-selection group-hover:opacity-100 focus-visible:opacity-100 focus-visible:bg-list-selection focus-visible:outline-none"
-                    aria-label={`Close Terminal ${index + 1}`}
+                    aria-label={`Close ${label}`}
                   >
                     <X className="size-3" />
                   </button>
@@ -754,7 +920,9 @@ export function TerminalDrawer() {
               >
                 <TerminalViewport
                   session={session}
+                  label={`Terminal ${sessions.indexOf(session) + 1}`}
                   active={open && activeId === session.id}
+                  visible={open}
                   onFocus={() => select(session.id)}
                   onUnavailable={() => close(session.id)}
                   clearEpoch={activeId === session.id ? clearEpoch : 0}
@@ -783,5 +951,17 @@ export function TerminalDrawer() {
   return <>
     <div ref={bottomTargetRef} className="shrink-0" hidden={placement !== "bottom" || !present} />
     {createPortal(content, portalHost)}
+    <AlertDialog
+      open={pendingClose !== null}
+      onOpenChange={(next) => { if (!next) setCloseRequest(null); }}
+      title={`Close ${pendingClose?.label ?? "terminal"}?`}
+      description={`${pendingClose?.command ?? "A program"} is still running. Closing the terminal stops it.`}
+      confirmLabel="Close terminal"
+      confirmVariant="destructive"
+      onConfirm={() => {
+        if (pendingClose) close(pendingClose.id);
+        setCloseRequest(null);
+      }}
+    />
   </>;
 }

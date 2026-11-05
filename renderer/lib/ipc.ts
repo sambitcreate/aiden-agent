@@ -1344,6 +1344,9 @@ export const terminalApi = {
   resize: (sessionId: string, cols: number, rows: number) =>
     invoke<void>("terminal:resize", sessionId, cols, rows),
   close: (sessionId: string) => invoke<void>("terminal:close", sessionId),
+  /** The program running in the foreground, or null when the shell is at its prompt. */
+  foregroundCommand: (sessionId: string) =>
+    invoke<string | null>("terminal:foregroundCommand", sessionId),
 };
 
 // ── Git ───────────────────────────────────────────────────────────────

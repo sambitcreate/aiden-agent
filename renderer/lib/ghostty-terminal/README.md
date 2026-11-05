@@ -10,7 +10,9 @@ uses in the browser. This is not an xterm.js compatibility layer.
   render snapshots.
 - `renderer.ts` batches backgrounds and style runs into a Canvas 2D frame.
 - `surface.ts` owns browser input, IME, selection, scrolling, sizing, links,
-  and cursor blinking (adapted from T3 Code, MIT).
+  and cursor blinking (adapted from T3 Code, MIT). It holds painting during
+  synchronized output (DEC 2026, ended after 500ms if the program never closes
+  it) and draws nothing while `setVisible(false)`; output still reaches Ghostty.
 - `fonts/` vendors the symbols-only Nerd Font (MIT) so prompt glyphs render
   without a locally installed Nerd Font.
 - `vendor/` holds the WASM artifacts. `VERSION` is the pinned Ghostty revision

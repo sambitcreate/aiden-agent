@@ -8,7 +8,7 @@ import {
   resolveNodePtyDiskPackageDir,
   resolveNodePtySpawnHelperPaths,
 } from "./terminal-spawn-helper.js";
-import { TerminalService } from "./terminal.js";
+import { TerminalService, foregroundCommandName } from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 
 function deferred() {
@@ -1057,4 +1057,84 @@ test("bursty pty output reaches the renderer in few ordered messages and a bound
   );
   const exitIndex = owner.sent.findIndex((entry) => entry.channel === "terminal:exit");
   assert.ok(tailIndex >= 0 && tailIndex < exitIndex, "final output precedes exit");
+});
+
+test("the foreground name ignores the shell however the platform spells it", () => {
+  assert.equal(foregroundCommandName("zsh", "/bin/zsh"), null);
+  assert.equal(foregroundCommandName("-zsh", "/bin/zsh"), null);
+  assert.equal(foregroundCommandName("/bin/zsh", "/bin/zsh"), null);
+  assert.equal(foregroundCommandName("/usr/bin/python3", "/bin/zsh"), "python3");
+  assert.equal(foregroundCommandName("npm", "/bin/zsh"), "npm");
+  assert.equal(foregroundCommandName("", "/bin/zsh"), null);
+  assert.equal(foregroundCommandName(undefined, "/bin/zsh"), null);
+});
+
+async function foregroundHarness() {
+  const owner = ownerState();
+  const child = fakePty();
+  const pty = child.pty as unknown as { process: string };
+  pty.process = "zsh";
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    shellCandidates: () => ["/bin/zsh"],
+    shellIsExecutable: () => true,
+    foregroundPollMs: 5,
+  });
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+  const activity = () =>
+    owner.sent.filter((entry) => entry.channel === "terminal:activity").map((entry) => entry.payload);
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 40));
+  return { owner, child, pty, service, session, activity, settle };
+}
+
+test("a program in the foreground is reported once, and its end at once", async () => {
+  const { pty, session, activity, settle } = await foregroundHarness();
+  await settle();
+  assert.deepEqual(activity(), []);
+  pty.process = "npm";
+  await settle();
+  assert.deepEqual(activity(), [{ sessionId: session.id, command: "npm" }]);
+  pty.process = "zsh";
+  await settle();
+  assert.deepEqual(activity(), [
+    { sessionId: session.id, command: "npm" },
+    { sessionId: session.id, command: null },
+  ]);
+});
+
+test("a prompt helper that finishes between polls never reaches the tab", async () => {
+  const { pty, activity } = await foregroundHarness();
+  pty.process = "git";
+  await new Promise<void>((resolve) => setTimeout(resolve, 7));
+  pty.process = "zsh";
+  await new Promise<void>((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(activity(), []);
+});
+
+test("closing reads the foreground program fresh and only for its owner", async () => {
+  const { owner, pty, service, session } = await foregroundHarness();
+  pty.process = "vim";
+  assert.equal(service.foregroundCommand(session.id, owner.owner), "vim");
+  assert.throws(() => service.foregroundCommand(session.id, ownerState("document-2").owner), /unavailable/u);
+  service.close(session.id, owner.owner);
+  assert.throws(() => service.foregroundCommand(session.id, owner.owner), /unavailable/u);
+});
+
+test("a closed PTY reads as idle instead of throwing", async () => {
+  const { owner, child, service, session } = await foregroundHarness();
+  Object.defineProperty(child.pty, "process", {
+    get() {
+      throw new Error("ioctl failed");
+    },
+  });
+  assert.equal(service.foregroundCommand(session.id, owner.owner), null);
+});
+
+test("an exited shell stops being polled", async () => {
+  const { child, pty, activity, settle } = await foregroundHarness();
+  child.emitExit(0);
+  pty.process = "npm";
+  await settle();
+  assert.deepEqual(activity(), []);
 });
