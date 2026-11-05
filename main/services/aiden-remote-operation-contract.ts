@@ -41,6 +41,23 @@ export class AidenOperationContractError extends Error {
   }
 }
 
+/**
+ * What the call that owns an operation reports back about its own entry. Held
+ * by entry rather than key: an operation that ran nothing frees its key, so a
+ * later owner may hold the same key by the time an earlier write finishes.
+ */
+export interface AidenOperationOwnership {
+  /** The outcome is on disk, so the entry may now expire normally. */
+  recorded(): void;
+  /**
+   * The outcome could not be written. Disk still holds it in flight and the
+   * caller is told it is unknown, so the live entry must not expire into a retry.
+   */
+  unrecorded(): void;
+  /** The action's result could not be represented, so only unknown was recorded. */
+  outcomeUnknown(): boolean;
+}
+
 /** A stored rejection answering a replay; the same code a caller always saw. */
 export class AidenOperationReplayedRejection extends AidenOperationContractError {}
 
@@ -458,6 +475,8 @@ function assertSnapshot(value: unknown): asserts value is AidenIdempotencySnapsh
 
 export class AidenIdempotencyLedger {
   private readonly entries = new Map<string, AidenIdempotencyEntry>();
+  /** Settled entries whose owner is still writing them; they cannot expire yet. */
+  private readonly outcomesBeingRecorded = new Set<AidenIdempotencyEntry>();
   private lastObservedAt: number;
   private clockRollbackDetected = false;
 
@@ -571,6 +590,7 @@ export class AidenIdempotencyLedger {
   private prune(now: number): void {
     if (this.clockRollbackDetected) return;
     for (const [key, entry] of this.entries) {
+      if (this.outcomesBeingRecorded.has(entry)) continue;
       const expiresAt = aidenOperationExpiry(entry.phase);
       if (expiresAt !== null && expiresAt <= now) this.entries.delete(key);
     }
@@ -682,7 +702,8 @@ export class AidenIdempotencyLedger {
     input: unknown,
     action: () => Promise<T>,
     reference?: AidenIdempotencyOperationReference,
-  ): { admitted: boolean; result: Promise<T> } {
+    ownerRecordsOutcome = false,
+  ): { admitted: boolean; result: Promise<T>; ownership?: AidenOperationOwnership } {
     const now = this.now();
     this.prune(now);
     const ledgerKey = createHash("sha256").update(canonical(scope)).digest("base64url");
@@ -774,22 +795,24 @@ export class AidenIdempotencyLedger {
         },
       );
     entry.phase = { kind: "executing", result };
-    return { admitted: true, result: result as Promise<T> };
-  }
-
-  /**
-   * The settled outcome of `scope` could not be written, so disk still holds it
-   * in flight and the caller was told it is unknown. Without this the live entry
-   * would expire on its TTL and let the same key execute again.
-   */
-  markOutcomeUnrecorded(scope: {
-    deviceId: string;
-    route: string;
-    resourceId: string;
-    key: string;
-  }): void {
-    const entry = this.entries.get(createHash("sha256").update(canonical(scope)).digest("base64url"));
-    if (entry) entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_unrecorded" });
+    if (!ownerRecordsOutcome) return { admitted: true, result: result as Promise<T> };
+    this.outcomesBeingRecorded.add(entry);
+    return {
+      admitted: true,
+      result: result as Promise<T>,
+      ownership: {
+        recorded: () => {
+          this.outcomesBeingRecorded.delete(entry);
+        },
+        unrecorded: () => {
+          this.outcomesBeingRecorded.delete(entry);
+          if (this.entries.get(ledgerKey) === entry) {
+            entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_unrecorded" });
+          }
+        },
+        outcomeUnknown: () => entry.phase.kind === "unknown",
+      },
+    };
   }
 
   reconcile<T>(operationIdToFinalize: string, outcome: AidenIdempotencyOutcome<T>): void {
