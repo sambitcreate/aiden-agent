@@ -27,6 +27,7 @@ import {
 } from "./aiden-remote-operation-store.js";
 
 const SCOPE = { deviceId: "device-1", route: "POST /things", resourceId: "thing-1", key: "operation-key-0001" };
+const OTHER_SCOPE = { ...SCOPE, key: "operation-key-0002" };
 const MESSAGES = { notPreparedMessage: "not prepared", outcomeUnrecordedMessage: "outcome unrecorded" };
 
 function code(expected: string) {
@@ -298,16 +299,21 @@ function heldWrites(...numbers: number[]) {
     }),
   );
   let saves = 0;
-  return {
+  const disk = {
+    /** The last snapshot that reached disk. */
+    contents: undefined as AidenIdempotencySnapshot | undefined,
     write: (number: number) => held.get(number)!,
-    persist: async () => {
+    persist: async (snapshot: AidenIdempotencySnapshot) => {
       saves += 1;
       const write = held.get(saves);
-      if (!write) return;
-      write.reached();
-      await write.finished;
+      if (write) {
+        write.reached();
+        await write.finished;
+      }
+      disk.contents = snapshot;
     },
   };
+  return disk;
 }
 
 test("a replay of a rejection waits for the owner to record it", async () => {
@@ -442,6 +448,78 @@ test("an earlier owner's failed write leaves a later owner's recorded outcome al
   assert.equal(await later, "committed");
   assert.equal(await executeAidenDurableOperation(durable, SCOPE, {}, action), "committed");
   assert.equal(effects, 1);
+});
+
+/** Another scope's action that stays open, so its admission is the last write on disk. */
+function openAction() {
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let finish!: () => void;
+  const run = () =>
+    new Promise<string>((done) => {
+      finish = () => done("other");
+      started();
+    });
+  return { run, running, finish: () => finish() };
+}
+
+test("a failed outcome write published by another scope's save restarts as the true outcome", async () => {
+  const disk = heldWrites(2, 3);
+  const durable = owner(new AidenIdempotencyLedger(), disk.persist);
+  let effects = 0;
+  const action = async () => {
+    effects += 1;
+    return "committed";
+  };
+
+  const first = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  const firstAnswer = assert.rejects(first, code("idempotency_in_flight"));
+  await disk.write(2).arrived;
+  const otherAction = openAction();
+  const other = executeAidenDurableOperation(durable, OTHER_SCOPE, {}, otherAction.run);
+  await disk.write(3).arrived;
+  disk.write(2).fail(new Error("disk lost"));
+  await firstAnswer;
+  disk.write(3).release();
+  await otherAction.running;
+
+  const restarted = owner(new AidenIdempotencyLedger(disk.contents), async () => undefined);
+  assert.equal(await executeAidenDurableOperation(restarted, SCOPE, {}, action), "committed");
+  assert.equal(effects, 1);
+  otherAction.finish();
+  await other;
+});
+
+test("a failed admission published by another scope's save restarts unknown and never runs", async () => {
+  const disk = heldWrites(1, 2);
+  const durable = owner(new AidenIdempotencyLedger(), disk.persist);
+  let effects = 0;
+  const action = async () => {
+    effects += 1;
+    return "committed";
+  };
+
+  const first = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  const firstAnswer = assert.rejects(first, code("internal_error"));
+  await disk.write(1).arrived;
+  const otherAction = openAction();
+  const other = executeAidenDurableOperation(durable, OTHER_SCOPE, {}, otherAction.run);
+  await disk.write(2).arrived;
+  disk.write(1).fail(new Error("disk lost"));
+  await firstAnswer;
+  disk.write(2).release();
+  await otherAction.running;
+
+  const restarted = owner(new AidenIdempotencyLedger(disk.contents), async () => undefined);
+  await assert.rejects(
+    executeAidenDurableOperation(restarted, SCOPE, {}, action),
+    code("idempotency_in_flight"),
+  );
+  assert.equal(effects, 0);
+  otherAction.finish();
+  await other;
 });
 
 test("a replay reports the settled outcome and writes nothing", async () => {
