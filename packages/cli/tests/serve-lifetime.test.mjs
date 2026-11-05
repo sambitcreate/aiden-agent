@@ -248,7 +248,7 @@ test("stop signals only a verified daemon, at the start and at the deadline", ()
 
 test("two daemon starts cannot both spawn", posix, async (t) => {
   const box = sandbox(t);
-  t.after(() => { run(["serve", "stop"], box.env); });
+  box.stopServer = true;
   const release = api.acquireLease(join(box.agentDir, "serve-start"));
   const refused = run(["serve", "--daemon", "--no-remote"], box.env);
   assert.notEqual(refused.status, 0);
