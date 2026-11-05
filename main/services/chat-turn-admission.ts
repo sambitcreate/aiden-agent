@@ -41,6 +41,8 @@ interface ChatTurnRecord {
   appendSlotReserved: boolean;
   authorityActive: boolean;
   asyncSettled: boolean;
+  registering: boolean;
+  finalize(): void;
   expiry: ReturnType<typeof setTimeout>;
 }
 
@@ -203,7 +205,7 @@ export class ChatTurnAdmission {
           record.appendSlotReserved = false;
           record.appendBytes = 0;
         }
-        if (!record.authorityActive) finalize(record);
+        if (!record.authorityActive && !record.registering) finalize(record);
       },
       onReleased: (cleanup) => {
         if (!lease.isActive()) cleanup();
@@ -215,14 +217,25 @@ export class ChatTurnAdmission {
           return;
         record.authorityActive = false;
         clearTimeout(record.expiry);
-        for (const cleanup of cleanups) cleanup();
+        const pendingCleanups = [...cleanups];
         cleanups.clear();
-        if (record.asyncSettled) finalize(record);
+        let failure: { error: unknown } | undefined;
+        for (const cleanup of pendingCleanups) {
+          try {
+            cleanup();
+          } catch (error) {
+            failure ??= { error };
+          }
+        }
+        // A failing callback must not strand the chat: its accounting is
+        // finished first, and the failure then reaches the caller as before.
+        if (record.asyncSettled && !record.registering) finalize(record);
+        if (failure) throw failure.error;
       },
     };
     const expiry = setTimeout(() => lease.release(), this.leaseTtlMs);
     expiry.unref?.();
-    this.turns.set(chatId, {
+    const record: ChatTurnRecord = {
       lease,
       skillBytes: 0,
       skillSlotReserved: false,
@@ -230,8 +243,11 @@ export class ChatTurnAdmission {
       appendSlotReserved: false,
       authorityActive: true,
       asyncSettled: false,
+      registering: false,
+      finalize: () => finalize(record),
       expiry,
-    });
+    };
+    this.turns.set(chatId, record);
     return lease;
   }
 
@@ -305,6 +321,7 @@ export class ChatTurnAdmission {
     if (
       !record?.authorityActive ||
       !record.asyncSettled ||
+      record.registering ||
       lease?.turnId !== turnId ||
       lease.ownerId !== ownerId
     ) {
@@ -325,7 +342,15 @@ export class ChatTurnAdmission {
       this.skillTurns -= 1;
       this.skillBytes -= retainedSkillBytes;
     };
-    registerGeneration(record.preparedSkillInvocation, releaseSkillReservation);
+    record.registering = true;
+    try {
+      registerGeneration(record.preparedSkillInvocation, releaseSkillReservation);
+    } catch (error) {
+      record.registering = false;
+      if (!record.authorityActive) record.finalize();
+      throw error;
+    }
+    record.registering = false;
     if (retainsSkillReservation) {
       // The prompt remains charged after the append lease disappears because
       // initialization and the active Agent still retain its expanded bytes.
@@ -334,7 +359,10 @@ export class ChatTurnAdmission {
       transferred = true;
       if (releaseRequested) releaseSkillReservation();
     }
-    lease.release();
+    // A release during registration revoked authority but left finalizing to
+    // this outcome, so the skill charge above could move first.
+    if (record.authorityActive) lease.release();
+    else record.finalize();
     return true;
   }
 }

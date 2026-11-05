@@ -278,6 +278,81 @@ test("a skill release requested during registration completes exactly once at tr
   assert.throws(() => rival.reserveSkillPreparation(), /Too many skill messages/u);
 });
 
+test("a release during registration leaves the skill charge with the generation, refunded once", () => {
+  const admission = new ChatTurnAdmission({ maxPreparedTurns: 2, maxPreparedBytes: 64 * 1024 * 1024 });
+  const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
+  assert.ok(lease);
+  lease.reserveSkillPreparation();
+  lease.prepareSkillInvocation(preparedSkill);
+  lease.settleAsyncWork();
+  let releaseActiveSkill = () => {};
+  assert.equal(admission.handoff("chat-1", "turn-1", "owner", (_skill, release) => {
+    releaseActiveSkill = release;
+    admission.releaseChat("chat-1");
+    assert.equal(lease.isActive(), false);
+  }), true);
+  assert.equal(admission.isAdmitted("chat-1"), false);
+
+  const holders = ["a", "b"].map((id) => admission.tryBegin(`chat-${id}`, id, "owner", false));
+  const [first, second] = holders;
+  assert.ok(first && second);
+  first.reserveSkillPreparation();
+  assert.throws(
+    () => second.reserveSkillPreparation(),
+    /Too many skill messages/u,
+    "The generation still holds its prompt after the lease ended",
+  );
+  releaseActiveSkill();
+  releaseActiveSkill();
+  second.reserveSkillPreparation();
+  const third = admission.tryBegin("chat-c", "c", "owner", false);
+  assert.ok(third);
+  assert.throws(
+    () => third.reserveSkillPreparation(),
+    /Too many skill messages/u,
+    "A double refund would have admitted a third prepared skill",
+  );
+});
+
+test("one lease cannot register two generations when handoff is re-entered", () => {
+  const admission = new ChatTurnAdmission();
+  const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
+  assert.ok(lease);
+  lease.settleAsyncWork();
+  let registrations = 0;
+  let nested: boolean | undefined;
+  const handedOff = admission.handoff("chat-1", "turn-1", "owner", () => {
+    registrations += 1;
+    nested = admission.handoff("chat-1", "turn-1", "owner", () => {
+      registrations += 1;
+    });
+  });
+  assert.equal(handedOff, true);
+  assert.equal(nested, false);
+  assert.equal(registrations, 1);
+});
+
+test("a release callback that throws cannot strand the chat or skip the other callbacks", () => {
+  const admission = new ChatTurnAdmission({ maxAppendTurns: 1, maxAppendBytes: 10 });
+  const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
+  assert.ok(lease);
+  lease.reserveAppendPayload(10);
+  lease.settleAsyncWork({ retainAppendPayloadUntilRelease: true });
+  const ran: string[] = [];
+  lease.onReleased(() => {
+    ran.push("first");
+    throw new Error("cleanup failed");
+  });
+  lease.onReleased(() => ran.push("second"));
+
+  assert.throws(() => lease.release(), /cleanup failed/u);
+  assert.deepEqual(ran, ["first", "second"]);
+  assert.equal(admission.isAdmitted("chat-1"), false);
+  const next = admission.tryBegin("chat-1", "turn-2", "owner", false);
+  assert.ok(next, "The chat accepts a new turn");
+  next.reserveAppendPayload(10);
+});
+
 test("handed-off skill prompts remain globally charged until generation cleanup", () => {
   const admission = new ChatTurnAdmission({
     maxPreparedTurns: 1,
