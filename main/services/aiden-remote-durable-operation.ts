@@ -55,6 +55,13 @@ function operationKey(scope: AidenDurableOperationScope): string {
  * treats the key as unknown until a later write clears it. That can strand the
  * key but cannot repeat an effect, which is the safe side of a disk that just failed.
  *
+ * The ledger is saved whole, so another scope's save can carry this operation's
+ * phase after this operation's own write failed. Both results stay honest: an
+ * unknown caller may later learn the true outcome, and an admission that never
+ * ran can strand its key as above. Leaving unconfirmed entries out of a save
+ * would be unsafe, because that save could erase an admission already on disk
+ * while its action runs.
+ *
  * Only the call that owns the operation writes. A replay or a join has nothing
  * of its own to record, so it answers with the owner's durable result: reading
  * the ledger directly could confirm an outcome whose write then fails.
