@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { after, test } from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -1126,7 +1127,8 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
 });
 
 
-test("only host-issued routine origins reach the actual durable input; copied origins are refused before model preparation", async () => {
+test("only host-issued routine origins reach the actual durable input; copied origins are refused before model preparation", async (t) => {
+  const sent = captureAnalyticsEvents(t);
   const fauxModels = createFauxModels([fauxAssistantMessage("routine done")]);
   let prepared = 0;
   const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => { prepared++; return FAUX_MODEL_REF; } });
@@ -1139,7 +1141,81 @@ test("only host-issued routine origins reach the actual durable input; copied or
     const entry = (await (await service.conversation("bot:a")).context(ctx)).entries.find((item) => item.kind === "aiden.routine-input");
     assert.deepEqual(entry?.data, { routineOrigin: { ...origin } });
     assert.equal(fauxModels.calls(), 1);
+    await analyticsSettled();
+    assert.deepEqual(sent, [], "a host-issued routine without a display label is not a person message");
   } finally { await service.shutdown(); }
+});
+
+test("a steer into a running Bot turn is not a new message; a queued follow-up is", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const fauxModels = createFauxModels(
+    [slowAnswer(), fauxAssistantMessage("steered"), fauxAssistantMessage("followed")],
+    { tokensPerSecond: 40 },
+  );
+  const service = await serviceFor(tempProfile(), fauxModels);
+  try {
+    await service.send("bot:a", { text: "write a lot", requestId: "desk-1" });
+    await waitFor(async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
+      what: "turn start",
+    });
+    await service.send("bot:a", { text: "shorter", requestId: "desk-2", whenBusy: "steer" });
+    await analyticsSettled();
+    assert.equal(sent.length, 1, "the steer joined the turn that was already counted");
+    await service.send("bot:a", { text: "then this", requestId: "desk-3" });
+    await analyticsSettled();
+    assert.equal(sent.length, 2);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a person's message to a Bot counts once; a repeat, a routine, Telegram and a refused send do not", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const fauxModels = createFauxModels([fauxAssistantMessage("hi"), fauxAssistantMessage("[SILENT]"), fauxAssistantMessage("Telegram answer")]);
+  let model: ModelRef | null = FAUX_MODEL_REF;
+  const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => model });
+  try {
+    const first = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    await service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
+    await analyticsSettled();
+    assert.deepEqual(sent, [{
+      event: "chat_message_sent",
+      props: { provider_id: "custom", model_id: "custom", in_workspace: false, thinking: "other", origin: "bot" },
+    }]);
+
+    sent.length = 0;
+    const routine = await service.send("bot:a", { text: "new?", requestId: "routine:t1:1", label: "Inbox check" });
+    await service.awaitReply("bot:a", routine.submissionId, new AbortController().signal);
+    const telegram = await service.send("bot:a", { text: "Telegram person", requestId: "tg:123:456" });
+    await service.awaitReply("bot:a", telegram.submissionId, new AbortController().signal);
+    model = null;
+    await assert.rejects(service.send("bot:a", { text: "hi", requestId: "desk-2" }));
+    await analyticsSettled();
+    assert.deepEqual(sent, []);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a message from another Bot is not a person's message", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage("answer")]));
+  const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+  try {
+    const delivered = await service.send("bot:a", {
+      text: "framed",
+      requestId: `bot:J:1:${deliveryId}`,
+      ifIdle: true,
+      ifNotInterrupted: true,
+      botMessage: { kind: "request", deliveryId, botId: "J", botName: "Jester", text: "clean", deadline: Date.now() + 60_000 },
+    });
+    await service.awaitReply("bot:a", delivered.submissionId, new AbortController().signal);
+    await analyticsSettled();
+    assert.deepEqual(sent, []);
+  } finally {
+    await service.shutdown();
+  }
 });
 
 test('Bot message inputs persist host provenance and are quiet', async () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createDecipheriv, hkdfSync } from "node:crypto";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import {
   AidenRemotePairingService,
   normalizeAidenManualPairingCode,
@@ -22,7 +23,9 @@ const endpoint = "https://aiden.example.test/api/aiden/v1";
 const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 
 function fixture(options: {
+  devices?: Array<{ type: string; revokedAt?: number }>;
   issueFails?: boolean;
+  beforeDeviceList?: () => Promise<void>;
   botCapabilitiesSupported?: boolean;
   hostCapabilitiesSupported?: boolean;
 } = {}) {
@@ -53,6 +56,7 @@ function fixture(options: {
           },
         };
       },
+      listDevices: async () => { await options.beforeDeviceList?.(); return (options.devices ?? []) as never; },
     },
     {
       now: () => now,
@@ -497,4 +501,35 @@ test("Android pairs as a phone without desktop authority", async () => {
   const result = await pairing.service.exchange({ ...exchange(opened.bootstrap.secret, true, true, true), deviceType: "android" }, "android");
   assert.equal(result.capabilities.includes("host:events"), false);
   assert.equal(result.capabilities.includes("simulators:control"), false);
+});
+
+test("a paired phone counts once with its route and the phones in use; a desktop or a failed issue does not", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const failed = fixture({ issueFails: true });
+  await assert.rejects(failed.service.exchange(exchange(failed.service.begin(endpoint, fingerprint).bootstrap.secret), "phone"));
+
+  const desktop = fixture();
+  const opened = desktop.service.begin(endpoint, fingerprint);
+  await desktop.service.exchange({ ...exchange(opened.bootstrap.secret), deviceType: "mac" }, "desktop");
+  await analyticsSettled();
+  assert.deepEqual(sent, []);
+
+  const phone = fixture({ devices: [{ type: "iphone" }, { type: "android" }, { type: "ipad", revokedAt: 5 }, { type: "mac" }] });
+  await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint, "tailscale").bootstrap.secret), "phone");
+  await analyticsSettled();
+  assert.deepEqual(sent, [{ event: "phone_paired", props: { transport: "tailscale", device_count: "2-3" } }]);
+});
+
+
+test("phone count metadata cannot move an earlier pairing to a new analytics sender", async (t) => {
+  const previous = captureAnalyticsEvents(t);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const phone = fixture({ beforeDeviceList: () => held });
+  await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint).bootstrap.secret), "phone");
+  const current = captureAnalyticsEvents(t);
+  release();
+  await analyticsSettled();
+  assert.deepEqual(previous, []);
+  assert.deepEqual(current, [], "the earlier pairing cannot be attributed to the replacement sender");
 });

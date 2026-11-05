@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
+import * as analyticsFeatureReports from "./analytics/analytics-feature-reports.js";
+import * as analyticsIds from "./analytics/analytics-ids.js";
+import * as analyticsReport from "./analytics/analytics-report.js";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import * as crypto from "node:crypto";
+import * as nodeModule from "node:module";
 import { mkdtempSync, promises as fsPromises, rmSync } from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
@@ -184,6 +189,7 @@ async function executionHarness(
     scriptFailure?: boolean;
     output?: string;
     peerOwnsFinal?: boolean;
+    duringScript?: () => void;
   } = {},
 ) {
   const records: ScheduledRun[] = [];
@@ -244,6 +250,7 @@ async function executionHarness(
     "./schedule-script.js": {
       resolveScheduledScript: async () => "/synthetic/script.sh",
       runScheduledScript: async () => {
+        options.duringScript?.();
         if (options.scriptFailure) throw new Error("synthetic script failure");
         return { stdout: output, stderr: "", exitCode: 0 };
       },
@@ -260,6 +267,11 @@ async function executionHarness(
       get: async () => ({ name: "Planner", interruptions: { quietHours: { enabled: false, start: "22:00", end: "07:00" }, dailyLimit: 20 } }),
     },
   };
+  ports["./analytics/analytics-report.js"] = analyticsReport;
+  ports["./analytics/analytics-ids.js"] = analyticsIds;
+  ports["./analytics/analytics-feature-reports.js"] = analyticsFeatureReports;
+  // Bot routines bundle the id helpers, whose sanitizer reads the module list on load.
+  ports["node:module"] = nodeModule;
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
@@ -456,4 +468,28 @@ test("a peer-owned routine final preserves run completion without an initial not
   assert.deepEqual(h.telegramDeliveries, []);
   assert.deepEqual(h.clicks, []);
   assert.equal(h.profile(), undefined, "the reserved peer final suppresses delivery before reading its log");
+});
+
+test("a finished task run counts once by its result and what started it", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const script = task({ mode: "script", permission: "full", script: "/synthetic/script.sh" });
+  await (await executionHarness({})).execution.run(script);
+  await (await executionHarness({ scriptFailure: true })).execution.run(script, undefined, { kind: "automatic", fireTime: 1 });
+  await (await executionHarness({ output: "" })).execution.run(script, undefined, { kind: "manual", key: "run-3" });
+  assert.deepEqual(sent, [
+    { event: "scheduled_task_ran", props: { trigger: "manual", result: "success" } },
+    { event: "scheduled_task_ran", props: { trigger: "automatic", result: "failed" } },
+    { event: "scheduled_task_ran", props: { trigger: "manual", result: "silent" } },
+  ]);
+});
+
+test("a cancelled task run is not counted", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const script = task({ mode: "script", permission: "full", script: "/synthetic/script.sh" });
+  let cancel = () => {};
+  const h = await executionHarness({ scriptFailure: true, duringScript: () => cancel() });
+  cancel = () => void h.execution.cancel(script.id);
+  const run = await h.execution.run(script);
+  assert.equal(run.result, "blocked");
+  assert.deepEqual(sent, []);
 });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -127,6 +128,7 @@ test("chosen small context triggers blocking compaction with the same model, thi
   assert.equal(env.charges.length, 2); assert.equal(new Set(env.charges.map((row) => row.id)).size, 2); assert.ok(env.charges.every((row) => row.owner === "A"));
 });
 test("unknown dispatch passively suspends the real SQLite Bot; explicit person Resume advances one durable attempt and preserves queued B", { timeout: 10_000 }, async (t) => {
+  const sent = captureAnalyticsEvents(t);
   const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-execution-paused-")); t.after(() => rm(folder, { recursive: true, force: true }));
   const env = await environment(path.join(folder, "unused.sqlite"), {}, { compaction: { enabled: false } }); await env.harness.close(ctx);
   const blockedGate = gate(), attempts: string[] = [], issues: string[] = []; let acknowledged = false, acknowledgements = 0, defaultResolutions = 0;
@@ -153,6 +155,8 @@ test("unknown dispatch passively suspends the real SQLite Bot; explicit person R
   assert.equal((await service.awaitReply("bot:one", a.submissionId, new AbortController().signal)).kind, "completed"); assert.equal((await service.awaitReply("bot:one", b.submissionId, new AbortController().signal)).kind, "completed");
   assert.equal(acknowledgements, 1); assert.notEqual(attempts[0], attempts[1]); assert.deepEqual(env.calls.map(({ model }) => model), ["A", "B"]);
   await service.resume("bot:one", "person-resume-confirmed", cost); assert.equal(acknowledgements, 1); assert.equal(defaultResolutions, 0);
+  await analyticsSettled();
+  assert.deepEqual(sent, Array.from({ length: 2 }, () => ({ event: "chat_message_sent", props: { provider_id: "custom", model_id: "custom", in_workspace: false, thinking: "other", origin: "bot" } })), "only the two admitted person inputs count, using allowlisted IDs without resolving the unavailable default");
 });
 test("delayed background A compaction keeps A model, thinking and owner while B streams", async (t) => {
   const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-execution-background-")); t.after(() => rm(folder, { recursive: true, force: true }));

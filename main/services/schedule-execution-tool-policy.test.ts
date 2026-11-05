@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
+import * as analyticsFeatureReports from "./analytics/analytics-feature-reports.js";
+import * as analyticsIds from "./analytics/analytics-ids.js";
+import * as analyticsReport from "./analytics/analytics-report.js";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import * as acpHarness from "../../renderer/shared/acp-harness.js";
@@ -54,7 +58,10 @@ function task(patch: Partial<ScheduledTask> = {}): ScheduledTask {
   };
 }
 
-async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
+async function executionHarness(
+  webSearch: () => Promise<{ ready?: boolean }>,
+  finish: [channel: string, payload: unknown] = ["chat:done", { content: "Done." }],
+) {
   const started: StartedGeneration[] = [];
   let availabilityReads = 0;
   const chat = { id: "chat-1", title: "Morning brief", updatedAt: 1 };
@@ -101,7 +108,7 @@ async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
           options: StartedGeneration["options"],
         ) => {
           started.push({ params, options });
-          owner.send("chat:done", { content: "Done." });
+          owner.send(...finish);
           return true;
         },
         waitForChatIdle: async () => true,
@@ -117,6 +124,9 @@ async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
     "../../renderer/shared/gemini-usage-scope.js": geminiUsageScope,
     "../../renderer/shared/acp-harness.js": acpHarness,
   };
+  ports["./analytics/analytics-report.js"] = analyticsReport;
+  ports["./analytics/analytics-ids.js"] = analyticsIds;
+  ports["./analytics/analytics-feature-reports.js"] = analyticsFeatureReports;
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
@@ -153,6 +163,7 @@ async function executionHarness(webSearch: () => Promise<{ ready?: boolean }>) {
       assert.equal(started.length, 1, "exactly one generation starts");
       return started[0]!;
     },
+    runToEnd: (scheduled: ScheduledTask) => execution.run(scheduled),
     availabilityReads: () => availabilityReads,
   };
 }
@@ -209,4 +220,26 @@ test("an unattended Assistant run carries its approved provider fingerprint into
   );
   assert.equal(params.mode, "assistant-unattended");
   assert.equal(options.providerFingerprint, FINGERPRINT);
+});
+
+test("a run stopped by a permission counts as failed", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const h = await executionHarness(notReady, ["chat:error", { message: "Blocked: this tool is read-only." }]);
+  const run = await h.runToEnd(task());
+  assert.equal(run.result, "blocked");
+  assert.deepEqual(
+    sent.filter(({ event }) => event === "scheduled_task_ran").map(({ props }) => props?.result),
+    ["failed"],
+  );
+});
+
+test("a scheduled run counts its one generated message as coming from the schedule", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const h = await executionHarness(notReady);
+  await h.run(task({ permission: "full", mcpServerIds: [] }));
+  await analyticsSettled();
+  assert.deepEqual(
+    sent.filter(({ event }) => event === "chat_message_sent").map(({ props }) => props?.origin),
+    ["schedule"],
+  );
 });

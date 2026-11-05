@@ -1,4 +1,6 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -227,7 +229,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           owner,
           input.workspaceId,
         );
-        if (!(await deps.configStore.getWorkspace(input.workspaceId))) {
+        const workspace = await deps.configStore.getWorkspace(input.workspaceId);
+        if (!workspace) {
           throw new Error("The selected workspace is no longer available.");
         }
         const assertCurrent = () => {
@@ -242,7 +245,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           }
         };
         try {
-          return chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
+          const chat = chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
+          reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+          return chat;
         } catch (error) {
           if (isChatCreateReconciliationRequiredError(error)) {
             return markReconciliationRequired(owner);

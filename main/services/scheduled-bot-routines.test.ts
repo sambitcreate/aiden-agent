@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DataStore } from "./data-store.js";
 import { openProtectedRoutineClaims, claimTestModule, killAfterRoutineReceipt } from "./bot-routine-model-claim-test-support.js";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { scheduledJobs, type Cron } from "croner";
 import { BotSessionError } from "./bot-runtime/bot-session-service.js";
 import type {
@@ -1715,3 +1716,28 @@ for (const timing of ["while permission is pending", "just after permission reso
     assert.deepEqual(h.session.sends, []);
   });
 }
+
+test("a routine run counts once by what started it, including a failure, and a skipped run counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  const task = (await h.store.get(routine.id))!;
+
+  await h.run(task, undefined, { kind: "manual", key: "run-1" });
+  h.session.replies.push({ kind: "failed", error: "The AI service is unreachable." });
+  await h.run(task, undefined, { kind: "automatic", fireTime: 1 });
+  assert.deepEqual(sent, [
+    { event: "bot_routine_ran", props: { trigger: "manual", result: "success" } },
+    { event: "bot_routine_ran", props: { trigger: "automatic", result: "failed" } },
+  ]);
+
+  sent.length = 0;
+  h.session.states.set("bot-scout", { kind: "paused", since: 1, by: "person" as never });
+  await h.run(task, undefined, { kind: "automatic", fireTime: 2 });
+  assert.deepEqual(sent, []);
+});

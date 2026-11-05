@@ -240,11 +240,11 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       return bot ?? null;
     }, mintBotId: newBotId,
     reserveCreation: (key, botId) => creationKeys.set(key, botId),
-    createBot: (bot, access, botId) => ports.application.createBot({ audienceId: "cli:local", botId, bot, access }),
+    createBot: (bot, access, botId, presetId) => ports.application.createBot({ audienceId: "cli:local", botId, bot, access, presetId }),
     session: runtime,
   });
   return { runtime, messages, approvals, memory, stateChanges, presets: { list: () => BOT_PRESETS, create: async (presetId: string, { audienceId }: { audienceId: string }) => {
-    const result = await starter.startFromPreset(presetId, { createBot: (bot, botId) => ports.application.createBot({ audienceId, botId, bot }) });
+    const result = await starter.startFromPreset(presetId, { createBot: (bot, botId, presetId) => ports.application.createBot({ audienceId, botId, bot, presetId }) });
     return { botId: result.bot.id, created: result.created };
   } } };
 }

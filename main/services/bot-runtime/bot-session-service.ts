@@ -2,12 +2,13 @@ import { BOT_PEER_MESSAGE_ENTRY_KIND, parseBotPeerTranscriptData, type BotPeerTr
 import type { BotPeerRuntimeReceipt, BotPeerPublication } from "../bot-peers/service.js";
 import { inspectBotPeerInputOrigin, type BotPeerInputOrigin } from "../bot-peers/authority.js";
 import { BOT_PERSON_INPUT_KIND, BOT_PEER_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, isIssuedBotRoutineInputOrigin, type BotRoutineInputOrigin } from "./bot-input-entry.js";
-import { BOT_EXECUTION_INPUT_KEY, BotExecutionDoc, botCostApprovalFacts, createBotExecutionRegistry, reconcileBotExecutionResponses, stampBotExecutionTask, withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
+import { BOT_EXECUTION_INPUT_KEY, BotExecutionDoc, botExecutionScope, botCostApprovalFacts, createBotExecutionRegistry, reconcileBotExecutionResponses, stampBotExecutionTask, withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
 import type { BotExecutionClaim } from "../bot-routine-models.js";
 import { botConnectorExecutionRestriction, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
 import { createHash, randomUUID } from "node:crypto";
 import { botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
 import type { BotExecutionResumeStatus, BotResumeAcknowledgement } from "../../../renderer/shared/bot-execution-resume.js";
+import { reportChatMessageSent } from "../analytics/analytics-feature-reports.js";
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 // The Bot turn path: every ingress (desktop, Remote, Telegram, routines)
@@ -613,7 +614,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
    * admission after the idle snapshot. Each request and call applies its own
    * ingress rules (`turnAllows` in `bot-extension.ts`).
    */
-  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
+  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<ModelRef> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
     if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message, resolved.authority);
@@ -623,6 +624,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
       await conversation.configure({ model }, ctx);
     }
+    return model;
   }
 
   /** Abort the paused turn without running it, and mark its partial answer interrupted. */
@@ -869,8 +871,13 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind === "interrupted" && (input.ifNotInterrupted || peer)) throw new BotSessionError("bot_paused");
         if (input.ifIdle && before.kind !== "idle") throw new BotSessionError("bot_busy");
         const execution = await deps.execution?.claim(botId, { requestId: input.requestId, ...(routineOrigin ? { routineOrigin } : {}), ...(input.peerOrigin ? { peerOrigin: input.peerOrigin } : {}), ...(input.routineTiming ?? {}), ...(input.retryOf ? { retryOf: input.retryOf } : {}), ...(botConnectorInventoryServer() ? { connectorServerId: botConnectorInventoryServer() } : {}), ...(botConnectorExecutionRestriction() ? { connectorRestriction: botConnectorExecutionRestriction() } : {}) });
-        if (execution && deps.execution) await withBotExecutionAdmission(botId, execution, deps.execution, () => registry.refresh(), { allowFallback: true });
-        else await prepareToRun(botId, conversation, registry);
+        const model = execution && deps.execution
+          ? await withBotExecutionAdmission(botId, execution, deps.execution, async () => {
+            await registry.refresh();
+            const admitted = botExecutionScope(botId)!.runtime.model;
+            return { provider: admitted.provider, modelId: admitted.id };
+          }, { allowFallback: true })
+          : await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(botId, conversation, before.submissionId);
           blocked.delete(botId);
@@ -896,6 +903,18 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         );
         if (execution) await deps.execution?.recordSubmission?.(botId, execution.id, String(submission.id));
         if (input.hidden === true) hiddenSubmissions.add(String(submission.id));
+        // A routine's input, the hidden self-intro and another Bot's message are not
+        // the person's message, and a steer joins the running turn, as a mid-turn
+        // message does in a chat.
+        const joinsRunningTurn = input.whenBusy === "steer" && before.kind === "running";
+        if (input.label === undefined && input.hidden !== true && input.botMessage === undefined && !routineOrigin && !peer && !input.requestId.startsWith("tg:") && !joinsRunningTurn) {
+          reportChatMessageSent({
+            providerId: model.provider,
+            model: model.modelId,
+            origin: "bot",
+            inWorkspace: () => false,
+          });
+        }
         requireHost().touch(botId);
         publish(botId, await currentState(botId));
         return { submissionId: String(submission.id), deduped: false };
