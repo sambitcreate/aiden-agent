@@ -157,7 +157,11 @@ Owner: `approvedMutation` in `createCliScheduler` (`schedules.ts`) over `assertS
 | command with consent | none | `first_write` | snapshot, expiry and receipt verified at entry |
 | durable write verified | `first_write` | `follow_on` | task checked once; later writes check only the environment |
 | verification fails | `first_write` or `follow_on` | `closed` | abort, so the shared lifecycle rolls back |
-| command ends | any | `closed` | consent can never be used again |
+| command ends | any | `closed` | this context is finished, and its receipt is spent |
+
+A receipt is spent as the command starts, in memory, so it works once even if the command fails or the file stays on disk. A `save` must also read back the input that was reviewed, because the file is read after consent.
+
+**Defects fixed:** a `save` trusted whatever the file held by then, and a new-task consent could be replayed until it expired, since only the retired producer ever removed the receipt.
 
 No producer of consent remains in `src` since the model-facing tool was retired; only this guard is live. It had no tests, so `tests/schedule-consent.test.mjs` covers valid, reused, expired, cancelled, mismatched, and environment or task changed after review, and revocation between the entry check and the write.
 

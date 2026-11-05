@@ -4,6 +4,7 @@ import { storeFor } from "./mcp.ts";
 import { runScheduledInference } from "./scheduled-inference.ts";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 import { createHash } from "node:crypto";
 import { createScheduleStore, nextScheduledRuns } from "../../../main/services/schedule-store-core.js";
@@ -14,7 +15,7 @@ import { workspaceStore, accessFor } from "./workspaces.ts";
 import { resolveScheduledScript, runScheduledScript } from "../../../main/services/schedule-script.js";
 import { createCliModelRuntime } from "./providers.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { assertScheduleApproval, isScheduleMutation, type ScheduleToolApproval } from "./schedule-tool-approval.ts";
+import { assertScheduleApproval, isScheduleMutation, reviewedScheduleInput, type ScheduleToolApproval } from "./schedule-tool-approval.ts";
 
 async function providerFingerprint(agentDir: string, providerId?: string, modelId?: string): Promise<string> {
   if (!providerId || !modelId) throw new Error("Select an explicit provider and model for unattended inference.");
@@ -27,6 +28,8 @@ async function providerFingerprint(agentDir: string, providerId?: string, modelI
 export function createCliScheduler(agentDir: string) {
   // Consent verifies the task on the first write and only the environment after it.
   // `closed` is terminal: a rejected write or a finished command can never use it again.
+  // One receipt, one command, even if the command fails: the person reviews again.
+  const spentApprovals = new Set<string>();
   const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; phase: "first_write" | "follow_on" | "closed"; cancellation: AbortController }>();
   const persistence = new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []);
   const tasks = {
@@ -114,7 +117,9 @@ export function createCliScheduler(agentDir: string) {
     if (isScheduleMutation(action) && timezone !== undefined) {
       const approval = JSON.parse(timezone) as ScheduleToolApproval;
       if (approval.action !== action) throw new Error("The approved schedule action changed.");
+      if (spentApprovals.has(approval.approvalFile)) throw new Error("Scheduled-task approval was already used. Review the task again.");
       assertScheduleApproval(agentDir, approval);
+      spentApprovals.add(approval.approvalFile);
       const current = { approval, phase: "first_write" as "first_write" | "follow_on" | "closed", cancellation: new AbortController() };
       try {
         return await approvedMutation.run(current, () => command(args.slice(0, 2)));
@@ -184,6 +189,8 @@ export function createCliScheduler(agentDir: string) {
       case "save": {
         if (!value) throw new Error("Provide a JSON file containing ScheduledTaskInput.");
         const input = JSON.parse(readFileSync(value, "utf8")) as ScheduledTaskInput;
+        // The file is read after consent, so what it holds must still be what was reviewed.
+        if (consentOpen && !isDeepStrictEqual(input, reviewedScheduleInput(currentApproval.approval))) throw new Error("The schedule changed after approval. Review it again.");
         return saveInput(input, mutationOptions);
       }
       case "remove": await service.remove(value, mutationOptions); return { removed: value };

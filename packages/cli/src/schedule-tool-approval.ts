@@ -13,6 +13,12 @@ export interface ScheduleToolApproval {
   approvalFile: string;
 }
 
+/** What a save was reviewed as: the proposal, without the action naming it. */
+export function reviewedScheduleInput(approval: ScheduleToolApproval): Record<string, unknown> {
+  const { action: _action, ...input } = approval.input as Record<string, unknown>;
+  return input;
+}
+
 export const isScheduleMutation = (action: unknown): boolean =>
   action === "save" || action === "pause" || action === "resume" || action === "remove";
 

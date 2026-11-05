@@ -28,11 +28,34 @@ async function fixture(t) {
   return { dir, scheduler, workspace, task, consent, stored, run: (action, approval) => scheduler.command([action, task.id, JSON.stringify(approval)]) };
 }
 
-test("consent for the task as reviewed lets the mutation through once", async (t) => {
+test("consent for a new schedule covers the reviewed input, once", async (t) => {
+  const f = await fixture(t), file = join(f.dir, "new.json");
+  const reviewed = { name: "New", mode: "script", script: "true", cron: "0 9 * * *", timezone: "UTC", permission: "full", enabled: false, workspaceId: f.workspace.id };
+  const review = (name) => {
+    const approval = { cwd: f.dir, action: "save", input: reviewed, expiresAt: Date.now() + 60_000, approvalFile: join(f.dir, `${name}.json`) };
+    approval.snapshot = api.scheduleApprovalSnapshot(f.dir, approval);
+    writeFileSync(approval.approvalFile, JSON.stringify(approval.snapshot));
+    return approval;
+  };
+  const save = (approval) => f.scheduler.command(["save", file, JSON.stringify(approval)]);
+  const count = async () => (await f.scheduler.command(["list"])).length;
+  const before = await count(), swapped = review("swapped"), approved = review("approved");
+  writeFileSync(file, JSON.stringify({ ...reviewed, script: "rm -rf ." }));
+  await assert.rejects(save(swapped), /changed after approval/u);
+  assert.equal(await count(), before, "a swapped file is not what was reviewed");
+  writeFileSync(file, JSON.stringify(reviewed));
+  await assert.rejects(save(swapped), /already used/u, "a rejected command spends its consent");
+  await save(approved);
+  assert.equal(await count(), before + 1);
+  await assert.rejects(save(approved), /already used/u);
+  assert.equal(await count(), before + 1, "the receipt was left in place, but consent is spent");
+});
+
+test("consent for the task as reviewed lets the mutation through", async (t) => {
   const f = await fixture(t), approval = f.consent("pause");
   await f.run("pause", approval);
   assert.equal((await f.stored()).enabled, false);
-  await assert.rejects(f.run("pause", approval), /changed after approval/u, "the same consent no longer matches the task");
+  await assert.rejects(f.run("pause", approval), /already used/u);
 });
 
 test("expired, cancelled or mismatched consent changes nothing", async (t) => {
