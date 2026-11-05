@@ -6,16 +6,27 @@ import assert from "node:assert/strict";
 import { afterEach, before, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../../main/bots/test-dom";
+import type * as Storage from "../../shared/storage";
 import type { StorageReport } from "../../shared/storage";
+import type { StorageSettings as StorageSettingsView } from "./storage-settings";
 
 // Loaded from the hook so an import failure is the test error, not a file
 // that never starts. A static import that throws is reported only as "test failed".
-type StorageModule = typeof import("../../shared/storage");
-let assembleStorageReport!: StorageModule["assembleStorageReport"];
-let classifyThread!: StorageModule["classifyThread"];
-let classifyWorktree!: StorageModule["classifyWorktree"];
-let emptyStorageReport!: StorageModule["emptyStorageReport"];
-let StorageSettings!: typeof import("./storage-settings").StorageSettings;
+let assembleStorageReport: typeof Storage.assembleStorageReport = () => {
+  throw new Error("storage helpers were not loaded");
+};
+let classifyThread: typeof Storage.classifyThread = () => {
+  throw new Error("storage helpers were not loaded");
+};
+let classifyWorktree: typeof Storage.classifyWorktree = () => {
+  throw new Error("storage helpers were not loaded");
+};
+let emptyStorageReport: typeof Storage.emptyStorageReport = () => {
+  throw new Error("storage helpers were not loaded");
+};
+let StorageSettings: typeof StorageSettingsView = () => {
+  throw new Error("storage page was not loaded");
+};
 
 before(async () => {
   ({ assembleStorageReport, classifyThread, classifyWorktree, emptyStorageReport } = await import("../../shared/storage"));
