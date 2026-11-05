@@ -6,6 +6,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
+import { session } from "electron";
 import { chatStore } from "./chat-store.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { configStore } from "./config-store.js";
@@ -21,6 +22,9 @@ import { terminalService } from "./terminal.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { chatTriage } from "./chat-triage-main.js";
 import { workspaceWorktreeApplicationService } from "./workspace-worktree-application-service-main.js";
+import { botStore } from "./bot-store.js";
+import { browserService } from "./browser/service.js";
+import { scheduleStore } from "./schedule-store.js";
 import { createStorageUsageService } from "./storage-usage.js";
 
 /**
@@ -46,6 +50,18 @@ export const storageUsageService = createStorageUsageService({
       if (entry.pinnedAt !== undefined) pinned.add(chatId);
     }
     return pinned;
+  },
+  async scheduledTaskWorkspaceIds() {
+    const tasks = await scheduleStore.list();
+    return tasks.flatMap((task) => (task.workspaceId ? [task.workspaceId] : []));
+  },
+  async clearBrowserCache() {
+    // The app's own window cache, then every saved browser profile and each
+    // Bot's. Cookies and site data stay, so nobody is signed out.
+    await session.defaultSession.clearCache();
+    await session.defaultSession.clearCodeCaches({});
+    const bots = await botStore.list();
+    await browserService.clearCaches(bots.map((bot) => bot.id));
   },
   removeWorktree: async (workspaceId) => {
     await workspaceWorktreeApplicationService.remove(headlessOwner, workspaceId);

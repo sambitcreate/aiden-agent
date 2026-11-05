@@ -11,8 +11,10 @@ import test from "node:test";
 
 import {
   createStorageScanBudget,
+  diskBytes,
   measurePathBytes,
   orderCategories,
+  planBrowserCacheCleanup,
   planStorageCleanup,
   planThreadCleanup,
   planWorktreeCleanup,
@@ -23,7 +25,6 @@ import {
   classifyThread,
   classifyWorktree,
   DEFAULT_STORAGE_INACTIVE_DAYS,
-  DEFAULT_THREAD_INACTIVE_DAYS,
   emptyStorageReport,
   formatStorageBytes,
   threadProtectionReason,
@@ -58,12 +59,14 @@ function worktreeFacts(overrides: Partial<StorageWorktreeFacts> = {}): StorageWo
     name: "Repo · feature",
     branch: "feature",
     bytes: 1_000,
+    bytesComplete: true,
     lastUsedAt: NOW - 40 * DAY,
     uncommitted: 0,
     unpushed: 0,
     active: false,
     changing: false,
     gitStateKnown: true,
+    routineCount: 0,
     ...overrides,
   };
 }
@@ -73,6 +76,8 @@ function threadFacts(overrides: Partial<StorageThreadFacts> = {}): StorageThread
     chatId: "chat-1",
     title: "Old chat",
     bytes: 1_000,
+    bytesComplete: true,
+    imageCount: 0,
     lastUsedAt: NOW - 120 * DAY,
     active: false,
     pinned: false,
@@ -90,11 +95,16 @@ function reportWith(
     categories,
     worktrees,
     threads,
+    browserCacheBytes: 0,
     scan: { status: "ready", scannedAt: NOW, error: null, truncated: false },
   });
 }
 
 // ── Measurement ────────────────────────────────────────────────────────
+
+async function allocated(file: string): Promise<number> {
+  return diskBytes(await fs.lstat(file));
+}
 
 test("measurePathBytes adds regular files and skips symlinks", async () => {
   const root = await tempRoot();
@@ -110,12 +120,66 @@ test("measurePathBytes adds regular files and skips symlinks", async () => {
       path.join(root, "measured", "linked.txt"),
     );
     const measured = await measurePathBytes(path.join(root, "measured"), createStorageScanBudget());
-    assert.equal(measured.bytes, 350, "only the two real files count");
+    const expected =
+      (await allocated(path.join(root, "measured", "a.txt"))) +
+      (await allocated(path.join(root, "measured", "nested", "b.txt")));
+    assert.equal(measured.bytes, expected, "only the two real files count");
     assert.equal(measured.files, 2);
     assert.equal(measured.truncated, false);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("a sparse file counts the space it really occupies, not its reserved size", async () => {
+  // Bot computer disks are sparse: a 64 GB disk image may hold a few GB.
+  const root = await tempRoot();
+  try {
+    const disk = path.join(root, "disk.img");
+    const handle = await fs.open(disk, "w");
+    await handle.truncate(512 * 1024 * 1024);
+    await handle.write(Buffer.alloc(64 * 1024, 1), 0, 64 * 1024, 0);
+    await handle.close();
+    const measured = await measurePathBytes(root, createStorageScanBudget());
+    if (process.platform !== "win32") {
+      assert.ok(measured.bytes < 16 * 1024 * 1024, `a 512 MB sparse file reported ${measured.bytes} bytes`);
+    }
+    assert.ok(measured.bytes > 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a hard-linked file counts once across the whole scan", async () => {
+  // Chat pictures are hard-linked, so two paths can name the same bytes.
+  const root = await tempRoot();
+  try {
+    await writeFileWithBytes(path.join(root, "chats", "images", "aa", "picture"), 200_000);
+    await fs.mkdir(path.join(root, "create-images"), { recursive: true });
+    await fs.link(path.join(root, "chats", "images", "aa", "picture"), path.join(root, "create-images", "picture"));
+    const one = await allocated(path.join(root, "chats", "images", "aa", "picture"));
+    const budget = createStorageScanBudget();
+    const chats = await measurePathBytes(path.join(root, "chats"), budget);
+    const images = await measurePathBytes(path.join(root, "create-images"), budget);
+    assert.equal(chats.bytes + images.bytes, one, "the second path adds nothing");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("measurePathBytes skips excluded directories so each worktree is measured once", async () => {
+  const root = await tempRoot();
+  try {
+    await writeFileWithBytes(path.join(root, "worktrees", "repo-1", "tree-a", "big.bin"), 300_000);
+    await writeFileWithBytes(path.join(root, "worktrees", "orphan.bin"), 10_000);
+    const tree = path.join(root, "worktrees", "repo-1", "tree-a");
+    const rest = await measurePathBytes(path.join(root, "worktrees"), createStorageScanBudget(), {
+      exclude: new Set([tree]),
+    });
+    assert.equal(rest.bytes, await allocated(path.join(root, "worktrees", "orphan.bin")));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
@@ -136,7 +200,7 @@ test("a scan budget stops the walk and marks the total as a floor", async () => 
       await writeFileWithBytes(path.join(root, `file-${index}.txt`), 10);
     }
     const budget = createStorageScanBudget({
-      limits: { maxEntries: 3, maxBytes: 1024, maxDurationMs: 60_000 },
+      limits: { maxEntries: 3, maxDurationMs: 60_000 },
     });
     const measured = await measurePathBytes(root, budget);
     assert.equal(measured.truncated, true, "the walk stopped when the entry cap was hit");
@@ -150,7 +214,7 @@ test("a scan budget stops the walk and marks the total as a floor", async () => 
 test("the scan budget also expires on elapsed time", () => {
   let clock = 0;
   const budget = createStorageScanBudget({
-    limits: { maxEntries: 1_000, maxBytes: 1_000, maxDurationMs: 5 },
+    limits: { maxEntries: 1_000, maxDurationMs: 5 },
     now: () => clock,
   });
   assert.equal(budget.exhausted(), false);
@@ -159,13 +223,15 @@ test("the scan budget also expires on elapsed time", () => {
   assert.equal(budget.truncated, true);
 });
 
-test("category totals stay in display order even when a category is missing", () => {
-  const ordered = orderCategories([{ id: "logs", bytes: 40, itemCount: 2 }]);
-  assert.deepEqual(
-    ordered.map((entry) => entry.id),
-    ["worktrees", "snapshots", "threads", "artifacts", "logs", "caches", "downloads"],
-  );
-  assert.equal(ordered.find((entry) => entry.id === "logs")?.bytes, 40);
+test("category totals list every category once, adding up entries of the same category", () => {
+  const ordered = orderCategories([
+    { id: "logs", bytes: 40, itemCount: 2 },
+    { id: "logs", bytes: 10, itemCount: 1 },
+  ]);
+  assert.equal(new Set(ordered.map((entry) => entry.id)).size, ordered.length);
+  assert.equal(ordered.length, 9);
+  assert.equal(ordered.find((entry) => entry.id === "logs")?.bytes, 50);
+  assert.equal(ordered.find((entry) => entry.id === "logs")?.itemCount, 3);
   assert.equal(ordered.find((entry) => entry.id === "worktrees")?.bytes, 0);
 });
 
@@ -177,6 +243,7 @@ test("the report total is the sum of its categories, and items are sorted by siz
     ],
     worktrees: [classifyWorktree(worktreeFacts({ bytes: 10 }), NOW), classifyWorktree(worktreeFacts({ workspaceId: "ws-2", bytes: 90 }), NOW)],
     threads: [classifyThread(threadFacts({ bytes: 5 }), NOW)],
+    browserCacheBytes: 0,
     scan: { status: "ready", scannedAt: NOW, error: null, truncated: false },
   });
   assert.equal(report.totalBytes, 1_000);
@@ -191,7 +258,7 @@ test("an empty report still lists every category so the bar has a stable shape",
     truncated: false,
   });
   assert.equal(report.totalBytes, 0);
-  assert.equal(report.categories.length, 7);
+  assert.equal(report.categories.length, 9);
 });
 
 // ── Sizes and percentages ──────────────────────────────────────────────
@@ -258,6 +325,16 @@ test("a worktree whose Git state could not be read is never treated as safe", ()
   assert.equal(worktreeProtectionReason(worktreeFacts({ gitStateKnown: false })), "unknown-git-state");
 });
 
+test("a worktree a scheduled task runs in is kept, and so is every worktree when tasks can't be read", () => {
+  // Removing the workspace would stop its scheduled tasks for good.
+  assert.equal(classifyWorktree(worktreeFacts({ routineCount: 2 }), NOW).protectionReason, "routine");
+  assert.equal(
+    classifyWorktree(worktreeFacts({ routineCount: null }), NOW).protectionReason,
+    "unknown-routines",
+  );
+  assert.equal(recheckWorktreeRemoval(worktreeFacts({ routineCount: 1 })), "routine");
+});
+
 test("local work outranks an activity reason, so the caption names what the person must fix", () => {
   assert.equal(
     worktreeProtectionReason(worktreeFacts({ active: true, uncommitted: 1 })),
@@ -297,7 +374,6 @@ test("worktree cleanup removes only idle, clean worktrees and explains every ski
     [
       ["dirty", "uncommitted"],
       ["unpushed", "unpushed"],
-      ["recent", "recent"],
       ["busy", "active"],
     ],
   );
@@ -344,20 +420,17 @@ test("an explicitly chosen pinned thread is still kept", () => {
   assert.equal(plan.skipped[0]?.reason, "pinned");
 });
 
-test("thread cleanup respects the inactivity window and never plans a pinned or owned thread", () => {
+test("chat cleanup never sweeps: without a named chat nothing is planned", () => {
   const threads = [
-    classifyThread(threadFacts({ chatId: "old", bytes: 800 }), NOW),
-    classifyThread(threadFacts({ chatId: "recent", lastUsedAt: NOW - DAY }), NOW),
+    classifyThread(threadFacts({ chatId: "old", bytes: 800, lastUsedAt: NOW - 900 * DAY }), NOW),
     classifyThread(threadFacts({ chatId: "pinned", pinned: true }), NOW),
-    classifyThread(threadFacts({ chatId: "owned", owned: true }), NOW),
-    classifyThread(threadFacts({ chatId: "busy", active: true }), NOW),
   ];
-  const plan = planThreadCleanup(threads, { inactiveDays: 30, now: NOW });
-  assert.deepEqual(plan.items.map((item) => item.id), ["old"]);
-  assert.deepEqual(
-    plan.skipped.map((entry) => entry.id).sort(),
-    ["busy", "owned", "pinned", "recent"],
-  );
+  const sweep = planThreadCleanup(threads, { inactiveDays: 7, now: NOW });
+  assert.equal(sweep.items.length, 0);
+  assert.equal(sweep.skipped.length, 0);
+  const named = planThreadCleanup(threads, { inactiveDays: 7, now: NOW, targetIds: ["old"] });
+  assert.deepEqual(named.items.map((item) => item.id), ["old"]);
+  assert.equal(named.totalBytes, 800);
 });
 
 test("a default plan for each action reaches the right categories", () => {
@@ -377,7 +450,7 @@ test("a default plan for each action reaches the right categories", () => {
   );
   assert.equal(worktrees.items.length, 1);
   const threads = planStorageCleanup(
-    { action: "delete-threads", inactiveDays: DEFAULT_THREAD_INACTIVE_DAYS },
+    { action: "delete-threads", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS, targetIds: ["chat-1"] },
     report,
     NOW,
   );
@@ -398,7 +471,8 @@ test("log cleanup offers nothing when there is nothing to clear", () => {
 test("every planned item has a positive-or-zero size and a label, so the dialog can list it", () => {
   const previews: StorageCleanupPreview[] = [
     planWorktreeCleanup([classifyWorktree(worktreeFacts(), NOW)], { inactiveDays: 14, now: NOW }),
-    planThreadCleanup([classifyThread(threadFacts(), NOW)], { inactiveDays: 30, now: NOW }),
+    planThreadCleanup([classifyThread(threadFacts(), NOW)], { inactiveDays: 30, now: NOW, targetIds: ["chat-1"] }),
+    planBrowserCacheCleanup(14, 5_000),
     planStorageCleanup(
       { action: "clear-logs", inactiveDays: 14 },
       reportWith([], [], [{ id: "logs", bytes: 12, itemCount: 1 }]),
@@ -409,13 +483,32 @@ test("every planned item has a positive-or-zero size and a label, so the dialog 
     for (const item of preview.items) {
       assert.ok(item.label.length > 0, "an item without a label cannot be reviewed");
       assert.ok(item.bytes >= 0);
-      assert.ok(["worktree", "thread", "logs"].includes(item.kind));
+      assert.ok(["worktree", "thread", "logs", "browser-cache"].includes(item.kind));
     }
     assert.equal(
       preview.totalBytes,
       preview.items.reduce((total, item) => total + item.bytes, 0),
     );
   }
+});
+
+test("browser cache cleanup offers the cached share only, and nothing when it is empty", () => {
+  assert.equal(planBrowserCacheCleanup(14, 0).items.length, 0);
+  const plan = planStorageCleanup(
+    { action: "clear-browser-cache", inactiveDays: 14 },
+    { ...reportWith([], [], [{ id: "browser", bytes: 9_000, itemCount: 3 }]), browserCacheBytes: 4_000 },
+    NOW,
+  );
+  assert.equal(plan.totalBytes, 4_000, "sign-ins and site data are not part of what it frees");
+});
+
+test("a worktree measured only partly marks the preview's total as a minimum", () => {
+  const plan = planWorktreeCleanup(
+    [classifyWorktree(worktreeFacts({ bytesComplete: false }), NOW)],
+    { inactiveDays: 14, now: NOW },
+  );
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.totalComplete, false);
 });
 
 test("rechecking a worktree right before removal keeps anything that changed", () => {
@@ -442,9 +535,17 @@ test("cleanup requests parse strictly and default their window", () => {
     inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS,
   });
   assert.deepEqual(
-    parseStorageCleanupRequest({ action: "delete-threads", inactiveDays: 90, targetIds: ["a", "a", "b"] }),
-    { action: "delete-threads", inactiveDays: 90, targetIds: ["a", "b"] },
+    parseStorageCleanupRequest({ action: "delete-threads", inactiveDays: 90, targetIds: ["a", "a"] }),
+    { action: "delete-threads", inactiveDays: 90, targetIds: ["a"] },
   );
+  assert.deepEqual(
+    parseStorageCleanupRequest({ action: "remove-worktrees", targetIds: ["a", "a", "b"] }),
+    { action: "remove-worktrees", inactiveDays: DEFAULT_STORAGE_INACTIVE_DAYS, targetIds: ["a", "b"] },
+  );
+  // Chats are only ever deleted one at a time.
+  for (const sweep of [{ action: "delete-threads" }, { action: "delete-threads", targetIds: ["a", "b"] }]) {
+    assert.throws(() => parseStorageCleanupRequest(sweep), /one at a time/u);
+  }
   for (const bad of [
     null,
     [],

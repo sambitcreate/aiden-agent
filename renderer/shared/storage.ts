@@ -2,63 +2,95 @@
 // cleanup actions it offers. Shared by the main-process scanner, the IPC
 // boundary, and the renderer page so both sides agree on names and limits.
 
+/** Every category, in the order the scan measures them (cheapest and most important first). */
 export const STORAGE_CATEGORY_IDS = [
-  "worktrees",
-  "snapshots",
   "threads",
-  "artifacts",
   "logs",
-  "caches",
-  "downloads",
+  "artifacts",
+  "browser",
+  "models",
+  "bot-computers",
+  "snapshots",
+  "other",
+  "worktrees",
 ] as const;
 
 export type StorageCategoryId = (typeof STORAGE_CATEGORY_IDS)[number];
 
+/**
+ * What the page offers on a category's row. `manage` opens the settings page
+ * that owns the data; the others open a review before anything is removed.
+ */
+export type StorageCategoryAction =
+  | { kind: "review-worktrees" }
+  | { kind: "clear-browser-cache" }
+  | { kind: "clear-logs" }
+  | { kind: "manage"; section: "botComputers" | "voice" };
+
 export interface StorageCategoryDefinition {
   id: StorageCategoryId;
   label: string;
-  /** One line naming what the category holds, shown under its bar segment row. */
+  /** One line naming what the category holds, shown on its row. */
   description: string;
+  action?: StorageCategoryAction;
 }
 
-/** Ordered most to least likely to be cleaned up; the bar follows this order. */
 export const STORAGE_CATEGORIES: readonly StorageCategoryDefinition[] = [
   {
-    id: "worktrees",
-    label: "Worktrees",
-    description: "Checkouts Aiden made for chats, one per branch.",
-  },
-  {
-    id: "snapshots",
-    label: "Worktree snapshots",
-    description: "Restorable copies kept when Aiden removed a worktree with uncommitted work.",
-  },
-  {
     id: "threads",
-    label: "Threads",
-    description: "Chat transcripts, their images, and private per-chat runtime history.",
-  },
-  {
-    id: "artifacts",
-    label: "Artifacts",
-    description: "Workspace artifact snapshots, generated images, and design projects.",
+    label: "Chats",
+    description: "Chat history, the pictures in it, and Bots’ conversations and memory.",
   },
   {
     id: "logs",
     label: "Logs and diagnostics",
-    description: "Local diagnostic journal, crash dumps, and terminal scrollback.",
+    description: "Diagnostic journal, crash reports and terminal scrollback.",
+    action: { kind: "clear-logs" },
   },
   {
-    id: "caches",
-    label: "Caches",
-    description: "Regenerable indexes, paired-device state, and background job records.",
+    id: "artifacts",
+    label: "Artifacts and images",
+    description: "Workspace artifacts, generated images and design projects.",
   },
   {
-    id: "downloads",
-    label: "Downloads",
-    description: "Voice models, agent runtimes, and Bot computer images Aiden downloaded.",
+    id: "browser",
+    label: "Browser data",
+    description: "What the built-in browser and Bots’ browsers saved: sign-ins, site data and cached pages.",
+    action: { kind: "clear-browser-cache" },
+  },
+  {
+    id: "models",
+    label: "Voice and helper models",
+    description: "On-device speech and form-filling models Aiden downloaded.",
+    action: { kind: "manage", section: "voice" },
+  },
+  {
+    id: "bot-computers",
+    label: "Bot computers",
+    description: "The macOS base image and each Bot’s own computer.",
+    action: { kind: "manage", section: "botComputers" },
+  },
+  {
+    id: "snapshots",
+    label: "Saved work from removed worktrees",
+    description: "Kept so a worktree you removed with changes can be restored.",
+  },
+  {
+    id: "other",
+    label: "Other app data",
+    description: "Settings, paired devices, agent runtimes and Aiden’s own caches.",
+  },
+  {
+    id: "worktrees",
+    label: "Worktrees",
+    description: "Copies of your projects Aiden made for coding chats.",
+    action: { kind: "review-worktrees" },
   },
 ];
+
+export function storageCategory(id: StorageCategoryId): StorageCategoryDefinition {
+  return STORAGE_CATEGORIES.find((category) => category.id === id)!;
+}
 
 export function storageCategoryLabel(id: StorageCategoryId): string {
   return STORAGE_CATEGORIES.find((category) => category.id === id)?.label ?? id;
@@ -66,41 +98,48 @@ export function storageCategoryLabel(id: StorageCategoryId): string {
 
 export interface StorageCategoryUsage {
   id: StorageCategoryId;
+  /** Disk space the category's files occupy, each file counted once. */
   bytes: number;
-  /** Directories or records measured for this category; 0 when nothing exists yet. */
+  /** Files measured for this category; 0 when nothing exists yet. */
   itemCount: number;
 }
 
-/** One removable or inspectable thing inside a category. */
+/** One removable thing a cleanup preview lists. */
 export interface StorageItem {
   id: string;
-  kind: "worktree" | "thread" | "logs";
+  kind: "worktree" | "thread" | "logs" | "browser-cache";
   label: string;
   detail?: string;
   bytes: number;
+  /** False when the scan stopped before it finished measuring this item. */
+  bytesComplete?: boolean;
 }
 
 /**
- * Why a worktree or thread may not be removed. Every reason is a hard block:
+ * Why a worktree or chat may not be removed. Every reason is a hard block:
  * cleanup never deletes something Aiden cannot prove is idle and saved.
  */
 export type StorageProtectionReason =
-  | "uncommitted"
-  | "unpushed"
+  | "unknown-git-state"
   | "active"
   | "changing"
-  | "unknown-git-state"
+  | "uncommitted"
+  | "unpushed"
+  | "routine"
+  | "unknown-routines"
   | "pinned"
   | "owned";
 
 export const STORAGE_PROTECTION_COPY: Readonly<Record<StorageProtectionReason, string>> = {
-  uncommitted: "Has uncommitted changes",
-  unpushed: "Has commits that aren’t pushed",
+  "unknown-git-state": "Aiden couldn’t read its Git state",
   active: "A chat is using it right now",
   changing: "Aiden is changing it right now",
-  "unknown-git-state": "Aiden couldn’t read its Git state",
+  uncommitted: "Has changes not committed to Git",
+  unpushed: "Has commits that aren’t pushed",
+  routine: "A scheduled task runs here",
+  "unknown-routines": "Aiden couldn’t check its scheduled tasks",
   pinned: "Pinned in your Inbox",
-  owned: "Belongs to another Aiden feature",
+  owned: "Belongs to a Bot or Design project",
 };
 
 export interface StorageWorktreeView {
@@ -108,12 +147,11 @@ export interface StorageWorktreeView {
   name: string;
   branch: string;
   bytes: number;
+  /** False when the scan's budget ran out before this worktree was fully measured. */
+  bytesComplete: boolean;
   lastUsedAt: number | null;
-  /** Whole days since `lastUsedAt`, or null when Aiden has no record of use. */
   idleDays: number | null;
-  /** Changed and untracked files Git reports. */
   uncommitted: number;
-  /** Commits the branch has not pushed anywhere. */
   unpushed: number;
   protected: boolean;
   protectionReason?: StorageProtectionReason;
@@ -122,48 +160,51 @@ export interface StorageWorktreeView {
 export interface StorageThreadView {
   chatId: string;
   title: string;
+  /**
+   * What deleting the chat frees: its transcript plus the pictures no other
+   * chat shows. Pictures shared with another chat stay, so they are not counted.
+   */
   bytes: number;
+  bytesComplete: boolean;
+  /** Pictures in this chat, shared or not. */
+  imageCount: number;
   lastUsedAt: number;
   idleDays: number;
   protected: boolean;
   protectionReason?: StorageProtectionReason;
 }
 
-/** Facts about one worktree, as read from Git and the workspace record. */
 export interface StorageWorktreeFacts {
   workspaceId: string;
   name: string;
   branch: string;
   bytes: number;
-  /** Newest of the workspace record and its newest chat; null when unrecorded. */
+  bytesComplete: boolean;
   lastUsedAt: number | null;
-  /** Changed and untracked entries Git reported. */
   uncommitted: number;
-  /** Commits that exist only on this machine. */
   unpushed: number;
-  /** A chat on this worktree is generating or waiting on the person. */
   active: boolean;
-  /** Aiden is currently creating or removing it. */
   changing: boolean;
-  /** False when Git could not be read, so the worktree is never treated as safe. */
   gitStateKnown: boolean;
+  /** Scheduled tasks that run in this workspace; null when they could not be read. */
+  routineCount: number | null;
 }
 
 /**
- * The first reason a worktree must be kept, most conservative first. Null means
- * it is safe to remove.
- *
- * `unknown-git-state` leads on purpose: a Git read that failed must never be
- * read as "clean", so a scan failure keeps the worktree rather than guessing.
+ * The first reason a worktree must be kept, or null when removing it loses
+ * nothing. Unreadable facts come first on purpose: a failed read must never
+ * count as "clean" or "no scheduled tasks".
  */
 export function worktreeProtectionReason(
   facts: StorageWorktreeFacts,
 ): StorageProtectionReason | null {
   if (!facts.gitStateKnown) return "unknown-git-state";
+  if (facts.routineCount === null) return "unknown-routines";
   if (facts.active) return "active";
   if (facts.changing) return "changing";
   if (facts.uncommitted > 0) return "uncommitted";
   if (facts.unpushed > 0) return "unpushed";
+  if (facts.routineCount > 0) return "routine";
   return null;
 }
 
@@ -173,6 +214,7 @@ export function classifyWorktree(facts: StorageWorktreeFacts, now: number): Stor
     name: facts.name,
     branch: facts.branch,
     bytes: facts.bytes,
+    bytesComplete: facts.bytesComplete,
     lastUsedAt: facts.lastUsedAt,
     idleDays: storageIdleDays(facts.lastUsedAt, now),
     uncommitted: facts.uncommitted,
@@ -187,21 +229,20 @@ export function classifyWorktree(facts: StorageWorktreeFacts, now: number): Stor
   return view;
 }
 
-/** Facts about one thread, as read from the chat index and live activity. */
 export interface StorageThreadFacts {
   chatId: string;
   title: string;
   bytes: number;
+  bytesComplete: boolean;
+  imageCount: number;
   lastUsedAt: number;
   active: boolean;
-  /** Pinned in the Inbox: the person asked to keep it handy. */
   pinned: boolean;
-  /** Owned by another Aiden surface (a Bot's conversation, a Design project). */
   owned: boolean;
 }
 
 export function threadProtectionReason(
-  facts: StorageThreadFacts,
+  facts: Pick<StorageThreadFacts, "active" | "pinned" | "owned">,
 ): StorageProtectionReason | null {
   if (facts.owned) return "owned";
   if (facts.active) return "active";
@@ -214,6 +255,8 @@ export function classifyThread(facts: StorageThreadFacts, now: number): StorageT
     chatId: facts.chatId,
     title: facts.title,
     bytes: facts.bytes,
+    bytesComplete: facts.bytesComplete,
+    imageCount: facts.imageCount,
     lastUsedAt: facts.lastUsedAt,
     idleDays: storageIdleDays(facts.lastUsedAt, now) ?? 0,
     protected: false,
@@ -230,29 +273,27 @@ export type StorageScanStatus = "idle" | "scanning" | "ready" | "failed";
 
 export interface StorageScanState {
   status: StorageScanStatus;
-  /** When the last completed scan started, so the page can say how fresh it is. */
   scannedAt: number | null;
-  /** Present when the last scan failed as a whole. */
   error: string | null;
-  /** True when a bound stopped the walk early and the totals are a floor. */
+  /** The walk hit its time or file budget, so totals are a minimum. */
   truncated: boolean;
 }
 
 export interface StorageReport {
   totalBytes: number;
   categories: StorageCategoryUsage[];
-  /** Largest worktrees, biggest first. */
   worktrees: StorageWorktreeView[];
-  /** Largest threads, biggest first. */
   threads: StorageThreadView[];
+  /** The part of Browser data that Clear cache removes (cached pages and code). */
+  browserCacheBytes: number;
   scan: StorageScanState;
 }
 
-/** Build a report: the total derives from the categories and items sort by size. */
 export function assembleStorageReport(input: {
   categories: readonly StorageCategoryUsage[];
   worktrees: readonly StorageWorktreeView[];
   threads: readonly StorageThreadView[];
+  browserCacheBytes: number;
   scan: StorageScanState;
 }): StorageReport {
   const bySize = (
@@ -264,33 +305,38 @@ export function assembleStorageReport(input: {
     categories: [...input.categories],
     worktrees: [...input.worktrees].sort(bySize),
     threads: [...input.threads].sort(bySize),
+    browserCacheBytes: input.browserCacheBytes,
     scan: input.scan,
   };
 }
 
-/** Every category at zero, so the bar and legend have a stable shape while scanning. */
 export function emptyStorageReport(scan: StorageScanState): StorageReport {
   return assembleStorageReport({
     categories: STORAGE_CATEGORY_IDS.map((id) => ({ id, bytes: 0, itemCount: 0 })),
     worktrees: [],
     threads: [],
+    browserCacheBytes: 0,
     scan,
   });
 }
 
+/**
+ * `delete-threads` only ever deletes chats the person named one at a time;
+ * there is no "delete every old chat" sweep.
+ */
 export const STORAGE_CLEANUP_ACTIONS = [
   "remove-worktrees",
   "delete-threads",
   "clear-logs",
+  "clear-browser-cache",
 ] as const;
 
 export type StorageCleanupAction = (typeof STORAGE_CLEANUP_ACTIONS)[number];
 
-/** Inactivity thresholds offered for worktrees and threads, in days. */
+/** Inactivity thresholds offered for worktrees, in days. */
 export const STORAGE_INACTIVE_DAYS = [7, 14, 30, 90] as const;
 export type StorageInactiveDays = (typeof STORAGE_INACTIVE_DAYS)[number];
 export const DEFAULT_STORAGE_INACTIVE_DAYS: StorageInactiveDays = 14;
-export const DEFAULT_THREAD_INACTIVE_DAYS: StorageInactiveDays = 90;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export function isStorageInactiveDays(value: unknown): value is StorageInactiveDays {
@@ -306,7 +352,8 @@ export interface StorageCleanupRequest {
   inactiveDays: StorageInactiveDays;
   /**
    * Ids the preview showed. Cleanup removes only these, and only if they are
-   * still eligible when it runs. Omit to let Aiden rebuild the full set.
+   * still eligible when it runs. Required for `delete-threads`; omit for a
+   * worktree sweep to let Aiden rebuild the set from the inactivity window.
    */
   targetIds?: string[];
 }
@@ -321,6 +368,9 @@ export function parseStorageCleanupRequest(value: unknown): StorageCleanupReques
   const inactiveDays = record.inactiveDays ?? DEFAULT_STORAGE_INACTIVE_DAYS;
   if (!isStorageInactiveDays(inactiveDays)) throw new Error("Invalid inactivity window.");
   const targetIds = parseTargetIds(record.targetIds);
+  if (record.action === "delete-threads" && (targetIds === undefined || targetIds.length !== 1)) {
+    throw new Error("Chats are deleted one at a time.");
+  }
   return targetIds === undefined
     ? { action: record.action, inactiveDays }
     : { action: record.action, inactiveDays, targetIds };
@@ -342,6 +392,7 @@ function parseTargetIds(value: unknown): string[] | undefined {
 export interface StorageCleanupSkipped {
   id: string;
   label: string;
+  /** A `StorageProtectionReason`, or `recent` for an item inside the inactivity window. */
   reason: string;
   bytes: number;
 }
@@ -354,6 +405,8 @@ export interface StorageCleanupPreview {
   /** What the action leaves alone, and why. Never removed. */
   skipped: StorageCleanupSkipped[];
   totalBytes: number;
+  /** False when an item's size is a minimum because the scan stopped early. */
+  totalComplete: boolean;
 }
 
 export interface StorageCleanupFailure {

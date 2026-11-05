@@ -270,7 +270,8 @@ export class TerminalService {
   }
 
   /** Settle every pending history write before application shutdown. */
-  async flushHistory(): Promise<void> {    if (!this.historyStore) return;
+  async flushHistory(): Promise<void> {
+    if (!this.historyStore) return;
     if (this.historyStore.flushAll) {
       await this.historyStore.flushAll();
       return;

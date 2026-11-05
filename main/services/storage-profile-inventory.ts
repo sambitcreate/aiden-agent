@@ -1,114 +1,84 @@
 // Desktop Settings → Storage: the profile inventory.
 //
-// One place lists every directory under Aiden's device-local user-data profile
-// and says which Storage category it belongs to. The scanner walks only paths
-// named here, so a new store must be added deliberately and can never be
-// measured — or cleared — by accident.
+// The scanner measures every top-level entry of Aiden's device-local user-data
+// profile, so the total covers the whole profile. This table only decides which
+// category an entry is shown under; anything it does not name is "Other app
+// data". Naming an entry here never makes it removable: each cleanup action
+// goes through the feature that owns the data.
 
-import * as path from "node:path";
 import type { StorageCategoryId } from "../../renderer/shared/storage.js";
 
-export interface StorageProfileEntry {
-  /** Path relative to the profile root. */
-  relativePath: string;
-  category: StorageCategoryId;
-}
-
-/**
- * Directories Aiden writes under its user-data profile, by category.
- *
- * `caches` covers records that are safe to regenerate: they are measured but
- * never offered for deletion, because deleting them silently loses paired-device
- * state, approvals, and Bot bindings rather than reclaiming anything meaningful.
- */
-export const STORAGE_PROFILE_LAYOUT: readonly StorageProfileEntry[] = [
+/** Top-level profile entries, by the category the page shows them under. */
+export const STORAGE_PROFILE_LAYOUT: Readonly<Record<string, StorageCategoryId>> = {
   // Worktrees and their restorable snapshots.
-  { relativePath: "worktrees", category: "worktrees" },
-  { relativePath: "worktree-snapshots", category: "snapshots" },
+  worktrees: "worktrees",
+  "worktree-snapshots": "snapshots",
 
-  // Chats: transcripts, their image files, and the private per-chat runtime stores.
-  { relativePath: "chats", category: "threads" },
-  { relativePath: "pi-compaction-sessions", category: "threads" },
-  { relativePath: "pi-runtime-effects.json", category: "threads" },
-  { relativePath: "subagent-runs", category: "threads" },
-  { relativePath: "subagent-runs-v2", category: "threads" },
-  { relativePath: "tool-output-spills.json", category: "threads" },
-  { relativePath: "display-image-artifacts.json", category: "threads" },
-  { relativePath: "generative-ui-artifacts.json", category: "threads" },
-  { relativePath: "chat-pull-requests", category: "threads" },
-  { relativePath: "chat-folders", category: "threads" },
-  { relativePath: "follow-through", category: "threads" },
-  { relativePath: "interrupted-waits.json", category: "threads" },
-  { relativePath: "chat-triage.json", category: "threads" },
-  { relativePath: "chat-read-markers.json", category: "threads" },
-  { relativePath: "first-message-worktrees.json", category: "threads" },
-  { relativePath: "bots", category: "threads" },
-  { relativePath: "memory", category: "threads" },
+  // Chats: transcripts, their image files, private per-chat runtime stores, and
+  // Bots' conversations and memory.
+  chats: "threads",
+  "pi-compaction-sessions": "threads",
+  "pi-runtime-effects.json": "threads",
+  "subagent-runs": "threads",
+  "subagent-runs-v2": "threads",
+  "tool-output-spills.json": "threads",
+  "display-image-artifacts.json": "threads",
+  "generative-ui-artifacts.json": "threads",
+  "chat-pull-requests": "threads",
+  "chat-folders": "threads",
+  "follow-through": "threads",
+  "interrupted-waits.json": "threads",
+  "chat-triage.json": "threads",
+  "chat-read-markers.json": "threads",
+  "first-message-worktrees.json": "threads",
+  bots: "threads",
+  memory: "threads",
 
   // Long-lived generated output.
-  { relativePath: "workspace-artifacts", category: "artifacts" },
-  { relativePath: "create-images", category: "artifacts" },
-  { relativePath: "studio-assets", category: "artifacts" },
-  { relativePath: "design-projects", category: "artifacts" },
+  "workspace-artifacts": "artifacts",
+  "create-images": "artifacts",
+  "studio-assets": "artifacts",
+  "design-projects": "artifacts",
 
-  // App output the person can always regenerate or live without.
-  { relativePath: "logs", category: "logs" },
-  { relativePath: "Crashpad", category: "logs" },
-  { relativePath: "terminal-history", category: "logs" },
+  // App output the person can always live without.
+  logs: "logs",
+  Crashpad: "logs",
+  "terminal-history": "logs",
 
-  // Regenerable or binding state. Measured, never offered for deletion.
-  { relativePath: "browser", category: "caches" },
-  { relativePath: "background-jobs", category: "caches" },
-  { relativePath: "devices", category: "caches" },
-  { relativePath: "aiden-live", category: "caches" },
-  { relativePath: "acp", category: "caches" },
-  { relativePath: "pi-upgrade-rollout", category: "caches" },
-  { relativePath: "provider-login-device-id", category: "caches" },
-  { relativePath: "telegram-inbox", category: "caches" },
-  { relativePath: "telegram-bot-outbox", category: "caches" },
-  { relativePath: "bot-avatar-store", category: "caches" },
+  // The built-in browser's and Bots' browsers' Chromium profiles, plus
+  // browser recordings.
+  Partitions: "browser",
+  browser: "browser",
 
-  // Downloaded runtimes and models.
-  { relativePath: "voice-models", category: "downloads" },
-  { relativePath: "parakeet-models", category: "downloads" },
-  { relativePath: "form-fill-model", category: "downloads" },
-  { relativePath: "bot-computers", category: "downloads" },
-];
+  // Downloaded models and Bot computers.
+  "voice-models": "models",
+  "parakeet-models": "models",
+  "form-fill-model": "models",
+  "bot-computers": "bot-computers",
+};
 
-/** The profile files and directories a "clear logs" action may remove contents of. */
-export const STORAGE_LOGS_PATHS: readonly string[] = [
-  "logs",
-  "Crashpad",
-  "terminal-history",
-];
-
-export function storageProfilePaths(
-  category: StorageCategoryId,
-): readonly string[] {
-  return STORAGE_PROFILE_LAYOUT.filter((entry) => entry.category === category).map(
-    (entry) => entry.relativePath,
-  );
-}
-
-/** Absolute paths for one category under `profileRoot`. */
-export function storageCategoryPaths(
-  profileRoot: string,
-  category: StorageCategoryId,
-): string[] {
-  return storageProfilePaths(category).map((relativePath) => path.join(profileRoot, relativePath));
+export function storageCategoryForEntry(name: string): StorageCategoryId {
+  return Object.prototype.hasOwnProperty.call(STORAGE_PROFILE_LAYOUT, name) ? STORAGE_PROFILE_LAYOUT[name]! : "other";
 }
 
 /**
- * Everything under the profile root is inside it by construction (the relative
- * paths above are literals), so this only guards a cleanup target that somehow
- * escaped. Kept small and explicit because it gates deletion.
+ * Chromium cache folders inside a browser profile that Clear cache empties:
+ * cached pages and files, compiled scripts and GPU shaders. Cookies, local
+ * storage and service-worker data are never touched, so sign-ins survive.
  */
-export function resolveProfilePath(profileRoot: string, relativePath: string): string {
-  const resolvedRoot = path.resolve(profileRoot);
-  const resolved = path.resolve(resolvedRoot, relativePath);
-  const relative = path.relative(resolvedRoot, resolved);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("Aiden refused to touch a path outside its own storage.");
-  }
-  return resolved;
+export const BROWSER_CACHE_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
+  "Cache",
+  "Code Cache",
+  "GPUCache",
+]);
+
+/**
+ * The browser partitions Aiden creates (`persist:aiden-browser-*` for the
+ * workspace browser, `persist:aiden-bot-*` for Bots). Only these are cleared;
+ * a folder name outside this pattern is left alone.
+ */
+const AIDEN_PARTITION_DIRECTORY = /^aiden-(?:browser|bot)-[a-z0-9-]{1,200}$/u;
+
+export function aidenBrowserPartitionName(directoryName: string): string | null {
+  return AIDEN_PARTITION_DIRECTORY.test(directoryName) ? `persist:${directoryName}` : null;
 }

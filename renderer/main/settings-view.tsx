@@ -64,7 +64,7 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import { MemoryCardIcon } from "../components/memory-card-icon";
 import { SettingsPage } from "../components/settings/settings-page";
 import { MemorySettings } from "../components/settings/memory-settings";
-import { StorageSettings } from "../components/settings/storage-settings";
+import { StorageSettingsPage } from "../components/settings/storage-settings";
 
 type NavGroup = "Agent" | "App";
 
@@ -134,7 +134,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   links: LinksSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
-  storage: StorageSettings,
+  storage: StorageSettingsPage,
   about: AboutSettings,
 };
 

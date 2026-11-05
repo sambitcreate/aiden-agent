@@ -453,6 +453,24 @@ export class BrowserService {
       this.deletingProfiles.delete(profileId);
     }
   }
+  /**
+   * Settings → Storage → Clear cache: empty cached pages, compiled scripts and
+   * GPU shaders in every saved browser profile and the given Bots' profiles.
+   * Cookies, sign-ins and site data stay, and open tabs keep working.
+   */
+  async clearCaches(botIds: readonly string[]): Promise<void> {
+    this.load();
+    const partitions = new Set<string>();
+    for (const profile of this.profiles)
+      if (profile.kind !== "incognito") partitions.add(browserPartition(profile.id, false));
+    for (const botId of botIds) partitions.add(botBrowserPartition(botId));
+    for (const partition of partitions) {
+      const target = this.sessions.get(partition) ?? session.fromPartition(partition);
+      await target.clearCache();
+      await target.clearCodeCaches({});
+      await target.clearStorageData({ storages: ["shadercache"] });
+    }
+  }
   /** Close a Bot's tabs and forget its workspace, keeping its sign-ins (the Bot runtime let go of it). */
   closeBotTabs(botId: string): void {
     const profileId = botBrowserProfileId(botId);

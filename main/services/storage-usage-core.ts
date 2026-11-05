@@ -5,6 +5,7 @@
 // deleted are testable without Electron, Git, or a real profile directory.
 
 import * as fs from "node:fs/promises";
+import type { Stats } from "node:fs";
 import * as path from "node:path";
 import {
   storageInactiveCutoff,
@@ -22,22 +23,19 @@ import {
   type StorageWorktreeView,
 } from "../../renderer/shared/storage.js";
 
-const GIB = 1024 * 1024 * 1024;
-
 export interface StorageScanBudgetLimits {
   maxEntries: number;
-  maxBytes: number;
   maxDurationMs: number;
 }
 
 /**
  * Defaults for one background scan. A large profile can exceed these; the walk
- * then reports `truncated` and the page says the totals are a floor instead of
- * blocking the app or spinning forever.
+ * then reports `truncated` and the page says the totals are a minimum instead
+ * of blocking the app or spinning forever. The walk measures worktrees last, so
+ * running out of budget only leaves worktree sizes unfinished.
  */
 export const DEFAULT_STORAGE_SCAN_LIMITS: StorageScanBudgetLimits = {
-  maxEntries: 400_000,
-  maxBytes: 64 * GIB,
+  maxEntries: 1_000_000,
   maxDurationMs: 20_000,
 };
 
@@ -45,9 +43,14 @@ export interface StorageScanBudget {
   /** Entries visited so far across every measurement. */
   readonly entries: number;
   readonly truncated: boolean;
-  /** True once the caller should stop walking (time or a hard limit). */
+  /** True once the caller should stop walking (time or entry limit). */
   exhausted(): boolean;
   spendEntries(count: number): void;
+  /**
+   * Whether this file's bytes still need counting. A hard-linked file (chat
+   * images share bytes this way) is counted the first time any path reaches it.
+   */
+  firstSighting(stats: Pick<Stats, "dev" | "ino" | "nlink">): boolean;
 }
 
 /** A shared, monotonic budget so several measurements cannot exceed the scan's cost. */
@@ -60,6 +63,7 @@ export function createStorageScanBudget(
   const limits = options.limits ?? DEFAULT_STORAGE_SCAN_LIMITS;
   const now = options.now ?? Date.now;
   const startedAt = now();
+  const linked = new Set<string>();
   let entries = 0;
   let truncated = false;
   return {
@@ -70,15 +74,33 @@ export function createStorageScanBudget(
       return truncated;
     },
     exhausted() {
-      const expired = now() - startedAt >= limits.maxDurationMs;
-      if (expired && !truncated) truncated = true;
+      if (!truncated && now() - startedAt >= limits.maxDurationMs) truncated = true;
       return truncated;
     },
     spendEntries(count: number) {
       entries += count;
       if (entries > limits.maxEntries) truncated = true;
     },
+    firstSighting(stats) {
+      if (stats.nlink <= 1) return true;
+      const key = `${stats.dev}:${stats.ino}`;
+      if (linked.has(key)) return false;
+      linked.add(key);
+      return true;
+    },
   };
+}
+
+/**
+ * Space a file takes on disk. Allocated blocks rather than the apparent size:
+ * a Bot computer's disk image is sparse, so its apparent size can be many times
+ * what it really occupies. Windows reports no blocks, so it falls back to size.
+ */
+export function diskBytes(stats: Pick<Stats, "size" | "blocks">): number {
+  return typeof stats.blocks === "number" && Number.isFinite(stats.blocks) && stats.blocks >= 0
+    && process.platform !== "win32"
+    ? stats.blocks * 512
+    : stats.size;
 }
 
 export interface MeasuredPath {
@@ -88,18 +110,28 @@ export interface MeasuredPath {
   truncated: boolean;
 }
 
+export interface MeasureOptions {
+  /** Directories measured separately (each worktree); the walk skips them. */
+  exclude?: ReadonlySet<string>;
+  /** Called with each counted file, so a caller can attribute bytes without a second walk. */
+  onFile?: (filePath: string, bytes: number) => void;
+  depthLimit?: number;
+}
+
 const ZERO_MEASUREMENT: MeasuredPath = { bytes: 0, files: 0, truncated: false };
 
 /**
- * Total bytes under `target`, counting regular files only. Symlinks are not
- * followed — Aiden's own stores never write them, and following one would let a
+ * Disk space under `target`, counting regular files only, each hard-linked file
+ * once per scan. Symlinks are not followed: following one would let a
  * workspace link the scanner into an unrelated volume.
  */
 export async function measurePathBytes(
   target: string,
   budget: StorageScanBudget,
-  depthLimit = 24,
+  options: MeasureOptions = {},
 ): Promise<MeasuredPath> {
+  const depthLimit = options.depthLimit ?? 24;
+  if (budget.exhausted()) return { ...ZERO_MEASUREMENT, truncated: true };
   let stats;
   try {
     stats = await fs.lstat(target);
@@ -109,7 +141,10 @@ export async function measurePathBytes(
   if (stats.isSymbolicLink()) return ZERO_MEASUREMENT;
   if (stats.isFile()) {
     budget.spendEntries(1);
-    return { bytes: stats.size, files: 1, truncated: false };
+    if (!budget.firstSighting(stats)) return { bytes: 0, files: 1, truncated: false };
+    const bytes = diskBytes(stats);
+    options.onFile?.(target, bytes);
+    return { bytes, files: 1, truncated: false };
   }
   if (!stats.isDirectory()) return ZERO_MEASUREMENT;
 
@@ -140,6 +175,7 @@ export async function measurePathBytes(
       const entryPath = path.join(next.directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
+        if (options.exclude?.has(entryPath)) continue;
         if (next.depth < depthLimit) stack.push({ directory: entryPath, depth: next.depth + 1 });
         else truncated = true;
         continue;
@@ -148,30 +184,16 @@ export async function measurePathBytes(
       try {
         const fileStats = await fs.lstat(entryPath);
         if (!fileStats.isFile()) continue;
-        bytes += fileStats.size;
         files += 1;
+        if (!budget.firstSighting(fileStats)) continue;
+        const fileBytes = diskBytes(fileStats);
+        bytes += fileBytes;
+        options.onFile?.(entryPath, fileBytes);
       } catch {
         truncated = true;
       }
     }
     if (truncated) break;
-  }
-  return { bytes, files, truncated };
-}
-
-/** Measure several paths as one bucket, sharing the scan budget. */
-export async function measurePaths(
-  targets: readonly string[],
-  budget: StorageScanBudget,
-): Promise<MeasuredPath> {
-  let bytes = 0;
-  let files = 0;
-  let truncated = false;
-  for (const target of targets) {
-    const measured = await measurePathBytes(target, budget);
-    bytes += measured.bytes;
-    files += measured.files;
-    truncated ||= measured.truncated;
   }
   return { bytes, files, truncated };
 }
@@ -185,6 +207,22 @@ interface CleanupSelection {
 
 function isSelected(id: string, targetIds: readonly string[] | undefined): boolean {
   return targetIds === undefined || targetIds.includes(id);
+}
+
+function preview(
+  action: StorageCleanupPreview["action"],
+  inactiveDays: StorageInactiveDays,
+  items: StorageItem[],
+  skipped: StorageCleanupSkipped[],
+): StorageCleanupPreview {
+  return {
+    action,
+    inactiveDays,
+    items,
+    skipped,
+    totalBytes: items.reduce((total, item) => total + item.bytes, 0),
+    totalComplete: items.every((item) => item.bytesComplete !== false),
+  };
 }
 
 /**
@@ -202,23 +240,18 @@ export function planWorktreeCleanup(
   const skipped: StorageCleanupSkipped[] = [];
   for (const worktree of worktrees) {
     if (!isSelected(worktree.workspaceId, selection.targetIds)) continue;
-    const protection = worktree.protectionReason;
     if (worktree.protected) {
       skipped.push({
         id: worktree.workspaceId,
         label: worktree.name,
-        reason: protection ?? "active",
+        reason: worktree.protectionReason ?? "active",
         bytes: worktree.bytes,
       });
       continue;
     }
     if (!explicitlyChosen && (worktree.lastUsedAt === null || worktree.lastUsedAt > cutoff)) {
-      skipped.push({
-        id: worktree.workspaceId,
-        label: worktree.name,
-        reason: "recent",
-        bytes: worktree.bytes,
-      });
+      // Recently used worktrees are simply outside the window; they are not
+      // listed as "kept", which would read as a warning.
       continue;
     }
     items.push({
@@ -227,42 +260,30 @@ export function planWorktreeCleanup(
       label: worktree.name,
       detail: worktree.branch,
       bytes: worktree.bytes,
+      bytesComplete: worktree.bytesComplete,
     });
   }
-  return {
-    action: "remove-worktrees",
-    inactiveDays: selection.inactiveDays,
-    items,
-    skipped,
-    totalBytes: items.reduce((total, item) => total + item.bytes, 0),
-  };
+  return preview("remove-worktrees", selection.inactiveDays, items, skipped);
 }
 
+/**
+ * The one chat a person asked to delete, or why it is kept. There is no sweep:
+ * without an explicit id nothing is offered.
+ */
 export function planThreadCleanup(
   threads: readonly StorageThreadView[],
   selection: CleanupSelection,
 ): StorageCleanupPreview {
-  const cutoff = storageInactiveCutoff(selection.inactiveDays, selection.now);
-  const explicitlyChosen = selection.targetIds !== undefined;
   const items: StorageItem[] = [];
   const skipped: StorageCleanupSkipped[] = [];
+  const targets = selection.targetIds ?? [];
   for (const thread of threads) {
-    if (!isSelected(thread.chatId, selection.targetIds)) continue;
-    const protection = thread.protectionReason;
+    if (!targets.includes(thread.chatId)) continue;
     if (thread.protected) {
       skipped.push({
         id: thread.chatId,
         label: thread.title,
-        reason: protection ?? "active",
-        bytes: thread.bytes,
-      });
-      continue;
-    }
-    if (!explicitlyChosen && thread.lastUsedAt > cutoff) {
-      skipped.push({
-        id: thread.chatId,
-        label: thread.title,
-        reason: "recent",
+        reason: thread.protectionReason ?? "active",
         bytes: thread.bytes,
       });
       continue;
@@ -272,15 +293,10 @@ export function planThreadCleanup(
       kind: "thread",
       label: thread.title,
       bytes: thread.bytes,
+      bytesComplete: thread.bytesComplete,
     });
   }
-  return {
-    action: "delete-threads",
-    inactiveDays: selection.inactiveDays,
-    items,
-    skipped,
-    totalBytes: items.reduce((total, item) => total + item.bytes, 0),
-  };
+  return preview("delete-threads", selection.inactiveDays, items, skipped);
 }
 
 /**
@@ -288,7 +304,7 @@ export function planThreadCleanup(
  * so "clear logs" always offers everything it measured.
  */
 export function planLogCleanup(
-  request: Pick<StorageCleanupRequest, "inactiveDays">,
+  inactiveDays: StorageInactiveDays,
   measured: { bytes: number; files: number },
 ): StorageCleanupPreview {
   const items: StorageItem[] =
@@ -303,19 +319,25 @@ export function planLogCleanup(
             bytes: measured.bytes,
           },
         ];
-  return {
-    action: "clear-logs",
-    inactiveDays: request.inactiveDays,
-    items,
-    skipped: [],
-    totalBytes: measured.bytes,
-  };
+  return preview("clear-logs", inactiveDays, items, []);
+}
+
+/** Cached pages and files in the browser profiles; sign-ins are not part of it. */
+export function planBrowserCacheCleanup(
+  inactiveDays: StorageInactiveDays,
+  cacheBytes: number,
+): StorageCleanupPreview {
+  const items: StorageItem[] =
+    cacheBytes <= 0
+      ? []
+      : [{ id: "browser-cache", kind: "browser-cache", label: "Cached pages and files", bytes: cacheBytes }];
+  return preview("clear-browser-cache", inactiveDays, items, []);
 }
 
 /** Build the preview for any action from an already-scanned report. */
 export function planStorageCleanup(
   request: StorageCleanupRequest,
-  report: Pick<StorageReport, "worktrees" | "threads" | "categories">,
+  report: Pick<StorageReport, "worktrees" | "threads" | "categories" | "browserCacheBytes">,
   now: number,
 ): StorageCleanupPreview {
   const selection = {
@@ -323,10 +345,18 @@ export function planStorageCleanup(
     now,
     ...(request.targetIds === undefined ? {} : { targetIds: request.targetIds }),
   };
-  if (request.action === "remove-worktrees") return planWorktreeCleanup(report.worktrees, selection);
-  if (request.action === "delete-threads") return planThreadCleanup(report.threads, selection);
-  const logs = report.categories.find((category) => category.id === "logs");
-  return planLogCleanup(request, { bytes: logs?.bytes ?? 0, files: logs?.itemCount ?? 0 });
+  switch (request.action) {
+    case "remove-worktrees":
+      return planWorktreeCleanup(report.worktrees, selection);
+    case "delete-threads":
+      return planThreadCleanup(report.threads, selection);
+    case "clear-browser-cache":
+      return planBrowserCacheCleanup(request.inactiveDays, report.browserCacheBytes);
+    case "clear-logs": {
+      const logs = report.categories.find((category) => category.id === "logs");
+      return planLogCleanup(request.inactiveDays, { bytes: logs?.bytes ?? 0, files: logs?.itemCount ?? 0 });
+    }
+  }
 }
 
 /**
@@ -335,14 +365,16 @@ export function planStorageCleanup(
  */
 export const recheckWorktreeRemoval = worktreeProtectionReason;
 
-export const STORAGE_CATEGORY_ORDER: readonly StorageCategoryId[] = STORAGE_CATEGORY_IDS;
-
-/** Force every category into the report in display order, filling gaps with zero. */
+/** Force every category into the report in scan order, filling gaps with zero. */
 export function orderCategories(
   usage: readonly StorageCategoryUsage[],
 ): StorageCategoryUsage[] {
-  return STORAGE_CATEGORY_ORDER.map((id) => {
-    const found = usage.find((category) => category.id === id);
-    return { id, bytes: found?.bytes ?? 0, itemCount: found?.itemCount ?? 0 };
+  return STORAGE_CATEGORY_IDS.map((id: StorageCategoryId) => {
+    const found = usage.filter((category) => category.id === id);
+    return {
+      id,
+      bytes: found.reduce((total, category) => total + category.bytes, 0),
+      itemCount: found.reduce((total, category) => total + category.itemCount, 0),
+    };
   });
 }
