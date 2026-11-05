@@ -65,13 +65,15 @@ const WORKTREE: StorageWorktreeFacts = {
 };
 
 function report(overrides: { truncated?: boolean; idleComplete?: boolean } = {}): StorageReport {
+  // A scan that stopped early leaves the worktrees and logs walks partial.
+  const complete = !overrides.truncated;
   return assembleStorageReport({
     categories: [
-      { id: "worktrees", bytes: 4_000_000_000, itemCount: 3 },
+      { id: "worktrees", bytes: 4_000_000_000, itemCount: 3, complete },
       { id: "threads", bytes: 1_000_000_000, itemCount: 12 },
       { id: "browser", bytes: 600_000_000, itemCount: 2 },
       { id: "models", bytes: 2_000_000_000, itemCount: 1 },
-      { id: "logs", bytes: 500_000, itemCount: 6 },
+      { id: "logs", bytes: 500_000, itemCount: 6, complete },
       { id: "bot-computers", bytes: 0, itemCount: 0 },
     ],
     worktrees: [
@@ -288,6 +290,22 @@ test("clearing the browser cache says sign-ins are kept", async () => {
   assert.equal((cleanupCall(calls) as StorageCleanupRequest).action, "clear-browser-cache");
 });
 
+test("a cleanup amount that was only partly measured is promised as a minimum", async () => {
+  installBotTestIpc({
+    "storage:report": () => report(),
+    "storage:refresh": () => report(),
+    "storage:preview": (request: unknown) => ({
+      ...previewFor(request as StorageCleanupRequest),
+      totalComplete: false,
+    }),
+  });
+  render(createElement(StorageSettings, {}));
+  const row = await screen.findByRole("group", { name: "Logs and diagnostics" });
+  fireEvent.click(within(row).getByRole("button", { name: "Clear…" }));
+  const dialog = await screen.findByRole("alertdialog");
+  assert.match(dialog.textContent ?? "", /This frees at least 500 KB/u);
+});
+
 test("Clear cache is off when the browser has nothing cached", async () => {
   mount({ report: { ...report(), browserCacheBytes: 0 } });
   const row = await screen.findByRole("group", { name: "Browser data" });
@@ -319,8 +337,10 @@ test("a scan that is still running says so and keeps cleanup off", async () => {
 test("a scan that stopped early says sizes are a minimum", async () => {
   mount({ report: report({ truncated: true, idleComplete: false }) });
   await screen.findByText(/some sizes are a minimum/u);
-  // The worktree category and a worktree measured only in part read "At least".
+  // Every partly measured category and worktree reads "At least"; a fully measured one does not.
   assert.ok(within(screen.getByRole("group", { name: "Worktrees" })).getByText("At least 4.00 GB"));
+  assert.ok(within(screen.getByRole("group", { name: "Logs and diagnostics" })).getByText("At least 500 KB"));
+  assert.ok(within(screen.getByRole("group", { name: "Chats" })).getByText("1.00 GB"));
   assert.ok(screen.getByText("At least 3.00 GB"));
 });
 

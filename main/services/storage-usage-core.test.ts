@@ -518,6 +518,31 @@ test("browser cache cleanup offers the cached share only, and nothing when it is
     NOW,
   );
   assert.equal(plan.totalBytes, 4_000, "sign-ins and site data are not part of what it frees");
+  assert.equal(plan.totalComplete, true);
+  const partial = planStorageCleanup(
+    { action: "clear-browser-cache", inactiveDays: 14 },
+    {
+      ...reportWith([], [], [{ id: "browser", bytes: 9_000, itemCount: 3, complete: false }]),
+      browserCacheBytes: 4_000,
+    },
+    NOW,
+  );
+  assert.equal(partial.totalComplete, false, "a partly measured browser profile makes the cache amount a minimum");
+});
+
+test("categories measured in several pieces are complete only when every piece is", () => {
+  const ordered = orderCategories([
+    { id: "browser", bytes: 1_000, itemCount: 1 },
+    { id: "browser", bytes: 2_000, itemCount: 2, complete: false },
+    { id: "logs", bytes: 500, itemCount: 1 },
+  ]);
+  assert.deepEqual(ordered.find((category) => category.id === "browser"), {
+    id: "browser",
+    bytes: 3_000,
+    itemCount: 3,
+    complete: false,
+  });
+  assert.equal(ordered.find((category) => category.id === "logs")?.complete, true);
 });
 
 test("a worktree measured only partly marks the preview's total as a minimum", () => {

@@ -457,18 +457,26 @@ test("each worktree is measured once and still listed when the walk runs out of 
   }
 });
 
-test("a folder the walk had to skip makes the page say sizes are a minimum", async () => {
-  const deep = `workspace-artifacts/${Array.from({ length: 30 }, (_, index) => `d${index}`).join("/")}/file.bin`;
-  await withHarness({ profileFiles: { [deep]: 5_000, "logs/today.log": 2_000 } }, async (h) => {
-    const report = await h.service.refresh();
-    assert.equal(report.scan.status, "ready");
-    assert.equal(report.scan.truncated, true, "a skipped folder is not reported as an exact total");
-    assert.equal(
-      report.categories.find((entry) => entry.id === "logs")?.bytes,
-      await allocated(h.root, "logs/today.log"),
-      "other categories are still measured in full",
-    );
-  });
+test("a folder the walk had to skip makes that category and its cleanup a minimum", async () => {
+  const deep = `logs/${Array.from({ length: 30 }, (_, index) => `d${index}`).join("/")}/old.log`;
+  await withHarness(
+    { profileFiles: { [deep]: 5_000, "logs/today.log": 2_000, "workspace-artifacts/a.bin": 3_000 } },
+    async (h) => {
+      const report = await h.service.refresh();
+      assert.equal(report.scan.status, "ready");
+      assert.equal(report.scan.truncated, true, "a skipped folder is not reported as an exact total");
+      const logs = report.categories.find((entry) => entry.id === "logs");
+      assert.equal(logs?.complete, false);
+      assert.equal(logs?.bytes, await allocated(h.root, "logs/today.log"), "the rest of the folder is still counted");
+      assert.notEqual(
+        report.categories.find((entry) => entry.id === "artifacts")?.complete,
+        false,
+        "other categories are measured in full",
+      );
+      const preview = await h.service.preview({ action: "clear-logs", inactiveDays: 14 });
+      assert.equal(preview.totalComplete, false, "clearing it can free more than it promises, never less");
+    },
+  );
 });
 
 test("browser data counts the whole profile, and Clear cache frees only its cache folders", async () => {

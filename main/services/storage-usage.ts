@@ -204,7 +204,7 @@ export function createStorageUsageService(
         }
         const measured = await measurePathBytes(target, budget, { onFile });
         partial ||= measured.truncated;
-        usage.push({ id: category, bytes: measured.bytes, itemCount: measured.files });
+        usage.push({ id: category, bytes: measured.bytes, itemCount: measured.files, complete: !measured.truncated });
       }
     }
 
@@ -247,9 +247,10 @@ export function createStorageUsageService(
       truncated ||= measured.truncated;
     }
     const rest = await measurePathBytes(worktreeRoot, budget, { exclude });
+    const partial = truncated || rest.truncated;
     return {
-      usage: { id: "worktrees", bytes: bytes + rest.bytes, itemCount: files + rest.files },
-      truncated: truncated || rest.truncated,
+      usage: { id: "worktrees", bytes: bytes + rest.bytes, itemCount: files + rest.files, complete: !partial },
+      truncated: partial,
     };
   }
 

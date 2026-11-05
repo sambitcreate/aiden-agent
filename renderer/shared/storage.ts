@@ -102,6 +102,12 @@ export interface StorageCategoryUsage {
   bytes: number;
   /** Files measured for this category; 0 when nothing exists yet. */
   itemCount: number;
+  /**
+   * False when part of the category could not be measured (a skipped folder or
+   * a spent budget), so its size and anything cleared from it are minimums.
+   * Omitted means fully measured.
+   */
+  complete?: boolean;
 }
 
 /** One removable thing a cleanup preview lists. */

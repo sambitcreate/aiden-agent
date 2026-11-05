@@ -309,7 +309,7 @@ export function planThreadCleanup(
  */
 export function planLogCleanup(
   inactiveDays: StorageInactiveDays,
-  measured: { bytes: number; files: number },
+  measured: { bytes: number; files: number; complete?: boolean },
 ): StorageCleanupPreview {
   const items: StorageItem[] =
     measured.files === 0
@@ -321,6 +321,7 @@ export function planLogCleanup(
             label: "Logs and diagnostics",
             detail: measured.files === 1 ? "1 file" : `${measured.files} files`,
             bytes: measured.bytes,
+            bytesComplete: measured.complete !== false,
           },
         ];
   return preview("clear-logs", inactiveDays, items, []);
@@ -330,11 +331,20 @@ export function planLogCleanup(
 export function planBrowserCacheCleanup(
   inactiveDays: StorageInactiveDays,
   cacheBytes: number,
+  complete = true,
 ): StorageCleanupPreview {
   const items: StorageItem[] =
     cacheBytes <= 0
       ? []
-      : [{ id: "browser-cache", kind: "browser-cache", label: "Cached pages and files", bytes: cacheBytes }];
+      : [
+          {
+            id: "browser-cache",
+            kind: "browser-cache",
+            label: "Cached pages and files",
+            bytes: cacheBytes,
+            bytesComplete: complete,
+          },
+        ];
   return preview("clear-browser-cache", inactiveDays, items, []);
 }
 
@@ -354,11 +364,19 @@ export function planStorageCleanup(
       return planWorktreeCleanup(report.worktrees, selection);
     case "delete-threads":
       return planThreadCleanup(report.threads, selection);
-    case "clear-browser-cache":
-      return planBrowserCacheCleanup(request.inactiveDays, report.browserCacheBytes);
+    case "clear-browser-cache": {
+      // Every cache folder lives in a Browser data entry, so a partial walk there
+      // makes the clearable amount a minimum too.
+      const browser = report.categories.find((category) => category.id === "browser");
+      return planBrowserCacheCleanup(request.inactiveDays, report.browserCacheBytes, browser?.complete !== false);
+    }
     case "clear-logs": {
       const logs = report.categories.find((category) => category.id === "logs");
-      return planLogCleanup(request.inactiveDays, { bytes: logs?.bytes ?? 0, files: logs?.itemCount ?? 0 });
+      return planLogCleanup(request.inactiveDays, {
+        bytes: logs?.bytes ?? 0,
+        files: logs?.itemCount ?? 0,
+        complete: logs?.complete !== false,
+      });
     }
   }
 }
@@ -379,6 +397,7 @@ export function orderCategories(
       id,
       bytes: found.reduce((total, category) => total + category.bytes, 0),
       itemCount: found.reduce((total, category) => total + category.itemCount, 0),
+      complete: found.every((category) => category.complete !== false),
     };
   });
 }

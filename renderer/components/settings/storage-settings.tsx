@@ -398,9 +398,7 @@ export function StorageSettings({
                     <div className="text-small text-secondary">{definition.description}</div>
                   </div>
                 </div>
-                <SizeAndAction
-                  size={sizeLabel(category.bytes, !(category.id === "worktrees" && report.scan.truncated))}
-                >
+                <SizeAndAction size={sizeLabel(category.bytes, category.complete !== false)}>
                   {categoryAction(category)}
                 </SizeAndAction>
               </div>
