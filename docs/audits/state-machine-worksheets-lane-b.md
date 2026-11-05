@@ -176,7 +176,14 @@ Not reviewed in this pass. It is a persisted migration, so it overlaps P4d.
 
 `grantRevision` and `resetsInProgress` fence cached grants across streams.
 
-Fixed defect, reproduced by test: `decide` captured the revision before its awaited status and grant reads and compared later state against that captured value, so a revocation during either read went unnoticed. Turning off Always allow, or starting a reset, while a read was in flight let that one call pass on the stale answer. `decide` now starts again when the revision has moved, so it re-reads the grant, or refuses if a reset is running. It retries at most three times, then refuses. A card answered after a revocation still counts: that answer is the person's fresh decision.
+Fixed defects, reproduced by test:
+
+- `decide` captured the revision before its awaited status and grant reads and compared later state against that captured value, so a revocation during either read went unnoticed. Turning off Always allow, or starting a reset, while a read was in flight let that one call pass on the stale answer. `decide` now starts again when the revision has moved.
+- A revocation after an allow, during the grant save or the readiness recheck, also passed. The allow is now bound to the revision current when it arrived and checked again after those awaits, so the call goes back through the grant read and, if needed, a new card.
+- An allow answered after a revocation was cached under the old revision, so a `once` grant lapsed on the next call and the card came back within one response. It is now cached under the answer's revision, because that answer is the person's fresh decision.
+- An allow answered during a reset could save a grant that the reset had just cleared. It is now refused.
+
+`decide` retries at most three times, then refuses.
 
 ### `backend:M123` Bot computer takeover — retained
 

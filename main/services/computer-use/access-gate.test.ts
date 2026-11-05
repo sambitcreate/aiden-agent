@@ -397,6 +397,105 @@ test("a cached grant does not outlive a revocation that lands during the readine
   assert.deepEqual(cards, ["call-2"]);
 });
 
+function gateForCards(input: {
+  status: () => { ready: boolean; available: boolean; detail: string };
+  answer: (toolCallId: string) => { outcome: "allowed" | "denied"; scope?: ToolApprovalScope };
+  grantChat?: () => Promise<unknown>;
+}) {
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => false,
+    status: async () => input.status(),
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return input.answer(toolCallId);
+    },
+    grantChat: input.grantChat ?? (async () => undefined),
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  return { gate, cards };
+}
+
+test("a revocation during the readiness recheck after an allow sends the call back to a card", async () => {
+  let reads = 0;
+  const { gate, cards } = gateForCards({
+    status: () => {
+      reads += 1;
+      if (reads === 1) return NEEDS_PERMISSIONS;
+      if (reads === 2) revokeComputerUseGrants();
+      return READY;
+    },
+    answer: (toolCallId) => ({ outcome: toolCallId === "call-1" && cards.length === 1 ? "allowed" : "denied" }),
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_DECLINED_REASON,
+  });
+  assert.equal(cards.length, 2);
+});
+
+test("a revocation while a chat grant is saved does not let the allow pass unchecked", async () => {
+  let saves = 0;
+  const { gate, cards } = gateForCards({
+    status: () => READY,
+    answer: () => (cards.length === 1 ? { outcome: "allowed", scope: "chat" } : { outcome: "denied" }),
+    grantChat: async () => {
+      saves += 1;
+      revokeComputerUseGrants();
+    },
+  });
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  assert.equal(saves, 1);
+  assert.equal(cards.length, 2);
+});
+
+test("an allow given after a revocation is fresh and covers the rest of the response", async () => {
+  let revoked = false;
+  const { gate, cards } = gateForCards({
+    status: () => READY,
+    answer: () => {
+      if (!revoked) {
+        revoked = true;
+        revokeComputerUseGrants();
+      }
+      return { outcome: "allowed", scope: "once" };
+    },
+  });
+  assert.deepEqual(await gate.authorize("call-1"), { allowed: true });
+  assert.deepEqual(await gate.authorize("call-2"), { allowed: true });
+  assert.deepEqual(cards, ["call-1"]);
+});
+
+test("an allow answered during a reset is refused and saves no grant", async () => {
+  let finishClearing = () => {};
+  let reset: Promise<unknown> | undefined;
+  let saves = 0;
+  const { gate } = gateForCards({
+    status: () => READY,
+    answer: () => {
+      reset = resetComputerUseGrants({
+        cancelActivatedStreams: () => undefined,
+        clearAlwaysAllow: () => new Promise<void>((resolve) => { finishClearing = resolve; }),
+        clearChatGrants: async () => 0,
+      });
+      return { outcome: "allowed", scope: "chat" };
+    },
+    grantChat: async () => {
+      saves += 1;
+    },
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_RESETTING_REASON,
+  });
+  assert.equal(saves, 0);
+  finishClearing();
+  await reset;
+});
+
 test("grants revoked on every read end in a refusal, not an endless retry", async () => {
   const cards: string[] = [];
   const gate = createComputerUseAccessGate({

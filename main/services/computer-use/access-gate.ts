@@ -166,6 +166,15 @@ export function createComputerUseAccessGate(
       () => deps.setPendingContinue(pending),
     );
 
+  const decideAgain = (
+    toolCallId: string,
+    signal: AbortSignal | undefined,
+    attempt: number,
+  ): Promise<ComputerUseAccessDecision> =>
+    attempt < MAX_DECIDE_ATTEMPTS
+      ? decide(toolCallId, signal, attempt + 1)
+      : Promise.resolve({ allowed: false, reason: COMPUTER_USE_RESETTING_REASON });
+
   const decide = async (
     toolCallId: string,
     signal?: AbortSignal,
@@ -198,11 +207,7 @@ export function createComputerUseAccessGate(
     }
     // A revocation during the awaits above makes both the cached grant and this
     // read stale. Decide again so a passed grant is current at this point.
-    if (revision !== grantRevision) {
-      return attempt < MAX_DECIDE_ATTEMPTS
-        ? decide(toolCallId, signal, attempt + 1)
-        : { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
-    }
+    if (revision !== grantRevision) return decideAgain(toolCallId, signal, attempt);
     if (grantedAt === revision) {
       if (status.ready) {
         establishedAt = revision;
@@ -219,6 +224,12 @@ export function createComputerUseAccessGate(
     if (!status.ready) await setPending(true);
     const { outcome, scope } = await deps.requestAccess(toolCallId, signal);
     if (outcome === "allowed") {
+      // Nothing may be saved while stored grants are being cleared.
+      if (resetsInProgress > 0)
+        return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
+      // The answer is fresh as of now, even if grants moved while the card was
+      // open. Only a revocation after this point can overrule it.
+      const answeredAt = grantRevision;
       if (scope === "always") {
         await persist(
           "Could not save Always allow for Computer Use.",
@@ -231,7 +242,7 @@ export function createComputerUseAccessGate(
         );
       }
       // A bare allow or "once" grants this response only.
-      grantedAt = revision;
+      grantedAt = answeredAt;
       const current = status.ready ? status : await readStatus(signal, true);
       if (!current)
         return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
@@ -240,7 +251,8 @@ export function createComputerUseAccessGate(
       if (!current.ready)
         return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
       if (!status.ready) await setPending(false);
-      establishedAt = revision;
+      if (answeredAt !== grantRevision) return decideAgain(toolCallId, signal, attempt);
+      establishedAt = answeredAt;
       return { allowed: true };
     }
     if (outcome === "denied") {
