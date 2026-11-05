@@ -12,7 +12,7 @@ import {
   buildCuaDriverEnvironment,
 } from "./contract.js";
 import { verifyCuaDriverBridgeProcess } from "./binary.js";
-import { runCuaDriverCommand, terminateDirectChild } from "./process.js";
+import { isChildReaped, runCuaDriverCommand, terminateDirectChild } from "./process.js";
 import { CuaDriverSession } from "./session.js";
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
@@ -153,6 +153,7 @@ export class CuaDriverHost {
   private cleanupPromise: Promise<void> = Promise.resolve();
   private pendingCleanupDirectories = new Set<string>();
   private readonly cleanupRetryFailures = new Map<string, number>();
+  private cleanupUnconfirmed = false;
 
   constructor(private readonly options: CuaDriverHostOptions) {
     const unsafeOptions = options as CuaDriverHostOptions & {
@@ -181,6 +182,11 @@ export class CuaDriverHost {
   /** Overridden only by the Node-test harness, which is not imported by production. */
   protected directBrokerInvocation(): CuaDriverInvocation | null {
     return null;
+  }
+
+  /** A child that never spawned has nothing to wait for. */
+  protected exitConfirmed(child: ChildProcess): boolean {
+    return !child.pid || isChildReaped(child);
   }
 
   /** Production always validates the exact live bridge process. */
@@ -380,12 +386,14 @@ export class CuaDriverHost {
           await terminateDirectChild(bridge).catch(() => {});
         }
         if (brokerLauncher) await terminateDirectChild(brokerLauncher).catch(() => {});
-        this.pendingCleanupDirectories.add(tempDirectory);
-        try {
-          await this.removeDirectory(tempDirectory);
-          this.pendingCleanupDirectories.delete(tempDirectory);
-        } catch {
-          // Retried by shutdown or before the next session.
+        if (this.childrenExited(bridge, brokerLauncher)) {
+          this.pendingCleanupDirectories.add(tempDirectory);
+          try {
+            await this.removeDirectory(tempDirectory);
+            this.pendingCleanupDirectories.delete(tempDirectory);
+          } catch {
+            // Retried by shutdown or before the next session.
+          }
         }
       }
       if (this.shutdownPromise) {
@@ -432,6 +440,16 @@ export class CuaDriverHost {
     await this.cleanupPromise;
     await this.retryPendingCleanup();
     this.manifest = null;
+    if (this.cleanupUnconfirmed) {
+      throw new CuaDriverError("cleanup_unconfirmed", "A Computer Use process may still be running.");
+    }
+  }
+
+  /** A timeout after SIGKILL proves nothing, so an unseen exit stays on record. */
+  private childrenExited(...children: readonly (ChildProcess | null | undefined)[]): boolean {
+    const exited = children.every((child) => !child || this.exitConfirmed(child));
+    if (!exited) this.cleanupUnconfirmed = true;
+    return exited;
   }
 
   private scheduleRuntimeCleanup(runtime: SessionRuntime): void {
@@ -462,6 +480,8 @@ export class CuaDriverHost {
     if (runtime.brokerLauncher) {
       await terminateDirectChild(runtime.brokerLauncher).catch(() => {});
     }
+    // Keep the runtime and its lease directory: a live bridge could still hold them.
+    if (!this.childrenExited(runtime.bridge, runtime.brokerLauncher)) return;
     this.runtimes.delete(runtime);
     this.pendingCleanupDirectories.add(runtime.tempDirectory);
     try {

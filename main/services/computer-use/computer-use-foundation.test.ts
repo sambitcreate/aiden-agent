@@ -223,13 +223,13 @@ function fakeHost(
   logPath: string,
   flags: string[] = [],
   overrides: Partial<CuaDriverHostOptions> &
-    Pick<CuaDriverHostTestHooks, "verifyBridgeProcess"> = {},
+    Pick<CuaDriverHostTestHooks, "verifyBridgeProcess" | "exitConfirmed"> = {},
 ): CuaDriverHost {
   const invocation = {
     command: process.execPath,
     prefixArgs: [fixture, "--log", logPath, ...flags],
   };
-  const { verifyBridgeProcess, ...hostOverrides } = overrides;
+  const { verifyBridgeProcess, exitConfirmed, ...hostOverrides } = overrides;
   return new TestCuaDriverHost(
     {
       invocation,
@@ -237,7 +237,7 @@ function fakeHost(
       tempRoot: root,
       ...hostOverrides,
     },
-    { brokerInvocation: invocation, verifyBridgeProcess },
+    { brokerInvocation: invocation, verifyBridgeProcess, exitConfirmed },
   );
 }
 
@@ -1155,6 +1155,38 @@ for (const phase of ["before fixture initialization", "during bridge verificatio
     }
   });
 }
+
+test("a bridge whose exit was not seen fails shutdown and keeps its lease directory", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-stuck-"));
+  const logPath = path.join(root, "events.jsonl");
+  // SIGKILL cannot be ignored, so the host is told the exit never showed up.
+  const host = fakeHost(root, logPath, [], { exitConfirmed: () => false });
+  try {
+    await host.createSession();
+    await assert.rejects(
+      host.shutdown(),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "cleanup_unconfirmed",
+    );
+    const leases = (await readdir(root)).filter((name) => name.startsWith("acu-"));
+    assert.equal(leases.length, 1, "nothing may reclaim what a live bridge could still hold");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a session whose bridge exited normally still shuts down cleanly", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-clean-"));
+  const logPath = path.join(root, "events.jsonl");
+  const host = fakeHost(root, logPath);
+  try {
+    const session = await host.createSession();
+    await session.close();
+    await host.shutdown();
+    assert.deepEqual((await readdir(root)).filter((name) => name.startsWith("acu-")), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("shutdown racing session startup cannot return an orphan session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-race-"));

@@ -23,3 +23,9 @@ SIGTERM comes first, then SIGKILL after the grace period, then up to two seconds
 The order per call stays: prepared, authorized, dispatch started, then a terminal record. After dispatch started, an unconfirmed outcome is recorded as `unknown` and never retried. Before it, the call is cancelled and its workspace admission released.
 
 Descendant cleanup is proved in `native/subagent-shell-runner/main.c`, which reports `cleanup_unconfirmed` itself. The native protocol is unchanged.
+
+## Computer Use host
+
+`CuaDriverHost` owns each session's bridge, broker launcher and lease directory. A runtime is reclaimed only when both children were seen to exit. If one was not, the host keeps the runtime and its directory and `shutdown()` rejects with `cleanup_unconfirmed`, which the controller already reports as a failed teardown.
+
+Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession` and `ComputerUseController` already had one close promise, exactly-once close notification and a poisoned state (`backend:M116`, `M117`, `M118`). The native broker, guard, supervisor and JSON-RPC filter (`cli-native:N01` to `N04`) were not changed; their frames and process-group identity checks are out of bounds here.
