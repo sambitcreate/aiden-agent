@@ -4,6 +4,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, before, test } from "node:test";
+import { createElement } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import type * as Storage from "../../shared/storage";
@@ -127,7 +128,7 @@ function mount(options: { report?: StorageReport; preview?: unknown; cleanup?: u
         freedBytes: 3_000_000_000,
       },
   });
-  render(<StorageSettings />);
+  render(createElement(StorageSettings));
   return calls;
 }
 
@@ -234,7 +235,7 @@ test("a read that throws says the files are unchanged", async () => {
       throw new Error("unreachable");
     },
   });
-  render(<StorageSettings />);
+  render(createElement(StorageSettings));
   await flush();
   await screen.findByText(/Nothing was changed/u);
   await screen.findByText(/Your files are unchanged/u);

@@ -1291,7 +1291,7 @@
         "renderer/components/transcript-image.test.tsx",
         "renderer/lib/work-details.test.ts",
         "renderer/components/chat-preferences.test.tsx",
-        "renderer/components/settings/storage-settings.test.tsx"
+        "renderer/components/settings/storage-settings.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",
