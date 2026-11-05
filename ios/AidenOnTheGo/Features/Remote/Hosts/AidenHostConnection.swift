@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// An opaque activation lease for one selected Aiden installation. The
-/// generation prevents an A -> B -> A switch from making work started during
-/// the first A activation current again.
+/// An opaque lease on one paired machine, selected or not. The generation
+/// prevents an A -> B -> A switch from making work started during the first A
+/// activation current again.
 struct AidenRemoteRequestContext: Equatable, Hashable, Sendable {
     let instanceId: String
     let deviceId: String
@@ -44,18 +44,6 @@ protocol AidenHostConnectionDelegate: AnyObject {
 @MainActor
 @Observable
 final class AidenHostConnection {
-    /// What the owner shows for its selected machine, handed from one
-    /// connection to the next when the selection moves. The generations carry
-    /// on rather than restart, so A -> B -> A can never reissue an old lease.
-    struct Carryover {
-        var connectionState: AidenRemoteConnectionState
-        var connectionIssue: AidenConnectionIssue?
-        var server: AidenServer?
-        var workspaces: [AidenWorkspace] = []
-        var generation = 0
-        var connectionGeneration = 0
-    }
-
     private struct ActiveClientKey: Equatable {
         let instanceId: String
         let deviceId: String
@@ -69,12 +57,14 @@ final class AidenHostConnection {
     private(set) var connectionIssue: AidenConnectionIssue?
     private(set) var server: AidenServer?
     private(set) var workspaces: [AidenWorkspace] = []
-    /// The activation lease every request context carries. A reconnect leaves
-    /// it alone, so contexts survive a dropped network.
-    private(set) var generation = 0
+    /// The lease every request context carries. A reconnect leaves it alone, so
+    /// contexts survive a dropped network, and leaving this machine for another
+    /// does too. Coming back moves it, so A -> B -> A can't make an old context
+    /// current again.
+    private(set) var generation: Int
     /// Moves on every connect attempt, so a late answer from an earlier attempt
     /// is dropped.
-    private(set) var connectionGeneration = 0
+    private(set) var connectionGeneration: Int
     private(set) var isRevoked = false
     @ObservationIgnored weak var delegate: (any AidenHostConnectionDelegate)?
 
@@ -85,12 +75,16 @@ final class AidenHostConnection {
     init(
         installation: AidenInstallation,
         credential: @escaping () throws -> String,
-        clientFactory: @escaping AidenRemoteCoordinator.ClientFactory
+        clientFactory: @escaping AidenRemoteCoordinator.ClientFactory,
+        generation: Int = 0,
+        connectionGeneration: Int = 0
     ) {
         instanceId = installation.id
         self.installation = installation
         loadCredential = credential
         self.clientFactory = clientFactory
+        self.generation = generation
+        self.connectionGeneration = connectionGeneration
     }
 
     func connect() async {
@@ -128,6 +122,14 @@ final class AidenHostConnection {
             deviceId: installation.deviceId,
             generation: generation
         )
+    }
+
+    /// True while `context` is this machine's and its lease hasn't ended.
+    func isLive(_ context: AidenRemoteRequestContext) -> Bool {
+        !isRevoked
+            && context.instanceId == instanceId
+            && context.deviceId == installation.deviceId
+            && context.generation == generation
     }
 
     func client() throws -> AidenRemoteClient {
@@ -213,27 +215,6 @@ final class AidenHostConnection {
     }
 
     // MARK: Writes from the owner
-
-    /// Takes over from the connection this one replaces.
-    func resume(from carryover: Carryover) {
-        connectionState = carryover.connectionState
-        connectionIssue = carryover.connectionIssue
-        server = carryover.server
-        workspaces = carryover.workspaces
-        generation = carryover.generation
-        connectionGeneration = carryover.connectionGeneration
-    }
-
-    var carryover: Carryover {
-        Carryover(
-            connectionState: connectionState,
-            connectionIssue: connectionIssue,
-            server: server,
-            workspaces: workspaces,
-            generation: generation,
-            connectionGeneration: connectionGeneration
-        )
-    }
 
     /// Picks up a re-pairing or a saved change to this machine's record.
     func adopt(installation: AidenInstallation) {
