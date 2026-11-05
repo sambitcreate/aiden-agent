@@ -88,11 +88,13 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
   ["browser", "app"],
   ["inspect_image", "photo"],
   ["subagent", "helper"],
+  ["message_bot", "helper"],
   ["bot_memory", "remembering"],
   ["routines", "routine"],
   ["routine_notes", "routine"],
   ["ask_user_question", "waiting"],
   ["hand_off", "waiting"],
+  ["request_access", "waiting"],
   ["sign_in", "waiting"],
 ]);
 
@@ -100,6 +102,7 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
 const TOOL_STEP_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
   ["codemode", "Ran a script"],
   ["hand_off", "Handed you a step"],
+  ["request_access", "Asked you for access"],
   ["sign_in", "Asked you to sign in"],
 ]);
 
@@ -222,6 +225,7 @@ export function botStepPhrase(kind: BotToolPhase, count: number, app?: string): 
 
 /** One finished call, past tense: its tool's own phrase ("Handed you a step"), else its phase's ("Read 1 file"). */
 export function botToolStepLabel(toolName: string, kind: BotToolPhase, app?: string): string {
+  if (toolName === "message_bot") return app ? `Messaged ${app}` : "Messaged a Bot";
   return TOOL_STEP_LABELS.get(toolName) ?? botStepPhrase(kind, 1, app);
 }
 

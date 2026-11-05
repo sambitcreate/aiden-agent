@@ -1610,3 +1610,9 @@ test("private storage rejects ownership mismatches before changing root or confi
   assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o644);
   assert.equal(await fs.readFile(r.portableFile, "utf8"), "preserve");
 });
+
+test('runtime settings export botMessaging only when off',()=>{
+ assert.equal(runtimeSettingsFrom({botMessaging:false} as never).botMessaging,false);
+ assert.equal(runtimeSettingsFrom({botMessaging:true} as never).botMessaging,undefined);
+ assert.equal(runtimeSettingsFrom({botMessaging:'no'} as never).botMessaging,undefined);
+});

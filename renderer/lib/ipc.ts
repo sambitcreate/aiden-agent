@@ -1,4 +1,5 @@
 import type { PeerProjectSource } from "../shared/peer-project-clone";
+import { BOT_PLAN_CHANNELS, type BotPlanDecision } from "../shared/bot-plans.js";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
@@ -1778,14 +1779,26 @@ export const botsApi = {
       submissionId,
     }),
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
-  approve: (waitId: string, decision: "allow" | "deny") =>
-    invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  approve: (waitId: string, decision: "allow" | "deny", scope?: "always") =>
+    invoke<{ decided: boolean }>("bots:approve", { waitId, decision, ...(scope === undefined ? {} : { scope }) }),
+  allowedList: (botId?: string) =>
+    invoke<import("../shared/tool-approval-scope").BotAllowedEntry[]>("bots:allowed:list", botId === undefined ? {} : { botId }),
+  removeAllowed: (botId: string, entryId: string) =>
+    invoke<{ removed: boolean }>("bots:allowed:remove", { botId, entryId }),
+  onAllowedChanged: (handler: (payload: { botId: string }) => void) =>
+    onNotification("bots:allowed:changed", handler),
   /**
    * Answer the Bot's A–E question by its wait id; `answered` is false once the
    * question is no longer waiting (answered elsewhere or withdrawn).
    */
   answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
     invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  /** Answer only the offered choice for this live authorization attempt. */
+  answerAccessRequest: (botId: string, waitId: string, choice: import("../shared/bot-access-requests").BotAccessChoice) =>
+    invoke<{ answered: boolean; savedForFuture?: true }>("bots:answerAccessRequest", { botId, waitId, choice }),
+  /** Answer or stop the exact plan shown by the host. */
+  respondPlan: (input: { botId: string; planId: string; decision: BotPlanDecision }) =>
+    invoke<{ result: "done" | "not_waiting" }>(BOT_PLAN_CHANNELS.respond, input),
   /**
    * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
    * optional note; `answered` is false once the card is no longer waiting.

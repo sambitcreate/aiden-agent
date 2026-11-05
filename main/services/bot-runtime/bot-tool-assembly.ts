@@ -18,12 +18,16 @@
 //   routine inputs, an approval (today's or a rule's Ask first) is granted
 //   without a card. Hand-offs, the locked rules, Computer Use on the person's
 //   Mac and every turn a person or Telegram joined are unchanged.
+// - Remembered Bot entries follow plan coverage and skip only baseline, no-rule approvals.
 // - Effect: each offered tool re-admits and revalidates immediately before it
 //   runs, and its signal follows the admission, as `protectAdmittedBotTool`
 //   does on the legacy path.
 // - Replay: a tool's own declaration (`declarePiRuntimeReplay`) unless the
 //   candidate overrides it; MCP tools and subagents are always `unsafe`.
 
+import { createHash } from "node:crypto";
+import type { BotPlans } from "../bot-plans/plans.js";
+import { botPlanRuleFingerprint } from "../bot-plans/validate.js";
 import type { BrowserApprovalTarget } from "../browser/approval.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
@@ -33,10 +37,13 @@ import {
   normalizeBotHandoffAction,
   withoutBotHandoffControls,
 } from "../../../renderer/shared/bot-handoffs.js";
-import { botRuleLabel, type BotRule } from "../../../renderer/shared/bot-rules.js";
+import { botRuleLabel, BOT_LOCKED_RULES, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import { classifyBotAction, type BotClassifiableAction } from "../bot-rules/classify.js";
 import { botBaselineOf, decideBotRule } from "../bot-rules/decide.js";
 import { describeMcpAction } from "../bot-rules/mcp-action.js";
+import type { BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
+import { botApprovalTargetOf } from "./bot-allow-target.js";
+import { BOT_EXECUTION_ID_MEMO } from "./bot-extension.js";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { summarizeToolCall } from "../coding-tools.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
@@ -45,13 +52,14 @@ import { piRuntimeReplayPolicy } from "../pi-runtime-tool.js";
 import type { SkillRegistrySnapshot } from "../skill-registry.js";
 import type {
   BotApprovalRequirement,
+  BotApprovalRequirements,
   BotPolicyDecision,
   BotToolCallCheck,
   BotToolEntry,
   BotTurnContext,
 } from "./bot-extension.js";
 import { ruleAskUnattendedBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
-import { botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, SUBAGENT_TOOL, type BotToolFacts } from "./bot-tool-policy.js";
 import type { BotToolCall, ToolReplay } from "./tool-adapter.js";
 
 /** One admission of the Bot's current authority. Release it when done. */
@@ -110,7 +118,15 @@ export interface BotToolSources {
   approvalFor?(botId: string, toolName: string, call: BotToolCallCheck): Promise<BotLiveApproval | undefined>;
 }
 
+export interface BotAllowListPort {
+  consentRevision(botId: string, target: BotApprovalRuleTarget): Promise<string>;
+  match(botId: string, target: BotApprovalRuleTarget): Promise<{ id: string } | undefined>;
+  offer(botId: string, target: BotApprovalRuleTarget): Promise<{ count: number } | undefined>;
+  used(botId: string, ruleId: string): Promise<void>;
+}
+
 export interface BotToolAssemblyPorts {
+  allowList?: BotAllowListPort;
   admit(botId: string): Promise<BotAdmission>;
   sources: BotToolSources;
   /** The Bot's effective rules, read fresh on every call. Absent: no rules apply. */
@@ -119,9 +135,13 @@ export interface BotToolAssemblyPorts {
   botName?(botId: string): Promise<string | undefined>;
   /** Settings → Bots, read fresh on every call: routine runs go ahead without asking. Absent: off. */
   routinesGoAhead?(): Promise<boolean>;
+  plans?: Pick<BotPlans, "cover" | "admit">;
 }
 
 export interface BotToolAssembly {
+  /** Fresh evidence only: no C reservation, D use, offer or execution binding. */
+  approvalRequirements(botId: string, toolName: string, call: BotToolCallCheck): Promise<BotApprovalRequirements | undefined>;
+  approvalEvidence(botId: string, toolName: string, call: BotToolCallCheck): Promise<BotApprovalRequirement | undefined>;
   currentTools(botId: string, turn: BotTurnContext): Promise<BotToolEntry[]>;
   checkPolicy(botId: string, toolName: string, call?: BotToolCallCheck): Promise<BotPolicyDecision>;
   /** The bounded `mcp_servers` section for the connection tools last offered to the Bot, or "". */
@@ -181,8 +201,155 @@ function ruleWhyText(label: string, botName: string, summary: string): string {
   return bounded(withoutBotHandoffControls(why), BOT_HANDOFF_WHY_MAX_CHARS);
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+/** Hash exact call data, preserving array order and ignoring object key insertion order. */
+function operationIdentity(toolName: string, args: unknown, action: BotClassifiableAction | undefined, target?: Readonly<BrowserApprovalTarget>): string | undefined {
+  try { return createHash("sha256").update(canonical({ toolName, args, action, target })).digest("hex"); } catch { return undefined; }
+}
+
 export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssembly {
   const offered = new Map<string, { connectionTools: readonly AgentTool[]; skillSnapshot?: SkillRegistrySnapshot }>();
+
+  // Only immutable hashes live beyond beforeTool. No completed HookApi or callback is retained.
+  const entryExecutions = new Map<string, { requirements: BotApprovalRequirements; owner?: BotToolCallCheck["owner"] }>();
+  const hash = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
+  const effectiveRules = (rules: readonly BotRule[]) => [...BOT_LOCKED_RULES, ...rules.filter(rule => !rule.locked)];
+  const ruleIdentity = (rules: readonly BotRule[]) => canonical(effectiveRules(rules).map(rule => [rule.id, botPlanRuleFingerprint(rule)]).sort());
+  const callData = (call: BotToolCallCheck) => ({ executionId: call.executionId, callId: call.callId, args: call.args,
+    authorizationIds: call.authorizationIds ?? call.requestIds, requestIds: call.requestIds, owner: call.owner });
+  function snapshot(call: BotToolCallCheck): BotToolCallCheck {
+    return { ...call, args: structuredClone(call.args), requestIds: call.requestIds?.slice(),
+      authorizationIds: call.authorizationIds?.slice(), owner: structuredClone(call.owner) };
+  }
+  function active(call: BotToolCallCheck, original: BotToolCallCheck) {
+    call.signal?.throwIfAborted();
+    if (canonical(callData(call)) !== canonical(callData(original))) throw new Error("This action's authorization changed.");
+  }
+
+  async function describePolicy(botId: string, toolName: string, call: BotToolCallCheck, facts: BotToolFacts) {
+    const live = await ports.sources.approvalFor?.(botId, toolName, call);
+    const summary = live === undefined ? await botToolApprovalSummary(toolName, call.args, facts) : undefined;
+    const baseline = live === undefined ? (summary === undefined ? undefined : { summary }) : live.approval ?? undefined;
+    const action = structuredClone(live !== undefined ? live.action : await describeMcpAction(toolName, call.args, facts));
+    let rules: readonly BotRule[] = [];
+    if (action !== undefined && (ports.rules || ports.plans || ports.allowList)) {
+      try { rules = structuredClone(ports.rules ? await ports.rules(botId) : []); } catch { throw new Error(RULES_UNREADABLE); }
+    }
+    const identity = ruleIdentity(rules);
+    const decision = action === undefined || !(ports.rules || ports.plans || ports.allowList) ? { ruled: botBaselineOf(baseline), rule: undefined, allMatchingAsk: [] }
+      : decideBotRule(botBaselineOf(baseline), rules, classifyBotAction(action, rules));
+    return { live, baseline, action, rule: decision.rule, ruled: decision.ruled, matchingAsk: decision.allMatchingAsk,
+      rulesIdentity: identity,
+      rulesCurrent: async () => {
+        try { return ruleIdentity(ports.rules ? await ports.rules(botId) : []) === identity; } catch { return false; }
+      } };
+  }
+
+  function requirementFingerprint(botId: string, toolName: string, call: BotToolCallCheck,
+    authority: Readonly<BotRuntimeEffectiveAuthority>, policy: Awaited<ReturnType<typeof describePolicy>>) {
+    return hash({ version: 1, botId, toolName, call: callData(call), authority,
+      operation: operationIdentity(toolName, call.args, policy.action, policy.live?.browserTarget),
+      rules: policy.rulesIdentity, baseline: policy.baseline !== undefined });
+  }
+
+  async function ordinaryApproval(botId: string, toolName: string, call: BotToolCallCheck, original: BotToolCallCheck,
+    admission: BotAdmission, facts: BotToolFacts, policy: Awaited<ReturnType<typeof describePolicy>>, approval: BotApprovalRequirement) {
+    let requirements = approval.requirements;
+    if (!requirements) {
+      try { requirements = await requirementsFrom(botId, toolName, call, original, admission, facts, policy); } catch { /* Once-only evidence. */ }
+    }
+    await call.assertCurrent?.();
+    await admission.revalidateBeforeEffect();
+    if (!(await policy.rulesCurrent())) throw new Error("This Bot's approval requirements changed. Ask again.");
+    active(call, original);
+    const requirementsFingerprint = requirements?.requirementsFingerprint ?? requirementFingerprint(botId, toolName, call, admission.authority, policy);
+    const described = botApprovalTargetOf(toolName, policy.action);
+    const evidence = { requirementsFingerprint, authorizationFingerprint: requirements?.authorizationFingerprint ??
+      hash(["bot-ordinary-approval-v1", requirementsFingerprint, described && ports.allowList && !policy.rule ? "consent-unavailable" : null]) };
+    const expected = requirements;
+    return { ...approval, ...(expected ? { requirements: expected } : {}), evidence,
+      ...(expected?.matchedRuleId && policy.baseline ? { allowFromList: async (grant: import("./bot-extension.js").BotAllowListRelease) => {
+        if (grant.ruleId !== expected.matchedRuleId || grant.consentRevision !== expected.consentRevision ||
+            canonical(grant.target) !== canonical(expected.target)) throw new Error("This remembered approval changed.");
+        await allowEntry(botId, toolName, call, expected, policy.baseline!);
+      } } : {}),
+      revalidate: () => assembly.approvalEvidence(botId, toolName, call) };
+  }
+
+  async function requirementsFrom(botId: string, toolName: string, call: BotToolCallCheck, original: BotToolCallCheck,
+    admission: BotAdmission, facts: BotToolFacts, policy: Awaited<ReturnType<typeof describePolicy>>): Promise<BotApprovalRequirements | undefined> {
+    const list = ports.allowList;
+    if (!ports.rules || !list || typeof list.consentRevision !== "function" || !call.executionId || !call.requestIds?.length ||
+        (!call.authorizationIds?.length && call.requestIds.some(id => !id)) || !policy.baseline || policy.baseline.rule || policy.rule ||
+        policy.ruled !== "ask" || toolName === COMPUTER_USE_TOOL_NAME) return undefined;
+    const described = botApprovalTargetOf(toolName, policy.action);
+    if (!described || (described.target.kind === "site" && !policy.live?.browserTarget)) return undefined;
+    const authority = structuredClone(admission.authority);
+    if (canonical(facts.authority) !== canonical(authority)) return undefined;
+    const binding = (value: typeof policy) => requirementFingerprint(botId, toolName, call, authority, value);
+    const requirementsFingerprint = binding(policy);
+    const consentRevision = await list.consentRevision(botId, described.target);
+    if (!consentRevision) return undefined;
+    const match = await list.match(botId, described.target);
+    if (await list.consentRevision(botId, described.target) !== consentRevision) return undefined;
+    await call.assertCurrent?.();
+    await admission.revalidateBeforeEffect();
+    const freshFacts = await ports.sources.facts(botId, admission);
+    const turns = (call.requestIds ?? []).map(botTurnOf);
+    if (!(await botToolVerdict(toolName, freshFacts, { botMessage: turns.some(t => t.botMessage), telegram: turns.some(t => t.telegram), routine: turns.some(t => t.routine) }, call.args)).allowed) return undefined;
+    if (await list.consentRevision(botId, described.target) !== consentRevision) return undefined;
+    const fresh = await describePolicy(botId, toolName, call, freshFacts);
+    if (await list.consentRevision(botId, described.target) !== consentRevision || !(await fresh.rulesCurrent())) return undefined;
+    await call.assertCurrent?.();
+    active(call, original);
+    if (admission.signal.aborted || canonical(admission.authority) !== canonical(authority) || canonical(freshFacts.authority) !== canonical(authority) ||
+        !botIngressAllowsTool(toolName, call.requestIds ?? []) || fresh.rule || !fresh.baseline || binding(fresh) !== requirementsFingerprint) return undefined;
+    return Object.freeze({ target: Object.freeze(described.target), requirementsFingerprint, consentRevision,
+      authorizationFingerprint: hash(["bot-approval-authorization-v1", requirementsFingerprint, consentRevision]),
+      ...(match ? { matchedRuleId: match.id } : {}) });
+  }
+
+  async function approvalRequirements(botId: string, toolName: string, original: BotToolCallCheck): Promise<BotApprovalRequirements | undefined> {
+    let admission: BotAdmission | undefined;
+    try {
+      const call = snapshot(original);
+      active(call, original);
+      if (!call.requestIds?.length || !botIngressAllowsTool(toolName, call.requestIds)) return undefined;
+      admission = await ports.admit(botId);
+      await admission.revalidateBeforeEffect();
+      const facts = await ports.sources.facts(botId, admission);
+      const turns = call.requestIds.map(botTurnOf);
+      const verdict = await botToolVerdict(toolName, facts, { botMessage: turns.some(t => t.botMessage),
+        telegram: turns.some(t => t.telegram), routine: turns.some(t => t.routine) }, call.args);
+      if (!verdict.allowed) return undefined;
+      const policy = await describePolicy(botId, toolName, call, facts);
+      return await requirementsFrom(botId, toolName, call, original, admission, facts, policy);
+    } catch { return undefined; }
+    finally { admission?.release(); }
+  }
+
+  async function assertEntryCurrent(botId: string, toolName: string, call: BotToolCallCheck, expected: BotApprovalRequirements) {
+    const current = await approvalRequirements(botId, toolName, call);
+    if (!current || current.authorizationFingerprint !== expected.authorizationFingerprint || current.matchedRuleId !== expected.matchedRuleId)
+      throw new Error("This Bot's remembered approval changed. Ask again.");
+  }
+
+  async function allowEntry(botId: string, toolName: string, call: BotToolCallCheck, expected: BotApprovalRequirements, baseline: BotApprovalRequirement) {
+    await assertEntryCurrent(botId, toolName, call, expected);
+    await baseline.onAllow?.();
+    await assertEntryCurrent(botId, toolName, call, expected);
+    await ports.allowList!.used(botId, expected.matchedRuleId!);
+    await assertEntryCurrent(botId, toolName, call, expected);
+    const executionId = call.executionId!;
+    entryExecutions.set(executionId, { requirements: expected, owner: structuredClone(call.owner) });
+    call.signal?.addEventListener("abort", () => entryExecutions.delete(executionId), { once: true });
+  }
 
   /**
    * Run `tool` behind a fresh admission, revalidated immediately before the
@@ -191,46 +358,86 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
    * for) used that grant's effect, so a tool that changed since, such as one
    * that turned from read-only to mutating, never runs under the old answer.
    */
-  function fenced(botId: string, tool: AgentTool, mcp: boolean): AgentTool {
+  function fenced(botId: string, tool: AgentTool, mcp: boolean, call?: BotToolCall): AgentTool {
     return {
       ...tool,
       async execute(toolCallId, params, signal, onUpdate) {
-        const admission = await ports.admit(botId);
+        // A rejected plan permit gets one ordinary authorization attempt. Release
+        // the admission before that card waits, then acquire fresh authority again.
+        const executionId = ports.allowList && call?.readMemo ? await call.readMemo<string>(BOT_EXECUTION_ID_MEMO) : undefined;
         try {
-          await admission.revalidateBeforeEffect();
-          if (mcp) {
-            const facts = await ports.sources.facts(botId, admission);
-            if (!(await facts.mcpTools()).has(tool.name)) {
-              throw new Error("This connection tool changed since it was offered. Try again.");
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const admission = await ports.admit(botId);
+            try {
+              await admission.revalidateBeforeEffect();
+              if (mcp) {
+                const facts = await ports.sources.facts(botId, admission);
+                if (!(await facts.mcpTools()).has(tool.name)) {
+                  throw new Error("This connection tool changed since it was offered. Try again.");
+                }
+              }
+              if (admission.signal.aborted) throw admission.signal.reason;
+              const effectSignal = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
+              await call?.assertRunActive?.();
+              const invoke = () => {
+                // Plan admission can await disk and revalidation. No await may
+                // separate this last cancellation check from actual invocation.
+                effectSignal.throwIfAborted();
+                return tool.execute(toolCallId, params, effectSignal, onUpdate);
+              };
+              const authorization = executionId ? entryExecutions.get(executionId) : undefined;
+              const start = authorization && call ? async () => {
+                const requestIds = await call.runRequestIds?.(), authorizationIds = await call.runInputIds?.();
+                await assertEntryCurrent(botId, tool.name, {
+                  executionId, callId: call.callId, args: params, signal: effectSignal,
+                  requestIds, authorizationIds, owner: authorization.owner,
+                  assertCurrent: async () => {
+                    await call.assertRunActive?.();
+                    if (canonical(await call.runRequestIds?.()) !== canonical(requestIds) ||
+                        canonical(await call.runInputIds?.()) !== canonical(authorizationIds))
+                      throw new Error("This tool's owning inputs changed.");
+                  },
+                }, authorization.requirements);
+                return invoke();
+              } : invoke;
+              if (!call?.admitEffect) return await start();
+              const result = await call.admitEffect(start);
+              if (result.admitted) return await result.started;
+            } finally {
+              admission.release();
             }
+            if (attempt !== 0 || !call?.reauthorize) throw new Error("This plan no longer permits the action.");
+            await call.reauthorize();
           }
-          if (admission.signal.aborted) throw admission.signal.reason;
-          const effectSignal = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
-          return await tool.execute(toolCallId, params, effectSignal, onUpdate);
-        } finally {
-          admission.release();
-        }
+          throw new Error("This plan no longer permits the action.");
+        } finally { if (executionId) entryExecutions.delete(executionId); }
       },
     };
   }
 
-  return {
+  const assembly: BotToolAssembly = {
+    async approvalEvidence(botId, toolName, call) {
+      const decision = await assembly.checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
+      return decision.allowed && decision.approval && !decision.approval.preapproved ? decision.approval : undefined;
+    },
     async currentTools(botId, turn) {
       const admission = await ports.admit(botId);
       try {
         const facts = await ports.sources.facts(botId, admission);
         const set = await ports.sources.candidates(botId, admission, facts, turn);
-        const { telegram, routine } = botTurnOf(turn.requestId);
+        const { telegram, routine, botMessage } = botTurnOf(turn.requestId);
         const entries: BotToolEntry[] = [];
         for (const candidate of set.tools) {
-          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine })).allowed) continue;
+          if (!botIngressAllowsTool(candidate.tool.name, [turn.requestId])) continue;
+          if (!(await botToolVerdict(candidate.tool.name, facts, { telegram, routine, botMessage })).allowed) continue;
           const bind = candidate.bind;
-          const guard = (tool: AgentTool) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true));
+          const guard = (tool: AgentTool, call?: BotToolCall) => (candidate.interactive ? tool : fenced(botId, tool, candidate.mcp === true, call));
           entries.push({
             tool: guard(candidate.tool),
             replay: replayOf(candidate),
+            ...(ports.plans ? { admitPlan: ports.plans.admit } : {}),
             ...(candidate.mcp ? { mcp: true } : {}),
-            ...(bind === undefined ? {} : { bind: (call: BotToolCall) => guard(bind(call)) }),
+            bind: (call: BotToolCall) => guard(bind ? bind(call) : candidate.tool, call),
           });
         }
         offered.set(botId, {
@@ -243,7 +450,12 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       }
     },
 
-    async checkPolicy(botId, toolName, call) {
+    approvalRequirements,
+
+    checkPolicy: async function checkPolicy(botId, toolName, original): Promise<BotPolicyDecision> {
+      if (original?.executionId && !original.approvalProbe) entryExecutions.delete(original.executionId);
+      let call: BotToolCallCheck | undefined;
+      try { call = original === undefined ? undefined : snapshot(original); } catch { return { allowed: false, reason: "This action's authorization could not be read." }; }
       let admission: BotAdmission;
       try {
         admission = await ports.admit(botId);
@@ -254,57 +466,70 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         await admission.revalidateBeforeEffect();
         const facts = await ports.sources.facts(botId, admission);
         // The calling run's own ingress, not whoever refreshed the tools last.
+        if (call?.requestIds && !botIngressAllowsTool(toolName, call.requestIds)) return {allowed: false, reason: "This tool is not available on this turn."};
         const turns = (call?.requestIds ?? []).map(botTurnOf);
         const verdict = await botToolVerdict(toolName, facts, {
+          botMessage: turns.some((turn) => turn.botMessage),
           telegram: turns.some((turn) => turn.telegram),
           routine: turns.some((turn) => turn.routine),
         }, call?.args);
         if (!verdict.allowed) return verdict;
         if (call === undefined) return { allowed: true };
-        // The baseline: today's approval decision, untouched by any rule.
-        const live = await ports.sources.approvalFor?.(botId, toolName, call);
-        let baseline: BotApprovalRequirement | undefined;
-        if (live !== undefined) {
-          baseline = live.approval ?? undefined;
-        } else {
-          const summary = await botToolApprovalSummary(toolName, call.args, facts);
-          baseline = summary === undefined ? undefined : { summary };
-        }
-        // Only a run every input of which is a routine: a person who joined it is watching.
-        const routineOnly = turns.length > 0 && turns.every((turn) => turn.routine && !turn.telegram);
-        // Computer Use acts on the person's own Mac, so it keeps asking whatever the setting.
-        const goAhead =
-          routineOnly && toolName !== COMPUTER_USE_TOOL_NAME &&
-          (await ports.routinesGoAhead?.().catch(() => false)) === true &&
-          (await call.hasRoutineInputs?.()) === true;
-        const ask = (approval: BotApprovalRequirement): BotPolicyDecision =>
-          goAhead ? { allowed: true, approval: { ...approval, preapproved: true } } : { allowed: true, approval };
-        const asBaseline: BotPolicyDecision = baseline === undefined ? { allowed: true } : ask(baseline);
-        const action = live !== undefined ? live.action : await describeMcpAction(toolName, call.args, facts);
-        if (action === undefined || ports.rules === undefined) return asBaseline;
-        let rules: readonly BotRule[];
-        try {
-          rules = await ports.rules(botId);
-        } catch {
-          // Fail closed: a call the rules can't be checked for doesn't run.
-          return { allowed: false, reason: RULES_UNREADABLE };
-        }
-        const { ruled, rule } = decideBotRule(botBaselineOf(baseline), rules, classifyBotAction(action, rules));
-        if (ruled === "allowed" || rule === undefined) return asBaseline;
-        const label = botRuleLabel(rule);
-        const ruleRef = { id: rule.id, label };
+        const policy = await describePolicy(botId, toolName, call, facts);
+        const { live, baseline, action, rule, matchingAsk, ruled, rulesCurrent } = policy;
         const unattended = turns.some((turn) => turn.routine || turn.telegram);
+        const label = rule ? botRuleLabel(rule) : "";
+        const ruleRef = rule ? { id: rule.id, label } : undefined;
         const ownSummary = baseline?.summary ?? live?.summary ?? summarizeToolCall(toolName, call.args);
-        const callSummary = rule.locked ? lockedRuleSummary(action, ownSummary) : ownSummary;
-        if (ruled === "ask") {
-          // Never with remembered scopes: a rule-made ask is answered each time.
-          if (baseline !== undefined) {
-            return ask({ ...baseline, summary: `Rule · ${label} — ${baseline.summary}`, rule: ruleRef });
+        const callSummary = rule?.locked && action ? lockedRuleSummary(action, ownSummary) : ownSummary;
+        if (ruled !== "hand_off") {
+          // Build the approval only once, after rules have decided whether it may run.
+          const approval: BotApprovalRequirement | undefined = rule === undefined ? baseline : {
+            ...baseline, summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef,
+          };
+          if (!approval) return { allowed: true };
+          const routineOnly = turns.length > 0 && turns.every(turn => turn.routine && !turn.telegram);
+          const goAhead = routineOnly && toolName !== COMPUTER_USE_TOOL_NAME &&
+            (await ports.routinesGoAhead?.().catch(() => false)) === true && (await call.hasRoutineInputs?.()) === true;
+          if (goAhead) return { allowed: true, approval: { ...approval, preapproved: true } };
+          if (ports.plans && !call.skipPlanCoverage && call.executionId) {
+            const operationFingerprint = operationIdentity(toolName, call.args, action, live?.browserTarget);
+            const permit = operationFingerprint === undefined ? undefined : await ports.plans.cover(botId, {
+              executionId: call.executionId, operationFingerprint, toolName,
+              requestIds: call.authorizationIds ?? call.requestIds ?? [], action, baseline: baseline !== undefined,
+              rules: matchingAsk.map(rule => ({ id: rule.id, fingerprint: botPlanRuleFingerprint(rule) })),
+            }).catch(() => undefined);
+            if (permit) return { allowed: true, approval: { ...approval, preapproved: true, planPermit: permit,
+              planOperation: args => operationIdentity(toolName, args, action, live?.browserTarget), planRulesCurrent: rulesCurrent } };
           }
-          if (unattended && !goAhead) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
-          return ask({ summary: `Rule · ${label} — ${callSummary}`, rule: ruleRef });
+          if (ports.allowList && !call.skipAllowList && baseline && !rule && toolName !== COMPUTER_USE_TOOL_NAME) {
+            const described = botApprovalTargetOf(toolName, action);
+            if (described) {
+              let requirements: BotApprovalRequirements | undefined;
+              try { requirements = await requirementsFrom(botId, toolName, call, original!, admission, facts, policy); } catch { /* Ask normally. */ }
+              if (requirements?.matchedRuleId) {
+                const expected = requirements;
+                return { allowed: true, approval: { ...approval, requirements: expected, preapproved: true,
+                  onAllow: () => allowEntry(botId, toolName, call, expected, baseline) } };
+              }
+              if (!requirements) return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
+              let offer: { count: number } | undefined;
+              try { offer = await ports.allowList.offer(botId, described.target); } catch { /* No offer. */ }
+              // Offering can await disk; stale evidence must never attach to a new card.
+              const fresh = await approvalRequirements(botId, toolName, call);
+              if (!fresh || fresh.authorizationFingerprint !== requirements.authorizationFingerprint)
+                return checkPolicy(botId, toolName, { ...call, skipPlanCoverage: true, skipAllowList: true });
+              return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+                { ...approval, remember: { ...described, ...(offer ? { offer } : {}) }, requirements }) };
+            }
+          }
+          if (baseline === undefined && rule && unattended) return { allowed: false, reason: ruleAskUnattendedBlock(label) };
+          const described = call.skipAllowList && baseline && !rule ? botApprovalTargetOf(toolName, action) : undefined;
+          return { allowed: true, approval: await ordinaryApproval(botId, toolName, call, original!, admission, facts, policy,
+            described ? { ...approval, remember: described } : approval) };
         }
-        if (unattended) return { allowed: false, reason: ruleUnattendedBlock(label) };
+        if (!rule || !ruleRef) return { allowed: false, reason: RULES_UNREADABLE };
+        if (unattended || turns.some(turn => turn.botMessage)) return { allowed: false, reason: ruleUnattendedBlock(label) };
         const botName = (await ports.botName?.(botId).catch(() => undefined)) ?? "Your Bot";
         const open = live?.open !== undefined && isBotHandoffOpenUrl(live.open.url) ? { url: live.open.url } : undefined;
         return {
@@ -336,4 +561,5 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
       return offered.get(botId)?.skillSnapshot;
     },
   };
+  return assembly;
 }

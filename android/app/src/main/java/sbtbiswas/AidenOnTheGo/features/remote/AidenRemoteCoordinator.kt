@@ -124,9 +124,35 @@ internal fun aidenShouldRequestBotImages(server: AidenServer, installation: Aide
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_IMAGES, server, installation)
 
 /**
- * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
- * in a call of its own after every other negotiation, unless [installation] already holds it.
+ * Revision 56: plans are offered and negotiated alone, preserving the existing grants.
  */
+internal suspend fun aidenRequestBotAllowed(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ALLOWED, server, installation)) listOf(AidenRemoteCapability.BOT_ALLOWED) else emptyList(),
+    client, stillCurrent
+)
+
+internal suspend fun aidenRequestBotPlans(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PLANS, server, installation)) listOf(AidenRemoteCapability.BOT_PLANS) else emptyList(),
+    client, stillCurrent
+)
+
+internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
+
+internal suspend fun aidenRequestBotAccessRequests(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestBotAccessRequests(server, installation)) listOf(AidenRemoteCapability.BOT_ACCESS_REQUESTS) else emptyList(),
+    client, stillCurrent
+)
+
 internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
 
@@ -278,6 +304,16 @@ internal suspend fun aidenRequestChatNewWorktree(
         client,
         stillCurrent
     )
+
+internal suspend fun aidenRequestBotMessaging(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_MESSAGING, server, installation))
+        listOf(AidenRemoteCapability.BOT_MESSAGING) else emptyList(), client, stillCurrent
+)
 
 private suspend fun aidenRequestCapabilitiesAlone(
     missing: List<AidenRemoteCapability>,
@@ -626,11 +662,19 @@ class AidenRemoteCoordinator(
                     request = ::aidenRequestBotIssues
                 )
                 // Revision 49: `chat:jobs` goes alone too.
+                val accessServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = issuesServer, request = ::aidenRequestBotAccessRequests
+                )
+                val plansServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = accessServer, request = ::aidenRequestBotPlans
+                )
                 val jobsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
-                    server = issuesServer,
+                    server = plansServer,
                     request = ::aidenRequestChatJobs
                 )
                 // Revision 50: `attachments:raw` goes alone too.
@@ -641,14 +685,22 @@ class AidenRemoteCoordinator(
                     server = jobsServer,
                     request = ::aidenRequestRawUploads
                 )
-                // Revision 53: `chat:new-worktree` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 53: `chat:new-worktree` goes alone too.
+                val worktreeServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
                 )
+                val messagingServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = worktreeServer,
+                    request = ::aidenRequestBotMessaging
+                )
+                val negotiatedServer = negotiateSoloCapability(generation, installation, newClient, messagingServer, ::aidenRequestBotAllowed)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,

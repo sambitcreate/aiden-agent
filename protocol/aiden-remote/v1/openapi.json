@@ -7214,6 +7214,290 @@
           }
         }
       }
+    },
+    "/bots/messaging": {
+      "parameters": [{"$ref": "#/components/parameters/ProtocolVersion"}],
+      "put": {
+        "operationId": "updateBotMessaging",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:write",
+          "bot:messaging"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotMessagingSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authoritative Bot messaging settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotMessagingSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Set whether Bots can message each other",
+        "description": "Revision 54. Requires bot:write and negotiated bot:messaging. Exact boolean enabled. Changes gate new sends only; accepted deliveries finish. No inference or catalog access."
+      }
+    },
+    "/bots/{botId}/allowed": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "listBotAllowed",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:allowed"
+        ],
+        "description": "Revision 57. Combined rules and selected folders, sorted newest date then ID, with opaque device-and-Bot-bound cursors. Pages of 50 share a complete immutable snapshot for 2 minutes. Cache: 64 snapshots globally, 4 per device, aggregate 8 MiB; over-capacity complete views are refused, never truncated. Unknown Bot is 404. Foreign, expired or evicted cursors are refreshable 400 invalid_request; restart without cursor.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The first or requested immutable page, at most 50 rows. No private targets or authorization metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAllowedList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/allowed/{entryId}/remove": {
+      "parameters": [
+        {
+          "name": "botId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        },
+        {
+          "name": "entryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "removeBotAllowed",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:allowed"
+        ],
+        "description": "Revision 57. Remove only this Bot entry. Exact empty JSON body, no query. Naturally idempotent; no Idempotency-Key required. Success including an already-gone entry invalidates this device/Bot snapshots and returns a fresh first page; load its subsequent pages. Never republishes consent or removes another Bot folder/root.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The first or requested immutable page, at most 50 rows. No private targets or authorization metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAllowedList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/plans/{planId}/respond": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "planId",
+          "in": "path",
+          "required": true,
+          "description": "The exact plan ID returned by the Bot session.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "respondBotPlan",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:plans"
+        ],
+        "description": "Revision 56. Respond to an exact plan with approve, not_now or stop. Requires Idempotency-Key. Duplicate success replays its original receipt. Unknown decision is 400 invalid_request. A settled, missing or expired plan is 409 plan_expired, a pre-effect refusal that leaves no durable rejected key. Transient errors permit retry with the same key and exact plan identity; first answer wins. Unwired hosts return 404. not_now returns stopped; other statuses come from the exact host plan.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPlanRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The host authorized and settled the answer, or replayed its original receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPlanRespondReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/access-requests/{waitId}/answer": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "waitId",
+          "in": "path",
+          "required": true,
+          "description": "The current access request waitId.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "answerBotAccessRequest",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:access-requests"
+        ],
+        "description": "Revision 55. Answer an offered access choice. Requires Idempotency-Key; a repeat replays the receipt even after the card settles or a response is lost. An unoffered choice is 400 invalid_request. A settled or expired request is 409 access_request_expired. Unwired hosts return 404.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotAccessAnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The host authorized and settled the answer, or replayed its original receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotAccessAnswerReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7968,9 +8252,13 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8014,9 +8302,13 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8147,7 +8439,7 @@
             "type": "array",
             "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place. Contract revision 42 adds bot:issues, which any device type may negotiate while the server lists it in serverCapabilities (a host without the issue act route answers not_found): it grants no authority and opts the device into the Bot session issues list and frame, the summary issueCount, issue items in the routine notification feed, and the issue act route, which still needs bot:read and bot:write. Phones request it in its own call. Contract revision 43 adds bot:handoff-on-mac, negotiated like bot:handoff-notes beside bot:handoffs: it grants no authority and opts the device into onMac on hand-off cards whose step is on the Bot's own screen.",
             "minItems": 1,
-            "maxItems": 16,
+            "maxItems": 23,
             "items": {
               "enum": [
                 "tasks:read",
@@ -8163,9 +8455,13 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8218,9 +8514,13 @@
                 "simulators:mobile",
                 "bot:cards",
                 "bot:activity",
+                "bot:messaging",
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:access-requests",
+                "bot:plans",
+                "bot:allowed",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -10537,6 +10837,9 @@
           },
           "maxBots": {
             "const": 256
+          },
+          "messaging": {
+            "$ref": "#/components/schemas/BotMessagingSettings"
           }
         },
         "additionalProperties": false
@@ -11070,6 +11373,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "botMessaging": {
+            "$ref": "#/components/schemas/BotMessaging",
+            "description": "Revision 54, only for devices holding bot:messaging. Absent switches default on."
           }
         },
         "additionalProperties": false
@@ -11164,6 +11471,9 @@
           "chatActivity": {
             "description": "Contract revision 30, only on hosts announcing bot-activity-v1. Absent keeps the saved choice.",
             "$ref": "#/components/schemas/BotChatActivity"
+          },
+          "botMessaging": {
+            "$ref": "#/components/schemas/BotMessagingPatch"
           }
         },
         "additionalProperties": false
@@ -14973,7 +15283,9 @@
           "memory_blocked",
           "routine_proposal_not_found",
           "bot_paused",
-          "handoff_expired"
+          "handoff_expired",
+          "access_request_expired",
+          "plan_expired"
         ]
       },
       "ErrorDetails": {
@@ -17052,6 +17364,28 @@
             "items": {
               "$ref": "#/components/schemas/BotIssue"
             }
+          },
+          "accessRequest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotAccessRequest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Revision 55. Present only for bot:access-requests holders."
+          },
+          "plan": {
+            "description": "Revision 56. Present only for bot:plans holders. null clears the current plan; absence means the capability is not negotiated.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "unevaluatedProperties": false
@@ -17080,7 +17414,8 @@
               "preflight_failed",
               "routine_failed",
               "routine_paused",
-              "run_stalled"
+              "run_stalled",
+              "access_needed"
             ]
           },
           "title": {
@@ -17148,7 +17483,9 @@
               "open_chat",
               "resume_routine",
               "stop_run",
-              "keep_waiting"
+              "keep_waiting",
+              "allow_folder",
+              "dismiss_access"
             ]
           },
           "routineId": {
@@ -17159,7 +17496,8 @@
             "description": "Present exactly on resume_routine."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "allow_folder and dismiss_access require bot:access-requests beside bot:issues. dismiss_access is offered only on access_needed issues."
       },
       "BotIssueActRequest": {
         "type": "object",
@@ -17304,15 +17642,51 @@
               "queued",
               "handoff",
               "issues",
-              "closed"
+              "closed",
+              "access_request",
+              "plan"
             ]
           },
           "payload": {
-            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances.",
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances. Revision 55 access_request carries {accessRequest: BotAccessRequest | null} only for bot:access-requests holders. Legacy phones and paired desktops receive an assistant access-notice entry, removed by an authoritative snapshot on settlement or replacement. Revision 56 plan carries {plan: BotPlan | null} only for bot:plans holders. Other devices receive a state frame at the same sequence.",
             "type": "object"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "plan"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "plan"
+                  ],
+                  "properties": {
+                    "plan": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BotPlan"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ]
       },
       "BotMessageRequest": {
         "type": "object",
@@ -17681,10 +18055,11 @@
                   "maxLength": 160
                 },
                 "kind": {
-                  "description": "Contract revision 42: absent means routine. An issue item carries no routineId or status, and routineName is the card's title.",
+                  "description": "Absent means routine. Issue and message items carry neither routineId nor status. Message items require bot:messaging, revision 54.",
                   "enum": [
                     "routine",
-                    "issue"
+                    "issue",
+                    "message"
                   ]
                 },
                 "botId": {
@@ -17724,7 +18099,46 @@
                   "maxLength": 160
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "issue",
+                          "message"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "then": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "routineId"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "status"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "else": {
+                    "required": [
+                      "routineId",
+                      "status"
+                    ]
+                  }
+                }
+              ]
             }
           },
           "now": {
@@ -18233,8 +18647,130 @@
         },
         "additionalProperties": false
       },
+      "BotAllowedEntry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "rule"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "uses": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "lastUsedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt",
+              "uses"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "uses": {
+                      "const": 0
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "lastUsedAt"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "kind": {
+                "const": "folder"
+              },
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+              },
+              "addedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "what",
+              "addedAt"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "BotAllowedList": {
+        "type": "object",
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/BotAllowedEntry"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "pattern": "^cur_[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "botId",
+          "entries"
+        ],
+        "additionalProperties": false
+      },
       "BotApproval": {
-        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it.",
+        "description": "A tool call the Bot is waiting to have approved. Answered once, by waitId, through POST /approvals/{approvalId}/respond, which needs approval:respond, bot:read and bot:write. canAllow false: a phone may only deny it. An offered Always answer also requires bot:allowed and scope always; other Bot cards remain once-only. The receipt acknowledges the choice, not durable grant publication.",
         "type": "object",
         "required": [
           "waitId",
@@ -18267,9 +18803,31 @@
           },
           "canAllow": {
             "type": "boolean"
+          },
+          "alwaysCount": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Revision 57, only bot:allowed holders on an offered card. No private class key."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "alwaysCount"
+              ]
+            },
+            "then": {
+              "properties": {
+                "canAllow": {
+                  "const": true
+                }
+              }
+            }
+          }
+        ]
       },
       "BotQuestionAnswerReceipt": {
         "type": "object",
@@ -18698,6 +19256,419 @@
           }
         },
         "additionalProperties": false
+      },
+      "BotMessagingSettings": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessaging": {
+        "type": "object",
+        "required": [
+          "receive",
+          "send"
+        ],
+        "properties": {
+          "receive": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotMessagingPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "receive": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPlan": {
+        "type": "object",
+        "required": [
+          "planId",
+          "status",
+          "title",
+          "why",
+          "steps",
+          "items"
+        ],
+        "properties": {
+          "planId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "active",
+              "finished",
+              "stopped",
+              "expired"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": [
+                "text",
+                "status"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "done",
+                    "skipped"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "required": [
+                "line",
+                "details"
+              ],
+              "properties": {
+                "line": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120,
+                  "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                },
+                "details": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                  }
+                },
+                "used": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 25
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 25
+                }
+              },
+              "additionalProperties": false,
+              "dependentRequired": {
+                "used": [
+                  "max"
+                ],
+                "max": [
+                  "used"
+                ]
+              },
+              "allOf": [
+                {"if":{"properties":{"max":{"const":1}},"required":["max"]},"then":{"properties":{"used":{"maximum":1}}}},
+                {"if":{"properties":{"max":{"const":2}},"required":["max"]},"then":{"properties":{"used":{"maximum":2}}}},
+                {"if":{"properties":{"max":{"const":3}},"required":["max"]},"then":{"properties":{"used":{"maximum":3}}}},
+                {"if":{"properties":{"max":{"const":4}},"required":["max"]},"then":{"properties":{"used":{"maximum":4}}}},
+                {"if":{"properties":{"max":{"const":5}},"required":["max"]},"then":{"properties":{"used":{"maximum":5}}}},
+                {"if":{"properties":{"max":{"const":6}},"required":["max"]},"then":{"properties":{"used":{"maximum":6}}}},
+                {"if":{"properties":{"max":{"const":7}},"required":["max"]},"then":{"properties":{"used":{"maximum":7}}}},
+                {"if":{"properties":{"max":{"const":8}},"required":["max"]},"then":{"properties":{"used":{"maximum":8}}}},
+                {"if":{"properties":{"max":{"const":9}},"required":["max"]},"then":{"properties":{"used":{"maximum":9}}}},
+                {"if":{"properties":{"max":{"const":10}},"required":["max"]},"then":{"properties":{"used":{"maximum":10}}}},
+                {"if":{"properties":{"max":{"const":11}},"required":["max"]},"then":{"properties":{"used":{"maximum":11}}}},
+                {"if":{"properties":{"max":{"const":12}},"required":["max"]},"then":{"properties":{"used":{"maximum":12}}}},
+                {"if":{"properties":{"max":{"const":13}},"required":["max"]},"then":{"properties":{"used":{"maximum":13}}}},
+                {"if":{"properties":{"max":{"const":14}},"required":["max"]},"then":{"properties":{"used":{"maximum":14}}}},
+                {"if":{"properties":{"max":{"const":15}},"required":["max"]},"then":{"properties":{"used":{"maximum":15}}}},
+                {"if":{"properties":{"max":{"const":16}},"required":["max"]},"then":{"properties":{"used":{"maximum":16}}}},
+                {"if":{"properties":{"max":{"const":17}},"required":["max"]},"then":{"properties":{"used":{"maximum":17}}}},
+                {"if":{"properties":{"max":{"const":18}},"required":["max"]},"then":{"properties":{"used":{"maximum":18}}}},
+                {"if":{"properties":{"max":{"const":19}},"required":["max"]},"then":{"properties":{"used":{"maximum":19}}}},
+                {"if":{"properties":{"max":{"const":20}},"required":["max"]},"then":{"properties":{"used":{"maximum":20}}}},
+                {"if":{"properties":{"max":{"const":21}},"required":["max"]},"then":{"properties":{"used":{"maximum":21}}}},
+                {"if":{"properties":{"max":{"const":22}},"required":["max"]},"then":{"properties":{"used":{"maximum":22}}}},
+                {"if":{"properties":{"max":{"const":23}},"required":["max"]},"then":{"properties":{"used":{"maximum":23}}}},
+                {"if":{"properties":{"max":{"const":24}},"required":["max"]},"then":{"properties":{"used":{"maximum":24}}}}
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Revision 56, bot:plans holders only. Display-only plan with bounded text. Bot-written text is redacted; host-formatted file items disclose the enforced folder location, access mode and temporary-grant lifetime. No Bot/item IDs, authorization, runtime request identities, raw proposal, binding, model tool names or revision. Counted items carry both used and max, with used <= max."
+      },
+      "BotPlanRespondRequest": {
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "not_now",
+              "stop"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPlanRespondReceipt": {
+        "type": "object",
+        "required": [
+          "planId",
+          "status"
+        ],
+        "properties": {
+          "planId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "finished",
+              "stopped",
+              "expired"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotAccessRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "waitId",
+          "target",
+          "label",
+          "why",
+          "choices"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]{1,64}$"
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "whole_mac"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "allOf": [
+              {
+                "pattern": "\\S"
+              },
+              {
+                "not": {
+                  "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                }
+              }
+            ]
+          },
+          "place": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(~/|/)"
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400,
+            "allOf": [
+              {
+                "pattern": "\\S"
+              },
+              {
+                "not": {
+                  "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                }
+              }
+            ]
+          },
+          "choices": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "not_now",
+                "always",
+                "once"
+              ]
+            },
+            "enum": [
+              [
+                "not_now",
+                "once"
+              ],
+              [
+                "not_now",
+                "always",
+                "once"
+              ]
+            ]
+          },
+          "approvalCount": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Revision 57. Only bot:allowed plus bot:access-requests holders, for a folder offering Always."
+          }
+        },
+        "description": "Revision 55, bot:access-requests holders only. Public display card; no authorization, root identity, tool call or logical request id. Exact choices in order are [not_now, once] or, for a persistable folder, [not_now, always, once]. Whole Mac has label 'your whole Mac' and no place or always. Nonblank text, no control characters. place is a bounded display path, never an API identifier.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "target": {
+                  "const": "whole_mac"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "label": {
+                  "const": "your whole Mac"
+                },
+                "choices": {
+                  "const": [
+                    "not_now",
+                    "once"
+                  ]
+                }
+              },
+              "not": {
+                "required": [
+                  "place"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "approvalCount"
+              ]
+            },
+            "then": {
+              "properties": {
+                "target": {
+                  "const": "folder"
+                },
+                "choices": {
+                  "const": [
+                    "not_now",
+                    "always",
+                    "once"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "BotAccessAnswerRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "choice"
+        ],
+        "properties": {
+          "choice": {
+            "type": "string",
+            "enum": [
+              "once",
+              "always",
+              "not_now"
+            ]
+          }
+        }
+      },
+      "BotAccessAnswerReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "answered"
+        ],
+        "properties": {
+          "answered": {
+            "type": "boolean",
+            "const": true
+          },
+          "savedForFuture": {
+            "type": "boolean",
+            "const": true,
+            "description": "Records the exact earlier durable folder approval, including a replay after removal. It does not confirm current saved access or issue temporary run access."
+          }
+        }
       }
     }
   }

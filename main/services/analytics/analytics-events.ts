@@ -71,7 +71,7 @@ export const ANALYTICS_EVENTS = {
 
   // Crashes without a JavaScript stack (process gone, unclean exit)
   app_crashed: {
-    kind: enumProp("renderer", "renderer_loop", "gpu", "utility", "unclean_exit", "other"),
+    kind: enumProp("renderer", "renderer_loop", "browser_tab", "gpu", "utility", "unclean_exit", "other"),
     reason: optional(enumProp(
       "clean_exit",
       "abnormal_exit",

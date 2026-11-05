@@ -101,7 +101,7 @@ test("invalid super properties disable sending entirely", () => {
 test("an exception is sent in PostHog's format with the outermost frame first", () => {
   const { core, sent } = harness();
 
-  assert.equal(core.captureException(failing("disk full"), {
+  assert.equal(core.captureException(failing("Maximum call stack size exceeded"), {
     source: "main",
     level: "fatal",
     processType: "browser",
@@ -120,7 +120,7 @@ test("an exception is sent in PostHog's format with the outermost frame first", 
     mechanism: { handled: boolean };
     stacktrace: { type: string; frames: { function: string; platform: string }[] };
   }[];
-  assert.equal(entry!.value, "disk full");
+  assert.equal(entry!.value, "Maximum call stack size exceeded");
   assert.equal(entry!.mechanism.handled, false);
   assert.equal(entry!.stacktrace.type, "raw");
   assert.deepEqual(entry!.stacktrace.frames.map((frame) => frame.function), ["run", "save"]);

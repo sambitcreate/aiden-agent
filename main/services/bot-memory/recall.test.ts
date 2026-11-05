@@ -200,3 +200,15 @@ test("in a turn, bot_recall answers from earlier conversation but not the asking
     await harness.close(ctx);
   }
 });
+
+test('recall excludes another Bots input and answer', async () => {
+ const {harness,conversation,say}=await setup();
+ try {
+  await say('The person likes tea');
+  const requestId='bot:J:1:00112233-4455-4677-8899-aabbccddeeff';
+  await conversation.submit({type:'write',entry:{kind:BOT_NOTICE_ENTRY_KIND,data:{notice:'bot_message',requestId}}},ctx);
+  await (await conversation.submit({type:'input',content:'zebraprivate',requestId,entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
+  await say('Another person turn');
+  assert.deepEqual(await search(conversation,'zebraprivate'),[]);
+ } finally {await harness.close(ctx);}
+});

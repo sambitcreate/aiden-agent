@@ -3483,3 +3483,10 @@ test("Azure preferences migrate durably with current-model precedence and custom
     assert.deepEqual(await createConfigStore(h.stores, h.secrets.port).getSettings(), settings);
   }
 });
+
+test('botMessaging validates booleans and persists only off',async t=>{
+ const h=await harness(t);
+ await assert.rejects(h.store.setSettings({botMessaging:'no' as never}),/messaging/);
+ await h.store.setSettings({botMessaging:false});assert.equal((await h.store.getSettings()).botMessaging,false);
+ await h.store.setSettings({botMessaging:true});assert.equal((await h.store.getSettings()).botMessaging,undefined);
+});

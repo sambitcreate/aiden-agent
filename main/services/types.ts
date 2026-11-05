@@ -819,6 +819,7 @@ export interface AppSettings {
    * the password and money rules, or chat turns. Absent means off.
    */
   botRoutinesGoAhead?: boolean;
+  botMessaging?: boolean;
   /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;

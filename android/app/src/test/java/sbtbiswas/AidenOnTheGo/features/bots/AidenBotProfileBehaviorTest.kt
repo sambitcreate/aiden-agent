@@ -400,4 +400,91 @@ class AidenBotProfileBehaviorTest {
         assertNotNull(first.await())
         assertEquals(6, transport.calls.size)
     }
+
+    @Test
+    fun messagingGlobalAvailabilityRequiresNegotiationAndSettings() {
+        assertFalse(aidenBotMessagingAvailable(emptyList(), AidenBotMessagingSettings(true)))
+        assertFalse(aidenBotMessagingAvailable(listOf(AidenRemoteCapability.BOT_MESSAGING), null))
+        assertTrue(aidenBotMessagingAvailable(listOf(AidenRemoteCapability.BOT_MESSAGING), AidenBotMessagingSettings(false)))
+        assertFalse(aidenBotMessagingControlsEnabled(null, true, false))
+        assertFalse(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(false), true, false))
+        assertFalse(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(true), false, false))
+        assertFalse(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(true), true, true))
+        assertTrue(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(true), true, false))
+    }
+
+    @Test
+    fun messagingGlobalSaveShowsOptimismRollsBackAndAcceptsLostAnswer() = runTest {
+        val response = CompletableDeferred<AidenBotMessagingSettings>()
+        var authoritative = AidenBotMessagingSettings(true)
+        var writes = 0
+        val controller = AidenBotMessagingController(send = { writes++; response.await() }, read = { authoritative })
+        controller.adopt(authoritative)
+        val save = async { controller.save(false) }
+        runCurrent()
+        assertEquals(false, controller.state.value.settings?.enabled)
+        assertTrue(controller.state.value.saving)
+        controller.save(true)
+        assertEquals(1, writes)
+        response.completeExceptionally(IOException("response lost"))
+        save.await()
+        assertEquals(true, controller.state.value.settings?.enabled)
+        assertTrue(controller.state.value.failed)
+        val landed = AidenBotMessagingController(send = { throw IOException("response lost") }, read = { AidenBotMessagingSettings(false) })
+        landed.adopt(authoritative)
+        landed.save(false)
+        assertEquals(false, landed.state.value.settings?.enabled)
+        assertFalse(landed.state.value.failed)
+    }
+
+    @Test
+    fun messagingStaleListAndSwitchedPairingCannotOverwriteNewState() = runTest {
+        val oldRead = CompletableDeferred<AidenBotMessagingSettings?>()
+        var current = true
+        val controller = AidenBotMessagingController(send = { AidenBotMessagingSettings(it) }, read = { oldRead.await() }, current = { current })
+        controller.adopt(AidenBotMessagingSettings(true))
+        val refresh = async { controller.refresh() }
+        runCurrent()
+        controller.save(false)
+        oldRead.complete(AidenBotMessagingSettings(true))
+        refresh.await()
+        assertEquals(false, controller.state.value.settings?.enabled)
+        current = false
+        controller.adopt(AidenBotMessagingSettings(true))
+        controller.save(true)
+        assertEquals(false, controller.state.value.settings?.enabled)
+    }
+
+    @Test
+    fun messagingIdentitySaveKeepsOtherFieldAndLatestRevision() = runTest {
+        val original = fixture.botDetail.copy(botMessaging = AidenBotMessaging(true, true))
+        val revisions = mutableListOf<String>()
+        val patches = mutableListOf<AidenBotIdentityPatch>()
+        val editor = AidenBotIdentityEditor(original, save = { baseline, patch ->
+            revisions += baseline.revision
+            patches += patch
+            baseline.applying(patch).copy(revision = "new_revision")
+        })
+        editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(receive = false)))
+        assertEquals(AidenBotMessaging(false, true), editor.state.value.bot.botMessaging)
+        editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(send = false)))
+        assertEquals(listOf(original.revision, "new_revision"), revisions)
+        assertNull(patches.first().name)
+        assertNull(patches.first().botMessaging?.send)
+        assertNull(patches.last().botMessaging?.receive)
+        assertEquals(AidenBotMessaging(false, false), editor.state.value.bot.botMessaging)
+    }
+
+    @Test
+    fun messagingIdentityFailureRollsBackToLatestHostFields() = runTest {
+        val original = fixture.botDetail.copy(botMessaging = AidenBotMessaging(true, true))
+        val authority = original.copy(botMessaging = AidenBotMessaging(true, false), revision = "host_changed")
+        val editor = AidenBotIdentityEditor(original,
+            save = { _, _ -> throw IOException("response lost") }, refresh = { authority })
+        editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(receive = false)))
+        assertEquals("host_changed", editor.state.value.bot.revision)
+        assertEquals(AidenBotMessaging(true, false), editor.state.value.bot.botMessaging)
+        assertNotNull(editor.state.value.failure)
+        assertFalse(editor.state.value.isSaving)
+    }
 }

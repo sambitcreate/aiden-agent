@@ -27,6 +27,10 @@ function fakeTransport() {
     revokeQueue: () => { queued.length = 0; },
     capture: (message) => void (state === "open" && queued.push(message)),
     captureOptOut: async (message) => void immediate.push(message),
+    captureNow: async (message) => {
+      immediate.push(message);
+      return true;
+    },
     flush: async () => void sent.push(...queued.splice(0)),
     shutdown: async () => {
       sent.push(...queued.splice(0));
@@ -149,7 +153,7 @@ test("a launch after an unclean exit or an update is labelled, and the update is
   t.after(crashed.cleanup);
   writeFileSync(join(crashed.runDirectory, RUN_MARKER_FILE), "");
   await crashed.service.start();
-  assert.equal(crashed.events()[0]!.properties.launch_kind, "after_crash");
+  assert.equal(crashed.events().find((message) => message.event === "app_opened")!.properties.launch_kind, "after_crash");
 
   const updated = harness({ initial: { ...shown, lastVersion: "1.39.2" } });
   t.after(updated.cleanup);

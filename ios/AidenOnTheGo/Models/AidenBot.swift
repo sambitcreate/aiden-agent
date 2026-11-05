@@ -413,23 +413,60 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// `GET /bots`: `{bots, maxBots}`. Revision 25 removed Favorites, so a
-/// payload still carrying `favorites` is rejected.
+/// Revision 54 (`bot:messaging`), supplied only to a negotiated device.
+struct AidenBotMessaging: Codable, Equatable, Sendable {
+    let receive: Bool
+    let send: Bool
+}
+
+struct AidenBotMessagingSettings: Codable, Equatable, Sendable {
+    let enabled: Bool
+}
+
+struct AidenBotMessagingPatch: Codable, Equatable, Sendable {
+    let receive: Bool?
+    let send: Bool?
+
+    init(receive: Bool? = nil, send: Bool? = nil) throws {
+        guard receive != nil || send != nil else { throw AidenBotContractError.invalidField("botMessaging") }
+        self.receive = receive
+        self.send = send
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["receive", "send"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            receive: AidenBotWire.optional(Bool.self, from: values, forKey: .receive),
+            send: AidenBotWire.optional(Bool.self, from: values, forKey: .send)
+        )
+    }
+
+    func applying(to value: AidenBotMessaging) -> AidenBotMessaging {
+        AidenBotMessaging(receive: receive ?? value.receive, send: send ?? value.send)
+    }
+    private enum CodingKeys: String, CodingKey { case receive, send }
+}
+
+/// `GET /bots`: `{bots, maxBots, messaging?}`. Revision 25 removed Favorites.
 struct AidenBotList: Codable, Equatable, Sendable {
     let bots: [AidenBotSummary]
     let maxBots: Int
+    let messaging: AidenBotMessagingSettings?
 
-    init(bots: [AidenBotSummary], maxBots: Int = AidenBotWire.maxBots) throws {
+    init(bots: [AidenBotSummary], maxBots: Int = AidenBotWire.maxBots, messaging: AidenBotMessagingSettings? = nil) throws {
         guard Self.isValid(bots: bots, maxBots: maxBots) else {
             throw AidenBotContractError.invalidField("bots")
         }
         self.bots = bots
         self.maxBots = maxBots
+        self.messaging = messaging
     }
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["bots", "maxBots"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["bots", "maxBots", "messaging"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        messaging = try AidenBotWire.optional(AidenBotMessagingSettings.self, from: values, forKey: .messaging)
         bots = try values.decode([AidenBotSummary].self, forKey: .bots)
         maxBots = try values.decode(Int.self, forKey: .maxBots)
         guard Self.isValid(bots: bots, maxBots: maxBots) else {
@@ -439,14 +476,14 @@ struct AidenBotList: Codable, Equatable, Sendable {
 
     /// The same list without one Bot, used after a permanent delete.
     func removing(botID: String) throws -> Self {
-        try Self(bots: bots.filter { $0.id != botID }, maxBots: maxBots)
+        try Self(bots: bots.filter { $0.id != botID }, maxBots: maxBots, messaging: messaging)
     }
 
     /// The same list with one Bot inserted or replaced, used after a create.
     func upserting(_ bot: AidenBotSummary) throws -> Self {
         var next = bots.filter { $0.id != bot.id }
         next.append(bot)
-        return try Self(bots: next, maxBots: maxBots)
+        return try Self(bots: next, maxBots: maxBots, messaging: messaging)
     }
 
     private static func isValid(bots: [AidenBotSummary], maxBots: Int) -> Bool {
@@ -457,7 +494,7 @@ struct AidenBotList: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case bots, maxBots
+        case bots, maxBots, messaging
     }
 }
 
@@ -473,6 +510,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     let visionModelSelection: AidenBotModelSelection?
     /// Revision 30 (`bot:activity`): the Bot's Chat activity choice.
     let chatActivity: AidenBotChatActivity?
+    let botMessaging: AidenBotMessaging?
     let createdAt: Date
     let updatedAt: Date
     let revision: String
@@ -526,6 +564,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
             from: values,
             forKey: .visionModelSelection
         )
+        botMessaging = try AidenBotWire.optional(AidenBotMessaging.self, from: values, forKey: .botMessaging)
         chatActivity = try AidenBotWire.optional(
             AidenBotChatActivity.self,
             from: values,
@@ -665,15 +704,17 @@ struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
     let instructions: String?
     let avatar: AidenBotSemanticAvatar?
     let chatActivity: AidenBotChatActivity?
+    let botMessaging: AidenBotMessagingPatch?
 
     init(
         name: String? = nil,
         purpose: String? = nil,
         instructions: String? = nil,
         avatar: AidenBotSemanticAvatar? = nil,
-        chatActivity: AidenBotChatActivity? = nil
+        chatActivity: AidenBotChatActivity? = nil,
+        botMessaging: AidenBotMessagingPatch? = nil
     ) throws {
-        guard name != nil || purpose != nil || instructions != nil || avatar != nil || chatActivity != nil else {
+        guard name != nil || purpose != nil || instructions != nil || avatar != nil || chatActivity != nil || botMessaging != nil else {
             throw AidenBotContractError.invalidCombination("empty identity patch")
         }
         if let name { try AidenBotWire.validateString(name, field: "name", maxLength: AidenBotWire.maxNameLength, allowEmpty: false) }
@@ -684,6 +725,7 @@ struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
         self.instructions = instructions
         self.avatar = avatar
         self.chatActivity = chatActivity
+        self.botMessaging = botMessaging
     }
 
     /// A patch body from an older client may still carry `openingGreeting`;
@@ -713,14 +755,15 @@ struct AidenBotIdentityPatch: Codable, Equatable, Sendable {
         } else {
             avatar = nil
         }
+        botMessaging = try AidenBotWire.optional(AidenBotMessagingPatch.self, from: values, forKey: .botMessaging)
         chatActivity = try values.decodeIfPresent(AidenBotChatActivity.self, forKey: .chatActivity)
-        guard name != nil || purpose != nil || instructions != nil || avatar != nil || chatActivity != nil else {
+        guard name != nil || purpose != nil || instructions != nil || avatar != nil || chatActivity != nil || botMessaging != nil else {
             throw AidenBotContractError.invalidCombination("empty identity patch")
         }
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case name, purpose, instructions, avatar, chatActivity
+        case name, purpose, instructions, avatar, chatActivity, botMessaging
     }
 }
 

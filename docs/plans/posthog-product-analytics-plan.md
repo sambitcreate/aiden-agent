@@ -1,6 +1,6 @@
 # Anonymous Usage Analytics and Crash Reporting (PostHog)
 
-Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, merged; PR 5, server, in review)
+Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, shipped in 0.64.0; PR 4, crashes and errors, merged; PR 5, server, in review)
 Date: 2026-10-28
 Base: `origin/main` at `8504c773c` (0.62.0 + #625–#628)
 Scope: Electron desktop app (macOS and Linux) first, then the `aiden serve` headless server. iOS and Android are out of scope.
@@ -157,14 +157,17 @@ Deliberately left out (can be added later with one registry entry each): Telegra
 | Source | Hook (existing) | Sent as |
 | --- | --- | --- |
 | Main-process uncaught exception | `uncaughtExceptionMonitor` in `main/services/process-diagnostics.ts:75` | `$exception` via `captureException`, `level: fatal`, `source: main` |
-| Main-process unhandled rejection | Already reaches the same `uncaughtExceptionMonitor` with `origin: "unhandledRejection"`. **No new listener** is added: registering `process.on("unhandledRejection")` would stop Node rethrowing it and so change today's crash behaviour. | `$exception`, `level: fatal`, `source: main`, `origin: unhandled_rejection` |
+| Main-process unhandled rejection | `process.on("unhandledRejection")` in `installProcessDiagnostics`, journaled as `unhandled-rejection`. Corrected in PR 4: this plan first said the monitor already saw rejections and that a listener would change crash behaviour. Measured on Electron 43 (macOS, real process), Electron runs Node in warn mode, so the monitor never fires for a rejection and the process carries on with or without a listener. A listener silences Node's two warnings, so the code raises the one carrying the reason again. The CLI is plain Node, where a listener would change behaviour; it does not use this code. | `$exception`, `level: error` (the process survives), `source: main`, `origin: unhandled_rejection` |
 | Renderer uncaught error / rejection | Listeners exist (`renderer/lib/dev-log.ts:95,98`) and are rate-limited by main, but `reportRendererDiagnostic` (`dev-log.ts:59-89`) sends only `{kind, errorType, context, referenceId}`, with no message or stack. See [Renderer stacks](#renderer-stacks). | `$exception`, `source: renderer` |
-| Renderer process gone | `render-process-gone` (`main/index.ts:1249`, `main/services/browser/service.ts:850`) | `app_crashed` with `kind: renderer`, `reason`, `exit_code` (no stack exists) |
+| Renderer process gone | `render-process-gone` (`main/index.ts:1249`) | `app_crashed` with `kind: renderer`, `reason`, `exit_code` (no stack exists) |
+| In-app browser tab process gone | `render-process-gone` (`main/services/browser/service.ts:850`) | `app_crashed` with `kind: browser_tab`, `reason`, `exit_code`. Decided in PR 4: a web page's crash is not an Aiden crash, so it does not share `kind: renderer`. |
 | Helper/GPU/utility process gone | `child-process-gone` (`main/index.ts:1720`) | `app_crashed` with `kind: <process type>`, `reason`, `exit_code` |
 | Renderer crash loop | existing `renderer-crash-loop` diagnostic event | `app_crashed` with `kind: renderer_loop` |
 | Native main-process crash (no JS runs) | **New** run marker: write `<userData>/analytics-run.marker` at launch, delete on clean quit; if present at next launch, the last run ended uncleanly | `app_crashed` with `kind: unclean_exit` on next launch, and `app_opened.launch_kind = after_crash` |
 
 The best tap point is the diagnostics journal: these sources already flow through `writeDiagnosticEvent` (`main/services/diagnostic-journal.ts:549`) with typed names. The analytics sink subscribes to the fatal/crash subset there instead of adding parallel hooks everywhere. The raw `Error` (needed for the stack) is passed alongside where the journal only keeps the projected form.
+
+Not crashes (decided in PR 4): a process that exited with code zero, a helper that was `killed` (Aiden stops its own utility processes on purpose), and any process that ended during shutdown. React errors a boundary caught (`react-caught`, `route-error`) and `react-recoverable` are handled, so they are soft errors and stay local; `global-error`, `unhandled-rejection` and `react-uncaught` are sent.
 
 ### Renderer stacks
 
@@ -173,22 +176,32 @@ The owner wants to see every error with a stack, so the renderer-to-main diagnos
 - **Main sanitizes**, using the same sanitizer as main-process errors. The renderer never sanitizes or decides what is safe.
 - The diagnostics journal keeps its current content-free projection; the raw fields go only to the analytics sink and are never written to disk.
 - When analytics is off, the IPC payload is exactly what it is today.
+- Implemented with `diagnostics:policy` (which waits for startup to settle, so errors held during startup keep their details) plus an `analytics:sending-changed` notification, rather than `analytics:status`, so main alone decides.
 
 ### Fatal crashes survive the exit
 
 A fatal main-process exception may kill the process before an async flush finishes. So the sink:
 1. Builds the sanitized exception.
 2. Writes it synchronously to `<userData>/analytics-pending-crash.json` (one record, overwritten, small).
-3. Attempts `captureException` + `flush()` with a 1 s cap.
+3. Attempts to send that one event on its own request. Shutdown waits for it inside the existing usage-data deadline, not a separate cap.
 4. On next launch, if the pending file exists and its ID was not acknowledged as sent, sends it, then deletes it.
 
 If analytics is off at next launch, the pending file is deleted unsent.
+
+Details settled in PR 4:
+- The SDK resolves a failed immediate send and reports it only through its `error` event, so acknowledgement comes from that, not from the promise. A record stays on disk until a send is acknowledged; a launch that is offline leaves it for the next one.
+- Both attempts use the record's ID as the event UUID, so a report that arrived without its acknowledgement is de-duplicated by the server.
+- A record carries the install ID it was captured under. One that does not match the current ID is discarded, so a failed delete cannot outlive an opt-out.
+- A fatal crash before activation finishes reads consent synchronously from `settings.json`, and is kept only if sending is already allowed and an install ID exists.
+- A pending crash from the same run (the marker and the record hold a run ID) explains the unclean exit, so only the `$exception` is sent for that launch. An older record waiting to be sent explains nothing.
+- The record stays a single slot, as above: a second fatal error before the first is sent replaces it.
+- `bootstrap-import-failed` also counts as fatal: a throw in an ES module's top-level code reaches `uncaughtException` without raising the monitor (measured on Electron 43). A signal or `process.exit` ends the run through JavaScript and removes the run marker, so only a native crash or a hard kill counts as `unclean_exit`.
 
 ### Sanitizing every exception
 
 Before an error reaches `captureException`, the sink rebuilds it as a new `Error`:
 - `name`: kept if it matches `/^[A-Za-z][A-Za-z0-9_]{0,63}$/`, else `Error`.
-- `message`: email addresses are redacted first, then the text runs through the existing `sanitizeDiagnosticText` (`main/services/diagnostics-contract.ts:403`), which already redacts credentials, tokens, authorization values, URLs, POSIX/Windows paths, UUIDs and long IDs, then capped at 300 characters.
+- `message`: email addresses are redacted first, then the text runs through the existing `sanitizeDiagnosticText` (`main/services/diagnostics-contract.ts:403`), which already redacts credentials, tokens, authorization values, URLs, POSIX/Windows paths, UUIDs and long IDs, then capped at 300 characters. The result is kept only if it matches a fixed list of messages the runtime writes itself (`KNOWN_ENGINE_MESSAGES`), with every quoted name replaced by `[name]`; anything else becomes `[message withheld]`. This is stricter than the original plan, decided in PR 4: redaction cannot recognise chat text, an anti-goal forbids any reaching PostHog, and a quoted property can be a key from data. Add only messages that are fixed once their names are replaced.
 - `stack`: each frame's file path rewritten to an app-relative virtual path (e.g. `app:///main/services/foo.js`). Frames outside the app bundle become `<external>` (user workspace scripts, Pi extensions in the user's folders, node internals keep `node:` prefix). Function names are kept. Max 30 frames.
 - `cause` chains: sanitized the same way, max depth 3.
 
@@ -207,7 +220,7 @@ Per app session:
 
 ### Source maps
 
-Out of scope for v1. If the main/renderer bundles are minified, stacks will be harder to read; a follow-up can upload source maps to PostHog from the release workflow (build-time only, never from the app).
+Out of scope for v1. The production renderer bundle is minified, and the main bundle has whitespace and syntax minified but keeps its identifiers, so renderer stacks are the harder ones to read; a follow-up can upload source maps to PostHog from the release workflow (build-time only, never from the app).
 
 ## User-facing surfaces
 
@@ -294,7 +307,7 @@ Behavioural, per `AGENTS.md` house style; every new file registered in the root 
 1. **Core, no sending.** `main/services/analytics/*` (registry, consent, sanitizer, core with fake transport, client wrapper, crash sink), `posthog-node` pinned exactly, tests. No key, no UI, nothing wired. Safe to merge on its own. Because nothing in main imports the client yet, `posthog-node` sits in `devDependencies` (as `scripts/main-runtime-dependencies.test.mjs` requires); PR 2 moves it to `dependencies` when main starts importing it.
 2. **Consent, lifecycle and "who's using it".** (In review, stacked on PR 1.) Settings group, onboarding row, existing-user notice, "What's sent" sheet, IPC, release-key injection, `app_opened` / `app_active` / `onboarding_finished` / `app_updated` / `analytics_disabled`. All docs and policy changes above. Screenshots in the PR.
 3. **Feature events.** Wire the core-use and big-feature tables at service level.
-4. **Crashes and errors.** Journal sink (including rejections via the existing monitor), widened renderer IPC with main-side sanitizing, process-gone events, run marker, pending-crash file, flood control.
+4. **Crashes and errors.** (Merged in #732.) Journal sink (including rejections, through a new listener because the monitor never sees them in Electron), widened renderer IPC with main-side sanitizing, process-gone events, run marker, pending-crash file, flood control.
 5. **Server.** (In review.) Consent store, notice, `aiden telemetry`, `server_started`, shared events, crash capture, `packages/cli/README.md`, keyed bundle workflow.
 
 Each PR runs the narrow suites locally before CI; PR 2 onwards also checks a packaged build sends to a test PostHog project (owner key) and that turning it off stops traffic (verified with a local proxy or the PostHog live events view).
@@ -352,7 +365,7 @@ What we deliberately do not copy: identity derived from other products' account 
 - Settings control lives in Settings → Diagnostics.
 - Unknown provider/model/preset IDs are reported as `custom`.
 - No on-disk event queue apart from the single pending-crash record.
-- Main-process unhandled rejections keep today's fatal behaviour; no new listener.
+- Main-process unhandled rejections stay non-fatal, as they are today in Electron; the listener only records them.
 - Renderer errors gain message and stack only while analytics is on, sanitized in main.
 - `computer_use_enabled` counts only the global switch.
 - Release workflow fails without the key; its own smoke runs never send.
