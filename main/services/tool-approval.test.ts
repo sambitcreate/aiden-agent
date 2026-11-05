@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
 
 function trackedSignal() {
@@ -444,6 +445,35 @@ test("a prompt answered from inside its own publication is still withdrawn exact
   assert.equal(outcome, "allowed");
   assert.deepEqual(withdrawn, [["a-sync", "allowed"]]);
   assert.equal(coordinator.pendingCount, 0);
+});
+
+test("re-asking an id from inside its publication leaves the replacement pending and answerable", async () => {
+  const withdrawn: Array<[string, string]> = [];
+  let replacement: Promise<"allow" | "deny"> | undefined;
+  const ask = (toolCallId: string) =>
+    approvals.request({
+      botId: "b",
+      waitId: "same",
+      toolCallId,
+      toolName: "write",
+      summary: "x",
+      signal: new AbortController().signal,
+    });
+  const approvals = createBotApprovals({
+    publish(prompt) {
+      if (prompt.toolCallId === "first") replacement = ask("second");
+    },
+    withdraw: (prompt, outcome) => withdrawn.push([prompt.toolCallId, outcome]),
+  });
+
+  assert.equal(await ask("first"), "deny");
+  assert.deepEqual(approvals.pending("b").map((prompt) => prompt.toolCallId), ["second"]);
+  assert.deepEqual(withdrawn, []);
+
+  assert.equal(approvals.decide("same", "allow"), true);
+  assert.equal(await replacement, "allow");
+  assert.deepEqual(approvals.pending("b"), []);
+  assert.deepEqual(withdrawn, [["second", "allowed"]]);
 });
 
 test("a publication that throws after settling its own prompt keeps the outcome and still withdraws", async () => {
