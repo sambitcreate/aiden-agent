@@ -74,6 +74,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatScrollPolicy.swift",
   "AidenOnTheGo/Features/Chat/AidenImageGenerationPlaceholder.swift",
   "AidenOnTheGo/Features/Chat/AidenTranscriptPolish.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatPolicies.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
@@ -131,6 +132,20 @@ const appSourcePaths = [
   "AidenOnTheGo/Persistence/AidenChatDraftStore.swift",
   "AidenOnTheGo/Persistence/AidenModelPreferenceStore.swift",
 ];
+
+// `AidenChatFeature.swift` was split into the files below. The source checks that
+// used to read that one file read all of them, in the order the code used to appear.
+const chatFeatureSourcePaths = [
+  "AidenOnTheGo/Features/Chat/AidenChatPolicies.swift",
+  "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
+];
+
+async function readChatFeatureSources() {
+  const sources = await Promise.all(
+    chatFeatureSourcePaths.map((path) => readFile(`${iosRoot}${path}`, "utf8")),
+  );
+  return sources.join("\n");
+}
 
 const testSources = [
   "AidenBotCacheTests.swift",
@@ -348,7 +363,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   );
   const sourceByPath = new Map(sources);
   const allSwift = sources.map(([, source]) => source).join("\n");
-  const chat = sourceByPath.get("AidenOnTheGo/Features/Remote/AidenChatFeature.swift");
+  const chat = await readChatFeatureSources();
   const productShell = sourceByPath.get("AidenOnTheGo/Features/Remote/AidenProductShellView.swift");
   const botSession = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotSessionChatView.swift");
   const botHome = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift");
@@ -469,7 +484,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
-    readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenChatFeature.swift`, "utf8"),
+    readChatFeatureSources(),
     readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift`, "utf8"),
