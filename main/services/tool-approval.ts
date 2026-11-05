@@ -181,8 +181,10 @@ export class ToolApprovalCoordinator {
           return;
         }
       }
-      if (settledWhilePublishing !== undefined) withdrawPrompt(settledWhilePublishing);
-      else phase = "published";
+      if (settledWhilePublishing === undefined) phase = "published";
+      // Withdrawal goes by id, so a same-id replacement asked during publication
+      // would be removed in this prompt's place. That replacement owns the id.
+      else if (!this.pending.has(approvalId)) withdrawPrompt(settledWhilePublishing);
     });
   }
 
