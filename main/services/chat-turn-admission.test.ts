@@ -344,6 +344,41 @@ test("one lease cannot register two generations when handoff is re-entered", () 
   assert.equal(registrations, 1);
 });
 
+test("a release callback that throws cannot stop pending work from settling", () => {
+  const admission = new ChatTurnAdmission({ maxAppendTurns: 1, maxAppendBytes: 10 });
+  const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
+  const rival = admission.tryBegin("chat-2", "turn-2", "owner", false);
+  assert.ok(lease && rival);
+  lease.reserveAppendPayload(10);
+  lease.onReleased(() => {
+    throw new Error("release callback failed");
+  });
+
+  // Failure paths run release() and then settleAsyncWork() with no guard.
+  const failurePath = () => {
+    lease.release();
+    lease.settleAsyncWork();
+  };
+  assert.throws(failurePath, /release callback failed/u);
+
+  assert.equal(admission.isAdmitted("chat-1"), false);
+  rival.reserveAppendPayload(10);
+  assert.ok(admission.tryBegin("chat-1", "turn-3", "owner", false));
+});
+
+test("a release callback failure is reported once", () => {
+  const admission = new ChatTurnAdmission();
+  const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
+  assert.ok(lease);
+  lease.onReleased(() => {
+    throw new Error("release callback failed");
+  });
+  lease.release();
+  assert.throws(() => lease.settleAsyncWork(), /release callback failed/u);
+  assert.doesNotThrow(() => lease.settleAsyncWork());
+  assert.doesNotThrow(() => lease.release());
+});
+
 test("a release callback that throws cannot strand the chat or skip the other callbacks", () => {
   const admission = new ChatTurnAdmission({ maxAppendTurns: 1, maxAppendBytes: 10 });
   const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
