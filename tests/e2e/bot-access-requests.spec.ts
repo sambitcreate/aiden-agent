@@ -214,7 +214,7 @@ test("repeated approvals lead to a removable entry on the profile and in Setting
   if (await showSidebar.isVisible()) await showSidebar.click();
   await page.getByRole("button", { name: "Back to Aiden", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots & Approvals", exact: true }).click();
   await expect(page.getByText("Folder · ~/Documents/Taxes", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.getByText("No Bot does anything without asking yet.", { exact: true })).toBeVisible();

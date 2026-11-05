@@ -709,7 +709,7 @@ export function OnboardingFlow({
                   </div>
                 </div>
                 <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5" data-onboarding-tts-privacy>
-                  Read aloud is separate and off by default. Configure it later in Settings → Text to Speech.
+                  Read aloud is separate and off by default. Configure it later in Settings → Voice & Speech → Text to Speech.
                   Pressing the speaker sends the latest response text to Google, even for local-model replies;
                   Google charges may apply. Paired phones and tablets use this same desktop setup;
                   they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.

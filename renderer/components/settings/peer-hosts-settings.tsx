@@ -19,6 +19,7 @@ import {
   Text,
   toast,
 } from "../ui";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { peerHostsApi } from "../../lib/ipc";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
 import {
@@ -253,6 +254,12 @@ function RenameDialog({
 }
 
 /** Connections → Control other devices. */
+/** Settings → Connections → Control other devices. */
+export function PeerHostsSettingsPage() {
+  const capabilities = useAppCapabilities();
+  return <PeerHostsSettings hostLabel={capabilities.platform === "darwin" ? "Mac" : "computer"} />;
+}
+
 export function PeerHostsSettings({ hostLabel }: { hostLabel: string }) {
   const { list, statuses } = usePeerConnections();
   const hosts = list.data ?? [];

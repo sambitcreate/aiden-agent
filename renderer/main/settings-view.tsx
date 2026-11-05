@@ -14,20 +14,14 @@ import {
   Image as ImageIcon,
   Mic,
   Keyboard,
-  Link2,
   ListFilter,
   Search,
-  MousePointer2,
   Monitor,
   ChartScatter,
   Info,
   Clock3,
-  Send,
   Smartphone,
   TabletSmartphone,
-  AudioWaveform,
-  Volume2,
-  ShieldCheck,
   Hourglass,
   Bot,
 } from "lucide-react";
@@ -41,7 +35,6 @@ import { TelegramSettings } from "../components/settings/telegram-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
 import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
-import { LinksSettings } from "../components/settings/links-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { BotComputersSettings } from "../components/settings/bot-computers-settings";
 import { BotsSettings } from "../components/settings/bots-settings";
@@ -49,64 +42,59 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
-import { ConnectionsSettings } from "../components/settings/connections-settings";
+import { RemoteAccessSettings } from "../components/settings/remote-access-settings";
+import { PeerHostsSettingsPage } from "../components/settings/peer-hosts-settings";
+import { AppControlSettings } from "../components/settings/app-control-settings";
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import { LimitsSettings } from "../components/settings/limits-settings";
 import {
-  availableSettingsDestinations,
-  matchesSettingsSearch,
-  SETTINGS_DESTINATIONS,
+  availableSettingsPages,
+  firstMatchingSettingsSection,
+  pageFor,
+  resolveSettingsSection,
+  SETTINGS_GROUPS,
+  type SettingsPageId,
   type SettingsSection,
 } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { MemoryCardIcon } from "../components/memory-card-icon";
-import { SettingsPage } from "../components/settings/settings-page";
+import {
+  SettingsAnchorContext,
+  SettingsPage,
+  SettingsPageTabs,
+} from "../components/settings/settings-page";
 import { MemorySettings } from "../components/settings/memory-settings";
 
-type NavGroup = "Agent" | "App";
-
-type NavItem = {
-  id: SettingsSection;
-  title: string;
-  icon: React.ReactNode;
-  group: NavGroup;
-  keywords: string;
-};
-
-const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
+const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
   providers: <Server className="size-5" />,
   modelData: <ChartScatter className="size-5" />,
   limits: <Hourglass className="size-5" />,
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
-  telegram: <Send className="size-5" />,
-  remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
   imageGeneration: <ImageIcon className="size-5" />,
-  scheduledTasks: <Clock3 className="size-5" />,
-  geminiLive: <AudioWaveform className="size-5" />,
-  approvals: <ShieldCheck className="size-5" />,
-  computerUse: <MousePointer2 className="size-5" />,
-  bots: <Bot className="size-5" />,
-  botComputers: <Monitor className="size-5" />,
-  simulator: <TabletSmartphone className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
-  voice: <Mic className="size-5" />,
-  tts: <Volume2 className="size-5" />,
-  links: <Link2 className="size-5" />,
-  shortcut: <Keyboard className="size-5" />,
+  botsApprovals: <Bot className="size-5" />,
+  scheduledTasks: <Clock3 className="size-5" />,
+  computers: <Monitor className="size-5" />,
+  simulator: <TabletSmartphone className="size-5" />,
+  voiceSpeech: <Mic className="size-5" />,
+  connections: <Smartphone className="size-5" />,
   appearance: <Palette className="size-5" />,
+  shortcut: <Keyboard className="size-5" />,
   about: <Info className="size-5" />,
 };
 
-const NAV: NavItem[] = SETTINGS_DESTINATIONS.map((item) => ({
-  ...item,
-  icon: NAV_ICONS[item.id],
-  keywords: item.keywords.join(" "),
-}));
-
-const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
+/** These pages draw their own heading. */
+const OWN_HEADING = new Set<SettingsPageId>([
+  "providers",
+  "skills",
+  "mcp",
+  "appearance",
+  "websearch",
+  "shortcut",
+]);
 
 const CONTENT: Record<SettingsSection, React.ComponentType> = {
   providers: ProvidersSettings,
@@ -114,11 +102,13 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   limits: LimitsSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
-  remoteAccess: ConnectionsSettings,
+  remoteAccess: RemoteAccessSettings,
+  peerHosts: PeerHostsSettingsPage,
   mcp: McpSettings,
   websearch: WebSearchSettings,
   imageGeneration: ImageGenerationSettings,
   approvals: ToolApprovalSettings,
+  appControls: AppControlSettings,
   computerUse: ComputerUseSettings,
   bots: BotsSettings,
   botComputers: BotComputersSettings,
@@ -128,7 +118,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   geminiLive: AidenLiveSettings,
   voice: VoiceSettings,
   tts: TtsSettings,
-  links: LinksSettings,
+  links: AppearanceSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
   about: AboutSettings,
@@ -141,10 +131,12 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",
-  remoteAccess: "Use Aiden from your phone or another computer, or control your other computers from here.",
+  remoteAccess: "Use Aiden on this computer from your phone or another computer.",
+  peerHosts: "Pair the other computers you control from here, and manage them.",
   websearch: "Choose how Aiden searches and reads the web.",
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
   approvals: "Review the exact actions Aiden may repeat without asking, and revoke them.",
+  appControls: "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   bots: "Choose how every Bot handles steps that need your OK.",
   botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
@@ -167,17 +159,15 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
-  const availableDestinationIds = new Set(
-    availableSettingsDestinations(capabilities).map((destination) => destination.id),
-  );
-  // A deep link to a page this Mac can't show (Computer Use off, Bot computers on
-  // Linux or an Intel Mac) lands on Providers rather than an empty page.
-  const section =
-    initialSection && availableDestinationIds.has(initialSection) ? initialSection : "providers";
-  const availableNav = NAV.filter((item) => availableDestinationIds.has(item.id));
-  const filteredNav = query
-    ? availableNav.filter((item) => matchesSettingsSearch(item, query, DESCRIPTIONS[item.id]))
-    : availableNav;
+  const section = resolveSettingsSection(initialSection, capabilities);
+  const pages = availableSettingsPages(capabilities);
+  const activePage = pages.find((page) => page.id === pageFor(section).id)!;
+  const rows = pages.flatMap((page) => {
+    const target = firstMatchingSettingsSection(page, query, (item) => DESCRIPTIONS[item]);
+    return target ? [{ page, target }] : [];
+  });
+  const open = (next: SettingsSection) =>
+    void navigate({ to: "/settings", search: { section: next }, replace: true });
   const ActiveSection = CONTENT[section];
 
   return (
@@ -226,36 +216,30 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
             </label>
 
             <nav aria-label="Settings" className="space-y-5">
-              {NAV_GROUPS.map((group) => {
-                const items = filteredNav.filter((item) => item.group === group);
+              {SETTINGS_GROUPS.map((group) => {
+                const items = rows.filter((row) => row.page.group === group);
                 if (items.length === 0) return null;
 
                 return (
                   <div key={group}>
                     <div className="mb-2 px-3 text-[13px] font-medium text-tertiary">{group}</div>
                     <div className="space-y-0.5">
-                      {items.map((item) => {
-                        const selected = section === item.id;
+                      {items.map(({ page, target }) => {
+                        const selected = activePage.id === page.id;
                         return (
                           <button
-                            key={item.id}
+                            key={page.id}
                             type="button"
                             aria-current={selected ? "page" : undefined}
-                            onClick={() =>
-                              void navigate({
-                                to: "/settings",
-                                search: { section: item.id },
-                                replace: true,
-                              })
-                            }
+                            onClick={() => open(target)}
                             className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring ${
                               selected
                                 ? "bg-list-selection text-primary hover:bg-list-selection"
                                 : "text-primary"
                             }`}
                           >
-                            <span className="shrink-0 text-secondary">{item.icon}</span>
-                            <span className="min-w-0 truncate">{item.title}</span>
+                            <span className="shrink-0 text-secondary">{NAV_ICONS[page.id]}</span>
+                            <span className="min-w-0 truncate">{page.title}</span>
                           </button>
                         );
                       })}
@@ -264,7 +248,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
                 );
               })}
 
-              {filteredNav.length === 0 ? (
+              {rows.length === 0 ? (
                 <p role="status" className="px-3 py-2 text-[13px] leading-relaxed text-tertiary">
                   No settings match “{search.trim()}”.
                 </p>
@@ -277,15 +261,15 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
       <ScrollArea className="h-full" title="Settings">
         <div className="settings-responsive mx-auto w-full max-w-5xl px-5 py-6">
           <SettingsPage
-            heading={
-              !["providers", "skills", "mcp", "appearance", "websearch", "shortcut"].includes(
-                section,
-              )
-            }
-            title={NAV.find((item) => item.id === section)?.title ?? "Settings"}
+            heading={!OWN_HEADING.has(activePage.id)}
+            title={activePage.title}
             description={DESCRIPTIONS[section]}
           >
-            <ActiveSection />
+            <SettingsPageTabs page={activePage} section={section} onSelect={open}>
+              <SettingsAnchorContext.Provider value={section === "links" ? section : null}>
+                <ActiveSection />
+              </SettingsAnchorContext.Provider>
+            </SettingsPageTabs>
           </SettingsPage>
         </div>
       </ScrollArea>

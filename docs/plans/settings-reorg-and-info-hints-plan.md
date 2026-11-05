@@ -126,7 +126,7 @@ The gates are in `main/services/host-platform-capabilities.ts:35-36`. `assistant
 
 - Sidebar search matches a page if any available tab matches on title, keywords or description, and the row opens the first matching tab. Searching "read aloud" shows Voice & Speech and opens Text to Speech.
 - The palette (`command-palette.tsx:321,1124`) keeps one row per section and shows the page title as its detail. "Links" stays findable.
-- Links keywords also go on Appearance.
+- Links keywords stay on the `links` anchor, and sidebar search checks page anchors, so Links terms still find Appearance without copying its keywords.
 
 ### Tabs
 

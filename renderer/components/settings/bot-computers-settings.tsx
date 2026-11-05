@@ -114,7 +114,7 @@ function PermissionsStep({
 }
 
 /**
- * Settings → Bot computers (plan §8): the one place the macOS download and the
+ * Settings → Computers & VMs → Bot computers (plan §8): the one place the macOS download and the
  * base computer are set up, sized and removed. Nothing is downloaded until the
  * person chooses Set up, and the size and source are stated before that.
  */

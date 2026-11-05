@@ -405,7 +405,7 @@ export class ToolApprovalRuleBook {
       if (draft.rules.some((rule) => targetKey(rule) === key)) return false;
       if (draft.rules.length >= MAX_PERSISTED_TOOL_APPROVAL_RULES) {
         throw new Error(
-          `Aiden keeps at most ${MAX_PERSISTED_TOOL_APPROVAL_RULES} always-allow rules. Remove some in Settings → Tool approvals.`,
+          `Aiden keeps at most ${MAX_PERSISTED_TOOL_APPROVAL_RULES} always-allow rules. Remove some in Settings → Bots & Approvals → Tool approvals.`,
         );
       }
       draft.rules.push({

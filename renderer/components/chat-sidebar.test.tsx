@@ -176,12 +176,6 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Aiden Live settings has a dedicated destination", () => {
-  const settings = source("../main/settings-view.tsx");
-  assert.match(settings, /geminiLive: <AudioWaveform/u);
-  assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
-});
-
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {
   const ui = source("./ui.tsx");
   assert.match(

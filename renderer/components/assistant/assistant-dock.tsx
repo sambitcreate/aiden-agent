@@ -106,7 +106,7 @@ export function AssistantDockPresentation({
   chat: AssistantLiveApprovals;
   live: AssistantLiveController;
   rightInset?: number;
-  /** Settings → Aiden Live. Off renders nothing and ignores the Live command. */
+  /** Settings → Voice & Speech → Aiden Live. Off renders nothing and ignores the Live command. */
   enabled?: boolean;
   /** Settings → Show Live button. Off hides only the idle pill. */
   buttonVisible?: boolean;

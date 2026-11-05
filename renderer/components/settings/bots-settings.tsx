@@ -20,7 +20,7 @@ function Always() {
   );
 }
 
-/** Settings → Bots: how every Bot handles a step that needs the person's OK. */
+/** Settings → Bots & Approvals: how every Bot handles a step that needs the person's OK. */
 export function BotsSettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();

@@ -23,7 +23,7 @@ seeing and taking over a Bot's computer, and the tools a Bot uses inside it.
 
 ## Setup
 
-1. Open **Settings → Bot computers** and choose **Set up**. Before that choice
+1. Open **Settings → Computers & VMs → Bot computers** and choose **Set up**. Before that choice
    the page states what happens: Aiden downloads macOS 26.6.2 (build 25G83)
    from Apple, about 20 GB (19,772,231,540 bytes), and builds a base computer
    of about 50 GB. Nothing is downloaded until you choose Set up. Set up first
@@ -76,7 +76,7 @@ Bot computer that was interrupted while it was being made is marked for
   has made a place for the base (see Limits).
 - **The base** takes about 50 GB once macOS is installed.
 - **Each Bot computer** starts as an APFS copy of the base and takes space only
-  as it changes. Settings → Bot computers shows the disk used by the base, the
+  as it changes. Settings → Computers & VMs → Bot computers shows the disk used by the base, the
   Bot computers and any download in progress. Because APFS copies share blocks,
   that figure can count shared space more than once.
 - **Starting a computer** needs 8 GB of available memory (free, inactive and
@@ -258,7 +258,7 @@ the screen keeps working.
   base. Files in the `Computer` folder stay.
 - **Delete Bot** stops and deletes its computer, then erases the Bot's files,
   including its `Computer` folder.
-- **Remove everything** in Settings → Bot computers asks first, then stops and
+- **Remove everything** in Settings → Computers & VMs → Bot computers asks first, then stops and
   deletes every Bot computer (including one an earlier launch left running),
   the base, the macOS download and any partial download, Aiden's SSH key and pinned host key, the guest password, and the
   Bot-computer settings. Files in each Bot's `Computer` folder stay. To use Bot
@@ -422,7 +422,7 @@ skipped, everything above applies unchanged.
   It is loaded into the guest's GUI session with the guest password, which only
   Aiden holds.
 - **Allowing Accessibility and Screen Recording.** While setup shows "Waiting
-  for permissions in the base computer", Settings → Bot computers shows the
+  for permissions in the base computer", Settings → Computers & VMs → Bot computers shows the
   base computer's live screen, the state of both permissions, **Check again**
   and **Skip**. Choose Open System Settings on each prompt in the base (or go
   to Privacy & Security) and turn on cua-driver for both. The screen is lent

@@ -515,7 +515,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
           title="This Mac is not connected"
-          description="Pair it again or turn it back on in Settings → Remote Access to start chats on it."
+          description="Pair it again or turn it back on in Settings → Connections to start chats on it."
         />
       </div>
     );

@@ -22,7 +22,7 @@ export function OnboardingBotsStep({
         Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once.
       </Text>
       <Text as="p" variant="small" color="secondary" className="mt-2 text-pretty">
-        Bots can message each other when it helps; turn it off in Settings → Bots.
+        Bots can message each other when it helps; turn it off in Settings → Bots & Approvals.
       </Text>
       <div className="mt-4">
         <Button variant="transparent" onClick={onSkip}>

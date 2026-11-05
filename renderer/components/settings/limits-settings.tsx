@@ -29,7 +29,7 @@ const WAIT_LABELS: Record<UsageLimitWaitHours, string> = {
 
 const MONTH_DAYS = Array.from({ length: SPENDING_MONTH_START_DAY_MAX }, (_, index) => index + 1);
 
-/** Settings → Limits & spending: how long replies wait out provider usage limits, and what they may spend. */
+/** Settings → Context & Limits: how long replies wait out provider usage limits, and what they may spend. */
 export function LimitsSettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();

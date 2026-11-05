@@ -182,7 +182,7 @@
     <string name="pairing_first_run_title">Connect your desktop</string>
     <string name="pairing_steps_title">On your desktop</string>
     <string name="pairing_step_open">Open Aiden Agent.</string>
-    <string name="pairing_step_settings">Go to Settings → Aiden On The Go → Connect a device.</string>
+    <string name="pairing_step_settings">Go to Settings → Connections → Connect a device.</string>
     <string name="pairing_step_scan">Scan the code it shows, or enter its setup code.</string>
     <string name="pairing_tab_scan">Scan QR</string>
     <string name="pairing_tab_code">Setup code</string>

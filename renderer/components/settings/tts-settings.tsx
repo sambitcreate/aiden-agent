@@ -1,4 +1,4 @@
-// Settings → Text to Speech: connection, model, voice, delivery, reading
+// Settings → Voice & Speech → Text to Speech: connection, model, voice, delivery, reading
 // preferences, and privacy. Credential values never round-trip: the dedicated
 // key field is cleared after submission and only readiness crosses IPC.
 

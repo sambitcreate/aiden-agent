@@ -198,7 +198,7 @@ export function withTelegramAgentContract(prompt: string, input: TelegramAgentPr
 
 export function buildAssistantSystemPrompt(input: AssistantPromptInput): string {
   const telegram = input.surface === "telegram";
-  const sections = `Settings are organised into these sections: ${input.settingsSections.join(", ")}.`;
+  const sections = `Settings are organised into these sections, some of them tabs on a shared page: ${input.settingsSections.join(", ")}.`;
   const canReadSettings = input.availableTools.includes("aiden_get_state");
   const canReadProjects = input.availableTools.includes("list_projects");
   const canReadMcpServers = input.availableTools.includes("list_mcp_servers");

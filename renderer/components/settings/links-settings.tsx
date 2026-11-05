@@ -1,8 +1,10 @@
 import * as React from "react";
 import { browserApi } from "../../lib/ipc";
 import type { BrowserLinkOpening } from "../../shared/browser";
+import { prefersReducedMotion } from "../../lib/appearance-runtime";
 import { isMacPlatform } from "../../lib/ghostty-terminal/host-platform";
 import { Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, toast } from "../ui";
+import { SettingsAnchorContext } from "./settings-page";
 
 const LABELS: Record<BrowserLinkOpening, string> = {
   ask: "Ask each time",
@@ -14,6 +16,16 @@ const MOD = isMacPlatform() ? "⌘" : "Ctrl";
 export function LinksSettings({ embedded = false }: { embedded?: boolean }) {
   const [value, setValue] = React.useState<BrowserLinkOpening | null>(null);
   const revision = React.useRef(0);
+  const anchor = React.useContext(SettingsAnchorContext);
+  const row = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (anchor !== "links") return;
+    row.current?.scrollIntoView({
+      block: "center",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  }, [anchor]);
 
   React.useEffect(() => {
     let live = true;
@@ -52,22 +64,24 @@ export function LinksSettings({ embedded = false }: { embedded?: boolean }) {
         label={embedded ? "Open chat links in" : "Open links in"}
         description={`Local dev servers always open in Aiden. ${MOD}-click a link to open it in the other browser.`}
       >
-        <Select
-          value={value ?? undefined}
-          onValueChange={(next) => change(next as BrowserLinkOpening)}
-          disabled={value === null}
-        >
-          <SelectTrigger size="small" aria-label={embedded ? "Open chat links in" : "Open links in"}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(Object.keys(LABELS) as BrowserLinkOpening[]).map((key) => (
-              <SelectItem key={key} value={key}>
-                {LABELS[key]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div ref={row}>
+          <Select
+            value={value ?? undefined}
+            onValueChange={(next) => change(next as BrowserLinkOpening)}
+            disabled={value === null}
+          >
+            <SelectTrigger size="small" aria-label={embedded ? "Open chat links in" : "Open links in"}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(LABELS) as BrowserLinkOpening[]).map((key) => (
+                <SelectItem key={key} value={key}>
+                  {LABELS[key]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </Field>
   );
   return embedded ? field : <FieldSet>{field}</FieldSet>;

@@ -3302,6 +3302,7 @@ export const llmClient = {
           : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: assistantSettingsSections({
+                computerUse: hostPlatformCapabilities().computerUse,
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
               }),

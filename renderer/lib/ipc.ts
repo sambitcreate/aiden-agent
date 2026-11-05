@@ -1171,7 +1171,7 @@ async function botComputer(channel: string, botId: string): Promise<BotComputerS
   return computer;
 }
 
-/** Settings → Bot computers and the profile's Computer section (Apple silicon only). */
+/** Settings → Computers & VMs → Bot computers and the profile's Computer section (Apple silicon only). */
 export const botComputersApi = {
   status: () => botComputersStatus(BOT_COMPUTER_CHANNELS.status),
   setUp: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUp),
