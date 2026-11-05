@@ -97,6 +97,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
+  "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
@@ -185,12 +186,13 @@ async function readChatFeatureSources() {
 }
 
 // `AidenWorkspaceShellView.swift` was split into the files below. The source checks that
-// used to read that one file read all of them: the shell first, then the moved code.
+// used to read that one file read all of them, in the order the code used to appear.
 const workspaceShellSourcePaths = [
-  "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
-  "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
+  "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
+  "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
+  "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
 ];
 
 async function readWorkspaceShellSources() {
