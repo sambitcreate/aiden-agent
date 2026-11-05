@@ -1,12 +1,17 @@
 /** Electron-main binding of product analytics. */
 
+import { readFileSync } from "node:fs";
 import { release } from "node:os";
+import { join } from "node:path";
 
-import { app, logger } from "../../platform.js";
+import { app, ipcMain, logger } from "../../platform.js";
 import { configStore } from "../config-store.js";
+import { observeDiagnosticEvents } from "../diagnostic-journal.js";
+import { SETTINGS_FILENAME } from "../portable-config-core.js";
 import { providerRegistry } from "../provider-registry.js";
 import { ANALYTICS_BUILD_CONFIG } from "./analytics-build-config.js";
 import type { PostHogTransport } from "./analytics-client.js";
+import { parseAnalyticsState, type AnalyticsState } from "./analytics-consent.js";
 import type { AnalyticsSuperProperties } from "./analytics-events.js";
 import { setAnalyticsReporter } from "./analytics-report.js";
 import { createAnalyticsService, createLoggingTransport, type AnalyticsService } from "./analytics-service.js";
@@ -49,6 +54,17 @@ function transportFactory(): (() => Promise<PostHogTransport>) | undefined {
   return undefined;
 }
 
+// A fatal crash cannot wait for the store, which is asynchronous. Anything
+// unreadable means no consent, so nothing is captured.
+function readStateSync(): AnalyticsState | undefined {
+  try {
+    const document = JSON.parse(readFileSync(join(app.getPath("userData"), SETTINGS_FILENAME), "utf8")) as { analytics?: unknown };
+    return document.analytics === undefined ? undefined : parseAnalyticsState(document.analytics);
+  } catch {
+    return undefined;
+  }
+}
+
 let service: AnalyticsService | undefined;
 
 // Created on first use, after main has settled the userData path.
@@ -65,6 +81,8 @@ export function analyticsService(): AnalyticsService {
     appRoots: [app.getAppPath()],
     runDirectory: app.getPath("userData"),
     isBuiltinProvider: (providerId) => providerRegistry.isBuiltinProvider(providerId),
+    readStateSync,
+    onSendingChanged: (sending) => ipcMain.broadcast("analytics:sending-changed", { sending }),
     log: (message, error) =>
       logger.warn("analytics", message, { errorType: error instanceof Error ? error.name : typeof error }),
   });
@@ -72,4 +90,11 @@ export function analyticsService(): AnalyticsService {
   // Shared services report through the seam, so they never import this file.
   setAnalyticsReporter((event, props) => created.track(event, props));
   return created;
+}
+
+// Crashes and uncaught errors reach analytics through the diagnostics journal.
+export function installAnalyticsCrashCapture(): void {
+  const analytics = analyticsService();
+  analytics.beginRun();
+  observeDiagnosticEvents((event, detail) => analytics.handleDiagnosticEvent(event, detail));
 }
