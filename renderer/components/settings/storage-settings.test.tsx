@@ -3,17 +3,24 @@
 
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, before, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../../main/bots/test-dom";
-import {
-  assembleStorageReport,
-  classifyThread,
-  classifyWorktree,
-  emptyStorageReport,
-  type StorageReport,
-} from "../../shared/storage";
-import { StorageSettings } from "./storage-settings";
+import type { StorageReport } from "../../shared/storage";
+
+// Loaded from the hook so an import failure is the test error, not a file
+// that never starts. A static import that throws is reported only as "test failed".
+type StorageModule = typeof import("../../shared/storage");
+let assembleStorageReport!: StorageModule["assembleStorageReport"];
+let classifyThread!: StorageModule["classifyThread"];
+let classifyWorktree!: StorageModule["classifyWorktree"];
+let emptyStorageReport!: StorageModule["emptyStorageReport"];
+let StorageSettings!: typeof import("./storage-settings").StorageSettings;
+
+before(async () => {
+  ({ assembleStorageReport, classifyThread, classifyWorktree, emptyStorageReport } = await import("../../shared/storage"));
+  ({ StorageSettings } = await import("./storage-settings"));
+});
 
 afterEach(cleanup);
 

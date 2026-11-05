@@ -7,7 +7,7 @@ const MAX_FAILURES = 50;
 const MAX_ERROR_LINES = 60;
 const STDERR_LIMIT = 8000;
 const NOTABLE = /error|ERR_|Cannot find|does not provide|Transform failed|failed to load/iu;
-const NOISE = /not wrapped in act|wrap-tests-with-act/u;
+const NOISE = /not wrapped in act|wrap-tests-with-act|No handler registered|link-opening preference/u;
 
 /** Recent stderr for each file. Act warnings from the rest of the lane are noise and must not crowd out the load error. */
 const stderrByFile = new Map();
@@ -48,15 +48,31 @@ export function withRunnerStderr(digest, stderrTailLines) {
   return `${digest}\n  runner stderr:\n${extra}`;
 }
 
+function fileStem(file) {
+  return file?.split(/[\\/]/u).pop()?.replace(/\.test\.[^.]+$/u, "") ?? "";
+}
+
+function stderrFor(file) {
+  const stem = fileStem(file);
+  if (!stem) return "";
+  const chunks = [];
+  for (const [path, text] of stderrByFile) {
+    if (!path.includes(stem) && !text.includes(stem)) continue;
+    chunks.push(text.slice(-2500));
+  }
+  return chunks.join("\n").trim();
+}
+
 function notableFor(file) {
   const base = file?.split(/[\\/]/u).pop();
+  const stem = fileStem(file);
   if (!base) return notableLines.slice(-20);
   const picked = [];
   for (let index = 0; index < notableLines.length; index += 1) {
-    if (!notableLines[index].includes(base)) continue;
-    // The message is often the line before the file location.
+    const line = notableLines[index];
+    if (!line.includes(base) && !(stem && line.includes(stem))) continue;
     if (index > 0 && !notableLines[index - 1].includes(base)) picked.push(notableLines[index - 1]);
-    picked.push(notableLines[index]);
+    picked.push(line);
   }
   return (picked.length > 0 ? picked : notableLines).slice(-20);
 }
@@ -71,9 +87,11 @@ function errorText(error, stderr, file) {
   // A load failure has no stack; the message is only "test failed".
   const unhelpful = !thrown?.stack || lines.every((line) => line.trim() === "" || /^(?:Error: )?test failed$/u.test(line.trim()));
   if (unhelpful) {
+    const related = stderrFor(file);
+    if (related) lines.push("file stderr:", ...related.split("\n").slice(-25));
     const notable = notableFor(file);
     if (notable.length > 0) lines.push("notable:", ...notable);
-    else if (stderr) lines.push("stderr:", ...stderr.trim().split("\n").slice(-15));
+    else if (!related && stderr) lines.push("stderr:", ...stderr.trim().split("\n").slice(-15));
   }
   return lines.length > MAX_ERROR_LINES ? [...lines.slice(0, MAX_ERROR_LINES), "…"] : lines;
 }
