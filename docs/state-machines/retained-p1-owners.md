@@ -13,6 +13,19 @@ Each owner below was traced for the state-machine migration and already centrali
 
 `reset` keeps `shutdownInterrupted`, as it did before. Harnesses serve one generation, so it cannot reach another run through `llm-client`.
 
+## Renderer adapters
+
+The P1b work changed no IPC, so these needed no adapter change.
+
+| Inventory | Owner | Disposition | Why |
+|---|---|---|---|
+| `clients:C02` | `renderer/lib/chat-message-queue.ts` | Retain | `claim`, `settle` and `deliverQueuedMessage` are the only route, and `chat-message-queue.test.ts` covers stale chats, drafts and unknown appends. |
+| `clients:C03` | `renderer/main/chat-pane.tsx` | Deferred | The orchestration is spread through a 4,166-line view. Moving it needs a UI test harness first, and it holds no authority of its own: the host decides. |
+| `clients:C04` | `renderer/lib/generation-stream.ts` | Retain, one fix | One subscription per stream. The first terminal event now closes it, because listeners stay on while an async `onDone` settles. |
+| `clients:C05` | `renderer/lib/chat-terminal-sync.ts` | Retain | Identity-keyed registries with bounded retries, covered by `chat-terminal-sync.test.ts`. Not re-audited beyond the entry points. |
+| `clients:C11` | `renderer/lib/hosts/remote-queue-fence.ts` | Retain | `remoteQueueFenceHolds` is pure and tested. Two overlapping `sendFencedTurn` calls can replace each other's fence, and the 120 s stall bounds that. Whether two can overlap in practice was not established. |
+| `clients:N15` | iOS `AidenChatFeature.swift` | Retain | No shared contract changed, so nothing here needed native work. |
+
 ## Run input transitions
 
 | Step | Guard | Result if refused | Draft |

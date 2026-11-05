@@ -112,6 +112,9 @@ export function subscribeGenerationStream(
     for (const u of unsubs) u();
     unsubs.length = 0;
   };
+  // Listeners stay on while an async onDone settles, so the first terminal event
+  // has to close the door itself: a second one would restore guidance twice.
+  let terminalSeen = false;
 
   unsubs.push(
     onNotification<ChatDelta>("chat:delta", (p) => {
@@ -160,7 +163,8 @@ export function subscribeGenerationStream(
   );
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
-      if (p.streamId !== streamId) return;
+      if (p.streamId !== streamId || terminalSeen) return;
+      terminalSeen = true;
       restoreUndeliveredGuidance(scope.chatId, undeliveredGuidanceFromTerminal(p));
       void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
@@ -171,7 +175,8 @@ export function subscribeGenerationStream(
   );
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
-      if (p.streamId !== streamId) return;
+      if (p.streamId !== streamId || terminalSeen) return;
+      terminalSeen = true;
       restoreUndeliveredGuidance(scope.chatId, undeliveredGuidanceFromTerminal(p));
       callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
       dispose();
