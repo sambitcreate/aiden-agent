@@ -1,6 +1,6 @@
 # Design mode P4: the full canvas
 
-Status: planned 2026-11-05, waiting on the owner's answers to the questions at the end. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
+Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. In progress from P4a. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
 
 **Goal:** the canvas does everything in the owner's 2026-11-05 reference screenshots of a design canvas (owner chose "add everything shown"). That is the original P4 (point, comment, draw, and send comments to Aiden) plus:
 - drawing tools;
@@ -39,7 +39,7 @@ Status: planned 2026-11-05, waiting on the owner's answers to the questions at t
 | Code tab: the frame's source | – | P4f |
 | Tweaks: dark switch per frame, page-declared tweaks | – | P4g |
 | Editing text inside a page with a formatting bar | – | P4h |
-| Share | – | Question 2 |
+| Share | – | later, its own project (Question 2: b) |
 | "Unsaved changes" banner | not needed | – (the canvas saves itself) |
 
 ## Document schema v2
@@ -126,7 +126,7 @@ A panel on the canvas's right edge with three tabs. It opens with the toggle or 
   - print mode and paper;
   - a layout guide (columns or a grid, drawn over the frame).
 - **Layers:** a tree of the page's frames by group. You can select, rename, reorder by dragging, hide and lock.
-- **Code:** a file frame's source, read-only, with syntax highlighting. Editing it is Question 3.
+- **Code:** a file frame's source, read-only, with syntax highlighting and a Copy button (Question 3: a, with Copy).
 - **Tweaks:** see P4g.
 
 ### P4g: tweaks
@@ -138,14 +138,14 @@ A panel on the canvas's right edge with three tabs. It opens with the toggle or 
 
 - Double-click text inside an entered live frame to edit it in place. The bridge makes only that element editable.
 - A formatting bar offers heading level, bold, italic, underline, link, list, alignment and Comment.
-- Saving follows Question 1.
+- Saving (Question 1: a): a plain text change is written straight into the file at the matched place, and a formatting change is sent to Aiden as a scoped request.
 - If the edit can't be matched to exactly one place in the source, it is sent to Aiden as a scoped request instead, and the person is told so.
 - Undo restores the file.
 - It needs the source stamps from §5.5, so it lands after P4e's bridge.
 
 ## Order and size
 
-The order is P4a, then P4e (the core loop: point at something and Aiden changes it), then P4b, P4c, P4d, P4f, P4g and P4h, then P5 (launch). Question 4 can change this.
+The order is P4a, then P4e (the core loop: point at something and Aiden changes it), then P4b, P4c, P4d, P4f, P4g and P4h, then P5 (launch). (Question 4: a.)
 
 These sizes are rough, at the pace of P3:
 - P4a: about one day.
@@ -159,7 +159,7 @@ These sizes are rough, at the pace of P3:
 
 Each slice gets its own E2E coverage in `tests/e2e/design-mode.spec.ts`.
 
-## Questions for the owner
+## Questions for the owner (answered 2026-11-05: 1a, 2b, 3a with a Copy button, 4a)
 
 1. **Text edits inside a page.**
    - a) Plain text changes are saved straight into the file, and formatting changes go to Aiden. (Recommended.)
