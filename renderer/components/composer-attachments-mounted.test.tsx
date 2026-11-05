@@ -53,6 +53,7 @@ async function loadComposer() {
     "./follow-through-chips": "export const FollowThroughChips=()=>null;",
     "./busy-send-button": "export const BusySendButton=()=>null;",
     "./provider-icon": "export const ProviderIcon=()=>null;",
+    "../lib/design-mode": "export const useDesignModeControls=()=>null;",
   };
   await build({
     entryPoints: [path.resolve("renderer/components/composer.tsx")],
