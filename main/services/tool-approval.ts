@@ -45,8 +45,9 @@ export type ToolApprovalOutcome = "allowed" | "denied" | "cancelled" | "detached
 
 /**
  * One prompt's lifetime. `publishing` is separate from `published` because a
- * publish callback can settle its own prompt before it returns. The prompt was
- * still shown, so it is withdrawn once publication completes.
+ * publish callback can settle its own prompt before it returns, or even before
+ * it throws. That prompt may have been shown, so it is withdrawn once the
+ * callback ends.
  */
 type ApprovalPromptPhase = "admitted" | "publishing" | "published" | "settled";
 
@@ -172,11 +173,16 @@ export class ToolApprovalCoordinator {
       phase = "publishing";
       try {
         this.publish({ ...descriptor, approvalId });
-        if (settledWhilePublishing !== undefined) withdrawPrompt(settledWhilePublishing);
-        else phase = "published";
       } catch {
-        finish("unavailable");
+        if (settledWhilePublishing === undefined) {
+          // Nothing settled it, so treat it as never shown: no withdrawal.
+          phase = "admitted";
+          finish("unavailable");
+          return;
+        }
       }
+      if (settledWhilePublishing !== undefined) withdrawPrompt(settledWhilePublishing);
+      else phase = "published";
     });
   }
 

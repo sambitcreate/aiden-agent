@@ -446,7 +446,7 @@ test("a prompt answered from inside its own publication is still withdrawn exact
   assert.equal(coordinator.pendingCount, 0);
 });
 
-test("a publication that fails after settling its own prompt reports the settled outcome and no withdrawal", async () => {
+test("a publication that throws after settling its own prompt keeps the outcome and still withdraws", async () => {
   const withdrawn: string[] = [];
   const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(
     (prompt) => {
@@ -456,12 +456,12 @@ test("a publication that fails after settling its own prompt reports the settled
     (approvalId) => withdrawn.push(approvalId),
   );
   const outcome = await coordinator.request(
-    { streamId: "s-throw", toolCallId: "c", toolName: "write", summary: "x" },
+    { streamId: "s-throw", approvalId: "a-throw", toolCallId: "c", toolName: "write", summary: "x" },
     undefined,
     "document-one",
   );
   assert.equal(outcome, "denied");
-  assert.deepEqual(withdrawn, []);
+  assert.deepEqual(withdrawn, ["a-throw"]);
 });
 
 test("concurrent answers across the owner and a paired host settle once, first answer wins", async () => {

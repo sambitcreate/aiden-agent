@@ -32,8 +32,9 @@ export type AskUserQuestionRespondOutcome = AskUserQuestionAnswerStatus | "rejec
 
 /**
  * One prompt's lifetime. `publishing` is separate from `published` because a
- * publish callback can settle its own prompt before it returns. The prompt was
- * still shown, so it is withdrawn once publication completes.
+ * publish callback can settle its own prompt before it returns, or even before
+ * it throws. That prompt may have been shown, so it is withdrawn once the
+ * callback ends.
  */
 type QuestionPromptPhase = "admitted" | "publishing" | "published" | "settled";
 
@@ -151,13 +152,18 @@ export class AskUserQuestionCoordinator {
       phase = "publishing";
       try {
         this.publish(prompt);
-        if (settledWhilePublishing) {
-          withdrawPrompt(settledWhilePublishing.response, settledWhilePublishing.by);
-        } else {
-          phase = "published";
-        }
       } catch {
-        finish(cancelled());
+        if (!settledWhilePublishing) {
+          // Nothing settled it, so treat it as never shown: no withdrawal.
+          phase = "admitted";
+          finish(cancelled());
+          return;
+        }
+      }
+      if (settledWhilePublishing) {
+        withdrawPrompt(settledWhilePublishing.response, settledWhilePublishing.by);
+      } else {
+        phase = "published";
       }
     });
   }

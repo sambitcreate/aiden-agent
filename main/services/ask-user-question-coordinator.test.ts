@@ -288,6 +288,32 @@ test("a prompt answered from inside its own publication is still withdrawn exact
   assert.equal(coordinator.pendingCount, 0);
 });
 
+test("a publication that throws after settling its own prompt keeps the answer and still withdraws", async () => {
+  const withdrawn: string[] = [];
+  const coordinator: AskUserQuestionCoordinator = new AskUserQuestionCoordinator(
+    (prompt) => {
+      coordinator.respond(
+        prompt.promptId,
+        {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId: prompt.promptId,
+          cancelled: false,
+          answers: [{ questionIndex: 0, kind: "option", answer: "Direct" }],
+        },
+        "document-one",
+      );
+      throw new Error("channel lost after the answer");
+    },
+    (promptId) => withdrawn.push(promptId),
+  );
+  const response = await coordinator.request(
+    { streamId: "s-throw", toolCallId: "call-throw", questions },
+    "document-one",
+  );
+  assert.equal(response.cancelled, false);
+  assert.deepEqual(withdrawn, [response.promptId]);
+});
+
 test("after shutdown a new question is cancelled without being shown", async () => {
   const published: string[] = [];
   const coordinator = new AskUserQuestionCoordinator((prompt) => published.push(prompt.promptId));
