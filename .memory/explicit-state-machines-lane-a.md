@@ -10,7 +10,7 @@ Lane A owns P0 and P1 (admission and generation settlement), then P5 (physical t
 
 ## Local setup
 
-A fresh worktree needs `npm ci`, then `npm run build:worktree-remover`, `build:worktree-file-io` and `build:subagent-file-mutator`, plus `build:lease-flock` for the CLI suite. Without them `first-message-worktree.test.ts` fails with "Branch already exists".
+A fresh worktree needs `npm ci`, then `npm run build:worktree-remover`, `build:worktree-file-io` and `build:subagent-file-mutator`, `build:vcc`, plus `build:lease-flock` for the CLI suite. Without them `first-message-worktree.test.ts` fails with "Branch already exists".
 
 ## Skipped CLI entries
 
