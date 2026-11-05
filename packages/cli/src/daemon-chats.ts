@@ -299,7 +299,10 @@ export function createDaemonChats(agentDir: string) {
         send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline }); return true;
       } catch (error) {
         const cancelled = entry.stopRequested;
-        const finalTimeline = cancelled ? timeline.finish("cancelled", entry.cancellationOrigin) : timeline.finish("failed");
+        const finished = cancelled ? timeline.finish("cancelled", entry.cancellationOrigin) : timeline.finish("failed");
+        // A failed final save already closed the projector as completed, but this turn did not complete.
+        const finalTimeline = finished.status !== "completed" ? finished
+          : { ...finished, status: cancelled ? "cancelled" as const : "failed" as const, ...(cancelled && entry.cancellationOrigin ? { cancellationOrigin: entry.cancellationOrigin } : {}) };
         if (entry.persistence === "none" && (content || produced.length)) {
           entry.persistence = await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }).then(() => "partial_saved" as const, () => {
             process.stderr.write("aiden: Could not persist the partial response.\n");
