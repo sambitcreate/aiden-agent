@@ -51,6 +51,8 @@ interface AidenBotSessionTransport {
      * Revision 37 (`bot:handoffs`): Done or Skip on a hand-off card. A transport that predates
      * hand-offs answers nothing: the card only shows to a phone the Mac sends hand-offs to.
      */
+    suspend fun answerAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, key: UUID): AidenBotAccessAnswerReceipt =
+        throw AidenRemoteClientException.InvalidResponse()
     suspend fun answerHandoff(
         botId: String,
         waitId: String,
@@ -107,6 +109,8 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
         decision: AidenBotRoutineProposalDecision,
         key: UUID
     ) = client.respondToBotRoutineProposal(botId, proposalId, decision, key)
+    override suspend fun answerAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, key: UUID) =
+        client.answerBotAccessRequest(botId, waitId, request, key)
     override suspend fun answerHandoff(
         botId: String,
         waitId: String,
@@ -230,6 +234,8 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
         is AidenBotSessionEventPayload.Handoff ->
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, handoff = payload.handoff))
         // Revision 42: the frame carries the whole card list; an empty list clears it.
+        is AidenBotSessionEventPayload.AccessRequest ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, accessRequest = payload.accessRequest))
         is AidenBotSessionEventPayload.Issues ->
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, issues = payload.issues))
         AidenBotSessionEventPayload.Closed -> AidenBotSessionEventOutcome.Reconnect
@@ -325,7 +331,8 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_HANDOFFS,
         AidenRemoteCapability.BOT_HANDOFF_NOTES,
         AidenRemoteCapability.BOT_HANDOFF_ON_MAC,
-        AidenRemoteCapability.BOT_IMAGES
+        AidenRemoteCapability.BOT_IMAGES,
+        AidenRemoteCapability.BOT_ACCESS_REQUESTS
     )
         .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
 
@@ -366,6 +373,7 @@ data class AidenBotSessionUiState(
     val isRespondingToApproval: Boolean = false,
     /** Revision 37: Done or Skip on the hand-off card is on its way. */
     val isAnsweringHandoff: Boolean = false,
+    val isAnsweringAccessRequest: Boolean = false,
     /** Revision 37: Finish on your Mac is on its way. */
     val isFinishingHandoffOnMac: Boolean = false,
     /** What the Mac said after Finish on your Mac, for the card it was pressed on. */
@@ -375,6 +383,7 @@ data class AidenBotSessionUiState(
     /** Revision 42: the cards whose action is on its way, so their buttons wait. */
     val actingIssueIds: Set<String> = emptySet(),
     val actionError: String? = null,
+    val accessSuccessNotice: String? = null,
     /** A notice about unsent messages; shown in place of [actionError] until dismissed or the next send. */
     val notice: AidenBotSessionNotice? = null,
     val connectRequests: Map<String, AidenBotConnectRequestPhase> = emptyMap(),
@@ -588,6 +597,7 @@ class AidenBotSessionController(
     private var stateWrites = 0
     private var questionWrites = 0
     private var approvalWrites = 0
+    private var accessRequestWrites = 0
     private var handoffWrites = 0
     private var issueWrites = 0
     /** Transcript entries that already stand for an outgoing message, for the life of an epoch. */
@@ -816,6 +826,7 @@ class AidenBotSessionController(
             is AidenBotSessionEventPayload.State -> afterStateWrite(previous)
             is AidenBotSessionEventPayload.Question -> questionWrites += 1
             is AidenBotSessionEventPayload.Approval -> approvalWrites += 1
+            is AidenBotSessionEventPayload.AccessRequest -> accessRequestWrites += 1
             is AidenBotSessionEventPayload.Handoff -> handoffWritten(previous?.handoff, payload.handoff)
             is AidenBotSessionEventPayload.Activity -> activityArrived(payload.activity)
             is AidenBotSessionEventPayload.Entry -> storeTranscript()
@@ -831,6 +842,7 @@ class AidenBotSessionController(
         _state.update { it.copy(session = session, isLoading = false, loadFailed = false, hasLoaded = true, accessLost = false) }
         settleCards(session)
         questionWrites += 1
+        accessRequestWrites += 1
         approvalWrites += 1
         handoffWritten(previous?.handoff, session.handoff)
         if (session.activity != previous?.activity) activityArrived(session.activity)
@@ -1586,13 +1598,49 @@ class AidenBotSessionController(
     }
 
     /**
-     * Revision 37: answers the hand-off once, Done (with an optional note the Bot reads) or Skip.
-     * The card goes at once and comes back with an error if the answer didn't reach the Mac,
-     * unless the Mac has since shown another (R18). A sign-in can only be skipped from a phone.
-     * An unanswered attempt keeps its key, so retrying the same answer replays the Mac's
-     * receipt; another answer gets a new key. A card answered elsewhere (`handoff_expired`)
-     * stays gone. A second tap while one is in flight sends nothing.
+     * A retry after an unknown outcome reuses its key for this wait and choice.
+     * A different choice sends a new request; the host decides which answer won.
+     * Expired cards stay gone, and feed replacements win over late failures.
      */
+    suspend fun answerAccessRequest(choice: AidenBotAccessRequestChoice): Boolean {
+        val current = _state.value
+        val shown = current.session?.accessRequest ?: return false
+        if (!current.hasLoaded || current.isAnsweringAccessRequest || choice !in shown.choices) return false
+        val action = "answerAccessRequest:${shown.waitId}:${choice.name}"
+        val request = AidenBotAccessAnswerRequest(choice)
+        val writes = accessRequestWrites
+        _state.update { it.copy(isAnsweringAccessRequest = true, actionError = null, accessSuccessNotice = null, session = it.session?.copy(accessRequest = null)) }
+        return try {
+            val receipt = bounded { transport.answerAccessRequest(botId, shown.waitId, request, keys.key(action)) }
+            keys.complete(action)
+            _state.update { state -> state.copy(
+                session = if (state.session?.accessRequest?.waitId == shown.waitId) state.session.copy(accessRequest = null) else state.session,
+                accessSuccessNotice = if (receipt.savedForFuture == true) "Folder approval recorded." else null
+            ) }
+            true
+        } catch (error: CancellationException) {
+            if (accessRequestWrites == writes) _state.update { it.copy(session = it.session?.copy(accessRequest = shown)) }
+            throw error
+        } catch (error: Exception) {
+            if (error is AidenRemoteClientException.Server && error.statusCode < 500) keys.complete(action)
+            val expired = (error as? AidenRemoteClientException.Server)?.body?.code == AidenRemoteErrorCode.ACCESS_REQUEST_EXPIRED
+            _state.update { state ->
+                val session = state.session
+                state.copy(
+                    session = when {
+                        expired && session?.accessRequest?.waitId == shown.waitId -> session.copy(accessRequest = null)
+                        !expired && accessRequestWrites == writes -> session?.copy(accessRequest = shown)
+                        else -> session
+                    },
+                    actionError = if (expired) "That card was already answered or closed." else "That answer wasn't sent. Please try again."
+                )
+            }
+            false
+        } finally {
+            _state.update { it.copy(isAnsweringAccessRequest = false) }
+        }
+    }
+
     suspend fun answerHandoff(outcome: AidenBotHandoffOutcome, note: String? = null): Boolean {
         val handoff = _state.value.session?.handoff ?: return false
         if (outcome == AidenBotHandoffOutcome.DONE && handoff.kind == AidenBotHandoffKind.SIGN_IN) return false

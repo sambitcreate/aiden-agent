@@ -4,6 +4,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -23,6 +24,45 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 /** What TalkBack hears from the Bot chat's status line and its unsent messages. */
 @RunWith(AndroidJUnit4::class)
 class AidenBotChatSemanticsUiTest {
+    @Test fun accessCardOffersOnlyHostChoicesAndButtonsReportTheChosenAnswer() {
+        val request = sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequest(
+            "access-55", sbtbiswas.AidenOnTheGo.models.AidenBotAccessTarget.FOLDER,
+            "Reports", "~/Documents/Reports", "Read the reports for your summary.",
+            listOf(sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.NOT_NOW,
+                sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.ALWAYS,
+                sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.ONCE))
+        val answers = mutableListOf<sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice>()
+        compose.setContent { AidenTheme { AidenBotAccessRequestCard(request, "Scout", true) { answers += it } } }
+        compose.onNodeWithText("Not now").performClick()
+        compose.onNodeWithText("Always for this folder").performClick()
+        compose.onNodeWithText("Allow once").performClick()
+        assertEquals(request.choices, answers)
+    }
+
+    @Test fun wholeMacAccessCardNeverOffersAlwaysAndDisabledCardCannotAnswer() {
+        val request = sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequest(
+            "access-55", sbtbiswas.AidenOnTheGo.models.AidenBotAccessTarget.WHOLE_MAC,
+            "your whole Mac", why = "Find your files.", choices = listOf(
+                sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.NOT_NOW,
+                sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.ONCE))
+        compose.setContent { AidenTheme { AidenBotAccessRequestCard(request, "Scout", false) {} } }
+        compose.onNodeWithText("Always for this folder").assertDoesNotExist()
+        compose.onNodeWithText("Allow once").assertIsNotEnabled()
+        compose.onNodeWithText("Not now").assertIsNotEnabled()
+    }
+
+    @Test fun accessIssueOffersNotNowAndReportsDismissAction() {
+        val action = sbtbiswas.AidenOnTheGo.models.AidenBotIssueAction(sbtbiswas.AidenOnTheGo.models.AidenBotIssueActionKind.DISMISS_ACCESS)
+        val issue = sbtbiswas.AidenOnTheGo.models.AidenBotIssue(
+            "access-issue-55", sbtbiswas.AidenOnTheGo.models.AidenBotIssueKind.ACCESS_NEEDED,
+            "Folder access needed", "Choose whether to save access for future tasks.",
+            actions = listOf(action), createdAt = java.time.Instant.parse("2026-11-03T00:00:00Z"), resolved = false)
+        val answers = mutableListOf<sbtbiswas.AidenOnTheGo.models.AidenBotIssueAction>()
+        compose.setContent { AidenTheme { AidenBotIssueCard(issue, true, false) { answers += it } } }
+        compose.onNodeWithText("Not now").performClick()
+        assertEquals(listOf(action), answers)
+    }
+
     @get:Rule
     val compose = createComposeRule()
 

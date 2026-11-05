@@ -7,6 +7,7 @@ import {
   AidenIdempotencyLedger,
   AidenOperationContractError,
   AidenOperationUnknownOutcomeError,
+  AidenOperationReplaySafeRetryError,
   assertRevision,
   MAX_DURABLE_JSON_ARRAY_LENGTH,
   MAX_DURABLE_JSON_DEPTH,
@@ -1507,4 +1508,23 @@ test("canonical Chat fixtures validate bounded classification and every known Me
     },
     /exceeds the 1 MiB JSON response ceiling/u,
   );
+});
+
+test("replay-safe failures reconcile their durable receipt after ledger reconstruction without another effect", async () => {
+  const scope={deviceId:"phone",route:"/access/answer",resourceId:"attempt-1",key:"receipt-retry-key-001"};
+  const durableReceipts=new Map<string,{recorded:true}>();let publications=0, readable=false;
+  const action=async()=>{
+    if(!durableReceipts.has(scope.resourceId)) {publications++;durableReceipts.set(scope.resourceId,{recorded:true});}
+    try {
+      if(!readable) throw new Error("receipt storage temporarily unavailable");
+      return durableReceipts.get(scope.resourceId)!;
+    } catch(error) {throw new AidenOperationReplaySafeRetryError(error);}
+  };
+  const first=new AidenIdempotencyLedger();
+  await assert.rejects(first.execute(scope,{choice:"always"},action),/receipt storage temporarily unavailable/u);
+  assert.equal(publications,1);
+  readable=true;
+  const restarted=new AidenIdempotencyLedger(first.snapshot());
+  assert.deepEqual(await restarted.execute(scope,{choice:"always"},action),{recorded:true});
+  assert.equal(publications,1);
 });

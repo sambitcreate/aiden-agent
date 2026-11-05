@@ -1,3 +1,5 @@
+import type { BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
+import { BotAccessRequestStaleError, type BotAccessRequests } from "./bot-runtime/bot-access-requests.js";
 import { botMessageRowLabel, botMessageStatusLine } from "../../renderer/shared/bot-messages.js";
 // Remote surface of the durable Bot runtime (contract revision 25).
 //
@@ -104,6 +106,10 @@ import {
   parseAidenRemoteBotPresetCreateRequest,
   parseAidenRemoteBotPresetList,
   parseAidenRemoteBotQuestionAnswerRequest,
+  parseAidenRemoteBotAccessRequest,
+  parseAidenRemoteBotAccessAnswerRequest,
+  type AidenRemoteBotAccessRequest,
+  type AidenRemoteBotAccessAnswerReceipt,
   parseAidenRemoteBotHandoffAnswerRequest,
   parseAidenRemoteBotHandoffWaitId,
   parseAidenRemoteBotIssueActRequest,
@@ -144,7 +150,7 @@ import {
   type AidenRemoteBotHandoffAudience,
 } from "./aiden-remote-bot-handoffs.js";
 import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
-import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
+import { AidenOperationNotExecutedError, AidenOperationReplaySafeRetryError } from "./aiden-remote-operation-contract.js";
 import { BotSessionError, type BotSessionErrorReason, type BotSessionState } from "./bot-runtime/bot-session-service.js";
 import type { BotLiveActivity } from "../../renderer/shared/bot-live.js";
 import { stopWithIntents, type BotTurnIntent, type BotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
@@ -250,6 +256,8 @@ export interface AidenRemoteBotSessionServiceOptions {
    * answers through). With it the host announces `bot:handoffs`.
    */
   handoffs?: Pick<BotHandoffs, "pending" | "get" | "answer" | "onChange">;
+  accessRequests?: Pick<BotAccessRequests, "pending" | "get" | "onChange">;
+  answerAccessRequest?(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean; savedForFuture?: true }>;
   /** Revision 37: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
   openHandoffOnMac?(botId: string, waitId: string): Promise<BotHandoffOpened>;
   /**
@@ -319,7 +327,7 @@ export interface AidenRemoteBotSessionServiceOptions {
   routineNotifications?: {
     list(
       since: number | undefined,
-      options?: { issues?: boolean; messaging?: boolean },
+      options?: { issues?: boolean; messaging?: boolean; accessRequests?: boolean },
     ): Promise<AidenRemoteBotRoutineNotificationList>;
   };
   now?(): number;
@@ -744,6 +752,7 @@ interface Audience {
   images: boolean;
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
+  accessRequests: boolean;
 }
 
 /**
@@ -802,8 +811,10 @@ class BotLiveProjector {
   approval: AidenRemoteBotApproval | null = null;
   /** The waiting hand-off (revision 37), with the line devices without `bot:handoffs` show for it. */
   handoff: ProjectedHandoff | null = null;
+  accessRequest: { card: AidenRemoteBotAccessRequest; notice: AidenRemoteBotSessionEntry } | null = null;
   /** The Bot's issue cards (revision 42), oldest first; only `bot:issues` devices are sent them. */
   issues: AidenRemoteBotIssue[] = [];
+  legacyIssues: AidenRemoteBotIssue[] = [];
   /** What the running turn is doing, in the §11 shape; null while no turn runs. */
   activity: AidenRemoteBotSessionActivity | null = null;
   /** The person's messages waiting for the running turn. */
@@ -856,7 +867,8 @@ class BotLiveProjector {
     /** Revision 37; without it no hand-off is ever projected. */
     private readonly readHandoff: () => Promise<ProjectedHandoff | null> = async () => null,
     /** Revision 42; without it no issue card is ever projected. */
-    private readonly readIssues?: () => Promise<AidenRemoteBotIssue[]>,
+    private readonly readIssues?: () => Promise<{ holder: AidenRemoteBotIssue[]; legacy: AidenRemoteBotIssue[] }>,
+    private readonly readAccessRequest: () => Promise<BotLiveProjector["accessRequest"]> = async () => null,
   ) {
     this.classifier = activityDeps
       ? createQueuedInputClassifier({
@@ -887,13 +899,16 @@ class BotLiveProjector {
     this.question = this.readQuestion();
     this.approval = this.readApproval();
     this.handoff = await this.readHandoff();
-    this.issues = (await this.readIssues?.()) ?? [];
+    this.accessRequest = await this.readAccessRequest();
+    const issues = await this.readIssues?.();
+    this.issues = issues?.holder ?? [];
+    this.legacyIssues = issues?.legacy ?? [];
     if (this.activityDeps) {
       this.trackRun({ state: "idle", interrupted: false }, this.state, watch.value.docs);
       this.activity = this.deriveActivity(
         watch.value,
         this.state,
-        this.question !== null || this.approval !== null || this.handoff !== null,
+        this.question !== null || this.approval !== null || this.handoff !== null || this.accessRequest !== null,
       );
       this.queued = await this.queuedFor(watch.value.docs);
     }
@@ -917,11 +932,13 @@ class BotLiveProjector {
     const showActivity = audience.activity && this.activityDeps !== undefined;
     const state = stateViewForAudience(this.state, audience);
     const handoff = handoffForAudience(this.handoff?.handoff ?? null, audience);
+    const issues = this.issuesFor(audience);
     let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
     for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
     used += memberBytes("question", this.question) + memberBytes("approval", this.approval);
     if (audience.handoffs) used += memberBytes("handoff", handoff);
-    if (audience.issues) used += memberBytes("issues", this.issues);
+    if (audience.issues) used += memberBytes("issues", issues);
+    if (audience.accessRequests) used += memberBytes("accessRequest", this.accessRequest?.card ?? null);
     if (showActivity) used += memberBytes("activity", this.activity);
 
     let partial: string | undefined;
@@ -944,6 +961,7 @@ class BotLiveProjector {
     const shown = entriesFor(this.entries, audience);
     // Without `bot:handoffs`, a waiting hand-off is the newest line of the chat.
     if (!audience.handoffs && this.handoff) shown.push(this.handoff.notice);
+    if (!audience.accessRequests && this.accessRequest) shown.push(this.accessRequest.notice);
     const { entries, hasOlder } = windowed(shown, transcriptBudget);
     return parseAidenRemoteBotSession({
       botId: this.botId,
@@ -957,8 +975,13 @@ class BotLiveProjector {
       approval: this.approval,
       ...(showActivity ? { activity: this.activity, queued } : {}),
       ...(audience.handoffs ? { handoff } : {}),
-      ...(audience.issues ? { issues: this.issues } : {}),
+      ...(audience.issues ? { issues } : {}),
+      ...(audience.accessRequests ? { accessRequest: this.accessRequest?.card ?? null } : {}),
     });
+  }
+
+  private issuesFor(audience: Audience): AidenRemoteBotIssue[] {
+    return audience.accessRequests ? this.issues : this.legacyIssues;
   }
 
   /** The `snapshot` frame for the current seq (first frame of a stream, or a history rewrite). */
@@ -982,7 +1005,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1024,6 +1047,7 @@ class BotLiveProjector {
       );
     const activityOnly = ACTIVITY_FRAME_TYPES.has(event.type);
     const handoffOnly = event.type === "handoff";
+    const accessOnly = event.type === "access_request";
     const issuesOnly = event.type === "issues";
     // A frame a device can't parse (a card entry before revision 27, an
     // activity or queued frame without `bot:activity`, a hand-off without
@@ -1043,6 +1067,11 @@ class BotLiveProjector {
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
       if (issuesOnly && !audience.issues) return noOp(audience);
+      if (issuesOnly && !audience.accessRequests) return sseFrame(id, "issues", { ...data, payload: { issues: this.issuesFor(audience) } });
+      if (accessOnly && !audience.accessRequests) {
+        if (legacy === "snapshot") return this.snapshotFrame(audience);
+        return legacy ? sseFrame(id, "entry", { ...data, type: "entry", payload: { entry: legacy } }) : noOp(audience);
+      }
       if (imageLine && !audience.images) return imageLine;
       if (handoffOnly && !audience.handoffs) {
         if (legacy === "snapshot") return this.snapshotFrame(audience);
@@ -1257,13 +1286,16 @@ class BotLiveProjector {
     const question = this.readQuestion();
     const approval = this.readApproval();
     const handoff = await this.readHandoff();
-    const issues = this.readIssues ? await this.readIssues().catch(() => this.issues) : [];
+    const accessRequest = await this.readAccessRequest();
+    const projectedIssues = this.readIssues ? await this.readIssues().catch(() => ({ holder: this.issues, legacy: this.legacyIssues })) : { holder: [], legacy: [] };
+    const issues = projectedIssues.holder;
+    const legacyIssues = projectedIssues.legacy;
     const queued = this.activityDeps ? await this.queuedFor(view.docs) : [];
     if (this.closed) return;
     let activity: AidenRemoteBotSessionActivity | null = null;
     if (this.activityDeps) {
       this.trackRun(this.state, state, view.docs);
-      activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null);
+      activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null || accessRequest !== null);
     }
 
     const previous = this.entries;
@@ -1289,9 +1321,11 @@ class BotLiveProjector {
       this.question = question;
       this.approval = approval;
       this.handoff = handoff;
+      this.accessRequest = accessRequest;
       this.activity = activity;
       this.queued = queued;
       this.issues = issues;
+      this.legacyIssues = legacyIssues;
       this.seq += 1;
       this.broadcast((audience) => this.snapshotFrame(audience));
       return;
@@ -1324,6 +1358,11 @@ class BotLiveProjector {
       this.handoff = handoff;
       this.frame({ type: "handoff", payload: { handoff: handoff?.handoff ?? null } }, shown ? "snapshot" : handoff?.notice);
     }
+    if (accessRequest?.card.waitId !== this.accessRequest?.card.waitId) {
+      const shown = this.accessRequest !== null;
+      this.accessRequest = accessRequest;
+      this.frame({ type: "access_request", payload: { accessRequest: accessRequest?.card ?? null } }, shown ? "snapshot" : accessRequest?.notice);
+    }
     // After the state frame, so a phone never sees a phase for a turn that already ended.
     if (JSON.stringify(activity) !== JSON.stringify(this.activity)) {
       this.activity = activity;
@@ -1333,8 +1372,9 @@ class BotLiveProjector {
       this.queued = queued;
       this.frame({ type: "queued", payload: { queued } });
     }
-    if (JSON.stringify(issues) !== JSON.stringify(this.issues)) {
+    if (JSON.stringify(issues) !== JSON.stringify(this.issues) || JSON.stringify(legacyIssues) !== JSON.stringify(this.legacyIssues)) {
       this.issues = issues;
+      this.legacyIssues = legacyIssues;
       this.frame({ type: "issues", payload: { issues } });
     }
   }
@@ -1434,6 +1474,23 @@ async function answerOrRefuseUnchanged<Result>(answer: () => Promise<Result>): P
   } catch (error) {
     if (error instanceof AidenRemoteServiceError) throw new AidenOperationNotExecutedError(error);
     throw error;
+  }
+}
+
+/**
+ * Access operations alone have a second replay boundary: the exact wait/issue
+ * ID is the durable grant operation ID. The authorizer checks its committed
+ * receipt before revalidation; issue settlement is first-action-wins and its
+ * folder port uses that same journal ID. Even an error after publication can
+ * therefore retry without a second publication or recreating removed access.
+ * Never apply it to unrelated session/issue operations.
+ */
+async function replaySafeAccess<Result>(action: () => Promise<Result>): Promise<Result> {
+  try {
+    return await action();
+  } catch (error) {
+    if (error instanceof AidenOperationNotExecutedError || error instanceof AidenOperationReplaySafeRetryError) throw error;
+    throw new AidenOperationReplaySafeRetryError(error);
   }
 }
 
@@ -1568,7 +1625,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -1598,6 +1655,7 @@ export class AidenRemoteBotSessionService {
   private readonly answeredApprovals = new Set<string>();
   private readonly stopIntents: (() => void) | undefined;
   private readonly stopStateChanges: (() => void) | undefined;
+  private readonly stopAccessRequests: (() => void) | undefined;
   private readonly runStarts: BotRunStarts;
 
   constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
@@ -1609,6 +1667,7 @@ export class AidenRemoteBotSessionService {
     options.questions?.onChange(refresh);
     options.approvals?.onChange(refresh);
     options.handoffs?.onChange(refresh);
+    this.stopAccessRequests = options.accessRequests?.onChange(refresh);
     // Revision 42: a card raised, settled or superseded reaches open streams.
     options.issues?.onChange(refresh);
     // A pause or unpause on the Mac changes only the state; open streams hear it here.
@@ -1652,6 +1711,10 @@ export class AidenRemoteBotSessionService {
    * bridge and the Mac opener are wired. Without them the host never offers
    * the capability and every device gets the revision-35 view.
    */
+  get supportsAccessRequests(): boolean {
+    return Boolean(this.options.accessRequests && this.options.answerAccessRequest);
+  }
+
   get supportsHandoffs(): boolean {
     return Boolean(this.options.handoffs && this.options.openHandoffOnMac);
   }
@@ -1821,7 +1884,7 @@ export class AidenRemoteBotSessionService {
   /** Finished Bot routine runs a phone should announce, after `since` (ISO). */
   async routineNotificationFeed(
     since: string | undefined,
-    options: { issues?: boolean; messaging?: boolean } = {},
+    options: { issues?: boolean; messaging?: boolean; accessRequests?: boolean } = {},
   ): Promise<AidenRemoteBotRoutineNotificationList> {
     const { routineNotifications } = this.proactive();
     let sinceMs: number | undefined;
@@ -1831,7 +1894,7 @@ export class AidenRemoteBotSessionService {
         throw new AidenRemoteServiceError("invalid_request", "since must be an ISO-8601 time.", 400);
       }
     }
-    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues, messaging: options.messaging === true });
+    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues, messaging: options.messaging === true, accessRequests: options.accessRequests === true && this.supportsAccessRequests });
   }
 
   /** The state as a `bot:handoffs` device sees it; `stateViewForAudience` projects it for the others. */
@@ -1843,6 +1906,16 @@ export class AidenRemoteBotSessionService {
    * The Bot's oldest waiting hand-off, for both kinds of device. A card the
    * wire can't carry stays on the Mac.
    */
+  private async accessRequestOf(botId: string): Promise<BotLiveProjector["accessRequest"]> {
+    if (!this.supportsAccessRequests) return null;
+    const prompt = this.options.accessRequests!.pending(botId)[0];
+    if (!prompt) return null;
+    const { botId: _botId, toolCallId: _toolCallId, ...publicCard } = prompt;
+    const card = parseAidenRemoteBotAccessRequest(publicCard);
+    const { name } = await this.options.bots.bot(botId);
+    return { card, notice: { type: "message", id: `access-notice:${card.waitId}`, role: "assistant", text: `${name} needs you on your Mac: allow access to ${card.label}` } };
+  }
+
   private async handoffOf(botId: string): Promise<ProjectedHandoff | null> {
     const prompt = this.options.handoffs?.pending(botId)[0];
     if (prompt === undefined) return null;
@@ -1861,14 +1934,20 @@ export class AidenRemoteBotSessionService {
    * The store's own rows are the truth here; a card the wire can't carry is
    * dropped by the projection and never fails the rest.
    */
-  private async issuesOf(botId: string): Promise<AidenRemoteBotIssue[]> {
+  async openIssueCount(botId: string, options: { accessRequests?: boolean } = {}): Promise<number> {
+    const rows = await this.issueService().list(botId, { open: true });
+    return rows.filter((issue) => issue.resolvedAt === undefined && (options.accessRequests === true || issue.kind !== "access_needed")).length;
+  }
+
+  private async issuesOf(botId: string): Promise<{ holder: AidenRemoteBotIssue[]; legacy: AidenRemoteBotIssue[] }> {
     const service = this.options.issues;
-    if (!service) return [];
+    if (!service) return { holder: [], legacy: [] };
     try {
-      return toRemoteBotIssues(await service.list(botId));
+      const rows = await service.list(botId);
+      return { holder: toRemoteBotIssues(rows, true), legacy: toRemoteBotIssues(rows) };
     } catch {
       // An unreadable issue file must never take the transcript down with it.
-      return [];
+      return { holder: [], legacy: [] };
     }
   }
 
@@ -1981,6 +2060,33 @@ export class AidenRemoteBotSessionService {
     }
   }
 
+  async answerAccessRequest(deviceId: string, botId: string, waitId: string, key: string, input: unknown): Promise<AidenRemoteBotAccessAnswerReceipt> {
+    if (!this.supportsAccessRequests) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const id = parseOrInvalid((value) => parseAidenRemoteBotHandoffWaitId(value), waitId, "The access request is invalid.");
+    const parsed = parseOrInvalid(parseAidenRemoteBotAccessAnswerRequest, input, "The access answer is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    return this.options.bots.executeIdempotent(
+      { deviceId, route: "POST /bots/{id}/access-requests/{waitId}/answer", resourceId: `${bot.id}:${id}`, key },
+      { waitId: id, ...parsed },
+      () => replaySafeAccess(async () => {
+        const prompt = this.options.accessRequests!.get(bot.id, id);
+        const expired = () => new AidenRemoteServiceError("access_request_expired", "This access request is no longer waiting.", 409);
+        // An Always retry may acknowledge its exact durable operation even
+        // after the owner removed the prompt. The port never recreates access.
+        if (!prompt && parsed.choice !== "always") throw expired();
+        if (prompt && !prompt.choices.includes(parsed.choice)) throw new AidenRemoteServiceError("invalid_request", "That answer doesn't match the card.", 400);
+        let receipt;
+        try { receipt = await this.options.answerAccessRequest!(bot.id, id, parsed.choice); }
+        catch (error) {
+          if (error instanceof BotAccessRequestStaleError) throw new AidenRemoteServiceError("access_request_expired", error.message, 409, true);
+          throw error;
+        }
+        if (!receipt.answered) throw expired();
+        return { answered: true as const, ...(receipt.savedForFuture ? { savedForFuture: true as const } : {}) };
+      }),
+    );
+  }
+
   private handoffService() {
     if (!this.supportsHandoffs) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -2078,9 +2184,11 @@ export class AidenRemoteBotSessionService {
     issueId: string,
     key: string,
     input: unknown,
+    options: { accessRequests?: boolean } = {},
   ): Promise<AidenRemoteBotIssueActReceipt> {
     const issues = this.issueService();
     const parsed = parseOrInvalid(parseAidenRemoteBotIssueActRequest, input, "The issue action is invalid.");
+    if (options.accessRequests !== true && (parsed.action.kind === "allow_folder" || parsed.action.kind === "dismiss_access" || (await issues.list(botId)).some((issue) => issue.id === issueId && issue.kind === "access_needed"))) throw new AidenRemoteServiceError("capability_denied", "This card requires bot:access-requests.", 403);
     if (typeof issueId !== "string" || !BOT_ISSUE_ID_PATTERN.test(issueId)) {
       throw new AidenRemoteServiceError("invalid_request", "The Bot issue is invalid.", 400);
     }
@@ -2090,7 +2198,17 @@ export class AidenRemoteBotSessionService {
       { deviceId, route: "POST /bots/{id}/issues/{issueId}/act", resourceId: `${bot.id}:${id}`, key },
       parsed,
       async () => {
-        const result = await issues.act(bot.id, id, parsed.action);
+        let result;
+        try { result = await issues.act(bot.id, id, parsed.action); }
+        catch (error) {
+          if (error instanceof BotAccessRequestStaleError) throw new AidenOperationNotExecutedError(
+            new AidenRemoteServiceError("operation_stale", error.message, 409, true),
+          );
+          // Access settlement is first-action-wins; retries observe not_open.
+          // Folder publication also has its exact issue/journal operation receipt.
+          if (parsed.action.kind === "allow_folder" || parsed.action.kind === "dismiss_access") throw new AidenOperationReplaySafeRetryError(error);
+          throw error;
+        }
         if (result === "invalid") {
           // Nothing ran: the same key is checked again after the card refreshes.
           throw new AidenOperationNotExecutedError(
@@ -2156,6 +2274,7 @@ export class AidenRemoteBotSessionService {
           : undefined,
         () => this.handoffOf(botId),
         this.supportsIssues ? () => this.issuesOf(botId) : undefined,
+        () => this.accessRequestOf(botId),
       );
       await projector.attach(conversation);
       return projector;
@@ -2195,6 +2314,7 @@ export class AidenRemoteBotSessionService {
       onMac: options.handoffs === true && options.handoffOnMac === true && this.supportsHandoffs,
       images: options.images === true,
       issues: options.issues === true && this.supportsIssues,
+      accessRequests: options.accessRequests === true && this.supportsAccessRequests,
     };
   }
 
@@ -2213,6 +2333,7 @@ export class AidenRemoteBotSessionService {
           ...(audience.activity ? { activity: null, queued: [] } : {}),
           ...(audience.handoffs ? { handoff: null } : {}),
           ...(audience.issues ? { issues: [] } : {}),
+          ...(audience.accessRequests ? { accessRequest: null } : {}),
         });
       }
       const projector = await this.liveProjector(bot.id);
@@ -2291,6 +2412,7 @@ export class AidenRemoteBotSessionService {
   async close(): Promise<void> {
     this.stopIntents?.();
     this.stopStateChanges?.();
+    this.stopAccessRequests?.();
     for (const deviceId of [...this.subscriptions.keys()]) this.revokeDevice(deviceId);
     const projectors = await Promise.allSettled([...this.projectors.values()]);
     for (const result of projectors) if (result.status === "fulfilled") await result.value.close();

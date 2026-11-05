@@ -28,6 +28,8 @@ export interface BotDeliveryRow {
   id: string;
   botId: string;
   class: BotDeliveryClass;
+  /** Persisted phone audience gate; survives issue-store retention. */
+  requiredCapability?: "bot:access-requests";
   /** Stable key one Bot delivers by; a repeat is the same message. */
   dedupeKey: string;
   title: string;
@@ -123,6 +125,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
   if (typeof value.class !== "string" || !CLASSES.has(value.class)) return undefined;
   if (typeof value.status !== "string" || !STATUSES.has(value.status)) return undefined;
   if (typeof value.body !== "string" || createdAt === undefined || deliverAfter === undefined) return undefined;
+  if (value.requiredCapability !== undefined && (value.requiredCapability !== "bot:access-requests" || value.class !== "issue")) return undefined;
   const routineId = optionalText(value.routineId, 160);
   const requestId = optionalText(value.requestId, 160);
   const suppressed = value.suppressed === true;
@@ -136,6 +139,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
     id,
     botId,
     class: value.class as BotDeliveryClass,
+    ...(value.requiredCapability === "bot:access-requests" ? { requiredCapability: "bot:access-requests" as const } : {}),
     dedupeKey,
     title,
     body: value.body,

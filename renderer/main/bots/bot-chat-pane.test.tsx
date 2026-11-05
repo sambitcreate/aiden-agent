@@ -1772,3 +1772,55 @@ test("Bot questions, replies and saved paused answers show clean labels without 
   const waiting = screen.getByText("COS is waiting for you to approve: Create 3 events");
   assert.equal(waiting.querySelector("button"), null);
 });
+
+test("an access request sits above the unchanged composer, preserves failed grants and removes only on host projection", async () => {
+  const errors = captureErrorToasts();
+  let failure = true;
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, accessRequest: {
+        botId: "bot-1", waitId: "access-attempt", toolCallId: "access-call", target: "folder", label: "Taxes",
+        place: "~/Documents/Taxes", why: "Prepare your return.", choices: ["not_now", "always", "once"],
+      } }),
+      "bots:answerAccessRequest": () => {
+        if (failure) throw new Error("This Bot's access changed. Ask for access again.");
+        return { answered: true };
+      },
+    });
+    const card = await screen.findByRole("group", { name: "Planner wants to use Taxes" });
+    const composer = screen.getByPlaceholderText("Ask Planner");
+    assert.ok(card.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING);
+    fireEvent.click(within(card).getByRole("button", { name: "Always for this folder" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["This Bot's access changed. Ask for access again."]));
+    assert.equal(screen.getByRole("group", { name: "Planner wants to use Taxes" }), card);
+    assert.equal((within(card).getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled, false);
+    failure = false;
+    fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:answerAccessRequest").length, 2));
+    assert.ok(screen.getByRole("group", { name: "Planner wants to use Taxes" }), "a receipt alone cannot fabricate card removal");
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "access_request", accessRequest: null }));
+    await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner wants to use Taxes" }), null));
+    assert.equal(screen.getByPlaceholderText("Ask Planner"), composer);
+  } finally { errors.restore(); }
+});
+
+test("a no-longer-waiting access answer shows no success and its fresh host projection removes the old card", async () => {
+  const errors = captureErrorToasts();
+  try {
+    await mountChat({
+      "bots:live:subscribe": () => snapshot({ accessRequest: {
+        botId: "bot-1", waitId: "old-attempt", toolCallId: "access-call", target: "whole_mac", label: "your whole Mac",
+        why: "Find the missing file.", choices: ["not_now", "once"],
+      } }),
+      "bots:answerAccessRequest": () => ({ answered: false }),
+    });
+    const card = await screen.findByRole("group", { name: "Planner wants to use your whole Mac" });
+    fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."]));
+    act(() => emitBotTestNotification("bots:live:event", {
+      botId: "bot-1", epoch: "epoch-1", seq: 1, type: "snapshot", snapshot: snapshot({ seq: 1, accessRequest: null }),
+    }));
+    await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner wants to use your whole Mac" }), null));
+    screen.getByPlaceholderText("Ask Planner");
+  } finally { errors.restore(); }
+});

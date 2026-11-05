@@ -1,3 +1,4 @@
+import { parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import {
   BOT_LIMITS,
   isBotAvatar,
@@ -345,6 +346,17 @@ export function parseBotHandoffAnswer(input: unknown): {
     outcome: fields.outcome,
     ...(note === undefined ? {} : { note }),
   };
+}
+
+const ACCESS_ANSWER_KEYS = new Set(["botId", "waitId", "choice"]);
+
+export function parseBotAccessAnswer(input: unknown): { botId: string; waitId: string; choice: BotAccessChoice } {
+  const fields = exact(input, ACCESS_ANSWER_KEYS, "bot access answer fields");
+  if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId))
+    throw new Error("Invalid bot access request id.");
+  const choice = parseBotAccessChoice(fields.choice);
+  if (choice === null) throw new Error("Invalid bot access answer.");
+  return { botId: parseBotId(fields.botId), waitId: fields.waitId, choice };
 }
 
 /** Open on a hand-off card: the Bot and the durable `waitId`. */

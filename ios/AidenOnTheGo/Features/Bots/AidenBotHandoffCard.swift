@@ -143,3 +143,47 @@ struct AidenBotPausedCard: View {
         .accessibilityElement(children: .contain)
     }
 }
+
+/// Revision 55. Only the host's offered choices can grant access.
+struct AidenBotAccessRequestCard: View {
+    let request: AidenRemoteBotAccessRequest
+    let botName: String
+    let canAnswer: Bool
+    let onAnswer: (AidenBotAccessChoice) -> Void
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("\(botName) wants to use \(request.label)", systemImage: request.target == .wholeMac ? "laptopcomputer" : "folder")
+                .font(.headline).foregroundStyle(palette.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+            if let place = request.place {
+                Text(verbatim: place).font(.footnote).foregroundStyle(palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(verbatim: request.why).font(.subheadline).foregroundStyle(palette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { actions }
+                VStack(alignment: .leading, spacing: 8) { actions }
+            }
+        }
+        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bot_session_access_request_card")
+    }
+
+    @ViewBuilder private var actions: some View {
+        ForEach(request.choices, id: \.rawValue) { choice in
+            if choice == .once {
+                Button(choice.title) { onAnswer(choice) }
+                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).aidenSolidFillTint()
+                    .disabled(!canAnswer)
+            } else {
+                Button(choice.title) { onAnswer(choice) }
+                    .buttonStyle(.bordered).buttonBorderShape(.capsule).disabled(!canAnswer)
+            }
+        }
+    }
+}

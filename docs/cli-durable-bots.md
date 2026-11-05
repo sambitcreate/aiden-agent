@@ -29,6 +29,7 @@ For rollback, stop the daemon first, retain the whole profile, and move only `bo
 | Durable Send, Resume, Dismiss, Stop, hard delete | Supported | Shared core and existing Remote endpoints |
 | Stable request deduplication and paused restart | Supported | Shared core |
 | Bot messaging (phase A) | Supported | Shared tool, private ledger, courier and Remote switches; no desktop delivery funnel |
+| Folder access requests (`request_access`, phase B) | Desktop host only | The CLI does not offer access cards or temporary run grants; its saved Custom grants still apply |
 | Access requests, plan approval and the allow list (phases B-D) | Desktop-hosted | Unavailable |
 | Bot memory tools, recall, person edits | Supported | Shared store and existing Remote endpoints |
 | Routines | Supported | Shared routine service/executor; paused turns are skipped |

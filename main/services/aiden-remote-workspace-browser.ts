@@ -128,7 +128,7 @@ export class AidenRemoteWorkspaceBrowserService {
 
   private async approvedRoot(rootId: string): Promise<AidenRemoteApprovedRoot> {
     const root = (await this.options.state.snapshot()).approvedRoots.find(
-      (candidate) => candidate.id === rootId,
+      (candidate) => candidate.id === rootId && !candidate.botsOnly,
     );
     if (!root) {
       throw new AidenRemoteServiceError(
@@ -201,6 +201,7 @@ export class AidenRemoteWorkspaceBrowserService {
     const roots: AidenRemoteBrowserRootProjection[] = [];
     let unavailable: unknown;
     for (const root of state.approvedRoots) {
+      if (root.botsOnly) continue;
       let claims: AidenOpaqueHandleClaims;
       try {
         claims = await this.claimsForPath(deviceId, root, root.folderPath, {

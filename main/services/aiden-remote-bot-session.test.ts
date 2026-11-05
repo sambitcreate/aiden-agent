@@ -1,3 +1,11 @@
+import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
+import { createBotAccessAuthorizer } from "./bot-runtime/bot-access-authorization.js";
+import { createBotRunAccess } from "./bot-runtime/bot-run-access.js";
+import { BotRuntimeAuthorityError } from "./bot-runtime-authority.js";
+import { createBotIssueService } from "./bot-issues/service.js";
+import { createBotIssueStore } from "./bot-issues/store.js";
+import { BOT_ISSUE_STATUS_ENTRY_KIND } from "../../renderer/shared/bot-issues.js";
+import { accessRequestPrompt } from "./bot-runtime/test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -1518,7 +1526,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -3659,6 +3667,20 @@ function issueSession(
   });
 }
 
+test("access_needed issues and their private authorization never reach bot:issues-only devices", async () => {
+  const access: BotIssue = { ...ISSUE_CARD, id: "issue_access", kind: "access_needed", actions: [{ kind: "allow_folder" }], access: { label: "Taxes", folderPath: "/private/Taxes", authorization: { policyRevision: "private-revision", requestIds: ["routine:private:1"], target: "folder", root: "/private/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] } } };
+  const host = issueHost({ cards: [access, ISSUE_CARD] });
+  const service = issueSession(host.service);
+  try {
+    const session = await service.session(BOT_ID, ISSUES_HOLDER);
+    assert.deepEqual(session.issues?.map((issue) => issue.id), [ISSUE_CARD.id]);
+    const serialized = JSON.stringify(session);
+    assert.equal(serialized.includes("private-revision"), false);
+    assert.equal(serialized.includes("/private/Taxes"), false);
+    assert.equal(serialized.includes("issue_access"), false);
+  } finally { await service.close(); }
+});
+
 test("issues are omitted unless bot:issues is negotiated, and a settled card reaches holders at its own seq", async () => {
   const host = issueHost();
   const service = issueSession(host.service);
@@ -3760,6 +3782,7 @@ test("unknown and desktop-only issue actions are 400 and run nothing", async () 
   try {
     for (const action of [
       { kind: "open_settings", section: "model" },
+      { kind: "open_settings", section: "access" },
       { kind: "stop_run", routineId: "routine_1" },
       { kind: "resume_routine" },
       { kind: "surprise" },
@@ -3839,4 +3862,254 @@ test("Bot messaging projects to existing labelled messages, including bounded sa
     {type: "message", id: "entry_6", role: "user", text: "My own message", createdAt: new Date(2).toISOString()},
     {type: "message", id: "entry_7", role: "user", label: "COS replied", text: "Current Bot answer", createdAt: new Date(3).toISOString()},
   ]);
+});
+
+// Revision 55: public access requests and capability-aware issue projection.
+function accessSession(options: { issues?: ReturnType<typeof issueHost>["service"] } = {}) {
+  const accessRequests = createBotAccessRequests();
+  let authorizations = 0;
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    accessRequests, ...options,
+    answerAccessRequest: async (botId, waitId, choice) => ({ answered: await accessRequests.answer(botId, waitId, choice, async () => { authorizations += 1; }) === "answered" }),
+  });
+  return { service, accessRequests, authorizations: () => authorizations };
+}
+
+test("access requests reach holders, while legacy phones and paired desktops fold notice removal to a fresh snapshot", async () => {
+  const { service, accessRequests } = accessSession();
+  const holder = await openAudienceStream(service, { accessRequests: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder snapshot");
+    await legacy.until(() => legacy.frames.length === 1, "legacy snapshot");
+    const asked = accessRequests.request(accessRequestPrompt({ botId: BOT_ID }));
+    const card = accessRequests.pending(BOT_ID)[0]!;
+    await holder.until(() => holder.frames.some((frame) => frame.type === "access_request"), "access frame");
+    await legacy.until(() => legacy.frames.some((frame) => frame.type === "entry"), "legacy access notice");
+    assert.equal((await service.session(BOT_ID, { accessRequests: true })).accessRequest?.waitId, card.waitId);
+    assert.equal(holder.raw.join("").includes("authorization"), false);
+    assert.equal(holder.raw.join("").includes("folderPath"), false);
+    const read = await service.session(BOT_ID);
+    assert.equal("accessRequest" in read, false);
+    assert.deepEqual(last(read.entries), { type: "message", role: "assistant", id: `access-notice:${card.waitId}`, text: "Planner needs you on your Mac: allow access to Taxes" });
+    assert.deepEqual(reducedView(legacy.frames), remoteBotSessionView(read));
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-001", { choice: "once" });
+    assert.equal((await asked).choice, "once");
+    await legacy.until(() => last(legacy.frames)?.type === "snapshot", "notice removed by snapshot");
+    await holder.until(() => last(holder.frames)?.payload.accessRequest === null, "holder card removed");
+    assert.deepEqual(reducedView(legacy.frames), remoteBotSessionView(await service.session(BOT_ID)));
+    assert.equal(reducedView(legacy.frames).snapshot.entries.some((entry) => entry.id.startsWith("access-notice:")), false);
+    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
+  } finally { await holder.close(); await legacy.close(); await service.close(); }
+});
+
+test("access answer replay survives a lost response and never authorizes twice; unoffered and settled choices are refused", async () => {
+  const { service, accessRequests, authorizations } = accessSession();
+  const asked = accessRequests.request(accessRequestPrompt({ botId: BOT_ID }));
+  const card = accessRequests.pending(BOT_ID)[0]!;
+  try {
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "always" }); // response lost
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "always" }), { answered: true });
+    assert.equal(authorizations(), 1);
+    assert.equal((await asked).choice, "always");
+    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-003", { choice: "once" }), (e: { code?: string }) => e.code === "access_request_expired");
+    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, card.waitId, "access-answer-key-002", { choice: "not_now" }), (e: { code?: string }) => e.code === "idempotency_conflict");
+    const whole = accessRequests.request(accessRequestPrompt({ botId: BOT_ID, logicalRequestId: "whole", target: "whole_mac", label: "your whole Mac", place: undefined, choices: ["not_now", "once"], grant: undefined, authorization: { policyRevision: "rev-1", requestIds: ["run-1"], target: "whole_mac", root: "/", choices: ["not_now", "once"] } }));
+    const wholeId = accessRequests.pending(BOT_ID)[0]!.waitId;
+    await assert.rejects(service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", { choice: "always" }), (e: { code?: string; status?: number }) => e.code === "invalid_request" && e.status === 400);
+    assert.equal(accessRequests.pending(BOT_ID).length, 1);
+    await service.answerAccessRequest(DEVICE_ID, BOT_ID, wholeId, "access-answer-key-004", { choice: "not_now" });
+    assert.equal((await whole).choice, "not_now");
+  } finally { await service.close(); }
+});
+
+test("access issues and allow_folder reach holders only, including settled issue events", async () => {
+  const access: BotIssue = { ...ISSUE_CARD, id: "issue_access_holder", kind: "access_needed", actions: [{ kind: "allow_folder" }], access: { label: "Taxes", folderPath: "/private/Taxes", authorization: accessRequestPrompt().authorization } };
+  const host = issueHost({ cards: [access, ISSUE_CARD] });
+  const { service } = accessSession({ issues: host.service });
+  const holder = await openAudienceStream(service, { issues: true, accessRequests: true });
+  const old = await openAudienceStream(service, { issues: true });
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder issues"); await old.until(() => old.frames.length === 1, "legacy issues");
+    assert.deepEqual((await service.session(BOT_ID, { issues: true, accessRequests: true })).issues?.map((i) => i.kind), ["run_stalled", "access_needed"]);
+    assert.equal(holder.raw.join("").includes("/private/Taxes"), false);
+    assert.equal(old.raw.join("").includes("access_needed"), false);
+    await assert.rejects(service.actIssue(DEVICE_ID, BOT_ID, access.id, "access-issue-key-001", { action: { kind: "allow_folder" } }), (e: { code?: string }) => e.code === "capability_denied");
+    assert.deepEqual(await service.actIssue(DEVICE_ID, BOT_ID, access.id, "access-issue-key-001", { action: { kind: "allow_folder" } }, { accessRequests: true }), { result: "done" });
+    host.settle(access.id);
+    await holder.until(() => holder.frames.some((f) => f.type === "issues"), "settled access issue");
+    await old.until(() => old.frames.some((f) => f.type === "issues"), "legacy issues advance");
+    assert.equal(old.raw.join("").includes("access_needed"), false);
+    assert.equal(old.raw.join("").includes("allow_folder"), false);
+  } finally { await holder.close(); await old.close(); await service.close(); }
+});
+
+test("public open issue counts exclude hidden access requests for nonholders", async () => {
+  const host = issueHost({ cards: [ISSUE_CARD, { ...ISSUE_CARD, id: "issue_access_count", kind: "access_needed" }, { ...ISSUE_CARD, id: "issue_settled_count", resolvedAt: 123 }] });
+  const { service } = accessSession({ issues: host.service });
+  try {
+    assert.equal(await service.openIssueCount(BOT_ID), 1);
+    assert.equal(await service.openIssueCount(BOT_ID, { accessRequests: true }), 2);
+  } finally { await service.close(); }
+});
+
+test("stale access policy or inode returns retryable 409 on same-key replay without ledger internal_error", async () => {
+  for (const reason of ["policy", "inode", "admission"]) {
+    const bridge = createBotAccessRequests(), store = createBotRunAccess({now:Date.now});
+    let revision = "rev-1", inode = "2", admissionDrift = false;
+    const authorize = createBotAccessAuthorizer({now:Date.now,audienceId:"desktop",runAccess:store,
+      revalidate:async (_id,expected)=>{if(admissionDrift) throw new BotRuntimeAuthorityError("capability_changed");if(expected!==revision) throw new BotAccessRequestStaleError("policy changed");},
+      resolveTarget:async()=>({kind:"folder",root:"/home/person/Documents/Taxes",label:"Taxes",place:"~/Documents/Taxes",device:"1",inode,always:{kind:"new"}}),
+      grantFolder:async()=>{throw new Error("must not save");},changed(){}
+    });
+    const service = new AidenRemoteBotSessionService({
+      bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+      accessRequests: bridge,
+      answerAccessRequest: async (botId, waitId, choice) => ({ answered: await bridge.answer(botId, waitId, choice, authorize) === "answered" }),
+    });
+    const controller = new AbortController();
+    const owner = {signal:controller.signal,deadline:Date.now()+60_000,validate:async()=>{}};
+    const waiting = bridge.request(accessRequestPrompt({ botId: BOT_ID, owner }));
+    const withdrawn = assert.rejects(waiting, BotAccessRequestStaleError);
+    const id = bridge.pending()[0]!.waitId;
+    if(reason==="policy") revision="rev-2"; else if(reason==="inode") inode="3"; else admissionDrift=true;
+    try {
+      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number;retryable?:boolean})=>e.code==="access_request_expired"&&e.status===409&&e.retryable===true);
+      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"stale-access-key-001",{choice:"once"}), (e:{code?:string;status?:number})=>e.code==="access_request_expired"&&e.status===409);
+      await withdrawn; assert.deepEqual(bridge.pending(),[]);
+      assert.equal(store.location(BOT_ID,["run-1"],revision),undefined);
+      admissionDrift=false;
+      const input=accessRequestPrompt({botId:BOT_ID,owner});
+      const fresh=bridge.request({...input,authorization:{...input.authorization,policyRevision:revision,identity:{device:"1",inode}}});
+      const freshId=bridge.pending()[0]!.waitId; assert.notEqual(freshId,id);
+      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,freshId,"stale-access-key-002",{choice:"once"}),{answered:true});
+      await fresh; assert.equal(store.location(BOT_ID,["run-1"],revision)?.root,"/home/person/Documents/Taxes");
+    } finally { await service.close(); }
+  }
+});
+test("saved access receipt replays after card disappears without executing authority twice", async () => {
+  const bridge = createBotAccessRequests(); let effects = 0;
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(), runtime: async () => fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime,
+    accessRequests: bridge,
+    answerAccessRequest: async (botId, waitId, choice) => {
+      const result = await bridge.answer(botId, waitId, choice, async () => { effects++; return { savedForFuture: true }; });
+      return { answered: result === "saved_for_future", ...(result === "saved_for_future" ? { savedForFuture: true as const } : {}) };
+    },
+  });
+  const asked = bridge.request(accessRequestPrompt({ botId: BOT_ID })); const id = bridge.pending()[0]!.waitId;
+  try {
+    const receipt = { answered: true, savedForFuture: true };
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", { choice: "always" }), receipt);
+    await asked;
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-001", { choice: "always" }), receipt);
+    assert.deepEqual(await service.answerAccessRequest(DEVICE_ID, BOT_ID, id, "saved-access-key-002", { choice: "always" }), receipt);
+    assert.equal(effects, 1);
+  } finally { await service.close(); }
+});
+
+test("a known pre-grant stale access issue refusal stays typed and its same-key retry can observe settlement", async () => {
+  const host = issueHost(); let attempts = 0;
+  const service = issueSession({...host.service, act: async () => {
+    if (++attempts === 1) throw new BotAccessRequestStaleError("This folder request changed. Ask again.");
+    return "not_open" as const;
+  }});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),
+      (error:{code?:string;status?:number;retryable?:boolean})=>error.code==="operation_stale"&&error.status===409&&error.retryable===true);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"stale-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),{result:"not_open"});
+  } finally {await service.close();}
+});
+
+test("transient access failures retry the same ledger key through the real bridge and exact receipt", async () => {
+  for (const failure of ["before_publication", "after_publication"] as const) {
+    const bridge = createBotAccessRequests(), runAccess = createBotRunAccess({now:Date.now});
+    let portCalls=0, publications=0, attempts=0, readable=true, committed=false;
+    const authorize=createBotAccessAuthorizer({now:Date.now,audienceId:"desktop",runAccess,
+      revalidate:async()=>{if(committed) throw new BotAccessRequestStaleError("policy changed");},
+      resolveTarget:async()=>({kind:"folder",root:"/home/person/Documents/Taxes",label:"Taxes",place:"~/Documents/Taxes",device:"1",inode:"2",always:{kind:"new"}}),
+      grantFolder:async()=>{
+        attempts++;
+        if(attempts===1 && failure==="before_publication") throw new Error("disk temporarily unavailable");
+        publications++;committed=true;
+        if(failure==="after_publication") {readable=false;throw new Error("publication receipt lookup unavailable");}
+        return "rev-2";
+      },
+      folderCommitted:async()=>{if(!readable) throw new Error("journal temporarily unavailable");return committed;},changed(){}
+    });
+    const service=new AidenRemoteBotSessionService({bots:botService(),runtime:async()=>fakeRuntime({kind:"running",submissionId:"sub_1"}).runtime,accessRequests:bridge,
+      answerAccessRequest:async(botId,waitId,choice)=>{portCalls++;const result=await bridge.answer(botId,waitId,choice,authorize);return {answered:result==="answered"||result==="saved_for_future",...(result==="saved_for_future"?{savedForFuture:true as const}:{})};}
+    });
+    const waiting=bridge.request(accessRequestPrompt({botId:BOT_ID,owner:{signal:new AbortController().signal,deadline:Date.now()+60_000,validate:async()=>{}}}));
+    const id=bridge.pending()[0]!.waitId;
+    try {
+      await assert.rejects(service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),/temporarily unavailable/u);
+      assert.equal(bridge.pending()[0]!.waitId,id);
+      readable=true;
+      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),{answered:true,savedForFuture:true});
+      assert.deepEqual(await service.answerAccessRequest(DEVICE_ID,BOT_ID,id,"transient-access-key-001",{choice:"always"}),{answered:true,savedForFuture:true});
+      await waiting;assert.equal(portCalls,2);assert.equal(publications,1);
+      assert.equal(attempts,failure==="before_publication"?2:1);
+    } finally {
+      if(bridge.pending().length) await bridge.answer(BOT_ID,id,"not_now",async()=>{});
+      await waiting;await service.close();
+    }
+  }
+});
+
+test("a transient allow_folder failure retries the issue port under the same ledger key only for access", async () => {
+  const host=issueHost();let attempts=0;
+  const service=issueSession({...host.service,act:async()=>{if(++attempts===1) throw new Error("grant journal temporarily unavailable");return "done" as const;}});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"transient-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),/temporarily unavailable/u);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"transient-issue-key-001",{action:{kind:"allow_folder"}},{accessRequests:true}),{result:"done"});
+    assert.equal(attempts,2);
+  } finally {await service.close();}
+});
+
+test("ordinary issue failure retains its existing cached rejection rather than gaining access retry semantics", async () => {
+  const host=issueHost();let attempts=0;
+  const service=issueSession({...host.service,act:async()=>{attempts++;throw new Error("ordinary action failed");}});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"ordinary-issue-key-001",{action:{kind:"stop_run"}}),/ordinary action failed/u);
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,ISSUE_CARD.id,"ordinary-issue-key-001",{action:{kind:"stop_run"}}),(error:{code?:string})=>error.code==="internal_error");
+    assert.equal(attempts,1);
+  } finally {await service.close();}
+});
+
+test("access dismissal retries the same ledger key after a transient failure", async () => {
+  const action = {kind:"dismiss_access"} as const;
+  const access: BotIssue = {...ISSUE_CARD,kind:"access_needed",actions:[{kind:"dismiss_access"},{kind:"open_settings",section:"access"}]};
+  const host=issueHost({cards:[access]});let attempts=0;
+  const service=issueSession({...host.service,act:async()=>{if(++attempts===1)throw new Error("access action temporarily unavailable");return "done" as const;}});
+  try {
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),/temporarily unavailable/u);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),{result:"done"});
+    assert.equal(attempts,2);
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,access.id,"retry-access-action-key-01",{action},{accessRequests:true}),{result:"done"});
+    assert.equal(attempts,2,"successful retry remains cached");
+  } finally {await service.close();}
+});
+
+test("an access dismissal settles despite unrelated failed status writes and its retry observes not_open", {timeout:10_000}, async () => {
+  const profile=mkdtempSync(path.join(os.tmpdir(),"bot-access-dismiss-recovery-"));
+  const store=createBotIssueStore({profileDir:()=>profile});let failing=false,attempts=0;
+  const issues=createBotIssueService({store,now:()=>2000,
+    appendEntry:async(_botId,kind)=>{if(failing&&kind===BOT_ISSUE_STATUS_ENTRY_KIND)throw new Error("transcript status unavailable");},
+    funnel:{deliver:async()=>"sent"},actions:{resumeRoutine:async()=>"missing",stopRun:async()=>{},snoozeStall(){},openSettings(){}}});
+  const issue=await issues.raise({botId:BOT_ID,title:"Use your whole Mac",body:"Needs a broader folder",dedupeKey:"access:whole-mac",kind:"access_needed",actions:[{kind:"dismiss_access"},{kind:"open_settings",section:"access"}]});
+  await store.change(BOT_ID,rows=>({issues:[{...ISSUE_CARD,id:"other-settled",resolvedAt:1000,resolution:"fixed" as const,statusAppended:false},...rows],result:undefined}));
+  const service=issueSession({...issues,act:async(...args)=>{attempts++;return issues.act(...args);}});
+  try {
+    failing=true;
+    await assert.rejects(service.actIssue(DEVICE_ID,BOT_ID,issue.id,"dismiss-after-write-key-01",{action:{kind:"dismiss_access"}},{accessRequests:true}),/transcript status unavailable/u);
+    assert.equal((await store.read(BOT_ID)).find(row=>row.id===issue.id)?.resolution,"dismissed");
+    assert.deepEqual(await service.actIssue(DEVICE_ID,BOT_ID,issue.id,"dismiss-after-write-key-01",{action:{kind:"dismiss_access"}},{accessRequests:true}),{result:"not_open"});
+    assert.equal(attempts,2);
+    failing=false;
+    const repaired=new Promise<void>(resolve=>{issues.onChange(()=>{void store.read(BOT_ID).then(rows=>{if(rows.every(row=>row.statusAppended!==false))resolve();});});});
+    await issues.list(BOT_ID);await repaired;
+    assert.equal((await store.read(BOT_ID)).every(row=>row.statusAppended!==false),true);
+  } finally {failing=false;await service.close();rmSync(profile,{recursive:true,force:true});}
 });

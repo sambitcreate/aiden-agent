@@ -1,3 +1,4 @@
+import type { BotPendingAccessRequest } from "../../../renderer/shared/bot-access-requests.js";
 import { BOT_MESSAGE_LIMITS, BOT_MESSAGE_STATUS_ENTRY_KIND, type BotMessageStatusEntryData } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "./bot-input-entry.js";
 // Live projection of each Bot's durable conversation to renderer windows
@@ -983,6 +984,8 @@ export interface BotLiveProjectionDeps {
   question?(botId: string): BotPendingQuestion | null;
   /** The hand-off card the Bot is waiting on right now, if any. */
   handoff?(botId: string): BotPendingHandoff | null;
+  /** Public card from the host bridge; authorization never enters this feed. */
+  accessRequest?(botId: string): BotPendingAccessRequest | null;
   /**
    * Classify queued submission ids: `true` for a routine's input or the hidden
    * self-intro, `false` for the person's own message. Decided from durable
@@ -1030,6 +1033,8 @@ export interface BotLiveProjection {
   refreshQuestion(botId: string): Promise<void>;
   /** The Bot's pending hand-off changed (opened, answered, withdrawn): push a `handoff` event. */
   refreshHandoff(botId: string): Promise<void>;
+  /** Publish the current access-request attempt or its removal. */
+  refreshAccessRequest(botId: string): Promise<void>;
   /** The person pressed Stop: the running turn reads "Stopping" until it ends. Ignored when nothing runs. */
   notifyStopping(botId: string): void;
   /**
@@ -1048,7 +1053,7 @@ export interface BotLiveProjection {
   inboxSignals(botId: string): Promise<Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt">>;
   /**
    * The summary's `needsYou` alone, without reading the transcript: an open
-   * question, hand-off, approval or issue, and never for an unavailable Bot
+   * question, hand-off, access request, approval or issue, and never for an unavailable Bot
    * with no open feed. The Dock badge reads it on every recount.
    */
   needsYou(botId: string): Promise<boolean>;
@@ -1073,6 +1078,7 @@ interface Feed {
   state: BotSessionState;
   question: BotPendingQuestion | null;
   handoff: BotPendingHandoff | null;
+  accessRequest: BotPendingAccessRequest | null;
   activity: BotLiveActivity | null;
   queued: BotQueuedMessage[];
   /** Which queued inputs are the person's own (fail closed, throttled retries). */
@@ -1153,6 +1159,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       state: feed.state,
       question: feed.question,
       handoff: feed.handoff,
+      accessRequest: feed.accessRequest,
       activity: feed.activity,
       queued: feed.queued,
     };
@@ -1215,7 +1222,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   }
 
   function waitingOn(feed: Feed): boolean {
-    return feed.question !== null || feed.handoff !== null || deps.approvalPending?.(feed.botId) === true;
+    return feed.question !== null || feed.handoff !== null || feed.accessRequest !== null || deps.approvalPending?.(feed.botId) === true;
   }
 
   /** Null unless the session is running: a paused Bot keeps `pi.live.run` but is not working. */
@@ -1385,6 +1392,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
         handoff: deps.handoff?.(botId) ?? null,
+        accessRequest: deps.accessRequest?.(botId) ?? null,
         activity: null,
         queued: [],
         classifier,
@@ -1477,11 +1485,23 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     });
   }
 
+  /** Read inside the feed queue so an old refresh cannot restore a settled attempt. */
+  function syncAccessRequest(feed: Feed): Promise<void> {
+    return enqueueWork(feed, async () => {
+      const accessRequest = deps.accessRequest?.(feed.botId) ?? null;
+      if (accessRequest?.waitId === feed.accessRequest?.waitId) return;
+      feed.accessRequest = accessRequest;
+      emit(feed, { type: "access_request", accessRequest });
+      updateActivity(feed);
+    });
+  }
+
   /** Whether the person owes this Bot an answer: the same sources the chat shows. */
   async function needsYouNow(botId: string): Promise<boolean> {
     return (
       (deps.question?.(botId) ?? null) !== null ||
       (deps.handoff?.(botId) ?? null) !== null ||
+      (deps.accessRequest?.(botId) ?? null) !== null ||
       deps.approvalPending?.(botId) === true ||
       (await deps.issuePending?.(botId)) === true
     );
@@ -1493,9 +1513,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const feed = await openFeed(botId);
       // A new subscriber gets current connect-card statuses, not the feed's last view.
       await reproject(feed).catch((error) => report(botId, error));
-      // A question or hand-off asked or settled while no feed was open is caught up here.
+      // A question, hand-off or access request opened or settled while no feed was open is caught up here.
       await syncQuestion(feed).catch((error) => report(botId, error));
       await syncHandoff(feed).catch((error) => report(botId, error));
+      await syncAccessRequest(feed).catch((error) => report(botId, error));
       let set = subscribers.get(botId);
       if (!set) subscribers.set(botId, (set = new Set()));
       set.add(subscriber);
@@ -1572,6 +1593,12 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const feed = feeds.get(botId);
       if (!feed || feed.ended) return;
       await syncHandoff(feed);
+    },
+
+    async refreshAccessRequest(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      await syncAccessRequest(feed);
     },
 
     async needsYou(botId) {

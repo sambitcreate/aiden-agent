@@ -1,3 +1,5 @@
+import { createBotAccessRequests } from "./bot-access-requests.js";
+import { accessRequestPrompt } from "./test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
@@ -2220,4 +2222,57 @@ test("Bot statuses dedupe independently by delivery, outcome and approval wait",
   const data = { deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", waitId: "one", summary: "Approve" };
   const records = [data, data, {...data, waitId: "two"}, {...data, deliveryId: "other"}, {...data, outcome: "failed"}];
   assert.equal(projectBotTranscript(records.map((data, id) => ({id, kind: "aiden.bot-message-status", data})) as never).length, 4);
+});
+
+
+test("a waiting access request reaches subscribers, needs-you and late joiners; a failed grant keeps it and an answer clears it", async () => {
+  const requests = createBotAccessRequests();
+  const live = await start(createFauxModels([]), { projection: { accessRequest: (botId) => requests.pending(botId)[0] ?? null } });
+  const stop = requests.onChange((botId) => void live.projection.refreshAccessRequest(botId));
+  try {
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    assert.equal(first.snapshot.accessRequest, null);
+    assert.equal(await live.projection.needsYou("bot:a"), false);
+    const asked = requests.request(accessRequestPrompt());
+    const card = requests.pending()[0]!;
+    await waitFor(() => tape.view?.accessRequest?.waitId === card.waitId, { what: "the public access event" });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true);
+    assert.equal((await live.projection.inboxSignals("bot:a")).needsYou, true);
+    assert.deepEqual(Object.keys(tape.view!.accessRequest!).sort(), ["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices"].sort());
+    await assert.rejects(requests.answer("bot:a", card.waitId, "always", async () => { throw new Error("Access changed"); }), /Access changed/u);
+    await live.projection.refreshAccessRequest("bot:a");
+    assert.equal(tape.view?.accessRequest?.waitId, card.waitId);
+    const late = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(late.snapshot.accessRequest?.waitId, card.waitId);
+    late.unsubscribe();
+    await requests.answer("bot:a", card.waitId, "not_now", async () => {});
+    await asked;
+    await waitFor(() => tape.view?.accessRequest === null, { what: "access card removal" });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false);
+    assert.equal(await live.projection.needsYou("bot:a"), false);
+    assert.equal(tape.gaps, 0);
+    first.unsubscribe();
+  } finally { stop(); await live.close(); }
+});
+
+test("access requests opened without a feed and settled without refresh are caught up on subscribe", async () => {
+  const requests = createBotAccessRequests();
+  const live = await start(createFauxModels([]), { projection: { accessRequest: (botId) => requests.pending(botId)[0] ?? null } });
+  try {
+    const asked = requests.request(accessRequestPrompt());
+    const card = requests.pending()[0]!;
+    assert.equal(await live.projection.needsYou("bot:a"), true, "no feed is required for the badge");
+    const tape = recorder();
+    const first = await live.projection.subscribe("bot:a", tape.sink);
+    tape.start(first.snapshot);
+    assert.equal(first.snapshot.accessRequest?.waitId, card.waitId);
+    await requests.answer("bot:a", card.waitId, "not_now", async () => {});
+    await asked;
+    const settled = await live.projection.subscribe("bot:a", recorder().sink);
+    assert.equal(settled.snapshot.accessRequest, null);
+    await waitFor(() => tape.view?.accessRequest === null, { what: "subscribe catch-up" });
+    first.unsubscribe(); settled.unsubscribe();
+  } finally { await live.close(); }
 });

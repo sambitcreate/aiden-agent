@@ -28,7 +28,8 @@ import { botMessages, disposeBotMessages } from "../bot-messages/messages-main.j
 import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
-import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
+import { botAccessPrivateRoots } from "./bot-access-target.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { usageLimits } from "../usage-limit-main.js";
 import { spending } from "../spending-main.js";
@@ -84,10 +85,11 @@ import {
   recordMemoryChange,
 } from "../bot-learning/learning-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
+import { botAccessRequests } from "./bot-access-requests-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
 import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
-import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
+import { createBotHandoffNotifier, watchBotAccessRequests, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
@@ -100,7 +102,8 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
+import { botRunAccess, createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
+import { botRunEnded } from "./bot-run-access.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -133,6 +136,8 @@ setBotFileToolProtectedRoots(() => [
   path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
   path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
 ]);
+// Temporary Home/whole-Mac access must not expose any app-private store.
+setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
 // A Bot's replies and routines wait out provider usage limits like a chat's.
 const runtimeModels = createBotRuntimeModels({
   usageLimits: (botId, runtime) =>
@@ -229,6 +234,7 @@ async function imageInput(botId: string): Promise<boolean> {
 }
 
 const toolSources = createBotToolSources({
+  policyRevision: async (botId) => (await botCapabilityStore.getBotPolicy(botId)).revision,
   canonicalChatId,
   imageInput,
   admit,
@@ -590,6 +596,12 @@ botHandoffs.onChange((botId) => {
   );
 });
 
+const stopAccessRequestProjection = botAccessRequests.onChange((botId) => {
+  void liveProjection?.refreshAccessRequest(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} access request view report.`, error),
+  );
+});
+
 // A card that opens while no Aiden window is focused also says so in a Mac
 // notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
 const handoffNotifier = createBotHandoffNotifier({
@@ -609,6 +621,21 @@ const handoffNotifier = createBotHandoffNotifier({
 });
 watchBotHandoffs(botHandoffs, handoffNotifier);
 
+const accessRequestNotifier = createBotHandoffNotifier({
+  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  show: ({ title, body, onClick }) => {
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({ title, body });
+    notification.on("click", onClick);
+    notification.show();
+  },
+  botName: async (botId) => (await botStore.get(botId))?.name,
+  onClick: async (botId) => { await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`); },
+  isPending: (botId, waitId) => botAccessRequests.get(botId, waitId) !== undefined,
+  onError: (stage) => logger.warn("bots", `Access request notification ${stage} failed.`),
+});
+const stopAccessRequestNotifications = watchBotAccessRequests(botAccessRequests, accessRequestNotifier);
+
 // An approval appearing or settling changes the line to and from "Waiting for you".
 botApprovals.onChange((botId) => {
   void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
@@ -619,10 +646,11 @@ botApprovals.onChange((botId) => {
 // "Needs you" in the Bots sidebar follows questions, approvals, hand-offs and
 // host-raised issues as they appear and settle; the renderer re-reads that
 // Bot's summary, whose open-issue check is the same file the card comes from.
-wireBotAttention({
+const stopBotAttention = wireBotAttention({
   questions: botQuestions,
   approvals: botApprovals,
   handoffs: botHandoffs,
+  accessRequests: botAccessRequests,
   issues: botIssues,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
@@ -697,6 +725,7 @@ const runWatchdog = createBotRunWatchdog({
   },
   isWaitingOnPerson: (botId) =>
     botHandoffs.pending(botId).length > 0 ||
+    botAccessRequests.pending(botId).length > 0 ||
     botApprovals.pending(botId).length > 0 ||
     botQuestions.pending(botId).length > 0,
   // Held back only: a test request already sent can still hang, and the watchdog catches it.
@@ -758,6 +787,7 @@ export function botLiveProjection(): BotLiveProjection {
     quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
+    accessRequest: (botId) => botAccessRequests.pending(botId)[0] ?? null,
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     issuePending: async (botId) => (await botIssues.list(botId, { open: true })).length > 0,
     connectCardStatus,
@@ -837,6 +867,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     // Announced only here, after the session resumed, never by a route ahead of `resume`.
     onResumed: (botId) => botTurnIntents.announce(botId, "resuming"),
     onStateChange: (botId, state) => {
+      if (botRunEnded(state)) botRunAccess.clearBot(botId);
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
       for (const listener of stateListeners) {
@@ -885,6 +916,10 @@ export function initializeBotSessionRuntime(): Promise<void> {
 }
 
 export async function shutdownBotSessionRuntime(): Promise<void> {
+  stopAccessRequestProjection();
+  stopAccessRequestNotifications();
+  stopBotAttention();
+  botRunAccess.clearAll();
   if (runtime === undefined) return;
   await disposeBotMessages();
   const service = await runtime.catch(() => undefined);

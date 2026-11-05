@@ -301,3 +301,31 @@ test("Bot status notifications do not repeat the status as both title and body",
   assert.equal(row.routineName, "Bot message");
   assert.equal(row.preview, "COS couldn't answer.");
 });
+
+test("access issue alerts need access capability while ordinary and missing historical issues keep their behavior", async (t) => {
+  const h = await harness(); t.after(h.cleanup);
+  const kinds = new Map([["access_1", "access_needed"], ["ordinary_1", "run_stalled"]]);
+  const feed = createBotNotificationFeed({ log: h.log, botName: async () => "Scout", now: () => NOW, issueKind: async (_bot, id) => kinds.get(id) });
+  for (const id of ["access_1", "ordinary_1", "historical_1"]) await h.log.append(delivery({ class: "issue", dedupeKey: `issue:${id}`, requestId: id }));
+  assert.deepEqual((await feed.list(undefined, { issues: true })).notifications.map((n) => n.id).sort(), ["historical_1", "ordinary_1"]);
+  assert.deepEqual((await feed.list(undefined, { issues: true, accessRequests: true })).notifications.map((n) => n.id).sort(), ["access_1", "historical_1", "ordinary_1"]);
+  assert.deepEqual((await feed.list(undefined, { accessRequests: true })).notifications, []);
+});
+
+test("persisted access issue audience survives restart and pruning of the issue record", async (t) => {
+  const h = await harness(); t.after(h.cleanup);
+  let issueExists = true;
+  const funnel = createBotDeliveryFunnel({ log: h.log, gate: ALWAYS_NOW_GATE, now: () => NOW, mac: async () => {}, telegram: async () => {} });
+  await funnel.deliver({ botId: "bot_fixture_01", class: "issue", dedupeKey: "issue:retained_access", title: "Allow Reports", body: "Prepare the report.", status: "info", requiredCapability: "bot:access-requests" });
+  await funnel.deliver({ botId: "bot_fixture_01", class: "issue", dedupeKey: "issue:ordinary", title: "Run stalled", body: "Check the run.", status: "info" });
+  issueExists = false; // The issue store prunes it; the delivery log remains.
+  const reloadedLog = createBotDeliveryLog({ profileDir: () => h.profile, now: () => NOW });
+  const stored = await reloadedLog.find("bot_fixture_01", "issue:retained_access");
+  assert.equal(stored?.requiredCapability, "bot:access-requests");
+  const feed = createBotNotificationFeed({ log: reloadedLog, botName: async () => "Scout", now: () => NOW, issueKind: async () => issueExists ? "access_needed" : undefined });
+  const legacy = await feed.list(undefined, { issues: true });
+  assert.deepEqual(legacy.notifications.map((n) => n.routineName), ["Run stalled"]);
+  const holder = await feed.list(undefined, { issues: true, accessRequests: true });
+  assert.deepEqual(holder.notifications.map((n) => n.routineName).sort(), ["Allow Reports", "Run stalled"]);
+  assert.equal(JSON.stringify(holder).includes("requiredCapability"), false);
+});

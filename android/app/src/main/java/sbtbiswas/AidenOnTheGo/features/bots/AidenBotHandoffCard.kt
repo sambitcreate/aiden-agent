@@ -171,3 +171,35 @@ fun AidenBotPausedCard(botName: String, busy: Boolean, canResume: Boolean, onRes
         }
     }
 }
+
+/** Revision 55. FlowRow keeps the host's ordered actions usable on narrow screens and large text. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AidenBotAccessRequestCard(
+    request: sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequest,
+    botName: String, canAnswer: Boolean,
+    onAnswer: (sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice) -> Unit
+) {
+    val palette = AidenTheme.palette
+    Surface(color = palette.raised, shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().testTag("bot_session_access_request_card")) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.bot_access_title, botName, request.label),
+                style = MaterialTheme.typography.titleSmall, color = palette.foreground)
+            request.place?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = palette.secondary) }
+            Text(request.why, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                request.choices.forEach { choice ->
+                    val title = stringResource(when (choice) {
+                        sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.ONCE -> R.string.bot_access_once
+                        sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.ALWAYS -> R.string.bot_access_always
+                        sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.NOT_NOW -> R.string.bot_access_not_now
+                    })
+                    if (choice == sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice.ONCE)
+                        AidenPrimaryButton(title, enabled = canAnswer, onClick = { onAnswer(choice) })
+                    else AidenTonalButton(title, enabled = canAnswer, onClick = { onAnswer(choice) })
+                }
+            }
+        }
+    }
+}

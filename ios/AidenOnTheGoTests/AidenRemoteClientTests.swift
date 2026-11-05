@@ -1753,6 +1753,27 @@ final class AidenRemoteClientTests: XCTestCase {
     /// Contract revision 37: a hand-off answer, open-on-Mac, pause and resume
     /// each use their own route under the request key, with the fixture's
     /// bodies, and a receipt for another wait is refused.
+    func testBotAccessAnswerUsesOfferedChoiceRouteAndKey() async throws {
+        for (choice, expected) in [(AidenBotAccessChoice.notNow, "not_now"), (.always, "always"), (.once, "once")] {
+            let key = UUID()
+            let waitID = "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e"
+            let response = choice == .always
+                ? String(decoding: try botFixtureData(at: ["botAccessRequests", "answer", "response"]), as: UTF8.self)
+                : #"{"answered":true}"#
+            AidenRemoteMockURLProtocol.handler = { request in
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/bot_fixture_01/access-requests/\(waitID)/answer")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key")?.lowercased(), key.uuidString.lowercased())
+                XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, ["choice": expected] as NSDictionary)
+                return Self.response(for: request, status: 200, json: response)
+            }
+            let receipt = try await makeClient().answerBotAccessRequest(botId: "bot_fixture_01", waitId: waitID,
+                request: AidenBotAccessAnswerRequest(choice: choice), idempotencyKey: key)
+            XCTAssertTrue(receipt.answered)
+            XCTAssertEqual(receipt.savedForFuture, choice == .always ? true : nil)
+        }
+    }
+
     func testBotHandoffAndPauseRoutesUseTheirOwnPathsAndKeys() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"
@@ -5190,6 +5211,78 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
             XCTAssertEqual(installation.hasNegotiatedAccess(to: .botHandoffs), !refused)
             XCTAssertEqual(coordinator.server?.supportsBotHandoffs, !refused)
+        }
+    }
+
+    /// Contract revision 40: a Mac that offers `bot:handoff-notes` is asked
+    /// for it with `bot:handoffs`; a Mac on revision 37 is never asked for it,
+    /// and once that Mac updates, the device asks for the notes alone.
+    /// Revision 43's `bot:handoff-on-mac` rides the same way.
+    @MainActor
+    func testCoordinatorAsksForBotAccessRequestsInACallOfItsOwnAfterTheProgressBatch() async throws {
+        for status in [200, 400, 404] {
+            let refused = status != 200
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-access", deviceId: "device-access", credential: "credential-access"),
+                trust: makeSystemTrust(),
+                name: "Hand-off Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-access",
+                        "name": "Hand-off Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read", "bot:access-requests"],
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-20T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    if refused, asked.contains("bot:access-requests") {
+                        return Self.response(
+                            for: request,
+                            status: status,
+                            json: #"{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"request-handoffs","retryable":false}}"#
+                        )
+                    }
+                    granted += asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected, "refused: \(refused)")
+            XCTAssertEqual(accepts, [["tasks:read"], ["bot:access-requests"]], "the batch first, then access requests alone")
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .botAccessRequests), !refused)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.botAccessRequests), !refused)
         }
     }
 

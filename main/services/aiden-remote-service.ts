@@ -1660,7 +1660,7 @@ export class AidenRemoteService {
           ? { tailscaleErrorCode }
           : {}),
       pairedDeviceCount: state.devices.length,
-      approvedRootCount: state.approvedRoots.length,
+      approvedRootCount: state.approvedRoots.filter((root) => !root.botsOnly).length,
       ...(this.options.pairingRequestSettings
         ? { acceptPairingRequests: await this.loadPairingRequestSetting() }
         : {}),

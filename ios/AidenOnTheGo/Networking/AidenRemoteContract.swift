@@ -682,7 +682,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
         Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
-        Self(rawValue: "bot:issues"), Self(rawValue: "bot:messaging"),
+        Self(rawValue: "bot:issues"), Self(rawValue: "bot:messaging"), Self(rawValue: "bot:access-requests"),
         Self(rawValue: "bot:handoff-on-mac"),
         Self(rawValue: "bot:images"),
         Self(rawValue: "chat:jobs"),
@@ -694,10 +694,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Bot session entries. It grants no authority.
     static let botCards = Self(rawValue: "bot:cards")
 
-    /// Revision 30: the device receives activity and queued frames and Bot
-    /// detail `chatActivity`. It grants no authority.
+    /// Revision 55: access cards and folder-access issues, negotiated in their own call.
+    static let botAccessRequests = Self(rawValue: "bot:access-requests")
     static let botMessaging = Self(rawValue: "bot:messaging")
 
+    /// Revision 30: the device receives activity and queued frames and Bot
+    /// detail `chatActivity`. It grants no authority.
     static let botActivity = Self(rawValue: "bot:activity")
 
     /// Revision 37: the device receives the session `handoff` field and
@@ -866,6 +868,7 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         // Contract revision 37: only a `bot:handoffs` device is sent these.
         Self(rawValue: "bot_paused"),
         Self(rawValue: "handoff_expired"),
+        Self(rawValue: "access_request_expired"),
     ]
 
     init(from decoder: Decoder) throws {
@@ -2794,7 +2797,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
-        "botSessionCards", "botHandoffs", "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification",
+        "botSessionCards", "botHandoffs", "botAccessRequests", "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {

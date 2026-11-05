@@ -5,6 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import type { RuntimeProfileId } from "../runtime-profile-core.js";
+import path from "node:path";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_CAPABILITIES,
@@ -61,6 +62,9 @@ export interface AidenRemoteApprovedRoot {
   inode: string;
   policyRevision: string;
   createdAt: number;
+  botsOnly?: true;
+  /** Main-only ownership receipt for compensation of an unfinished folder grant. */
+  botGrantOperationId?: string;
 }
 
 export interface AidenRemoteStateDocument {
@@ -383,14 +387,16 @@ function parseApprovedRoot(value: unknown): AidenRemoteApprovedRoot | null {
       "inode",
       "policyRevision",
       "createdAt",
-    ]) ||
+    ], ["botsOnly", "botGrantOperationId"]) ||
     !boundedString(record.id, 128) ||
     !boundedString(record.label, 160) ||
     !boundedString(record.folderPath, 4_096) ||
     !boundedString(record.device, 64) ||
     !boundedString(record.inode, 64) ||
     !boundedString(record.policyRevision, 128) ||
-    !safeTimestamp(record.createdAt)
+    !safeTimestamp(record.createdAt) ||
+    (record.botsOnly !== undefined && record.botsOnly !== true) ||
+    (record.botGrantOperationId !== undefined && (!boundedString(record.botGrantOperationId, 256) || record.botsOnly !== true))
   ) {
     return null;
   }
@@ -1108,24 +1114,44 @@ export class AidenRemoteStateRegistry {
     });
   }
 
-  async addApprovedRoot(root: AidenRemoteApprovedRoot): Promise<void> {
+  async addApprovedRoot(root: AidenRemoteApprovedRoot, assertCurrent: () => void = () => {}): Promise<void> {
     if (!parseApprovedRoot(root)) throw new Error("Invalid approved root.");
     await this.mutate((draft) => {
+      assertCurrent();
       if (draft.approvedRoots.length >= MAX_APPROVED_ROOTS) {
         throw new Error("Aiden Remote approved-root capacity reached.");
       }
       if (draft.approvedRoots.some((candidate) => candidate.id === root.id)) {
         throw new Error("This approved root already exists.");
       }
+      if (draft.approvedRoots.some((candidate) => {
+        // An explicit phone approval may overlap a separate hidden Bot root.
+        // Keep exact paths unique and keep Bot-created roots from widening scope.
+        if (!root.botsOnly && candidate.botsOnly && candidate.folderPath !== root.folderPath) return false;
+        const a = path.relative(candidate.folderPath, root.folderPath), b = path.relative(root.folderPath, candidate.folderPath);
+        const contains = (relative: string) => relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+        return contains(a) || contains(b);
+      })) throw new Error("This folder would overlap an existing approved root.");
       draft.approvedRoots.push(root);
     });
   }
 
-  async removeApprovedRoot(rootId: string): Promise<boolean> {
+  async approveRootForPhones(rootId: string): Promise<AidenRemoteApprovedRoot> {
+    return this.mutate((draft) => {
+      const root = draft.approvedRoots.find((entry) => entry.id === rootId);
+      if (!root) throw new Error("This approved root is no longer available.");
+      delete root.botsOnly;
+      delete root.botGrantOperationId;
+      return structuredClone(root);
+    });
+  }
+
+  async removeApprovedRoot(rootId: string, ownedBy?: string): Promise<boolean> {
     if (!boundedString(rootId, 128)) return false;
     return this.mutate((draft) => {
       const index = draft.approvedRoots.findIndex((root) => root.id === rootId);
       if (index < 0) return false;
+      if (ownedBy !== undefined && (draft.approvedRoots[index]!.botGrantOperationId !== ownedBy || !draft.approvedRoots[index]!.botsOnly)) return false;
       draft.approvedRoots.splice(index, 1);
       return true;
     });

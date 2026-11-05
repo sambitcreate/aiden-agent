@@ -1564,7 +1564,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botMessaging, .botAccessRequests,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2539,6 +2539,16 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     // MARK: Contract revision 37: Bot hand-offs and pause (`bot:handoffs`)
+
+    /// Answers an offered access choice. Only the opaque wait ID and choice leave the phone.
+    func answerBotAccessRequest(
+        botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID
+    ) async throws -> AidenBotAccessAnswerReceipt {
+        try validateBotIdentifier(botId)
+        try validateBotWaitIdentifier(waitId)
+        return try await send(method: "POST", path: ["bots", botId, "access-requests", waitId, "answer"],
+                              body: request, headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200])
+    }
 
     /// Answers the hand-off the Bot waits on: Done or Skip, with an optional
     /// note. The request UUID is the idempotency key, so a retried answer

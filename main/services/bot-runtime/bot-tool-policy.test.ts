@@ -1,10 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
-import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botRunUnattended, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
 
 const QUESTION = "ask_user_question";
 const HANDOFF = "hand_off";
+
+test("request_access is offered only to scoped Custom Bots and remains callable to raise unattended issues", async () => {
+  const base = bareFacts();
+  for (const [accessMode, mode, allowed, reason] of [
+    ["custom", "scoped", true, undefined], ["full", "full_mac", false, "This Bot can already use your whole Mac."],
+    ["custom", "full_mac", false, "This Bot can already use your whole Mac."], ["custom", "off", false, "File access is off for this Bot."],
+  ] as const) {
+    const facts = { ...base, authority: { ...base.authority, accessMode, files: { mode } } as BotRuntimeEffectiveAuthority };
+    const verdict = await botToolVerdict("request_access", facts);
+    assert.deepEqual(verdict, allowed ? { allowed: true } : { allowed: false, reason });
+  }
+  const message = "bot:ada:1:00112233-4455-4677-8899-aabbccddeeff", reply = "botreply:00112233-4455-4677-8899-aabbccddeeff";
+  for (const ids of [["routine:t:1"], ["tg:1"], [message], [reply], ["desk", message]]) {
+    assert.equal(botRunUnattended(ids), true);
+    assert.equal(botIngressAllowsTool("request_access", ids), true);
+  }
+  assert.equal(botRunUnattended(["desk", "remote:phone"]), false);
+  assert.equal(botIngressAllowsTool("request_access", []), false);
+});
 
 /** A Bot with no grants at all: cards need none, so only the turn decides. */
 function bareFacts(): BotToolFacts {

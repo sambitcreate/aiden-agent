@@ -465,6 +465,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botAttachments;
   // Bot hand-offs and pause are revision 37.
   delete revision19.botHandoffs;
+  delete revision19.botAccessRequests;
   // Bot issues on phones are revision 42.
   delete revision19.botIssues;
   // Schedule approval cards are revision 39.
@@ -699,6 +700,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/session/images/{entryId}",
     "/chats/{chatId}/recordings/{recordingId}",
     "/bots/messaging",
+    "/bots/{botId}/access-requests/{waitId}/answer",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -2608,6 +2610,7 @@ test("Bot attachment references arrive in revision 33 and only where the host an
     assert.throws(() => parseAidenRemoteBotMessageRequest(sample, { allowAttachments: true }), Error, JSON.stringify(sample));
   }
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   older.contractRevision = 32;
   record(older.hostHealth, "hostHealth").contractRevision = 32;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 33/u);
@@ -2869,6 +2872,7 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
 test("Bot hand-off fixtures require their own revision, and an older fixture parses without them", async () => {
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
@@ -2908,6 +2912,7 @@ test("new worktree fixtures need their own revision, and a moved chat has no mes
   assert.notEqual(fixture.response.chat.workspaceId, raw.chat.workspaceId, "the chat is in the worktree's workspace");
 
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   assert.throws(
@@ -2940,6 +2945,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   assert.equal(fixture.none.spending, null);
 
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -2986,6 +2992,7 @@ test("raw upload fixtures need their own revision, and every client spells a pic
   assert.equal(decodeURIComponent(encodeAidenRemoteAttachmentName("写真 📷.jpeg")), "写真 📷.jpeg");
 
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
@@ -3019,6 +3026,7 @@ test("background job fixtures need their own revision, and the parser and schema
   assert.equal(fixture.notFound.error.code, "not_found");
 
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
@@ -3110,6 +3118,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
   assert.equal(fixture.capability, "bot:images");
 
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   delete older.browserRecordings;
@@ -3149,6 +3158,7 @@ test("browser recordings need their own revision, and a recording step carries o
   assert.ok(fixture.recordingPath.endsWith(raw.browserRecordings.step.recording.id));
 
   const older = structuredClone(raw);
+  delete older.botAccessRequests;
   older.contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3473,7 +3483,8 @@ test("Bot messaging fixtures use revision 54, strict switch shapes and bounded c
   const {AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION, AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES, parseAidenRemoteBotMessagingSettings, parseAidenRemoteBotRoutineNotificationList} = await import("./aiden-remote-protocol.js");
   const raw = record(await json("fixtures/contract.json"), "fixtures");
   const fixture = parseAidenRemoteContractFixture(raw);
-  assert.equal(fixture.contractRevision, AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION);
+  assert.equal(AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION, 54);
+  assert.equal(fixture.contractRevision, AIDEN_REMOTE_CONTRACT_REVISION);
   assert.deepEqual(parseAidenRemoteBotDetail(raw.botMessagingDetail).botMessaging, {receive: true, send: true});
   assert.deepEqual(parseAidenRemoteBotIdentityPatchRequest(raw.botMessagingPatch, {allowBotMessaging: true}), {botMessaging: {receive: false}});
   assert.deepEqual(parseAidenRemoteBotMessagingSettings(raw.botMessagingSettings), {enabled: false});
@@ -3501,4 +3512,49 @@ test("Bot messaging OpenAPI accepts fixtures and rejects malformed switch and no
   for (const botMessaging of [{}, {receive: "false"}, {send: null}, {receive: true, extra: false}]) assert.equal(patch({botMessaging}), false);
   for (const sample of [{}, {enabled: "false"}, {enabled: false, extra: true}]) assert.equal(settings(sample), false);
   for (const extra of [{routineId: "routine"}, {status: "succeeded"}]) assert.equal(feed({notifications: [{...raw.botMessageNotification as object, ...extra}], now: "2026-11-03T12:00:00.000Z"}), false);
+});
+
+test("revision 55 access fixtures and strict public DTOs reject private fields and invalid choices", async () => {
+  const { parseAidenRemoteBotAccessRequest: card, parseAidenRemoteBotAccessAnswerRequest: answer, parseAidenRemoteBotAccessAnswerReceipt: receipt } = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const section = parseAidenRemoteContractFixture(raw).botAccessRequests!;
+  assert.deepEqual(section, raw.botAccessRequests);
+  assert.equal(section.folder.place, "~/Documents/Reports");
+  assert.deepEqual(section.wholeMac.choices, ["not_now", "once"]);
+  assert.throws(() => parseAidenRemoteBotIssue({...section.issue,kind:"run_stalled",actions:[{kind:"dismiss_access"}]}));
+  assert.deepEqual(receipt({ answered: true }), { answered: true });
+  assert.deepEqual(receipt({ answered: true, savedForFuture: true }), { answered: true, savedForFuture: true });
+  for (const savedForFuture of [false, null, "true", 1]) assert.throws(() => receipt({ answered: true, savedForFuture }));
+  for (const choice of ["once", "always", "not_now"]) assert.deepEqual(answer({ choice }), { choice });
+  for (const sample of [{}, { choice: "all" }, { choice: "once", folderPath: "/private" }]) assert.throws(() => answer(sample));
+  for (const sample of [{ answered: false }, { answered: true, waitId: "other" }]) assert.throws(() => receipt(sample));
+  for (const extra of [{ authorization: {} }, { botId: "bot_fixture_01" }, { root: "/private" }, { toolCallId: "call" }]) assert.throws(() => card({ ...section.folder, ...extra }));
+  for (const change of [{ label: "x".repeat(121) }, { why: "x".repeat(401) }, { place: "x".repeat(513) }, { why: " " }, { label: "Bad\u0000" }, { place: "relative/path" }, { waitId: "bad_id" }, { choices: ["once", "always", "not_now"] }, { choices: ["not_now", "once", "once"] }]) assert.throws(() => card({ ...section.folder, ...change }));
+  assert.throws(() => card({ ...section.wholeMac, choices: ["not_now", "always", "once"] }));
+  assert.throws(() => card({ ...section.wholeMac, place: "~/Reports" }));
+  const older = structuredClone(raw); older.contractRevision = 54; older.hostHealth.contractRevision = 54;
+  assert.throws(() => parseAidenRemoteContractFixture(older), /require revision 55/u);
+  delete older.botAccessRequests;
+  assert.equal(parseAidenRemoteContractFixture(older).botAccessRequests, undefined);
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const validate = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/BotAccessRequest", components: spec.components });
+  assert.equal(validate(section.folder), true, JSON.stringify(validate.errors));
+  assert.equal(validate(section.wholeMac), true, JSON.stringify(validate.errors));
+  assert.equal(validate({ ...section.folder, authorization: {} }), false);
+  const receiptSchema = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/BotAccessAnswerReceipt", components: spec.components });
+  assert.equal(receiptSchema({answered:true}),true);
+  assert.equal(receiptSchema({answered:true,savedForFuture:true}),true);
+  assert.equal(receiptSchema({answered:true,savedForFuture:false}),false);
+  assert.equal(receiptSchema({answered:true,authorization:{}}),false);
+});
+
+test("the access fixture refuses a holder field in a legacy snapshot or event", async () => {
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const leaked = structuredClone(raw);
+  leaked.botAccessRequests.legacy.session.accessRequest = null;
+  assert.throws(() => parseAidenRemoteContractFixture(leaked), /must not carry holder fields/u);
+  const eventLeak = structuredClone(raw);
+  eventLeak.botAccessRequests.legacy.events = raw.botAccessRequests.events;
+  assert.throws(() => parseAidenRemoteContractFixture(eventLeak), /must not carry access_request/u);
 });

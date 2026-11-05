@@ -3,7 +3,7 @@
   "botMessagingPatch": {"botMessaging": {"receive": false}},
   "botMessagingSettings": {"enabled": false},
   "botMessageNotification": {"id": "bot-message-fixture-01", "kind": "message", "botId": "bot_fixture_01", "botName": "Scout", "routineName": "COS replied", "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "The calendar is ready."},
-  "contractRevision": 54,
+  "contractRevision": 55,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1583,7 +1583,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 54,
+    "contractRevision": 55,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2596,6 +2596,188 @@
       },
       "pausedError": {
         "error": { "code": "operation_stale", "message": "This Bot is paused. Resume it to continue.", "requestId": "request_fixture_36", "retryable": false }
+      }
+    }
+  },
+  "botAccessRequests": {
+    "capability": "bot:access-requests",
+    "folder": {
+      "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "folder",
+      "label": "Reports",
+      "place": "~/Documents/Reports",
+      "why": "Read the reports for your summary.",
+      "choices": [
+        "not_now",
+        "always",
+        "once"
+      ]
+    },
+    "wholeMac": {
+      "waitId": "55b1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "whole_mac",
+      "label": "your whole Mac",
+      "why": "Find the files you asked me to organize.",
+      "choices": [
+        "not_now",
+        "once"
+      ]
+    },
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_55",
+      "seq": 50,
+      "state": "running",
+      "interrupted": false,
+      "entries": [],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "accessRequest": {
+        "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+        "target": "folder",
+        "label": "Reports",
+        "place": "~/Documents/Reports",
+        "why": "Read the reports for your summary.",
+        "choices": [
+          "not_now",
+          "always",
+          "once"
+        ]
+      }
+    },
+    "events": [
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 51,
+        "type": "access_request",
+        "payload": {
+          "accessRequest": {
+            "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+            "target": "folder",
+            "label": "Reports",
+            "place": "~/Documents/Reports",
+            "why": "Read the reports for your summary.",
+            "choices": [
+              "not_now",
+              "always",
+              "once"
+            ]
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 52,
+        "type": "access_request",
+        "payload": {
+          "accessRequest": null
+        }
+      }
+    ],
+    "answer": {
+      "request": {
+        "choice": "always"
+      },
+      "response": {
+        "answered": true,
+        "savedForFuture": true
+      }
+    },
+    "expired": {
+      "error": {
+        "code": "access_request_expired",
+        "message": "This access request is no longer waiting.",
+        "requestId": "request_fixture_55",
+        "retryable": false
+      }
+    },
+    "issue": {
+      "id": "issue_fixture_access_01",
+      "kind": "access_needed",
+      "title": "Allow Reports",
+      "body": "Read the reports for your summary.",
+      "actions": [
+        {
+          "kind": "dismiss_access"
+        },
+        {
+          "kind": "allow_folder"
+        }
+      ],
+      "createdAt": "2026-11-03T09:00:00.000Z",
+      "resolved": false
+    },
+    "legacy": {
+      "session": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 50,
+        "state": "running",
+        "interrupted": false,
+        "entries": [
+          {
+            "type": "message",
+            "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+            "role": "assistant",
+            "text": "Scout needs you on your Mac: allow access to Reports"
+          }
+        ],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "events": [
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_55",
+          "seq": 51,
+          "type": "entry",
+          "payload": {
+            "entry": {
+              "type": "message",
+              "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+              "role": "assistant",
+              "text": "Scout needs you on your Mac: allow access to Reports"
+            }
+          }
+        },
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_55",
+          "seq": 52,
+          "type": "snapshot",
+          "payload": {
+            "session": {
+              "botId": "bot_fixture_01",
+              "epoch": "epoch_fixture_55",
+              "seq": 52,
+              "state": "running",
+              "interrupted": false,
+              "entries": [],
+              "hasOlder": false,
+              "question": null,
+              "approval": null
+            }
+          }
+        }
+      ],
+      "settledSession": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 52,
+        "state": "running",
+        "interrupted": false,
+        "entries": [],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
       }
     }
   },

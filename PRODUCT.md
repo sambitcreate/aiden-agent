@@ -43,6 +43,8 @@ The headless server (`aiden serve`, the standalone CLI) can explicitly migrate i
 
 Bots can ask each other for help through private, bounded messages on desktop and the CLI host. Chats name who asked or replied, and the sender receives one final result. Global and per-Bot switches are available on desktop and paired iOS and Android clients that negotiate messaging support. Another Bot's words never grant approval or personal memory access. The CLI records paid Bot response costs in its profile-local spending ledger and enforces configured monthly and routine-run limits. See [Bot messaging](docs/bot-messaging.md).
 
+A desktop-hosted Custom Bot can ask for file access outside its selected folders. The person chooses Allow once, Always for this folder or Not now. Whole-Mac access is once-only, stale cards cannot adopt changed permissions, and Bot-only folder approvals do not expose those folders to a phone's file browser. Unattended turns leave a Needs you issue instead of a card. The CLI host does not offer this tool. See [Bot access requests](docs/bot-access-requests.md).
+
 ## Brand Commitments
 
 Quiet, capable, and trustworthy. The product should feel at home on macOS, with the restraint and task focus of the Codex and ChatGPT desktop apps while retaining Aiden's own workspace and privacy model.
