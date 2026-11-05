@@ -101,6 +101,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       const status = await remote.service.status().catch(() => undefined);
       process.stderr.write(`Aiden Remote listening${status ? ` on port ${status.lanPort}${status.lanEndpoint ? ` (${status.lanEndpoint})` : ""}` : ""}. Pair a device with \`aiden remote pair lan|tailscale\`.\n`);
     } else process.stderr.write("Aiden Remote is off.\n");
+    if (signal.aborted) return;
     lifetime.markServing();
     options.onReady?.();
     if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));

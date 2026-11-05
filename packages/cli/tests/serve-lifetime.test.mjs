@@ -19,8 +19,13 @@ function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), "aiden-serve-life-"));
   const home = join(root, "home"), agentDir = join(root, "agent");
   mkdirSync(home); mkdirSync(agentDir, { mode: 0o700 });
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  return { agentDir, socket: api.daemonSocket(agentDir), lock: join(agentDir, "serve.lock"), env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+  const box = { agentDir, socket: api.daemonSocket(agentDir), lock: join(agentDir, "serve.lock"), env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
+  // Hooks run in order, so the daemon has to stop here, while its directory still exists.
+  t.after(() => {
+    if (box.stopServer) run(["serve", "stop"], box.env);
+    rmSync(root, { recursive: true, force: true });
+  });
+  return box;
 }
 
 const run = (args, env) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", timeout: 60_000, env });
@@ -72,9 +77,29 @@ test("a stop that arrives during startup ends it there", posix, async (t) => {
   assert.equal(existsSync(box.lock), false);
 });
 
+test("a stop in the last step of startup still never reports ready", posix, async (t) => {
+  const box = sandbox(t);
+  const previous = { agentDir: process.env.AIDEN_CODING_AGENT_DIR, home: process.env.HOME };
+  process.env.AIDEN_CODING_AGENT_DIR = box.agentDir; process.env.HOME = box.env.HOME;
+  const controller = new AbortController(), { write } = process.stderr;
+  // These lines are written once every service has started, just before ready.
+  process.stderr.write = function (chunk, ...rest) {
+    if (String(chunk).includes("listening at")) controller.abort();
+    return write.call(this, chunk, ...rest);
+  };
+  t.after(() => {
+    process.stderr.write = write;
+    process.env.AIDEN_CODING_AGENT_DIR = previous.agentDir; process.env.HOME = previous.home;
+  });
+  let ready = false;
+  await api.serve(box.agentDir, controller.signal, { remote: false, onReady: () => { ready = true; } });
+  assert.equal(ready, false);
+  assert.equal(existsSync(box.lock), false);
+});
+
 test("a stopped server leaves nothing behind and a new one takes over at once", posix, async (t) => {
   const box = sandbox(t);
-  t.after(() => { run(["serve", "stop"], box.env); });
+  box.stopServer = true;
   assert.equal(run(["serve", "--daemon", "--no-remote"], box.env).status, 0);
   const first = JSON.parse(readFileSync(join(box.lock, "owner.json"), "utf8"));
   const stopped = run(["serve", "stop"], box.env);
