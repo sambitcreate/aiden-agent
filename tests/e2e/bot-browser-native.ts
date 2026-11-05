@@ -10,7 +10,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { app, BrowserWindow, nativeImage, session } from "electron";
+import { app, BrowserWindow, nativeImage, session, webContents } from "electron";
 import type { BrowserCommand, BrowserCommandResult, BrowserSnapshot } from "../../renderer/shared/browser";
 
 const root = process.env.AIDEN_BOT_BROWSER_ROOT!;
@@ -344,6 +344,79 @@ void app.whenReady().then(async () => {
   // What an approval and the rules read about the field.
   const probedType = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
   const reveal = { shownByBot, probedShownByBot, typingShownByBot, shownByPerson, pressingShownByPerson, typingShownByPerson, shownType, probedType };
+  // Slow reads of the page's fields, made slow at the tab's DevTools connection
+  // (every read is one DOM.getDocument), so nothing here depends on timing luck.
+  step("5 slow field reads");
+  const botContents = webContents.getAllWebContents().find((contents) => contents.session === session.fromPartition(botBrowserPartition(BOT)));
+  assert.ok(botContents);
+  const tabDebugger = botContents.debugger;
+  const sendCommand = tabDebugger.sendCommand.bind(tabDebugger);
+  let fieldReads = 0;
+  let beforeNextReadReturns: (() => Promise<void>) | undefined;
+  tabDebugger.sendCommand = async (...args: Parameters<typeof sendCommand>) => {
+    if (args[0] !== "DOM.getDocument") return sendCommand(...args);
+    const delay = beforeNextReadReturns;
+    beforeNextReadReturns = undefined;
+    const read = await sendCommand(...args);
+    await delay?.();
+    fieldReads += 1;
+    return read;
+  };
+  const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  /** Whether `count` reads have ended within `ms`: a read that never comes shows up in what the Bot sees, not as a hang. */
+  const fieldReadsEnded = async (count: number, ms: number): Promise<boolean> => {
+    const end = Date.now() + ms;
+    while (fieldReads < count && Date.now() < end) await pause(20);
+    return fieldReads >= count;
+  };
+  /** A read this slow puts the next timed one at least 6 s away, well past `fieldReadsEnded`'s wait below. */
+  const SLOW_READ_MS = 300;
+  const READ_ON_LOAD_MS = 2_000;
+  // The person shows the field on the page they just opened; the Bot then gets the tab back.
+  const shownAfterHold = async (holdId: string) => {
+    const shown = await user(BOT_WORKSPACE, {
+      action: "evaluate", tabId: botTab,
+      expression: "document.getElementById('show').click();document.getElementById('secret').type",
+    });
+    browser.release(BOT_WORKSPACE, holdId);
+    return { shownType: shown.value, ...revealAsSeen(await snapshot(botTab)) };
+  };
+  // A page opened after a slow read ended, while the next timed read is seconds away.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const readsBeforeBackoff = fieldReads;
+  beforeNextReadReturns = () => pause(SLOW_READ_MS);
+  browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-3", reason: "sign_in" });
+  assert.ok(await fieldReadsEnded(readsBeforeBackoff + 1, 5_000), "the held tab's first read");
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal`);
+  await fieldReadsEnded(readsBeforeBackoff + 2, READ_ON_LOAD_MS);
+  const openedDuringBackoff = await shownAfterHold("wait-3");
+  // A page that becomes ready while a slow read of the previous page is still running.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const readsBeforeOverlap = fieldReads;
+  let readReachedPage!: () => void;
+  const previousPageRead = new Promise<void>((resolve) => { readReachedPage = resolve; });
+  let finishRead!: () => void;
+  const readHeldOpen = new Promise<void>((resolve) => { finishRead = resolve; });
+  beforeNextReadReturns = () => {
+    readReachedPage();
+    return readHeldOpen;
+  };
+  browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-4", reason: "sign_in" });
+  await previousPageRead;
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal`);
+  await pause(SLOW_READ_MS);
+  finishRead();
+  assert.ok(await fieldReadsEnded(readsBeforeOverlap + 1, 5_000), "the held tab's first read");
+  await fieldReadsEnded(readsBeforeOverlap + 2, READ_ON_LOAD_MS);
+  const openedDuringRead = await shownAfterHold("wait-4");
+  // A wait shorter than the read before it still tries its condition, on an element already there.
+  const readsBeforeWait = fieldReads;
+  beforeNextReadReturns = () => pause(SLOW_READ_MS);
+  const waitAfterSlowRead = await outcome(agent({ action: "wait", tabId: botTab, locator: "#show", timeoutMs: 100 }));
+  assert.equal(fieldReads, readsBeforeWait + 1, "the wait read the page first");
+  tabDebugger.sendCommand = sendCommand;
+  const slowReads = { openedDuringBackoff, openedDuringRead, waitAfterSlowRead };
+
   // A remembered field is marked before any Bot locator runs, not only before
   // typing: a wait, a scroll's target and the snapshot's own locators. Each is
   // checked on a page nothing has marked yet: the Bot reads it while the fields
@@ -408,6 +481,7 @@ void app.whenReady().then(async () => {
         isolation, masking, typing, noteTyping, pressing, navigationKey, refused, textLocators, roleLocators, tableSeen, covered, frame,
         hold: { heldState, held, personMayUse, afterRelease, heldTraces },
         reveal,
+        slowReads,
         remembered,
         savedMonth,
         cleared,
