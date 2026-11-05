@@ -477,3 +477,99 @@ test("quitting flushes what is queued and a clean exit clears the run marker", a
   assert.deepEqual(h.transports[0]!.sent.map((message) => message.event), ["app_opened", "app_active"]);
   assert.equal(existsSync(join(h.runDirectory, RUN_MARKER_FILE)), false);
 });
+
+test("an action while start is still reading settings is sent once sending is allowed", async (t) => {
+  const consented = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
+  const h = harness({ initial: consented });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  assert.deepEqual(h.names(), []);
+  await h.service.start();
+  assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened"]);
+});
+
+test("an action held during start is dropped when sending isn't allowed, even after a later yes", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await h.service.start();
+  await h.service.markNoticeShown();
+  assert.deepEqual(h.names(), ["app_opened", "app_active"]);
+});
+
+test("a yes that arrives during start doesn't cover what was held before it", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await Promise.all([h.service.start(), h.service.markNoticeShown()]);
+  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+});
+
+test("quitting during start still sends what was held", async (t) => {
+  let release = () => {};
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const fake = fakeTransport();
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => { await ready; return fake.transport; },
+  });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  void h.service.start();
+  const quit = h.service.shutdown();
+  release();
+  await quit;
+  assert.ok(fake.sent.some((message) => message.event === "terminal_opened"));
+});
+
+test("a startup that outlives quitting makes no transport and sends nothing", async (t) => {
+  let release = () => {};
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const fake = fakeTransport();
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => { await ready; return fake.transport; },
+  });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  const starting = h.service.start();
+  // The service's own timers don't hold a process open.
+  const open = setTimeout(() => undefined, 5_000);
+  t.after(() => clearTimeout(open));
+  await h.service.shutdown(30);
+  release();
+  await starting;
+  assert.equal(fake.state(), "discarded");
+  assert.deepEqual(fake.sent, []);
+});
+
+test("turning usage data off during start drops what was held", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await h.service.setEnabled(false);
+  await h.service.start();
+  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+});
+
+test("a burst before start is held only up to its limit", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
+  for (let count = 0; count < 500; count += 1) h.service.track("terminal_opened", {});
+  await h.service.start();
+  assert.equal(h.names().filter((name) => name === "terminal_opened").length, 100);
+});
+
+test("a feature event reaches the transport only while sending is allowed", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  await h.service.start();
+  h.service.track("terminal_opened", {});
+  assert.deepEqual(h.names(), [], "nothing is sent before the notice has been shown");
+
+  await h.service.markNoticeShown();
+  h.service.track("terminal_opened", {});
+  h.service.track("provider_connected", { provider_id: "anthropic", auth: "key" });
+  assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened", "provider_connected"]);
+  assert.ok(h.events().every((message) => message.properties.$process_person_profile === false));
+});

@@ -2,6 +2,7 @@ import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { WorktreeCapacityUnavailableError, WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Workspace } from "./types.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 
@@ -10,7 +11,9 @@ const owner = {
   onInvalidated: () => () => undefined,
 };
 
-test("shared managed-worktree workflow preserves creation rollback gates and destructive deletion ordering", async () => {
+test("shared managed-worktree workflow preserves creation rollback gates and destructive deletion ordering", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  let failProvisioning = false;
   const events: string[] = [];
   const createAdmissions: Array<[string, number]> = [];
   const allocations: Array<[string, string, number]> = [];
@@ -50,7 +53,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     checkCreateCapacity: async (root, bytes) => { createAdmissions.push([root, bytes]); },
     checkWorktreeAllocation: async (root, common, bytes) => { allocations.push([root, common, bytes]); },
     checkSnapshotCapacity: async () => undefined,
-    provisionIncludedFiles: async () => [],
+    provisionIncludedFiles: async () => {
+      if (failProvisioning) throw new Error("provisioning failed");
+      return [];
+    },
     repositoryPaths: async (folderPath) => ({
       topLevel: folderPath,
       commonDir: `${folderPath}/.git`,
@@ -138,6 +144,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   });
 
   const created = await service.create(owner, source.id, "feature/mobile", "Mobile Workspace");
+  assert.deepEqual(sent, [{ event: "worktree_created", props: {} }]);
   assert.equal(created.id, "workspace-managed");
   assert.equal(created.name, "Mobile Workspace");
   assert.equal(created.permission, source.permission);
@@ -191,6 +198,11 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   await assert.rejects(service.remove(owner, again.id), /git worktree remove failed/u);
   assert.equal(events.includes(`remove:${again.id}`), false, "the record stays when Git deletion fails");
   assert.equal(events[events.length - 1], `close-git-watcher:${again.id}`);
+
+  sent.length = 0;
+  failProvisioning = true;
+  await assert.rejects(service.create(owner, source.id, "feature/rolled-back"), /provisioning failed/u);
+  assert.deepEqual(sent, [], "a rolled-back checkout was never created");
 });
 
 

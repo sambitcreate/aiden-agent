@@ -159,7 +159,7 @@ export function UsageDataSheet({
       open={open}
       onOpenChange={onOpenChange}
       title="What’s sent"
-      description="Aiden can send only these events and fields, with a random install ID that isn’t tied to you. This release sends the app lifecycle events and crash reports; feature use arrives later. Your IP address is discarded."
+      description="Aiden can send only these events and fields, with a random install ID that isn’t tied to you. This release sends app lifecycle events, feature events and crash reports. Your IP address is discarded."
       confirmHidden
       size="large"
       layer={layer}
@@ -324,8 +324,8 @@ export function UsageDataSettings() {
         label={USAGE_DATA_LABEL}
         description={
           <>
-            App launches, daily use, setup, updates and crash reports, with a random install ID. Feature use arrives in
-            a later release. Never your chats, files, keys or paths.
+            App launches, daily use, setup, updates, which big features you use and crash reports, with a random
+            install ID. Never your chats, files, keys or paths.
             {caption ? <span className="mt-1 block text-tertiary">{caption}</span> : null}
           </>
         }

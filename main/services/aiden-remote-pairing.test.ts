@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createDecipheriv, hkdfSync } from "node:crypto";
 import test from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import {
   AidenRemotePairingService,
   normalizeAidenManualPairingCode,
@@ -22,6 +23,7 @@ const endpoint = "https://aiden.example.test/api/aiden/v1";
 const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 
 function fixture(options: {
+  devices?: Array<{ type: string; revokedAt?: number }>;
   issueFails?: boolean;
   botCapabilitiesSupported?: boolean;
   hostCapabilitiesSupported?: boolean;
@@ -53,6 +55,7 @@ function fixture(options: {
           },
         };
       },
+      listDevices: async () => (options.devices ?? []) as never,
     },
     {
       now: () => now,
@@ -497,4 +500,21 @@ test("Android pairs as a phone without desktop authority", async () => {
   const result = await pairing.service.exchange({ ...exchange(opened.bootstrap.secret, true, true, true), deviceType: "android" }, "android");
   assert.equal(result.capabilities.includes("host:events"), false);
   assert.equal(result.capabilities.includes("simulators:control"), false);
+});
+
+test("a paired phone counts once with its route and the phones in use; a desktop or a failed issue does not", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const failed = fixture({ issueFails: true });
+  await assert.rejects(failed.service.exchange(exchange(failed.service.begin(endpoint, fingerprint).bootstrap.secret), "phone"));
+
+  const desktop = fixture();
+  const opened = desktop.service.begin(endpoint, fingerprint);
+  await desktop.service.exchange({ ...exchange(opened.bootstrap.secret), deviceType: "mac" }, "desktop");
+  await analyticsSettled();
+  assert.deepEqual(sent, []);
+
+  const phone = fixture({ devices: [{ type: "iphone" }, { type: "android" }, { type: "ipad", revokedAt: 5 }, { type: "mac" }] });
+  await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint, "tailscale").bootstrap.secret), "phone");
+  await analyticsSettled();
+  assert.deepEqual(sent, [{ event: "phone_paired", props: { transport: "tailscale", device_count: "2-3" } }]);
 });

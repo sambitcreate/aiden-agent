@@ -1,3 +1,4 @@
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { formatSkillInvocation } from "./pi-legacy-harness.js";
 import {
   SLASH_LIMITS,
@@ -88,7 +89,18 @@ export async function commitSkillInvocationForAppend<T>(
     );
   }
   dependencies.prepareLease(prepared);
-  return dependencies.append(prepared);
+  const appended = await dependencies.append(prepared);
+  reportSkillUsed(prepared.provenance);
+  return appended;
+}
+
+/** A skill the person ran by name. Only a bundled skill's name is ever reported. */
+export function reportSkillUsed(provenance: SkillProvenanceV1): void {
+  if (provenance.source !== "builtin") {
+    reportAnalyticsEvent("skill_used", { source: "user" });
+    return;
+  }
+  reportAnalyticsEvent("skill_used", { source: "builtin", skill_id: provenance.name.toLowerCase() });
 }
 
 export function preparedSkillPromptForCurrentTurn(
