@@ -40,6 +40,9 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 - `use-assistant-live.test.tsx`, "Live device preparation failure...", failed once on #743. Cause unknown, not fixed.
 - `mcp-failure-diagnostics.test.ts` matched `8443` inside a random hash. Fixed in #768.
 
+- Rust `guard::tests::authenticated_bridge_lease_eof_revokes_the_whole_broker_group` failed once locally at load about 10 ("broker survived authenticated bridge lease EOF", `guard.rs:490`, two-second deadline). No `native/` change in this lane. Not fixed.
+- One JS failure in `npm run test:computer-use` on the #766 fix: 514 passed, 1 failed, log discarded, test unidentified. 11 later JS runs clean. The new lease-retry test is not ruled out. Recorded in #766.
+
 ## Handed to the owner
 
 - `aiden serve stop` cannot force-stop an MCP survivor whose wrapper exited: `daemonMcpGroups()` in `packages/cli/src/serve-lifecycle.ts` needs a direct child of the daemon. Predates this lane, needs `packages/cli` work, and `feature/sm-serve-*` branches change that file.
