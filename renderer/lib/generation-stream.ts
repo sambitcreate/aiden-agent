@@ -166,7 +166,9 @@ export function subscribeGenerationStream(
       if (p.streamId !== streamId || terminalSeen) return;
       terminalSeen = true;
       restoreUndeliveredGuidance(scope.chatId, undeliveredGuidanceFromTerminal(p));
-      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
+      void new Promise((resolve) => {
+        resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning));
+      })
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
         )
@@ -178,8 +180,11 @@ export function subscribeGenerationStream(
       if (p.streamId !== streamId || terminalSeen) return;
       terminalSeen = true;
       restoreUndeliveredGuidance(scope.chatId, undeliveredGuidanceFromTerminal(p));
-      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
-      dispose();
+      try {
+        callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
+      } finally {
+        dispose();
+      }
     }),
   );
   unsubs.push(

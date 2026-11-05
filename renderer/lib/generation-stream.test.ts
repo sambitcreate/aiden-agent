@@ -160,6 +160,39 @@ test("a done handler that fails still reports through onError exactly once", asy
   }
 });
 
+test("a terminal handler that throws synchronously still releases every listener", async () => {
+  const bridge = installFakeBridge();
+  try {
+    const errors: string[] = [];
+    subscribeGenerationStream("stream-1", { chatId: "chat-1" }, {
+      onDelta: () => {},
+      onDone: () => {
+        throw new Error("could not settle");
+      },
+      onError: (message) => errors.push(message),
+    });
+    bridge.emit("chat:done", { streamId: "stream-1", content: "Saved" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(errors, ["could not settle"]);
+    assert.equal(bridge.listenerCount(), 0);
+
+    subscribeGenerationStream("stream-2", { chatId: "chat-1" }, {
+      onDelta: () => {},
+      onDone: () => {},
+      onError: () => {
+        throw new Error("could not report");
+      },
+    });
+    assert.throws(
+      () => bridge.emit("chat:error", { streamId: "stream-2", message: "failed" }),
+      /could not report/u,
+    );
+    assert.equal(bridge.listenerCount(), 0);
+  } finally {
+    bridge.restore();
+  }
+});
+
 test("dispose stops delivery before any terminal event", () => {
   const bridge = installFakeBridge();
   try {
