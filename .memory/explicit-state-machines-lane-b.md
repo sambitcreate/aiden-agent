@@ -13,7 +13,11 @@ Lane B of the explicit state-machine migration: P0 baselines and P2 (authority, 
 
 - P2 stack open: #737, #738, #739, #740. Later commits merge forward, never rebase.
 - Same-id approval replacement was first recorded as unreachable. Pullfrog reproduced it and it was fixed, so a reachability argument alone does not close a finding on code this lane added.
-- P6 not started. It needs P3, P4 and P5 boundaries, and no `feature/sm-p3*`, `p4*` or `p5*` branch exists yet. #727 to #730 also change 9 to 26 `bot-runtime` files each, so P6a and P6b would collide. Recheck `git ls-remote origin 'feature/sm-*'` first.
+- P3, P4 and P5 PRs opened on 2026-11-05 (#746 to #757, #766, #767, #769), so that dependency has cleared. Recheck overlap before each P6 owner, because file lists move.
+- P6a reviewed and retained: `bot-pause-store`, `bot-pause-steps`, `bot-routine-recovery`.
+- P6 still open: `bot-routine-events` (free of overlap, not reviewed), `scheduled-bot-routines` (#687, #734), `bot-session-service` (#729, #734), `bot-routine-notifications` (#709, #727, #728), `aiden-remote-streams` (#746). `schedule-service-core` and `schedule-store-core` claims are free of overlap but not reviewed. P6c and P6d not started.
+- #756 edits `subagent-shell.ts`, as #737 does. The source merges cleanly and only `subagent-shell.test.ts` conflicts.
+- `agent-compatibility.test.ts` fails on this Mac but passes in CI's `Desktop tests (runtime-subagents)`. Cause unknown.
 
 ## Skipped CLI entries
 

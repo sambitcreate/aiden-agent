@@ -228,3 +228,15 @@ PRs #732, #733 and #734 are changing analytics now.
 Transition review was not done for these, and no claim is made about them: `backend:M009`, `M010`, `M031`, `M033`, `M076`, `M099`, `M109`, `M110`, `M127`, `M164`, `M171`, `M180`, `M189`, `M197`, and `clients:C10`, `C35`, `C56`, `C63`, `C64`, `C67`, `C71`, `C74`, `C50`, `C51`, `C52`, `N10`, `N12`, `N24`, `N26`, `N34`.
 
 `backend:M009` and `M010` also sit on Lane A's ownership vocabulary.
+
+## P6a: Bot pause and recovery
+
+Other P6 owners are not reviewed yet. This section makes no claim about them.
+
+### Bot pause store and steps — retained
+
+`bot-pause-store` fails closed: an unreadable file makes reads throw and refuses writes, so a Bot turn is refused instead of guessing that nothing is paused. Pause and unpause mutate through `DataStore.update`. `bot-pause-steps` is ordered sequencing with no state of its own.
+
+### Bot routine recovery — retained
+
+`fireOutcomes`, `failureStreak` and `retryPlan` are already pure. `afterRun` decides from a task snapshot, which cannot go stale: user pause and edits go through `withTaskLifecycle` and `cancelAndSettle`, which wait for the active run, and `afterRun` runs inside that run. `addRoutineRetry` re-reads the task inside the store update and dedupes by request id.
