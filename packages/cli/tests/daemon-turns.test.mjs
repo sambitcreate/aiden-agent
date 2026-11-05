@@ -270,7 +270,10 @@ test("a failed final save reports the error and is retried once as the partial a
   assert.equal(error.message, "disk full");
   assert.equal(error.cancelled, false);
   assert.equal(assistantWrites.length, 2);
-  assert.deepEqual((await assistantMessages(f.daemon, "save-fault")).map((message) => message.content), ["Answer"]);
+  assert.equal(error.timeline.status, "failed");
+  const stored = await assistantMessages(f.daemon, "save-fault");
+  assert.deepEqual(stored.map((message) => message.content), ["Answer"]);
+  assert.equal(stored[0].timeline.status, "failed", "the record agrees with what the client was told");
   assertSessionReleased(f.daemon, "save-fault");
 });
 
@@ -353,7 +356,7 @@ test("an allowed tool call runs once, and only the owner or a host may answer", 
   const { owner, approval } = await awaitingApproval(f, "allow");
   assert.equal(approval.toolName, "ls");
   assert.equal(approval.summary, "List folder: .");
-  assert.equal(f.daemon.activity.snapshot().pendingApprovalChatIds?.length ?? 1, 1);
+  assert.deepEqual(f.daemon.activity.snapshot().approvalChatIds, ["allow"]);
   assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", "stranger"), false, "another owner cannot answer");
   assert.equal(f.daemon.llmClient.approve("approval_unknown", "allow", owner.documentId), false);
   assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", owner.documentId), true);
