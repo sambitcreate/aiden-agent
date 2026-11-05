@@ -320,7 +320,7 @@ test("an allowed tool call runs once, and only the owner or a host may answer", 
   const { owner, approval } = await awaitingApproval(f, "allow");
   assert.equal(approval.toolName, "ls");
   assert.equal(approval.summary, "List folder: .");
-  assert.equal(f.daemon.activity.snapshot().pendingApprovalChatIds?.length ?? 1, 1);
+  assert.deepEqual(f.daemon.activity.snapshot().approvalChatIds, ["allow"]);
   assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", "stranger"), false, "another owner cannot answer");
   assert.equal(f.daemon.llmClient.approve("approval_unknown", "allow", owner.documentId), false);
   assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", owner.documentId), true);
