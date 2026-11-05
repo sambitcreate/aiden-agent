@@ -150,7 +150,10 @@ export async function measurePathBytes(
 
   let bytes = 0;
   let files = 0;
+  // A hole (unreadable folder or file, or too deep) is skipped and marks the
+  // result partial; only a spent budget stops the walk.
   let truncated = false;
+  let stopped = false;
   const stack: Array<{ directory: string; depth: number }> = [{ directory: target, depth: 0 }];
   while (stack.length > 0) {
     if (budget.exhausted()) {
@@ -170,6 +173,7 @@ export async function measurePathBytes(
     for (const entry of entries) {
       if (budget.exhausted()) {
         truncated = true;
+        stopped = true;
         break;
       }
       const entryPath = path.join(next.directory, entry.name);
@@ -193,7 +197,7 @@ export async function measurePathBytes(
         truncated = true;
       }
     }
-    if (truncated) break;
+    if (stopped) break;
   }
   return { bytes, files, truncated };
 }

@@ -183,6 +183,24 @@ test("measurePathBytes skips excluded directories so each worktree is measured o
   }
 });
 
+test("a folder too deep to measure marks the result partial but the rest is still counted", async () => {
+  const root = await tempRoot();
+  try {
+    // Several shallow folders around one deep one, so whichever order the walk
+    // takes, every shallow file is reached after the deep folder is skipped.
+    const shallow = ["a", "b", "c", "d"].map((name) => path.join(root, name, "file.bin"));
+    for (const file of shallow) await writeFileWithBytes(file, 20_000);
+    await writeFileWithBytes(path.join(root, "deep", "one", "two", "three", "hidden.bin"), 500_000);
+    const measured = await measurePathBytes(root, createStorageScanBudget(), { depthLimit: 1 });
+    assert.equal(measured.truncated, true, "a skipped folder means the size is a minimum");
+    let expected = 0;
+    for (const file of shallow) expected += await allocated(file);
+    assert.equal(measured.bytes, expected);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("measurePathBytes reports a missing path as zero without throwing", async () => {
   const root = await tempRoot();
   try {

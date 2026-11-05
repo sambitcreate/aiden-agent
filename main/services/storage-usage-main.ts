@@ -6,7 +6,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
-import { session } from "electron";
+import { session, type Session } from "electron";
 import { chatStore } from "./chat-store.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { configStore } from "./config-store.js";
@@ -25,7 +25,15 @@ import { workspaceWorktreeApplicationService } from "./workspace-worktree-applic
 import { botStore } from "./bot-store.js";
 import { browserService } from "./browser/service.js";
 import { scheduleStore } from "./schedule-store.js";
+import { aidenBrowserPartitionName } from "./storage-profile-inventory.js";
 import { createStorageUsageService } from "./storage-usage.js";
+
+/** Empties one session's HTTP, code and shader caches; cookies and site storage stay. */
+async function clearSessionCaches(target: Session): Promise<void> {
+  await target.clearCache();
+  await target.clearCodeCaches({});
+  await target.clearStorageData({ storages: ["shadercache"] });
+}
 
 /**
  * Cleanup runs to completion even if the settings window has moved on. Its
@@ -56,12 +64,23 @@ export const storageUsageService = createStorageUsageService({
     return tasks.flatMap((task) => (task.workspaceId ? [task.workspaceId] : []));
   },
   async clearBrowserCache() {
-    // The app's own window cache, then every saved browser profile and each
-    // Bot's. Cookies and site data stay, so nobody is signed out.
-    await session.defaultSession.clearCache();
-    await session.defaultSession.clearCodeCaches({});
+    // The app's own window cache, every saved browser profile and each Bot's,
+    // then any Aiden partition left on disk by a deleted profile or Bot, which
+    // the scan counts too. Only cache classes are cleared: cookies and site
+    // data stay, so nobody is signed out.
+    await clearSessionCaches(session.defaultSession);
     const bots = await botStore.list();
     await browserService.clearCaches(bots.map((bot) => bot.id));
+    let onDisk: string[] = [];
+    try {
+      onDisk = await fs.readdir(path.join(app.getPath("userData"), "Partitions"));
+    } catch {
+      onDisk = [];
+    }
+    for (const directory of onDisk) {
+      const partition = aidenBrowserPartitionName(directory);
+      if (partition) await clearSessionCaches(session.fromPartition(partition));
+    }
   },
   removeWorktree: async (workspaceId) => {
     await workspaceWorktreeApplicationService.remove(headlessOwner, workspaceId);

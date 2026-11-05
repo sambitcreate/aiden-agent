@@ -457,6 +457,20 @@ test("each worktree is measured once and still listed when the walk runs out of 
   }
 });
 
+test("a folder the walk had to skip makes the page say sizes are a minimum", async () => {
+  const deep = `workspace-artifacts/${Array.from({ length: 30 }, (_, index) => `d${index}`).join("/")}/file.bin`;
+  await withHarness({ profileFiles: { [deep]: 5_000, "logs/today.log": 2_000 } }, async (h) => {
+    const report = await h.service.refresh();
+    assert.equal(report.scan.status, "ready");
+    assert.equal(report.scan.truncated, true, "a skipped folder is not reported as an exact total");
+    assert.equal(
+      report.categories.find((entry) => entry.id === "logs")?.bytes,
+      await allocated(h.root, "logs/today.log"),
+      "other categories are still measured in full",
+    );
+  });
+});
+
 test("browser data counts the whole profile, and Clear cache frees only its cache folders", async () => {
   await withHarness(
     {
@@ -464,6 +478,8 @@ test("browser data counts the whole profile, and Clear cache frees only its cach
         "Partitions/aiden-browser-profile-abc/Cookies": 50_000,
         "Partitions/aiden-browser-profile-abc/Cache/Cache_Data/data_1": 400_000,
         "Partitions/aiden-bot-bot~3a1/Code Cache/js/index": 100_000,
+        // A partition Aiden did not create: counted, but Clear cache never touches it.
+        "Partitions/someone-else/Cache/Cache_Data/data_2": 70_000,
         "Cache/Cache_Data/data_0": 20_000,
         "Preferences": 3_000,
       },
@@ -477,7 +493,10 @@ test("browser data counts the whole profile, and Clear cache frees only its cach
           "Partitions/aiden-browser-profile-abc/Cookies",
           "Partitions/aiden-browser-profile-abc/Cache/Cache_Data/data_1",
           "Partitions/aiden-bot-bot~3a1/Code Cache/js/index",
+          "Partitions/someone-else/Cache/Cache_Data/data_2",
+          "Cache/Cache_Data/data_0",
         ),
+        "the app's own cache shows under Browser data, where Clear cache is",
       );
       assert.equal(
         report.browserCacheBytes,
@@ -487,12 +506,12 @@ test("browser data counts the whole profile, and Clear cache frees only its cach
           "Partitions/aiden-bot-bot~3a1/Code Cache/js/index",
           "Cache/Cache_Data/data_0",
         ),
-        "cookies are not part of what Clear cache frees",
+        "cookies and other apps' partitions are not part of what Clear cache frees",
       );
       // Anything the layout does not name still counts toward the total.
       assert.equal(
         report.categories.find((entry) => entry.id === "other")?.bytes,
-        await allocated(h.root, "Cache/Cache_Data/data_0", "Preferences"),
+        await allocated(h.root, "Preferences"),
       );
       const result = await h.service.cleanup({ action: "clear-browser-cache", inactiveDays: 14 });
       assert.equal(h.browserCleared, 1);

@@ -13,11 +13,11 @@ The scan measures every top-level entry of Aiden's device-local user-data profil
 | Chats | `chats/` (transcripts and their `images/`), `pi-compaction-sessions/`, `pi-runtime-effects.json`, `subagent-runs/` and `subagent-runs-v2/`, `tool-output-spills.json`, `display-image-artifacts.json`, `generative-ui-artifacts.json`, `chat-pull-requests/`, `chat-folders/`, `follow-through/`, `interrupted-waits.json`, `chat-triage.json`, `chat-read-markers.json`, `first-message-worktrees.json`, `bots/`, `memory/`. | None; each chat is deleted from its own row in Largest chats. |
 | Logs and diagnostics | `logs/`, `Crashpad/`, `terminal-history/`. | **Clear…** |
 | Artifacts and images | `workspace-artifacts/`, `create-images/`, `studio-assets/`, `design-projects/`. | None. |
-| Browser data | `Partitions/` (the built-in browser's and Bots' browser profiles) and `browser/` (recordings). | **Clear cache…** |
+| Browser data | `Partitions/` (the built-in browser's and Bots' browser profiles), `browser/` (recordings), and the app's own Chromium caches (`Cache/`, `Code Cache/`, `GPUCache/`). | **Clear cache…** |
 | Voice and helper models | `voice-models/`, `parakeet-models/`, `form-fill-model/`. | **Manage ›** opens Settings → Voice. |
 | Bot computers | `bot-computers/`. | **Manage ›** opens Settings → Bot computers. |
 | Saved work from removed worktrees | `worktree-snapshots/`. | None. |
-| Other app data | Everything else: settings, paired devices, agent runtimes, and Chromium's own top-level files. | None. |
+| Other app data | Everything else: settings, paired devices, agent runtimes, and Chromium's other top-level files. | None. |
 | Worktrees | `worktrees/`, the managed checkouts Aiden creates per branch. | **Review…** |
 
 A category with nothing on disk is not listed. **Manage ›** is shown only when that settings page exists on this computer (for example, Bot computers is Mac-only).
@@ -32,11 +32,11 @@ Two things are deliberately outside the profile and therefore outside the total:
 2. When the cache is missing or older than 60 seconds, a scan starts in the background and `storage:changed` (`{ kind: "scan-started" | "scan-finished" }`) tells the page to re-read.
 3. The page's **Measure again** button calls `storage:refresh`, which awaits that same scan.
 
-Sizes are disk use, not file length: a file counts its allocated blocks (`blocks × 512`, or its size where the platform reports no blocks), so a sparse Bot computer disk is not overstated. A file hard-linked into several places counts once per scan. Symlinks are never followed, so a workspace link cannot make Aiden report bytes it did not write; an unreadable directory is a hole in the total, not a failed scan.
+Sizes are disk use, not file length: a file counts its allocated blocks (`blocks × 512`, or its size where the platform reports no blocks), so a sparse Bot computer disk is not overstated. A file hard-linked into several places counts once per scan. Symlinks are never followed, so a workspace link cannot make Aiden report bytes it did not write; an unreadable directory makes the total a minimum, not a failed scan.
 
 Each worktree is measured exactly once: the walk of `worktrees/` skips every managed worktree, and each is then measured on its own so the page can list its size. Worktrees are measured last because they are the largest and least predictable. A worktree whose record points outside `worktrees/` is listed at zero rather than walking an unrelated directory.
 
-The walk shares one budget (`DEFAULT_STORAGE_SCAN_LIMITS`: 1,000,000 entries and 20 seconds). Hitting it stops the walk and sets `scan.truncated`; the page then says "some sizes are a minimum", and any item that was not fully measured reads "At least …". Every worktree and chat is still listed, so a budget that runs out never hides one.
+The walk shares one budget (`DEFAULT_STORAGE_SCAN_LIMITS`: 1,000,000 entries and 20 seconds). Hitting it stops the walk. A folder the walk has to skip (unreadable, or more than 24 levels deep) is a hole: the rest of the category is still measured. Either way `scan.truncated` is set, the page says "some sizes are a minimum", and any item that was not fully measured reads "At least …". Every worktree and chat is still listed, so a budget that runs out never hides one.
 
 A chat's size is what deleting it would free: its transcript plus the pictures no other chat uses. A picture shared by several chats stays in the Chats category total but is not added to any one chat. The row also says how many pictures the chat has.
 
@@ -77,7 +77,7 @@ The actions:
 
 - **Review…** (worktrees) opens a dialog listing the worktrees unused for the chosen time (an **Unused for** picker: 7, 14, 30 or 90 days, default 14), their sizes, and a Kept list with reasons. A worktree row's **Remove…** removes just that one; naming an item skips the time window but not the protection rules. Removing a worktree deletes its branch only when nothing was ever committed on it (the branch still points where Aiden created it); a branch with commits stays in the repository.
 - **Delete…** on a chat row deletes that one chat. There is no bulk chat delete: `parseStorageCleanupRequest` rejects `delete-threads` unless it names exactly one chat.
-- **Clear cache…** empties cached pages, compiled scripts and GPU shaders for the app's own session, the built-in browser's profiles, and every Bot's browser. It goes through each browser session (`clearCache`, `clearCodeCaches`, and the shader cache), so cookies, local storage and sign-ins stay and open tabs keep working. The button is off when nothing is cached.
+- **Clear cache…** empties cached pages, compiled scripts and GPU shaders for the app's own session, the built-in browser's profiles, every Bot's browser, and any Aiden partition a deleted profile or Bot left on disk (`aiden-browser-*` and `aiden-bot-*` under `Partitions/`). It goes through each browser session (`clearCache`, `clearCodeCaches`, and the shader cache), so cookies, local storage and sign-ins stay and open tabs keep working. The amount it offers counts only those sessions' cache folders, never another partition's. The button is off when nothing is cached.
 - **Clear…** (logs) removes the diagnostic journal, crash dumps, and terminal scrollback through the diagnostics owner (`diagnostics:delete` uses the same path). Chats, settings, credentials, and projects are untouched.
 
 Every action drops the cache and starts a new scan, so the page shows the result of what it just did.

@@ -10,3 +10,4 @@ PR #731 (Cursor's branch `cursor/settings-storage-9f2b`) added the page; it was 
 - Worktree removal deletes the branch only when it still points at `createdFromHead`; the first proposal wrongly said it always deletes the branch.
 - The CI failure-digest reporter changes that were on #731 were left out of the rework; they are still on `cursor/settings-storage-9f2b`.
 - Test gotcha: in node:test + happy-dom, `waitFor(() => assert.equal(el, null))` can OOM the runner; use `assert.ok(!el)`.
+- Review fixes (2026-11-05): a skipped folder no longer stops a category's walk and marks the report a minimum; root Cache/Code Cache/GPUCache show under Browser data; cache bytes count only aiden-browser-*/aiden-bot-* partitions, and Clear cache also visits those left on disk by deleted profiles or Bots; the default session's shader cache is cleared too.

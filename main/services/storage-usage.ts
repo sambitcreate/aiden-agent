@@ -25,6 +25,7 @@ import {
 } from "./storage-usage-core.js";
 import {
   BROWSER_CACHE_DIRECTORY_NAMES,
+  aidenBrowserPartitionName,
   storageCategoryForEntry,
 } from "./storage-profile-inventory.js";
 import {
@@ -190,14 +191,19 @@ export function createStorageUsageService(
       topLevel = [];
     }
     const usage: StorageCategoryUsage[] = [];
+    // Any walk that skipped something makes every total a minimum, not only a spent budget.
+    let partial = false;
     for (const category of STORAGE_CATEGORY_IDS) {
       for (const name of topLevel.filter((entry) => storageCategoryForEntry(entry) === category)) {
         const target = path.join(profileRoot, name);
         if (category === "worktrees" && target === worktreeRoot) {
-          usage.push(await measureWorktreeRoot(worktreeRoot, measurable, worktreeBytes, budget));
+          const measured = await measureWorktreeRoot(worktreeRoot, measurable, worktreeBytes, budget);
+          partial ||= measured.truncated;
+          usage.push(measured.usage);
           continue;
         }
         const measured = await measurePathBytes(target, budget, { onFile });
+        partial ||= measured.truncated;
         usage.push({ id: category, bytes: measured.bytes, itemCount: measured.files });
       }
     }
@@ -209,7 +215,7 @@ export function createStorageUsageService(
       status: "ready",
       scannedAt: startedAt,
       error: null,
-      truncated: budget.truncated,
+      truncated: budget.truncated || partial,
     };
     return assembleStorageReport({
       categories: orderCategories(usage),
@@ -226,9 +232,10 @@ export function createStorageUsageService(
     managed: readonly Workspace[],
     into: Map<string, { bytes: number; complete: boolean }>,
     budget: StorageScanBudget,
-  ): Promise<StorageCategoryUsage> {
+  ): Promise<{ usage: StorageCategoryUsage; truncated: boolean }> {
     let bytes = 0;
     let files = 0;
+    let truncated = false;
     const exclude = new Set<string>();
     for (const workspace of managed) {
       const tree = workspace.managedWorktree!;
@@ -237,9 +244,13 @@ export function createStorageUsageService(
       into.set(workspace.id, { bytes: measured.bytes, complete: !measured.truncated });
       bytes += measured.bytes;
       files += measured.files;
+      truncated ||= measured.truncated;
     }
     const rest = await measurePathBytes(worktreeRoot, budget, { exclude });
-    return { id: "worktrees", bytes: bytes + rest.bytes, itemCount: files + rest.files };
+    return {
+      usage: { id: "worktrees", bytes: bytes + rest.bytes, itemCount: files + rest.files },
+      truncated: truncated || rest.truncated,
+    };
   }
 
   async function describeWorktrees(
@@ -607,13 +618,19 @@ function clampDays(value: number): StorageInactiveDays {
 
 /**
  * Whether a file is in a cache folder that Clear cache empties: the app's own
- * `Cache`, `Code Cache` or `GPUCache`, or the same folders inside one of the
- * browser profiles under `Partitions/<profile>/`.
+ * `Cache`, `Code Cache` or `GPUCache`, or the same folders inside one of
+ * Aiden's browser partitions under `Partitions/<partition>/`. Clear cache
+ * visits exactly those partitions, including ones left behind by a deleted
+ * profile or Bot, so what is counted here is what it frees.
  */
 function isBrowserCacheFile(profileRoot: string, partitionsDir: string, filePath: string): boolean {
   const fromPartitions = path.relative(partitionsDir, filePath).split(path.sep);
-  if (fromPartitions[0] !== ".." && fromPartitions.length >= 3) {
-    return BROWSER_CACHE_DIRECTORY_NAMES.has(fromPartitions[1]!);
+  if (fromPartitions[0] !== "..") {
+    return (
+      fromPartitions.length >= 3 &&
+      aidenBrowserPartitionName(fromPartitions[0]!) !== null &&
+      BROWSER_CACHE_DIRECTORY_NAMES.has(fromPartitions[1]!)
+    );
   }
   const fromRoot = path.relative(profileRoot, filePath).split(path.sep);
   return fromRoot.length >= 2 && BROWSER_CACHE_DIRECTORY_NAMES.has(fromRoot[0]!);

@@ -40,7 +40,7 @@ Nine categories: chats, logs and diagnostics, artifacts and images, browser data
 - A finished scan broadcasts `storage:changed` `{ kind: "scan-finished" }`; the page re-reads.
 - `refresh()` awaits the same in-flight scan, so pressing **Measure again** twice does not start two walks.
 - Sizes are allocated blocks, not file length, so sparse Bot computer disks are not overstated, and a hard-linked file counts once per scan.
-- The walk shares one `StorageScanBudget` across every measurement (1M entries, 20 s). Hitting a bound stops the walk and sets `scan.truncated`, and the page says some sizes are a minimum, marking each partly measured item "At least". Every worktree and chat is still listed. A silent undercount would be worse than an honest one.
+- The walk shares one `StorageScanBudget` across every measurement (1M entries, 20 s). Hitting a bound stops the walk; a skipped folder (unreadable or too deep) leaves a hole but the walk goes on. Either sets `scan.truncated`, and the page says some sizes are a minimum, marking each partly measured item "At least". Every worktree and chat is still listed. A silent undercount would be worse than an honest one.
 - Symlinks are never followed (`lstat`, skip), so a workspace link cannot pull an unrelated volume into the total.
 - Each worktree is measured once, last. A worktree is measured only inside `worktrees/`; a record pointing elsewhere is listed at zero.
 - A chat's size is its transcript plus the pictures no other chat uses, which is what deleting it frees.
@@ -68,7 +68,7 @@ Deletion uses Aiden's own paths, so their existing invariants still apply:
 - `workspaceWorktreeApplicationService.remove` (which itself snapshots dirty work and refuses on unknown ignored files, and runs through the workspace mutation gate, terminal shutdown, schedule pause, and operation cancellation).
 - `chatApplicationService.remove` (which deletes the chat's images, subagent history, staged display and generative-UI artifacts, Pi effect and compaction journals, sourced memory, and pull-request links with it).
 - The diagnostics owner for logs, the same path `diagnostics:delete` uses, plus terminal scrollback files.
-- Each browser session for the cache (`clearCache`, `clearCodeCaches`, shader cache): the app's own session, the built-in browser's profiles and every Bot's browser. Cookies and site storage stay.
+- Each browser session for the cache (`clearCache`, `clearCodeCaches`, shader cache): the app's own session, the built-in browser's profiles, every Bot's browser, and Aiden partitions left on disk by a deleted profile or Bot. The offered amount counts only those sessions' cache folders. Cookies and site storage stay.
 
 Cleanups run one at a time. Removing a worktree deletes its branch only when the branch still points where Aiden created it; a branch with commits stays.
 

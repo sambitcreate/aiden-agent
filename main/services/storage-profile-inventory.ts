@@ -45,10 +45,13 @@ export const STORAGE_PROFILE_LAYOUT: Readonly<Record<string, StorageCategoryId>>
   Crashpad: "logs",
   "terminal-history": "logs",
 
-  // The built-in browser's and Bots' browsers' Chromium profiles, plus
-  // browser recordings.
+  // The built-in browser's and Bots' browsers' Chromium profiles, browser
+  // recordings, and the app's own Chromium caches (cleared by Clear cache too).
   Partitions: "browser",
   browser: "browser",
+  Cache: "browser",
+  "Code Cache": "browser",
+  GPUCache: "browser",
 
   // Downloaded models and Bot computers.
   "voice-models": "models",
@@ -74,10 +77,11 @@ export const BROWSER_CACHE_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * The browser partitions Aiden creates (`persist:aiden-browser-*` for the
- * workspace browser, `persist:aiden-bot-*` for Bots). Only these are cleared;
- * a folder name outside this pattern is left alone.
+ * workspace browser, `persist:aiden-bot-*` for Bots, whose names escape other
+ * characters as `~xx`). Only these are counted and cleared; a folder name
+ * outside this pattern is left alone.
  */
-const AIDEN_PARTITION_DIRECTORY = /^aiden-(?:browser|bot)-[a-z0-9-]{1,200}$/u;
+const AIDEN_PARTITION_DIRECTORY = /^aiden-(?:browser|bot)-[A-Za-z0-9_~-]{1,200}$/u;
 
 export function aidenBrowserPartitionName(directoryName: string): string | null {
   return AIDEN_PARTITION_DIRECTORY.test(directoryName) ? `persist:${directoryName}` : null;
