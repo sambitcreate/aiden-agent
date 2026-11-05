@@ -216,12 +216,12 @@ data class AidenServer(
     val supportsBotPeerExchanges: Boolean
         get() = supportsBotPeers && capabilities.contains(AidenRemoteCapability.CHAT_READ)
 
-    /** Routine configuration and run facts require Bot and chat visibility (revision 56). */
+    /** Routine configuration and run facts require Bot and chat visibility (revision 58). */
     val supportsBotRoutineModels: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ROUTINE_MODELS) == true &&
             capabilities.containsAll(listOf(AidenRemoteCapability.BOT_ROUTINE_MODELS, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))
 
-    /** Offered and held (revision 54): this phone can inspect connector watches. */
+    /** Offered and held (revision 58): this phone can inspect connector watches. */
     val supportsBotWatches: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_WATCHES) == true &&
             capabilities.contains(AidenRemoteCapability.BOT_WATCHES) && capabilities.contains(AidenRemoteCapability.BOT_READ)

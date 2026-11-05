@@ -33,6 +33,16 @@ class AidenNavigationStackTest {
     }
 
     @Test
+    fun allowedListRestoresForItsBotAndBackReturnsToProfile() {
+        val botId = "bot:00000000-0000-4000-8000-000000000057"
+        val stack = root.push(AidenScreen.BotProfile(botId)).push(AidenScreen.BotAllowed(botId))
+        val saved = with(AidenNavigationStack.Saver) { SaverScope { true }.save(stack) }!!
+        val restored = AidenNavigationStack.Saver.restore(saved)!!
+        assertEquals(AidenScreen.BotAllowed(botId), restored.current)
+        assertEquals(AidenScreen.BotProfile(botId), restored.pop()!!.current)
+    }
+
+    @Test
     fun reopeningTheCurrentScreenOrTheShellDoesNotGrowTheStack() {
         val chat = root.push(AidenScreen.ChatDetail("chat-1"))
         assertEquals(chat, chat.push(AidenScreen.ChatDetail("chat-1")))

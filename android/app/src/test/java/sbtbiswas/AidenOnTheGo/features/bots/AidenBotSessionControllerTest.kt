@@ -37,6 +37,274 @@ import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AidenBotSessionControllerTest {
+    private fun accessSection() = fixture.getValue("botAccessRequests").jsonObject
+    private fun accessSession() = json.decodeFromJsonElement(AidenBotSession.serializer(), accessSection().getValue("session"))
+
+    @Test fun accessChoicesEachAnswerOnceAndWholeMacRefusesAlways() = runTest {
+        for (choice in listOf(AidenBotAccessRequestChoice.NOT_NOW, AidenBotAccessRequestChoice.ALWAYS, AidenBotAccessRequestChoice.ONCE)) {
+            val transport = FakeTransport(accessSession())
+            val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+            controller.refetch()
+            assertTrue(controller.answerAccessRequest(choice))
+            assertEquals(choice, transport.accessAnswers.single().request.choice)
+            assertEquals(accessSession().accessRequest?.waitId, transport.accessAnswers.single().waitId)
+            assertNull(controller.state.value.session?.accessRequest)
+            assertFalse(controller.answerAccessRequest(choice))
+            controller.stopFollowing()
+        }
+        val mac = AidenBotAccessRequest.parse(accessSection().getValue("wholeMac"))
+        val transport = FakeTransport(accessSession().copy(accessRequest = mac))
+        val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+        controller.refetch()
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+        assertTrue(transport.accessAnswers.isEmpty())
+        controller.stopFollowing()
+    }
+
+    @Test fun uncertainAlwaysThenNotNowSendsNewChoiceAndKey() = runTest {
+        val transport = FakeTransport(accessSession())
+        val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+        controller.refetch()
+        transport.accessFailure = IOException("lost")
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+        assertEquals("That answer wasn't sent. Please try again.", controller.state.value.actionError)
+        assertEquals(accessSession().accessRequest, controller.state.value.session?.accessRequest)
+        assertTrue(controller.answerAccessRequest(AidenBotAccessRequestChoice.NOT_NOW))
+        assertEquals(listOf(AidenBotAccessRequestChoice.ALWAYS, AidenBotAccessRequestChoice.NOT_NOW), transport.accessAnswers.map { it.request.choice })
+        assertNotEquals(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        assertNull(controller.state.value.session?.accessRequest)
+        controller.stopFollowing()
+    }
+
+    @Test fun sameChoiceUncertainRetryReusesBodyAndKey() = runTest {
+        val body = json.decodeFromJsonElement(AidenRemoteErrorEnvelope.serializer(), accessSection().getValue("expired")).error
+            .copy(code = AidenRemoteErrorCode.INTERNAL_ERROR)
+        for (failure in listOf(IOException("lost"), AidenRemoteClientException.Server(503, body))) {
+            val transport = FakeTransport(accessSession())
+            val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+            controller.refetch()
+            transport.accessFailure = failure
+            assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+            assertTrue(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+            assertEquals(listOf(AidenBotAccessRequestChoice.ALWAYS, AidenBotAccessRequestChoice.ALWAYS), transport.accessAnswers.map { it.request.choice })
+            assertEquals(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+            controller.stopFollowing()
+        }
+    }
+
+    @Test fun hostFirstAnswerWinsAndFreshWaitCanStillBeAnswered() = runTest {
+        val transport = FakeTransport(accessSession())
+        val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+        controller.refetch()
+        transport.accessFailure = IOException("lost")
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+        val body = json.decodeFromJsonElement(AidenRemoteErrorEnvelope.serializer(), accessSection().getValue("expired")).error
+        transport.accessFailure = AidenRemoteClientException.Server(409, body)
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.NOT_NOW))
+        assertEquals(listOf(AidenBotAccessRequestChoice.ALWAYS, AidenBotAccessRequestChoice.NOT_NOW), transport.accessAnswers.map { it.request.choice })
+        assertNotEquals(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        assertNull(controller.state.value.session?.accessRequest)
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ONCE))
+        val mac = AidenBotAccessRequest.parse(accessSection().getValue("wholeMac"))
+        controller.handle(AidenBotSessionEvent("bot_fixture_01", "epoch_fixture_55", 51, AidenBotSessionEventPayload.AccessRequest(mac)))
+        assertTrue(controller.answerAccessRequest(AidenBotAccessRequestChoice.ONCE))
+        assertNotEquals(transport.accessAnswers[0].waitId, transport.accessAnswers[2].waitId)
+        controller.stopFollowing()
+    }
+
+    @Test fun committedAlwaysShowsSuccessAndCannotRetryOldCard() = runTest {
+        val transport = FakeTransport(accessSession())
+        val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+        controller.refetch()
+        transport.accessFailure = IOException("lost")
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+        transport.accessReceipt = AidenBotAccessAnswerReceipt(true, true)
+        assertTrue(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+        assertNull(controller.state.value.actionError)
+        assertNull(controller.state.value.session?.accessRequest)
+        assertEquals("Folder approval recorded.", controller.state.value.accessSuccessNotice)
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ONCE))
+        assertEquals(2, transport.accessAnswers.size)
+        assertEquals(transport.accessAnswers[0].key, transport.accessAnswers[1].key)
+        controller.stopFollowing()
+    }
+
+    @Test fun dismissAccessPostsOfferedActionAndDropsIssue() = runTest {
+        val issue = json.decodeFromJsonElement(AidenBotIssue.serializer(), accessSection().getValue("issue"))
+            .copy(actions = listOf(AidenBotIssueAction(AidenBotIssueActionKind.DISMISS_ACCESS)))
+        val transport = FakeTransport(accessSession().copy(issues = listOf(issue)))
+        val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+        controller.refetch()
+        assertTrue(controller.actOnIssue(issue, issue.actions.single()))
+        assertTrue(controller.state.value.openIssues.isEmpty())
+        assertEquals(AidenBotIssueActionKind.DISMISS_ACCESS, transport.issueActions.single().second.action.kind)
+        assertEquals(issue.id, transport.issueActions.single().first)
+        assertFalse(controller.actOnIssue(issue, issue.actions.single()))
+        assertEquals(1, transport.issueActions.size)
+        controller.stopFollowing()
+    }
+
+    @Test fun accessFeedReplacementWinsFailedAnswerAndDuplicateTap() = runTest {
+        val transport = FakeTransport(accessSession())
+        val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
+        controller.refetch()
+        transport.accessGate = CompletableDeferred()
+        transport.accessFailure = IOException("lost")
+        val answer = async { controller.answerAccessRequest(AidenBotAccessRequestChoice.ONCE) }
+        runCurrent()
+        assertNull(controller.state.value.session?.accessRequest)
+        assertFalse(controller.answerAccessRequest(AidenBotAccessRequestChoice.ALWAYS))
+        val mac = AidenBotAccessRequest.parse(accessSection().getValue("wholeMac"))
+        controller.handle(AidenBotSessionEvent("bot_fixture_01", "epoch_fixture_55", 51, AidenBotSessionEventPayload.AccessRequest(mac)))
+        transport.accessGate!!.complete(Unit)
+        assertFalse(answer.await())
+        assertEquals(mac, controller.state.value.session?.accessRequest)
+        assertEquals(1, transport.accessAnswers.size)
+        controller.stopFollowing()
+    }
+
+    private fun planSection() = fixture.getValue("botPlans").jsonObject
+    private fun planSession() = json.decodeFromJsonElement(AidenBotSession.serializer(), planSection().getValue("session"))
+    private fun planError(status: Int = 409) = AidenRemoteClientException.Server(status,
+        json.decodeFromJsonElement(AidenRemoteErrorEnvelope.serializer(), planSection().getValue("expired")).error.let {
+            if (status >= 500) it.copy(code = AidenRemoteErrorCode.INTERNAL_ERROR) else it
+        })
+    private fun planEvent(plan: AidenRemoteBotPlan?, seq: Long = 1) = AidenBotSessionEvent(planSession().botId, planSession().epoch, seq, AidenBotSessionEventPayload.Plan(plan))
+
+    @Test fun plansRemainHostAuthoritativeAndPendingHoldsSend() = runTest {
+        val initial = planSession()
+        val transport = FakeTransport(initial)
+        val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+        controller.refetch()
+        assertTrue(controller.state.value.composerHeldForPlan)
+        assertTrue(controller.state.value.composerEnabled)
+        assertEquals("Files · change /Volumes/Backup/Family Photos for this plan", controller.state.value.session?.plan?.items?.get(2)?.line)
+        assertEquals(listOf("/Volumes/Backup/Family Photos", "Read and change · allowed once, for this plan only"), controller.state.value.session?.plan?.items?.get(2)?.details)
+        assertEquals("Files · read ~/Documents/Tax Records", controller.state.value.session?.plan?.items?.get(3)?.line)
+        assertFalse(controller.send("Keep this draft"))
+        assertTrue(transport.sends.isEmpty())
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertEquals(initial.plan, controller.state.value.session?.plan)
+        val active = AidenRemoteBotPlan.parse(planSection().getValue("active"))
+        controller.handle(planEvent(active))
+        assertFalse(controller.state.value.composerHeldForPlan)
+        assertEquals(1, controller.state.value.session?.plan?.completedSteps)
+        assertEquals("Files · change /Volumes/Backup/Family Photos for this plan", controller.state.value.session?.plan?.items?.get(2)?.line)
+        assertEquals(listOf("~/Documents/Tax Records"), controller.state.value.session?.plan?.items?.get(3)?.details)
+        assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        transport.planReceipt = AidenBotPlanRespondReceipt(active.planId, AidenBotPlanStatus.STOPPED)
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.STOP))
+        assertEquals(AidenBotPlanStatus.ACTIVE, controller.state.value.session?.plan?.status)
+        controller.handle(planEvent(null, 2))
+        assertNull(controller.state.value.session?.plan)
+        val readOnly = AidenRemoteBotPlan.parse(planSection().getValue("readOnlyFolderPlan"))
+        controller.handle(planEvent(readOnly, 3))
+        assertTrue(controller.state.value.composerHeldForPlan)
+        val shown = requireNotNull(controller.state.value.session?.plan)
+        assertEquals("plan-read-only-folder-56", shown.planId)
+        assertEquals(listOf("Files · read /Volumes/Archive/Tax Records for this plan"), shown.items.map { it.line })
+        assertEquals(listOf(listOf("/Volumes/Archive/Tax Records", "Read only · allowed once, for this plan only")), shown.items.map { it.details })
+        assertNull(shown.items.first().used); assertNull(shown.items.first().max)
+        controller.stopFollowing()
+    }
+    @Test fun sameDecisionUnknownRetryKeepsKeyAndDifferentDecisionSendsNewBody() = runTest {
+        for (failure in listOf(IOException("lost"), planError(503))) {
+            val initial = planSession(); val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch(); transport.planFailure = failure
+            assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+            assertEquals(initial.plan, controller.state.value.session?.plan)
+            assertTrue(controller.state.value.planError != null)
+            assertTrue(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+            assertEquals(listOf(AidenBotPlanDecision.APPROVE, AidenBotPlanDecision.APPROVE), transport.planAnswers.map { it.request.decision })
+            assertEquals(transport.planAnswers[0].key, transport.planAnswers[1].key)
+            controller.stopFollowing()
+        }
+        val initial = planSession(); val transport = FakeTransport(initial)
+        val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+        controller.refetch(); transport.planFailure = IOException("lost")
+        assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        transport.planReceipt = AidenBotPlanRespondReceipt(initial.plan!!.planId, AidenBotPlanStatus.STOPPED)
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.NOT_NOW))
+        assertEquals(listOf(AidenBotPlanDecision.APPROVE, AidenBotPlanDecision.NOT_NOW), transport.planAnswers.map { it.request.decision })
+        assertNotEquals(transport.planAnswers[0].key, transport.planAnswers[1].key)
+        assertEquals(AidenBotPlanStatus.PENDING, controller.state.value.session?.plan?.status)
+        controller.stopFollowing()
+    }
+    @Test fun expiredOnlyRemovesMatchingUnchangedPlanAndFreshReplacementAnswers() = runTest {
+        val initial = planSession(); val transport = FakeTransport(initial)
+        val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+        controller.refetch(); transport.planFailure = planError()
+        assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertNull(controller.state.value.session?.plan)
+        val replacement = initial.plan!!.copy(planId = "replacement-plan")
+        controller.handle(planEvent(replacement))
+        transport.planReceipt = AidenBotPlanRespondReceipt(replacement.planId, AidenBotPlanStatus.ACTIVE)
+        assertTrue(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertEquals(replacement, controller.state.value.session?.plan)
+        controller.stopFollowing()
+    }
+    @Test fun identicalPendingSnapshotDoesNotDiscardExpiredAnswer() = runTest {
+        for (decision in listOf(AidenBotPlanDecision.APPROVE, AidenBotPlanDecision.NOT_NOW)) {
+            val initial = planSession(); val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch()
+            transport.planGate = CompletableDeferred()
+            transport.planFailure = planError()
+            val answer = async { controller.respondToPlan(decision) }; runCurrent()
+            assertTrue(controller.handle(snapshotOf(initial.copy(seq = 1))))
+            assertEquals(initial.plan, controller.state.value.session?.plan)
+            assertTrue(controller.state.value.composerHeldForPlan)
+            transport.planGate!!.complete(Unit); answer.await()
+            assertNull(controller.state.value.session?.plan)
+            assertFalse(controller.state.value.composerHeldForPlan)
+            assertTrue(controller.state.value.respondingPlanIds.isEmpty())
+            assertEquals(listOf(decision), transport.planAnswers.map { it.request.decision })
+            controller.stopFollowing()
+        }
+    }
+    @Test fun latePlanFailureConflictAndReceiptCannotAlterReplacementClearOrGeneration() = runTest {
+        for (outcome in listOf("failure", "conflict", "success", "clear", "same-id-active", "generation")) {
+            val initial = planSession(); val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch(); transport.planGate = CompletableDeferred()
+            if (outcome == "failure") transport.planFailure = IOException("lost")
+            if (outcome == "conflict" || outcome == "same-id-active") transport.planFailure = planError()
+            val answer = async { controller.respondToPlan(AidenBotPlanDecision.APPROVE) }; runCurrent()
+            assertFalse(controller.respondToPlan(AidenBotPlanDecision.NOT_NOW))
+            when (outcome) {
+                "generation" -> controller.reopenFeed()
+                "clear" -> controller.handle(planEvent(null))
+                "same-id-active" -> controller.handle(planEvent(AidenRemoteBotPlan.parse(planSection().getValue("active"))))
+                else -> controller.handle(planEvent(initial.plan!!.copy(planId = "replacement-plan")))
+            }
+            val expected = controller.state.value.session?.plan
+            transport.planGate!!.complete(Unit); answer.await()
+            assertEquals(expected, controller.state.value.session?.plan)
+            assertNull(controller.state.value.planError)
+            assertTrue(controller.state.value.respondingPlanIds.isEmpty())
+            assertEquals(1, transport.planAnswers.size)
+            controller.stopFollowing()
+        }
+    }
+    @Test fun absentCapabilityMakesNoCardOrCallAndWrongReceiptNeverSettlesPlan() = runTest {
+        val initial = planSession(); val oldTransport = FakeTransport(initial)
+        val old = AidenBotSessionController(initial.botId, oldTransport, backgroundScope)
+        old.refetch()
+        assertNull(old.state.value.session?.plan)
+        assertFalse(old.state.value.composerHeldForPlan)
+        assertFalse(old.respondToPlan(AidenBotPlanDecision.APPROVE))
+        assertTrue(oldTransport.planAnswers.isEmpty()); old.stopFollowing()
+        for (receipt in listOf(AidenBotPlanRespondReceipt("wrong-plan", AidenBotPlanStatus.ACTIVE), AidenBotPlanRespondReceipt(initial.plan!!.planId, AidenBotPlanStatus.PENDING))) {
+            val transport = FakeTransport(initial)
+            val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
+            controller.refetch(); transport.planReceipt = receipt
+            assertFalse(controller.respondToPlan(AidenBotPlanDecision.APPROVE))
+            assertEquals(initial.plan, controller.state.value.session?.plan)
+            assertTrue(controller.state.value.planError != null); controller.stopFollowing()
+        }
+    }
+
     @get:Rule
     val tempFolder = TemporaryFolder()
 
@@ -53,6 +321,35 @@ class AidenBotSessionControllerTest {
     }
 
     private class FakeTransport(var session: AidenBotSession) : AidenBotSessionTransport {
+        data class PlanAnswer(val planId: String, val request: AidenBotPlanRespondRequest, val key: UUID)
+        val planAnswers = mutableListOf<PlanAnswer>()
+        var planFailure: Exception? = null
+        var planGate: CompletableDeferred<Unit>? = null
+        var planReceipt = AidenBotPlanRespondReceipt("plan-fixture-56", AidenBotPlanStatus.ACTIVE)
+        override suspend fun respondPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, key: UUID): AidenBotPlanRespondReceipt {
+            planAnswers += PlanAnswer(planId, request, key)
+            planGate?.await()
+            planFailure?.let { planFailure = null; throw it }
+            return planReceipt
+        }
+        data class AccessAnswer(val waitId: String, val request: AidenBotAccessAnswerRequest, val key: UUID)
+        val accessAnswers = mutableListOf<AccessAnswer>()
+        var accessReceipt = AidenBotAccessAnswerReceipt(true)
+        var accessFailure: Exception? = null
+        var accessGate: CompletableDeferred<Unit>? = null
+        override suspend fun answerAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, key: UUID): AidenBotAccessAnswerReceipt {
+            accessAnswers += AccessAnswer(waitId, request, key)
+            accessGate?.await()
+            accessFailure?.let { accessFailure = null; throw it }
+            return accessReceipt
+        }
+
+        val issueActions = mutableListOf<Pair<String, AidenBotIssueActRequest>>()
+        override suspend fun actOnIssue(botId: String, issueId: String, request: AidenBotIssueActRequest, key: UUID): AidenBotIssueActReceipt {
+            issueActions += issueId to request
+            return AidenBotIssueActReceipt(AidenBotIssueActResult.DONE)
+        }
+
         var sessionReads = 0
         val sends = mutableListOf<Pair<String, UUID>>()
         val resumeKeys = mutableListOf<UUID>()
@@ -144,12 +441,18 @@ class AidenBotSessionControllerTest {
         override suspend fun requestConnection(botId: String, pluginId: String, key: UUID) =
             AidenBotConnectionRequestReceipt(pluginId, "Google Calendar", AidenBotConnectionRequestStatus.SENT)
 
-        data class ApprovalCall(val waitId: String, val decision: AidenApprovalDecision, val key: UUID)
+        data class ApprovalCall(val waitId: String, val decision: AidenApprovalDecision, val key: UUID, val scope: AidenApprovalScope? = null)
         val approvalCalls = mutableListOf<ApprovalCall>()
         /** Failures the next approval responses throw, in order. */
         val approvalFailures = ArrayDeque<Exception>()
         var approvalGate: CompletableDeferred<Unit>? = null
 
+        override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, key: UUID): AidenApprovalResponse {
+            approvalCalls += ApprovalCall(waitId,decision,key,scope)
+            approvalGate?.await()
+            approvalFailures.removeFirstOrNull()?.let { throw it }
+            return AidenApprovalResponse(waitId,decision,scope,java.time.Instant.parse("2026-08-19T15:02:00Z"))
+        }
         override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID): AidenApprovalResponse {
             approvalCalls += ApprovalCall(waitId, decision, key)
             approvalGate?.await()
@@ -338,6 +641,41 @@ class AidenBotSessionControllerTest {
         assertEquals(null, controller.state.value.session?.approval)
         assertEquals(approvalFrames[1].seq, controller.state.value.session?.seq)
         assertFalse("nothing waits on an idle Bot any more", controller.state.value.canStopTurn)
+    }
+
+    @Test fun alwaysScopeRetainsItsUnknownKeyAndOnceUsesAnotherBody() = runTest {
+        val (transport,controller) = approvalController(mailApproval.copy(alwaysCount=3),backgroundScope)
+        controller.refetch()
+        assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW,AidenApprovalScope.ALWAYS))
+        assertTrue(transport.approvalCalls.isEmpty())
+        controller.allowedSupported=true
+        for (scope in listOf(AidenApprovalScope.ALWAYS,AidenApprovalScope.ONCE,AidenApprovalScope.ALWAYS)) {
+            transport.approvalFailures += IOException("lost acknowledgement")
+            assertFalse(controller.respondToApproval(AidenApprovalDecision.ALLOW,scope))
+        }
+        assertEquals(listOf(AidenApprovalScope.ALWAYS,null,AidenApprovalScope.ALWAYS),transport.approvalCalls.map { it.scope })
+        assertEquals(transport.approvalCalls[0].key,transport.approvalCalls[2].key)
+        assertNotEquals(transport.approvalCalls[0].key,transport.approvalCalls[1].key)
+        assertTrue(controller.respondToApproval(AidenApprovalDecision.ALLOW,AidenApprovalScope.ALWAYS))
+        assertEquals("Always allow requested.",controller.state.value.approvalSuccessNotice)
+    }
+
+    @Test fun lateAlwaysFailureCannotRestoreHostReplacementOrClear() = runTest {
+        for (clear in listOf(false,true)) {
+            val offered=mailApproval.copy(alwaysCount=3)
+            val (transport,controller)=approvalController(offered,backgroundScope)
+            controller.refetch(); controller.allowedSupported=true
+            transport.approvalGate=CompletableDeferred()
+            transport.approvalFailures += IOException("lost acknowledgement")
+            val answer=async { controller.respondToApproval(AidenApprovalDecision.ALLOW,AidenApprovalScope.ALWAYS) }
+            runCurrent()
+            val next=if (clear) null else offered.copy(waitId="replacement-57")
+            controller.handle(snapshotOf(transport.session.copy(seq=1,approval=next)))
+            transport.approvalGate!!.complete(Unit)
+            assertFalse(answer.await())
+            assertEquals(next,controller.state.value.session?.approval)
+            assertNull(controller.state.value.approvalSuccessNotice)
+        }
     }
 
     @Test

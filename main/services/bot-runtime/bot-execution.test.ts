@@ -253,6 +253,8 @@ test("person can acknowledge an older dismissed routine's actual unknown receipt
   const a = await env.port.getClaim("bot:one", "A", "A"), b = await env.port.getClaim("bot:one", "B", "B"); a.routineId = "routine-A"; b.routineId = "routine-B";
   let document = emptySpendingDocument(); const spending = new SpendingService({ persistence: { load: async () => structuredClone(document), save: async (next) => { document = structuredClone(next); } }, settings: async () => ({ botMonthUsd: 2, routineRunUsd: 1 }), broadcast() {} });
   let service!: BotSessionRuntime;
+  const interrupted = new Set<string>(), waiting = new Map<string, () => void>();
+  const observedInterruption = (submissionId: string) => interrupted.has(submissionId) ? Promise.resolve() : new Promise<void>(resolve => { waiting.set(submissionId, resolve); });
   const issues = createBotIssueService({ store: createBotIssueStore({ profileDir: () => folder }), appendEntry: (botId, kind, data) => service.appendEntry(botId, kind, data as JsonValue), funnel: { deliver: async () => "sent" }, actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} }, now: Date.now });
   const issueLifecycle = createBotExecutionIssues(issues, spending);
   let originalId = "", acknowledgements = 0; const base = env.port.resolve;
@@ -262,13 +264,13 @@ test("person can acknowledge an older dismissed routine's actual unknown receipt
   env.port.unknownCostReceipt = (botId, saved, submissionId, scopeId) => botExecutionUnknownCostReceipt(spending, botId, saved, submissionId, scopeId);
   env.port.acknowledgeUnknown = async (botId, bound, expectedDispatchId) => { const actual = await acknowledgeBotExecutionUnknown(spending, botId, bound, expectedDispatchId); if (actual) { acknowledgements++; await issueLifecycle.acknowledged(botId, actual); } return actual !== undefined; };
   env.port.dismissed = (botId, bound) => issueLifecycle.dismissed(botId, bound);
-  service = await createBotSessionService({ profileDir: folder, models: env.models, execution: env.port, extension: recordingDeps(), resolveModel: async () => ({ provider: "proof", modelId: "D" }), knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: { enabled: false } }, spendingRefusal: (botId) => botExecutionInputSpendingRefusal(spending, botId), executionBlocked: (...args) => issueLifecycle.blocked(...args) }); t.after(() => service.shutdown());
+  service = await createBotSessionService({ profileDir: folder, models: env.models, execution: env.port, extension: recordingDeps(), resolveModel: async () => ({ provider: "proof", modelId: "D" }), knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: { enabled: false } }, spendingRefusal: (botId) => botExecutionInputSpendingRefusal(spending, botId), executionBlocked: (...args) => issueLifecycle.blocked(...args), onStateChange: (_bot, state) => { if (state.kind === "interrupted") { interrupted.add(state.submissionId); waiting.get(state.submissionId)?.(); } } }); t.after(() => service.shutdown());
   env.faux.setResponses([fauxAssistantMessage("A outcome with unknown cost"), fauxAssistantMessage("B after consent")]);
-  await service.send("bot:one", { requestId: "A", text: "A", routineOrigin: issueBotRoutineInputOrigin({ version: 1, botId: "bot:one", routineId: "routine-A", runId: "A", kind: "manual" }) });
-  for (let n = 0; n < 100 && (await service.routineState("bot:one")).kind !== "interrupted"; n++) await new Promise((resolve) => setTimeout(resolve, 10));
+  const submittedA = await service.send("bot:one", { requestId: "A", text: "A", routineOrigin: issueBotRoutineInputOrigin({ version: 1, botId: "bot:one", routineId: "routine-A", runId: "A", kind: "manual" }) });
+  await observedInterruption(submittedA.submissionId);
   assert.equal((await service.routineState("bot:one")).kind, "interrupted"); const obligation = (await issues.list("bot:one", { open: true }))[0]!; assert.equal(obligation.body, SPENDING_UNKNOWN_RESUME_MESSAGE); await service.dismiss("bot:one", "dismiss-A");
   const submitted = await service.send("bot:one", { requestId: "B", text: "B", routineOrigin: issueBotRoutineInputOrigin({ version: 1, botId: "bot:one", routineId: "routine-B", runId: "B", kind: "manual" }) });
-  for (let n = 0; n < 100 && (await service.routineState("bot:one")).kind !== "interrupted"; n++) await new Promise((resolve) => setTimeout(resolve, 10));
+  await observedInterruption(submitted.submissionId);
   assert.equal((await service.executionResumeStatus("bot:one")).requiresUnknownCostAcknowledgement, true); assert.deepEqual(env.calls.map((row) => row.model), ["A"]);
   assert.deepEqual((await issues.list("bot:one", { open: true })).map((issue) => issue.id), [obligation.id], "B shares the actual saved cost obligation instead of creating another card");
   await assert.rejects(service.resume("bot:one", "resume-B"), (error: unknown) => error instanceof Error && "reason" in error && error.reason === "spending_unconfirmed"); assert.equal(acknowledgements, 0);
@@ -884,4 +886,42 @@ test("Mail source reads remain model-free with a missing Bot default, then queue
   const a=await service.send("bot:one",{requestId:"A",text:"Earlier routine",routineOrigin:issueBotRoutineInputOrigin({version:1,botId:"bot:one",routineId:"another-routine",runId:"A",kind:"scheduled"})});await waitFor(()=>entered);
   const b=await withBotConnectorExecutionRestriction(restriction,()=>service.send("bot:one",{requestId:"B",text:"A new Mail message arrived",routineOrigin:issueBotRoutineInputOrigin({version:1,botId:"bot:one",routineId:"watch-one",runId:"B",kind:"event"})}));assert.deepEqual(env.calls.map(row=>row.model),["A"]);
   barrier.release();await service.awaitReply("bot:one",a.submissionId,signal);assert.equal((await service.awaitReply("bot:one",b.submissionId,signal)).kind,"completed");assert.deepEqual(env.calls.map(row=>row.model),["A","B"]);assert.equal(defaultResolutions,0);
+});
+
+test("Bot-message input keeps host provenance, deadline and approval ownership under immutable execution models", async t => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "aiden-message-execution-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const env = await environment(path.join(folder, "unused.sqlite"), {}, { compaction: { enabled: false } });
+  await env.harness.close(ctx);
+  const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+  const requestId = `bot:sender:1:${deliveryId}`;
+  const saved = { ...claim("D", "off"), requestId, root: { botId: "bot:one", requestId } };
+  env.port.claim = async () => saved;
+  env.port.getClaim = async (_bot, id, request) => {
+    assert.equal(id, saved.id); assert.equal(request, requestId); return saved;
+  };
+  const mutate = countingTool("mutate");
+  const extension = recordingDeps({ tools: [{ tool: mutate, replay: "unsafe" }], policy: () => ({ allowed: true, approval: { summary: "Change a document" } }) });
+  const service = await createBotSessionService({ profileDir: folder, models: env.models, execution: env.port, extension,
+    resolveModel: async () => { throw new Error("The unrelated default must not be resolved"); }, knownBotIds: async () => new Set(["bot:one"]), settings: { compaction: { enabled: false } } });
+  t.after(() => service.shutdown());
+  env.faux.setResponses([fauxAssistantMessage([fauxToolCall("mutate", { text: "allowed" })], { stopReason: "toolUse" }), fauxAssistantMessage("Bot reply")]);
+  const metadata = { kind: "request" as const, deliveryId, botId: "sender", botName: "Sender", text: "A clean question", deadline: Date.now() + 60_000 };
+  const sent = await service.send("bot:one", { requestId, text: "<bot_message>private host framing</bot_message>", botMessage: metadata, ifIdle: true });
+  assert.equal((await service.awaitReply("bot:one", sent.submissionId, new AbortController().signal)).kind, "completed");
+  assert.equal(mutate.executions.length, 1);
+  assert.equal(extension.approvals.length, 1);
+  assert.deepEqual(extension.approvals[0]!.owner?.inputs[0]?.botMessage, metadata);
+  const conversation = await service.conversation("bot:one"), entries = (await conversation.context(ctx)).entries;
+  const input = entries.find(entry => entry.model?.[0]?.role === "user");
+  assert.equal(input?.kind, "aiden.bot-message-input");
+  assert.equal((input?.data as Record<string, unknown>)?.executionClaimId, saved.id);
+  const { projectBotTranscript } = await import("./live-projection.js");
+  const projected = projectBotTranscript(entries);
+  assert.deepEqual(projected.find(entry => entry.type === "bot_message"), { id: String(input!.id), type: "bot_message", kind: "request", botId: "sender", botName: "Sender", text: "A clean question", at: input!.model![0]!.timestamp });
+  assert.equal(projected.some(entry => entry.type === "user"), false);
+  const { provenanceOfHistory } = await import("../bot-memory/review.js");
+  const owners = await provenanceOfHistory(entries, ids => conversation.commit(tx => Promise.all(ids.map(id => tx.submissionByRequest(conversation.id, id))), ctx));
+  assert.ok(entries.filter(entry => entry.model?.[0]?.role === "user" || entry.kind === "pi.assistant").every(entry => owners.get(entry.id) === "unattended"));
+  assert.deepEqual(env.calls.map(call => call.model), ["D", "D"]);
 });

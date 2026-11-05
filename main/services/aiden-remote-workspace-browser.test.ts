@@ -50,6 +50,16 @@ async function fixture() {
   };
 }
 
+test("a Bot-only root is absent from listings and previously issued handles stop working", async () => {
+  const app = await fixture();
+  try {
+    const handle = (await app.service.listRoots("phone")).roots[0]!.location;
+    app.setRoots([{ ...app.root, botsOnly: true }]);
+    assert.deepEqual((await app.service.listRoots("phone")).roots, []);
+    await assert.rejects(app.service.listChildren("phone", handle), (error: unknown) => (error as { code?: string }).code === "root_policy_changed");
+  } finally { await app.cleanup(); }
+});
+
 test("approved-root browsing exposes only opaque directory entries and consumes selections once", async () => {
   const app = await fixture();
   try {

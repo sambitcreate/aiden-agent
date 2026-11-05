@@ -16,6 +16,7 @@ import { BotDeliveryHistoryFullError, type BotDeliveryClass, type BotDeliveryLog
 export interface BotDeliveryInput {
   botId: string;
   class: BotDeliveryClass;
+  requiredCapability?: BotDeliveryRow["requiredCapability"];
   dedupeKey: string;
   title: string;
   body: string;
@@ -117,6 +118,7 @@ export function createBotDeliveryFunnel(deps: {
     return {
       botId: row.botId,
       class: row.class,
+      ...(row.requiredCapability === undefined ? {} : { requiredCapability: row.requiredCapability }),
       dedupeKey: row.dedupeKey,
       title: row.title,
       body: row.body,
@@ -150,6 +152,7 @@ export function createBotDeliveryFunnel(deps: {
     const { row } = await deps.log.append({
       botId: input.botId,
       class: input.class,
+      ...(input.requiredCapability === undefined ? {} : { requiredCapability: input.requiredCapability }),
       dedupeKey: input.dedupeKey,
       title: input.title,
       body: input.body,

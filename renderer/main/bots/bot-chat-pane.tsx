@@ -1,6 +1,8 @@
 import { BOT_UNKNOWN_COST_CONFIRMATION } from "../../shared/bot-execution-resume";
 import { BotPeerExchangeDialog } from "./bot-peers";
 import { BOT_RESUME_JOURNAL_EVENT, pendingBotResumes, recordBotResume, settleBotResume, type BotResumeAttempt } from "./bot-resume-journal";
+import { AccessRequestCard } from "../../components/bots/access-request-card";
+import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 // A Bot's one conversation, rendered from the durable projection (`useBotLive`).
 // Sends go through `bots:send` with a fresh request UUID per message, so a retried
 // send never doubles. Stop, Resume and Dismiss map to their runtime actions.
@@ -18,6 +20,7 @@ import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
 import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
+import { PlanCard } from "../../components/bots/plan-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { detectedKeyboardPlatform } from "../../shared/keybindings";
@@ -32,7 +35,8 @@ import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../comp
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
 import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
-import { botListLocation } from "../../lib/bot-routes";
+import { botAllowedLocation, botListLocation } from "../../lib/bot-routes";
+import { botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
@@ -183,14 +187,31 @@ export function BotApprovalCard({
 }: {
   name: string;
   prompt: BotApprovalPrompt;
-  onAnswer(decision: "allow" | "deny"): void;
+  onAnswer(decision: "allow" | "deny", scope?: "always"): Promise<void> | void;
   /** Set when this device may only deny: where the person can allow it instead. */
   allowElsewhere?: string;
   /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
   keyboardShortcuts?: boolean;
 }) {
+  const [busy, setBusy] = React.useState(false);
+  const inFlight = React.useRef(false);
+  const [answerError, setAnswerError] = React.useState<string | null>(null);
+  const respond = async (decision: "allow" | "deny", scope?: "always") => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setAnswerError(null);
+    try {
+      await onAnswer(decision, scope);
+    } catch (error) {
+      setAnswerError(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
   const platform = detectedKeyboardPlatform();
-  useApprovalShortcuts({ enabled: keyboardShortcuts, canAllow: !allowElsewhere, onShortcut: onAnswer });
+  useApprovalShortcuts({ enabled: keyboardShortcuts && !busy, canAllow: !allowElsewhere, onShortcut: (decision) => void respond(decision) });
   const hint = (shortcut: ApprovalShortcut) =>
     keyboardShortcuts ? (
       <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
@@ -214,18 +235,25 @@ export function BotApprovalCard({
             <Button
               variant="transparent"
               size="small"
+              disabled={busy}
               aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", platform) : undefined}
-              onClick={() => onAnswer("deny")}
+              onClick={() => void respond("deny")}
             >
               Deny
               {hint("deny")}
             </Button>
+            {prompt.always && !allowElsewhere ? (
+              <Button variant="transparent" size="small" disabled={busy} onClick={() => void respond("allow", "always")}>
+                {botAlwaysAllowLabel(name)}
+              </Button>
+            ) : null}
             {allowElsewhere ? null : (
               <Button
                 variant="accent"
                 size="small"
+                disabled={busy}
                 aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", platform) : undefined}
-                onClick={() => onAnswer("allow")}
+                onClick={() => void respond("allow")}
               >
                 Allow
                 {hint("allow")}
@@ -234,12 +262,14 @@ export function BotApprovalCard({
           </>
         }
       >
+        {prompt.always ? <p className="text-tertiary">{`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`}</p> : null}
         {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
         {prompt.summary ? (
           <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
             {prompt.summary}
           </p>
         ) : null}
+        {answerError ? <p role="alert" className="mt-1 text-status-red">{answerError}</p> : null}
       </BotNoticeCard>
     </>
   );
@@ -762,7 +792,7 @@ export function TranscriptEntries({
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
   const retainedRecaps = React.useMemo(() => {
     let latestUserIndex = 0;
-    entries.forEach((entry, index) => { if (entry.type === "user") latestUserIndex = index; });
+    entries.forEach((entry, index) => { if (entry.type === "user" || entry.type === "bot_message") latestUserIndex = index; });
     return new Set(entries.slice(latestUserIndex).map((entry) => `${entry.id}:recap`));
   }, [entries]);
   return (
@@ -791,6 +821,24 @@ export function TranscriptEntries({
                   {...(row.note ? { note: row.note } : {})}
                 />
               </BotMessageActions>
+            );
+          case "bot_message":
+            return (
+              <div key={row.id} className="flex flex-col items-end gap-1">
+                <Text as="p" variant="small" color="secondary">{row.label}</Text>
+                <div className="w-full min-w-0">
+                  <BotMessageActions text={row.text} from={row.botName} align="end" onReply={onReply}>
+                    <SafeMessageBubble role="user" content={row.text} showCopy={false} />
+                  </BotMessageActions>
+                </div>
+              </div>
+            );
+          case "bot_message_status":
+            return (
+              <div key={row.id}>
+                <Text as="p" variant="small" color="secondary" role="note">{row.label}</Text>
+                {row.text ? <SafeMessageBubble role="assistant" content={row.text} showCopy={false} /> : null}
+              </div>
             );
           case "routine":
             return (
@@ -1060,6 +1108,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
   const findBar = useChatFind(botId);
+  const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
   // The Bot's routines, read only when its chat shows a wake-up chip.
@@ -1139,6 +1188,9 @@ export function BotChatPane({ botId }: { botId: string }) {
         approvals.prompts.length,
         snapshot?.question?.waitId,
         snapshot?.handoff?.waitId,
+        snapshot?.accessRequest?.waitId,
+        snapshot?.plan?.planId,
+        snapshot?.plan?.revision,
         snapshot?.activity?.phase,
         snapshot?.queued?.length ?? 0,
         pendingSends.length,
@@ -1199,6 +1251,9 @@ export function BotChatPane({ botId }: { botId: string }) {
   }
 
   const question = snapshot.question;
+  const plan = snapshot.plan ?? null;
+  const pendingPlan = plan?.status === "pending";
+  const accessRequest = snapshot.accessRequest ?? null;
   const handoff = snapshot.handoff ?? null;
   const signInWaits = handoff?.kind === "sign_in";
   // A sign-in or a password-or-code card is answered on the card alone: whatever is typed here would reach the Bot.
@@ -1230,7 +1285,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   });
   // A message just sent says "Getting ready" at once, before main's state
   // catches up (as on the phones); a failed send drops its echo and the line.
-  const startingTurn = !running && !question && !handoff ? shownSends.find((send) => !send.queued) : undefined;
+  const startingTurn = !running && !question && !handoff && !pendingPlan ? shownSends.find((send) => !send.queued) : undefined;
   const statusActivity =
     snapshot.activity && !replyStreaming
       ? snapshot.activity
@@ -1571,8 +1626,23 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const footer = (
     <div className="flex flex-col">
-      {approvals.prompts.length > 0 || handoff ? (
+      {plan || approvals.prompts.length > 0 || handoff || accessRequest ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
+          {plan ? (
+            <PlanCard
+              plan={plan}
+              botName={current.name}
+              avatar={current.avatar}
+              onRespond={async (decision) => {
+                const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
+                if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+              }}
+            />
+          ) : null}
+          {accessRequest ? (
+            <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
+              busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
+          ) : null}
           {handoff ? (
             <HandoffCard
               key={handoff.waitId}
@@ -1587,16 +1657,19 @@ export function BotChatPane({ botId }: { botId: string }) {
           ) : null}
           {approvals.prompts.map((prompt, index) => (
             <BotApprovalCard
-              key={prompt.waitId}
+              key={`${prompt.botId}:${prompt.waitId}`}
               name={current.name}
               prompt={prompt}
               keyboardShortcuts={index === 0}
-              onAnswer={(decision) => {
+              onAnswer={async (decision, scope) => {
+                const { decided } = await botsApi.approve(prompt.waitId, decision, scope);
+                if (!decided) throw new Error("That approval was already answered or closed.");
                 approvals.remove(prompt.waitId);
-                void botsApi.approve(prompt.waitId, decision).catch((error) => {
-                  approvals.restore(prompt);
-                  toast.error(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
-                });
+                if (scope === "always") {
+                  toast.success("Always allow requested.", {
+                    action: { label: "Manage", onClick: () => void navigate(botAllowedLocation(current.id)) },
+                  });
+                }
               }}
             />
           ))}
@@ -1623,9 +1696,11 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
-          ready={!noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          ready={!pendingPlan && !noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
-            state?.kind === "unavailable"
+            pendingPlan
+              ? "Answer the plan above, then send a message."
+              : state?.kind === "unavailable"
               ? BOT_UNAVAILABLE_LABEL
               : state?.kind === "paused"
                 ? botPausedText(current.name)

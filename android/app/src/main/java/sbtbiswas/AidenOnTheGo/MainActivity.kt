@@ -433,6 +433,9 @@ class MainActivity : ComponentActivity() {
                                 AidenBotWatchesScreen(screen.botId, coordinator, navigator::back,
                                     onOpenBotChat = { push(AidenScreen.BotChat(screen.botId)) })
                             }
+                            is AidenScreen.BotAllowed -> {
+                                sbtbiswas.AidenOnTheGo.features.bots.AidenBotAllowedScreen(screen.botId, coordinator, navigator::back)
+                            }
                             is AidenScreen.BotMemory -> {
                                 AidenBotMemoryScreen(
                                     botId = screen.botId,
@@ -452,6 +455,8 @@ class MainActivity : ComponentActivity() {
                                     onNavigateToPeers = { botId -> push(AidenScreen.BotPeers(botId)) },
                                     onNavigateToRoutineModels = { botId -> push(AidenScreen.BotRoutineModels(botId)) },
                                     onNavigateToOpenWork = { botId -> push(AidenScreen.BotOpenWork(botId)) },
+
+                                    onNavigateToAllowed = { botId -> push(AidenScreen.BotAllowed(botId)) },
                                     onBotMutated = { botsViewModel.loadBots(force = true) },
                                     botDeleter = AidenRemoteBotDeleter,
                                     onBotDeleted = {

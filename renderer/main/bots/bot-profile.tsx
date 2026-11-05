@@ -36,6 +36,7 @@ import { BotSpendingSection } from "./bot-spending-section";
 import { BotRules } from "./bot-rules";
 import { useBotLiveSummary } from "./bot-sidebar-rows";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
+import { useBotAllowed } from "./use-bot-allowed";
 
 /** The file's bytes as base64 (no data: prefix). */
 function readFileAsBase64(file: Blob): Promise<string> {
@@ -163,6 +164,7 @@ export function BotProfile({
   onOpenMemory,
   onOpenLearning,
   onOpenWork,
+  onOpenAllowed,
   onDelete,
 }: {
   bot: BotDefinition;
@@ -173,9 +175,12 @@ export function BotProfile({
   onOpenMemory(): void;
   onOpenLearning?(): void;
   onOpenWork?(): void;
+  onOpenAllowed(): void;
   onDelete(): void;
 }) {
   const qc = useQueryClient();
+  const allowed = useBotAllowed(bot.id);
+  const allowedCountId = React.useId();
   const photoInput = React.useRef<HTMLInputElement | null>(null);
   const previewId = React.useId();
   const [photoBusy, setPhotoBusy] = React.useState(false);
@@ -338,6 +343,17 @@ export function BotProfile({
       <BotHealthSection bot={bot} />
       <BotSpendingSection bot={bot} />
       <BotRules bot={bot} />
+      <FieldSet>
+        <button type="button" aria-label="Allowed without asking" aria-describedby={allowedCountId} className={PROFILE_ROW_CLASS} onClick={onOpenAllowed}>
+          <span className="min-w-0 flex-1">
+            <span className="block text-strong text-primary">Allowed without asking</span>
+            <span id={allowedCountId} className="mt-0.5 block text-small text-secondary">
+              {allowed.data === undefined ? allowed.isError ? "Couldn’t be read" : "Loading…" : allowed.data.length === 0 ? "Nothing yet" : allowed.data.length}
+            </span>
+          </span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+        </button>
+      </FieldSet>
       {/* Apple silicon only; renders nothing elsewhere. */}
       <BotComputerSection bot={bot} />
       <Text as="p" variant="small" color="tertiary" className="px-1 text-center">

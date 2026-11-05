@@ -15,7 +15,7 @@ internal const val PEER_NONCE="55555555-5555-4555-8555-555555555555"
 class AidenBotPeersContractTest {
     private fun <T> rejects(serializer:KSerializer<T>,value:JsonElement)=assertTrue("Rejected $value",runCatching{AidenPeerWire.decode(serializer,value.toString())}.isFailure)
     @Test fun canonical57ClosedOwnerCommandsResultsAndExchangeEvidence(){
-        val f=peerFixture();assertEquals(57,f.getValue("contractRevision").jsonPrimitive.int);assertEquals("bot:peers",f.getValue("capability").jsonPrimitive.content)
+        val f=peerFixture();assertEquals(58,f.getValue("contractRevision").jsonPrimitive.int);assertEquals("bot:peers",f.getValue("capability").jsonPrimitive.content)
         val s=peerSettings();assertEquals("Researcher",s.pairs.single().peer.name);assertEquals("bot_planner",peerCatalog().botId)
         assertEquals(listOf(AidenPeerAction.DESCRIBE,AidenPeerAction.APPROVE,AidenPeerAction.REVOKE),listOf("describe","approve","revoke").map{AidenPeerWire.decode(AidenPeerMutation.serializer(),f.getValue(it).toString()).action})
         assertTrue(AidenPeerWire.decode(AidenPeerMutationResult.serializer(),f.getValue("accepted").toString()).ok)

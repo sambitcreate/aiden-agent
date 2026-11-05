@@ -328,7 +328,8 @@ enum class AidenBotRoutineNotificationStatus {
 enum class AidenBotNotificationKind {
     @SerialName("routine") ROUTINE,
     @SerialName("issue") ISSUE,
-    @SerialName("peer") PEER
+    @SerialName("peer") PEER,
+    @SerialName("message") MESSAGE
 }
 
 /**
@@ -364,7 +365,7 @@ data class AidenBotRoutineNotification(
             AidenBotNotificationKind.ROUTINE -> if (routineId == null || status == null) {
                 throw AidenBotContractException.InvalidField("notification")
             }
-            AidenBotNotificationKind.ISSUE, AidenBotNotificationKind.PEER -> if (routineId != null || status != null) {
+            AidenBotNotificationKind.ISSUE, AidenBotNotificationKind.PEER, AidenBotNotificationKind.MESSAGE -> if (routineId != null || status != null) {
                 throw AidenBotContractException.InvalidField("notification")
             }
         }

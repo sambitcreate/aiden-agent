@@ -103,6 +103,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:connections:setup",
   "bots:approval",
   "bots:approval-settled",
+  "bots:allowed:changed",
   /** A Bot's question, approval, hand-off or issue appeared or settled: `{botId}`. The Bots sidebar re-reads its row. */
   "bots:attention",
   "botComputers:changed",

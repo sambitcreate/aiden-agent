@@ -139,4 +139,39 @@ class AidenBotRoutineNotificationDeliveryTest {
         assertEquals("aiden.bot-routine.peer_root_one",AidenBotRoutineNotificationDelivery.tag(item))
     }
 
+
+
+    @Test
+    fun mergedMessageAndPeerFeedKeepsBothKindsAndDeduplicatesAfterAccessRestores() = runTest {
+        val peer = AidenBotWireJson.json.decodeFromJsonElement(AidenBotRoutineNotification.serializer(), sbtbiswas.AidenOnTheGo.peerFixture().getValue("peerNotification"))
+        val message = AidenBotWireJson.json.decodeFromString(AidenBotRoutineNotification.serializer(),
+            """{"id":"message_merged","kind":"message","botId":"bot_fixture_01","botName":"COS","routineName":"COS replied","finishedAt":"2026-11-03T12:00:01.000Z","preview":"[redacted]"}""").copy(finishedAt = peer.finishedAt.plusSeconds(1))
+        val ledger = MemoryLedger().apply { cursors["host"] = peer.finishedAt.minusSeconds(1) }
+        val posted = mutableListOf<String>()
+        val delivery = AidenBotRoutineNotificationDelivery(ledger) { _, item -> posted += item.id; true }
+        var peers = false
+        val mixed = AidenBotRoutineNotificationList(listOf(message, peer), message.finishedAt.plusSeconds(1))
+        val allowed: (AidenBotRoutineNotification) -> Boolean = { it.kind != sbtbiswas.AidenOnTheGo.models.AidenBotNotificationKind.PEER || peers }
+        assertEquals(0, delivery.deliver("host", mayDeliver = allowed) { mixed })
+        assertEquals(peer.finishedAt.minusSeconds(1), ledger.cursors["host"])
+        peers = true
+        assertEquals(2, delivery.deliver("host", mayDeliver = allowed) { mixed })
+        assertEquals(listOf(peer.id, "message_merged"), posted)
+        assertEquals(0, delivery.deliver("host", mayDeliver = allowed) { mixed })
+        assertEquals(2, posted.size)
+    }
+
+    @Test
+    fun messageNotificationTapOpensItsBotAndRedactedPreviewStaysRedacted() = runTest {
+        val item = AidenBotWireJson.json.decodeFromString(AidenBotRoutineNotification.serializer(),
+            """{"id":"message_1","kind":"message","botId":"bot_fixture_01","botName":"COS","routineName":"COS replied","finishedAt":"2026-11-03T12:00:00.000Z","preview":"[redacted]"}""")
+        val ledger = MemoryLedger().apply { cursors["mac-1"] = Instant.parse("2026-11-03T11:59:00Z") }
+        val posted = mutableListOf<AidenBotRoutineNotification>()
+        val delivery = AidenBotRoutineNotificationDelivery(ledger) { _, message -> posted += message; true }
+        assertEquals(1, delivery.deliver("mac-1") { feed("2026-11-03T12:01:00Z", item) })
+        assertEquals("[redacted]", posted.single().preview)
+        assertEquals(AidenDeepLink.botChatUrl("bot_fixture_01", "mac-1"), AidenBotRoutineNotificationDelivery.chatUrl("mac-1", item))
+        assertEquals(0, delivery.deliver("mac-1") { feed("2026-11-03T12:02:00Z", item) })
+        assertEquals(1, posted.size)
+    }
 }

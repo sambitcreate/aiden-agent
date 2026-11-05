@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-05 — Combined Remote revision 58.** Connector watches, Open work, routine model management and approved Bot peers first enter the shared release at revision 58. Earlier revision numbers below describe branch implementation checkpoints; shipped messaging, access requests, plans and allowed-list capabilities retain revisions 54–57. Both `message` and `peer` notifications remain supported.
+
 - **2026-11-04 — Verified Calendar watch support.** Supporting Mac and Linux Electron hosts now offer Composio Calendar sources after authenticated exact-account/list/events/GET acceptance. Existing Watches controls can discover, preview and manage those sources; no new native contract revision is needed. iMCP Mail remains Mac-only. Watch diagnostics report only their own inspection/check outcome and do not authorize a source or change its availability.
 
 
@@ -10,6 +12,8 @@
 - Contract revision 55 (`bot:open-work`): a supporting paired host adds **Open work** to Bot profiles. Add and edit responsibilities, record Waiting reasons, mark Done, Reopen, Dismiss and Undo a recent metadata change. View owned source/result transcript excerpts and host-derived execution. Stop targets only safely linked work, and Stop and dismiss waits for acknowledgement. Protected local drafts and frozen requests survive disconnect and restart; Add never starts or schedules a run.
 
 - Contract revision 54 (`bot:watches`): a supporting paired host adds **Watches** to Bot profiles. Discover safe account/resource choices, create and edit typed watches, pause or resume, preview a test check, delete, or explicitly Run now. Polling and execution stay on the host. Calendar remains unavailable until exact-account and occurrence guarantees are available. Protected device-only drafts and frozen unresolved requests survive disconnect and restart, with stale-revision review and the original mutation identity retained for an explicit retry.
+
+- Remote revision 57 (`bot:allowed`): capable hosts offer Always allow for a Bot after repeated approvals, plus an Allowed without asking profile list. The list includes every rule and folder across pages. Remove waits for the host and keeps the row on failure. Unknown-outcome retries keep the exact decision/scope body and key; Always acknowledges “Always allow requested.” The host remains the authority for saved access. Eligible folder cards also show the host’s approval count. Older hosts keep their existing cards.
 
 - Stream recovery keeps a host-requested retry delay across a temporary network loss, counting time asleep toward the wait.
 

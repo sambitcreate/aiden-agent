@@ -1,4 +1,4 @@
-import { BOT_PEER_INPUT_KIND, isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
+import { BOT_PEER_INPUT_KIND, BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
 // Background memory review (spec 2026-10-09 §10).
 //
 // After a reply, the Bot's conversation is looked at again outside the turn:
@@ -17,6 +17,9 @@ import { BOT_PEER_INPUT_KIND, isBotInputEntryKind } from "../bot-runtime/bot-inp
 // input has a notice naming its request id; that id's submission says exactly
 // which `pi.user` entry it became and which entry answered it, so the input
 // and everything the Bot produced for it stay out of every review and flush.
+// Bot-message inputs also identify themselves by their host-owned entry kind.
+// Their notices still resolve run answers but never guess that a later input
+// belongs to another Bot when the announced submission was not admitted.
 // Ownership is walked over the conversation's whole history around the
 // entries being read, not those entries alone, so a compaction cut that keeps
 // only the middle of a routine run still leaves it out; an entry whose owner
@@ -305,18 +308,21 @@ interface NoticeData {
 function unattendedNoticeRequestId(entry: EntryRecord): string | undefined {
   if (entry.kind !== BOT_NOTICE_ENTRY_KIND) return undefined;
   const data = entry.data as NoticeData | undefined;
-  if (data?.notice !== "routine" && data?.notice !== "hidden_input") return undefined;
+  if (data?.notice !== "routine" && data?.notice !== "hidden_input" && data?.notice !== "bot_message") return undefined;
   return typeof data.requestId === "string" ? data.requestId : undefined;
 }
 
 /** What the ownership walk needs from one entry. */
-type Step = { id: EntryId; kind: "input" | "output"; peerRequestId?: string; unattended?: true } | { id: EntryId; kind: "notice"; requestId: string };
+type Step =
+  | { id: EntryId; kind: "input"; botMessage: boolean; peerRequestId?: string; unattended?: true }
+  | { id: EntryId; kind: "output" }
+  | { id: EntryId; kind: "notice"; requestId: string; botMessage: boolean; peerRequestId?: string; unattended?: true };
 
 function stepOf(entry: EntryRecord): Step | undefined {
   const requestId = unattendedNoticeRequestId(entry);
-  if (requestId !== undefined) return { id: entry.id, kind: "notice", requestId };
+  if (requestId !== undefined) return { id: entry.id, kind: "notice", requestId, botMessage: (entry.data as NoticeData).notice === "bot_message" };
   const role = entry.model?.[0]?.role;
-  if (isBotInputEntryKind(entry.kind) && role === "user") { const requestId = (entry.data as { peerRequestId?: unknown } | undefined)?.peerRequestId; return { id: entry.id, kind: "input", ...(entry.kind === BOT_PEER_INPUT_KIND ? { unattended: true as const, ...(typeof requestId === "string" ? { peerRequestId: requestId } : {}) } : {}) }; }
+  if (isBotInputEntryKind(entry.kind) && role === "user") { const requestId = (entry.data as { peerRequestId?: unknown } | undefined)?.peerRequestId; return { id: entry.id, kind: "input", botMessage: entry.kind === BOT_MESSAGE_INPUT_KIND, ...(entry.kind === BOT_PEER_INPUT_KIND ? { unattended: true as const, ...(typeof requestId === "string" ? { peerRequestId: requestId } : {}) } : {}) }; }
   if (entry.kind === "pi.assistant" && role === "assistant") return { id: entry.id, kind: "output" };
   return undefined;
 }
@@ -326,8 +332,9 @@ function stepOf(entry: EntryRecord): Step | undefined {
  * routine or self-intro input owns everything the Bot produced after it until
  * the run serving it answered (or, without an answer, until the person's next
  * input), wherever a compaction later cut. A notice whose input `unattended`
- * does not locate marks the next input instead, the order they are written
- * in. When `fromStart` is false the walk starts mid-history: outputs before
+ * does not locate marks the next input instead, except for Bot-message notices:
+ * those inputs have their own host-owned kind, so a stranded notice cannot
+ * exclude a person's later turn. When `fromStart` is false the walk starts mid-history: outputs before
  * its first input have an unknown owner and are left unowned (fail closed).
  */
 function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, UnattendedInput>, fromStart: boolean): Map<EntryId, EntryOwner> {
@@ -345,12 +352,14 @@ function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, Unatt
   let pendingGuess = false;
   for (const step of steps) {
     if (step.kind === "notice") {
-      if (!unattended.has(step.requestId)) pendingGuess = true;
+      if (!step.botMessage && !unattended.has(step.requestId)) pendingGuess = true;
       continue;
     }
     if (step.kind === "input") {
       known = true;
-      let isUnattended = step.unattended === true || answers.has(step.id);
+      // A routine/intro guess cannot cross a different, host-owned input kind.
+      if (step.botMessage || step.unattended) pendingGuess = false;
+      let isUnattended = step.botMessage || step.unattended === true || answers.has(step.id);
       if (!isUnattended && pendingGuess) {
         isUnattended = true;
         pendingGuess = false;
@@ -373,7 +382,7 @@ export type SubmissionLookup = (requestIds: readonly string[]) => Promise<Readon
 
 /** Each routine or self-intro notice's request id, resolved to the input it became and the entry that answered it. */
 async function resolveUnattended(steps: readonly Step[], lookup: SubmissionLookup): Promise<Map<string, UnattendedInput>> {
-  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : step.peerRequestId ? [step.peerRequestId] : [])))];
+  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : step.kind === "input" && step.peerRequestId ? [step.peerRequestId] : [])))];
   const unattended = new Map<string, UnattendedInput>();
   if (ids.length === 0) return unattended;
   const records = await lookup(ids);

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 57,
+  "contractRevision": 58,
   "capability": "bot:peers",
   "settings": {
     "botId": "bot_planner",

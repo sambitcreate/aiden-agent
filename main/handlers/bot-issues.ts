@@ -43,7 +43,7 @@ export function parseBotIssueAct(input: unknown): {
   action: BotIssueAction;
 } {
   const fields = exact(input, ["botId", "issueId", "action"]);
-  const action = botIssueActionOf(fields.action);
+  const action = botIssueActionOf(fields.action, true);
   if (action === null) throw new Error("Invalid bot issue action.");
   return { botId: parseBotId(fields.botId), issueId: issueId(fields.issueId), action };
 }

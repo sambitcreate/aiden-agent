@@ -1,3 +1,7 @@
+import { botMessageChainOf, botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { botMessages, botMessageRoster } from "../bot-messages/messages-main.js";
+import { messageBotCandidate } from "../bot-messages/candidate.js";
+import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 // Production candidate tools for durable Bot turns, built by the same legacy
 // factories and gates `llm-client.ts` used for Bot generations:
 //
@@ -33,7 +37,7 @@ import type { ComputerUseController } from "../computer-use/controller.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
-import { logger } from "../../platform.js";
+import { app, logger } from "../../platform.js";
 import { mcpPresetKeyBinding } from "../mcp-credential-cleanup-core.js";
 import { hasOAuthTokens } from "../mcp-oauth.js";
 import { presetSecretId } from "../mcp-presets.js";
@@ -82,6 +86,15 @@ import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-com
 import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
 import { botExecutionScope } from "./bot-execution.js";
+import { createBotRunAccess } from "./bot-run-access.js";
+import { botAccessRequestCandidate, botSavedLocationForCall } from "./bot-access-request-tool.js";
+import { botAccessRequests } from "./bot-access-requests-main.js";
+import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
+import { aidenConfigDir } from "../aiden-config-dir.js";
+import os from "node:os";
+import { proposePlanCandidate, planStepCandidate, type BotPlanToolDeps } from "./bot-plan-tools.js";
+
+export const botRunAccess = createBotRunAccess({ now: Date.now });
 
 const BOT_HOME_LOCATION_ID = "builtin.bot_home.v1";
 
@@ -92,6 +105,7 @@ export interface BotToolSourceDeps {
   imageInput(botId: string): Promise<boolean>;
   /** A fresh admission, used by tools that revalidate during their own effect. */
   admit(botId: string): Promise<BotAdmission>;
+  policyRevision(botId: string): Promise<string>;
   dismissals: Pick<BotConnectionDismissalStore, "isDismissed">;
   /**
    * The Bot's own Custom access leaves this connection out: the same check its
@@ -100,6 +114,9 @@ export interface BotToolSourceDeps {
   botLacksConnection?(botId: string, sourceId: string): Promise<boolean>;
   /** The Bot's name, for what its browser tells the person. */
   botName?(botId: string): Promise<string | undefined>;
+  /** Desktop-only plan cards and coverage. The CLI does not supply this port. */
+  planTools?: BotPlanToolDeps;
+  folderOffer?(botId: string, path: string): Promise<{ count: number } | undefined>;
 }
 
 type ProductionFacts = BotToolFactsWithSkills;
@@ -340,12 +357,14 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const production = facts as ProductionFacts;
       const routineRun = turn.requestId?.startsWith("routine:") ?? false;
       const peerRun = botExecutionScope(botId)?.claim.peer !== undefined;
+      const messageTurn = isBotMessageRequestId(turn.requestId);
       const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
       const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
       const skillSnapshot = await production.skillSnapshot();
       const subagentsAllowed =
         has("subagents") &&
+        !messageTurn &&
         !routineRun &&
         !peerRun &&
         !telegram &&
@@ -398,7 +417,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           hasComputer: facts.hasComputer,
           supportsImages: facts.supportsImages,
           routine: routineRun || peerRun,
-          telegram,
+          telegram: telegram || messageTurn,
           computers: async () => (await botComputerServices()).botComputers(),
           state: (control) => (botComputerToolState ??= createBotComputerToolState(control)),
           botName: async (id) => (await deps.botName?.(id).catch(() => undefined)) ?? "The Bot",
@@ -406,7 +425,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       // The Bot's own browser. Never on routine or Telegram turns: nobody is
       // there to approve a click or use a held tab (blueprint G12).
-      if (has("browser") && !routineRun && !peerRun && !telegram) {
+      if (has("browser") && !messageTurn && !routineRun && !peerRun && !telegram) {
         tools.push(
           ...(await botBrowser.candidates(botId, {
             workspaceId: workspace.id,
@@ -419,10 +438,19 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       }
 
       // A routine's own files must not fire its folder trigger again.
+      const boundFileLocations = await botFileLocations(admission);
       tools.push(
-        ...botFileCandidates(await botFileLocations(admission), {
+        ...botFileCandidates(boundFileLocations, {
           routine: routineRun || peerRun,
           recordOwnWrite: (written) => botOwnWrites.record(botId, written),
+          ...(authority.accessMode === "custom" && authority.files.mode === "scoped" ? { runAccess: { resolve: async (call: import("./tool-adapter.js").BotToolCall) => {
+            await call.assertRunActive?.();
+            // Named ingress IDs remain unchanged; unnamed person inputs use
+            // the same durable host identities as their plan-owned grant.
+            const ids = call.runInputIds ? await call.runInputIds() : await call.runRequestIds?.() ?? [];
+            return botRunAccess.location(botId, ids, await deps.policyRevision(botId));
+          } }, savedAccess: { resolve: (call: import("./tool-adapter.js").BotToolCall) =>
+            botSavedLocationForCall(botId, { runAccess: botRunAccess, policyRevision: deps.policyRevision }, call) } } : {}),
         }),
       );
       if (authority.files.botHome) tools.push(shareImageCandidate(authority));
@@ -494,12 +522,36 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Only in turns a person started (ingress also withholds it on routine,
       // catch-up, wake-up and intro runs), and only while the person's per-Bot
       // switch is on.
-      if (!routineRun && !peerRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+      if (!messageTurn && !routineRun && !peerRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
         tools.push(wakeUpCandidate(botId, lazyWakeUps));
+      }
+      if (!peerRun && botMessageChainOf([turn.requestId]).canSend && botMessagingEnabled(await configStore.getSettings())) {
+        const roster = await botMessageRoster();
+        if (roster.find(b => b.id === botId)?.sendsMessages && roster.some(b => b.id !== botId && b.acceptsMessages)) {
+          tools.push(await messageBotCandidate(botId, {post: input => botMessages().post(input), roster: botMessageRoster}));
+        }
       }
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
       tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
+      if (deps.planTools) tools.push(
+        proposePlanCandidate(botId, deps.planTools),
+        planStepCandidate(botId, deps.planTools.plans),
+      );
+      if (authority.accessMode === "custom" && authority.files.mode === "scoped") tools.push(botAccessRequestCandidate(botId, {
+        requests: botAccessRequests, runAccess: botRunAccess, policyRevision: deps.policyRevision, boundLocations: boundFileLocations,
+        ...(deps.folderOffer ? { folderOffer: deps.folderOffer } : {}),
+        resolveTarget: (requested) => resolveBotAccessTarget(requested, { homeDirectory: os.homedir, privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()), approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state.snapshot().then((state) => state.approvedRoots) }),
+        currentLocations: async () => {
+          const fresh = await deps.admit(botId);
+          try {
+            if (fresh.authority.accessMode !== "custom" || fresh.authority.files.mode !== "scoped") throw new Error("This Bot's access changed. Ask for access again.");
+            await fresh.revalidateBeforeEffect(); return await botFileLocations(fresh);
+          } finally { fresh.release(); }
+        },
+        raiseIssue: async (input) => (await import("../bot-issues/service-main.js")).botIssues.raise(input),
+        resolveIssue: async (id, key, resolution) => (await import("../bot-issues/service-main.js")).botIssues.resolve(id, key, resolution),
+      }));
       // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       tools.push(
         signInCandidate(botId, botHandoffs, {
@@ -547,12 +599,14 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     },
 
     async shutdown() {
+      botRunAccess.clearAll();
       botBrowser.shutdown();
       await Promise.all([...controllers.keys()].map(closeController));
       await botComputerToolState?.shutdown();
     },
 
     async forgetBot(botId) {
+      botRunAccess.clearBot(botId);
       await closeController(botId);
       // The host deletes the Bot's computer on its own Delete Bot step.
       botComputerToolState?.forget(botId);

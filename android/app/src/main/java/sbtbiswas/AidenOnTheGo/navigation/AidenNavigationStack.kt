@@ -26,6 +26,7 @@ sealed class AidenScreen {
     data class BotChat(val botId: String) : AidenScreen()
     data class BotEditor(val botId: String?) : AidenScreen()
     /** Profile → Memory (revision 27, `bot-memory-v1`). */
+    data class BotAllowed(val botId: String) : AidenScreen()
     data class BotMemory(val botId: String) : AidenScreen()
     data class BotWatches(val botId: String) : AidenScreen()
     data class BotPeers(val botId:String,val exchangeId:String?=null) : AidenScreen()
@@ -52,6 +53,7 @@ sealed class AidenScreen {
             is BotProfile -> "bot$SEPARATOR${screen.botId}"
             is BotChat -> "bot-chat$SEPARATOR${screen.botId}"
             is BotEditor -> screen.botId?.let { "bot-edit$SEPARATOR$it" } ?: "bot-new"
+            is BotAllowed -> "bot-allowed$SEPARATOR${screen.botId}"
             is BotMemory -> "bot-memory$SEPARATOR${screen.botId}"
             is BotWatches -> "bot-watches$SEPARATOR${screen.botId}"
             is BotPeers -> "bot-peers$SEPARATOR${screen.botId}"+(screen.exchangeId?.let{"$SEPARATOR$it"} ?: "")
@@ -78,6 +80,7 @@ sealed class AidenScreen {
                 kind == "bot" -> BotProfile(id)
                 kind == "bot-chat" -> BotChat(id)
                 kind == "bot-edit" -> BotEditor(id)
+                kind == "bot-allowed" -> BotAllowed(id)
                 kind == "bot-memory" -> BotMemory(id)
                 kind == "bot-watches" -> BotWatches(id)
                 kind == "bot-peers" -> id.split(SEPARATOR).takeIf{it.size in 1..2 && it.all{part->Regex("^[A-Za-z0-9._:-]{1,160}$").matches(part)}}?.let{BotPeers(it[0],it.getOrNull(1))}

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Revision 55. Text is bounded by both Unicode scalars and UTF-8 bytes;
+/// Revision 58. Text is bounded by both Unicode scalars and UTF-8 bytes;
 /// submission/entry identities remain decimal strings, including above 2^53.
 enum AidenOpenWorkWire {
     static func text(_ value: String, scalars: Int, bytes: Int, empty: Bool = false) throws {

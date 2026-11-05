@@ -1,25 +1,53 @@
-# Bot messaging
+# Bots that message each other
 
-Open a Bot’s **Profile → Bot messaging** on desktop, iPhone or Android. Write a routing description to explain when another Bot should ask it for help. A description helps route a request; it grants no access.
+Ask a Bot to get help from another Bot. It writes its own message and finishes its current turn. The other Bot answers in its own chat, then the first Bot receives the answer as a new turn and brings the result back to you.
 
-Choose another Bot, review both names, then approve the pair in both directions. Approval applies to these two Bots in the same Aiden profile. Each recipient keeps its own model, connected-app access, action rules and spending limit. Changing a description, approving a pair or revoking one does not discard a separately edited description. Save that description explicitly.
+A message shows who asked or replied. The message and final answer cross between the two Bots; their chat histories, working steps, files, permissions and personal memory stay separate. The receiving Bot uses its own model and access. Another Bot's words never count as your approval.
 
-If another device changed the description while you were editing it, review the current host version before saving your draft. Confirming or retrying a pair decision does not resolve that description conflict. Phones retain the original baseline and draft across restart until you review it.
+## Controls
 
-Revoking a pair removes its permission to exchange requests. Deleting a Bot also retires its pairs. Retained exchanges and delayed results belong to the original Bot identity; they cannot appear in a replacement Bot that reuses its ID. Work already in progress remains subject to its source and current access; do not infer cancellation from a removed pair or a dismissed work item.
+Messaging starts on. You can change it on desktop, iOS and Android:
 
-Requests and questions can ask the recipient to work. Status and FYI messages are quiet updates and do not start a model turn. The host bounds request depth, accepted requests and pending history. Full or unreadable storage refuses new work rather than dropping a delivery or its terminal return. Routing descriptions support up to 256 stored Bot profiles. The pair chooser accepts at most 128 other local Bots and reports a capacity error rather than silently hiding choices. Protected profile and exchange limits are checked before a change is saved; a full history remains readable. A Bot cannot use a message to approve a tool, change another Bot’s rules, sign in or gain access to a connected account.
+- **Settings → Bots → Bots can message each other** controls the profile. On a phone, use the same switch on the Bots page.
+- A Bot's **Advanced → Other Bots** has **Other Bots can message {name}** and **{name} can message other Bots**.
+- Turning messaging off for all Bots disables the per-Bot controls. Older paired hosts without messaging support show no messaging controls.
 
-An exchange appears as a quiet navigation row in chat and in the Bot’s exchange list. **View exchange** shows its direction, request, state and retained result. Source and result evidence come from the host’s linked records; phones do not supply transcript IDs or receive credentials. The sender owns source evidence and the recipient owns result evidence. Missing or expired evidence is reported as unavailable. Open work links back to the exchange without treating another Bot’s message as a request from you.
+A switch prevents new sends. An already accepted exchange keeps its original deadline. Deleting a Bot removes its private message work and prevents it from being recreated by recovery.
 
-Use **Stop exchange** to ask the host to stop only its linked execution. A mixed-input run may refuse a separate Stop. **Requested** or **uncertain** means the host has not confirmed the outcome; **blocked** means the Stop was refused. None means the task completed. When another device already has a pending Stop, refresh its status rather than creating a replacement request.
+## Replies and approvals
 
-Each device retains a setting change or Stop’s exact request before sending it. Leaving the page, disconnecting, losing access or restarting does not replace that request. A lost reply offers an explicit retry. A matching host receipt can settle it without another change. Ordinary requests stop retrying after twenty-three hours; a pending Stop may be retried later only after a fresh host read proves the same Bot, exchange and request remain protected and pending. If proof is unavailable, the saved request remains unconfirmed. Only confirmed Bot deletion clears that Bot’s saved controls and blocks late callbacks from recreating them.
+The recipient can ask the person to approve a step in its own chat. The sender shows a waiting line, such as "COS is waiting for you to approve: Create 3 events". Answer the actual approval card in the recipient's chat on desktop or a paired phone. There are no approval buttons on the sender's waiting line.
 
-The final result returns to the initiating Bot. Intermediate exchanges stay quiet; a root result uses that Bot’s normal delivery rules, including quiet hours, daily limits and a routine’s notification setting. Pausing or interruption does not silently resume work. When detailed exchange history expires, a small protected record of the original Bot identity remains until all of its owed deliveries settle; it grants no permission to run another task. Pending deliveries are retained when history fills; one result may arrive separately before the remaining digest to let that queue drain.
+The recipient still follows its rules. An uncovered Ask first rule still asks; a Hand off to me rule blocks the Bot-started step. A [plan approved by the person](bot-rules.md#approve-a-plan-once) can cover eligible steps within this exchange's deadline. The routines setting that goes ahead without asking does not apply to these turns. Bot-message turns cannot answer cards, change settings, save or recall personal memory, create routines or wake-ups, start subagents, or open question, hand-off, sign-in or browser flows.
 
-Phone support requires the owning host to advertise `bot:peers`. Pair metadata and the Bot catalog require Bot read access; exchange content and evidence also require chat read access. Changes and Stop additionally require Bot write access. Missing grants or an unsupported host leave those controls unavailable. The standalone `aiden serve` host does not advertise this optional management surface.
+Only a final answer is forwarded. Silence, failure and an unanswered deadline produce a status row instead of another model turn. If the sender is paused, interrupted, over budget or unable to use its model, the saved answer stays visible without resuming it. A failed or stopped reply turn also keeps the answer as a display row.
 
-Pair decisions and execution provenance live in the existing authenticated, rollback-protected Bot state. This private format is forward-only; use the matching Aiden build for that profile. Deleting a Bot removes its executable messaging authority. Minimal original financial reservations may remain to account for a late known provider charge without recreating that Bot or admitting another request. See [spending and recovery](usage-limits-and-spending.md).
+The normal final result and status notifications follow the Bot's configured delivery channels. A nested child's answer is relayed into its sender's chat, or shown there as saved text; its answer is never delivered separately through the delivery funnel. Text-free child status notifications can still say that it is waiting or could not finish.
 
-For contributors, `npm run test:bot-peers` exercises owner controls, transport contracts and desktop recovery. Native suites cover the same shared fixture. Physical-device acceptance and authenticated connector acceptance are tracked separately in the [continuity plan](plans/bot-continuity-plan.md).
+## Nesting and limits
+
+A Bot you ask can message another Bot. That recipient can ask one more Bot, then the answer travels back through the same chain. The final recipient and reply turns cannot send more messages, and no Bot can message one already in the chain. Routine, Telegram and self-introduction turns cannot start an exchange.
+
+Each accepted exchange has a **30-minute window**, including approval waits. A nested request shares the earlier ancestor deadline. Busy Bots finish their current work first. Messaging never resumes, stops or dismisses a person's work, or removes their queued messages.
+
+Limits apply to accepted sends:
+
+| Limit | Amount |
+| --- | --- |
+| Message | 4,000 characters |
+| Forwarded answer | 8,000 characters |
+| Unfinished exchanges per sender | 3 |
+| Sends per sender in five minutes | 20, followed by a ten-minute cooldown |
+| Sends per pair of Bots in a local day | 30, counting both directions |
+
+Refused attempts do not spend a quota slot; an accepted exchange that later fails still counts. A recipient that is paused, has no model or is over budget is refused before a new delivery is accepted.
+
+## CLI host
+
+The serve-only CLI daemon supports the same tool, bounded exchange, controls and durable recovery for its Bots. Paired phones use the same capability-gated Remote contract. The CLI records paid Bot response costs in its profile-local spending ledger and enforces configured monthly and routine-run limits. It does not wait out provider usage limits or offer a spending settings editor. The CLI has no terminal chat interface. See [durable CLI Bots](cli-durable-bots.md).
+
+For storage, recovery and implementation details, see [Bot messaging core](bot-messaging-core.md). The [implementation plan](plans/bot-messaging-plan.md) tracks review and acceptance; source tests and simulator checks do not establish physical-device or live-model acceptance.
+
+## Approved Bot pairs
+
+[Bot peers](bot-peers.md) provides a separate named-pair delegation contract through `message_peer`. Its exchange, spending and recipient-rule authority remains separate from `message_bot` messaging.

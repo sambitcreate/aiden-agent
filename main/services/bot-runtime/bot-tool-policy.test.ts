@@ -1,12 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
-import { botIngressAllowsTool, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botRunUnattended, botToolApprovalSummary, botToolVerdict, botTurnOf, type BotToolFacts } from "./bot-tool-policy.js";
 import { composioServiceToolDescriptor } from "../composio-service-tool.js";
 import { botMcpLiveToolGrantFacts } from "../bot-tool-authority.js";
 
 const QUESTION = "ask_user_question";
 const HANDOFF = "hand_off";
+
+test("plan tools allow only genuine-person or strict message-request ingress for every input", async () => {
+  const message = "bot:jester:1:00112233-4455-4677-8899-aabbccddeeff";
+  const reply = "botreply:00112233-4455-4677-8899-aabbccddeeff";
+  for (const tool of ["propose_plan", "plan_step"]) {
+    for (const ids of [[undefined], ["person"], [message], ["person", message], [undefined, message]]) assert.equal(botIngressAllowsTool(tool, ids), true, `${tool}: ${ids}`);
+    for (const ids of [[], ["routine:x"], ["tg:1"], ["intro:bot"], [reply], ["bot:jester:1:d1"], ["botreply:bad"], [message, reply], ["person", "routine:x"]]) assert.equal(botIngressAllowsTool(tool, ids), false, `${tool}: ${ids}`);
+    assert.deepEqual(await botToolVerdict(tool, bareFacts(), { botMessage: true }), { allowed: true });
+    for (const turn of [{ routine: true }, { telegram: true }, { routine: true, botMessage: true }]) assert.deepEqual(await botToolVerdict(tool, bareFacts(), turn), { allowed: false, reason: "Plans are off for this Bot turn." });
+  }
+});
+
+test("request_access is offered only to scoped Custom Bots and remains callable to raise unattended issues", async () => {
+  const base = bareFacts();
+  for (const [accessMode, mode, allowed, reason] of [
+    ["custom", "scoped", true, undefined], ["full", "full_mac", false, "This Bot can already use your whole Mac."],
+    ["custom", "full_mac", false, "This Bot can already use your whole Mac."], ["custom", "off", false, "File access is off for this Bot."],
+  ] as const) {
+    const facts = { ...base, authority: { ...base.authority, accessMode, files: { mode } } as BotRuntimeEffectiveAuthority };
+    const verdict = await botToolVerdict("request_access", facts);
+    assert.deepEqual(verdict, allowed ? { allowed: true } : { allowed: false, reason });
+  }
+  const message = "bot:ada:1:00112233-4455-4677-8899-aabbccddeeff", reply = "botreply:00112233-4455-4677-8899-aabbccddeeff";
+  for (const ids of [["routine:t:1"], ["tg:1"], [message], [reply], ["desk", message]]) {
+    assert.equal(botRunUnattended(ids), true);
+    assert.equal(botIngressAllowsTool("request_access", ids), true);
+  }
+  assert.equal(botRunUnattended(["desk", "remote:phone"]), false);
+  assert.equal(botIngressAllowsTool("request_access", []), false);
+});
 
 /** A Bot with no grants at all: cards need none, so only the turn decides. */
 function bareFacts(): BotToolFacts {
@@ -180,7 +210,7 @@ test("Open work needs the existing Tasks capability on both person and routine t
   assert.equal(await botToolApprovalSummary("open_work", { action: "add", title: "Explicit task" }, { ...allowed, mcpTools: async () => { throw new Error("Task tracking must not inspect unrelated connectors for approval."); } }), undefined);
 });
 test("peer ingress cannot turn a person joined later into approval, sign-in, wake-up or person-memory authority",async()=>{
- const facts=browserFacts();for(const tool of [QUESTION,HANDOFF,SIGN_IN,"wake_up","routines","routine_notes","bot_memory","subagent","suggest_connection"]){assert.equal(botIngressAllowsTool(tool,["peer:accepted",DESK]),false,tool);assert.equal((await botToolVerdict(tool,facts,{peer:true})).allowed,false,tool);}assert.equal((await botToolVerdict("message_bot",facts,{peer:true})).allowed,true,"the dedicated source/pair host still checks every send");
+ const facts=browserFacts();for(const tool of [QUESTION,HANDOFF,SIGN_IN,"wake_up","routines","routine_notes","bot_memory","subagent","suggest_connection"]){assert.equal(botIngressAllowsTool(tool,["peer:accepted",DESK]),false,tool);assert.equal((await botToolVerdict(tool,facts,{peer:true})).allowed,false,tool);}assert.equal((await botToolVerdict("message_peer",facts,{peer:true})).allowed,true,"the dedicated source/pair host still checks every send");
 });
 
 test("Calendar watch task and peer continuations allow only one exact-account curated read under the recipient's own service grant", async () => {
@@ -208,4 +238,22 @@ test("Calendar watch task and peer continuations allow only one exact-account cu
     for(const denied of [wrongAccount,wrongCalendar,batch,query,write,{action:"call",tool:"COMPOSIO_SEARCH_TOOLS",arguments:{}},{action:"call",tool:"COMPOSIO_MANAGE_CONNECTIONS",arguments:{}}])assert.equal((await botToolVerdict("composio",facts,{peer:true},denied)).allowed,false);
     assert.equal((await botToolVerdict("composio",{...facts,mcpTools:async()=>new Map()},{peer:true},call)).allowed,false,"the sender's scope cannot grant a receiving Bot the service");
   });
+});
+
+test('Bot-message ingress withholds unattended tools and enforces the hop chain', () => {
+ const d = '00112233-4455-4677-8899-aabbccddeeff';
+ for(const name of ['ask_user_question','hand_off','sign_in','browser','routines','subagent','propose_skill','wake_up']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),false,name);
+ for(const name of ['run_command','mcp__mail__send']) assert.equal(botIngressAllowsTool(name,[`bot:J:1:${d}`]),true);
+ for(const ids of [[undefined],['remote:d:k'],[`bot:J:1:${d}`]]) assert.equal(botIngressAllowsTool('message_bot',ids),true);
+ for(const ids of [[`bot:J:2:${d}`],[undefined,`botreply:${d}`],['routine:t:1'],['tg:1'],['intro:x']]) assert.equal(botIngressAllowsTool('message_bot',ids),false);
+});
+
+test("approved-peer inputs cannot obtain shipping messaging, plan approval or widened folder access", async () => {
+  const facts = browserFacts();
+  for (const tool of ["message_bot", "request_access", "propose_plan", "plan_step", "wake_up", "bot_memory"]) {
+    assert.equal(botIngressAllowsTool(tool, ["peer:accepted"]), false, tool);
+    assert.equal(botIngressAllowsTool(tool, [DESK, "peer:accepted"]), false, tool);
+    assert.equal((await botToolVerdict(tool, facts, { peer: true })).allowed, false, tool);
+  }
+  assert.equal(botRunUnattended(["peer:accepted"]), true);
 });

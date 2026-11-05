@@ -145,7 +145,7 @@ Acceptance: interleaved different-model routines and person turns retain their o
 
 ### Delivery, result and cancellation contract
 
-- `message_bot` sends a bounded request or a correlated interim question/status/FYI. A host-owned request ID is stable across tool replay. Persist source intent, recipient delivery and a recoverable hand-off before reporting success; recipient `send` deduplication supplies the execution receipt. There is no claim that an external side effect is universally exactly once.
+- `message_peer` sends a bounded request or a correlated interim question/status/FYI. A host-owned request ID is stable across tool replay. Persist source intent, recipient delivery and a recoverable hand-off before reporting success; recipient `send` deduplication supplies the execution receipt. There is no claim that an external side effect is universally exactly once.
 - Persist the final outcome obligation when the request is accepted. Completion, failure or cancellation returns one terminal result to the requester. A host-controlled final return retains a reserved path after the request depth limit, but cannot start another unbounded request chain. A model labeling arbitrary text as a result cannot obtain that exception.
 - Start with proposed bounds: three request hops, eight requests per root, eight unfinished inbound requests per Bot, and 24-hour pending-request expiry. Exclude the one reserved terminal return from request depth/count; retain its dedupe receipt. Bound message bytes and aggregate context. Validate the limits against the acceptance workflow before enabling them.
 - Recheck pair generation and both Bots' current state before admission. Revocation cancels undelivered requests and forbids new actions under stale permission; retain already admitted outcome evidence and display any uncertainty. Paused or interrupted recipients retain bounded waiting work without automatic Resume. Expiry returns a visible failure.
@@ -222,3 +222,9 @@ Progress (2026-11-03): W0 is complete for source research and offline acceptance
 - [x] Final combined docs, onboarding/gallery and focused suites verified after Calendar activation; independent Sol high composition review clear.
 - [ ] Integrated packaged/native acceptance recorded; remaining limitations explicit.
 - [x] Plan inventory status updated. Keep this plan active until release acceptance is complete, then archive it.
+
+### 2026-11-05 integration with current main
+
+Merged the separately shipped Bot messaging, access-request, plan-approval and allow-list contracts into continuity. Their existing revision 54–57 capability thresholds remain; continuity watches, Open work, routine models and peers use revision 58 across the host, fixtures, iOS and Android. Approved-pair delegation is exposed as `message_peer`, preserving `message_bot` and its separate courier/switch authority. Neither input can bridge into the other delegation mechanism; peer inputs cannot request fresh access or plan approval. See [Bot messaging](../bot-messaging.md) and [Bot peers](../bot-peers.md).
+
+Combined validation also covers audience-specific transcript/feed projections and grant loss during a held Remote read. Durable issue resolution commits metadata without re-entering the session command lane, preserving replay deduplication and deletion fences. Packaged, physical-device and live Mail gates and the three historical iOS observations remain open; this integration does not establish release acceptance.

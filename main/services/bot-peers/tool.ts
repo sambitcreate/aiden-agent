@@ -5,7 +5,7 @@ import type { BotToolCandidate } from "../bot-runtime/bot-tool-assembly.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import type { BotPeerSourceToken } from "./authority.js";
 import type { BotPeerService } from "./service.js";
-export const BOT_PEER_TOOL = "message_bot";
+export const BOT_PEER_TOOL = "message_peer";
 export function botPeerCandidate(botId: string, ports: { service: Pick<BotPeerService, "discover" | "accept" | "exchange">; source(botId: string, call: BotToolCall): Promise<BotPeerSourceToken>; wake(): void }): BotToolCandidate & {replay:"safe"} {
   const build = (call?: BotToolCall): AgentTool => ({
     name: BOT_PEER_TOOL, label: "Message a Bot", description: "List only this Bot's owner-approved peers and their routing descriptions. Send a bounded explicit request under the receiving Bot's own current rules. Acceptance means queued or waiting, never completed. Interim question/status/FYI needs a correlated exchange. Status/FYI is a quiet exchange-log update and does not start a model. The host returns the terminal result; never label arbitrary text as a terminal result. Do not send secrets or unrelated conversation history.",

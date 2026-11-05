@@ -676,16 +676,18 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
     /// Contract revision 50 adds `attachments:raw`, asked for alone.
     /// Contract revision 53 adds `chat:new-worktree`, asked for alone.
-    /// Contract revision 54 adds `bot:watches`, asked for alone.
-    /// Contract revision 55 adds `bot:open-work`, asked for alone.
-    /// Contract revision 56 adds `bot:routine-models`, asked for alone.
-    /// Contract revision 57 adds `bot:peers`, asked for alone.
+    /// Contract revision 58 adds `bot:watches`, asked for alone.
+    /// Contract revision 58 adds `bot:open-work`, asked for alone.
+    /// Contract revision 58 adds `bot:routine-models`, asked for alone.
+    /// Contract revision 58 adds `bot:peers`, asked for alone.
+
+    /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
         Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
-        Self(rawValue: "bot:issues"),
+        Self(rawValue: "bot:issues"), Self(rawValue: "bot:messaging"), Self(rawValue: "bot:access-requests"), Self(rawValue: "bot:plans"), Self(rawValue: "bot:allowed"),
         Self(rawValue: "bot:handoff-on-mac"),
         Self(rawValue: "bot:images"),
         Self(rawValue: "chat:jobs"),
@@ -700,6 +702,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
     /// Bot session entries. It grants no authority.
     static let botCards = Self(rawValue: "bot:cards")
+
+    /// Revision 57: the allow list and repeated-approval offers, negotiated alone.
+    static let botAllowed = Self(rawValue: "bot:allowed")
+    /// Revision 56: host-owned plan cards, negotiated alone.
+    static let botPlans = Self(rawValue: "bot:plans")
+    /// Revision 55: access cards and folder-access issues, negotiated alone.
+    static let botAccessRequests = Self(rawValue: "bot:access-requests")
+    static let botMessaging = Self(rawValue: "bot:messaging")
 
     /// Revision 30: the device receives activity and queued frames and Bot
     /// detail `chatActivity`. It grants no authority.
@@ -768,9 +778,9 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Open work metadata and owned evidence; also needs Bot and chat read.
     static let botOpenWork = Self(rawValue: "bot:open-work")
 
-    /// Revision 56: routine-only models, run facts and explicit unknown-cost Resume.
+    /// Revision 58: routine-only models, run facts and explicit unknown-cost Resume.
     static let botRoutineModels = Self(rawValue: "bot:routine-models")
-    /// Revision 57: approved pairs and bounded linked exchanges.
+    /// Revision 58: approved pairs and bounded linked exchanges.
     static let botPeers = Self(rawValue: "bot:peers")
 
     init(from decoder: Decoder) throws {
@@ -882,6 +892,8 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         // Contract revision 37: only a `bot:handoffs` device is sent these.
         Self(rawValue: "bot_paused"),
         Self(rawValue: "handoff_expired"),
+        Self(rawValue: "access_request_expired"),
+        Self(rawValue: "plan_expired"),
     ]
 
     init(from decoder: Decoder) throws {
@@ -2810,7 +2822,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
-        "botSessionCards", "botHandoffs", "botIssues",
+        "botSessionCards", "botHandoffs", "botAccessRequests", "botPlans", "botAllowed", "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -2974,7 +2986,7 @@ private enum AidenBotPrivateResponseValidator {
             if root == "botOpenWorkItem", parentPath == ["completion"] { return true }
         }
         guard key == "instructions" || key == "openingGreeting" else { return false }
-        if root == "botDetail" {
+        if root == "botDetail" || root == "botMessagingDetail" {
             return parentPath.isEmpty
         }
         // Revision 37: the paused Bot detail a `bot:handoffs` device reads.

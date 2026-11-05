@@ -20,12 +20,18 @@ import type { EntryRecord, SubmissionRecord, ToolExecutionApi, ToolExecutionResu
 
 export type DurableTool = ToolRegistration;
 export type ToolReplay = "safe" | "unsafe";
+export type BotEffectAdmission<T> = { admitted: false } | { admitted: true; started: Promise<T> };
 
 /** What a per-call tool may use of the conversation it runs in. */
 export interface BotToolCall {
-  readonly callId: string;
-  /** Host task identity; used only for protected durable peer handoffs. */
+  /** Host-owned durable tool identity, used to end replay receipts after settlement. */
   readonly taskId?: string;
+  assertRunActive?(): Promise<void>;
+  /** Called by the authority fence with the actual effect, after its awaited checks. */
+  admitEffect?<T>(start: () => Promise<T>): Promise<BotEffectAdmission<T>>;
+  /** A stale plan permit asks/blocks under ordinary policy, without reserving another plan. */
+  reauthorize?(): Promise<void>;
+  readonly callId: string;
   readonly signal: AbortSignal;
   /** Committed entries of the calling conversation, newest first (the store's default scan order). */
   entries(): Promise<EntryRecord[]>;
@@ -40,28 +46,42 @@ export interface BotToolCall {
    * returned on every later call of the same task, including after a restart.
    */
   memo<T extends JsonValue>(name: string, candidate: T): Promise<T>;
+  readMemo?<T extends JsonValue>(name: string): Promise<T | undefined>;
+  /** Stable host identities for plan/grant binding; raw ingress remains separate. */
+  runInputIds?(): Promise<readonly string[]>;
   /**
    * Request ids of the inputs the calling run serves (one per input; `undefined` for one without),
-   * when the registry reads them. The registry holds the attended tool set, so a tool that acts
+   * when the registry reads them. Preparation may precede this run, so a tool that acts
    * differently on routine or Telegram runs asks here.
    */
   runRequestIds?(): Promise<readonly (string | undefined)[]>;
 }
 
 export interface AdaptOptions {
+  assertRunActive?(api: ToolExecutionApi, context: Context): Promise<void>;
+  prepareExecution?(api: ToolExecutionApi, context: Context, args: unknown): Promise<void>;
+  admitEffect?<T>(api: ToolExecutionApi, context: Context, args: unknown, start: () => Promise<T>): Promise<BotEffectAdmission<T>>;
+  reauthorize?(api: ToolExecutionApi, context: Context, args: unknown): Promise<void>;
+  settled?(api: ToolExecutionApi): void;
   replay: ToolReplay;
   /** Build the tool for one call. `tool` still supplies the name, schema and description. */
   bind?: (call: BotToolCall) => AgentTool;
   /** Reads the calling run's request ids, for `BotToolCall.runRequestIds`. */
   runRequestIds?(api: ToolExecutionApi, context: Context): Promise<readonly (string | undefined)[]>;
+  runInputIds?(api: ToolExecutionApi, context: Context): Promise<readonly string[]>;
 }
 
 const ENTRY_PAGE = 500;
 
-function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, opts: AdaptOptions): BotToolCall {
+function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, opts: AdaptOptions, args: unknown): BotToolCall {
   const runRequestIds = opts.runRequestIds;
   return {
+    ...(opts.assertRunActive ? {assertRunActive: () => opts.assertRunActive!(api, context)} : {}),
+    ...(opts.admitEffect ? { admitEffect: <T>(start: () => Promise<T>) => opts.admitEffect!(api, context, args, start) } : {}),
+    ...(opts.reauthorize ? { reauthorize: () => opts.reauthorize!(api, context, args) } : {}),
     ...(runRequestIds === undefined ? {} : { runRequestIds: () => runRequestIds(api, context) }),
+    ...(opts.runInputIds ? { runInputIds: () => opts.runInputIds!(api, context) } : {}),
+    readMemo: <T extends JsonValue>(name: string) => api.memo<T>(name, context),
     callId: api.callId,
     taskId: String(api.taskId),
     signal,
@@ -151,7 +171,9 @@ export function adaptAidenTool(tool: AgentTool, opts: AdaptOptions): DurableTool
     async execute(args, api, context): Promise<ToolExecutionResult> {
       const { signal, dispose } = linkedSignal(context);
       try {
-        const target = opts.bind ? opts.bind(callApi(api, context, signal, opts)) : tool;
+        await opts.prepareExecution?.(api, context, args);
+        const target = opts.bind ? opts.bind(callApi(api, context, signal, opts, args)) : tool;
+        await opts.assertRunActive?.(api, context);
         const result = await target.execute(api.callId, args, signal, createUpdateForwarder(api, context));
         const details = toJson(result.details);
         return {
@@ -162,6 +184,7 @@ export function adaptAidenTool(tool: AgentTool, opts: AdaptOptions): DurableTool
           ...(result.terminate ? { control: { terminate: true } } : {}),
         };
       } finally {
+        opts.settled?.(api);
         dispose();
       }
     },

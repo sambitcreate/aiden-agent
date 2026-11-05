@@ -1359,4 +1359,16 @@
     <string name="bot_peers_messaged">Messaged %1$s</string>
     <string name="bot_peers_message_from">Message from %1$s</string>
     <string name="bot_peers_names_missing">Refresh the Bot names before approving a pair.</string>
+
+    <string name="bot_messaging_global">Bots can message each other</string>
+    <string name="bot_messaging_other_bots">Other Bots</string>
+    <string name="bot_messaging_receive">Other Bots can message %1$s</string>
+    <string name="bot_messaging_send">%1$s can message other Bots</string>
+    <string name="bot_messaging_globally_off">Turned off for all Bots</string>
+    <string name="bot_messaging_check_connection">Connect to check Bot messaging.</string>
+    <string name="bot_access_title">%1$s wants to use %2$s</string>
+    <string name="bot_access_once">Allow once</string>
+    <string name="bot_access_always">Always for this folder</string>
+    <string name="bot_issue_allow_folder">Allow this folder</string>
+    <string name="bot_access_not_now">Not now</string>
 </resources>

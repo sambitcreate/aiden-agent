@@ -1585,7 +1585,9 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
+            .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
+            .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2273,6 +2275,10 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     // MARK: - Bots
 
+    func setBotMessaging(enabled: Bool) async throws -> AidenBotMessagingSettings {
+        try await send(method: "PUT", path: ["bots", "messaging"], body: AidenBotMessagingSettings(enabled: enabled))
+    }
+
     func bots() async throws -> AidenBotList {
         try await send(method: "GET", path: ["bots"])
     }
@@ -2556,6 +2562,27 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     // MARK: Contract revision 37: Bot hand-offs and pause (`bot:handoffs`)
+
+    /// Revision 56. A receipt acknowledges the operation; only the session feed settles its card.
+    func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt {
+        try validateBotIdentifier(botId)
+        try AidenBotHandoffWire.validateWaitID(planId)
+        let receipt: AidenBotPlanRespondReceipt = try await send(
+            method: "POST", path: ["bots", botId, "plans", planId, "respond"], body: request,
+            headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200])
+        guard receipt.planId == planId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    /// Answers an offered access choice. Only the opaque wait ID and choice leave the phone.
+    func answerBotAccessRequest(
+        botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID
+    ) async throws -> AidenBotAccessAnswerReceipt {
+        try validateBotIdentifier(botId)
+        try validateBotWaitIdentifier(waitId)
+        return try await send(method: "POST", path: ["bots", botId, "access-requests", waitId, "answer"],
+                              body: request, headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200])
+    }
 
     /// Answers the hand-off the Bot waits on: Done or Skip, with an optional
     /// note. The request UUID is the idempotency key, so a retried answer
@@ -2910,6 +2937,19 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     // MARK: Memory (`bot-memory-v1`) and proactivity (`bot-proactive-v1`)
+
+    func botAllowed(botId: String, cursor: String? = nil) async throws -> AidenBotAllowedList {
+        try validateBotIdentifier(botId)
+        if let cursor, !AidenBotAllowedList.validCursor(cursor) { throw AidenRemoteClientError.invalidResponse }
+        let view: AidenBotAllowedList = try await send(method: "GET", path: ["bots", botId, "allowed"], query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return view
+    }
+    func removeBotAllowed(botId: String, entryId: String) async throws -> AidenBotAllowedList {
+        try validateBotIdentifier(botId)
+        guard AidenBotAllowedEntry.validID(entryId) else { throw AidenRemoteClientError.invalidResponse }
+        let view: AidenBotAllowedList = try await send(method: "POST", path: ["bots", botId, "allowed", entryId, "remove"], body: [String: String]())
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return view
+    }
 
     func botMemory(botId: String) async throws -> AidenBotMemory {
         try validateBotIdentifier(botId)

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Revision 57: owner controls only. Peer text never grants execution authority.
+/// Revision 58: owner controls only. Peer text never grants execution authority.
 enum AidenPeerWire {
     static func closed(_ decoder: Decoder, _ keys: Set<String>) throws { try AidenRoutineModelWire.closed(decoder, keys) }
     static func optional<T: Decodable, K: CodingKey>(_ type: T.Type, _ c: KeyedDecodingContainer<K>, _ key: K) throws -> T? { try AidenRoutineModelWire.optional(type, c, key) }

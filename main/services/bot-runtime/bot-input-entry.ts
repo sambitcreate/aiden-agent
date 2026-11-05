@@ -3,8 +3,14 @@ export const BOT_ROUTINE_INPUT_KIND = "aiden.routine-input";
 export const BOT_PERSON_INPUT_KIND = "aiden.person-input";
 export const BOT_PEER_INPUT_KIND = "aiden.peer-input";
 
+export const BOT_MESSAGE_INPUT_KIND = "aiden.bot-message-input";
+
+export interface BotMessageInputMetadata {
+  kind: "request" | "reply"; deliveryId: string; botId: string; botName: string; text: string; deadline: number;
+}
+
 export function isBotInputEntryKind(kind: string): boolean {
-  return kind === "pi.user" || kind === BOT_PERSON_INPUT_KIND || kind === BOT_ROUTINE_INPUT_KIND || kind === BOT_PEER_INPUT_KIND;
+  return kind === "pi.user" || kind === BOT_PERSON_INPUT_KIND || kind === BOT_ROUTINE_INPUT_KIND || kind === BOT_PEER_INPUT_KIND || kind === BOT_MESSAGE_INPUT_KIND;
 }
 
 export interface BotRoutineInputOrigin {

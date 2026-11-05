@@ -336,3 +336,21 @@ test("a later pending row re-arms a shared passive root and settlement waits for
  // cause the retried root to acquire another day's note before its own row.
  await log.append({botId:"bot:scout",class:"digest",peerRootIds:["shared-root"],dedupeKey:"old-note",title:"Old note",body:"Updates",status:"info",createdAt:NOW,deliverAfter:NOW,macSentAt:NOW,telegramSentAt:NOW,sentAt:NOW,peerSettledAt:NOW});settled=true;await log.append({botId:"bot:scout",class:"digest",peerRootIds:["shared-root"],dedupeKey:"new-note",title:"New note",body:"Updates",status:"info",createdAt:NOW,deliverAfter:NOW,macSentAt:NOW});await createBotDeliveryFunnel(ports).deliver({botId:"bot:scout",class:"peer_result",requestId:"shared-root",dedupeKey:"suppressed-result",title:"Result",body:"Result",status:"succeeded",quiet:true});assert.equal(settled,false);assert.deepEqual(channels,[]);assert.equal((await log.find("bot:scout","new-note"))?.peerSettledAt,undefined);fail=false;await createBotDeliveryFunnel({...ports,log:createBotDeliveryLog({profileDir:()=>root})}).flush(NOW);assert.equal(settled,true);assert.deepEqual(channels,["telegram"]);assert.ok((await log.list("bot:scout")).every(row=>row.peerSettledAt!==undefined));
 });
+
+test('bot_message final delivery is durable and deduplicated',async t=>{
+ const h=await harness();t.after(h.cleanup);
+ const input:BotDeliveryInput={botId:'bot:scout',class:'bot_message',dedupeKey:'message:delivery:final',title:'Scouts reply',body:'The final answer',status:'info'};
+ assert.equal(await h.funnel.deliver(input),'sent');assert.equal(await h.funnel.deliver(input),'duplicate');
+ assert.equal(h.calls.mac.length,1);assert.equal(h.calls.telegram.length,1);
+ assert.equal((await h.log.list(input.botId))[0]?.class,'bot_message');
+});
+
+test("a deferred access issue retains its audience gate when flushed from the durable log", async (t) => {
+  const h = await harness({ decide: async () => ({ kind: "defer", until: NOW + HOUR }) }); t.after(h.cleanup);
+  await h.funnel.deliver({ botId: "bot:scout", class: "issue", dedupeKey: "issue:access_gate", title: "Allow Reports", body: "Prepare a summary.", status: "info", requiredCapability: "bot:access-requests" });
+  assert.equal(h.calls.mac.length, 0);
+  await h.funnel.flush(NOW + HOUR);
+  assert.equal(h.calls.mac.length, 1);
+  assert.equal(h.calls.mac[0]!.requiredCapability, "bot:access-requests");
+  assert.equal((await h.log.find("bot:scout", "issue:access_gate"))?.requiredCapability, "bot:access-requests");
+});

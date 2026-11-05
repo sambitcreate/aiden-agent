@@ -9,7 +9,7 @@ import org.junit.Assert.*
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.*
-import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestBotPeers
+import sbtbiswas.AidenOnTheGo.features.remote.*
 import java.time.Instant
 
 class AidenBotPeersClientTest {
@@ -54,6 +54,30 @@ class AidenBotPeersClientTest {
         server.enqueue(MockResponse().setBody(" ".repeat(AidenPeerWire.PUBLIC_BYTES+1)));assertTrue(runCatching{client.botPeerCatalog("bot_planner")}.isFailure);server.takeRequest()
         server.enqueue(MockResponse().setBody(peerFixture().getValue("exchanges").jsonObject.getValue("exchanges").jsonArray.single().toString()));assertTrue(runCatching{client.botPeerExchange("bot_planner","exchange_one")}.isFailure)
     }
+    @Test fun continuityAndShippingMessagingCapabilitiesNegotiateTogetherWithoutDroppingEarlierGrants() = runBlocking {
+        val base = listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ)
+        val tokens = listOf("bot:watches", "bot:open-work", "bot:routine-models", "bot:peers", "bot:messaging", "bot:access-requests", "bot:plans", "bot:allowed")
+        val offered = base + tokens.map(::AidenRemoteCapability)
+        val installation = AidenInstallation(instanceId="test", deviceId="phone", name="Host", endpoint=server.url("/api/aiden/v1").toString(), serverSpkiSha256="sha256/test", deviceCapabilities=base, serverCapabilities=offered, createdAt=Instant.EPOCH)
+        var host = AidenServer(protocolVersion=1, instanceId="test", name="Host", capabilities=base, serverCapabilities=offered)
+        var grants = base
+        val requests = listOf(::aidenRequestBotWatches, ::aidenRequestBotOpenWork, ::aidenRequestBotRoutineModels, ::aidenRequestBotPeers, ::aidenRequestBotMessaging, ::aidenRequestBotAccessRequests, ::aidenRequestBotPlans, ::aidenRequestBotAllowed)
+        for ((index, request) in requests.withIndex()) {
+            grants = grants + AidenRemoteCapability(tokens[index])
+            val wireGrants = JsonArray(grants.map { JsonPrimitive(it.rawValue) })
+            server.enqueue(MockResponse().setBody(JsonObject(mapOf("capabilities" to wireGrants)).toString()))
+            server.enqueue(MockResponse().setBody(JsonObject(mapOf("instanceId" to JsonPrimitive("test"), "name" to JsonPrimitive("Host"), "capabilities" to wireGrants, "serverCapabilities" to JsonArray(offered.map { JsonPrimitive(it.rawValue) }))).toString()))
+            host = requireNotNull(request(client, host, installation) { true }).server
+            val post = server.takeRequest()
+            assertEquals("/api/aiden/v1/device/capabilities", post.path)
+            assertEquals(listOf(tokens[index]), Json.parseToJsonElement(post.body.readUtf8()).jsonObject.getValue("accepts").jsonArray.map { it.jsonPrimitive.content })
+            assertEquals("/api/aiden/v1/server", server.takeRequest().path)
+        }
+        assertTrue(host.supportsBotPeers)
+        assertTrue(host.supportsBotPeerExchanges)
+        assertEquals((base.map { it.rawValue } + tokens).toSet(), host.capabilities.map { it.rawValue }.toSet())
+    }
+
     @Test fun peerCapabilityNegotiatesAloneAndMetadataDoesNotNeedChatOrWrite()=runBlocking {
         val grants=listOf(AidenRemoteCapability.BOT_READ)
         val installation=AidenInstallation(instanceId="test",deviceId="phone",name="Host",endpoint=server.url("/api/aiden/v1").toString(),serverSpkiSha256="sha256/test",deviceCapabilities=grants,serverCapabilities=grants,createdAt=Instant.EPOCH)

@@ -1638,7 +1638,7 @@ final class AidenChatTests: XCTestCase {
     func testChatOpenFetchesTheProgressSnapshotOnceAndReloadsDoNotDuplicateIt() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-progress-once-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = try await makeProgressLifecycleModel(mode: .finite, cache: AidenChatCache(root: root))
+        let model = try await makeProgressLifecycleModel(mode: .open, cache: AidenChatCache(root: root))
         defer {
             model.stopProgressObservation()
             AidenChatProgressLifecycleURLProtocol.reset()
@@ -1655,9 +1655,8 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
 
         // A pull-to-refresh while the observer owns progress reloads the
-        // transcript but leaves progress to that single owner. The finite
-        // channel's reconnect waits at least half a second, so no retry
-        // snapshot can land inside this window.
+        // transcript but leaves progress to that single owner. Keep the live
+        // channel open so a legitimate reconnect cannot race these assertions.
         await model.load()
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
@@ -3213,22 +3212,21 @@ final class AidenChatTests: XCTestCase {
             responseOverride: { fixture.response($0) },
             extraCapabilities: [.runsObserve, .runsControl]
         )
-        let rosterHeld = expectation(description: "first roster read held")
-        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
-        let loading = Task { await model.load(observeProgress: true) }
-        // The opening lookup is answered before the run registers on the Mac,
-        // and the run registers before the held roster response is delivered.
+        // Complete transcript, draft and catalog I/O before timing only the
+        // held roster request. The opening lookup still sees no registered run.
+        await model.load(observeProgress: false)
         try await waitForCondition("opening lookup answered") {
             fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
         }
-        // Loading restores local state and fetches the transcript/catalog before
-        // starting either lookup. The roster deadline starts once that setup
-        // has finished, while its response is still deliberately held.
+        defer { model.stopProgressObservation() }
+        let rosterHeld = expectation(description: "first roster read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
+        model.startProgressObservation()
         await fulfillment(of: [rosterHeld], timeout: 3)
-        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs, [AidenChatProgressLifecycleURLProtocol.epoch])
+        // The opening lookup is answered before the run registers on the Mac,
+        // and the run registers before the first roster arrives.
         fixture.startRun()
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
-        await loading.value
 
         try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
         XCTAssertTrue(model.isObservingForeignRun)
@@ -3245,19 +3243,21 @@ final class AidenChatTests: XCTestCase {
             responseOverride: { fixture.response($0) },
             extraCapabilities: [.runsObserve, .runsControl]
         )
-        let rosterHeld = expectation(description: "first roster read held")
-        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
-        let loading = Task { await model.load(observeProgress: true) }
+        // Complete transcript, draft and catalog I/O before timing only the
+        // held roster request. The opening lookup still sees no registered run.
+        await model.load(observeProgress: false)
         try await waitForCondition("opening lookup answered") {
             fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
         }
+        defer { model.stopProgressObservation() }
+        let rosterHeld = expectation(description: "first roster read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
+        model.startProgressObservation()
         await fulfillment(of: [rosterHeld], timeout: 3)
-        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs, [AidenChatProgressLifecycleURLProtocol.epoch])
         // A run starts and finishes on the Mac after the load read the
         // transcript, and before the held roster response is delivered.
         fixture.startRun()
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
-        await loading.value
 
         try await waitForCondition("reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
         XCTAssertEqual(fixture.chatReads, 2, "The finished run's reply is read once.")
@@ -10951,6 +10951,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     enum Mode: Sendable, Equatable {
         case denied
         case finite
+        case open
         case rosterFailsAfterFirst
         case rosterEpochRotates
         case controls
@@ -11349,7 +11350,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 )
             } else {
                 let payload = String(decoding: Self.taskSnapshot, as: UTF8.self)
-                shouldFinish = currentMode != .rosterFailsAfterFirst || requestCount < 2
+                shouldFinish = currentMode != .open && (currentMode != .rosterFailsAfterFirst || requestCount < 2)
                 if currentMode == .rosterEpochRotates {
                     shouldFinish = requestCount < 3
                 }

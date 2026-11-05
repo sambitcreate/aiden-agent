@@ -1,6 +1,6 @@
 import Foundation
 
-/// Revision 56. Opaque catalog identities are never resolved from labels.
+/// Revision 58. Opaque catalog identities are never resolved from labels.
 enum AidenRoutineModelWire {
     static func closed(_ decoder: Decoder, _ keys: Set<String>) throws { try AidenBotWire.requireOnlyKeys(decoder, allowed: keys) }
     static func optional<T: Decodable, K: CodingKey>(_ type: T.Type, _ c: KeyedDecodingContainer<K>, _ key: K) throws -> T? {

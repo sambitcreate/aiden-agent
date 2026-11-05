@@ -103,12 +103,15 @@ class AidenBotsViewModel(
             _isLoading.value = _botList.value == null
             try {
                 supervisorScope {
+                    val messaging = coordinator.botMessagingController()
+                    val messagingGeneration = messaging.readGeneration
                     val botsRequest = async { request { client.bots() } }
                     val conversationsRequest = async { request { client.botConversations() } }
                     val botsResult = botsRequest.await()
                     val conversationsResult = conversationsRequest.await()
                     if (coordinator.client.value !== client) return@supervisorScope
                     botsResult.onSuccess { list ->
+                        messaging.adopt(list.messaging, generation = messagingGeneration)
                         _botList.value = list
                         botCache?.putBotList(list)
                     }

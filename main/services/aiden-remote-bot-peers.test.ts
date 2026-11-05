@@ -100,6 +100,32 @@ test("peer session and notification reads recheck current opt-in before publishi
     const body = await response.json(); assert.deepEqual(kind === "session" ? body.entries : body.notifications, []);
   }
 });
+test("held Bot reads refuse projections whose separate grants were removed before publication", async (t) => {
+  const cases: Array<{ kind: "session" | "feed"; capability: AidenRemoteCapability }> = [
+    { kind: "session", capability: "bot:access-requests" },
+    { kind: "session", capability: "bot:plans" },
+    { kind: "session", capability: "bot:allowed" },
+    { kind: "feed", capability: "bot:access-requests" },
+    { kind: "feed", capability: "bot:messaging" },
+  ];
+  for (const { kind, capability } of cases) {
+    await t.test(`${kind}: ${capability}`, async (t) => {
+      const hold = barrier();
+      const session = { botId: fixture.settings.botId, epoch: "e1", seq: 1, state: "idle", interrupted: false, entries: [], hasOlder: false, question: null, approval: null };
+      const server = await host(t, service().port, [...all, capability], undefined, {
+        session: async () => { await hold.block(); return session; },
+        routineNotificationFeed: async () => { await hold.block(); return { notifications: [], now: fixture.peerNotification.finishedAt }; },
+      } as never);
+      const pending = server.request(kind === "session" ? base + "/session" : "/bots/routine-notifications");
+      await hold.entered;
+      server.setCapabilities(all);
+      hold.release();
+      const response = await pending;
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error.code, "capability_denied");
+    });
+  }
+});
 test("normative peer schemas are closed and restrict final markers, notification kinds and large evidence IDs", () => {
   const contract = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/openapi.json", import.meta.url), "utf8"));
   const ajv = new Ajv({ strict: false, validateFormats: false }); ajv.addSchema(contract, "contract");
