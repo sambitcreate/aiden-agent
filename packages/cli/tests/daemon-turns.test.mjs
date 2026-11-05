@@ -347,6 +347,24 @@ async function awaitingApproval(f, chatId, { tool = "ls", args = { path: "." }, 
   await until(() => owner.of("chat:approval").length > 0, "the approval prompt");
   return { ...turn, approval: owner.of("chat:approval")[0] };
 }
+test("every raised approval reports one decision, and it matches the outcome", async () => {
+  const run = async ({ raised = () => {}, publish }) => {
+    const decisions = [];
+    const approvals = api.createDaemonApprovals({ raised, resolved: (id, decision) => decisions.push(decision) });
+    const outcome = await approvals.request({ streamId: "stream", toolCallId: "call", toolName: "ls", summary: "List" }, new AbortController().signal, "owner", (prompt) => publish(approvals, prompt));
+    return { outcome, decisions };
+  };
+  const allow = (approvals, prompt) => assert.equal(approvals.approve(prompt.approvalId, "allow", "owner"), true);
+  assert.deepEqual(await run({ publish: allow }), { outcome: "allowed", decisions: ["allow"] }, "answered during delivery");
+  assert.deepEqual(await run({ publish: (approvals, prompt) => { allow(approvals, prompt); throw new Error("send failed"); } }),
+    { outcome: "allowed", decisions: ["allow"] }, "answered, then delivery failed");
+  assert.deepEqual(await run({ publish: () => { throw new Error("send failed"); } }), { outcome: "unavailable", decisions: ["cancelled"] });
+  assert.deepEqual(await run({ raised: () => { throw new Error("attention failed"); }, publish: () => assert.fail("never delivered") }),
+    { outcome: "unavailable", decisions: ["cancelled"] }, "attention may have changed before it threw");
+  assert.deepEqual(await run({ publish: (approvals, prompt) => { setImmediate(() => approvals.approve(prompt.approvalId, "deny", "owner")); } }),
+    { outcome: "denied", decisions: ["deny"] }, "the ordinary path reports once too");
+});
+
 const toolResult = (owner) => owner.of("chat:tool").find((event) => event.phase !== "call")?.phase;
 const toolResultSeen = (request) => JSON.stringify(request.messages.filter((message) => message.role === "tool"));
 

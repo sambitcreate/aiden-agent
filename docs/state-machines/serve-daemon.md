@@ -73,7 +73,7 @@ Owner: the shared `ToolApprovalCoordinator` (`main/services/tool-approval.ts`, L
 | grant recheck | allowed | authority current, arguments unchanged, access not `none` | dispatched | tool runs | `chat:tool` result |
 | grant recheck | allowed | any check fails | blocked | none | model hears the refusal |
 
-A publish callback that settles its own prompt synchronously leaves raised attention unwithdrawn in the coordinator on `main`. That belongs to the shared owner, and Lane B's `publishing` phase in #738 handles it.
+The adapter reports each raised prompt once, from the outcome the coordinator settled it with, so it does not depend on the coordinator having seen the publish finish. That covers a publish that settles its own prompt, a publish that then throws, and a `raised` that throws.
 
 Linearization: the grant is checked again after the wait, so a late `allow` cannot outrun a revocation. The generation's own 300 s timer starts first, so in practice it ends a waiting prompt as `cancelled` before that prompt's expiry can fire.
 
