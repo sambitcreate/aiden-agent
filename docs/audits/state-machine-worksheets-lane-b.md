@@ -87,6 +87,11 @@ The first settlement is the linearization point, so the first answer across the 
 
 Fixed defect, reproduced by test: a prompt settled from inside its own publish callback was shown but never withdrawn, which left its attention row and run projection open.
 
+Recorded, not changed:
+
+- "Publish throws, unsettled" means never shown, and existing tests require that no withdrawal follows. A surface whose publish shows the prompt and then throws in a later step would break that assumption. `bot-approvals.ts` is the one known case: it stores the waiting entry before calling its own publish, so a throw leaves that entry behind. See `backend:M028`. No desktop path that throws after showing a prompt was established.
+- A publish callback that synchronously requests a new prompt with the same id would let the first prompt's deferred withdrawal remove the second one's presentation. No caller does this, so no code was added for it.
+
 ### `backend:M020` question coordinator — converted
 
 Same prompt phases as the approval coordinator, plus the deadline timer. `respondWithOutcome` treats a passed deadline as a timeout even if the timer has not fired.
@@ -109,6 +114,8 @@ Fixed defects, reproduced by test:
 ### `backend:M028` Bot approval wait registry — deferred
 
 PR #730 rewrites `bot-approvals.ts`, and #727 also edits it. Reconcile after those land.
+
+Open item for that reconciliation: #730's publish callback still sets `waiting` and then calls `options.publish`. If that throws, the coordinator settles `unavailable` without withdrawing, so the `waiting` entry stays. Clear it in that path or set it after publish returns.
 
 ## P2b: Remote pairing and single-use capabilities
 
@@ -183,7 +190,11 @@ Fixed defects, reproduced by test:
 - An allow answered after a revocation was cached under the old revision, so a `once` grant lapsed on the next call and the card came back within one response. It is now cached under the answer's revision, because that answer is the person's fresh decision.
 - An allow answered during a reset could save a grant that the reset had just cleared. It is now refused.
 
-`decide` retries at most three times, then refuses.
+- The continue marker was cleared only when the current call saw an unready Mac. When setup finished between calls, a later call that passed on the saved grant, was denied or was stopped left the marker behind, and the chat kept offering Continue. The gate now tracks whether it set the marker.
+
+`decide` retries at most three times, then refuses with `COMPUTER_USE_ACCESS_CHANGED_REASON`.
+
+A revocation after an Allow can raise a second card for the same call. That is intended: the revocation is newer than the answer, so the call fails closed and asks again.
 
 ### `backend:M123` Bot computer takeover — retained
 
