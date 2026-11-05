@@ -7,6 +7,7 @@ import type { AidenOperationContractErrorCode } from "./aiden-remote-operation-c
  *   executing --action_rejected---> rejected
  *   executing --outcome_lost------> unknown
  *   unknown   --reconciled_*------> fulfilled | rejected
+ *   fulfilled | rejected --outcome_unrecorded--> unknown
  *
  * `executing` is the only phase with a live owner in this process. `unknown`
  * has none: the effect may or may not have committed, so nothing short of an
@@ -16,7 +17,9 @@ import type { AidenOperationContractErrorCode } from "./aiden-remote-operation-c
  *
  * Linearization points: admission is the durable `in_flight` write, and the
  * terminal phases hold only after the outcome fits the snapshot budget. An
- * outcome that cannot be recorded is `outcome_lost`, never a clean failure.
+ * outcome that cannot be recorded is `outcome_lost`, never a clean failure, and
+ * one whose durable write failed is `outcome_unrecorded`: the disk still says
+ * in flight, so the live entry must not expire into a fresh execution either.
  */
 export type AidenOperationPhase<Value> =
   | { kind: "executing"; result: Promise<unknown> }
@@ -28,6 +31,7 @@ export type AidenOperationEvent<Value> =
   | { type: "action_fulfilled"; value: Value; expiresAt: number }
   | { type: "action_rejected"; errorCode: AidenOperationContractErrorCode; expiresAt: number }
   | { type: "outcome_lost" }
+  | { type: "outcome_unrecorded" }
   | { type: "reconciled_fulfilled"; value: Value; expiresAt: number }
   | { type: "reconciled_rejected"; errorCode: AidenOperationContractErrorCode; expiresAt: number };
 
@@ -50,6 +54,8 @@ export function advanceAidenOperation<Value>(
         : phase;
     case "outcome_lost":
       return phase.kind === "executing" ? { kind: "unknown" } : phase;
+    case "outcome_unrecorded":
+      return phase.kind === "fulfilled" || phase.kind === "rejected" ? { kind: "unknown" } : phase;
     case "reconciled_fulfilled":
       return phase.kind === "unknown"
         ? { kind: "fulfilled", value: event.value, expiresAt: event.expiresAt }

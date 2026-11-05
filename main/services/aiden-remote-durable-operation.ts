@@ -29,8 +29,12 @@ export interface AidenDurableOperationOwner {
  *      write proves the action never ran, so the entry is dropped and the same
  *      key stays usable.
  *   2. The outcome is written after the action settles. A failed write leaves
- *      the effect standing with no durable record, so the caller is told the
- *      outcome is unknown rather than given a result or a clean failure.
+ *      the effect standing with no durable record, so the operation becomes
+ *      unknown, in memory as on disk, and the caller is told so.
+ *
+ * Only the call that owns the operation writes. A replay or a join has nothing
+ * of its own to record, and its write failing would say nothing about the
+ * operation it is reporting on.
  */
 export async function executeAidenDurableOperation<T>(
   owner: AidenDurableOperationOwner,
@@ -47,13 +51,11 @@ export async function executeAidenDurableOperation<T>(
     admit = resolve;
     refuse = reject;
   });
-  // A replay never runs the wrapper below, so nothing else observes a refusal.
-  void admission.catch(() => undefined);
-
-  const pending = ledger.execute(scope, input, async () => {
+  const { admitted, result: pending } = ledger.begin(scope, input, async () => {
     await admission;
     return action();
   });
+  if (!admitted) return pending;
 
   try {
     await persist(ledger.snapshot());
@@ -77,6 +79,7 @@ export async function executeAidenDurableOperation<T>(
   try {
     await persist(ledger.snapshot());
   } catch {
+    ledger.markOutcomeUnrecorded(scope);
     throw new AidenRemoteServiceError("idempotency_in_flight", owner.outcomeUnrecordedMessage, 409);
   }
   if (failed) throw failure;
