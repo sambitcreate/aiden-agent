@@ -1192,6 +1192,26 @@ test("a bridge seen exiting late no longer fails shutdown, and its lease directo
   }
 });
 
+test("a bridge that exits after shutdown already failed is still reclaimed", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-after-"));
+  const logPath = path.join(root, "events.jsonl");
+  let exitSeen = false;
+  const host = fakeHost(root, logPath, [], { exitConfirmed: () => exitSeen });
+  const leases = async () => (await readdir(root)).filter((name) => name.startsWith("acu-"));
+  try {
+    await host.createSession();
+    await assert.rejects(host.shutdown(), { code: "cleanup_unconfirmed" });
+    assert.equal((await leases()).length, 1);
+    exitSeen = true;
+    for (let attempt = 0; attempt < 150 && (await leases()).length > 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.deepEqual(await leases(), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a session whose bridge exited normally still shuts down cleanly", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-clean-"));
   const logPath = path.join(root, "events.jsonl");

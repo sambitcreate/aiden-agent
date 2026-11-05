@@ -142,6 +142,8 @@ async function readBridgeReady(
   });
 }
 
+const UNCONFIRMED_EXIT_POLL_MS = 1_000;
+
 interface UnconfirmedExit {
   children: readonly (ChildProcess | null | undefined)[];
   tempDirectory: string;
@@ -448,6 +450,7 @@ export class CuaDriverHost {
     await this.retryPendingCleanup();
     this.manifest = null;
     if (this.unconfirmedExits.size > 0) {
+      this.reclaimWhenExited();
       throw new CuaDriverError("cleanup_unconfirmed", "A Computer Use process may still be running.");
     }
   }
@@ -461,6 +464,16 @@ export class CuaDriverHost {
 
   private allExited(owner: UnconfirmedExit): boolean {
     return owner.children.every((child) => !child || this.exitConfirmed(child));
+  }
+
+  /** A rejected shutdown is cached and its caller moves on, so this keeps watching. */
+  private reclaimWhenExited(): void {
+    const timer = setTimeout(() => {
+      void this.retryPendingCleanup().finally(() => {
+        if (this.unconfirmedExits.size > 0) this.reclaimWhenExited();
+      });
+    }, UNCONFIRMED_EXIT_POLL_MS);
+    timer.unref();
   }
 
   /** Reclaims what was held for a child that has since been seen exiting. */
