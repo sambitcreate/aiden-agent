@@ -300,7 +300,15 @@ export function createSubagentShellBrokerV2(
   const runShell = input.runShell ?? runSubagentShellProductionInert;
   const shell = subagentShellProfile(input.platform);
   const pending = new Map<string, PendingShell>();
-  const active = new Set<AbortController>();
+  const stop = new AbortController();
+  // Every prepare and dispatch in progress. Shutdown reports stopped only once
+  // these settle: an abort asks a helper to stop, and is no proof that it did.
+  const settling = new Set<Promise<void>>();
+  const tracked = <T>(work: Promise<T>): Promise<T> => {
+    const settled = work.then(() => undefined, () => undefined).finally(() => settling.delete(settled));
+    settling.add(settled);
+    return work;
+  };
   let shuttingDown = false;
 
   const liveAuthority = (): SubagentAuthorityV2 => {
@@ -337,7 +345,7 @@ export function createSubagentShellBrokerV2(
     prepared.admission.release();
   };
 
-  return {
+  const gate: SubagentShellGateV2 = {
     beforeToolCall: async (context, callerSignal) => {
       if (context.toolCall.name !== SUBAGENT_RUN_COMMAND_TOOL_NAME) return undefined;
       if (shuttingDown || pending.has(context.toolCall.id)) {
@@ -345,7 +353,7 @@ export function createSubagentShellBrokerV2(
       }
       const admission = registry.admit(input.authority.workspaceId);
       const signal = AbortSignal.any(
-        [callerSignal, input.runSignal, admission.signal].filter(
+        [stop.signal, callerSignal, input.runSignal, admission.signal].filter(
           (candidate): candidate is AbortSignal => candidate !== undefined,
         ),
       );
@@ -497,6 +505,10 @@ export function createSubagentShellBrokerV2(
           return blocked("This shell approval expired or changed.");
         }
         await input.journal.authorizeEffect(owner);
+        if (signal.aborted) {
+          await cancel(prepared);
+          return blocked("This shell call was cancelled.");
+        }
         pending.set(context.toolCall.id, prepared);
         return undefined;
       } catch {
@@ -513,9 +525,8 @@ export function createSubagentShellBrokerV2(
         throw new Error("This shell call has no live one-shot approval.");
       }
       const controller = new AbortController();
-      active.add(controller);
       const signal = AbortSignal.any(
-        [controller.signal, effect.signal, input.runSignal, prepared.admission.signal].filter(
+        [stop.signal, controller.signal, effect.signal, input.runSignal, prepared.admission.signal].filter(
           (candidate): candidate is AbortSignal => candidate !== undefined,
         ),
       );
@@ -582,16 +593,22 @@ export function createSubagentShellBrokerV2(
         throw error;
       } finally {
         controller.abort(new Error("Shell call settled."));
-        active.delete(controller);
         prepared.admission.release();
       }
     },
     shutdown: async () => {
       shuttingDown = true;
       runGrant?.revoke();
-      for (const controller of active) controller.abort(new Error("The subagent run ended."));
-      for (const prepared of pending.values()) await cancel(prepared);
+      stop.abort(new Error("The subagent run ended."));
+      const unclaimed = [...pending.values()];
       pending.clear();
+      for (const prepared of unclaimed) await cancel(prepared);
+      await Promise.all(settling);
     },
+  };
+  return {
+    ...gate,
+    beforeToolCall: (context, callerSignal) => tracked(gate.beforeToolCall(context, callerSignal)),
+    execute: (effect) => tracked(gate.execute(effect)),
   };
 }
