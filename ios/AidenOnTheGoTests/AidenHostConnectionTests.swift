@@ -183,6 +183,19 @@ final class AidenHostConnectionTests: XCTestCase {
         XCTAssertEqual(coordinator.selectedConnection?.instanceId, "studio")
         XCTAssertFalse(coordinator.isCurrent(first))
         XCTAssertNotEqual(try coordinator.requestContext(), first)
+
+        // The first context sits at the starting generation, so only a second
+        // round shows the count carrying across replaced connections.
+        let second = try coordinator.requestContext()
+        let attempt = try XCTUnwrap(coordinator.selectedConnection).connectionGeneration
+
+        await coordinator.switchInstallation(to: "laptop")
+        await coordinator.switchInstallation(to: "studio")
+
+        XCTAssertFalse(coordinator.isCurrent(second))
+        let third = try coordinator.requestContext()
+        XCTAssertGreaterThan(third.generation, second.generation)
+        XCTAssertGreaterThan(try XCTUnwrap(coordinator.selectedConnection).connectionGeneration, attempt)
     }
 
     func testALateAnswerFromTheOldSelectionNeverReachesTheNewOne() async throws {
@@ -193,11 +206,16 @@ final class AidenHostConnectionTests: XCTestCase {
         try await waitForRequest("GET /server", instanceId: "studio", responder: responder)
 
         await coordinator.switchInstallation(to: "laptop")
+        let savedStudio = coordinator.installationStore.installations.first { $0.id == "studio" }
+        let revision = coordinator.workspaceSnapshotRevision
         release()
         await connecting.value
 
         XCTAssertEqual(coordinator.server?.instanceId, "laptop")
         XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertNotNil(savedStudio)
+        XCTAssertEqual(coordinator.installationStore.installations.first { $0.id == "studio" }, savedStudio)
+        XCTAssertEqual(coordinator.workspaceSnapshotRevision, revision)
     }
 
     func testForgettingTheLastMachineDropsTheConnectionAndAsksForPairing() async throws {

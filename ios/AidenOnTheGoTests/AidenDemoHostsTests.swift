@@ -320,6 +320,8 @@ final class AidenDemoHostsTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTAssertEqual(responder.requests(instanceId: "studio"), ["GET /server"])
+        // Logged is not held: give a broken hold time to finish the request.
+        try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertFalse(finished.value, "A held request must not complete")
 
         release()
