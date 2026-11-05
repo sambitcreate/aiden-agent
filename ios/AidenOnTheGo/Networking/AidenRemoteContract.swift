@@ -3907,6 +3907,9 @@ struct AidenRemoteRunQuestion: Decodable, Equatable, Sendable {
 struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
     let runId: String
     let chatId: String
+    let replyText: String?
+    let replyReasoning: String?
+    let timeline: AidenGenerationTimeline?
     let reason: String
     let state: String?
     let approvals: [AidenRemoteRunApproval]
@@ -3920,6 +3923,10 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
         runId = try values.decode(String.self, forKey: .runId)
         chatId = try values.decode(String.self, forKey: .chatId)
         reason = try boundedString(values, forKey: .reason, maxLength: 32, field: "reason", required: true)!
+        replyText = try boundedString(values, forKey: .replyText, maxLength: 32_768, field: "replyText", allowEmpty: true)
+        replyReasoning = try boundedString(values, forKey: .replyReasoning, maxLength: 32_768, field: "replyReasoning", allowEmpty: true)
+        timeline = try decodeOptionalNonNull(values, AidenGenerationTimeline.self, forKey: .timeline)
+        guard timeline?.isRendererSafe != false else { throw AidenRemoteContractError.unsafePayloadField("timeline") }
         state = try boundedString(values, forKey: .state, maxLength: 32, field: "state")
         if values.contains(.pendingApprovalIds) {
             _ = try values.decode([String].self, forKey: .pendingApprovalIds)
@@ -3942,7 +3949,7 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case runId, chatId, reason, epoch, state, pendingApprovalIds, pendingQuestionIds
-        case approvals, questions, nextSequence
+        case approvals, questions, nextSequence, replyText, replyReasoning, timeline
     }
 }
 

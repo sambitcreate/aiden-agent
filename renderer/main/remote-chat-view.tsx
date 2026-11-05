@@ -373,7 +373,8 @@ export function RemoteChatPane({
   const row = snapshot ? remoteRunTranscript(snapshot.run, messages) : null;
   const stale = host.availability !== "online";
   const unavailable = host.availability === "offline" || host.availability === "blocked";
-  const loading = !snapshot || (!snapshot.loaded && snapshot.error === null);
+  const hasLiveContent = Boolean(row?.streamingText || row?.streamingReasoning || row?.timeline);
+  const loading = !snapshot || (!snapshot.loaded && !hasLiveContent && snapshot.error === null);
   const live = Boolean(run && !run.ended);
   const approvals = live && run ? run.approvals : [];
   const questions = live && run ? run.questions : [];
@@ -987,7 +988,7 @@ export function RemoteChatPane({
               Loading…
             </Text>
           </div>
-        ) : !snapshot.loaded ? (
+        ) : !snapshot.loaded && !hasLiveContent ? (
           <div className="flex min-h-full items-center justify-center">
             <EmptyState title="This chat could not be opened" description={snapshot.error ?? undefined} />
           </div>
@@ -1017,6 +1018,7 @@ export function RemoteChatPane({
               // Save and Copy read this Mac's stored chats; this chat is stored on its host.
               storedImageActions={false}
               streamingText={row!.streamingText}
+              replayedTextLength={run?.replayedTextLength}
               streamingReasoning={row!.streamingReasoning}
               streamComplete={row!.streamComplete}
               persistedHandoffMessageId={row!.persistedHandoffMessageId}
@@ -1145,7 +1147,7 @@ function useRemoteChatSession(host: PeerHostView | undefined, chatId: string): R
     };
   }, [qc, hostId, grants, chatId]);
 
-  return binding;
+  return binding?.adapter.hostId === hostId && binding?.session.getSnapshot().chatId === chatId ? binding : null;
 }
 
 type RemoteChatFrameProps = Omit<RemoteChatPaneProps, "chat">;
