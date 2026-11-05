@@ -143,6 +143,7 @@ Owner: `recoverChatDeletions` in `daemon-chats.ts`, over the `daemon-chat-deleti
 | recovery | closed | closed | bot history, journal, then chat record removed, each repeatable |
 | tombstone removed | closed | gone | gate released |
 | any step fails | closed | closed | tombstone kept, retried on the next start |
+| record unreadable | unknown | every chat closed | no server starts, Remote or not |
 
 Recovery runs in `serve` for every server. A failure there is logged and closes only those chats. `createCliRemoteChats` runs it again and still fails startup, because Remote must not list a chat whose deletion is stuck.
 

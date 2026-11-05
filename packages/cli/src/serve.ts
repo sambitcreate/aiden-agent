@@ -42,6 +42,7 @@ export async function serve(agentDir: string, signal: AbortSignal, options: { re
 async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void }) {
   const runtime = createCliScheduler(agentDir);
   const chats = createDaemonChats(agentDir);
+  chats.assertChatDeletionsReadable();
   // Every server finishes these, Remote or not. A failure keeps only those chats closed.
   await chats.recoverChatDeletions().catch((error: unknown) => { process.stderr.write(`aiden: Could not finish a chat deletion: ${error instanceof Error ? error.message : String(error)}\n`); });
   const workspaceRuntime = createCliWorkspaceApplication(agentDir, {
