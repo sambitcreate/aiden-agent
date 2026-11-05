@@ -302,6 +302,22 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
   assert.equal(application.finishDeletionCalls(), 0);
 });
 
+test("a chat deletion keeps its fences closed until the deletion is durably complete", async () => {
+  const closedDuringCompletion: number[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => undefined,
+      completeChatDeletion: async () => { closedDuringCompletion.push(application.finishDeletionCalls()); },
+      pendingChatDeletions: async () => [],
+    } as ChatApplicationDependencies["subagentRunStore"],
+  });
+
+  await application.service.remove("chat-1");
+
+  assert.deepEqual(closedDuringCompletion, [0]);
+  assert.equal(application.finishDeletionCalls(), 1);
+});
+
 test("a chat deletion whose tombstone status cannot be read stays fenced for startup", async () => {
   const restored: string[] = [];
   const events: string[] = [];
