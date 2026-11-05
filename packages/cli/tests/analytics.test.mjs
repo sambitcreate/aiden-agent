@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import lockfile from "proper-lockfile";
 
 const api = await import("../dist/parity-test-api.js");
 
@@ -320,6 +321,57 @@ test("turning it off from another process stops a running server at its next eve
   await run.finish();
 });
 
+test("an opt-out racing a server's first start stays off, and the server can't bring the old ID back", async (t) => {
+  const h = harness(t, { state: allowed });
+  const fixture = join(pkgDir, "tests", "fixtures", "analytics-opt-out.mjs");
+  const starting = join(h.agentDir, "opt-out-starting");
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  const blockFor = (done, ms) => {
+    for (const deadline = Date.now() + ms; !done() && Date.now() < deadline;) Atomics.wait(pause, 0, 0, 10);
+  };
+  let optOut;
+  let output = "";
+  // Runs between the server's read of the file and its write: the race itself.
+  h.context.randomUUID = () => {
+    optOut = spawn(process.execPath, [fixture, h.agentDir, h.appDir, starting], { stdio: ["ignore", "pipe", "inherit"] });
+    optOut.stdout.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
+    blockFor(() => existsSync(starting), 30_000);
+    assert.ok(existsSync(starting), "the opt-out process started");
+    // Without the lock the opt-out finishes here, and this write then undoes it.
+    blockFor(() => !readState(h.agentDir).enabled, 500);
+    return NEW_ID;
+  };
+  h.context.createTransport = async (allowSend) => {
+    h.allowSend = allowSend;
+    return h.transport;
+  };
+
+  const run = started(h);
+  await settle();
+  assert.ok(optOut, "the server wrote an install ID");
+  const [code] = await once(optOut, "close");
+  assert.equal(code, 0);
+
+  const saved = readState(h.agentDir);
+  assert.equal(saved.enabled, false);
+  assert.equal(saved.installId, undefined);
+  assert.equal(JSON.parse(output).distinctId, NEW_ID, "the last event carries the ID the server had just saved");
+  await run.finish();
+  assert.equal(h.allowSend(), false);
+  assert.equal(existsSync(`${stateFile(h.agentDir)}.lock`), false);
+});
+
+test("a process that died holding the consent lock can't stop the switch", async (t) => {
+  const h = harness(t, { state: { ...allowed, installId: INSTALL_ID } });
+  const lock = `${stateFile(h.agentDir)}.lock`;
+  mkdirSync(lock);
+  const longAgo = new Date(Date.now() - 60_000);
+  utimesSync(lock, longAgo, longAgo);
+
+  await api.telemetryCommand(h.agentDir, ["off"], h.context);
+  assert.equal(readState(h.agentDir).enabled, false);
+});
+
 test("events shared services report reach the server's client, before and after it is ready", async (t) => {
   const h = harness(t, { state: allowed });
   const run = api.startServerAnalytics("foreground", h.context);
@@ -521,6 +573,29 @@ test("a keyed client reaches only PostHog, and stops the moment the switch is of
   await run.finish();
   assert.equal(requests.length, 1);
   assert.equal(printed.mock.callCount(), 0, "turning it off leaves no stack trace in the server's log");
+});
+
+test("a keyed client starts a request only while it holds the consent lock, and sends nothing without it", async (t) => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  let h;
+  globalThis.fetch = async () => {
+    requests.push(lockfile.checkSync(stateFile(h.agentDir), { realpath: false, stale: 5_000 }));
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  h = harness(t, { state: allowed, createTransport: undefined, buildConfig: { projectKey: KEY, channel: "release" } });
+  const run = started(h);
+  for (let waited = 0; requests.length === 0 && waited < 3_000; waited += 20) await settle();
+  assert.deepEqual(requests, [true], "`telemetry off` can't land between the consent check and the request");
+
+  // Another process is changing the switch, so this batch must not leave.
+  const release = lockfile.lockSync(stateFile(h.agentDir), { realpath: false });
+  api.reportAnalyticsEvent("web_search_used", { search_provider: "brave" });
+  await run.finish();
+  release();
+  assert.equal(requests.length, 1);
 });
 
 test("a keyed client delivers what is queued at exit while the switch stays on", async (t) => {

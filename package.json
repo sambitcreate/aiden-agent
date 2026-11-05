@@ -365,7 +365,7 @@
     }
   },
   "engines": {
-    "node": ">=22.19"
+    "node": ">=22.22"
   },
   "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
   "build": {

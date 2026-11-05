@@ -7,9 +7,10 @@
  */
 
 import { randomUUID as nodeRandomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { release } from "node:os";
 import { dirname, join } from "node:path";
+import lockfile from "proper-lockfile";
 import { ANALYTICS_BUILD_CONFIG, type AnalyticsBuildConfig } from "../../../main/services/analytics/analytics-build-config.js";
 import type { PostHogTransport } from "../../../main/services/analytics/analytics-client.js";
 import {
@@ -39,6 +40,13 @@ export const CRASH_FLUSH_CAP_MS = 1_000;
 export const SERVE_EXIT_FLUSH_CAP_MS = 250;
 /** A service manager restarts a crashing server every few seconds; this stops it flooding the project. */
 export const MAX_CRASH_REPORTS_PER_DAY = 25;
+/** A process that died holding the consent lock loses it after this. */
+const CONSENT_LOCK_STALE_MS = 5_000;
+/** `aiden telemetry on|off` outwaits a dead holder, so a crash can't make the switch fail. */
+export const CONSENT_SWITCH_WAIT_MS = CONSENT_LOCK_STALE_MS + 1_000;
+/** A waiting server's event loop is stopped, so it gives up quickly and sends nothing. */
+const SERVER_LOCK_WAIT_MS = 100;
+const LOCK_RETRY_MS = 10;
 const OPT_OUT_CAP_MS = 1_500;
 const MAX_EARLY_EVENTS = 50;
 
@@ -98,11 +106,54 @@ export function readServerAnalyticsState(agentDir: string): AnalyticsState {
   }
 }
 
-export function updateServerAnalyticsState(agentDir: string, mutate: (state: AnalyticsState) => AnalyticsState): AnalyticsState {
-  const current = readServerAnalyticsState(agentDir);
-  const next = mutate(current);
-  if (next !== current) atomicJson(serverAnalyticsFile(agentDir), next);
-  return next;
+const lockRetryClock = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * Exclusive across processes. Every change to the consent file and every
+ * request happens inside it, so once `aiden telemetry off` returns no stale
+ * write can restore the old state and no new request can start. `work` must be
+ * synchronous: the lock is released as soon as it returns.
+ */
+function withConsentLock<T>(agentDir: string, waitMs: number, work: () => T): T {
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    let unlock: () => void;
+    try {
+      unlock = lockfile.lockSync(serverAnalyticsFile(agentDir), { realpath: false, stale: CONSENT_LOCK_STALE_MS });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || Date.now() >= deadline) throw error;
+      Atomics.wait(lockRetryClock, 0, 0, LOCK_RETRY_MS);
+      continue;
+    }
+    try {
+      return work();
+    } finally {
+      try {
+        unlock();
+      } catch {
+        // The work is done, and a lock left behind goes stale by itself.
+      }
+    }
+  }
+}
+
+export function updateServerAnalyticsState(agentDir: string, mutate: (state: AnalyticsState) => AnalyticsState, waitMs = SERVER_LOCK_WAIT_MS): AnalyticsState {
+  return withConsentLock(agentDir, waitMs, () => {
+    const current = readServerAnalyticsState(agentDir);
+    const next = mutate(current);
+    if (next !== current) atomicJson(serverAnalyticsFile(agentDir), next);
+    return next;
+  });
+}
+
+/** Runs `send` if consent holds. A lock that can't be had sends nothing. */
+function admitted<T>(agentDir: string, allowSend: SendGate, send: () => T): T | undefined {
+  try {
+    return withConsentLock(agentDir, SERVER_LOCK_WAIT_MS, () => (allowSend() ? send() : undefined));
+  } catch {
+    return undefined;
+  }
 }
 
 export type ServerBlockReason = AnalyticsBlockReason | "ci";
@@ -130,8 +181,7 @@ export function serverTransportFactory(context: ServerAnalyticsContext): ServerT
           ? {
               fetch: async (url, options) => {
                 // Answered here because the SDK prints a stack trace for a failed flush.
-                if (!allowSend()) return new Response("{}", { status: 200 });
-                return fetch(url, options);
+                return admitted(context.agentDir, allowSend, () => fetch(url, options)) ?? new Response("{}", { status: 200 });
               },
             }
           : {}),

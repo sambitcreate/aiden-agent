@@ -1,5 +1,6 @@
-import { disableAnalytics, enableAnalytics, markNoticeShown, type AnalyticsState } from "../../../main/services/analytics/analytics-consent.js";
+import { DEFAULT_ANALYTICS_STATE, disableAnalytics, enableAnalytics, markNoticeShown, type AnalyticsState } from "../../../main/services/analytics/analytics-consent.js";
 import {
+  CONSENT_SWITCH_WAIT_MS,
   serverAnalyticsContext,
   serverAnalyticsFile,
   serverSendStatus,
@@ -40,14 +41,17 @@ export async function telemetryCommand(agentDir: string, args: readonly string[]
   if (action === "on") {
     // Choosing it by name also answers the notice, as the desktop's switch does.
     const now = (context.now ?? (() => new Date()))();
-    return report(updateServerAnalyticsState(agentDir, (state) => markNoticeShown(enableAnalytics(state), now)), context);
+    return report(updateServerAnalyticsState(agentDir, (state) => markNoticeShown(enableAnalytics(state), now), CONSENT_SWITCH_WAIT_MS), context);
   }
   if (action !== "off") throw new Error(USAGE);
-  const before = readServerAnalyticsState(agentDir);
+  // Saved first, so a running server stops and the ID is gone whatever the network does.
+  let before = DEFAULT_ANALYTICS_STATE;
+  const after = updateServerAnalyticsState(agentDir, (state) => {
+    before = state;
+    return disableAnalytics(state);
+  }, CONSENT_SWITCH_WAIT_MS);
   const createTransport = serverTransportFactory(context);
   const couldSend = serverSendStatus(before, { env: context.env, hasKey: createTransport !== undefined }).canSend;
-  // Saved first, so a running server stops and the ID is gone whatever the network does.
-  const after = updateServerAnalyticsState(agentDir, disableAnalytics);
   if (couldSend && before.installId && createTransport) await sendServerOptOut(before.installId, context, createTransport);
   return report(after, context);
 }
