@@ -6,6 +6,7 @@ import { appControlsService } from "./app-controls-main.js";
 import {
   decideGenerationTerminal,
   runAdmittedGeneration,
+  runEveryStep,
   settleGenerationOwnership,
   type GenerationOwnershipEntry,
 } from "./generation-settlement.js";
@@ -840,15 +841,14 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 const deltaCoalescer = new GenerationDeltaCoalescer();
 
 /** End this entry's ownership. Repeat calls for the same entry do nothing. */
-function settleGeneration(
+function settleGeneration<Entry extends GenerationOwnershipEntry>(
   streamId: string,
   params: { chatId: string; workspaceId?: string },
-  entry: GenerationOwnershipEntry,
-  owners: { delete(streamId: string): boolean },
+  entry: Entry,
+  owners: Map<string, Entry>,
 ): void {
-  settleGenerationOwnership(entry, {
+  settleGenerationOwnership(streamId, entry, owners, {
     forgetApprovedArtifacts: () => approvedWorkspaceArtifactCalls.delete(streamId),
-    removeOwnerEntry: () => owners.delete(streamId),
     releaseApprovals: () => approvals.releaseStream(streamId),
     releaseQuestionnaires: () => questionnaires.releaseStream(streamId),
     broadcastSettled: () =>
@@ -2353,6 +2353,9 @@ const acpScratch = createAcpScratchDirectories({
   onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
 });
 
+/** Keeps the admitted half of `start` out of reach of anything but `start`. */
+const runAdmittedStart = Symbol("runAdmittedStart");
+
 export const llmClient = {
   /**
    * Aiden is about to quit (or the quit was called off): cards withdrawn from
@@ -2446,7 +2449,7 @@ export const llmClient = {
       },
     };
     return runAdmittedGeneration(
-      () => llmClient.runAdmittedStart(
+      () => llmClient[runAdmittedStart](
         streamId,
         params,
         owner,
@@ -2461,7 +2464,7 @@ export const llmClient = {
   },
 
   /** The start of an admitted run, up to the point its completion task owns it. */
-  async runAdmittedStart(
+  async [runAdmittedStart](
     streamId: string,
     params: ChatStartParams,
     owner: ChatGenerationOwner,
@@ -4785,21 +4788,31 @@ export const llmClient = {
     // cannot fall into a map-transition gap and leave a privileged run alive.
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
-    const abandonPromotedRun = async (status: "failed" | "cancelled"): Promise<void> => {
-      await persistInitializationTerminal(status, activeGeneration.cancellationOrigin);
-      await piTurnLease?.rollback().catch((error) => {
-        logger.error(
-          "pi",
-          `Could not roll back the ${status} Pi turn for stream ${streamId}.`,
-          error,
-        );
-      });
-      cacheWarmer?.dispose();
-      visualDrafts.dispose();
-      resetGenerationAgent(agent, streamId);
-      endLoadMonitor(activeGeneration, streamId, false);
-      formFill?.revoke();
-      await computerUse?.close().catch(() => {});
+    let promotedRunAbandoned: Promise<void> | undefined;
+    const abandonPromotedRun = (status: "failed" | "cancelled"): Promise<void> => {
+      // One teardown per run: the escape path may follow a teardown that failed.
+      promotedRunAbandoned ??= (async () => {
+        await persistInitializationTerminal(status, activeGeneration.cancellationOrigin);
+        await piTurnLease?.rollback().catch((error) => {
+          logger.error(
+            "pi",
+            `Could not roll back the ${status} Pi turn for stream ${streamId}.`,
+            error,
+          );
+        });
+        try {
+          runEveryStep([
+            () => cacheWarmer?.dispose(),
+            () => visualDrafts.dispose(),
+            () => resetGenerationAgent(agent, streamId),
+            () => endLoadMonitor(activeGeneration, streamId, false),
+            () => formFill?.revoke(),
+          ]);
+        } finally {
+          await computerUse?.close().catch(() => {});
+        }
+      })();
+      return promotedRunAbandoned;
     };
     escape.settle = async () => {
       try {
@@ -5002,7 +5015,7 @@ export const llmClient = {
           emergencyError,
           spendingRefusal: dispatchSpendingRefusal,
           wasCancelled,
-          hasVisibleOutput: generationHasVisibleOutput(
+          hasVisibleOutput: () => generationHasVisibleOutput(
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
               displayedHtmlArtifacts.length +
@@ -5111,12 +5124,20 @@ export const llmClient = {
         } finally {
           // A run that ended for any reason (failure included) owns no more
           // child work; nothing may keep acting for it after it settles.
-          subagentRuntimeRegistry.abortGeneration(streamId);
-          unregisterAcpHost?.();
-          invalidateChatContextJournal(params.chatId);
-          settleGeneration(streamId, params, activeGeneration, active);
-          // Exactly once per started run; pre-run failures reach DesignRunService through start().
-          designRun?.onSettled(designOutcome);
+          try {
+            runEveryStep([
+              () => subagentRuntimeRegistry.abortGeneration(streamId),
+              () => unregisterAcpHost?.(),
+              () => invalidateChatContextJournal(params.chatId),
+            ]);
+          } finally {
+            try {
+              settleGeneration(streamId, params, activeGeneration, active);
+            } finally {
+              // Exactly once per started run; pre-run failures reach DesignRunService through start().
+              designRun?.onSettled(designOutcome);
+            }
+          }
         }
       }
     })();

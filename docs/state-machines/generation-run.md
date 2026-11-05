@@ -24,9 +24,9 @@ Inventory: `backend:M005`, `backend:M177`, and the terminal boundary of rank 8. 
 | Anything else thrown before the completion task | `runAdmittedGeneration` through `escape.settle` | `start` rejects |
 | Runtime returns or throws | The completion task's `finally` | `chat:done` or `chat:error` |
 
-`settleGeneration` is the only exit. It runs once per entry, so paths may overlap safely. It runs every step even if one throws, and rethrows the first failure afterwards. The order is: skill reservation, Bot authority, approved artifacts, map entry, owner listener, approvals, questionnaires, settled broadcast. The broadcast is last so `chats:settled` never reaches a client while the chat still looks busy.
+`settleGeneration` is the only exit. It runs once per entry, so paths may overlap safely. It runs every step even if one throws, and rethrows the first failure afterwards. It removes only its own entry from the map, so a replacement under the same stream ID stays. The order is: skill reservation, Bot authority, approved artifacts, map entry, owner listener, approvals, questionnaires, settled broadcast. The broadcast is last so `chats:settled` never reaches a client while the chat still looks busy.
 
-`escape.settle` always describes the current step. It settles the initializing entry, then the promoted run once `active` holds it, and does nothing once the completion task exists, because the task's `finally` owns every path from there.
+`escape.settle` always describes the current step. It settles the initializing entry, then the promoted run once `active` holds it, and does nothing once the completion task exists. From there the task's `finally` owns the run: a throw in the steps before `settleGeneration` cannot skip it, and `designRun.onSettled` still runs. Physical teardown of a promoted run happens once, even when the escape path follows a teardown that failed.
 
 ## Commit points
 
@@ -39,7 +39,7 @@ A terminal event is not proof of a durable save. `chat:error` says so when the s
 
 ## Stale events
 
-- A settled entry cannot settle again, so a late path from an old run cannot delete a replacement in the same map slot.
+- A late path from an old run cannot delete a replacement in the same map slot, whether or not the old entry had settled.
 - `persistGenerationInitializationTerminal` writes only while its entry is still current.
 - `cancel` and `detachRenderer` check the owner's document ID against the entry.
 

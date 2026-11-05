@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   decideGenerationTerminal,
   runAdmittedGeneration,
+  runEveryStep,
   settleGenerationOwnership,
   type GenerationOwnershipEntry,
+  type GenerationOwnershipPorts,
   type GenerationTerminalInput,
 } from "./generation-settlement.js";
 
@@ -18,30 +20,32 @@ function harness() {
     removeOwnerInvalidation: () => held.delete("owner-listener"),
   };
   owners.set("stream-1", entry);
-  const ports = {
+  const ports: GenerationOwnershipPorts = {
     forgetApprovedArtifacts: () => held.delete("artifacts"),
-    removeOwnerEntry: () => owners.delete("stream-1"),
     releaseApprovals: () => held.delete("approvals"),
     releaseQuestionnaires: () => held.delete("questions"),
-    broadcastSettled: () => broadcasts.push("settled"),
+    broadcastSettled: () => {
+      broadcasts.push("settled");
+    },
   };
-  return { held, owners, broadcasts, entry, ports };
+  const settle = (overrides: Partial<GenerationOwnershipPorts> = {}) =>
+    settleGenerationOwnership("stream-1", entry, owners, { ...ports, ...overrides });
+  return { held, owners, broadcasts, entry, settle };
 }
 
 test("settling releases everything the run held and announces it once", () => {
-  const { held, owners, broadcasts, entry, ports } = harness();
-  assert.equal(settleGenerationOwnership(entry, ports), true);
-  assert.equal(settleGenerationOwnership(entry, ports), false);
+  const { held, owners, broadcasts, settle } = harness();
+  assert.equal(settle(), true);
+  assert.equal(settle(), false);
   assert.deepEqual([...held], []);
   assert.equal(owners.size, 0);
   assert.deepEqual(broadcasts, ["settled"]);
 });
 
 test("the chat stops being busy before anyone is told it settled", () => {
-  const { owners, entry, ports } = harness();
+  const { owners, settle } = harness();
   let busyAtBroadcast: boolean | undefined;
-  settleGenerationOwnership(entry, {
-    ...ports,
+  settle({
     broadcastSettled: () => {
       busyAtBroadcast = owners.has("stream-1");
     },
@@ -50,13 +54,12 @@ test("the chat stops being busy before anyone is told it settled", () => {
 });
 
 test("a failing step leaves nothing held and still surfaces the first failure", () => {
-  const { held, owners, broadcasts, entry, ports } = harness();
+  const { held, owners, broadcasts, entry, settle } = harness();
   entry.releaseSkillReservation = () => {
     throw new Error("skill release failed");
   };
   assert.throws(
-    () => settleGenerationOwnership(entry, {
-      ...ports,
+    () => settle({
       releaseApprovals: () => {
         throw new Error("approvals failed");
       },
@@ -69,20 +72,22 @@ test("a failing step leaves nothing held and still surfaces the first failure", 
 });
 
 test("a late settle from the old run cannot end its replacement on the same stream", () => {
-  const { owners, entry, ports } = harness();
-  settleGenerationOwnership(entry, ports);
-  const replacement: GenerationOwnershipEntry = {
-    releaseSkillReservation: () => {},
-    releaseBotAuthority: () => {},
-    removeOwnerInvalidation: () => {},
-  };
-  owners.set("stream-1", replacement);
-  settleGenerationOwnership(entry, ports);
-  assert.equal(owners.get("stream-1"), replacement);
+  for (const settledBeforeReplacement of [true, false]) {
+    const { owners, settle } = harness();
+    if (settledBeforeReplacement) settle();
+    const replacement: GenerationOwnershipEntry = {
+      releaseSkillReservation: () => {},
+      releaseBotAuthority: () => {},
+      removeOwnerInvalidation: () => {},
+    };
+    owners.set("stream-1", replacement);
+    settle();
+    assert.equal(owners.get("stream-1"), replacement);
+  }
 });
 
 test("a throw after admission ends the run instead of leaving the chat busy", async () => {
-  const { owners, entry, ports } = harness();
+  const { owners, settle } = harness();
   const reported: unknown[] = [];
   await assert.rejects(
     runAdmittedGeneration(
@@ -90,7 +95,7 @@ test("a throw after admission ends the run instead of leaving the chat busy", as
         throw new Error("the accepted callback failed");
       },
       async () => {
-        settleGenerationOwnership(entry, ports);
+        settle();
       },
       (error) => reported.push(error),
     ),
@@ -101,15 +106,15 @@ test("a throw after admission ends the run instead of leaving the chat busy", as
 });
 
 test("a run that settled itself before failing is not settled twice", async () => {
-  const { broadcasts, entry, ports } = harness();
+  const { broadcasts, settle } = harness();
   await assert.rejects(
     runAdmittedGeneration(
       async () => {
-        settleGenerationOwnership(entry, ports);
+        settle();
         throw new Error("initialization failed");
       },
       async () => {
-        settleGenerationOwnership(entry, ports);
+        settle();
       },
       () => assert.fail("Nothing failed while settling"),
     ),
@@ -146,25 +151,56 @@ test("a run that starts normally is left to its completion task", async () => {
   );
 });
 
+test("every teardown step runs and the first failure surfaces after them", () => {
+  const ran: string[] = [];
+  assert.throws(
+    () => runEveryStep([
+      () => ran.push("a"),
+      () => {
+        ran.push("b");
+        throw new Error("first");
+      },
+      () => {
+        ran.push("c");
+        throw new Error("second");
+      },
+      () => ran.push("d"),
+    ]),
+    /first/u,
+  );
+  assert.deepEqual(ran, ["a", "b", "c", "d"]);
+});
+
 const clean: GenerationTerminalInput = {
   runtime: { kind: "completed" },
   emergencyError: null,
   spendingRefusal: undefined,
   wasCancelled: false,
-  hasVisibleOutput: true,
+  hasVisibleOutput: () => true,
 };
 
 test("a completed or stopped reply finishes with the matching timeline", () => {
   assert.deepEqual(decideGenerationTerminal(clean), { kind: "finished", timeline: "completed" });
   assert.deepEqual(
-    decideGenerationTerminal({ ...clean, runtime: { kind: "app_cancelled" }, wasCancelled: true, hasVisibleOutput: false }),
+    decideGenerationTerminal({ ...clean, runtime: { kind: "app_cancelled" }, wasCancelled: true, hasVisibleOutput: () => false }),
     { kind: "finished", timeline: "cancelled" },
     "A Stop before any output is not an empty response",
   );
 });
 
+test("a failure is reported even if visible output cannot be read", () => {
+  const decision = decideGenerationTerminal({
+    ...clean,
+    runtime: { kind: "provider_failed", reason: "output-limit" },
+    hasVisibleOutput: () => {
+      throw new Error("visible output unavailable");
+    },
+  });
+  assert.equal(decision.kind === "failed" && decision.message, "The model reached its output limit.");
+});
+
 test("an empty reply is its own failure only when nobody stopped it", () => {
-  assert.deepEqual(decideGenerationTerminal({ ...clean, hasVisibleOutput: false }), { kind: "empty" });
+  assert.deepEqual(decideGenerationTerminal({ ...clean, hasVisibleOutput: () => false }), { kind: "empty" });
 });
 
 test("provider failures name their reason, and unknown reasons stay generic", () => {

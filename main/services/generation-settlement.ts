@@ -13,7 +13,6 @@ export interface GenerationOwnershipEntry {
 
 export interface GenerationOwnershipPorts {
   forgetApprovedArtifacts(): void;
-  removeOwnerEntry(): void;
   releaseApprovals(): void;
   releaseQuestionnaires(): void;
   broadcastSettled(): void;
@@ -21,18 +20,33 @@ export interface GenerationOwnershipPorts {
 
 const settledEntries = new WeakSet<GenerationOwnershipEntry>();
 
+/** Run every step even if one throws, then rethrow the first failure. */
+export function runEveryStep(steps: readonly (() => unknown)[]): void {
+  let failure: { error: unknown } | undefined;
+  for (const step of steps) {
+    try {
+      step();
+    } catch (error) {
+      failure ??= { error };
+    }
+  }
+  if (failure) throw failure.error;
+}
+
 /**
  * Returns false when this entry already settled. A failing step cannot skip the
- * later ones, because any of them left undone keeps the chat busy for good; the
- * first failure is rethrown once they have all run.
+ * later ones, because any of them left undone keeps the chat busy for good. Only
+ * this entry leaves `owners`: a replacement under the same stream ID stays.
  */
-export function settleGenerationOwnership(
-  entry: GenerationOwnershipEntry,
+export function settleGenerationOwnership<Entry extends GenerationOwnershipEntry>(
+  streamId: string,
+  entry: Entry,
+  owners: Map<string, Entry>,
   ports: GenerationOwnershipPorts,
 ): boolean {
   if (settledEntries.has(entry)) return false;
   settledEntries.add(entry);
-  const steps = [
+  runEveryStep([
     () => {
       const release = entry.releaseSkillReservation;
       entry.releaseSkillReservation = () => {};
@@ -44,21 +58,14 @@ export function settleGenerationOwnership(
       release();
     },
     ports.forgetApprovedArtifacts,
-    ports.removeOwnerEntry,
+    () => {
+      if (owners.get(streamId) === entry) owners.delete(streamId);
+    },
     entry.removeOwnerInvalidation,
     ports.releaseApprovals,
     ports.releaseQuestionnaires,
     ports.broadcastSettled,
-  ];
-  let failure: { error: unknown } | undefined;
-  for (const step of steps) {
-    try {
-      step();
-    } catch (error) {
-      failure ??= { error };
-    }
-  }
-  if (failure) throw failure.error;
+  ]);
   return true;
 }
 
@@ -95,7 +102,8 @@ export interface GenerationTerminalInput {
   emergencyError: string | null | undefined;
   spendingRefusal: string | undefined;
   wasCancelled: boolean;
-  hasVisibleOutput: boolean;
+  /** Read only when no failure already decided the outcome. */
+  hasVisibleOutput: () => boolean;
 }
 
 export type GenerationTerminalDecision =
@@ -137,6 +145,6 @@ export function decideGenerationTerminal(input: GenerationTerminalInput): Genera
       attachProviderFailure: runtime.kind === "provider_failed" && !spendingError,
     };
   }
-  if (!input.hasVisibleOutput && !input.wasCancelled) return { kind: "empty" };
+  if (!input.wasCancelled && !input.hasVisibleOutput()) return { kind: "empty" };
   return { kind: "finished", timeline: input.wasCancelled ? "cancelled" : "completed" };
 }
