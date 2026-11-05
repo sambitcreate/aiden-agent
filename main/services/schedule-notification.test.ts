@@ -7,6 +7,7 @@ import * as analyticsReport from "./analytics/analytics-report.js";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import * as crypto from "node:crypto";
+import * as nodeModule from "node:module";
 import { mkdtempSync, promises as fsPromises, rmSync } from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
@@ -266,6 +267,8 @@ async function executionHarness(
   ports["./analytics/analytics-report.js"] = analyticsReport;
   ports["./analytics/analytics-ids.js"] = analyticsIds;
   ports["./analytics/analytics-feature-reports.js"] = analyticsFeatureReports;
+  // Bot routines bundle the id helpers, whose sanitizer reads the module list on load.
+  ports["node:module"] = nodeModule;
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
