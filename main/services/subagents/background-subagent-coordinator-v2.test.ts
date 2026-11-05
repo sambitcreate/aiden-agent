@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import type { SubagentRunSnapshotV2 } from "../../../renderer/shared/subagent-runs.js";
 import { createSubagentAuthorityV2 } from "./authority-v2.js";
 import {
@@ -380,4 +381,29 @@ test("stop and bulk boundaries terminalize before abort, while startup never rec
     "interrupted",
   );
   assert.ok(children.get("run-shutdown")?.start?.signal.aborted);
+});
+
+test("a background subagent counts once by role, and one that could not start counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const { children, coordinator } = harness();
+  const input = prepared("run-counted");
+  await coordinator.launch(input);
+  assert.deepEqual(sent, [{ event: "subagent_launched", props: { role: input.snapshot.role } }]);
+  await until("detached child start", () => children.get("run-counted")?.start !== undefined);
+  children.get("run-counted")!.done.resolve();
+  await until("detached completion", () => coordinator.activeCount === 0);
+
+  sent.length = 0;
+  const failing = new BackgroundSubagentCoordinatorV2<never>(
+    new BackgroundSubagentLifecycleV2(new MemoryStore(), {}, () => 1),
+    {
+      createChild() {
+        throw new Error("The app-wide subagent runtime limit was reached.");
+      },
+      async startChild() {},
+      deliverSteer() {},
+    },
+  );
+  await assert.rejects(failing.launch(prepared("run-uncreated")));
+  assert.deepEqual(sent, []);
 });

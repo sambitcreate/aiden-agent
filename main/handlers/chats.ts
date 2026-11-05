@@ -25,6 +25,7 @@ import {
 import { asString, createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
 import { closeDeviceSessionsForChat } from "./devices.js";
 import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
+import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import {
   createFirstMessageCommitter,
@@ -122,7 +123,7 @@ export function registerChatHistoryHandlers(): void {
         throw error;
       }
     },
-    workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
+    getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
   const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
@@ -327,13 +328,15 @@ export function registerChatHistoryHandlers(): void {
       }
     };
     try {
-      return chatForRenderer(
+      const chat = chatForRenderer(
         await chatStore.create({
           ...parsed,
           workspaceId: ASSISTANT_WORKSPACE_ID,
           assertCurrent,
         }),
       );
+      reportAnalyticsEvent("chat_created", { workspace_kind: "none" });
+      return chat;
     } catch (error) {
       if (isChatCreateReconciliationRequiredError(error)) {
         llmClient.markAppendReconciliationRequired(owner.documentId);

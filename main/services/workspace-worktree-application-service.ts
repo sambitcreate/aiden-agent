@@ -1,3 +1,4 @@
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { FinishWorkspaceFollowThrough } from "./workspace-mutation-gate.js";
 import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
@@ -362,6 +363,7 @@ export function createWorkspaceWorktreeApplicationService(
           }),
       });
       dependencies.notifyChanged();
+      reportAnalyticsEvent("worktree_created", {});
       return saved;
     } catch (error) {
       if (error instanceof ManagedWorktreeCreationError) {

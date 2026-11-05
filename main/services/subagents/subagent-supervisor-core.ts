@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import {
   MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
   MAX_SUBAGENT_REQUESTED_TURNS,
@@ -1274,6 +1275,7 @@ export class SubagentSupervisor {
       // same cancellation immediately after the initial write settles.
       await this.input.projector?.flush();
       childrenLaunched = true;
+      for (const task of request.tasks) reportAnalyticsEvent("subagent_launched", { role: task.role });
       this.liveBatchStops.add(stopLiveForGuidance);
       if (this.pendingUserGuidance?.()) {
         stopLiveForGuidance(new SubagentUserGuidanceStop());

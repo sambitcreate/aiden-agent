@@ -8,6 +8,7 @@
  */
 
 import { Type } from "@earendil-works/pi-ai";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   canFallbackWebSearchError,
@@ -590,6 +591,7 @@ export class WebSearchService {
       if (controller.signal.aborted) {
         throw webSearchError(timedOut ? "timeout" : "cancelled", attempt.entry.providerId);
       }
+      reportAnalyticsEvent("web_search_used", { search_provider: attempt.entry.providerId });
       return result;
     } catch (error) {
       if (error instanceof WebSearchError) {

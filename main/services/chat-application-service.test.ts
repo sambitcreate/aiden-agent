@@ -3,6 +3,7 @@ import test from "node:test";
 import { emptyDesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { DesignCanvasStore } from "./design-canvas/store.js";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Chat, Workspace } from "./types.js";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -682,4 +683,16 @@ test("a delete rolled forward at startup clears the chat's Inbox state, even whe
   );
   assert.deepEqual(Object.keys((await triage.snapshot()).chats), ["chat-kept"]);
   assert.equal(logged.length, 1);
+});
+
+test("a created chat counts once with its workspace kind, and a refused create counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const application = fixture();
+  await application.service.create({ workspaceId: "workspace-1", title: "Chat" }, owner());
+  assert.deepEqual(sent, [{ event: "chat_created", props: { workspace_kind: "folder" } }]);
+
+  const stale = owner();
+  stale.invalidate();
+  await assert.rejects(application.service.create({ workspaceId: "workspace-1", title: "Chat" }, stale));
+  assert.equal(sent.length, 1);
 });

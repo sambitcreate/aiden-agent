@@ -1,3 +1,4 @@
+import { reportChatMessageSent } from "../analytics/analytics-feature-reports.js";
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
@@ -547,7 +548,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
    * admission after the idle snapshot. Each request and call applies its own
    * ingress rules (`turnAllows` in `bot-extension.ts`).
    */
-  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
+  async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<ModelRef> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
     if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message, resolved.authority);
@@ -557,6 +558,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     if (agent.model?.provider !== model.provider || agent.model?.modelId !== model.modelId) {
       await conversation.configure({ model }, ctx);
     }
+    return model;
   }
 
   /** Abort the paused turn without running it, and mark its partial answer interrupted. */
@@ -766,7 +768,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
         if (input.ifIdle && before.kind !== "idle") throw new BotSessionError("bot_busy");
-        await prepareToRun(botId, conversation, registry);
+        const model = await prepareToRun(botId, conversation, registry);
         if (before.kind === "interrupted") {
           await dismissPaused(conversation, before.submissionId);
           blocked.delete(botId);
@@ -790,6 +792,18 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
           ctx,
         );
         if (input.hidden === true) hiddenSubmissions.add(String(submission.id));
+        // A routine's input, the hidden self-intro and another Bot's message are not
+        // the person's message, and a steer joins the running turn, as a mid-turn
+        // message does in a chat.
+        const joinsRunningTurn = input.whenBusy === "steer" && before.kind === "running";
+        if (input.label === undefined && input.hidden !== true && input.botMessage === undefined && !joinsRunningTurn) {
+          reportChatMessageSent({
+            providerId: model.provider,
+            model: model.modelId,
+            origin: "bot",
+            inWorkspace: () => false,
+          });
+        }
         requireHost().touch(botId);
         publish(botId, await currentState(botId));
         return { submissionId: String(submission.id), deduped: false };
