@@ -37,7 +37,7 @@ enum AidenDemoScenario: String, CaseIterable {
 
 /// Answers every request the demo clients make. Register answers with `reply`,
 /// `fail` and `hold`; an unregistered path is a 404, so no endpoint is invented.
-/// The last registration for a machine and path wins.
+/// The last registration for a machine, method and path wins.
 final class AidenDemoResponder: @unchecked Sendable {
     /// Host-name suffix that marks a request as one of ours.
     static let hostSuffix = ".demo.invalid"

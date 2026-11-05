@@ -376,13 +376,17 @@ jobs:
         shell: bash
         run: |
           # Parallel test runs print only test names; the failure messages
-          # live in the result bundle.
-          xcrun xcresulttool get test-results summary --compact \
-            --path '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult' | python3 -c '
+          # live in the result bundles. A bundle is missing when its step never
+          # ran, so each one is optional.
+          for bundle in AidenOnTheGoSimulator AidenOnTheGoShellUI; do
+            path='${{ runner.temp }}'/"$bundle.xcresult"
+            [[ -d "$path" ]] || continue
+            xcrun xcresulttool get test-results summary --compact --path "$path" | python3 -c '
           import json, sys
           for failure in json.load(sys.stdin).get("testFailures", []):
               print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
           ' || true
+          done
 
       - name: Preserve failed iOS simulator test results
         if: failure()
@@ -494,13 +498,17 @@ jobs:
         shell: bash
         run: |
           # Parallel test runs print only test names; the failure messages
-          # live in the result bundle.
-          xcrun xcresulttool get test-results summary --compact \
-            --path '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult' | python3 -c '
+          # live in the result bundles. A bundle is missing when its step never
+          # ran, so each one is optional.
+          for bundle in AidenOnTheGoSimulator AidenOnTheGoShellUI; do
+            path='${{ runner.temp }}'/"$bundle.xcresult"
+            [[ -d "$path" ]] || continue
+            xcrun xcresulttool get test-results summary --compact --path "$path" | python3 -c '
           import json, sys
           for failure in json.load(sys.stdin).get("testFailures", []):
               print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
           ' || true
+          done
 
       - name: Preserve failed iOS simulator test results
         if: failure()
