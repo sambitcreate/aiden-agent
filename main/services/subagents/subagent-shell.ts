@@ -553,6 +553,11 @@ export function createSubagentShellBrokerV2(
         }
         await input.journal.markEffectDispatchStarted(prepared.owner);
         dispatchStarted = true;
+        // Journaling awaited, and expiry aborts nothing, so check again right
+        // before the spawn. The store cannot cancel a shell effect after
+        // dispatch-started, so a refusal here ends as unknown and never retries.
+        liveAuthority();
+        if (prepared.expiresAt <= now()) throw new Error("The shell approval expired or changed.");
         const result = await runShell({
           workspaceRoot: prepared.root,
           command: prepared.command,

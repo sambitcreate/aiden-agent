@@ -31,7 +31,9 @@ Commit point: the phase changes when the answer returns, but no effect is author
 
 `prepare → authorized → consumed`, with `deny`, `cancelRun` and expiry removing the entry. Removal is the terminal state: the ledger keeps no tombstones and stays bounded at 128 entries. The `authorized` flag, the identity binding and the one-entry-per-`(run, toolCallId)` set already live in one class.
 
-**`consume` is the linearization point for child writes and shell.** The brokers read `currentAuthority` before awaited workspace checks, and that read goes stale during the await. It stays safe because each production revocation pairs `revokeAuthority` with `approvals.cancelRun` synchronously, so `consume` fails right before the effect. Expiry is covered by the same `consume`, since the approval deadline never exceeds the authority deadline. Any new revocation path must keep that pairing. The new tests in `subagent-workspace-write.test.ts` and `subagent-shell.test.ts` hold revocation inside those awaits.
+**`consume` is the linearization point for child writes and shell.** The brokers read `currentAuthority` before awaited workspace checks, and that read goes stale during the await. It stays safe because each production revocation pairs `revokeAuthority` with `approvals.cancelRun` synchronously, so `consume` fails right before the effect. Expiry is covered by the same `consume`, since the approval deadline never exceeds the authority deadline. Any new revocation path must keep that pairing.
+
+Shell has one more await after `consume`: journaling dispatch-started. Expiry aborts nothing, so `execute` rechecks authority and the deadline after that await. The new tests in `subagent-workspace-write.test.ts` and `subagent-shell.test.ts` hold revocation inside those awaits.
 
 Consuming an approval frees the `(run, toolCallId)` slot, so a repeat call can prepare again. That needs a new approval, so it does not extend authority. Current behavior, kept.
 
@@ -39,11 +41,13 @@ Consuming an approval frees the `(run, toolCallId)` slot, so a repeat call can p
 
 `subagent-workspace-write.ts` and `subagent-shell.ts` compose the ledger, run grant, workspace revision, root pin and operation registry. The sequence is: admit, prepare, ask, re-read authority and workspace, authorize, then at execute re-read, consume and dispatch.
 
-- Stop aborts the run signal before revoking approvals (`subagent-control-v2.ts`). A stop that lands while dispatch is being journaled reaches the shell helper as an aborted signal, and the helper refuses to spawn on one.
+- Stop aborts the run signal before revoking approvals (`subagent-control-v2.ts`).
 - A consumed approval is gone even when the effect fails, so a failed write cannot be retried under it.
 - `shutdown` revokes the run grant first, so a late answer cannot authorize anything.
 
 The file transaction in this owner belongs to P4a (Lane C). PR #687 adds a protected-path check in the same function, away from these guards.
+
+Fixed defect, found in review and reproduced by test: an approval or authority that expired while dispatch was being journaled still spawned the command. The store cannot cancel a shell effect after dispatch-started, so this refusal is journaled as `unknown`, which is never retried. The record overstates the risk of a command that did not run, but it can't be mistaken for a clean cancellation.
 
 ### `backend:M036` Bot capability and inventory leases — retained
 
@@ -52,10 +56,12 @@ The file transaction in this owner belongs to P4a (Lane C). PR #687 adds a prote
 | Event | Guard | Effect |
 |---|---|---|
 | `acquire` | epoch not older than published; a newer epoch publishes first | New active lease |
-| `invalidateBot`, `invalidateChat`, `invalidateAudience` | | Generation moves before abort, so a lease taken in an abort listener is closed too |
+| `invalidateBot`, `invalidateChat`, `invalidateAudience` | | Aborts matching leases. Bot and chat invalidation also move the generation first. A matching lease taken in an abort listener is closed too, because the abort loop walks the live `Set` |
 | `publishBotEpoch`, `publishChatEpoch` | rollback throws; same epoch is a no-op | Aborts matching leases |
 | `release` | idempotent | Removed. `assertCurrent` fails from then on; the signal does not abort |
 | `assertCurrent` | synchronous | The fence immediately before an effect |
+
+The inventory registry differs: it snapshots and clears its set before aborting, so a lease taken in an abort listener survives under the new generation. That lease is current, and no production listener re-acquires synchronously.
 
 `BotRuntimeAuthorityResolver.revalidateBeforeEffect` ends with a synchronous recheck of both leases after its awaited reads. That recheck is the linearization point.
 

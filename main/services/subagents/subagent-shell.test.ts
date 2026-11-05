@@ -91,6 +91,7 @@ function harness(
     onRunShellStart?: () => void;
     onDispatchStarted?: () => void;
     onAuthorizedWorkspaceRead?: () => void;
+    now?: () => number;
     implementerRunGrant?: boolean;
     parentPermission?: "ask" | "full";
   } = {},
@@ -168,7 +169,7 @@ function harness(
     registry: new WorkspaceOperationRegistry(),
     implementerRunGrant: options.implementerRunGrant,
     runSignal: runControl.signal,
-    now: () => 1_000,
+    now: options.now ?? (() => 1_000),
     randomUUID: () => `shell-effect-${++allocated}`,
   };
   return {
@@ -408,13 +409,10 @@ test("a run stopped during the final workspace check never dispatches", async (t
   assert.equal(stopped.transitions[stopped.transitions.length - 1], "cancelled_before_dispatch");
 });
 
-test("a run stopped while dispatch is being journaled hands the helper an aborted signal", async (t) => {
+test("a run stopped while dispatch is being journaled never reaches the helper", async (t) => {
   const workspace = await fixture(t);
   const command = "printf 'one'\nprintf 'two'";
-  const stopped = harness(workspace, {
-    waitForAbort: true,
-    onDispatchStarted: () => stopped.stopRun(),
-  });
+  const stopped = harness(workspace, { onDispatchStarted: () => stopped.stopRun() });
   assert.equal(await stopped.gate.beforeToolCall(call(command)), undefined);
   await assert.rejects(
     stopped.gate.execute({
@@ -424,10 +422,30 @@ test("a run stopped while dispatch is being journaled hands the helper an aborte
     }),
     /stopped by its owner/u,
   );
-  assert.ok(
-    !stopped.transitions.includes("completed"),
-    "a stopped dispatch must not be journaled as completed",
+  assert.equal(stopped.rawCalls(), 0);
+  assert.equal(stopped.transitions[stopped.transitions.length - 1], "unknown");
+});
+
+test("an approval that expires while dispatch is being journaled never spawns", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  let clock = 1_000;
+  const expiring = harness(workspace, {
+    now: () => clock,
+    onDispatchStarted: () => {
+      clock = 1_000_000;
+    },
+  });
+  assert.equal(await expiring.gate.beforeToolCall(call(command)), undefined);
+  await assert.rejects(
+    expiring.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    }),
   );
+  assert.equal(expiring.rawCalls(), 0);
+  assert.equal(expiring.transitions[expiring.transitions.length - 1], "unknown");
 });
 
 test("a consumed shell approval cannot be replayed", async (t) => {
