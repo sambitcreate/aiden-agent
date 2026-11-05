@@ -37,8 +37,12 @@ interface AidenBotSessionTransport {
         key: UUID
     ): AidenBotQuestionAnswerReceipt
     suspend fun requestConnection(botId: String, pluginId: String, key: UUID): AidenBotConnectionRequestReceipt
-    /** The generic `POST /approvals/{waitId}/respond`; a Bot approval takes no scope. */
+    /** The generic `POST /approvals/{waitId}/respond`; Remote 57 permits Always only for an offered, held grant. */
     suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID): AidenApprovalResponse
+    suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, key: UUID): AidenApprovalResponse {
+        if (scope != null) throw AidenRemoteClientException.InvalidResponse()
+        return respondToApproval(waitId,decision,key)
+    }
     /** Revision 27 (`bot-proactive-v1`): Add routine or Not now on a proposal card. */
     suspend fun respondToRoutineProposal(
         botId: String,
@@ -102,6 +106,8 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
     ) = client.answerBotQuestion(botId, waitId, request, key)
     override suspend fun requestConnection(botId: String, pluginId: String, key: UUID) =
         client.requestBotConnection(botId, pluginId, key)
+    override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, key: UUID) =
+        client.respondToApproval(waitId, decision, scope, key)
     override suspend fun respondToApproval(waitId: String, decision: AidenApprovalDecision, key: UUID) =
         client.respondToApproval(waitId, decision, idempotencyKey = key)
     override suspend fun respondToRoutineProposal(
@@ -337,7 +343,8 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_HANDOFF_ON_MAC,
         AidenRemoteCapability.BOT_IMAGES,
         AidenRemoteCapability.BOT_ACCESS_REQUESTS,
-        AidenRemoteCapability.BOT_PLANS
+        AidenRemoteCapability.BOT_PLANS,
+        AidenRemoteCapability.BOT_ALLOWED
     )
         .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
 
@@ -376,6 +383,7 @@ data class AidenBotSessionUiState(
     val isDismissing: Boolean = false,
     val isAnsweringQuestion: Boolean = false,
     val isRespondingToApproval: Boolean = false,
+    val approvalSuccessNotice: String? = null,
     /** Revision 37: Done or Skip on the hand-off card is on its way. */
     val isAnsweringHandoff: Boolean = false,
     val isAnsweringAccessRequest: Boolean = false,
@@ -601,11 +609,13 @@ class AidenBotSessionController(
     private var isFlushing = false
     private val inFlight = mutableSetOf<String>()
     private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
-    private var pendingApprovalDecision: Pair<String, AidenApprovalDecision>? = null
     private var pendingHandoffAnswer: Pair<String, AidenBotHandoffAnswerRequest>? = null
     /** How many times the Mac has written each field, so a failed action rolls back only what nothing newer replaced. */
     private var stateWrites = 0
     private var questionWrites = 0
+    var allowedSupported = false
+    private var approvalGeneration = 0
+    private val approvalKeys = mutableMapOf<String, UUID>()
     private var approvalWrites = 0
     private var accessRequestWrites = 0
     private var planGeneration = 0
@@ -671,6 +681,8 @@ class AidenBotSessionController(
      */
     fun stopFollowing() {
         released = true
+        approvalGeneration++
+        _state.update { it.copy(isRespondingToApproval = false, approvalSuccessNotice = null) }
         invalidatePlanResponses()
         feedJob?.cancel()
         feedJob = null
@@ -691,6 +703,8 @@ class AidenBotSessionController(
      * unless the feed is following.
      */
     fun reopenFeed() {
+        approvalGeneration++
+        _state.update { it.copy(isRespondingToApproval = false, approvalSuccessNotice = null) }
         invalidatePlanResponses()
         if (released || feedJob?.isActive != true) return
         feedJob?.cancel()
@@ -843,7 +857,11 @@ class AidenBotSessionController(
         when (payload) {
             is AidenBotSessionEventPayload.State -> afterStateWrite(previous)
             is AidenBotSessionEventPayload.Question -> questionWrites += 1
-            is AidenBotSessionEventPayload.Approval -> approvalWrites += 1
+            is AidenBotSessionEventPayload.Approval -> {
+                approvalWrites += 1
+                approvalKeys.keys.removeAll { session.approval == null || !it.startsWith("$RESPOND_APPROVAL:${session.approval.waitId}:") }
+                _state.update { it.copy(approvalSuccessNotice = null) }
+            }
             is AidenBotSessionEventPayload.AccessRequest -> accessRequestWrites += 1
             is AidenBotSessionEventPayload.Handoff -> handoffWritten(previous?.handoff, payload.handoff)
             is AidenBotSessionEventPayload.Activity -> activityArrived(payload.activity)
@@ -863,6 +881,8 @@ class AidenBotSessionController(
         questionWrites += 1
         accessRequestWrites += 1
         approvalWrites += 1
+        approvalKeys.keys.removeAll { session.approval == null || !it.startsWith("$RESPOND_APPROVAL:${session.approval.waitId}:") }
+        _state.update { it.copy(approvalSuccessNotice = null) }
         handoffWritten(previous?.handoff, session.handoff)
         if (session.activity != previous?.activity) activityArrived(session.activity)
         afterStateWrite(previous)
@@ -1394,6 +1414,8 @@ class AidenBotSessionController(
         val hadUnsent = _state.value.outbox.any { it.status != AidenBotOutgoingStatus.SENT }
         // A disk restore still under way is stale from here on, and the chat has nothing on disk left to wait for.
         purgeGeneration += 1
+        approvalGeneration++
+        _state.update { it.copy(isRespondingToApproval = false, approvalSuccessNotice = null) }
         invalidatePlanResponses()
         _state.update { it.copy(session = it.session?.copy(plan = null)) }
         restoreJob?.cancel()
@@ -1567,39 +1589,41 @@ class AidenBotSessionController(
     }
 
     /**
-     * Allows or denies the waiting tool approval once. The card goes at once and comes back with
+     * Answers the waiting tool approval, with Always only for an offered, held grant. The card goes at once and comes back with
      * an error if the decision didn't reach the Mac, unless the Mac has since changed it (R18).
      * Allow is refused when the approval cannot be allowed from a phone. An unanswered attempt
      * keeps its key, so retrying the same decision replays the Mac's outcome; the other decision
      * gets a new key. An expired or already-settled approval stays gone.
      */
-    suspend fun respondToApproval(decision: AidenApprovalDecision): Boolean {
+    suspend fun respondToApproval(decision: AidenApprovalDecision, scope: AidenApprovalScope? = null): Boolean {
         val approval = _state.value.session?.approval ?: return false
         if (decision == AidenApprovalDecision.ALLOW && !approval.canAllow) return false
         var claimed = false
+        if (released || (scope != null && scope != AidenApprovalScope.ONCE &&
+            !(scope == AidenApprovalScope.ALWAYS && decision == AidenApprovalDecision.ALLOW && allowedSupported && approval.alwaysCount != null))) return false
+        val chosenScope = scope?.takeIf { it == AidenApprovalScope.ALWAYS }
+        val generation = approvalGeneration
         val writes = approvalWrites
         _state.update { current ->
             if (current.isRespondingToApproval) current else {
                 claimed = true
-                current.copy(isRespondingToApproval = true, actionError = null, session = current.session?.copy(approval = null))
+                current.copy(isRespondingToApproval = true, approvalSuccessNotice = null, actionError = null, session = current.session?.copy(approval = null))
             }
         }
         if (!claimed) return false
-        val action = "$RESPOND_APPROVAL:${approval.waitId}"
-        if (pendingApprovalDecision != action to decision) {
-            keys.complete(action)
-            pendingApprovalDecision = action to decision
-        }
+        val action = "$RESPOND_APPROVAL:${approval.waitId}:${decision.name}:${chosenScope?.name ?: "ONCE"}"
+        val key = approvalKeys.getOrPut(action) { UUID.randomUUID() }
         return try {
-            bounded { transport.respondToApproval(approval.waitId, decision, keys.key(action)) }
-            keys.complete(action)
-            pendingApprovalDecision = null
+            bounded { if (chosenScope == null) transport.respondToApproval(approval.waitId, decision, key) else transport.respondToApproval(approval.waitId, decision, chosenScope, key) }
+            if (generation != approvalGeneration || released) return false
+            approvalKeys.remove(action)
+            if (chosenScope == AidenApprovalScope.ALWAYS && approvalWrites == writes) _state.update { it.copy(approvalSuccessNotice = "Always allow requested.") }
             true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            keys.failed(action, error)
-            if (aidenBotMacAnswered(error)) pendingApprovalDecision = null
+            if (generation != approvalGeneration || released) return false
+            if (aidenBotMacAnswered(error)) approvalKeys.remove(action)
             when ((error as? AidenRemoteClientException.Server)?.body?.code) {
                 AidenRemoteErrorCode.APPROVAL_EXPIRED -> _state.update { it.copy(actionError = "That request expired.") }
                 // Settled elsewhere, on the Mac or another phone: nothing is waiting any more.
@@ -1614,7 +1638,7 @@ class AidenBotSessionController(
             }
             false
         } finally {
-            _state.update { it.copy(isRespondingToApproval = false) }
+            if (generation == approvalGeneration) _state.update { it.copy(isRespondingToApproval = false) }
         }
     }
 
@@ -1625,6 +1649,8 @@ class AidenBotSessionController(
      */
     fun setPlansSupported(supported: Boolean) {
         if (_state.value.plansSupported == supported) return
+        approvalGeneration++
+        _state.update { it.copy(isRespondingToApproval = false, approvalSuccessNotice = null) }
         invalidatePlanResponses()
         _state.update { it.copy(plansSupported = supported, session = if (supported) it.session else it.session?.copy(plan = null)) }
     }

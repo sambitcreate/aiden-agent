@@ -177,7 +177,7 @@ fun AidenBotPausedCard(botName: String, busy: Boolean, canResume: Boolean, onRes
 @Composable
 fun AidenBotAccessRequestCard(
     request: sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequest,
-    botName: String, canAnswer: Boolean,
+    botName: String, canAnswer: Boolean, showsApprovalCount: Boolean = false,
     onAnswer: (sbtbiswas.AidenOnTheGo.models.AidenBotAccessRequestChoice) -> Unit
 ) {
     val palette = AidenTheme.palette
@@ -187,6 +187,7 @@ fun AidenBotAccessRequestCard(
             Text(stringResource(R.string.bot_access_title, botName, request.label),
                 style = MaterialTheme.typography.titleSmall, color = palette.foreground)
             request.place?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = palette.secondary) }
+            if (showsApprovalCount && request.approvalCount != null) Text("You’ve allowed this ${request.approvalCount} times in the last 2 weeks.",style = MaterialTheme.typography.bodySmall,color = palette.secondary)
             Text(request.why, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 request.choices.forEach { choice ->

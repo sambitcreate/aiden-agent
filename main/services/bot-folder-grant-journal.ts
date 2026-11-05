@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { writeFileAtomic } from "./durable-fs.js";
 
 /** The original operation published, but its captured approval snapshot no longer matches.
@@ -24,6 +25,22 @@ export class BotFolderGrantJournalRepairError extends Error {
   }
 }
 
+export interface BotFolderApprovalTallyContext {
+  version: 1;
+  authorizationFingerprint: string;
+  offered: boolean;
+  decidedAt: number;
+}
+export interface BotFolderApprovalReceipt {
+  botId: string;
+  decisionId: string;
+  path: string;
+  authorizationFingerprint: string;
+  offered: boolean;
+  decidedAt: number;
+  answer: "always";
+  source: "person";
+}
 export interface BotFolderGrantInput {
   audienceId: string;
   botId: string;
@@ -33,6 +50,8 @@ export interface BotFolderGrantInput {
   expectedIdentity: { device: string; inode: string };
   expectedInventoryRevision?: string;
   operationId: string;
+  /** Original validated person decision, never current owner or authority. */
+  approvalTally?: BotFolderApprovalTallyContext;
 }
 export interface BotFolderGrantRecord {
   input: BotFolderGrantInput;
@@ -47,19 +66,7 @@ export interface BotFolderGrantJournal {
   list(): Promise<BotFolderGrantRecord[]>;
   put(record: BotFolderGrantRecord): Promise<void>;
 }
-export function createBotFolderGrantJournal(storage: {
-  read(): Promise<unknown>;
-  write(records: BotFolderGrantRecord[]): Promise<void>;
-}): BotFolderGrantJournal {
-  let tail: Promise<unknown> = Promise.resolve();
-  const read = async (): Promise<BotFolderGrantRecord[]> => {
-    let records: unknown;
-    try {
-      records = await storage.read();
-    } catch (error) {
-      if (error instanceof BotFolderGrantJournalRepairError) throw error;
-      throw new BotFolderGrantJournalReadError(error);
-    }
+function decodeRecords(records: unknown): BotFolderGrantRecord[] {
     if (records === null) return [];
     if (!Array.isArray(records) || records.length > 4096)
       throw new BotFolderGrantJournalRepairError();
@@ -92,8 +99,16 @@ export function createBotFolderGrantJournal(storage: {
               "expectedIdentity",
               "expectedInventoryRevision",
               "operationId",
+              "approvalTally",
             ].includes(key),
         ) ||
+        (input.approvalTally !== undefined && (
+          !input.approvalTally || typeof input.approvalTally !== "object" || Array.isArray(input.approvalTally) ||
+          Object.keys(input.approvalTally).some(key => !["version", "authorizationFingerprint", "offered", "decidedAt"].includes(key)) ||
+          input.approvalTally.version !== 1 || typeof input.approvalTally.authorizationFingerprint !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(input.approvalTally.authorizationFingerprint) ||
+          typeof input.approvalTally.offered !== "boolean" || !Number.isSafeInteger(input.approvalTally.decidedAt) || input.approvalTally.decidedAt < 0
+        )) ||
         !bounded(input.audienceId, 256) ||
         !bounded(input.botId, 256) ||
         !bounded(input.operationId, 256) ||
@@ -118,6 +133,21 @@ export function createBotFolderGrantJournal(storage: {
       ids.add(input.operationId);
     }
     return structuredClone(records);
+}
+export function createBotFolderGrantJournal(storage: {
+  read(): Promise<unknown>;
+  write(records: BotFolderGrantRecord[]): Promise<void>;
+}): BotFolderGrantJournal {
+  let tail: Promise<unknown> = Promise.resolve();
+  const read = async (): Promise<BotFolderGrantRecord[]> => {
+    let records: unknown;
+    try {
+      records = await storage.read();
+    } catch (error) {
+      if (error instanceof BotFolderGrantJournalRepairError) throw error;
+      throw new BotFolderGrantJournalReadError(error);
+    }
+    return decodeRecords(records);
   };
   return {
     async list() {
@@ -130,7 +160,12 @@ export function createBotFolderGrantJournal(storage: {
         const records = await read(),
           index = records.findIndex((entry) => entry.input.operationId === copy.input.operationId);
         if (index < 0) records.push(copy);
-        else records[index] = copy;
+        else {
+          if (!isDeepStrictEqual(records[index]!.input, copy.input)) throw new Error("The folder approval journal input identity changed.");
+          records[index] = copy;
+        }
+        // Refuse malformed new context before it can become repair evidence.
+        decodeRecords(records);
         // These are durable replay receipts. Pruning a completed operation
         // without a separate replay tombstone could recreate removed authority.
         if (records.length > 4096) throw new Error("The Bot folder grant journal is full.");

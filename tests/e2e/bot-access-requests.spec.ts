@@ -132,3 +132,92 @@ test("access cards keep their scope visible and wait for the host's answer", asy
   ]);
   expect(aiden.lmStudio.requests.filter(r => r.url === "/v1/chat/completions")).toHaveLength(0);
 });
+
+interface AllowedE2eState {
+  answers: unknown[];
+  release(): void;
+}
+
+// Public IPC fixtures isolate the UI from the mock profile's unavailable
+// Keychain. Real book, service and handler behavior is covered headlessly.
+test("repeated approvals lead to a removable entry on the profile and in Settings", async ({ aiden }, testInfo) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const bot = botFixture({ id: "bot-allowed", name: "Ada" });
+  await aiden.app.evaluate(({ ipcMain, BrowserWindow }, bot) => {
+    let pending = true, release: (() => void) | undefined;
+    const prompt = { botId: bot.id, waitId: "ordinary-approval", toolCallId: "calendar-call", toolName: "calendar_create", summary: "Create the project review event", always: { key: "calendar-create", count: 3 } };
+    let entries = [{ kind: "folder", id: "folder_root_a", botId: bot.id, what: "Folder · ~/Documents/Taxes", createdAt: "2026-11-03T12:00:00Z" }] as Array<import("../../renderer/shared/tool-approval-scope").BotAllowedEntry>;
+    const broadcast = (channel: string, payload: unknown) => {
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
+    };
+    const changed = () => broadcast("bots:allowed:changed", { botId: bot.id });
+    const state: AllowedE2eState = { answers: [], release: () => { release?.(); release = undefined; } };
+    (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e = state;
+    for (const channel of ["bots:list", "bots:get", "bots:getCanonicalPhoto", "bots:pendingApprovals", "bots:live:summary", "bots:live:subscribe", "bots:approve", "bots:allowed:list", "bots:allowed:remove"]) ipcMain.removeHandler(channel);
+    ipcMain.handle("bots:list", () => [bot]);
+    ipcMain.handle("bots:get", () => bot);
+    ipcMain.handle("bots:getCanonicalPhoto", () => null);
+    ipcMain.handle("bots:pendingApprovals", () => pending ? [prompt] : []);
+    ipcMain.handle("bots:live:summary", () => ({ botId: bot.id, preview: null, updatedAt: 1000, state: { kind: "idle" }, needsYou: pending, lastReplyAt: null }));
+    ipcMain.handle("bots:live:subscribe", () => ({ botId: bot.id, epoch: "allowed-e2e", seq: 0, entries: [], partial: null, state: { kind: "idle" }, question: null, handoff: null, accessRequest: null, plan: null, activity: null, queued: [] }));
+    ipcMain.handle("bots:approve", async (_event, answer: unknown) => {
+      state.answers.push(answer);
+      await new Promise<void>(resolve => { release = resolve; });
+      pending = false;
+      broadcast("bots:approval-settled", { botId: bot.id, waitId: prompt.waitId, outcome: "allowed" });
+      entries = [{ kind: "rule", id: "rule_calendar", botId: bot.id, what: "Calendar · Create event", createdAt: "2026-11-04T12:00:00Z", uses: 0 }, ...entries];
+      changed();
+      return { decided: true };
+    });
+    ipcMain.handle("bots:allowed:list", (_event, input?: { botId?: string }) => entries.filter(row => !input?.botId || row.botId === input.botId));
+    ipcMain.handle("bots:allowed:remove", (_event, input: { botId: string; entryId: string }) => {
+      const before = entries.length;
+      entries = entries.filter(row => row.botId !== input.botId || row.id !== input.entryId);
+      changed(); return { removed: before !== entries.length };
+    });
+  }, bot);
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  const card = page.getByRole("group", { name: "Ada needs approval", exact: true });
+  await expect(card).toContainText("You’ve allowed this 3 times in the last 2 weeks.");
+  const draft = page.locator("textarea");
+  await draft.fill("Keep this unsent draft");
+  for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
+    await page.evaluate(async mode => {
+      const appearance = await window.aidenAPI.ipc.invoke("settings:getAppearance") as Record<string, unknown>;
+      await window.aidenAPI.ipc.invoke("settings:previewAppearance", { ...appearance, mode, reduceMotion: "on" });
+    }, mode);
+    await aiden.app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setSize(width, 900), width);
+    await expect(card.getByRole("button", { name: "Always allow for Ada", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`repeated-approval-${mode}.png`) });
+  }
+  await card.getByRole("button", { name: "Deny", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(card.getByRole("button", { name: "Always allow for Ada", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  expect(await aiden.app.evaluate(() => (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e.answers)).toEqual([{ waitId: "ordinary-approval", decision: "allow", scope: "always" }]);
+  await expect(draft).toHaveValue("Keep this unsent draft");
+  await aiden.app.evaluate(() => (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e.release());
+  await expect(page.getByText("Always allow requested.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Ada won’t ask about this again.", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Allowed without asking", exact: true })).toBeVisible();
+  await expect(page.getByText("Calendar · Create event", { exact: true })).toBeVisible();
+  await expect(page.getByText("Folder · ~/Documents/Taxes", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("allowed-list-dark.png") });
+  const ruleRow = page.getByRole("group", { name: "Calendar · Create event", exact: true });
+  await ruleRow.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByText("Calendar · Create event", { exact: true })).toBeHidden();
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1280, 900));
+  const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
+  if (await showSidebar.isVisible()) await showSidebar.click();
+  await page.getByRole("button", { name: "Back to Aiden", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots", exact: true }).click();
+  await expect(page.getByText("Folder · ~/Documents/Taxes", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByText("No Bot does anything without asking yet.", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("allowed-settings-empty-dark.png") });
+  expect(aiden.lmStudio.requests.filter(request => request.url === "/v1/chat/completions")).toHaveLength(0);
+});

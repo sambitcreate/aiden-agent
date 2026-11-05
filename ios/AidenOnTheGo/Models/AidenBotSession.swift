@@ -541,8 +541,9 @@ struct AidenRemoteBotApproval: Codable, Equatable, Sendable {
     let toolName: String
     let summary: String
     let canAllow: Bool
+    let alwaysCount: Int?
 
-    init(waitId: String, toolCallId: String, toolName: String, summary: String, canAllow: Bool) throws {
+    init(waitId: String, toolCallId: String, toolName: String, summary: String, canAllow: Bool, alwaysCount: Int? = nil) throws {
         try Self.validateWaitID(waitId)
         try AidenBotWire.validateString(toolCallId, field: "toolCallId", maxLength: Self.maxToolCallIDLength, allowEmpty: false)
         try AidenBotWire.validateString(toolName, field: "toolName", maxLength: Self.maxToolNameLength, allowEmpty: false)
@@ -552,17 +553,20 @@ struct AidenRemoteBotApproval: Codable, Equatable, Sendable {
         self.toolName = toolName
         self.summary = summary
         self.canAllow = canAllow
+        guard alwaysCount == nil || (canAllow && (3...20).contains(alwaysCount!)) else { throw AidenBotContractError.invalidField("alwaysCount") }
+        self.alwaysCount = alwaysCount
     }
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "toolCallId", "toolName", "summary", "canAllow"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "toolCallId", "toolName", "summary", "canAllow", "alwaysCount"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             waitId: try values.decode(String.self, forKey: .waitId),
             toolCallId: try values.decode(String.self, forKey: .toolCallId),
             toolName: try values.decode(String.self, forKey: .toolName),
             summary: try values.decode(String.self, forKey: .summary),
-            canAllow: try values.decode(Bool.self, forKey: .canAllow)
+            canAllow: try values.decode(Bool.self, forKey: .canAllow),
+            alwaysCount: try AidenBotWire.optional(Int.self, from: values, forKey: .alwaysCount)
         )
     }
 
@@ -581,7 +585,7 @@ struct AidenRemoteBotApproval: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case waitId, toolCallId, toolName, summary, canAllow
+        case waitId, toolCallId, toolName, summary, canAllow, alwaysCount
     }
 }
 
@@ -958,9 +962,10 @@ struct AidenRemoteBotAccessRequest: Codable, Equatable, Sendable {
     let place: String?
     let why: String
     let choices: [AidenBotAccessChoice]
+    let approvalCount: Int?
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "target", "label", "place", "why", "choices"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "target", "label", "place", "why", "choices", "approvalCount"])
         let v = try decoder.container(keyedBy: CodingKeys.self)
         waitId = try v.decode(String.self, forKey: .waitId)
         try AidenBotHandoffWire.validateWaitID(waitId)
@@ -969,6 +974,8 @@ struct AidenRemoteBotAccessRequest: Codable, Equatable, Sendable {
         place = try AidenBotWire.optional(String.self, from: v, forKey: .place)
         why = try v.decode(String.self, forKey: .why)
         choices = try v.decode([AidenBotAccessChoice].self, forKey: .choices)
+        approvalCount = try AidenBotWire.optional(Int.self, from: v, forKey: .approvalCount)
+        guard approvalCount == nil || (target == .folder && choices.contains(.always) && (3...20).contains(approvalCount!)) else { throw AidenBotContractError.invalidField("approvalCount") }
         for (text, limit) in [(label, 120), (why, 400)] {
             try Self.validateText(text, limit: limit)
         }
@@ -991,7 +998,7 @@ struct AidenRemoteBotAccessRequest: Codable, Equatable, Sendable {
             throw AidenBotContractError.invalidField("accessRequest.text")
         }
     }
-    private enum CodingKeys: String, CodingKey { case waitId, target, label, place, why, choices }
+    private enum CodingKeys: String, CodingKey { case waitId, target, label, place, why, choices, approvalCount }
 }
 
 struct AidenBotAccessAnswerRequest: Codable, Equatable, Sendable {

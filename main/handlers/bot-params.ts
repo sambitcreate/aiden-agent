@@ -246,17 +246,35 @@ export function parseBotWithdraw(input: unknown): { botId: string; submissionId:
 const BOT_APPROVAL_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** A Bot approval answer: the durable `waitId` and allow or deny. */
-export function parseBotApprovalDecision(input: unknown): { waitId: string; decision: "allow" | "deny" } {
+export function parseBotApprovalDecision(input: unknown): { waitId: string; decision: "allow" | "deny"; scope?: "always" } {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot approval fields.");
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "waitId" || key === "decision")) {
+  if (!Object.keys(fields).every((key) => key === "waitId" || key === "decision" || key === "scope") ||
+      (Object.prototype.hasOwnProperty.call(fields, "scope") && (fields.scope !== "always" || fields.decision !== "allow"))) {
     throw new Error("Invalid bot approval fields.");
   }
   if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId)) {
     throw new Error("Invalid bot approval id.");
   }
   if (fields.decision !== "allow" && fields.decision !== "deny") throw new Error("Invalid bot approval decision.");
-  return { waitId: fields.waitId, decision: fields.decision };
+  return { waitId: fields.waitId, decision: fields.decision, ...(fields.scope === "always" ? { scope: "always" } : {}) };
+}
+
+/** Omission selects all Bots; a renderer cannot supply an audience or target. */
+export function parseBotAllowedList(input: unknown): string | undefined {
+  if (input === undefined) return undefined;
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot allowed list fields.");
+  const fields = input as Record<string, unknown>;
+  if (!Object.keys(fields).every(key => key === "botId")) throw new Error("Invalid bot allowed list fields.");
+  return fields.botId === undefined ? undefined : parseBotId(fields.botId);
+}
+
+export function parseBotAllowedRemove(input: unknown): { botId: string; entryId: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot allowed remove fields.");
+  const fields = input as Record<string, unknown>;
+  if (!Object.keys(fields).every(key => key === "botId" || key === "entryId")) throw new Error("Invalid bot allowed remove fields.");
+  if (typeof fields.entryId !== "string" || !/^[A-Za-z0-9_-]{1,80}$/u.test(fields.entryId)) throw new Error("Invalid bot allowed entry id.");
+  return { botId: parseBotId(fields.botId), entryId: fields.entryId };
 }
 
 const ANSWER_KEYS = new Set(["botId", "waitId", "answer"]);

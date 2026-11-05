@@ -13,6 +13,9 @@ import {
 } from "./bot-file-tool-router.js";
 import { botAccessPrivateRoots } from "./bot-runtime/bot-access-target.js";
 import { botServiceProtectedRoot, cliBotProtectedRoots } from "./bot-protected-settings.js";
+import { desktopBotProtectedRoots } from "./bot-desktop-protected-settings.js";
+import { DataStore } from "./data-store.js";
+import { ToolApprovalRuleBook, emptyToolApprovalRulesDocument, normalizeToolApprovalRulesDocument, TOOL_APPROVAL_RULES_FILE } from "./tool-approval-rules.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { runToolCall } from "@earendil-works/pi-agent-core";
@@ -582,4 +585,52 @@ test("multiple late aliases preserve the single lateLocation and reject duplicat
   assert.equal(textContent(await read.execute("saved",{location:"run.saved",path:"a.txt"})),"saved A");
   assert.equal(textContent(await read.execute("once",{location:"run.access",path:"b.txt"})),"once B");
   assert.throws(()=>buildBotFileTools({...options,lateLocations:[options.lateLocation]}),/late Bot file location/u);
+});
+
+
+test("the production fixed-location policy prevents consent forgery through direct, linked and nested writes", async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "bot-consent-fence-"));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  const profile = path.join(parent, "profile");
+  await fs.mkdir(profile);
+  const open = () => new ToolApprovalRuleBook(new DataStore(TOOL_APPROVAL_RULES_FILE, emptyToolApprovalRulesDocument(), () => profile,
+    { normalize: normalizeToolApprovalRulesDocument, reloadBeforeWrite: true, fileMode: 0o600 }), undefined, undefined, { knownBot: async () => true });
+  const target = { kind: "connection", serverId: "mail", tool: "send_email" } as const;
+  const published = await open().grantBot("bot:person", target, "Send email", "person-1");
+  assert.equal(published.status, "published");
+  const forged = await fs.readFile(path.join(profile, TOOL_APPROVAL_RULES_FILE), "utf8");
+  if (published.status !== "published") throw new Error("Expected person publication");
+  await open().revokeBot("bot:person", published.rule.id);
+  assert.equal(await open().matchBot("bot:person", target), undefined);
+  const journal = path.join(profile, "bot-folder-grants.json");
+  await fs.writeFile(journal, '{"version":1,"operations":[]}');
+  await fs.symlink(profile, path.join(parent, "alias"));
+  const tools = buildBotFileTools({ defaultLocation: { id: "mac", label: "This Mac", root: parent },
+    protectedRoots: () => desktopBotProtectedRoots(profile, path.join(parent, "config"), path.join(profile, "bot-service")) });
+  const message = fauxAssistantMessage("Update consent");
+  const nested = createPiCodemodeTool({ tools: () => tools, executeTool: async (_parent, name, args) =>
+    runToolCall({ type: "toolCall", id: "nested", name, arguments: args as JsonObject }, { tools, assistantMessage: message, context: { messages: [message], tools } }) });
+  for (const file of [TOOL_APPROVAL_RULES_FILE, "bot-folder-grants.json"]) {
+    const actual = path.join(profile, file), original = await fs.readFile(actual, "utf8");
+    for (const directory of ["profile", "alias"]) for (const name of ["write_file", "edit_file"]) {
+      const args = name === "write_file" ? { path: `${directory}/${file}`, content: forged }
+        : { path: `${directory}/${file}`, old_string: '"version"', new_string: '"forged"' };
+      await t.test(`${name} ${directory}/${file}`, async () => {
+        // Reset only the fixture if a RED attempt damaged it, so every route is independently exercised.
+        await fs.writeFile(actual, original);
+        await assert.rejects(byName(tools, name).execute("direct", args), /file tools cannot change them/u);
+        assert.equal(await fs.readFile(actual, "utf8"), original);
+        const result = await nested.execute("script", { code: `text(await tools.${name}(${JSON.stringify(args)}));` });
+        assert.match(JSON.stringify(result), /file tools cannot change them/u);
+        assert.equal(await fs.readFile(actual, "utf8"), original);
+      });
+    }
+    await fs.writeFile(actual, original);
+  }
+  assert.equal(await open().matchBot("bot:person", target), undefined);
+  const next = await open().grantBot("bot:person", target, "Send email", "person-2");
+  assert.equal(next.status, "published");
+  assert.ok(await open().matchBot("bot:person", target));
+  if (next.status === "published") await open().revokeBot("bot:person", next.rule.id);
+  assert.equal(await open().matchBot("bot:person", target), undefined);
 });

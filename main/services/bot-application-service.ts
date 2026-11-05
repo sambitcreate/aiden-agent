@@ -1,9 +1,12 @@
 import { newChatUuid } from "../../renderer/shared/chat-identity.js";
 import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
+import type { BotAllowedEntry } from "../../renderer/shared/tool-approval-scope.js";
+import { withoutBotHandoffControls } from "../../renderer/shared/bot-handoffs.js";
 import { nextBotFileScopeIds } from "../../renderer/shared/bot-capabilities.js";
 import { botAccessRootInventoryRevision, resolveBotAccessTarget, type BotAccessTargetDeps } from "./bot-runtime/bot-access-target.js";
 import type { AidenRemoteApprovedRoot } from "./aiden-remote-state.js";
-import type { BotFolderGrantInput, BotFolderGrantJournal, BotFolderGrantRecord } from "./bot-folder-grant-journal.js";
+import type { BotFolderApprovalReceipt, BotFolderGrantInput, BotFolderGrantJournal, BotFolderGrantRecord } from "./bot-folder-grant-journal.js";
 import { BotFolderGrantReplayStaleError } from "./bot-folder-grant-journal.js";
 import { BotAccessRequestStaleError } from "./bot-runtime/bot-access-requests.js";
 import { BotRuntimeInventoryLeaseInvalidError } from "./bot-runtime-inventory-lease.js";
@@ -312,6 +315,7 @@ export function newBotId(): string {
 }
 
 export function createBotApplicationService(deps: BotApplicationDependencies) {
+  const accessListeners = new Set<(botId: string) => void>();
   const mintBotId = deps.mintBotId ?? newBotId;
   const mintChatId = deps.mintChatId ?? (() => newChatUuid(randomUUID));
   const mintOperationId = deps.mintOperationId ?? mintBotLifecycleOperationId;
@@ -1357,6 +1361,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
               });
             }
           }
+          for (const listener of accessListeners) {
+            try { listener(input.botId); }
+            catch { /* A closed reader cannot turn a saved policy into a failed mutation. */ }
+          }
           return result;
         });
       }),
@@ -1476,11 +1484,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     input: BotFolderGrantInput,
     owner?: { assertCurrent(): void },
   ): Promise<"added" | "already_allowed"> => {
+    // Freeze the original decision context before even initialization can await.
+    input = structuredClone(input);
     await ensureOperational();
     const folders = deps.approvedFolders;
     if (!folders) throw new Error("That folder can't be added right now.");
-    // Freeze caller-owned values before the first awaited authorization check.
-    input = structuredClone(input);
     return folders.withInventoryLock(async () => {
       await recoverFolderGrants();
       const prior = (await folders.journal.list()).find(
@@ -1660,6 +1668,78 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
 
   const service = {
     grantBotFolder,
+    /** Historical D bookkeeping only. This never grants or restores access. */
+    async botFolderApprovalReceipts(filter: { botId?: string; decisionId?: string } = {}): Promise<BotFolderApprovalReceipt[]> {
+      const captured = { ...filter };
+      await ensureOperational();
+      const records = await deps.approvedFolders?.journal.list() ?? [];
+      const active = new Set((await deps.botStore.list()).map(bot => bot.id));
+      const deleting = new Set((await deps.lifecycleJournal.listPending())
+        .filter(operation => operation.kind === "delete_bot").map(operation => operation.botId));
+      return records.flatMap(record => {
+        const { input } = record, tally = input.approvalTally;
+        if (record.state !== "committed" || input.audienceId !== "desktop:local" || !tally ||
+            !active.has(input.botId) || deleting.has(input.botId) ||
+            (captured.botId !== undefined && input.botId !== captured.botId) ||
+            (captured.decisionId !== undefined && input.operationId !== captured.decisionId)) return [];
+        return [{ botId: input.botId, decisionId: input.operationId, path: input.folderPath,
+          authorizationFingerprint: tally.authorizationFingerprint, offered: tally.offered,
+          decidedAt: tally.decidedAt, answer: "always" as const, source: "person" as const }];
+      });
+    },
+    async botFolderEntries(botId?: string): Promise<BotAllowedEntry[]> {
+      await ensureOperational();
+      const folders = deps.approvedFolders;
+      if (!folders) return [];
+      return folders.withInventoryLock(async () => {
+        const roots = await folders.list();
+        const deleting = new Set((await deps.lifecycleJournal.listPending())
+          .filter(operation => operation.kind === "delete_bot").map(operation => operation.botId));
+        const result: BotAllowedEntry[] = [];
+        for (const bot of await deps.botStore.list()) {
+          if ((botId !== undefined && bot.id !== botId) || deleting.has(bot.id)) continue;
+          const policy = await deps.capabilityStore.getBotPolicy(bot.id);
+          if (policy.accessMode !== "custom" || !policy.custom) continue;
+          const binding = await deps.capabilityStore.getBotBinding(bot.id);
+          for (const scope of binding?.fileScopes ?? []) {
+            if (scope.option.kind !== "approved_location" || !policy.custom.fileScopeIds.includes(scope.option.id)) continue;
+            const root = roots.find(entry => entry.id === scope.sourceId);
+            if (!root) continue;
+            const relative = path.relative(folders.target.homeDirectory(), root.folderPath);
+            const place = relative === "" ? "~" : !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`)
+              ? `~/${relative.split(path.sep).join("/")}` : root.folderPath;
+            result.push({ kind: "folder", id: `folder_${root.id}`, botId: bot.id,
+              what: `Folder · ${withoutBotHandoffControls(place).replace(/\s+/gu, " ").trim()}`, createdAt: new Date(root.createdAt).toISOString() });
+          }
+        }
+        return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      });
+    },
+    async revokeBotFolder(input: { audienceId: string; botId: string; sourceId: string }): Promise<boolean> {
+      const captured = { ...input };
+      await ensureOperational();
+      if (!deps.approvedFolders) return false;
+      // Keep the existing folder-lock-before-Bot-mutation order. saveBotAccess
+      // re-enters the inventory lock, then owns the policy compare-and-save.
+      return withFolderInventoryLock(async () => {
+        await activeBot(captured.botId);
+        const policy = await deps.capabilityStore.getBotPolicy(captured.botId);
+        if (policy.accessMode !== "custom" || !policy.custom) return false;
+        const binding = await deps.capabilityStore.getBotBinding(captured.botId);
+        const scope = binding?.fileScopes.find(entry => entry.sourceId === captured.sourceId &&
+          entry.option.kind === "approved_location" && policy.custom!.fileScopeIds.includes(entry.option.id));
+        if (!scope) return false;
+        const chat = await canonicalChatForBot(captured.botId);
+        const snapshot = await snapshotForAudience(captured.audienceId, captured.botId, [
+          ...(chat ? retainedBotProviderForChat(chat) : []), ...(await retainedVisionProvider(captured.botId)),
+        ]);
+        await saveBotAccess({ audienceId: captured.audienceId, botId: captured.botId,
+          expectedRevision: policy.revision, refuseDriftedGrants: { message: BOT_FOLDER_GRANT_DRIFT_MESSAGE },
+          access: { accessMode: "custom", catalogRevision: snapshot.catalog.revision,
+            custom: { ...policy.custom, fileScopeIds: nextBotFileScopeIds(policy.custom.fileScopeIds, snapshot.catalog.fileScopes, scope.option.id, false) } } });
+        return true;
+      });
+    },
     /** A receipt acknowledges a past durable effect; it never authorizes a tool call. */
     async botFolderGrantCommitted(botId: string, operationId: string): Promise<boolean> {
       return (await deps.approvedFolders?.journal.list())?.some((entry) =>
@@ -1753,6 +1833,10 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     },
 
     updateBotAccess: (input: UpdateBotAccessInput) => saveBotAccess(input),
+    onAccessChange(listener: (botId: string) => void): () => void {
+      accessListeners.add(listener);
+      return () => { accessListeners.delete(listener); };
+    },
 
     /**
      * Hard-delete the Bot's photo, managed home, access, chat rows and record

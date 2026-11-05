@@ -1,3 +1,4 @@
+import type { AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
 import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
@@ -51,6 +52,8 @@ import {
   AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
   AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
+  AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES,
+  parseAidenRemoteBotAllowedCursor,
   AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
@@ -318,6 +321,7 @@ export interface AidenRemoteRouterDependencies {
    * (contract revision 25). Absent: those routes are `not_found` and their
    * feature tokens are never advertised.
    */
+  botAllowed?: AidenRemoteBotAllowList;
   botSessions?: Pick<
     AidenRemoteBotSessionService,
     | "session"
@@ -441,6 +445,8 @@ export type AidenRemoteRouteLabel =
   | "botSessionEvents"
   | "botSessionImage"
   | "botQuestionAnswer"
+  | "botAllowed"
+  | "botAllowedRemove"
   | "botPlanRespond"
   | "botAccessRequestAnswer"
   | "botHandoffAnswer"
@@ -544,6 +550,8 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botSessionEvents: ["/bots/:botId/session/events"],
   botSessionImage: ["/bots/:botId/session/images/:entryId"],
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
+  botAllowed: ["/bots/:botId/allowed"],
+  botAllowedRemove: ["/bots/:botId/allowed/:entryId/remove"],
   botPlanRespond: ["/bots/:botId/plans/:planId/respond"],
   botAccessRequestAnswer: ["/bots/:botId/access-requests/:waitId/answer"],
   botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
@@ -1965,6 +1973,20 @@ function holdsScheduleCards(device: Pick<AidenRemoteRouterAuthenticatedDevice, "
   return device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
 }
 
+function botAllowedWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return typeof dependencies.botAllowed?.list === "function" && typeof dependencies.botAllowed.remove === "function";
+}
+function holdsBotAllowed(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+  return device.capabilities.has("bot:allowed") && botAllowedWired(dependencies);
+}
+function botAllowedCursorQuery(query: string): string | undefined {
+  const params = new URLSearchParams(query);
+  if ([...params.keys()].some(key => key !== "cursor") || params.getAll("cursor").length > 1) throw new AidenRemoteServiceError("invalid_request", "The allow list query is invalid.", 400);
+  const cursor = params.get("cursor");
+  if (cursor === null) return undefined;
+  try { return parseAidenRemoteBotAllowedCursor(cursor); } catch { throw new AidenRemoteServiceError("invalid_request", "The allow list cursor is invalid. Refresh the list.", 400, true); }
+}
+
 /** Revision 56: plan projection and response ship together. */
 function botPlansWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return dependencies.botSessions?.supportsPlans === true && typeof dependencies.botSessions.respondPlan === "function";
@@ -2148,6 +2170,8 @@ function advertisedServerCapabilities(
       : []),
     ...(device.acceptsBotCapabilities === true && botMessagingWired(dependencies)
       ? AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES : []),
+    ...(device.acceptsBotCapabilities === true && botAllowedWired(dependencies)
+      ? AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botPlansWired(dependencies)
       ? AIDEN_REMOTE_BOT_PLAN_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botAccessRequestsWired(dependencies)
@@ -2585,6 +2609,8 @@ export function createAidenRemoteRequestHandler(
             if (!botActivityWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot chat activity is unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!botAllowedWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot allow lists are unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_BOT_PLAN_CAPABILITIES as readonly string[]).includes(capability)) {
             if (!botPlansWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot plans are unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES as readonly string[]).includes(capability)) {
@@ -2930,6 +2956,7 @@ export function createAidenRemoteRequestHandler(
             issues: holdsBotIssues(device, dependencies),
             accessRequests: holdsBotAccessRequests(device, dependencies),
             plans: holdsBotPlans(device, dependencies),
+            allowed: holdsBotAllowed(device, dependencies),
           }),
         );
         return;
@@ -2957,6 +2984,7 @@ export function createAidenRemoteRequestHandler(
             issues: holdsBotIssues(device, dependencies),
             accessRequests: holdsBotAccessRequests(device, dependencies),
             plans: holdsBotPlans(device, dependencies),
+            allowed: holdsBotAllowed(device, dependencies),
           },
         );
         return;
@@ -3165,6 +3193,28 @@ export function createAidenRemoteRequestHandler(
             ? await sessions.pause!(device.id, botPauseMatch[1]!, key, body, { handoffs: true })
             : await sessions.unpause!(device.id, botPauseMatch[1]!, key, { handoffs: true }),
         );
+        return;
+      }
+      const botAllowedReadMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/allowed$/u.exec(path);
+      if (botAllowedReadMatch && request.method === "GET") {
+        route = "botAllowed";
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!botAllowedWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        requireDeviceCapabilities(device, ["bot:allowed"]);
+        const cursor = botAllowedCursorQuery(query);
+        writeJson(response, 200, await dependencies.botAllowed!.list(device.id, botAllowedReadMatch[1]!, cursor));
+        return;
+      }
+      const botAllowedRemoveMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/allowed\/([A-Za-z0-9_-]{1,80})\/remove$/u.exec(path);
+      if (botAllowedRemoveMatch && request.method === "POST") {
+        route = "botAllowedRemove"; requireNoQuery(query);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!botAllowedWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        requireDeviceCapabilities(device, ["bot:read", "bot:allowed"]);
+        requireEmptyJsonObject(await readJsonBody(request, 64));
+        writeJson(response, 200, await dependencies.botAllowed!.remove(device.id, botAllowedRemoveMatch[1]!, botAllowedRemoveMatch[2]!));
         return;
       }
       const botSpendingReadMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/spending$/u.exec(path);
@@ -4728,10 +4778,11 @@ export function createAidenRemoteRequestHandler(
         // approval bridge, by a device that may use Bots.
         if (dependencies.botSessions?.ownsApproval(approvalMatch[1]!)) {
           requireDeviceCapabilities(device, ["bot:read", "bot:write"]);
+          if (scope === "always" && !holdsBotAllowed(device, dependencies)) throw new AidenRemoteServiceError("invalid_request", "This Bot approval cannot be remembered by this device.", 400);
           writeJson(
             response,
             200,
-            await dependencies.botSessions.respondApproval(device.id, approvalMatch[1]!, decision, key, scope),
+            await dependencies.botSessions.respondApproval(device.id, approvalMatch[1]!, decision, key, scope, { allowed: holdsBotAllowed(device, dependencies) }),
           );
           return;
         }

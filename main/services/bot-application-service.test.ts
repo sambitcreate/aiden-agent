@@ -128,8 +128,10 @@ test("committed folder receipts acknowledge only the original Bot and desktop op
   await assert.rejects(app.service.grantBotFolder(input), (error: unknown) => error instanceof Error && !(error instanceof BotAccessRequestStaleError) && /access changed/u.test(error.message));
   assert.deepEqual(app.policies.get(app.owner.id)!.custom!.fileScopeIds, ["scope:home"]);
   const record = (await app.journal.list())[0]!;
-  await app.journal.put({ ...record, input: { ...record.input, audienceId: "device:phone" } });
-  assert.equal(await app.service.botFolderGrantCommitted(app.owner.id, input.operationId), false);
+  await assert.rejects(app.journal.put({ ...record, input: { ...record.input, audienceId: "device:phone" } }), /identity changed/u);
+  const phone = await folderFixture(t);
+  await phone.service.grantBotFolder({ ...phone.input, audienceId: "device:phone" });
+  assert.equal(await phone.service.botFolderGrantCommitted(phone.owner.id, phone.input.operationId), false);
 });
 
 for (const drift of ["grant removed", "directory replaced"] as const) {
@@ -333,6 +335,134 @@ test("a crash after policy publication retains the committed root and never issu
   assert.equal(app.counts.saves, 1); assert.equal(app.counts.removes, 0);
   const stat = await fs.stat(path.join(app.privateRoot, "bot-folder-grants.json"));
   assert.equal(stat.mode & 0o777, 0o600);
+});
+
+const approvalTally = () => ({ version: 1 as const, authorizationFingerprint: "d".repeat(64), offered: true, decidedAt: 1_793_793_600_000 });
+
+test("D folder receipts retain original desktop tally context after removal and never restore authority", async (t) => {
+  const app = await folderFixture(t);
+  const input = { ...app.input, audienceId: "desktop:local", approvalTally: approvalTally() };
+  await app.service.grantBotFolder(input);
+  const expected = [{ botId: app.owner.id, decisionId: input.operationId, path: app.folderPath,
+    authorizationFingerprint: input.approvalTally.authorizationFingerprint, offered: true,
+    decidedAt: input.approvalTally.decidedAt, answer: "always", source: "person" }];
+  assert.deepEqual(await app.service.botFolderApprovalReceipts(), expected);
+  assert.deepEqual(await app.service.botFolderApprovalReceipts({ botId: "bot:other" }), []);
+  assert.deepEqual(await app.service.botFolderApprovalReceipts({ decisionId: "different" }), []);
+  const root = (await app.state.snapshot()).approvedRoots[0]!;
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "desktop:local", botId: app.owner.id, sourceId: root.id }), true);
+  const before = { ...app.counts };
+  assert.deepEqual(await createBotApplicationService(app.deps).botFolderApprovalReceipts({ botId: app.owner.id, decisionId: input.operationId }), expected);
+  assert.deepEqual(app.counts, before, "historical acknowledgement creates no root or policy save");
+  assert.deepEqual(app.policies.get(app.owner.id)!.custom!.fileScopeIds, ["scope:home"]);
+});
+
+test("D folder history excludes legacy, phone, rolled-back and deleted Bot publications", async (t) => {
+  for (const mode of ["legacy", "phone", "rollback", "deleted", "deleting"] as const) {
+    const app = await folderFixture(t);
+    const input = { ...app.input, audienceId: mode === "phone" ? "device:phone" : "desktop:local",
+      ...(mode === "legacy" ? {} : { approvalTally: approvalTally() }) };
+    if (mode === "rollback") {
+      app.deps.capabilityStore.updateBotPolicy = async () => { throw new Error("save failed"); };
+      await assert.rejects(app.service.grantBotFolder(input), /save failed/u);
+    } else await app.service.grantBotFolder(input);
+    if (mode === "deleted") app.bots.splice(0);
+    if (mode === "deleting") app.pending.set("delete-intent", { operationId: "delete-intent", botId: app.owner.id,
+      kind: "delete_bot", subject: {}, stage: "prepared", startedAt: 1, updatedAt: 1 });
+    assert.deepEqual(await app.service.botFolderApprovalReceipts(), [], mode);
+  }
+});
+
+test("D folder journal validates and preserves immutable tally context through roll-forward", async (t) => {
+  const app = await folderFixture(t);
+  const input = { ...app.input, audienceId: "desktop:local", approvalTally: approvalTally() };
+  await app.service.grantBotFolder(input);
+  const record = (await app.journal.list())[0]!;
+  await assert.rejects(app.journal.put({ ...record, input: { ...input, approvalTally: { ...input.approvalTally, offered: false } } }), /identity|changed|immutable/u);
+  const expected = await app.service.botFolderApprovalReceipts();
+  let interrupted = [{ ...record, state: "pending" as const }];
+  app.deps.approvedFolders!.journal = createBotFolderGrantJournal({ read: async () => interrupted,
+    write: async records => { interrupted = structuredClone(records) as typeof interrupted; } });
+  const recovered = createBotApplicationService(app.deps);
+  await recovered.initialize();
+  assert.equal(interrupted[0]!.state, "committed");
+  assert.deepEqual(interrupted[0]!.input.approvalTally, input.approvalTally);
+  assert.deepEqual(await recovered.botFolderApprovalReceipts(), expected);
+  assert.equal(app.counts.saves, 1);
+});
+
+test("D folder publication snapshots tally metadata before its first asynchronous check", async (t) => {
+  const app = await folderFixture(t);
+  const tally = approvalTally(), original = structuredClone(tally);
+  const input = { ...app.input, audienceId: "desktop:local", approvalTally: tally };
+  const pending = app.service.grantBotFolder(input);
+  tally.offered = false;
+  tally.decidedAt += 1;
+  tally.authorizationFingerprint = "e".repeat(64);
+  await pending;
+  const receipt = (await app.service.botFolderApprovalReceipts())[0]!;
+  assert.equal(receipt.offered, original.offered);
+  assert.equal(receipt.decidedAt, original.decidedAt);
+  assert.equal(receipt.authorizationFingerprint, original.authorizationFingerprint);
+});
+
+test("D malformed folder tally context is refused without poisoning valid journal evidence", async (t) => {
+  const app = await folderFixture(t);
+  await app.service.grantBotFolder({ ...app.input, approvalTally: approvalTally() });
+  const record = (await app.journal.list())[0]!;
+  const file = path.join(app.privateRoot, "bot-folder-grants.json");
+  const before = await fs.readFile(file, "utf8");
+  const invalid = [null, { ...approvalTally(), version: 2 }, { ...approvalTally(), extra: "private" },
+    { ...approvalTally(), authorizationFingerprint: "not-a-hash" }, { ...approvalTally(), authorizationFingerprint: ["d".repeat(64)] },
+    { ...approvalTally(), offered: "yes" },
+    { ...approvalTally(), decidedAt: -1 }, { ...approvalTally(), decidedAt: Number.NaN },
+    { ...approvalTally(), decidedAt: undefined }];
+  for (const [index, tally] of invalid.entries()) {
+    await assert.rejects(app.journal.put({ ...record, input: { ...record.input,
+      operationId: `invalid-${index}`, approvalTally: tally as never } }), /journal needs repair/u);
+    assert.equal(await fs.readFile(file, "utf8"), before);
+  }
+  assert.equal((await app.journal.list()).length, 1);
+});
+
+test("D folder rows remove only the selected Bot binding and keep shared approved roots", async (t) => {
+  const app = await folderFixture(t);
+  await app.service.grantBotFolder(app.input);
+  const root = (await app.state.snapshot()).approvedRoots[0]!;
+  const other = bot("bot:shared"); app.bots.push(other);
+  const policy = structuredClone(app.policies.get(app.owner.id)!);
+  app.policies.set(other.id, { ...policy, botId: other.id });
+  app.botBindings.set(other.id, structuredClone(app.botBindings.get(app.owner.id)));
+  const rows = await app.service.botFolderEntries();
+  assert.deepEqual(rows.map(row => [row.id, row.botId, row.kind, row.what]).sort((a, b) => String(a[1]).localeCompare(String(b[1]))), [
+    [`folder_${root.id}`, app.owner.id, "folder", "Folder · ~/Taxes"],
+    [`folder_${root.id}`, other.id, "folder", "Folder · ~/Taxes"],
+  ]);
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "desktop:local", botId: app.owner.id, sourceId: root.id }), true);
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "desktop:local", botId: app.owner.id, sourceId: root.id }), false);
+  assert.deepEqual(await app.service.botFolderEntries(app.owner.id), []);
+  assert.equal((await app.service.botFolderEntries(other.id)).length, 1);
+  assert.deepEqual(app.policies.get(other.id)!.custom!.fileScopeIds, policy.custom!.fileScopeIds);
+  assert.deepEqual(app.policies.get(app.owner.id)!.custom!.fileScopeIds, ["scope:home"]);
+  assert.equal((await app.state.snapshot()).approvedRoots.length, 1);
+  const full = fixture({ bots: [bot("bot:full")] });
+  assert.deepEqual(await full.service.botFolderEntries("bot:full"), []);
+});
+
+test("D folder rows sanitize bidi and whitespace while Remove keeps the exact root identity", async t => {
+  const app = await folderFixture(t);
+  const folderPath = path.join(app.directory, "bidi\u202e\tfolder\nnotes\u007f");
+  await fs.rename(app.folderPath, folderPath);
+  await app.service.grantBotFolder({ ...app.input, folderPath });
+  const [root] = (await app.state.snapshot()).approvedRoots;
+  assert.equal(root!.folderPath, folderPath, "display cleanup must never rewrite the enforced filesystem path");
+  const [entry] = await app.service.botFolderEntries(app.owner.id);
+  assert.equal(entry!.what, "Folder · ~/bidi folder notes");
+  assert.equal(entry!.id, `folder_${root!.id}`);
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "desktop:local", botId: app.owner.id, sourceId: root!.id }), true);
+  assert.deepEqual(await app.service.botFolderEntries(app.owner.id), []);
+  assert.equal((await app.state.snapshot()).approvedRoots[0]!.folderPath, folderPath);
+  assert.deepEqual(app.policies.get(app.owner.id)!.custom!.fileScopeIds, ["scope:home"]);
 });
 
 test("inventory changes and path replacement at binding refuse publication and compensate only owned roots", async (t) => {
@@ -2614,6 +2744,28 @@ test("disabled Full Bot catalog retains only its own saved chat-reduction skill 
   assert.deepEqual((await app.service.capabilityCatalog("device:a")).skills, []);
   assert.doesNotMatch(JSON.stringify(result), /other-bot|sourceId|instructions/u);
 });
+
+
+test("access changes notify allowed-list readers only after successful saves and unsubscribe cleanly", async t => {
+  const app = await folderFixture(t), observed: string[] = [];
+  const unsubscribe = app.service.onAccessChange(botId => { observed.push(botId); });
+  const badObserver = app.service.onAccessChange(() => { throw new Error("window closed"); });
+  await app.service.grantBotFolder(app.input);
+  assert.deepEqual(observed, [app.owner.id]);
+  const root = (await app.state.snapshot()).approvedRoots[0]!;
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "device:a", botId: app.owner.id, sourceId: root.id }), true);
+  assert.deepEqual(observed, [app.owner.id, app.owner.id]);
+  assert.equal(await app.service.revokeBotFolder({ audienceId: "device:a", botId: app.owner.id, sourceId: root.id }), false);
+  assert.deepEqual(observed, [app.owner.id, app.owner.id]);
+  await assert.rejects(app.service.updateBotAccess({ audienceId: "device:a", botId: app.owner.id, expectedRevision: app.input.expectedRevision,
+    access: { accessMode: "full", catalogRevision: CATALOG_REVISION, confirmedForeground: true } }));
+  assert.equal(observed.length, 2);
+  unsubscribe(); badObserver();
+  await app.service.updateBotAccess({ audienceId: "device:a", botId: app.owner.id, expectedRevision: app.policies.get(app.owner.id)!.revision,
+    access: { accessMode: "full", catalogRevision: CATALOG_REVISION, confirmedForeground: true } });
+  assert.equal(observed.length, 2);
+});
+
 
 for (const deleting of ["grant owner", "another Bot", "binding disappears"] as const) {
   test(`folder recovery completes an interrupted delete without blocking surviving Bots (${deleting})`, async t => {

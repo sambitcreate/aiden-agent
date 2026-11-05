@@ -26,6 +26,10 @@ implementation notes are in `.memory/bot-rules.md`.
 - A rule that asks shows an approval card for that call unless an approved
   plan covers it and every matching Ask first rule. Remembered approval
   scopes never answer it.
+  Each answer belongs to the call and requirements shown. If access, rules or
+  the page binding changes before execution, Aiden checks again and may ask
+  with a fresh card. Stopping a waiting turn withdraws its card without
+  recording a decline.
 - A rule that hands off shows a hand-off card ("Your turn: …") with Done and
   Skip; the Bot waits for the answer and never does the step itself.
 - On a routine or Telegram turn nobody is there to answer, so a step a rule
@@ -119,6 +123,54 @@ Main reads the setting fresh at every tool call (`checkPolicy` in
 Bot's rules, the profile says what routines do with Ask first steps and links
 to the page. The CLI's durable Bot host has no rules and keeps asking for every
 MCP call.
+
+## Allowed without asking
+
+After you approve the same app action or website action three times in 14 days,
+with no denial in that period, the next eligible card offers **Always allow
+for <Bot>**. A class is one exact connected app tool, or one website host and
+action such as click, type or press. Website names ignore letter case and a
+leading `www.`; other subdomains and actions remain separate.
+
+Use **Allowed without asking** on a Bot's Profile to review and remove app actions, website actions and selected Custom folders. The desktop also lists every Bot in Settings → Bots; paired iOS and Android clients show the profile list when the host grants `bot:allowed`. Each row names its scope.
+
+Choosing Always saves that allowance for this Bot. Allow once keeps the card
+for next time; when an offer was present, the Bot may mention the option in
+one short sentence, at most once a week for that class. Decisions on a
+Bot-message turn still count, but do not send or consume that hint because the
+reply goes to another Bot. Expiry and automatic
+answers do not count as your approvals or denials. A denial withholds an
+offer for 14 days. Transport retries and recovery do not count a choice twice.
+
+Remembered entries follow current access, rules, routine behavior and approved
+plan coverage. They apply to eligible calls on every turn kind, but never
+provide a new tool or override a locked rule, a rule-made ask, a hand-off or
+Computer Use on your Mac. Actions on payment-provider hosts, including payment
+subdomains of an otherwise eligible site, never use remembered approval or
+offer Always. If rules or page binding change while a card waits,
+Aiden checks again before saving Always or running the action. If saving
+fails, the current one-time answer still applies; it does not promise a saved
+entry.
+
+**Allowed without asking** on the Bot's profile and in Settings → Bots lists
+its remembered app/site actions and saved Custom folders. Remove stops that
+remembered allowance on the next call. A plan or the routines setting can still
+supply its own approval. Removing a folder deselects it for this Bot and keeps
+other Bots' selections and the approved folder itself. Full-access Bots have
+no extra Custom-folder rows. There are at most 50 remembered app/site entries
+per Bot and 1,000 across the profile; folders do not consume those limits.
+
+Folder cards use their separate **Always for this folder** choice and can show
+the repeat count and a short hint after Allow once. Whole-Mac requests never
+count. Home or another folder without an Always choice never offers the nudge.
+The CLI host has no remembered-approval port. Counts, saved entries and replay
+receipts stay in the host profile; recovery acknowledges history and never
+recreates removed access. If remembered-approval evidence is damaged,
+remembered approvals fail closed. Bot file tools cannot write the remembered
+approval store or folder-publication journal, including through symlinks or
+codemode. Rule-made and Computer Use cards still work.
+Deleting a Bot preserves the damaged evidence and continues removing that Bot’s
+data; a genuine storage-write failure still requires deletion to be retried.
 
 ## What rules check
 

@@ -50,6 +50,9 @@ export function AccessRequestCard({
     >
       {request.target === "folder" && request.place ? <p className="text-tertiary">{request.place}</p> : null}
       <p className="whitespace-pre-line">{request.why}</p>
+      {request.target === "folder" && request.approvalCount !== undefined ? (
+        <p className="mt-1 text-tertiary">{`You’ve allowed this folder ${request.approvalCount} times in the last 2 weeks.`}</p>
+      ) : null}
     </BotNoticeCard>
   );
 }

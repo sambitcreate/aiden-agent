@@ -451,9 +451,11 @@ data class AidenBotApproval(
     val toolCallId: String,
     val toolName: String,
     val summary: String,
-    val canAllow: Boolean
+    val canAllow: Boolean,
+    val alwaysCount: Int? = null
 ) {
     init {
+        require(alwaysCount == null || (canAllow && alwaysCount in 3..20))
         AidenBotWire.validateString(waitId, "waitId", MAX_WAIT_ID_LENGTH)
         if (!WAIT_ID.matches(waitId)) throw AidenBotContractException.InvalidField("waitId")
         AidenBotWire.validateString(toolCallId, "toolCallId", MAX_TOOL_CALL_ID_LENGTH)
@@ -467,6 +469,7 @@ data class AidenBotApproval(
         put("toolName", JsonPrimitive(toolName))
         put("summary", JsonPrimitive(summary))
         put("canAllow", JsonPrimitive(canAllow))
+        alwaysCount?.let { put("alwaysCount", JsonPrimitive(it)) }
     }
 
     companion object {
@@ -479,7 +482,7 @@ data class AidenBotApproval(
 
         fun parse(element: JsonElement): AidenBotApproval {
             val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("approval")
-            if (obj.keys != KEYS) throw AidenBotContractException.InvalidField("approval")
+            if (!obj.keys.containsAll(KEYS) || (obj.keys - (KEYS + "alwaysCount")).isNotEmpty()) throw AidenBotContractException.InvalidField("approval")
             fun string(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
                 ?: throw AidenBotContractException.InvalidField(key)
             val canAllow = (obj["canAllow"] as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.content
@@ -488,6 +491,7 @@ data class AidenBotApproval(
                 toolCallId = string("toolCallId"),
                 toolName = string("toolName"),
                 summary = string("summary"),
+                alwaysCount = aidenBotApprovalCount(obj, "alwaysCount"),
                 canAllow = when (canAllow) {
                     "true" -> true
                     "false" -> false
@@ -755,9 +759,10 @@ enum class AidenBotAccessTarget { @SerialName("folder") FOLDER, @SerialName("who
 @Serializable(with = AidenBotAccessRequestSerializer::class)
 data class AidenBotAccessRequest(
     val waitId: String, val target: AidenBotAccessTarget, val label: String,
-    val place: String? = null, val why: String, val choices: List<AidenBotAccessRequestChoice>
+    val place: String? = null, val why: String, val choices: List<AidenBotAccessRequestChoice>, val approvalCount: Int? = null
 ) {
     init {
+        require(approvalCount == null || (target == AidenBotAccessTarget.FOLDER && AidenBotAccessRequestChoice.ALWAYS in choices && approvalCount in 3..20))
         AidenBotHandoffWire.validateWaitId(waitId)
         fun text(value: String, max: Int) {
             if (value.isBlank() || value.codePointCount(0, value.length) > max ||
@@ -778,13 +783,14 @@ data class AidenBotAccessRequest(
     fun toJson(): JsonObject = buildJsonObject {
         put("waitId", waitId); put("target", if (target == AidenBotAccessTarget.FOLDER) "folder" else "whole_mac")
         put("label", label); place?.let { put("place", it) }; put("why", why)
+        approvalCount?.let { put("approvalCount", JsonPrimitive(it)) }
         put("choices", AidenBotWireJson.json.encodeToJsonElement(ListSerializer(AidenBotAccessRequestChoice.serializer()), choices))
     }
     companion object {
         fun parse(element: JsonElement): AidenBotAccessRequest {
             val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("accessRequest")
             if (!obj.keys.containsAll(setOf("waitId", "target", "label", "why", "choices")) ||
-                (obj.keys - setOf("waitId", "target", "label", "place", "why", "choices")).isNotEmpty())
+                (obj.keys - setOf("waitId", "target", "label", "place", "why", "choices", "approvalCount")).isNotEmpty())
                 throw AidenBotContractException.InvalidField("accessRequest")
             fun text(key: String): String {
                 val value = obj[key] as? JsonPrimitive
@@ -796,7 +802,7 @@ data class AidenBotAccessRequest(
             val choices = obj["choices"] as? JsonArray ?: throw AidenBotContractException.InvalidField("choices")
             return AidenBotAccessRequest(text("waitId"), target, text("label"),
                 if (obj.containsKey("place")) text("place") else null, text("why"),
-                choices.map { AidenBotWireJson.json.decodeFromJsonElement(AidenBotAccessRequestChoice.serializer(), it) })
+                choices.map { AidenBotWireJson.json.decodeFromJsonElement(AidenBotAccessRequestChoice.serializer(), it) }, aidenBotApprovalCount(obj, "approvalCount"))
         }
     }
 }

@@ -32,7 +32,8 @@ import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../comp
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
 import { Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
-import { botListLocation } from "../../lib/bot-routes";
+import { botAllowedLocation, botListLocation } from "../../lib/bot-routes";
+import { botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
@@ -183,14 +184,31 @@ export function BotApprovalCard({
 }: {
   name: string;
   prompt: BotApprovalPrompt;
-  onAnswer(decision: "allow" | "deny"): void;
+  onAnswer(decision: "allow" | "deny", scope?: "always"): Promise<void> | void;
   /** Set when this device may only deny: where the person can allow it instead. */
   allowElsewhere?: string;
   /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
   keyboardShortcuts?: boolean;
 }) {
+  const [busy, setBusy] = React.useState(false);
+  const inFlight = React.useRef(false);
+  const [answerError, setAnswerError] = React.useState<string | null>(null);
+  const respond = async (decision: "allow" | "deny", scope?: "always") => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setAnswerError(null);
+    try {
+      await onAnswer(decision, scope);
+    } catch (error) {
+      setAnswerError(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
   const platform = detectedKeyboardPlatform();
-  useApprovalShortcuts({ enabled: keyboardShortcuts, canAllow: !allowElsewhere, onShortcut: onAnswer });
+  useApprovalShortcuts({ enabled: keyboardShortcuts && !busy, canAllow: !allowElsewhere, onShortcut: (decision) => void respond(decision) });
   const hint = (shortcut: ApprovalShortcut) =>
     keyboardShortcuts ? (
       <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
@@ -214,18 +232,25 @@ export function BotApprovalCard({
             <Button
               variant="transparent"
               size="small"
+              disabled={busy}
               aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", platform) : undefined}
-              onClick={() => onAnswer("deny")}
+              onClick={() => void respond("deny")}
             >
               Deny
               {hint("deny")}
             </Button>
+            {prompt.always && !allowElsewhere ? (
+              <Button variant="transparent" size="small" disabled={busy} onClick={() => void respond("allow", "always")}>
+                {botAlwaysAllowLabel(name)}
+              </Button>
+            ) : null}
             {allowElsewhere ? null : (
               <Button
                 variant="accent"
                 size="small"
+                disabled={busy}
                 aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", platform) : undefined}
-                onClick={() => onAnswer("allow")}
+                onClick={() => void respond("allow")}
               >
                 Allow
                 {hint("allow")}
@@ -234,12 +259,14 @@ export function BotApprovalCard({
           </>
         }
       >
+        {prompt.always ? <p className="text-tertiary">{`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`}</p> : null}
         {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
         {prompt.summary ? (
           <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
             {prompt.summary}
           </p>
         ) : null}
+        {answerError ? <p role="alert" className="mt-1 text-status-red">{answerError}</p> : null}
       </BotNoticeCard>
     </>
   );
@@ -1559,16 +1586,19 @@ export function BotChatPane({ botId }: { botId: string }) {
           ) : null}
           {approvals.prompts.map((prompt, index) => (
             <BotApprovalCard
-              key={prompt.waitId}
+              key={`${prompt.botId}:${prompt.waitId}`}
               name={current.name}
               prompt={prompt}
               keyboardShortcuts={index === 0}
-              onAnswer={(decision) => {
+              onAnswer={async (decision, scope) => {
+                const { decided } = await botsApi.approve(prompt.waitId, decision, scope);
+                if (!decided) throw new Error("That approval was already answered or closed.");
                 approvals.remove(prompt.waitId);
-                void botsApi.approve(prompt.waitId, decision).catch((error) => {
-                  approvals.restore(prompt);
-                  toast.error(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
-                });
+                if (scope === "always") {
+                  toast.success("Always allow requested.", {
+                    action: { label: "Manage", onClick: () => void navigate(botAllowedLocation(current.id)) },
+                  });
+                }
               }}
             />
           ))}

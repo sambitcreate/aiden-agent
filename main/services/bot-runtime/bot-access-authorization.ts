@@ -2,9 +2,14 @@ import type { BotAccessChoice } from "../../../renderer/shared/bot-access-reques
 import type { BotFolderGrantInput } from "../bot-folder-grant-journal.js";
 import { BotRuntimeAuthorityError } from "../bot-runtime-authority.js";
 import type { BotAccessResolution } from "./bot-access-target.js";
-import { BotAccessRequestStaleError, type BotAccessAuthorizationReceipt, type BotAccessRequestPrompt } from "./bot-access-requests.js";
+import { BotAccessRequestStaleError, type BotAccessAuthorizationReceipt, type BotAccessRequestPrompt, type BotAccessTallyProof } from "./bot-access-requests.js";
 import { BOT_RUN_ACCESS_MAX_AGE_MS, type BotRunAccess, type BotRunAccessGrant } from "./bot-run-access.js";
 import type { BotAdmission } from "./bot-tool-assembly.js";
+
+function snapshotPrompt(prompt: BotAccessRequestPrompt): BotAccessRequestPrompt {
+  const { owner, ...data } = prompt;
+  return { ...structuredClone(data), ...(owner ? { owner: { ...owner } } : {}) };
+}
 
 /** Shared pure wiring so both admission phases are exercised without Electron. */
 export function createBotAccessRevalidator(deps: {
@@ -39,9 +44,12 @@ export interface BotAccessAuthorizerDeps {
   grantFolder(input: BotFolderGrantInput, owner: { assertCurrent(): void }): Promise<string>;
   folderCommitted?(botId: string, operationId: string): Promise<boolean>;
   changed(botId: string): void;
+  /** Capture only after exact live owner/policy/path validation. */
+  captureDecision?(prompt: BotAccessRequestPrompt, choice: BotAccessChoice): BotAccessTallyProof | undefined;
 }
 export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
   return async (prompt: BotAccessRequestPrompt, choice: BotAccessChoice): Promise<void | BotAccessAuthorizationReceipt> => {
+    prompt = snapshotPrompt(prompt);
     // A retained prompt may belong to a publication whose receipt read failed.
     // Acknowledge history before consulting today's owner or policy.
     if (prompt.target === "folder" && prompt.grant && prompt.choices.includes("always")) {
@@ -103,7 +111,9 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
     )
       throw new BotAccessRequestStaleError("That folder changed. Ask for access again.");
     assertOwner();
-    if (choice === "not_now") return;
+    const tally = deps.captureDecision?.(prompt, choice);
+    const decisionReceipt = tally ? { tally } : undefined;
+    if (choice === "not_now") return decisionReceipt;
     let revision = auth.policyRevision;
     if (choice === "always") {
       try {
@@ -117,6 +127,7 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
             expectedIdentity: auth.identity!,
             ...(auth.inventoryRevision ? { expectedInventoryRevision: auth.inventoryRevision } : {}),
             operationId: prompt.waitId,
+            ...(tally ? { approvalTally: { version: 1 as const, ...tally } } : {}),
           },
           { assertCurrent: assertOwner },
         );
@@ -125,7 +136,7 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
         // durable operation can turn that ambiguous result into success.
         if (!(await deps.folderCommitted?.(prompt.botId, prompt.waitId))) throw error;
         try { deps.changed(prompt.botId); } catch { /* observer only */ }
-        return { savedForFuture: true };
+        return { savedForFuture: true, ...(tally ? { tally } : {}) };
       }
     }
     // An Always changes the policy. Its exact publication receipt is the only
@@ -170,12 +181,72 @@ export function createBotAccessAuthorizer(deps: BotAccessAuthorizerDeps) {
       // must acknowledge the save without creating temporary run authority.
       if (choice !== "always") throw error;
       try { deps.changed(prompt.botId); } catch { /* observer only */ }
-      return { savedForFuture: true };
+      return { savedForFuture: true, ...(tally ? { tally } : {}) };
     }
     try {
       deps.changed(prompt.botId);
     } catch {
       /* An observer cannot undo a validated answer. */
     }
+    return decisionReceipt;
+  };
+}
+
+/** D bookkeeping around B's real authorization. Only primitive receipts survive
+ * a retry; no owner callback or temporary authority is reconstructed here. */
+export function createBotAccessDecisionSettlement(deps: {
+  now(): number;
+  allowList: Pick<import("./bot-allow-list.js").BotAllowList, "decision" | "settleFolder">;
+  receipts(botId: string, decisionId: string): Promise<readonly import("./bot-allow-list.js").BotFolderApprovalReceipt[]>;
+}) {
+  const pendingAlways = new Map<string, BotAccessTallyProof>();
+  const offered = (prompt: BotAccessRequestPrompt) => prompt.choices.includes("always") && prompt.approvalCount !== undefined;
+  const choiceOf = (answer: import("./bot-approval-tallies.js").BotApprovalAnswer): BotAccessChoice => answer === "allow" ? "once" : answer === "allow_always" ? "always" : "not_now";
+  return {
+    captureDecision(prompt: BotAccessRequestPrompt, choice: BotAccessChoice): BotAccessTallyProof | undefined {
+      if (prompt.target !== "folder" || !prompt.authorizationFingerprint) return undefined;
+      const previous = choice === "always" ? pendingAlways.get(prompt.waitId) : undefined;
+      if (previous) return { ...previous };
+      const proof = { authorizationFingerprint: prompt.authorizationFingerprint, offered: offered(prompt), decidedAt: deps.now() };
+      if (choice === "always") pendingAlways.set(prompt.waitId, proof);
+      return proof;
+    },
+    forgetInactive(waitIds: ReadonlySet<string>) {
+      for (const id of pendingAlways.keys()) if (!waitIds.has(id)) pendingAlways.delete(id);
+    },
+    async authorize(prompt: BotAccessRequestPrompt, choice: BotAccessChoice,
+      authorize: (prompt: BotAccessRequestPrompt, choice: BotAccessChoice) => Promise<void | BotAccessAuthorizationReceipt>): Promise<void | BotAccessAuthorizationReceipt> {
+      prompt = snapshotPrompt(prompt);
+      if (prompt.target === "folder" && prompt.authorizationFingerprint) {
+        const saved = await deps.allowList.decision(prompt.botId, prompt.waitId, prompt.authorizationFingerprint);
+        if (saved?.source === "person") return { effectiveChoice: choiceOf(saved.answer), ...(saved.answer === "allow_always" ? { savedForFuture: true as const } : {}) };
+      }
+      return authorize(prompt, choice);
+    },
+    async settle(prompt: BotAccessRequestPrompt, choice: BotAccessChoice, receipt: BotAccessAuthorizationReceipt | undefined): Promise<BotAccessAuthorizationReceipt | undefined> {
+      prompt = snapshotPrompt(prompt);
+      receipt = receipt === undefined ? undefined : structuredClone(receipt);
+      if (prompt.target !== "folder" || !prompt.authorizationFingerprint) return receipt;
+      if (choice === "always") {
+        // The original journal context is authoritative even on Once/Not now
+        // taps recovering an earlier publication. Legacy receipts skip D.
+        const records = await deps.receipts(prompt.botId, prompt.waitId);
+        for (const record of records) await deps.allowList.settleFolder({ ...record, origin: "historical" });
+        return receipt;
+      }
+      const result = await deps.allowList.settleFolder({ botId: prompt.botId, path: prompt.authorization.root,
+        decisionId: prompt.waitId, authorizationFingerprint: prompt.authorizationFingerprint, source: "person", answer: choice,
+        offered: receipt?.tally?.offered ?? offered(prompt), label: prompt.label,
+        // A tally proof comes only from the validated live authorizer. A saved
+        // receipt acknowledgement must not acquire a new hint entitlement.
+        origin: receipt?.tally ? "live" : "historical",
+        ...(receipt?.tally ? { decidedAt: receipt.tally.decidedAt } : {}) });
+      return { ...receipt, ...result };
+    },
+    async reconcileAbsent(botId: string, decisionId: string): Promise<boolean> {
+      const records = await deps.receipts(botId, decisionId);
+      for (const record of records) await deps.allowList.settleFolder({ ...record, origin: "historical" });
+      return records.length > 0;
+    },
   };
 }

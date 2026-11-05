@@ -50,6 +50,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Config/AppConfig.swift",
   "AidenOnTheGo/ContentView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotAdvancedView.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotAllowedView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCharacter.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCreateView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift",
@@ -105,6 +106,7 @@ const appSourcePaths = [
   "AidenOnTheGo/LiveActivities/AidenLatestValueThrottle.swift",
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
   "AidenOnTheGo/Models/AidenBot.swift",
+  "AidenOnTheGo/Models/AidenBotAllowed.swift",
   "AidenOnTheGo/Models/AidenBotMemory.swift",
   "AidenOnTheGo/Models/AidenBotRoutine.swift",
   "AidenOnTheGo/Models/AidenBotSession.swift",
@@ -130,6 +132,7 @@ const appSourcePaths = [
 
 const testSources = [
   "AidenBotCacheTests.swift",
+  "AidenBotAllowedTests.swift",
   "AidenBotContractTests.swift",
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotHomeProfileTests.swift",

@@ -74,6 +74,7 @@ async function fixture(options: {
   acceptsBotCapabilities?: boolean;
   /** A recording durable-session service for the Bot session, routine and preset routes. */
   botSessions?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"];
+  botAllowed?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botAllowed"];
   acceptsProgressCapabilities?: boolean;
   progressAvailable?: boolean;
   authorizationBlocked?: () => boolean;
@@ -286,6 +287,7 @@ async function fixture(options: {
               capability !== "bot:issues" &&
               capability !== "bot:access-requests" &&
               capability !== "bot:plans" &&
+              capability !== "bot:allowed" &&
               capability !== "schedule:cards" &&
               capability !== "chat:jobs" &&
               capability !== "attachments:raw" &&
@@ -728,6 +730,7 @@ async function fixture(options: {
       },
     },
     ...(options.botSessions ? { botSessions: options.botSessions } : {}),
+    ...(options.botAllowed ? { botAllowed: options.botAllowed } : {}),
     ...(options.streamsAvailable === false ? {} : { streams: {
       streamChatId: () => "chat-1",
       status: (_deviceId, streamId) => ({
@@ -7246,4 +7249,45 @@ test("plan routes advertise only when wired, negotiate separately and require ev
   }
   assert.equal(seen.length, 1);
   assert.deepEqual(seen[0]!.slice(1), ["bot:00000000-0000-4000-8000-000000000056", "plan-56", "plan-answer-route-56", { decision: "approve" }]);
+});
+
+test("D allowed routes require grants, bind owners, negotiate separately and reject nonempty Remove", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
+  const seen: unknown[][] = [];
+  const botAllowed = { list: async (...args: [string, string, string?]) => { seen.push(["list", ...args]); return { botId: args[1], entries: [] }; }, remove: async (...args: [string, string, string]) => { seen.push(["remove", ...args]); return { botId: args[1], entries: [] }; } };
+  for (const [caps, wired, readStatus, writeStatus] of [
+    [["server:read", "bot:read", "bot:write", "bot:allowed"], true, 200, 200],
+    [["server:read", "bot:read", "bot:write"], true, 403, 403],
+    [["server:read", "bot:read", "bot:allowed"], true, 200, 403],
+    [["server:read", "bot:write", "bot:allowed"], true, 403, 403],
+    [["server:read", "bot:read", "bot:write", "bot:allowed"], false, 404, 404],
+  ] as const) {
+    const app = await fixture({ capabilities: [...caps], acceptsBotCapabilities: true, ...(wired ? { botAllowed } : {}) });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:allowed"), wired); assert.equal(server.features.includes("bot:allowed"), false); assert.ok(server.features.length <= AIDEN_REMOTE_MAX_SERVER_FEATURES);
+      assert.equal((await fetch(`${app.base}/bots/bot:00000000-0000-4000-8000-000000000057/allowed`, { headers })).status, readStatus);
+      const remove = (body: unknown) => fetch(`${app.base}/bots/bot:00000000-0000-4000-8000-000000000057/allowed/rule_1/remove`, { method: "POST", headers, body: JSON.stringify(body) });
+      assert.equal((await remove({})).status, writeStatus);
+      if (writeStatus === 200) { assert.equal((await remove({ deviceId: "another-phone" })).status, 400); }
+      if (readStatus === 200) {
+        for (const query of ["cursor=", "cursor=x", "cursor=cur_" + "A".repeat(43) + "&cursor=cur_" + "A".repeat(43), "limit=50"]) assert.equal((await fetch(`${app.base}/bots/bot-1/allowed?${query}`, { headers })).status, 400);
+      }
+      assert.equal((await fetch(`${app.base}/device/capabilities`, { method: "POST", headers, body: JSON.stringify({ accepts: ["bot:allowed"] }) })).status, wired ? 200 : 404);
+    } finally { await app.close(); }
+  }
+  assert.equal(seen.filter(s => s[0] === "list").length, 2); assert.equal(seen.filter(s => s[0] === "remove").length, 1);
+  assert.ok(seen.every(s => s[1] === "device-authorized-12345678" && s[2] === "bot:00000000-0000-4000-8000-000000000057"));
+});
+
+test("D shared approval route forwards Always only with the separate wired Bot grant", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json", "idempotency-key": "always-route-key-0057" };
+  const seen: unknown[][] = [];
+  for (const [holder, wired, expected] of [[true, true, 200], [false, true, 400], [true, false, 400]] as const) {
+    const app = await fixture({ capabilities: ["server:read", "approval:respond", "bot:read", "bot:write", ...(holder ? ["bot:allowed" as const] : [])], acceptsBotCapabilities: true,
+      botSessions: { ...recordingBotSessions([], { routines: false, presets: false, connections: false }), ownsApproval: () => true, respondApproval: async (...args) => { seen.push(args); return { approvalId: "allowed-57", decision: "allow", resolvedAt: "2026-11-04T12:00:00.000Z" }; } },
+      ...(wired ? { botAllowed: { list: async (_device, botId) => ({ botId, entries: [] }), remove: async (_device, botId) => ({ botId, entries: [] }) } } : {}) });
+    try { assert.equal((await fetch(`${app.base}/approvals/allowed-57/respond`, { method: "POST", headers, body: JSON.stringify({ decision: "allow", scope: "always" }) })).status, expected); } finally { await app.close(); }
+  }
+  assert.equal(seen.length, 1); assert.deepEqual(seen[0]!.slice(-2), ["always", { allowed: true }]);
 });

@@ -464,6 +464,7 @@ test("all owned approvals are denied by expiry, and waiting notices publish whil
       botId: "B",
       waitId,
       toolCallId: waitId,
+      authorizationFingerprint: "courier-approval-fingerprint",
       toolName: "change",
       summary: waitId,
       signal: undefined,
@@ -472,7 +473,7 @@ test("all owned approvals are denied by expiry, and waiting notices publish whil
   );
   await f.until(() => f.notices.length === 2);
   await f.advance(1800001);
-  assert.deepEqual(await Promise.all(outcomes), ["deny", "deny"]);
+  assert.deepEqual((await Promise.all(outcomes)).map(outcome => ({ answer: outcome.answer, source: outcome.source })), [{ answer: "deny", source: "expiry" }, { answer: "deny", source: "expiry" }]);
   await f.until(() => f.notices.length === 3);
   assert.equal(
     (
@@ -903,6 +904,7 @@ test("answered approval history cannot turn an unrelated timeout into gave_up", 
     botId: "B",
     waitId: "answered",
     toolCallId: "call",
+    authorizationFingerprint: "courier-approval-fingerprint",
     toolName: "change",
     summary: "Change it",
     signal: undefined,
@@ -919,7 +921,7 @@ test("answered approval history cannot turn an unrelated timeout into gave_up", 
   });
   await f.until(() => f.notices.length === 1);
   f.approvals.decide("answered", "allow");
-  assert.equal(await request, "allow");
+  assert.equal((await request).answer, "allow");
   await f.until(async () => !(await f.ledger.get(root.deliveryId))?.waiting.length);
   await f.advance(1800001);
   await f.until(async () => (await f.ledger.get(root.deliveryId))?.outcome === "expired");
@@ -934,14 +936,15 @@ test("reply approval notice names its actual owner and deletion denies it by exp
   const sent = f.sends[1]!;
   const sources: string[] = [];
   const decide = f.approvals.decide;
-  f.approvals.decide = (id, choice, source) => {
+  f.approvals.decide = (id, choice, scope, source) => {
     sources.push(source ?? "person");
-    return decide(id, choice, source);
+    return decide(id, choice, scope, source);
   };
   const request = f.approvals.request({
     botId: "A",
     waitId: "reply-card",
     toolCallId: "call",
+    authorizationFingerprint: "courier-approval-fingerprint",
     toolName: "change",
     summary: "Change",
     signal: undefined,
@@ -960,7 +963,7 @@ test("reply approval notice names its actual owner and deletion denies it by exp
   assert.equal((f.notices[0] as { botName: string }).botName, "A");
   f.remove("B");
   await f.courier.forgetBot("B");
-  assert.equal(await request, "deny");
+  assert.equal((await request).answer, "deny");
   assert.ok(sources.includes("expiry"));
   await f.until(() => f.notices.length === 2);
   assert.equal((f.notices[1] as { outcome: string }).outcome, "failed");
@@ -1033,6 +1036,7 @@ for (const turn of ["request", "reply"] as const) {
       botId: sent.botId,
       waitId: "same",
       toolCallId: "call",
+      authorizationFingerprint: "courier-approval-fingerprint",
       toolName: "change",
       summary: "Change event",
       owner: {
@@ -1059,7 +1063,7 @@ for (const turn of ["request", "reply"] as const) {
     const row = (await f.ledger.get(accepted.deliveryId))!;
     assert.equal(row.effects.filter((e) => e.kind === "notice" && e.data?.waitId === "same").length, 1);
     await f.advance(1800001);
-    assert.deepEqual(await second, { decision: "deny", decisionSource: "expiry" });
+    assert.deepEqual(await second, { id: "same", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" });
     if (turn === "request")
       await f.until(() => f.notices.some((n) => (n as { outcome: string }).outcome === "gave_up"));
   });
@@ -1074,6 +1078,7 @@ test("parallel approval publication preserves a preannounced second card without
   const request = {
     botId: "B",
     toolCallId: "call",
+    authorizationFingerprint: "courier-approval-fingerprint",
     toolName: "change",
     summary: "Change event",
     signal: undefined,
@@ -1098,8 +1103,8 @@ test("parallel approval publication preserves a preannounced second card without
   );
   await f.advance(1800001);
   assert.deepEqual(await Promise.all([one, two]), [
-    { decision: "deny", decisionSource: "expiry" },
-    { decision: "deny", decisionSource: "expiry" },
+    { id: "one", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" },
+    { id: "two", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" },
   ]);
   await f.until(() => f.notices.some((n) => (n as { outcome: string }).outcome === "gave_up"));
 });
@@ -1232,6 +1237,7 @@ for (const parentOutcome of ["expired", "gave_up", "live", "live_card"] as const
         botId: "B",
         waitId: "parent",
         toolCallId: "call",
+        authorizationFingerprint: "courier-approval-fingerprint",
         toolName: "change",
         summary: "Parent action",
         signal: undefined,
@@ -1252,7 +1258,7 @@ for (const parentOutcome of ["expired", "gave_up", "live", "live_card"] as const
       }));
     }
     await f.advance(1800001);
-    if (card) assert.deepEqual(await card, { decision: "deny", decisionSource: "expiry" });
+    if (card) assert.deepEqual(await card, { id: "parent", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" });
     await f.until(async () => (await f.ledger.open()).length === 0);
     assert.equal(
       (await f.ledger.get(root.deliveryId))!.outcome,
@@ -1289,6 +1295,7 @@ for (const ownCard of [false, true]) {
         botId: "C",
         waitId: "child",
         toolCallId: "call",
+        authorizationFingerprint: "courier-approval-fingerprint",
         toolName: "change",
         summary: "Child action",
         signal: undefined,
@@ -1308,7 +1315,7 @@ for (const ownCard of [false, true]) {
       effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
     }));
     await f.advance(1800001);
-    if (card) assert.deepEqual(await card, { decision: "deny", decisionSource: "expiry" });
+    if (card) assert.deepEqual(await card, { id: "child", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" });
     await f.until(async () => (await f.ledger.open()).length === 0);
     assert.equal((await f.ledger.get(child.deliveryId))!.outcome, ownCard ? "gave_up" : "expired");
     assert.equal(f.approvals.pending().length, 0);

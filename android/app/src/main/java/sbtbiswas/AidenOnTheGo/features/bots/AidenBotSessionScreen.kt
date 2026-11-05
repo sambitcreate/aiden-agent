@@ -192,6 +192,7 @@ private fun AidenBotSessionContent(
     // opened without one opens again.
     val feedOpenedWith = remember(controller) { aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) }
     val grantsSettled = serverInfo != null
+    controller.allowedSupported = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ALLOWED) == true
     val feedGrantsNow = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
     LaunchedEffect(controller, grantsSettled, feedGrantsNow) {
         controller.setPlansSupported(AidenRemoteCapability.BOT_PLANS in feedGrantsNow)
@@ -553,11 +554,13 @@ private fun AidenBotSessionContent(
                         )
                     }
                 }
+                ui.approvalSuccessNotice?.let { notice -> item(key = "approval-notice") { Text(notice) } }
                 ui.session?.approval?.let { approval ->
                     item(key = "approval-${approval.waitId}") {
-                        AidenBotApprovalCard(approval, enabled = !ui.isRespondingToApproval) { decision ->
-                            scope.launch { controller.respondToApproval(decision) }
-                        }
+                        AidenBotApprovalCard(approval, enabled = canWriteBots && !ui.isRespondingToApproval,
+                            onRespond = { decision -> scope.launch { controller.respondToApproval(decision) } },
+                            botName = botName, allowedSupported = controller.allowedSupported,
+                            onAlways = { scope.launch { controller.respondToApproval(sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision.ALLOW, sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ALWAYS) } })
                     }
                 }
                 ui.session?.plan?.takeIf { ui.plansSupported }?.let { plan ->
@@ -573,6 +576,7 @@ private fun AidenBotSessionContent(
                 }?.let { request ->
                     item(key = "access-${request.waitId}") {
                         AidenBotAccessRequestCard(request, botName,
+                            showsApprovalCount = controller.allowedSupported,
                             canAnswer = canWriteBots && ui.isConnected && !ui.isAnsweringAccessRequest,
                             onAnswer = { choice -> scope.launch { controller.answerAccessRequest(choice) } })
                     }

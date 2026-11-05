@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   botAccessAuthorizationOf,
   botPendingAccessRequestOf,
@@ -11,23 +11,33 @@ export type { BotAccessAuthorization } from "../../../renderer/shared/bot-access
 export class BotAccessRequestStaleError extends Error {}
 export interface BotAccessRequestPrompt extends BotPendingAccessRequest {
   logicalRequestId: string;
+  /** Private identity of the immutable host attempt, never projected. */
+  authorizationFingerprint?: string;
   authorization: BotAccessAuthorization;
   grant?: { folderPath: string; rootId?: string };
   /** Main-only live owner. Never persisted, projected or restored from a memo. */
   owner?: { signal: AbortSignal; deadline: number; validate(): Promise<void> };
 }
 export type BotAccessAnswerOutcome = "answered" | "saved_for_future" | "not_waiting" | "invalid";
-export interface BotAccessAuthorizationReceipt { savedForFuture?: true }
+export interface BotAccessTallyProof { authorizationFingerprint: string; offered: boolean; decidedAt: number }
+export interface BotAccessAuthorizationReceipt {
+  savedForFuture?: true;
+  hint?: string;
+  effectiveChoice?: BotAccessChoice;
+  tally?: BotAccessTallyProof;
+}
+export type BotAccessSettle = (prompt: BotAccessRequestPrompt, choice: BotAccessChoice, receipt: BotAccessAuthorizationReceipt | undefined) => Promise<BotAccessAuthorizationReceipt | undefined>;
 export interface BotAccessDecision extends BotAccessAuthorizationReceipt { choice: BotAccessChoice; waitId: string }
 export interface BotAccessRequests {
   request(
-    prompt: Omit<BotAccessRequestPrompt, "waitId"> & { signal: AbortSignal | undefined },
+    prompt: Omit<BotAccessRequestPrompt, "waitId" | "authorizationFingerprint"> & { signal: AbortSignal | undefined },
   ): Promise<BotAccessDecision>;
   answer(
     botId: string,
     waitId: string,
     choice: BotAccessChoice,
     authorize: (prompt: BotAccessRequestPrompt, choice: BotAccessChoice) => Promise<void | BotAccessAuthorizationReceipt>,
+    settle?: BotAccessSettle,
   ): Promise<BotAccessAnswerOutcome>;
   pending(botId?: string): BotPendingAccessRequest[];
   get(botId: string, waitId: string): BotPendingAccessRequest | undefined;
@@ -43,6 +53,7 @@ function publicPrompt(prompt: BotAccessRequestPrompt): BotPendingAccessRequest {
     ...(prompt.place === undefined ? {} : { place: prompt.place }),
     why: prompt.why,
     choices: [...prompt.choices],
+    ...(prompt.approvalCount === undefined ? {} : { approvalCount: prompt.approvalCount }),
   };
 }
 function freeze<T>(value: T): T {
@@ -57,6 +68,7 @@ interface Waiting {
   fingerprint: string;
   claimed: boolean;
   promise: Promise<BotAccessDecision>;
+  authorized?: { choice: BotAccessChoice; receipt?: BotAccessAuthorizationReceipt };
   settle(choice?: BotAccessChoice, reason?: unknown, receipt?: BotAccessAuthorizationReceipt): void;
 }
 export function createBotAccessRequests(): BotAccessRequests {
@@ -92,6 +104,7 @@ export function createBotAccessRequests(): BotAccessRequests {
         ...freeze(structuredClone(data)),
         ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
         waitId,
+        authorizationFingerprint: createHash("sha256").update(JSON.stringify({ version: 1, waitId, botId: data.botId, authorization: data.authorization, ownerDeadline: owner?.deadline })).digest("hex"),
       });
       if (
         !botPendingAccessRequestOf(publicPrompt(prompt)) ||
@@ -136,14 +149,20 @@ export function createBotAccessRequests(): BotAccessRequests {
       notify(prompt.botId);
       return promise;
     },
-    async answer(botId, waitId, choice, authorize) {
+    async answer(botId, waitId, choice, authorize, settle) {
       if (choice === "always" && saved.get(waitId) === botId) return "saved_for_future";
       const entry = waiting.get(waitId);
       if (!entry || entry.prompt.botId !== botId || entry.claimed) return "not_waiting";
       if (!entry.prompt.choices.includes(choice)) return "invalid";
       entry.claimed = true;
       try {
-        const receipt = await authorize(entry.prompt, choice);
+        if (!entry.authorized) {
+          const authorized = await authorize(entry.prompt, choice);
+          entry.authorized = { choice: authorized?.savedForFuture ? "always" : authorized?.effectiveChoice ?? choice,
+            ...(authorized ? { receipt: structuredClone(authorized) } : {}) };
+        }
+        const effectiveChoice = entry.authorized.choice;
+        const receipt = settle ? await settle(entry.prompt, effectiveChoice, entry.authorized.receipt) : entry.authorized.receipt;
         if (receipt?.savedForFuture) {
           saved.set(waitId, botId);
           if (saved.size > 4096) saved.delete(saved.keys().next().value!);
@@ -152,14 +171,15 @@ export function createBotAccessRequests(): BotAccessRequests {
           entry.settle("always", undefined, receipt);
           return "saved_for_future";
         }
-        if (choice === "always") {
+        if (effectiveChoice === "always") {
           saved.set(waitId, botId);
           if (saved.size > 4096) saved.delete(saved.keys().next().value!);
         }
-        if (waiting.get(waitId) !== entry) return choice === "always" ? "saved_for_future" : "not_waiting";
-        entry.settle(choice);
+        if (waiting.get(waitId) !== entry) return effectiveChoice === "always" ? "saved_for_future" : "not_waiting";
+        entry.settle(effectiveChoice, undefined, receipt);
         return "answered";
       } catch (error) {
+        if (entry.authorized?.choice === "always") entry.authorized.receipt = { ...entry.authorized.receipt, savedForFuture: true };
         entry.claimed = false;
         if (error instanceof BotAccessRequestStaleError) entry.settle(undefined, error);
         throw error;

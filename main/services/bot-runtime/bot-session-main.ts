@@ -29,7 +29,6 @@ import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
 // schedules the background review, and compaction flushes memory and steers
 // its summary.
 
-import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
@@ -43,13 +42,6 @@ import type { SpendingOwner } from "../spending-core.js";
 import { botRoutineTaskIdOf } from "../scheduled-bot-routines.js";
 import { isLocalModelProvider } from "../usage-accounting.js";
 import { aidenConfigDir } from "../aiden-config-dir.js";
-import { IMAGE_GENERATION_SETTINGS_FILE } from "../image-generation/settings-store.js";
-import {
-  LOCAL_CONFIG_FILENAME,
-  PORTABLE_CONFIG_FILENAME,
-  PROVIDER_MODEL_CACHE_FILENAME,
-  SETTINGS_FILENAME,
-} from "../portable-config-core.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
@@ -57,7 +49,7 @@ import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
-import { botServiceProtectedRoot } from "../bot-protected-settings.js";
+import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
 import { configStore } from "../config-store.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { botPauses, isBotPaused } from "../bot-pause-main.js";
@@ -74,7 +66,10 @@ import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
-import { botApprovals } from "./bot-approvals-main.js";
+import { botApprovals, configureBotApprovalDecisionLookup } from "./bot-approvals-main.js";
+import { createBotApprovalTallies } from "./bot-approval-tallies.js";
+import { createBotAllowList, reconcileBotAllowListHistory } from "./bot-allow-list.js";
+import { toolApprovalRules } from "../tool-approval-rules-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
@@ -131,16 +126,7 @@ const profileDir = () => app.getPath("userData");
 // Aiden's settings files and Bot storage (definitions, access state, pauses;
 // not the Bots' own homes) are fenced the same way, so a Bot cannot change app
 // settings or its own access by editing them.
-setBotFileToolProtectedRoots(() => [
-  path.join(profileDir(), "bots"),
-  path.join(profileDir(), "bots.json"),
-  botServiceProtectedRoot(botServiceRoot()),
-  path.join(aidenConfigDir(), PORTABLE_CONFIG_FILENAME),
-  path.join(profileDir(), SETTINGS_FILENAME),
-  path.join(profileDir(), LOCAL_CONFIG_FILENAME),
-  path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
-  path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
-]);
+setBotFileToolProtectedRoots(() => desktopBotProtectedRoots(profileDir(), aidenConfigDir(), botServiceRoot()));
 // Temporary Home/whole-Mac access must not expose any app-private store.
 setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
 // A Bot's replies and routines wait out provider usage limits like a chat's.
@@ -238,8 +224,30 @@ async function imageInput(botId: string): Promise<boolean> {
   return resolvedModels.get(botId)?.imageInput ?? false;
 }
 
+export const botAllowList = createBotAllowList({
+  rules: toolApprovalRules,
+  tallies: createBotApprovalTallies({ profileDir }),
+  approvals: botApprovals,
+  botName: async botId => (await botStore.get(botId))?.name,
+  connectionName: async serverId => (await configStore.listMcpServers()).find(server => server.id === serverId)?.name,
+  folderEntries: botId => botApplicationService.botFolderEntries(botId),
+  revokeFolder: (botId, sourceId) => botApplicationService.revokeBotFolder({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, sourceId }),
+  log: (message, error) => logger.warn("bots", message, error),
+});
+configureBotApprovalDecisionLookup((...args) => botAllowList.decision(...args));
+botApplicationService.onAccessChange(botId => botAllowList.changed(botId));
+
+/** Called after the application journal recovered and before runtime initialization.
+ * Only known committed history is reconciled; this never publishes new access. */
+export async function reconcileBotAllowList(): Promise<void> {
+  const [bots, receipts] = await Promise.all([botStore.list(), botApplicationService.botFolderApprovalReceipts()]);
+  await reconcileBotAllowListHistory(botAllowList, bots.map(bot => bot.id), receipts,
+    (_botId, error) => logger.warn("bots", "A Bot's approval history could not be reconciled.", error));
+}
+
 const toolSources = createBotToolSources({
   policyRevision: async (botId) => (await botCapabilityStore.getBotPolicy(botId)).revision,
+  folderOffer: (botId, folder) => botAllowList.folderOffer(botId, folder),
   canonicalChatId,
   imageInput,
   admit,
@@ -292,6 +300,7 @@ const planAuthority = createBotPlanAuthority({
 configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
 
 const tools = createBotToolAssembly({
+  allowList: botAllowList,
   admit,
   sources: toolSources,
   rules: (botId) => botRules.rules(botId),
@@ -467,11 +476,11 @@ const extension: BotExtensionDeps = {
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
   afterReply: (botId) => memoryReview.afterReply(botId),
   beforeCompact: compactionSteering,
-  requestApproval: botApprovals.request,
-  requestApprovalOutcome: async (request) => {
+  settleApproval: (input, context) => botAllowList.settle(input, context),
+  requestApproval: async (request) => {
     const window = await botMessages().announceWaiting(request.botId, request.owner?.inputs.map(i => i.requestId) ?? [], request.summary, request.waitId);
-    if (window?.expired) return { decision: "deny", decisionSource: "expiry" };
-    return botApprovals.requestOutcome(request);
+    if (window?.expired) return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer: "deny", source: "expiry" };
+    return botApprovals.request(request);
   },
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
   requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request, ruleHandoffTarget(request.toolName))),
@@ -923,6 +932,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
+      (botId) => botAllowList.forgetBot(botId),
       (botId) => botRules.forgetBot(botId),
       // Its computer stops and its VM is deleted before its home (the shared folder) goes.
       async (botId) => (await import("../bot-computers/bot-computers-main.js")).deleteBotComputer(botId),

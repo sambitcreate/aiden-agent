@@ -1585,6 +1585,46 @@ final class AidenBotSessionApprovalTests: XCTestCase {
         return .server(statusCode: status, body: body)
     }
 
+    func testAlwaysScopeRetriesRetainExactChoiceAndAnotherScopeUsesAnotherKey() async throws {
+        let offered = String(approvalJSON().dropLast()) + ",\"alwaysCount\":3}"
+        let (model, transport) = try await loadedModel(approval: offered)
+        await model.answerApproval(.allow, scope: .always)
+        XCTAssertTrue(transport.approvals.isEmpty, "A decoded offer alone does not grant the capability")
+        model.allowedSupported = true
+        for scope: AidenApprovalScope in [.always, .once, .always] {
+            transport.nextApprovalError = URLError(.networkConnectionLost)
+            await model.answerApproval(.allow, scope: scope)
+            XCTAssertEqual(model.approval?.waitId, waitID)
+        }
+        XCTAssertEqual(transport.approvals.map(\.scope), [.always,nil,.always])
+        XCTAssertEqual(transport.approvals[0].key,transport.approvals[2].key)
+        XCTAssertNotEqual(transport.approvals[0].key,transport.approvals[1].key)
+        await model.answerApproval(.allow, scope: .always)
+        XCTAssertEqual(model.approvalSuccessNotice,"Always allow requested.")
+        XCTAssertEqual(transport.approvals[2].key,transport.approvals[3].key)
+    }
+
+    func testLateAlwaysFailureCannotRestoreAReplacedOrClearedHostCard() async throws {
+        for clear in [false,true] {
+            let offered=String(approvalJSON().dropLast()) + ",\"alwaysCount\":3}"
+            let (model,transport)=try await loadedModel(approval:offered)
+            model.allowedSupported=true
+            let entered=expectation(description:"approval sent")
+            transport.approvalEntered=entered
+            transport.answerGate.hold()
+            transport.nextApprovalError=URLError(.networkConnectionLost)
+            let request=Task { await model.answerApproval(.allow,scope:.always) }
+            await fulfillment(of:[entered],timeout:2)
+            let next=clear ? "null" : offered.replacingOccurrences(of:waitID,with:"replacement-57")
+            let raw="{\"protocolVersion\":1,\"botId\":\"bot_fixture_01\",\"epoch\":\"epoch_1\",\"seq\":1,\"type\":\"approval\",\"payload\":{\"approval\":\(next)}}"
+            _ = await model.apply(try JSONDecoder().decode(AidenBotSessionEvent.self,from:Data(raw.utf8)))
+            transport.answerGate.release()
+            await request.value
+            XCTAssertEqual(model.approval?.waitId,clear ? nil : "replacement-57")
+            XCTAssertNil(model.approvalSuccessNotice)
+        }
+    }
+
     func testSnapshotApprovalIsAllowedOnceByItsWaitIDAndClearsOnTheReceipt() async throws {
         let (model, transport) = try await loadedModel(approval: approvalJSON())
         XCTAssertEqual(model.approval?.waitId, waitID)
@@ -1685,6 +1725,7 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
     var nextAnswerError: Error?
     private(set) var approvals: [(waitId: String, decision: AidenApprovalDecision, scope: AidenApprovalScope?, key: UUID)] = []
     /// Thrown by the next approval response instead of a resolution.
+    var approvalEntered: XCTestExpectation?
     var nextApprovalError: Error?
     let answerGate = TestGate()
 
@@ -1743,6 +1784,7 @@ private final class QuestionTransport: AidenBotSessionTransport, @unchecked Send
         idempotencyKey: UUID
     ) async throws -> AidenApprovalResponse {
         approvals.append((id, decision, scope, idempotencyKey))
+        approvalEntered?.fulfill(); approvalEntered = nil
         await answerGate.pass()
         if let error = nextApprovalError {
             nextApprovalError = nil
@@ -5488,7 +5530,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
     private func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 56)
+        XCTAssertEqual(root["contractRevision"] as? Int, 57)
         return try XCTUnwrap(root["botAccessRequests"] as? [String: Any])
     }
     private func decode<T: Decodable>(_ type: T.Type, _ object: Any) throws -> T {

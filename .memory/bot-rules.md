@@ -49,7 +49,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - ask:
   - An existing approval keeps its `onAllow` and gains the prefix `Rule · <label> — <summary>`.
   - With no baseline approval, a new rule-made approval is created.
-  - Bot approvals never pass `scopes`, so a remembered approval scope never skips a rule-made ask.
+  - Bot approvals pass once/always scopes only for an explicit baseline Always offer. Rule-made asks never receive an offer or reuse remembered consent. The desktop runtime wires the allow-list/tally service; CLI has no such port.
 - hand_off: `decision.handoff {rule, summary, action, why}`. beforeTool then:
   - stores the approval memo with `kind:"handoff"` and `rule`;
   - asks through `requestHandoff`, which is `ruleHandoffRequest` from `bot-handoffs.ts`: kind `action`, source `rule`;
@@ -62,8 +62,8 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - Settings → Bots, routines go ahead (2026-10-31, owner chose option a of the tool audit's Q1): `AppSettings.botRoutinesGoAhead` (off by default; only literal `true` counts, `botRoutinesGoAhead()` in `renderer/shared/bot-rules.ts`). The assembly port `routinesGoAhead()` is read on every call. When every request id of the run is `routine:` (no `tg:`, no person's turn joined) and the tool isn't `computer_use` (the person's Mac), an approval (baseline or rule-made ask, with or without baseline) comes back with `preapproved: true`; `beforeTool` runs its `onAllow` and lets the call through with no memo and no card. Hand-offs and the locked rules are unchanged. Page: `renderer/components/settings/bots-settings.tsx` (section id `bots`); the Rules group on a Bot's profile says what routines do and links there. The CLI durable host has no such port.
 - Plan coverage (phase C, 2026-11-04): after fresh authority/ingress, rules/locked/refusals/hand-offs and eligible routine go-ahead, check one captured active plan before ordinary approval. Every allMatchingAsk fingerprint and baseline connector/site item must match; atomic caps are conjunctive. No Computer Use/locked/password/money/hand-off waiver. Direct/nested durable tasks reserve exact execution identity and admit only around the actual callback, then ordinary fallback skips coverage on a stale permit. Details in .memory/bot-plans.md.
 - Memos must be JSON values:
-  - The approval memo always writes `kind` and `rule` (null when no rule made it).
-  - Memos written before rules have neither field and read as approvals: only `kind === "handoff"` changes the summary.
+  - Ordinary approval attempts write `kind`, `rule` and authorizationFingerprint under an attempt-specific memo; a changed complete rule set gets a fresh host wait ID. Legacy aiden.approval remains the hand-off memo.
+  - Old ordinary approval memos do not supply authority to a new fingerprinted attempt. Hand-off answers still apply as answered so a completed human action is never run again by the Bot.
 - Live projection: the last `aiden.handoff-result` entry for a call becomes the `handoff_result` row (`handoff:<toolCallId>`, or `handoff:<toolCallId>:<entry id>` when a provider reused the id in a later turn), placed after that call's tool result.
 
 ## Prompt
@@ -100,3 +100,9 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - The shell is outside rules by design. Under Full access, a shell command could edit `rules.json`; the locked rules still hold because they come from code.
 
 - Bot messaging (2026-11-03): Ask first cards on bot:/botreply: turns wait on the real owning run within the saved deadline; expiry remains host provenance, not person denial. Hand-off rules block Bot-started steps and routine go-ahead never applies. See .memory/bot-messaging.md.
+
+## Allow list, phase D Task5
+
+botAllowList is wired after routines and C coverage for baseline-only no-rule approvals. Exact connection/server/tool and normalized site/action classes count person choices, three in14days without a denial, with an executed hint at most weekly. Atomic first publication compares original consent generation and the live pure full-requirements guard; exact operation receipts acknowledge history after Remove without invoking stale guards or restoring authority. Siblings use fresh automatic attempt pairs and do not count as person choices. Publication I/O/capacity failures keep the current one-time allowance and leave original private context for safe recovery. BotApprovalTallies publication/pendingPublications queries reconcile only known committed/revoked book history at startup. B's original committed journal context drives folder Always accounting and all-choice retry recovery. Full-file details/status in bot-allowed.md; desktop/native UI and Gate6 remain pending.
+
+PhaseDTask6 desktop: eligible Always offers pass scope through strict IPC; renderer toast onlyacknowledgesrequest, no claimofpublishedconsent. Profile/Settings list rulesandselectedCustomfolders, guardedRemove andqueryinvalidationsrefreshfromhost. ApplicationonAccessChange coverssuccessfullivepolicy saves forlistreaders, observerfailurescannotfailcommittedwrites. DesktopBcardsrenderapprovalCount; Task7mustgateoptionalphonecountbybot:allowedandexplicitlyprojectfields. Task6types/lint/headless/Cua2passed; Remote/nativehelduntilnumberedstart.

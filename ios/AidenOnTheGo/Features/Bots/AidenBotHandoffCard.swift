@@ -148,6 +148,7 @@ struct AidenBotPausedCard: View {
 struct AidenBotAccessRequestCard: View {
     let request: AidenRemoteBotAccessRequest
     let botName: String
+    var showsApprovalCount = false
     let canAnswer: Bool
     let onAnswer: (AidenBotAccessChoice) -> Void
     @Environment(\.aidenPalette) private var palette
@@ -161,6 +162,7 @@ struct AidenBotAccessRequestCard: View {
                 Text(verbatim: place).font(.footnote).foregroundStyle(palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if showsApprovalCount, let count = request.approvalCount { Text("You’ve allowed this \(count) times in the last 2 weeks.").font(.footnote).foregroundStyle(palette.secondary) }
             Text(verbatim: request.why).font(.subheadline).foregroundStyle(palette.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {

@@ -200,11 +200,10 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
         // ask the person, including providers without effect annotations.
         return { allowed: true, ...(mcpAgentToolDescriptor(tool) ? { approval: { summary: `Allow ${tool.label ?? name}?` } } : {}) };
       }),
-      requestApproval: approvals.request,
-      requestApprovalOutcome: async (request) => {
+      requestApproval: async (request) => {
         const window = await messages.announceWaiting(request.botId, request.owner?.inputs.map((input) => input.requestId) ?? [], request.summary, request.waitId);
-        if (window?.expired) return { decision: "deny", decisionSource: "expiry" };
-        return approvals.requestOutcome(request);
+        if (window?.expired) return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer: "deny", source: "expiry" };
+        return approvals.request(request);
       },
       spending: {
         refusal: (botId, requestIds) => spending.refusal(botId, undefined, requestIds),
