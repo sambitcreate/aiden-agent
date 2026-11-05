@@ -78,6 +78,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenReadAloud.swift",
   "AidenOnTheGo/Features/Chat/AidenChatImages.swift",
   "AidenOnTheGo/Features/Chat/AidenChatMarkdown.swift",
+  "AidenOnTheGo/Features/Chat/AidenLiveResponseView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
@@ -142,6 +143,7 @@ const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatPolicies.swift",
   "AidenOnTheGo/Features/Chat/AidenChatImages.swift",
   "AidenOnTheGo/Features/Chat/AidenChatMarkdown.swift",
+  "AidenOnTheGo/Features/Chat/AidenLiveResponseView.swift",
   "AidenOnTheGo/Features/Chat/AidenReadAloud.swift",
   "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
 ];
@@ -877,7 +879,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /AidenActivityPhaseCard\(label: visualizingLabel\)/u);
   assert.doesNotMatch(chat, /Thinking…|Thinking\.\.\./u);
   const reasoningCard = chat.match(
-    /private struct AidenReasoningCard[\s\S]*?private struct AidenToolActivityCard/u,
+    /(?:private\s+)?struct AidenReasoningCard[\s\S]*?(?:private\s+)?struct AidenToolActivityCard/u,
   )?.[0];
   assert.ok(reasoningCard, "Expected the bounded reasoning-card source section");
   assert.doesNotMatch(reasoningCard, /AidenSidebarLogo/u);
