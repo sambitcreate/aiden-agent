@@ -21,6 +21,22 @@ export interface AidenDurableOperationOwner {
   outcomeUnrecordedMessage: string;
 }
 
+/** Operations whose owner has not finished writing, per ledger. */
+const unfinishedOperations = new WeakMap<AidenIdempotencyLedger, Map<string, Promise<unknown>>>();
+
+function operationsFor(ledger: AidenIdempotencyLedger): Map<string, Promise<unknown>> {
+  let operations = unfinishedOperations.get(ledger);
+  if (!operations) {
+    operations = new Map();
+    unfinishedOperations.set(ledger, operations);
+  }
+  return operations;
+}
+
+function operationKey(scope: AidenDurableOperationScope): string {
+  return JSON.stringify([scope.deviceId, scope.route, scope.resourceId, scope.key]);
+}
+
 /**
  * Runs one idempotent request through the two durable edges every Remote
  * mutation shares:
@@ -33,8 +49,8 @@ export interface AidenDurableOperationOwner {
  *      unknown, in memory as on disk, and the caller is told so.
  *
  * Only the call that owns the operation writes. A replay or a join has nothing
- * of its own to record, and its write failing would say nothing about the
- * operation it is reporting on.
+ * of its own to record, so it answers with the owner's durable result: reading
+ * the ledger directly could confirm an outcome whose write then fails.
  */
 export async function executeAidenDurableOperation<T>(
   owner: AidenDurableOperationOwner,
@@ -55,8 +71,28 @@ export async function executeAidenDurableOperation<T>(
     await admission;
     return action();
   });
-  if (!admitted) return pending;
+  const operations = operationsFor(ledger);
+  const operation = operationKey(scope);
+  if (!admitted) return (operations.get(operation) as Promise<T> | undefined) ?? pending;
 
+  const durable = settleDurably(owner, scope, pending, admit, refuse);
+  operations.set(operation, durable);
+  try {
+    return await durable;
+  } finally {
+    operations.delete(operation);
+  }
+}
+
+async function settleDurably<T>(
+  owner: AidenDurableOperationOwner,
+  scope: AidenDurableOperationScope,
+  pending: Promise<T>,
+  admit: () => void,
+  refuse: (error: unknown) => void,
+): Promise<T> {
+  const { ledger } = owner;
+  const persist = owner.persist!;
   try {
     await persist(ledger.snapshot());
     admit();
