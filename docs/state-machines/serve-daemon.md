@@ -86,7 +86,7 @@ Owners: `ServeLifetime` in `packages/cli/src/serve-lifetime.ts` for the control 
 | `serving` | `markServing`, before `onReady` | answers | open | signal |
 | `draining`: ingress closed | `beginDrain` | refuses new connections and commands | `chats.stop()` closes it synchronously | |
 | `draining`: services | `Promise.allSettled` of chats, Bots, Telegram, Remote, scheduler | accepted commands keep running | closed | all settled |
-| `draining`: commands | `settleCommands` | clients destroyed only afterwards | closed | every accepted command answered |
+| `draining`: commands | `settleCommands` | clients destroyed only afterwards | closed | every accepted command answered and its reply flushed, or its client gone |
 | released | socket removed, MCP recording stopped, lease released | absent | closed | process exit |
 
 Order matters in two places: `chats.stop()` runs first so no other stopping ingress can begin a turn, and every accepted command settles before the lease is released. A hung command therefore holds shutdown: `aiden serve stop` escalates to KILL at its deadline, and a second signal ends a foreground server.
