@@ -470,7 +470,10 @@ export class CuaDriverHost {
   private reclaimWhenExited(): void {
     const timer = setTimeout(() => {
       void this.retryPendingCleanup().finally(() => {
-        if (this.unconfirmedExits.size > 0) this.reclaimWhenExited();
+        // Pending directories stop by themselves at MAX_CLEANUP_RETRIES.
+        if (this.unconfirmedExits.size > 0 || this.pendingCleanupDirectories.size > 0) {
+          this.reclaimWhenExited();
+        }
       });
     }, UNCONFIRMED_EXIT_POLL_MS);
     timer.unref();
