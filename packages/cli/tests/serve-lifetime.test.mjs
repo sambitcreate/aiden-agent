@@ -199,6 +199,35 @@ test("shutdown keeps the lease until a running control command has answered", po
   assert.equal(existsSync(box.socket), false);
 });
 
+test("shutdown delivers the whole reply to a client that reads it slowly", posix, async (t) => {
+  const box = sandbox(t), controller = new AbortController(), ready = Promise.withResolvers();
+  const serving = api.serve(box.agentDir, controller.signal, { onReady: ready.resolve });
+  void serving.catch(ready.reject);
+  t.after(() => { controller.abort(); return serving.catch(() => {}); });
+  await ready.promise;
+  const workspace = await api.remoteDaemonCommand(box.agentDir, "workspace", ["add", box.agentDir]);
+  const input = join(box.agentDir, "input.json");
+  writeFileSync(input, JSON.stringify({ name: "Large", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Review", permission: "read-only", enabled: false, workspaceId: workspace.id }));
+  await api.remoteDaemonCommand(box.agentDir, "schedule", ["save", input]);
+  // Far more than a socket buffers, so the reply cannot finish until the client reads.
+  const file = join(box.agentDir, "schedules.json"), [task] = JSON.parse(readFileSync(file, "utf8"));
+  api.atomicJson(file, [{ ...task, prompt: "x".repeat(4 * 1024 * 1024) }]);
+  const client = createConnection(box.socket);
+  client.pause();
+  client.write(`${JSON.stringify({ command: "schedule", args: ["list"] })}\n`);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+  controller.abort();
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+  const chunks = [], closed = new Promise((resolveClose) => client.once("close", resolveClose));
+  client.on("data", (part) => chunks.push(part)).on("error", () => {});
+  client.resume();
+  await closed;
+  const { result } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  assert.equal(result[0].prompt.length, 4 * 1024 * 1024);
+  await serving;
+  assert.equal(existsSync(box.lock), false);
+});
+
 test("serve phases only move forward and draining waits for every accepted command", async () => {
   const lifetime = new api.ServeLifetime();
   assert.equal(lifetime.acceptsCommands, true, "commands are answered while services start");
@@ -233,6 +262,31 @@ test("a daemon PID that stops being ours before the stop deadline is never kille
   assert.equal(child.exitCode, null);
   assert.equal(child.signalCode, null, "the unrelated process was left alone");
   assert.equal(existsSync(box.lock), false, "its stale lease is gone");
+});
+
+test("a stop that cannot confirm its owner at the deadline signals nothing and advises no kill", posix, async (t) => {
+  const box = sandbox(t), script = join(box.agentDir, "becomes-command.sh"), entry = join(box.agentDir, "entry.js");
+  writeFileSync(entry, "setInterval(() => {}, 1000);\n");
+  // Ignores TERM like a stuck daemon, then its PID shows another Aiden command.
+  writeFileSync(script, `trap '' TERM\nsleep 0.5\nexec "${process.execPath}" "${entry}" schedule\n`);
+  const previous = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = entry;
+  const child = spawn("/bin/sh", [script, "serve"], { stdio: "ignore" });
+  t.after(() => {
+    child.kill("SIGKILL");
+    if (previous === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = previous;
+  });
+  mkdirSync(box.lock, { mode: 0o700 });
+  writeFileSync(join(box.lock, "owner.json"), JSON.stringify({ pid: child.pid, argv: ["/bin/sh", script, "serve"], startedAt: 1, token: "legacy" }));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+  await assert.rejects(api.stopDaemon(box.agentDir, 1_000), (error) => {
+    assert.match(error.message, /could not confirm/iu);
+    assert.doesNotMatch(error.message, /kill/u);
+    return true;
+  });
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null, "the process was left alone");
+  assert.equal(existsSync(box.lock), true, "its lease is not ours to clear");
 });
 
 test("stop signals only a verified daemon, at the start and at the deadline", () => {
