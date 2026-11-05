@@ -213,7 +213,7 @@ interface LiveTab {
   /** Fields this tab has shown as sensitive, so a "show password" toggle can't uncover one. */
   sensitiveFields: SensitiveFieldMemory;
   /** Reads the fields of a held tab while the person uses it (`watchHeldFields`). */
-  heldFieldWatch?: { timer?: ReturnType<typeof setTimeout> };
+  heldFieldWatch?: { timer?: ReturnType<typeof setTimeout>; read(): void };
 }
 
 const ACTIONS_AGENT = new Set([
@@ -773,6 +773,7 @@ export class BrowserService {
     wc.on("did-start-loading", publish);
     wc.on("did-stop-loading", publish);
     wc.on("did-stop-loading", () => this.finishPreviewNavigation(tab));
+    wc.on("dom-ready", () => tab.heldFieldWatch?.read());
     wc.on("page-title-updated", publish);
     wc.on("media-started-playing", publish);
     wc.on("media-paused", publish);
@@ -1700,23 +1701,38 @@ export class BrowserService {
   /**
    * While the person holds a tab, read its fields every so often, so a field
    * they turn into plain text ("show password") after it loaded stays covered
-   * once the Bot has the tab back. A slow read waits longer before the next.
+   * once the Bot has the tab back. A slow read waits longer before the next,
+   * so each page the person opens is also read as soon as it is ready: a page
+   * that loads during that wait would otherwise have its field shown unseen.
    */
   private watchHeldFields(tab: LiveTab): void {
     if (tab.heldFieldWatch) return;
-    const watch: NonNullable<LiveTab["heldFieldWatch"]> = {};
-    tab.heldFieldWatch = watch;
+    let reading = false, readAgain = false;
     const read = async () => {
+      if (reading) {
+        readAgain = true;
+        return;
+      }
+      reading = true;
+      clearTimeout(watch.timer);
       const started = Date.now();
       await this.recallSensitiveFields(tab, undefined, false).catch(() => {});
+      reading = false;
       if (tab.heldFieldWatch !== watch) return;
       if (!tab.hold || tab.closing || tab.view.webContents.isDestroyed()) {
         tab.heldFieldWatch = undefined;
         return;
       }
+      if (readAgain) {
+        readAgain = false;
+        void read();
+        return;
+      }
       watch.timer = setTimeout(() => void read(), Math.max(HELD_FIELD_SCAN_MS, 20 * (Date.now() - started)));
     };
-    void read();
+    const watch: NonNullable<LiveTab["heldFieldWatch"]> = { read: () => void read() };
+    tab.heldFieldWatch = watch;
+    watch.read();
   }
   private unwatchHeldFields(tab: LiveTab): void {
     if (tab.heldFieldWatch?.timer) clearTimeout(tab.heldFieldWatch.timer);
@@ -3055,7 +3071,6 @@ export class BrowserService {
     boundary = false,
   ): Promise<void> {
     const timeout = browserBoundedNumber(input.timeoutMs ?? 15000, 1, 60000, "Wait timeout");
-    const end = Date.now() + timeout;
     if (
       !input.selector &&
       !input.locator &&
@@ -3067,6 +3082,9 @@ export class BrowserService {
     const target = input.selector || input.locator ? this.target(tab, input, boundary) : undefined;
     // Before a Bot's locator runs, as before it types: see `recallSensitiveFields`.
     if (target && boundary) await this.recallSensitiveFields(tab, signal);
+    // The wait starts after that read, or a slow read would use up a short
+    // wait before its condition was tried once.
+    const end = Date.now() + timeout;
     while (Date.now() < end) {
       check();
       browserAbort(signal);
