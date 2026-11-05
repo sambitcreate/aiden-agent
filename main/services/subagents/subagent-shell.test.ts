@@ -501,3 +501,24 @@ test("an approved call cancelled by shutdown is cancelled once, even if it is di
   assert.equal(run.rawCalls(), 0);
   assert.equal(run.transitions.filter((state) => state === "cancelled_before_dispatch").length, 1);
 });
+
+test("every shutdown caller waits for the same cancellation", async (t) => {
+  const workspace = await fixture(t);
+  let cancelling!: () => void;
+  const reached = new Promise<void>((resolve) => { cancelling = resolve; });
+  let cancelled!: () => void;
+  const run = harness(workspace, {
+    onCancel: cancelling,
+    cancelJournal: new Promise<void>((resolve) => { cancelled = resolve; }),
+  });
+  await run.gate.beforeToolCall(call(shellCommand));
+  const first = run.gate.shutdown();
+  await reached;
+  let secondDone = false;
+  const second = run.gate.shutdown().then(() => { secondDone = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(secondDone, false, "the cancellation has not been recorded");
+  cancelled();
+  await Promise.all([first, second]);
+  assert.equal(run.transitions.filter((state) => state === "cancelled_before_dispatch").length, 1);
+});

@@ -310,6 +310,7 @@ export function createSubagentShellBrokerV2(
     return work;
   };
   let shuttingDown = false;
+  let stopped: Promise<void> | undefined;
 
   const liveAuthority = (): SubagentAuthorityV2 => {
     const current = input.currentAuthority(input.authority.runId);
@@ -596,14 +597,17 @@ export function createSubagentShellBrokerV2(
         prepared.admission.release();
       }
     },
-    shutdown: async () => {
-      shuttingDown = true;
-      runGrant?.revoke();
-      stop.abort(new Error("The subagent run ended."));
-      const unclaimed = [...pending.values()];
-      pending.clear();
-      for (const prepared of unclaimed) await cancel(prepared);
-      await Promise.all(settling);
+    shutdown: () => {
+      stopped ??= (async () => {
+        shuttingDown = true;
+        runGrant?.revoke();
+        stop.abort(new Error("The subagent run ended."));
+        const unclaimed = [...pending.values()];
+        pending.clear();
+        for (const prepared of unclaimed) await cancel(prepared);
+        await Promise.all(settling);
+      })();
+      return stopped;
     },
   };
   return {
