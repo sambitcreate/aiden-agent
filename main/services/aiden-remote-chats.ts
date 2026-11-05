@@ -1,4 +1,5 @@
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
@@ -122,6 +123,7 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 import {
   prepareSkillInvocationForAppend,
+  reportSkillUsed,
   requireSkillInvocationWorkspace,
   type PreparedSkillInvocation,
 } from "./skill-invocation-turn.js";
@@ -1465,6 +1467,10 @@ export class AidenRemoteChatService {
         target(workspaceId: string): Promise<string>;
         release(workspaceId: string): Promise<void>;
       };
+      /** For usage data: a real workspace record, not a hidden folder or a default. */
+      isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
+      /** For usage data: this device is another paired Mac or Linux host, not a phone. */
+      deviceIsPeer?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -2925,6 +2931,7 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            if (preparedSkill) reportSkillUsed(preparedSkill.provenance);
             // The person wrote in it, so a snoozed chat is back. Never blocks
             // or fails the send; Pin and Done are left alone.
             void this.options.triage?.wake?.(chatId).catch(() => undefined);
@@ -2935,6 +2942,18 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
+            if (started) {
+              reportChatMessageSent({
+                providerId: selection.providerId,
+                model: selection.modelId,
+                thinkingLevel: parsed.thinkingLevel,
+                origin: authoritative.botId
+                  ? "bot"
+                  : async () => ((await this.options.deviceIsPeer?.(deviceId)) === true ? "peer" : "phone"),
+                inWorkspace: async () =>
+                  !authoritative.botId && (await this.options.isFolderWorkspace?.(workspaceId)) === true,
+              });
+            }
             if (!started && !accepted) {
               turn.release();
               this.options.streams.markStartError(

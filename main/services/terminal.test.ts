@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { mkdtemp, open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1057,4 +1058,33 @@ test("bursty pty output reaches the renderer in few ordered messages and a bound
   );
   const exitIndex = owner.sent.findIndex((entry) => entry.channel === "terminal:exit");
   assert.ok(tailIndex >= 0 && tailIndex < exitIndex, "final output precedes exit");
+});
+
+test("an opened terminal counts once, and one that could not start counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const owner = ownerState();
+  const child = fakePty();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+  });
+  await service.create("workspace-1", "/tmp", owner.owner);
+  assert.deepEqual(sent, [{ event: "terminal_opened", props: {} }]);
+  child.emitExit(0);
+  await service.closeForWorkspaceAndWait("workspace-1", 10);
+
+  sent.length = 0;
+  const leaving = ownerState("document-2", 43);
+  const refused = fakePty();
+  const stopped = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => {
+      leaving.destroy();
+      return refused.pty;
+    }) as typeof spawn,
+  });
+  await assert.rejects(stopped.create("workspace-1", "/tmp", leaving.owner));
+  refused.emitExit(0);
+  await stopped.closeForWorkspaceAndWait("workspace-1", 10);
+  assert.deepEqual(sent, []);
 });
