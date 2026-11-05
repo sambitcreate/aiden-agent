@@ -7,8 +7,7 @@
 // a process outside the group holds the server's stdout.
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
-import { setTimeout as delay } from "node:timers/promises";
-import { processGroupExists, processGroupStillRuns } from "../shared/process-group.js";
+import { groupStoppedWithin, processGroupExists, processGroupStillRuns } from "../shared/process-group.js";
 import { StdioTransport, type McpTransport, type StdioTransportOptions } from "@earendil-works/pi-mcp";
 
 export interface McpStdioTransportOptions {
@@ -29,7 +28,6 @@ export interface McpStdioTransportOptions {
 }
 
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
-const GROUP_POLL_MS = 25;
 const SURVIVOR_POLL_MS = 1_000;
 // SIGKILL is asynchronous and can be denied, so sending it proves nothing.
 const KILL_CONFIRM_MS = 2_000;
@@ -88,15 +86,6 @@ function installExitHook(): void {
   process.once("exit", () => {
     for (const pid of liveGroups) signalGroup(pid, "SIGTERM");
   });
-}
-
-async function groupGoneWithin(pid: number, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (processGroupExists(pid)) {
-    if (Date.now() >= deadline) return false;
-    await delay(GROUP_POLL_MS);
-  }
-  return true;
 }
 
 function settlesWithin(operation: Promise<unknown>, ms: number): Promise<boolean> {
@@ -182,9 +171,10 @@ class AidenStdioTransport extends StdioTransport {
     if (pid === undefined) return Promise.resolve();
     this.reaping ??= (async () => {
       signalGroup(pid, "SIGTERM");
-      if (!(await groupGoneWithin(pid, this.graceMs))) {
+      const probe = { exists: () => processGroupExists(pid), stillRuns: () => this.groupStillRuns(pid) };
+      if (!(await groupStoppedWithin(probe, this.graceMs))) {
         signalGroup(pid, "SIGKILL");
-        await groupGoneWithin(pid, KILL_CONFIRM_MS);
+        await groupStoppedWithin(probe, KILL_CONFIRM_MS);
       }
       if (await this.groupStillRuns(pid)) this.forgetWhenGone(pid);
       else if (liveGroups.delete(pid)) groupsChanged();
