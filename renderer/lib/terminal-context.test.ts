@@ -12,7 +12,8 @@ test("a selection becomes a named text attachment sized by its encoded bytes", (
   assert.equal(attachment.id, "id-1");
   assert.equal(attachment.name, "Terminal 2 lines 12-20.txt");
   assert.equal(attachment.kind, "text");
-  assert.equal(attachment.size, new TextEncoder().encode(attachment.text!).byteLength);
+  // The framing is ASCII, so "é" is the one character that takes two bytes.
+  assert.equal(attachment.size, attachment.text!.length + 1);
 });
 
 test("a one-line selection is named for that line", () => {

@@ -383,6 +383,16 @@ test("a program's synchronized redraw appears whole, and an unfinished one still
   await expect(output).toContainText("stuck-output");
 });
 
+test("back-to-back synchronized redraws still reach the screen", async ({ aiden }) => {
+  const { page } = aiden;
+  const { output, run } = await openTerminal(page);
+  // Every chunk closes one group and opens the next, so no frame lands between groups.
+  await run(
+    `M=tick; printf "\\033[?2026h"; for i in $(seq 1 40); do sleep 0.05; printf "$M-$i\\n\\033[?2026l\\033[?2026h"; done`,
+  );
+  await expect(output).toContainText("tick-3", { timeout: 1_900 });
+});
+
 test("a hidden terminal keeps its output and shows it when revealed", async ({ aiden }) => {
   const { page } = aiden;
   const { drawer, output, run } = await openTerminal(page);
@@ -434,6 +444,35 @@ test("selected terminal output reaches the composer as an attachment", async ({ 
   await page.getByRole("menu").getByRole("menuitem", { name: "Add to chat" }).click();
   await expect(page.getByText(/^Terminal 1 lines 1-\d+\.txt$/u)).toHaveCount(2);
   await expect(page.locator("textarea").first()).toBeFocused();
+});
+
+test("a terminal program that reports the mouse keeps right-click", async ({ aiden }) => {
+  const { page } = aiden;
+  const { drawer, output, run } = await openTerminal(page);
+  await run(`M=mouse; printf "\\033[?1000h$M-on\\n"`);
+  await expect(output).toContainText("mouse-on");
+  await drawer.locator("canvas").click({ button: "right" });
+  await page.waitForTimeout(200);
+  await expect(page.getByRole("menu")).toHaveCount(0);
+});
+
+test("the selection action leaves when its text moves or goes away", async ({ aiden }) => {
+  const { page } = aiden;
+  const { drawer, output, run } = await openTerminal(page);
+  const selectAll = process.platform === "darwin" ? "Meta+A" : "Control+Shift+A";
+  const action = drawer.getByRole("button", { name: "Add to chat" });
+  await run("seq 1 300");
+  await expect(output).toContainText(/\b300\b/u);
+
+  await page.keyboard.press(selectAll);
+  await expect(action).toBeVisible();
+  await page.keyboard.press("Shift+PageUp");
+  await expect(action).toHaveCount(0);
+
+  await page.keyboard.press(selectAll);
+  await expect(action).toBeVisible();
+  await drawer.getByRole("button", { name: "Clear terminal view" }).click();
+  await expect(action).toHaveCount(0);
 });
 
 test("closing a terminal asks first only while a program is running", async ({ aiden }) => {

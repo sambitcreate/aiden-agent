@@ -404,7 +404,7 @@ function TerminalViewport({
   const addSelectionToChat = () => {
     const surface = surfaceRef.current;
     const position = surface?.getSelectionPosition();
-    if (!surface || !position) return;
+    if (!surface || !position) return false;
     const delivered = terminalContextDelivery.capture(session.workspaceId)?.deliver({
       label,
       lineStart: position.start.y + 1,
@@ -413,10 +413,10 @@ function TerminalViewport({
     });
     if (!delivered) {
       toast.error(TERMINAL_CONTEXT_UNAVAILABLE);
-      return;
+      return false;
     }
-    focusLeftTerminalRef.current = true;
     surface.clearSelection();
+    return true;
   };
 
   const { openLink, canOpen } = useLinkOpener();
@@ -457,6 +457,7 @@ function TerminalViewport({
             void terminalApi.resize(session.id, cols, rows).catch(() => undefined);
           },
           onSelectionChange: () => setSelectionAction(null),
+          onViewportScroll: () => setSelectionAction(null),
           onSelectionSettled: () => {
             const surface = surfaceRef.current;
             const hostBounds = hostRef.current?.getBoundingClientRect();
@@ -603,7 +604,6 @@ function TerminalViewport({
             ref={hostRef}
             data-command-scope="terminal"
             onMouseDown={onFocus}
-            onWheel={() => setSelectionAction(null)}
             className="relative h-full min-h-0 w-full overflow-hidden select-text"
           />
         </ContextMenuTrigger>
@@ -614,7 +614,12 @@ function TerminalViewport({
             focusLeftTerminalRef.current = false;
           }}
         >
-          <ContextMenuItem disabled={!menuHasSelection} onSelect={addSelectionToChat}>
+          <ContextMenuItem
+            disabled={!menuHasSelection}
+            onSelect={() => {
+              focusLeftTerminalRef.current = addSelectionToChat();
+            }}
+          >
             Add to chat
           </ContextMenuItem>
           <ContextMenuItem

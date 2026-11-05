@@ -594,6 +594,8 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onSelectionChange: () => void;
   /** The pointer released a selection, or Select All made one. */
   readonly onSelectionSettled?: () => void;
+  /** The rows on screen moved through scrollback. */
+  readonly onViewportScroll?: () => void;
   readonly beforeKey: (event: KeyboardEvent) => boolean;
   readonly canActivateLink?: (text: string) => boolean;
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
@@ -630,6 +632,7 @@ export class GhosttyTerminalSurface {
   private snapshot: GhosttySnapshot | null = null;
   private frame = 0;
   private synchronizedRenderTimer: number | null = null;
+  private synchronizedPaintDeadline: number | null = null;
   private cursorTimer: number | null = null;
   private compositionInputToSuppress: string | null = null;
   private compositionSuppressionTimer: number | null = null;
@@ -833,9 +836,7 @@ export class GhosttyTerminalSurface {
     if (this.disposed) return;
     this.core.write(
       data,
-      this.synchronizedRenderTimer === null
-        ? undefined
-        : () => this.cancelSynchronizedRenderTimer(),
+      this.synchronizedRenderTimer === null ? undefined : this.onSynchronizedOutputEnd,
     );
     this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
@@ -863,7 +864,7 @@ export class GhosttyTerminalSurface {
     if (this.disposed) return;
     // ED3 removes saved scrollback; ED2 and CUP reset the visible page and cursor.
     this.core.write("\x1b[3J\x1b[2J\x1b[H");
-    this.core.clearSelection();
+    this.clearSelection();
     this.core.scrollToBottom();
     this.forceFullRender = true;
     this.scrollbarDirty = true;
@@ -967,8 +968,9 @@ export class GhosttyTerminalSurface {
       !this.canvasConfigured ||
       this.canvasDevicePixelRatio !== ratio
     ) {
-      // Setting a backing size clears the canvas. Apply it with the gated paint
-      // so a resize cannot blank a frame while synchronized output is open.
+      // Setting a backing size clears the canvas, so apply it with the paint. A
+      // resize that also changes the grid ends any open synchronized group
+      // (core.resize clears the mode), and its paint is a full snapshot.
       this.pendingCanvasConfiguration = { width: pixelWidth, height: pixelHeight, ratio };
       this.forceFullRender = true;
       this.scrollbarDirty = true;
@@ -1055,7 +1057,7 @@ export class GhosttyTerminalSurface {
     this.selectionBase = null;
     this.setSelectionAutoscroll(0);
     this.options.onSelectionChange();
-    this.options.onSelectionSettled?.();
+    if (this.hasSelection()) this.options.onSelectionSettled?.();
     this.forceFullRender = true;
     this.requestRender();
   }
@@ -1160,11 +1162,12 @@ export class GhosttyTerminalSurface {
       return;
     }
     // IME candidates belong to the textarea even when a key resembles these.
-    if (!isTerminalCompositionKey(event, this.composing) && this.handleViewportShortcut(event)) {
+    const composing = isTerminalCompositionKey(event, this.composing);
+    if (!composing && this.handleViewportShortcut(event)) {
       this.suppressedKeyCodes.add(event.code);
       return;
     }
-    if (isTerminalCopyShortcut(event) && this.hasSelection()) {
+    if (!composing && isTerminalCopyShortcut(event) && this.hasSelection()) {
       // A plain Ctrl+C/Cmd+C fires the browser's native copy event, caught in
       // onCopyEvent; not preventing the default keeps that path alive. WebKit
       // omits the keyboard copy event without a DOM selection, so race the
@@ -1219,7 +1222,7 @@ export class GhosttyTerminalSurface {
       this.suppressedKeyCodes.add(event.code);
       return;
     }
-    if (isTerminalPasteShortcut(event)) {
+    if (!composing && isTerminalPasteShortcut(event)) {
       this.suppressedKeyCodes.add(event.code);
       const clipboard = navigator.clipboard;
       if (typeof clipboard?.readText === "function") {
@@ -1249,7 +1252,7 @@ export class GhosttyTerminalSurface {
     // keyCode 229 is Safari's only signal that this keydown opens an IME
     // composition; encoding it would double the committed text. Do not blank
     // the textarea first: onInput leaves the in-progress candidate there.
-    if (isTerminalCompositionKey(event, this.composing)) {
+    if (composing) {
       return;
     }
     this.clearPrimedCopy();
@@ -1863,6 +1866,7 @@ export class GhosttyTerminalSurface {
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     this.requestRender();
+    this.options.onViewportScroll?.();
   }
 
   private scrollbarToPointer(clientY: number, bounds: DOMRect): void {
@@ -1915,6 +1919,7 @@ export class GhosttyTerminalSurface {
 
   private cancelRender(): void {
     this.cancelSynchronizedRenderTimer();
+    this.synchronizedPaintDeadline = null;
     if (this.frame !== 0) {
       window.cancelAnimationFrame(this.frame);
       this.frame = 0;
@@ -1933,12 +1938,14 @@ export class GhosttyTerminalSurface {
 
   /**
    * DEC 2026: full-screen programs bracket a redraw so the screen never shows it
-   * half done. Hold painting until the group closes, or until the deadline if the
-   * program never closes it.
+   * half done. Hold painting until the group closes, or until the timeout if the
+   * program never closes it. Each group gets its own timer, but one paint deadline
+   * spans them all, so back-to-back groups cannot hold the screen forever.
    */
   private deferSynchronizedRender(): boolean {
     if (!this.core.isSynchronizedOutput()) {
       this.cancelSynchronizedRenderTimer();
+      this.synchronizedPaintDeadline = null;
       return false;
     }
     // A frame queued before the opening marker would now consume partial rows.
@@ -1950,6 +1957,7 @@ export class GhosttyTerminalSurface {
       window.clearTimeout(this.cursorTimer);
       this.cursorTimer = null;
     }
+    this.synchronizedPaintDeadline ??= performance.now() + SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS;
     if (this.synchronizedRenderTimer === null) {
       this.synchronizedRenderTimer = window.setTimeout(() => {
         this.synchronizedRenderTimer = null;
@@ -1959,6 +1967,13 @@ export class GhosttyTerminalSurface {
     }
     return true;
   }
+
+  /** The screen is complete here, which a frame may never see if the next group opens at once. */
+  private readonly onSynchronizedOutputEnd = () => {
+    this.cancelSynchronizedRenderTimer();
+    const deadline = this.synchronizedPaintDeadline;
+    if (deadline !== null && performance.now() >= deadline) this.renderFrame();
+  };
 
   private renderFrame(): void {
     if (this.disposed || !this.visible) return;

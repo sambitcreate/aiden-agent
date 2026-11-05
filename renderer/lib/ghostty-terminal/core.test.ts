@@ -102,6 +102,15 @@ test("a write inside an open group that never closes it reports nothing", async 
   });
 });
 
+test("a grid resize ends an open synchronized group", async () => {
+  await withCore((core) => {
+    core.write("\x1b[?2026h");
+    assert.equal(core.isSynchronizedOutput(), true);
+    core.resize(30, 6, 8, 16);
+    assert.equal(core.isSynchronizedOutput(), false);
+  });
+});
+
 test("select all reports the live range and keeps the selected text", async () => {
   await withCore((core) => {
     assert.equal(core.selectionRange(), null);

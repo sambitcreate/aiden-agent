@@ -4,6 +4,7 @@
 
 import * as path from "path";
 import * as fs from "fs/promises";
+import { execFile } from "node:child_process";
 import { accessSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
@@ -25,6 +26,7 @@ const MAX_SESSIONS_PER_WEB_CONTENTS = 8;
 /** How often the foreground program of each open terminal is read. */
 const FOREGROUND_POLL_MS = 1_000;
 const MAX_COMMAND_NAME_CHARS = 64;
+const FOREGROUND_GROUP_TIMEOUT_MS = 1_000;
 const MIN_COLS = 20;
 const MAX_COLS = 500;
 const MIN_ROWS = 4;
@@ -99,6 +101,8 @@ export interface TerminalServiceOptions {
   killGraceMs?: number;
   /** Foreground polling interval. Test seam. */
   foregroundPollMs?: number;
+  /** The process group holding the shell's terminal, or null when unknown. */
+  readForegroundGroup?: (shellPid: number) => Promise<number | null>;
 }
 
 /**
@@ -124,6 +128,21 @@ export function foregroundCommandName(processTitle: unknown, shell: string): str
   const name = commandBaseName(processTitle);
   if (name.length === 0 || name === commandBaseName(shell)) return null;
   return name.slice(0, MAX_COMMAND_NAME_CHARS);
+}
+
+/** Sandboxed kernels such as gVisor report 0, which reads as unknown. */
+function readForegroundGroup(shellPid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "ps",
+      ["-o", "tpgid=", "-p", String(shellPid)],
+      { timeout: FOREGROUND_GROUP_TIMEOUT_MS },
+      (error, stdout) => {
+        const group = error ? 0 : Number.parseInt(stdout.trim(), 10);
+        resolve(group > 0 ? group : null);
+      },
+    );
+  });
 }
 
 function terminalId(): string {
@@ -492,8 +511,15 @@ export class TerminalService {
   }
 
   /** A fresh reading for decisions such as confirming a close. */
-  foregroundCommand(id: string, owner: RendererDocumentOwner): string | null {
-    return this.readForegroundCommand(this.getOwned(id, owner));
+  async foregroundCommand(id: string, owner: RendererDocumentOwner): Promise<string | null> {
+    const session = this.getOwned(id, owner);
+    const command = this.readForegroundCommand(session);
+    if (command !== null) return command;
+    // A script run by the shell's own interpreter (`./deploy.sh` under bash)
+    // reads as the shell by name. Its process group is what tells them apart.
+    const shellPid = session.pty.pid;
+    const group = await (this.options.readForegroundGroup ?? readForegroundGroup)(shellPid);
+    return group === null || group === shellPid ? null : commandBaseName(session.resolvedShell);
   }
 
   closeForWebContents(webContentsId: number): void {

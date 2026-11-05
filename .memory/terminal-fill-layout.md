@@ -27,7 +27,8 @@ Kept different from T3 on purpose:
 Aiden's own additions:
 
 - **Add to chat** reuses the `kind: "text"` attachment path browser annotations use, so there is no message contract or phone change. `ComposerDeliveryRegistry` (`renderer/lib/composer-delivery.ts`) now backs both. `terminalContextText` frames output as untrusted and keeps the tail of long selections.
-- **Running program** uses node-pty's `pty.process` (the PTY foreground process group) instead of T3's `ps -eo` table. It spawns nothing and ignores background jobs, so a job left running with `&` does not trigger the close confirmation. A program must hold across two 1s polls before the tab shows it, because prompt themes run short foreground commands. Close reads it fresh over `terminal:foregroundCommand`.
+- **Synchronized deadline**: a per-group 500ms timer alone lets back-to-back groups hold painting forever (found in review of the port). Aiden keeps that timer for a stuck group and adds one paint deadline across groups; once it passes, the next group close paints.
+- **Running program** uses node-pty's `pty.process` (the PTY foreground process group) instead of T3's `ps -eo` table. It spawns nothing and ignores background jobs, so a job left running with `&` does not trigger the close confirmation. A program must hold across two 1s polls before the tab shows it, because prompt themes run short foreground commands. Close reads it fresh over `terminal:foregroundCommand`, and when that name equals the shell's it also runs `ps -o tpgid=` once, so a script under the shell's own interpreter (`./deploy.sh` under bash) still prompts. The tab dot does not show those scripts: polling `ps` every second per terminal was not worth it. gVisor reports 0 for `tpgid` and reads as idle.
 
 ## Not ported
 

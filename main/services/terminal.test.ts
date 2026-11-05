@@ -1074,18 +1074,20 @@ async function foregroundHarness() {
   const child = fakePty();
   const pty = child.pty as unknown as { process: string };
   pty.process = "zsh";
+  const foreground: { group: number | null } = { group: null };
   const service = new TerminalService({
     prepareSpawnHelper: async () => undefined,
     spawnPty: (() => child.pty) as typeof spawn,
     shellCandidates: () => ["/bin/zsh"],
     shellIsExecutable: () => true,
     foregroundPollMs: 5,
+    readForegroundGroup: async () => foreground.group,
   });
   const session = await service.create("workspace-1", "/tmp", owner.owner);
   const activity = () =>
     owner.sent.filter((entry) => entry.channel === "terminal:activity").map((entry) => entry.payload);
   const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 40));
-  return { owner, child, pty, service, session, activity, settle };
+  return { owner, child, pty, service, session, activity, settle, foreground };
 }
 
 test("a program in the foreground is reported once, and its end at once", async () => {
@@ -1115,10 +1117,20 @@ test("a prompt helper that finishes between polls never reaches the tab", async 
 test("closing reads the foreground program fresh and only for its owner", async () => {
   const { owner, pty, service, session } = await foregroundHarness();
   pty.process = "vim";
-  assert.equal(service.foregroundCommand(session.id, owner.owner), "vim");
-  assert.throws(() => service.foregroundCommand(session.id, ownerState("document-2").owner), /unavailable/u);
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), "vim");
+  await assert.rejects(service.foregroundCommand(session.id, ownerState("document-2").owner), /unavailable/u);
   service.close(session.id, owner.owner);
-  assert.throws(() => service.foregroundCommand(session.id, owner.owner), /unavailable/u);
+  await assert.rejects(service.foregroundCommand(session.id, owner.owner), /unavailable/u);
+});
+
+test("closing notices a script that runs under the shell's own name", async () => {
+  const { owner, child, service, session, foreground } = await foregroundHarness();
+  foreground.group = child.pty.pid;
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), null);
+  foreground.group = child.pty.pid + 1;
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), "zsh");
+  foreground.group = null;
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), null);
 });
 
 test("a closed PTY reads as idle instead of throwing", async () => {
@@ -1128,7 +1140,7 @@ test("a closed PTY reads as idle instead of throwing", async () => {
       throw new Error("ioctl failed");
     },
   });
-  assert.equal(service.foregroundCommand(session.id, owner.owner), null);
+  assert.equal(await service.foregroundCommand(session.id, owner.owner), null);
 });
 
 test("an exited shell stops being polled", async () => {
