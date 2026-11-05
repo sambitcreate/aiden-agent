@@ -7,6 +7,7 @@ import * as fs from "fs/promises";
 import { accessSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
@@ -432,6 +433,7 @@ export class TerminalService {
     // A shell can exit while the owner subscription is being installed.
     if (this.sessions.get(id) !== session) removeOwnerInvalidation();
 
+    reportAnalyticsEvent("terminal_opened", {});
     return { id, workspaceId, cwd, resolvedShell, preferredShellSkipped };
   }
 

@@ -25,11 +25,12 @@ export function botStarter(): BotStarter {
     },
     mintBotId: newBotId,
     reserveCreation: (creationKey, botId) => creationKeys.set(creationKey, botId),
-    createBot: (input, access, botId) =>
+    createBot: (input, access, botId, presetId) =>
       botApplicationService.createBot({
         audienceId: BOT_DESKTOP_AUDIENCE_ID,
         botId,
         bot: input,
+        presetId,
         ...(access === undefined ? {} : { access }),
         // The starter cards say every Bot can search the web.
         grantFullWebSearch: true,
