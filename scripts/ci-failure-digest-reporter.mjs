@@ -6,7 +6,7 @@
 const MAX_FAILURES = 50;
 const MAX_ERROR_LINES = 60;
 const STDERR_LIMIT = 8000;
-const NOTABLE = /Error|ERR_|Cannot find|SyntaxError|does not provide|Transform failed|ReferenceError|TypeError|failed to load/u;
+const NOTABLE = /error|ERR_|Cannot find|does not provide|Transform failed|failed to load/iu;
 const NOISE = /not wrapped in act|wrap-tests-with-act/u;
 
 /** Recent stderr for each file. Act warnings from the rest of the lane are noise and must not crowd out the load error. */
@@ -19,10 +19,17 @@ function rememberStderr(file, chunk) {
     const next = `${stderrByFile.get(file) ?? ""}${chunk}`;
     stderrByFile.set(file, next.length > STDERR_LIMIT ? next.slice(-STDERR_LIMIT) : next);
   }
+  let keepNext = false;
   for (const line of chunk.split("\n")) {
     const trimmed = line.trim();
+    // esbuild prints the file and line on the line after [ERROR].
+    if (keepNext && trimmed && !NOISE.test(trimmed)) {
+      notableLines.push(trimmed.slice(0, 500));
+      keepNext = false;
+    }
     if (!trimmed || NOISE.test(trimmed) || !NOTABLE.test(trimmed)) continue;
     notableLines.push(trimmed.slice(0, 500));
+    keepNext = true;
     if (notableLines.length > 80) notableLines.shift();
   }
 }
@@ -43,8 +50,15 @@ export function withRunnerStderr(digest, stderrTailLines) {
 
 function notableFor(file) {
   const base = file?.split(/[\\/]/u).pop();
-  const matched = base ? notableLines.filter((line) => line.includes(base)) : [];
-  return (matched.length > 0 ? matched : notableLines).slice(-20);
+  if (!base) return notableLines.slice(-20);
+  const picked = [];
+  for (let index = 0; index < notableLines.length; index += 1) {
+    if (!notableLines[index].includes(base)) continue;
+    // The message is often the line before the file location.
+    if (index > 0 && !notableLines[index - 1].includes(base)) picked.push(notableLines[index - 1]);
+    picked.push(notableLines[index]);
+  }
+  return (picked.length > 0 ? picked : notableLines).slice(-20);
 }
 
 function errorText(error, stderr, file) {

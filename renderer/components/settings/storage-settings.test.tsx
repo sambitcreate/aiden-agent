@@ -21,7 +21,7 @@ const NOW = 1_800_000_000_000;
 const DAY = 24 * 60 * 60 * 1_000;
 
 /** Lets effects and resolved promises settle before asserting. */
-const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+const flush = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
 function report(): StorageReport {
   return assembleStorageReport({
