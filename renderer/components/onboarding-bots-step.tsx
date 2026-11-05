@@ -21,6 +21,9 @@ export function OnboardingBotsStep({
       <Text as="p" variant="small" color="secondary" className="mt-4 text-pretty">
         Bots hand you the steps only you should do, and follow rules you set.
       </Text>
+      <Text as="p" variant="small" color="secondary" className="mt-2 text-pretty">
+        Bots can message each other when it helps; turn it off in Settings → Bots.
+      </Text>
       <div className="mt-4">
         <Button variant="transparent" onClick={onSkip}>
           Skip

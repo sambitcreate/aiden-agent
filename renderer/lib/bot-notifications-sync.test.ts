@@ -25,13 +25,17 @@ test("a routine change re-reads that Bot's Routines panel only", async () => {
 
 test("a change naming no Bot re-reads every Routines panel", async () => {
   const queryClient = seeded();
+  queryClient.setQueryData(queryKeys.settings, {botMessaging: true});
   await invalidateForBotsChanged(queryClient, {});
   assert.equal(stale(queryClient, "bot-a"), true);
   assert.equal(stale(queryClient, "bot-b"), true);
+  assert.equal(queryClient.getQueryState(queryKeys.settings)?.isInvalidated, true, "a phone's global switch change re-reads settings");
 });
 
 test("a session state change leaves routines alone", async () => {
   const queryClient = seeded();
+  queryClient.setQueryData(queryKeys.settings, {botMessaging: true});
   await invalidateForBotsChanged(queryClient, { botId: "bot-a", session: { state: "working" } });
   assert.equal(stale(queryClient, "bot-a"), false);
+  assert.equal(queryClient.getQueryState(queryKeys.settings)?.isInvalidated, false);
 });

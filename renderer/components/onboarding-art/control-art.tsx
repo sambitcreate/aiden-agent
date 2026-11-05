@@ -205,6 +205,9 @@ export function BotsArt() {
       <ArtChip icon={CalendarClock} className="oa-bots-routine" style={{ left: 20, top: 86 }}>
         Every Sunday at 9:00 AM
       </ArtChip>
+      <ArtChip icon={MessageSquare} className="oa-bots-routine" style={{ left: 20, top: 116 }}>
+        COS replied
+      </ArtChip>
     </>
   );
 }

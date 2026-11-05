@@ -2180,3 +2180,44 @@ test("a list summary reads a waiting question, hand-off and approval whether or 
     await live.close();
   }
 });
+
+
+test("Bot message projection uses clean text, preserves bounded status, and never offers Retry", () => {
+  const notice = { id: 1, kind: "aiden.bot-notice", data: { notice: "bot_message", requestId: "bot:j:1:d", kind: "request", deliveryId: "d", botId: "j", botName: "Jester", text: "Clean question" } };
+  const input = { id: 2, kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "d", botId: "j", botName: "Jester", text: "Clean question", deadline: 100}, model: [{ role: "user", content: '<bot_message from="Jester">private frame</bot_message>', timestamp: 1 }] };
+  const status = { id: 3, kind: "aiden.bot-message-status", data: { deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "x".repeat(9000) } };
+  const failed = { id: 4, kind: "pi.assistant", model: [{role: "assistant", content: [], stopReason: "error", errorMessage: "failed", timestamp: 2}] };
+  const rows = projectBotTranscript([notice, input, status, {...status, id: 5}, failed] as never);
+  assert.deepEqual(rows[0], { id: "2", type: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Clean question", at: 1 });
+  assert.equal(rows.filter(r => r.type === "bot_message_status").length, 1);
+  assert.equal(rows.find(r => r.type === "bot_message_status")?.data.text?.length, 8000);
+  assert.equal(rows.find(r => r.type === "failed_turn")?.retryText, null);
+  const silent = projectBotTranscript([notice, input, status, {id: 6, kind: "pi.assistant", model: [fauxAssistantMessage("[SILENT]")]}] as never);
+  assert.deepEqual(silent.map(r => r.type), ["bot_message_status"]);
+  const withoutNotice = projectBotTranscript([input, failed] as never);
+  assert.deepEqual(withoutNotice[0], rows[0], "the admitted input itself retains its clean display text");
+  const malformed = projectBotTranscript([{...input, data: undefined}, failed] as never);
+  assert.equal(malformed.some(r => r.type === "user" || r.type === "bot_message"), false, "missing metadata must never expose the frame");
+  assert.equal(malformed.find(r => r.type === "failed_turn")?.retryText, null);
+});
+
+test("stranded Bot notices preserve person messages and later inputs use their own metadata", () => {
+  const stranded = {id: 1, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", deliveryId: "old", botId: "old-bot", botName: "Old Bot", text: "Stale private text"}};
+  const person = {id: 2, kind: "pi.user", model: [{role: "user", content: "My own message", timestamp: 1}]};
+  const failed = {id: 3, kind: "pi.assistant", model: [{role: "assistant", content: [], stopReason: "error", errorMessage: "failed", timestamp: 2}]};
+  const input = {id: 4, kind: "aiden.bot-message-input", data: {kind: "reply", deliveryId: "new", botId: "cos", botName: "COS", text: "The current answer", deadline: 100}, model: [{role: "user", content: "<bot_message>private frame</bot_message>", timestamp: 3}]};
+  const personOnly = projectBotTranscript([stranded, person, failed] as never);
+  assert.equal(personOnly[0]?.type, "user");
+  assert.equal(personOnly[0]?.type === "user" && personOnly[0].text, "My own message");
+  assert.equal(personOnly.find(r => r.type === "failed_turn")?.retryText, "My own message");
+  const all = projectBotTranscript([stranded, person, failed, input] as never);
+  assert.deepEqual(all[0], personOnly[0]);
+  assert.deepEqual(all.find(r => r.type === "bot_message"), {id: "4", type: "bot_message", kind: "reply", botId: "cos", botName: "COS", text: "The current answer", at: 3});
+  assert.equal(JSON.stringify(all).includes("Stale private text"), false);
+});
+
+test("Bot statuses dedupe independently by delivery, outcome and approval wait", () => {
+  const data = { deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", waitId: "one", summary: "Approve" };
+  const records = [data, data, {...data, waitId: "two"}, {...data, deliveryId: "other"}, {...data, outcome: "failed"}];
+  assert.equal(projectBotTranscript(records.map((data, id) => ({id, kind: "aiden.bot-message-status", data})) as never).length, 4);
+});

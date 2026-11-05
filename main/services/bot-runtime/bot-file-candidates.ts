@@ -1,7 +1,6 @@
 // The Bot file router as durable-turn candidates. A routine's own writes must
 // not fire its folder trigger again, so they go to the own-write journal
-// (`bot-routine-events/own-writes.ts`). The registry holds the attended tool
-// set (it is built without a turn), so each call asks which run it serves
+// (`bot-routine-events/own-writes.ts`). Preparation may precede the calling turn, so each call asks which run it serves
 // (`BotToolCall.runRequestIds`) and journals only for a routine run.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";

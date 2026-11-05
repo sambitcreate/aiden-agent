@@ -676,12 +676,13 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
     /// Contract revision 50 adds `attachments:raw`, asked for alone.
     /// Contract revision 53 adds `chat:new-worktree`, asked for alone.
+    /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
         Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
-        Self(rawValue: "bot:issues"),
+        Self(rawValue: "bot:issues"), Self(rawValue: "bot:messaging"),
         Self(rawValue: "bot:handoff-on-mac"),
         Self(rawValue: "bot:images"),
         Self(rawValue: "chat:jobs"),
@@ -695,6 +696,8 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
 
     /// Revision 30: the device receives activity and queued frames and Bot
     /// detail `chatActivity`. It grants no authority.
+    static let botMessaging = Self(rawValue: "bot:messaging")
+
     static let botActivity = Self(rawValue: "bot:activity")
 
     /// Revision 37: the device receives the session `handoff` field and
@@ -2791,7 +2794,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
-        "botSessionCards", "botHandoffs", "botIssues",
+        "botSessionCards", "botHandoffs", "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -2945,7 +2948,7 @@ private enum AidenBotPrivateResponseValidator {
                 || ["act.response.result", "notOpen.result"].contains((parentPath + [key]).joined(separator: "."))
         }
         guard key == "instructions" || key == "openingGreeting" else { return false }
-        if root == "botDetail" {
+        if root == "botDetail" || root == "botMessagingDetail" {
             return parentPath.isEmpty
         }
         // Revision 37: the paused Bot detail a `bot:handoffs` device reads.

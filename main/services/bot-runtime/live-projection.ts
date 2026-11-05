@@ -1,4 +1,5 @@
-import { isBotInputEntryKind } from "./bot-input-entry.js";
+import { BOT_MESSAGE_LIMITS, BOT_MESSAGE_STATUS_ENTRY_KIND, type BotMessageStatusEntryData } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "./bot-input-entry.js";
 // Live projection of each Bot's durable conversation to renderer windows
 // (spec §6.5, plan Task 1.4).
 //
@@ -146,8 +147,47 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
   return entry.kind === BOT_NOTICE_ENTRY_KIND && typeof entry.data === "object" && entry.data !== null;
 }
 
+/** Display only the clean metadata committed atomically with the admitted input. */
+function botMessageInputOf(value: unknown): Omit<Extract<BotTranscriptEntry, {type: "bot_message"}>, "id" | "at"> | null {
+  if (typeof value !== "object" || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    (data.kind !== "request" && data.kind !== "reply") ||
+    typeof data.deliveryId !== "string" || !data.deliveryId ||
+    typeof data.botId !== "string" || !data.botId ||
+    typeof data.botName !== "string" || typeof data.text !== "string" ||
+    typeof data.deadline !== "number" || !Number.isFinite(data.deadline)
+  ) return null;
+  return {
+    type: "bot_message", kind: data.kind, botId: data.botId,
+    botName: data.botName.slice(0, 80),
+    text: data.text.slice(0, data.kind === "request" ? BOT_MESSAGE_LIMITS.messageChars : BOT_MESSAGE_LIMITS.replyChars),
+  };
+}
+
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["bot_message_status", "connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
+
+/** Host-owned saved notices still validate and bound text before reaching any display. */
+function botMessageStatusOf(value: unknown): BotMessageStatusEntryData | null {
+  if (typeof value !== "object" || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    typeof data.deliveryId !== "string" || typeof data.botId !== "string" || typeof data.botName !== "string" ||
+    typeof data.outcome !== "string" ||
+    !["waiting_approval", "silent", "expired", "gave_up", "failed", "replied_while_paused"].includes(data.outcome)
+  ) return null;
+  if (data.waitId !== undefined && typeof data.waitId !== "string") return null;
+  return {
+    deliveryId: data.deliveryId,
+    botId: data.botId,
+    botName: data.botName.slice(0, 80),
+    outcome: data.outcome as BotMessageStatusEntryData["outcome"],
+    ...(typeof data.waitId === "string" ? { waitId: data.waitId } : {}),
+    ...(typeof data.summary === "string" ? { summary: data.summary.slice(0, 160) } : {}),
+    ...(typeof data.text === "string" ? { text: data.text.slice(0, BOT_MESSAGE_LIMITS.replyChars) } : {}),
+  };
+}
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -278,6 +318,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   /** `retryText`: the typed message Retry resends if this turn fails. */
   type Turn = { start: number; silent: boolean; retryText: string | null };
   const mapped: Array<{ entry: BotTranscriptEntry; turn: Turn | null }> = [];
+  const seenBotStatuses = new Set<string>();
   let pendingRoutine: string | undefined;
   let pendingHidden = false;
   /** File tool calls aimed at the default location (the Bot's folder), by call id. */
@@ -374,6 +415,17 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         );
         if (routines.length > 0) {
           mapped.push({ entry: { id, type: "routines_skipped", since: notice.since, routines }, turn: null });
+        }
+      }
+      continue;
+    }
+    if (record.kind === BOT_MESSAGE_STATUS_ENTRY_KIND) {
+      const data = botMessageStatusOf(record.data);
+      if (data) {
+        const key = JSON.stringify([data.deliveryId, data.outcome, data.waitId ?? ""]);
+        if (!seenBotStatuses.has(key)) {
+          seenBotStatuses.add(key);
+          mapped.push({ entry: {id, type: "bot_message_status", data}, turn: null });
         }
       }
       continue;
@@ -486,8 +538,15 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       turn = {
         start: mapped.length,
         silent: false,
-        retryText: pendingHidden || pendingRoutine !== undefined || !text.trim() ? null : text,
+        retryText: pendingHidden || pendingRoutine !== undefined || record.kind === BOT_MESSAGE_INPUT_KIND || !text.trim() ? null : text,
       };
+      if (record.kind === BOT_MESSAGE_INPUT_KIND) {
+        const input = botMessageInputOf(record.data);
+        pendingRoutine = undefined;
+        pendingHidden = false;
+        if (input) mapped.push({entry: {...input, id, at: message.timestamp}, turn});
+        continue;
+      }
       if (pendingHidden) {
         pendingHidden = false;
         pendingRoutine = undefined;

@@ -4,10 +4,10 @@
 // approval routes (through `llmClient.approve` / `approveAsHost`).
 
 import { ipcMain } from "../../platform.js";
-import { createBotApprovals } from "./bot-approvals.js";
+import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js";
 
 export const botApprovals = createBotApprovals({
-  publish: (prompt) => ipcMain.broadcast("bots:approval", prompt),
+  publish: (prompt) => ipcMain.broadcast("bots:approval", publicBotApprovalPrompt(prompt)),
   withdraw: (prompt, outcome) =>
     ipcMain.broadcast("bots:approval-settled", { botId: prompt.botId, waitId: prompt.waitId, outcome }),
 });

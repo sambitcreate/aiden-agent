@@ -6,6 +6,10 @@ If the selected computer is unavailable, choose **Switch connection** in the rec
 
 Public new-chat links wait through connection readiness, then require confirmation of their installation and workspace and never start dictation. iOS App Intents use a one-shot foreground action inside the app process, so the intentional voice shortcut remains available. Existing-chat widget and notification links only navigate. Unsent composer drafts and unresolved-send records remain protected device-only storage and are excluded from backups, including stores from older versions during app startup without opening a chat; backup restore does not migrate them.
 
+On a host that negotiates Remote revision 54's `bot:messaging`, the Bots list offers **Bots can message each other**. Advanced → **Other Bots** controls whether each Bot receives and sends messages. Turning messaging off globally disables both per-Bot switches with **Turned off for all Bots**. Older hosts show no messaging controls. Saves apply optimistically and reconcile against the desktop after a lost response; failures restore authoritative values and show an error.
+
+Bot messages use the existing labelled transcript rows, including a saved answer returned while the sender was paused. A `message` notification opens the Bot's chat without starting or resuming a turn, and displays only the host's bounded, redacted preview.
+
 The product and protocol sources of truth are:
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md)

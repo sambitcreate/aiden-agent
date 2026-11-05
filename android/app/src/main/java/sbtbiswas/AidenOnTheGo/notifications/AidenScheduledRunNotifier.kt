@@ -91,6 +91,10 @@ class AidenBotRoutineNotificationDelivery(
         private val lock = Mutex()
 
         fun tag(notification: AidenBotRoutineNotification): String = TAG_PREFIX + notification.id
+
+        /** Routine, issue and Bot-message taps all open this Bot's chat. */
+        fun chatUrl(instanceId: String, item: AidenBotRoutineNotification): String? =
+            AidenDeepLink.botChatUrl(item.botId, instanceId)
     }
 }
 
@@ -207,7 +211,7 @@ class AidenScheduledRunNotifier(context: Context) {
     }
 
     private fun postBotRoutine(instanceId: String, item: AidenBotRoutineNotification): Boolean {
-        val link = AidenDeepLink.botChatUrl(item.botId, instanceId)
+        val link = AidenBotRoutineNotificationDelivery.chatUrl(instanceId, item)
         val intent = Intent(appContext, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             link?.let { data = it.toUri() }

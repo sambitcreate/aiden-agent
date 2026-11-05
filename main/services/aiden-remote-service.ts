@@ -205,7 +205,7 @@ export interface AidenRemoteServiceOptions {
           | "createChat"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete" | "supportsChatActivity" | "supportsBotMessaging" | "updateMessaging"
         >>;
         settle?: () => Promise<void>;
       }
@@ -245,7 +245,7 @@ export interface AidenRemoteServiceOptions {
           | "createChat"
         > & Partial<Pick<
           AidenRemoteBotService,
-          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
+          "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete" | "supportsChatActivity" | "supportsBotMessaging" | "updateMessaging"
         >>;
         settle?: () => Promise<void>;
       }>;

@@ -757,7 +757,7 @@ export function TranscriptEntries({
   const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
   const retainedRecaps = React.useMemo(() => {
     let latestUserIndex = 0;
-    entries.forEach((entry, index) => { if (entry.type === "user") latestUserIndex = index; });
+    entries.forEach((entry, index) => { if (entry.type === "user" || entry.type === "bot_message") latestUserIndex = index; });
     return new Set(entries.slice(latestUserIndex).map((entry) => `${entry.id}:recap`));
   }, [entries]);
   return (
@@ -786,6 +786,24 @@ export function TranscriptEntries({
                   {...(row.note ? { note: row.note } : {})}
                 />
               </BotMessageActions>
+            );
+          case "bot_message":
+            return (
+              <div key={row.id} className="flex flex-col items-end gap-1">
+                <Text as="p" variant="small" color="secondary">{row.label}</Text>
+                <div className="w-full min-w-0">
+                  <BotMessageActions text={row.text} from={row.botName} align="end" onReply={onReply}>
+                    <SafeMessageBubble role="user" content={row.text} showCopy={false} />
+                  </BotMessageActions>
+                </div>
+              </div>
+            );
+          case "bot_message_status":
+            return (
+              <div key={row.id}>
+                <Text as="p" variant="small" color="secondary" role="note">{row.label}</Text>
+                {row.text ? <SafeMessageBubble role="assistant" content={row.text} showCopy={false} /> : null}
+              </div>
             );
           case "routine":
             return (

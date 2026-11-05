@@ -1186,4 +1186,10 @@
     <string name="notification_scheduled_failed">Scheduled run failed (%1$s).</string>
     <string name="notification_scheduled_failed_default_code">error</string>
     <string name="notification_scheduled_completed">Scheduled run completed.</string>
+    <string name="bot_messaging_global">Bots can message each other</string>
+    <string name="bot_messaging_other_bots">Other Bots</string>
+    <string name="bot_messaging_receive">Other Bots can message %1$s</string>
+    <string name="bot_messaging_send">%1$s can message other Bots</string>
+    <string name="bot_messaging_globally_off">Turned off for all Bots</string>
+    <string name="bot_messaging_check_connection">Connect to check Bot messaging.</string>
 </resources>

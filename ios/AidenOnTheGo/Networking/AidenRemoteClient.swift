@@ -2252,6 +2252,10 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     // MARK: - Bots
 
+    func setBotMessaging(enabled: Bool) async throws -> AidenBotMessagingSettings {
+        try await send(method: "PUT", path: ["bots", "messaging"], body: AidenBotMessagingSettings(enabled: enabled))
+    }
+
     func bots() async throws -> AidenBotList {
         try await send(method: "GET", path: ["bots"])
     }

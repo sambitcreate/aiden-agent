@@ -698,6 +698,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/controls/{panelId}",
     "/bots/{botId}/session/images/{entryId}",
     "/chats/{chatId}/recordings/{recordingId}",
+    "/bots/messaging",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -1032,6 +1033,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   const conjunctiveCapabilities = new Map<string, readonly AidenRemoteCapability[]>([
     ["get /bots", ["bot:read"]],
     ["post /bots", ["bot:read", "bot:write"]],
+    ["put /bots/messaging", ["bot:write", "bot:messaging"]],
     ["get /bots/{botId}", ["bot:read"]],
     ["patch /bots/{botId}", ["bot:read", "bot:write"]],
     ["delete /bots/{botId}", ["bot:read", "bot:write"]],
@@ -1197,7 +1199,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
   );
   const identityPatch = record(schemas.BotIdentityPatch, "BotIdentityPatch");
   assert.equal(identityPatch.minProperties, 1);
-  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "chatActivity"]);
+  assert.deepEqual(Object.keys(record(identityPatch.properties, "BotIdentityPatch properties")), ["name", "purpose", "openingGreeting", "instructions", "avatar", "chatActivity", "botMessaging"]);
 
   const conversationPageProperties = record(record(schemas.BotConversationPage, "BotConversationPage").properties, "BotConversationPage properties");
   assert.equal(record(conversationPageProperties.conversations, "conversations").maxItems, 50);
@@ -3302,8 +3304,8 @@ test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the pa
       ...section.notification,
       notifications: [{ ...section.notification.notifications[0], status: "failed" }],
     }),
-    true,
-    "the schema lets an older routine item keep its kind",
+    false,
+    "an issue item must not carry a routine status",
   );
 });
 
@@ -3464,4 +3466,39 @@ test("revision 52 fixtures carry Inbox signals, and a stray or malformed signal 
   assert.throws(mutate((copy) => { summary(copy, "chat_fixture_summary_02").attentionSince = "yesterday"; }));
   // A waiting run with no ask is still a waiting run.
   assert.doesNotThrow(mutate((copy) => { delete runState(copy).attentionSummary; }));
+});
+
+
+test("Bot messaging fixtures use revision 54, strict switch shapes and bounded capability vocabulary", async () => {
+  const {AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION, AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES, parseAidenRemoteBotMessagingSettings, parseAidenRemoteBotRoutineNotificationList} = await import("./aiden-remote-protocol.js");
+  const raw = record(await json("fixtures/contract.json"), "fixtures");
+  const fixture = parseAidenRemoteContractFixture(raw);
+  assert.equal(fixture.contractRevision, AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION);
+  assert.deepEqual(parseAidenRemoteBotDetail(raw.botMessagingDetail).botMessaging, {receive: true, send: true});
+  assert.deepEqual(parseAidenRemoteBotIdentityPatchRequest(raw.botMessagingPatch, {allowBotMessaging: true}), {botMessaging: {receive: false}});
+  assert.deepEqual(parseAidenRemoteBotMessagingSettings(raw.botMessagingSettings), {enabled: false});
+  assert.equal(parseAidenRemoteBotRoutineNotificationList({notifications: [raw.botMessageNotification], now: "2026-11-03T12:00:00.000Z"}).notifications[0]?.kind, "message");
+  assert.deepEqual(AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES, ["bot:messaging"]);
+  assert.ok(AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES.includes("bot:messaging"));
+  assert.equal(new Set(AIDEN_REMOTE_CAPABILITIES).size, AIDEN_REMOTE_CAPABILITIES.length);
+  for (const botMessaging of [{}, {receive: "false"}, {send: null}, {receive: true, extra: false}, null]) assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({botMessaging}, {allowBotMessaging: true}));
+  assert.throws(() => parseAidenRemoteBotIdentityPatchRequest({botMessaging: {send: false}}));
+  assert.throws(() => parseAidenRemoteBotDetail({...raw.botMessagingDetail as object, botMessaging: {receive: true}}));
+});
+
+
+test("Bot messaging OpenAPI accepts fixtures and rejects malformed switch and notification payloads", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as {components: {schemas: Record<string, object>}};
+  const raw = record(await json("fixtures/contract.json"), "fixtures");
+  const ajv = new Ajv2020({strict: false});
+  const schema = (name: string) => ajv.compile({$ref: `#/components/schemas/${name}`, components: spec.components});
+  const detail = schema("BotDetail"), patch = schema("BotIdentityPatch"), settings = schema("BotMessagingSettings"), feed = schema("BotRoutineNotificationList");
+  assert.equal(detail(raw.botMessagingDetail), true, JSON.stringify(detail.errors));
+  assert.equal(patch(raw.botMessagingPatch), true);
+  assert.equal(settings(raw.botMessagingSettings), true);
+  assert.equal(feed({notifications: [raw.botMessageNotification], now: "2026-11-03T12:00:00.000Z"}), true);
+  for (const botMessaging of [{}, {receive: "false"}, {send: null}, {receive: true, extra: false}]) assert.equal(patch({botMessaging}), false);
+  for (const sample of [{}, {enabled: "false"}, {enabled: false, extra: true}]) assert.equal(settings(sample), false);
+  for (const extra of [{routineId: "routine"}, {status: "succeeded"}]) assert.equal(feed({notifications: [{...raw.botMessageNotification as object, ...extra}], now: "2026-11-03T12:00:00.000Z"}), false);
 });

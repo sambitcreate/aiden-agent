@@ -161,3 +161,7 @@ reach cards, the Bot's own computer or browser, routines or subagents.
   editor offers Try again.
 - Deleting the Bot removes the file and its kept copies, and refuses later writes.
 - Phones don't show rules yet.
+
+## Messages from other Bots
+
+A `bot:` or `botreply:` turn still follows every rule. Ask first opens the real approval card in the receiving Bot's chat and waits for the person within the exchange's deadline. Hand off to me blocks the step; another Bot cannot answer or accept it. The routines go-ahead switch never applies to Bot-message turns. See [Bot messaging](bot-messaging.md).

@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
@@ -12,6 +14,7 @@ import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
+import { createBotMessageLedger, type BotMessageDelivery } from "../bot-messages/ledger.js";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { ToolResultEntry, type ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -67,6 +70,182 @@ async function notices(service: BotSessionRuntime, botId: string): Promise<unkno
   const view = await (await service.conversation(botId)).context(ctx);
   return view.entries.filter((entry) => entry.kind === BOT_NOTICE_ENTRY_KIND).map((entry) => entry.data);
 }
+
+function messageReceiptRow(taskId: string): BotMessageDelivery {
+  const id = randomUUID();
+  const requestId = `bot:bot:a:1:${id}`;
+  return {
+    id,
+    taskId,
+    fromBotId: "bot:a",
+    toBotId: "bot:b",
+    fromName: "A",
+    toName: "B",
+    hop: 1,
+    targetRequestId: requestId,
+    createdAt: Date.now(),
+    deadline: Date.now() + 60_000,
+    status: "delivered",
+    message: "help",
+    waiting: [],
+    effects: [
+      {
+        id: `${id}:target`,
+        kind: "target",
+        botId: "bot:b",
+        requestId,
+        text: "help",
+      },
+    ],
+  };
+}
+
+test("receipt observation after corrupt-session recovery preserves the next send's reset notice", async () => {
+  const profile = tempProfile();
+  const ledger = createBotMessageLedger({
+    file: () => path.join(profile, "bots", "bot-messages.json"),
+    now: Date.now,
+  });
+  let row: BotMessageDelivery | undefined;
+  const tool = countingTool("save_message");
+  const extension = recordingDeps({
+    tools: [
+      {
+        tool,
+        replay: "safe",
+        bind: (call) => ({
+          ...tool,
+          execute: async (...args) => {
+            assert.ok(call.taskId, "receipt uses the actual durable tool task");
+            row = messageReceiptRow(call.taskId);
+            await ledger.reserve(row);
+            return tool.execute(...args);
+          },
+        }),
+      },
+    ],
+  });
+  const faux = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("save_message", { text: "save" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("saved"),
+    fauxAssistantMessage("fresh answer"),
+  ]);
+  const first = await serviceFor(profile, faux, { extension });
+  try {
+    const sent = await first.send("bot:a", {
+      text: "save a message",
+      requestId: "before-corruption",
+    });
+    assert.equal(
+      (
+        await first.awaitReply(
+          "bot:a",
+          sent.submissionId,
+          new AbortController().signal,
+        )
+      ).kind,
+      "completed",
+    );
+  } finally {
+    await first.shutdown();
+  }
+  assert.ok(row?.taskId);
+  assert.equal((await ledger.receipt(row.id))?.taskId, row.taskId);
+  const directory = path.join(profile, "bots", botDirectoryName("bot:a"));
+  const damaged = "not a SQLite session ".repeat(100);
+  writeFileSync(path.join(directory, BOT_SESSION_FILE), damaged);
+  const recovered = await serviceFor(profile, faux);
+  try {
+    assert.equal(
+      await recovered.awaitMessageTaskSettlement(
+        "bot:a",
+        row.taskId,
+        new AbortController().signal,
+      ),
+      true,
+    );
+    await ledger.collectReceipt(row.id, row.taskId);
+    assert.equal(await ledger.receipt(row.id), undefined);
+    assert.equal(
+      faux.calls(),
+      2,
+      "observing and collecting never runs a model",
+    );
+    const [moved] = (await readdir(directory)).filter((name) =>
+      name.startsWith(`${BOT_SESSION_FILE}.corrupt-`),
+    );
+    assert.ok(moved);
+    assert.equal(await readFile(path.join(directory, moved), "utf8"), damaged);
+    const sent = await recovered.send("bot:a", {
+      text: "new question",
+      requestId: "after-corruption",
+    });
+    assert.deepEqual(
+      await recovered.awaitReply(
+        "bot:a",
+        sent.submissionId,
+        new AbortController().signal,
+      ),
+      {
+        kind: "completed",
+        text: "fresh answer",
+      },
+    );
+    assert.deepEqual(await notices(recovered, "bot:a"), [
+      { notice: "session_reset", movedTo: moved },
+    ]);
+    assert.equal(faux.calls(), 3);
+  } finally {
+    await recovered.shutdown();
+  }
+});
+
+test("a damaged peer purge marker does not skip later Bot deletion effects", async () => {
+  const profile = tempProfile();
+  const file = path.join(profile, "bots", "bot-messages.json");
+  const ledger = createBotMessageLedger({ file: () => file, now: Date.now });
+  await ledger.forgetBot("peer");
+  const directory = path.join(
+    path.dirname(file),
+    ".bot-messages.json.pending-purges",
+  );
+  const [marker] = await readdir(directory);
+  const damaged = "{damaged peer purge";
+  writeFileSync(path.join(directory, marker!), damaged);
+  const effects: string[] = [];
+  const faux = createFauxModels([]);
+  const service = await serviceFor(profile, faux, {
+    deleteEffects: [
+      async (id) => {
+        await ledger.forgetBot(id);
+      },
+      async (id) => {
+        effects.push(id);
+      },
+    ],
+  });
+  try {
+    await service.initialize();
+    assert.equal(
+      await readFile(path.join(directory, marker!), "utf8"),
+      damaged,
+      "startup's orphan sweep preserves purge markers",
+    );
+    await service.deleteBot("bot:a");
+    assert.deepEqual(effects, ["bot:a"]);
+    assert.equal(
+      await readFile(path.join(directory, marker!), "utf8"),
+      damaged,
+    );
+    assert.equal((await readdir(directory)).length, 2);
+    await assert.rejects(ledger.open(), /bookkeeping/);
+    assert.equal(faux.calls(), 0);
+  } finally {
+    await service.shutdown();
+  }
+});
 
 /** Leave `bot:killed` with a turn that was streaming when its process died. */
 async function killMidStream(profileDir: string): Promise<string> {
@@ -261,6 +440,10 @@ test("a routine send never dismisses a paused turn", async () => {
       }),
       (error: unknown) => error instanceof BotSessionError && error.reason === "bot_paused",
     );
+    await assert.rejects(service.send("bot:killed", {
+      text: "framed Bot message", requestId: "bot:J:1:00112233-4455-4677-8899-aabbccddeeff", ifIdle: true, ifNotInterrupted: true,
+      botMessage: {kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", botId: "J", botName: "Jester", text: "help", deadline: Date.now()+60_000},
+    }), (error: unknown) => error instanceof BotSessionError && error.reason === "bot_paused");
     assert.deepEqual(await service.state("bot:killed"), { kind: "interrupted", submissionId });
     assert.deepEqual(await notices(service, "bot:killed"), []);
     assert.equal(fauxModels.calls(), 0);
@@ -808,4 +991,138 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
   } finally {
     await service.shutdown();
   }
+});
+
+test('Bot message inputs persist host provenance and are quiet', async () => {
+  let release:()=>void=()=>undefined;
+  const gate=new Promise<void>(r=>{release=r;});
+  const hold=countingTool('hold',async()=>{await gate;return 'done';});
+  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('answer')]),{extension:recordingDeps({tools:[{tool:hold,replay:'unsafe'}]})});
+  const deliveryId = '00112233-4455-4677-8899-aabbccddeeff';
+  const input = {text:'framed', requestId:`bot:J:1:${deliveryId}`, ifIdle:true, ifNotInterrupted:true,
+    botMessage:{kind:'request' as const, deliveryId, botId:'J', botName:'Jester',text:'clean',deadline:Date.now()+60_000}};
+  try {
+    const sent = await service.send('bot:a',input);
+    assert.equal((await service.quietInputs('bot:a',[sent.submissionId])).get(sent.submissionId),true);
+    assert.equal((await service.placedSubmissions('bot:a')).size,0);
+    release();await service.awaitReply('bot:a',sent.submissionId,new AbortController().signal);
+    const entries = (await (await service.conversation('bot:a')).context(ctx)).entries;
+    const entry = entries.find(e=>e.kind === 'aiden.bot-message-input');
+    assert.equal((entry?.data as {deadline:number}).deadline,input.botMessage.deadline);
+    assert.deepEqual(await notices(service,'bot:a'),[{notice:'bot_message',requestId:input.requestId,...input.botMessage}]);
+    await assert.rejects(service.send('bot:a',{...input,requestId:'invalid',label:'routine'}),TypeError);
+  } finally {release();await service.shutdown();}
+});
+
+test('idle-only Bot delivery cannot queue behind person work', async () => {
+  let release:()=>void=()=>undefined;
+  const gate=new Promise<void>(r=>{release=r;});
+  const hold=countingTool('hold',async()=>{await gate;return 'done';});
+  const service = await serviceFor(tempProfile(),createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('person answer'),fauxAssistantMessage('bot answer')]),{extension:recordingDeps({tools:[{tool:hold,replay:'unsafe'}]})});
+  try {
+    const person = await service.send('bot:a',{text:'person',requestId:'person'});
+    const input = {text:'bot',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',ifIdle:true,ifNotInterrupted:true,botMessage:{kind:'request' as const,botId:'J',botName:'J',text:'bot',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}};
+    await assert.rejects(service.send('bot:a',input),(e:unknown)=>e instanceof BotSessionError && e.reason === 'bot_busy');
+    assert.equal(await service.submissionForRequest('bot:a',input.requestId),undefined);
+    release();await service.awaitReply('bot:a',person.submissionId,new AbortController().signal);
+    const sent = await service.send('bot:a',input);
+    assert.deepEqual(await service.send('bot:a',input),{...sent,deduped:true});
+  } finally {release();await service.shutdown();}
+});
+
+test("ordinary sends keep the attended preparation for their tools", async () => {
+  const tool = countingTool("person_tool");
+  const base = recordingDeps({ tools: [{ tool, replay: "unsafe" }] });
+  const faux = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("person_tool", { text: "person action" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("person complete"),
+  ]);
+  const service = await serviceFor(tempProfile(), faux, { extension: { ...base,
+    currentTools: async (bot, turn) => turn.requestId === undefined ? base.currentTools(bot, turn) : [],
+  } });
+  try {
+    const person = await service.send("bot:a", { text: "An ordinary action", requestId: "person" });
+    assert.deepEqual(await service.awaitReply("bot:a", person.submissionId, new AbortController().signal), { kind: "completed", text: "person complete" });
+    assert.deepEqual(tool.executions, [{ text: "person action" }]);
+  } finally { await service.shutdown(); }
+});
+
+test("queued Bot replies preserve the active person's tool inventory", async () => {
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const tool = countingTool("person_tool");
+  const base = recordingDeps({ tools: [{ tool, replay: "unsafe" }] });
+  const faux = createFauxModels([
+    async () => { entered(); await held; return fauxAssistantMessage([fauxToolCall("person_tool", { text: "first" })], { stopReason: "toolUse" }); },
+    fauxAssistantMessage([fauxToolCall("person_tool", { text: "second" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("person complete"), fauxAssistantMessage("reply complete"),
+  ]);
+  const service = await serviceFor(tempProfile(), faux, { extension: { ...base,
+    currentTools: async (bot, turn) => turn.requestId?.startsWith("botreply:") ? [] : base.currentTools(bot, turn),
+  } });
+  try {
+    const person = await service.send("bot:a", { text: "Two actions", requestId: "person" });
+    await started;
+    const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+    const reply = await service.send("bot:a", { text: "A later reply", requestId: `botreply:${deliveryId}`,
+      botMessage: { kind: "reply", deliveryId, botId: "J", botName: "Jester", text: "Pong", deadline: Date.now() + 60_000 } });
+    release();
+    assert.deepEqual(await service.awaitReply("bot:a", person.submissionId, new AbortController().signal), { kind: "completed", text: "person complete" });
+    assert.deepEqual(tool.executions, [{ text: "first" }, { text: "second" }]);
+    assert.deepEqual(await service.awaitReply("bot:a", reply.submissionId, new AbortController().signal), { kind: "completed", text: "reply complete" });
+  } finally { release(); await service.shutdown(); }
+});
+
+test('simultaneous cross-message tools remain host-free through pause, delete and shutdown', {timeout:15_000}, async () => {
+ const {createBotMessageLedger}=await import('../bot-messages/ledger.js');
+ const {createBotMessageCourier}=await import('../bot-messages/courier.js');
+ const {messageBotCandidate}=await import('../bot-messages/candidate.js');
+ const {createBotApprovals}=await import('./bot-approvals.js');
+ const profile=tempProfile();
+ const ledger=createBotMessageLedger({file:()=>path.join(profile,'bots','bot-messages.json'),now:Date.now});
+ let count=0,release:()=>void=()=>undefined;
+ const gate=new Promise<void>(r=>{release=r;});
+ const listeners=new Set<(id:string)=>void>();
+ const roster=['bot:a','bot:b'].map(id=>({id,name:id,purpose:'help',acceptsMessages:true,sendsMessages:true}));
+ const faux=createFauxModels(Array.from({length:8},()=>context=>{
+  const last=context.messages[context.messages.length-1];
+  return last?.role==='toolResult'?fauxAssistantMessage('Done'):fauxAssistantMessage([fauxToolCall('message_bot',{bot:(getCurrentSystemPrompt(context.messages)??'').includes('bot:a')?'bot:b':'bot:a',message:'Help'})],{stopReason:'toolUse'});
+ }));
+ let service:BotSessionRuntime;
+ const courier=createBotMessageCourier({ledger,sessions:{send:(...a)=>service.send(...a),awaitReply:(...a)=>service.awaitReply(...a),markSilent:(...a)=>service.markSilent(...a),appendEntry:(...a)=>service.appendEntry(...a),state:(...a)=>service.state(...a),submissionForRequest:(...a)=>service.submissionForRequest(...a)},roster:async()=>roster,enabled:async()=>true,approvals:createBotApprovals({publish:()=>undefined}),onStateChange:fn=>{listeners.add(fn);return ()=>void listeners.delete(fn);},now:Date.now,setTimer:(fn,ms)=>{const timer=setTimeout(fn,ms);return {cancel:()=>clearTimeout(timer)};}});
+ service=await serviceFor(profile,faux,{knownBotIds:async()=>new Set(roster.map(b=>b.id)),extension:{...recordingDeps(),systemSections:async bot=>[bot.id],currentTools:async bot=>[{...await messageBotCandidate(bot.id,{roster:async()=>roster,post:async input=>{const result=await courier.post(input);assert.equal(result.status,'sent');count++;await gate;return result;}}),replay:'safe'}]},deleteEffects:[id=>courier.forgetBot(id)],onStateChange:id=>{for(const listener of listeners)listener(id);}});
+ try {
+  await courier.start();await Promise.all(['bot:a','bot:b'].map(id=>service.send(id,{text:'ask the peer',requestId:`person-${id}`})));
+  await waitFor(()=>count===2,{what:'both host-free tool acceptances'});
+  const pause=service.pause('bot:a','mac');const deletion=service.deleteBot('bot:b');release();
+  await Promise.all([pause,deletion]);
+  await courier.dispose();await service.shutdown();
+  assert.equal((await ledger.open()).filter(r=>r.fromBotId==='bot:b'||r.toBotId==='bot:b').length,0);
+ } finally {release();await courier.dispose();await service.shutdown();}
+});
+
+test('courier expiry leaves a busy real harness and queued human follow-ups intact',async()=>{
+ const {createBotMessageLedger}=await import('../bot-messages/ledger.js');
+ const {createBotMessageCourier}=await import('../bot-messages/courier.js');
+ const {createBotApprovals}=await import('./bot-approvals.js');
+ let release:()=>void=()=>undefined;
+ const gate=new Promise<void>(r=>{release=r;});const hold=countingTool('hold',async()=>{await gate;return 'done';});
+ const profile=tempProfile();let now=Date.now();
+ const service=await serviceFor(profile,createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('first human answer'),fauxAssistantMessage('queued human answer')]),{knownBotIds:async()=>new Set(['bot:a','bot:b']),extension:recordingDeps({tools:[{tool:hold,replay:'unsafe'}]})});
+ const ledger=createBotMessageLedger({file:()=>path.join(profile,'bots','bot-messages.json'),now:()=>now});
+ const deadlines:Array<()=>void>=[];
+ const courier=createBotMessageCourier({ledger,sessions:service,roster:async()=>['bot:a','bot:b'].map(id=>({id,name:id,purpose:'help',acceptsMessages:true,sendsMessages:true})),enabled:async()=>true,approvals:createBotApprovals({publish:()=>undefined}),onStateChange:()=>()=>undefined,now:()=>now,setTimer:(fn,ms)=>{if(ms===0){const timer=setTimeout(fn,0);return {cancel:()=>clearTimeout(timer)};}deadlines.push(fn);return {cancel:()=>undefined};}});
+ try {
+  const first=await service.send('bot:b',{text:'human work',requestId:'human-first'});
+  const queued=await service.send('bot:b',{text:'queued human',requestId:'human-second',whenBusy:'followUp'});
+  await courier.start();const accepted=await courier.post({fromBotId:'bot:a',target:'bot:b',message:'help',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',runRequestIds:['human-origin']});
+  assert.equal(accepted.status,'sent');await waitFor(()=>deadlines.length===1);
+  now+=1_800_001;deadlines[0]!();
+  await waitFor(async()=>((await (await service.conversation('bot:a')).context(ctx)).entries.some(e=>e.kind==='aiden.bot-message-status')));
+  assert.equal(await service.submissionForRequest('bot:b','bot:bot:a:1:00112233-4455-4677-8899-aabbccddeeff'),undefined);
+  assert.equal((await service.state('bot:b')).kind,'running');
+  release();const answers=await Promise.all([first,queued].map(s=>service.awaitReply('bot:b',s.submissionId,new AbortController().signal)));
+  assert.deepEqual(answers,[{kind:'completed',text:'first human answer'},{kind:'completed',text:'queued human answer'}]);
+ } finally {release();await courier.dispose();await service.shutdown();}
 });

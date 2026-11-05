@@ -301,3 +301,11 @@ test("a delivery after the Bot is forgotten writes nothing and sends nothing", a
   assert.equal(h.calls.mac.length, 0);
   assert.deepEqual(await h.log.list("bot:scout"), []);
 });
+
+test('bot_message final delivery is durable and deduplicated',async t=>{
+ const h=await harness();t.after(h.cleanup);
+ const input:BotDeliveryInput={botId:'bot:scout',class:'bot_message',dedupeKey:'message:delivery:final',title:'Scouts reply',body:'The final answer',status:'info'};
+ assert.equal(await h.funnel.deliver(input),'sent');assert.equal(await h.funnel.deliver(input),'duplicate');
+ assert.equal(h.calls.mac.length,1);assert.equal(h.calls.telegram.length,1);
+ assert.equal((await h.log.list(input.botId))[0]?.class,'bot_message');
+});

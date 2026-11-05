@@ -97,3 +97,5 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 - Phones show no rules. A read-only list needs a Bot-detail field (Remote revision 37+).
 - The computer surface's VNC lane depends on the Bot's own stated intent (plan §8.7 known gap; the rules editor notes it where `AppCapabilities.botComputers`). The guest driver lane (P11) adds element roles and window titles. `computer_shell` is not classified.
 - The shell is outside rules by design. Under Full access, a shell command could edit `rules.json`; the locked rules still hold because they come from code.
+
+- Bot messaging (2026-11-03): Ask first cards on bot:/botreply: turns wait on the real owning run within the saved deadline; expiry remains host provenance, not person denial. Hand-off rules block Bot-started steps and routine go-ahead never applies. See .memory/bot-messaging.md.

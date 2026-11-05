@@ -12,7 +12,7 @@ import { createBotRegistry } from "../bot-runtime/bot-extension.js";
 import { BOT_NOTICE_ENTRY_KIND } from "../bot-runtime/bot-session-service.js";
 import { fakeMemoryAuthority, holdNextRead, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL, FAUX_MODEL_REF, FAUX_PROVIDER, waitFor, type FauxModels } from "../bot-runtime/test-support/faux.js";
-import { createBotMemoryReview, type BotMemoryReviewDeps } from "./review.js";
+import { createBotMemoryReview, personTurns as projectPersonTurns, provenanceOfHistory, type BotMemoryReviewDeps } from "./review.js";
 import { createBotMemoryService } from "./service.js";
 import { createBotMemoryStore } from "./store.js";
 import { botMemoryToolEntry } from "./tool.js";
@@ -350,6 +350,65 @@ test("the review offers an extra add-only tool with its own lines, behind the sa
     await review.runNow(BOT);
     assert.deepEqual(noted, [{ text: "Check the invoice", due_date: "2026-10-30" }]);
     assert.match(getCurrentSystemPrompt(script.reviewRequests[0]!) ?? "", /call note_follow_up/u);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test('another Bots input and answer never have person provenance',async()=>{
+ const {harness,conversation,personTurns}=await setup(Array.from({length:8},()=>fauxAssistantMessage('answer')));
+ try {
+  await personTurns(1);
+  const requestId='bot:J:1:00112233-4455-4677-8899-aabbccddeeff';
+  await conversation.submit({type:'write',entry:{kind:BOT_NOTICE_ENTRY_KIND,data:{notice:'bot_message',requestId}}},ctx);
+  await (await conversation.submit({type:'input',content:'other Bot',requestId,entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
+  await personTurns(1);
+  const entries=(await conversation.context(ctx)).entries;
+  const provenance=await provenanceOfHistory(entries,ids=>conversation.commit(tx=>Promise.all(ids.map(id=>tx.submissionByRequest(conversation.id,id))),ctx));
+  const inputs=entries.filter(e=>e.model?.[0]?.role==='user');
+  assert.deepEqual(inputs.map(e=>provenance.get(e.id)),['person','unattended','person']);
+  const answers=entries.filter(e=>e.kind==='pi.assistant');
+  assert.deepEqual(answers.map(e=>provenance.get(e.id)),['person','unattended','person']);
+ } finally {await harness.close(ctx);}
+});
+
+test("a host-owned Bot input ends a stranded routine or intro notice's ownership guess", async t => {
+  for (const notice of ["routine", "hidden_input"] as const) {
+    await t.test(notice, async () => {
+      const {harness, conversation} = await setup(Array.from({length: 4}, () => fauxAssistantMessage("answer")));
+      try {
+        await conversation.submit({type: "write", entry: {kind: BOT_NOTICE_ENTRY_KIND, data: {notice, requestId: notice === "routine" ? "routine:missing:1" : "intro:missing"}}}, ctx);
+        await (await conversation.submit({type: "input", content: "<bot_message>other Bot text</bot_message>", requestId: "bot:j:1:00112233-4455-4677-8899-aabbccddeeff", entry: {kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", deadline: Date.now() + 60_000}}}, ctx)).wait(ctx);
+        await (await conversation.submit({type: "input", content: "I prefer tea"}, ctx)).wait(ctx);
+        const entries = (await conversation.context(ctx)).entries;
+        const ownership = await provenanceOfHistory(entries, ids => conversation.commit(tx => Promise.all(ids.map(id => tx.submissionByRequest(conversation.id, id))), ctx));
+        assert.deepEqual(entries.filter(e => e.model?.[0]?.role === "user" || e.kind === "pi.assistant").map(e => ownership.get(e.id)), ["unattended", "unattended", "person", "person"]);
+        assert.deepEqual(projectPersonTurns(entries, ownership), {personInputs: 1, transcript: "[Person]: I prefer tea\n\n[Bot]: answer"});
+      } finally {
+        await harness.close(ctx);
+      }
+    });
+  }
+});
+
+test("a stranded Bot notice preserves person memory while later Bot inputs remain unattended without a notice", async () => {
+  const {harness, conversation} = await setup(Array.from({length: 8}, () => fauxAssistantMessage("answer")));
+  const lookup = (ids: readonly string[]) => conversation.commit(tx => Promise.all(ids.map(id => tx.submissionByRequest(conversation.id, id))), ctx);
+  try {
+    await conversation.submit({type: "write", entry: {kind: BOT_NOTICE_ENTRY_KIND, data: {notice: "bot_message", requestId: "bot:old:1:00112233-4455-4677-8899-aabbccddeeff"}}}, ctx);
+    await (await conversation.submit({type: "input", content: "My name is Sam and I like tea"}, ctx)).wait(ctx);
+    const personEntries = (await conversation.context(ctx)).entries;
+    const personOwnership = await provenanceOfHistory(personEntries, lookup);
+    assert.deepEqual(personEntries.filter(e => e.model?.[0]?.role === "user" || e.kind === "pi.assistant").map(e => personOwnership.get(e.id)), ["person", "person"]);
+    assert.deepEqual(projectPersonTurns(personEntries, personOwnership), {personInputs: 1, transcript: "[Person]: My name is Sam and I like tea\n\n[Bot]: answer"});
+
+    await (await conversation.submit({type: "input", content: "<bot_message>private other Bot input</bot_message>", requestId: "bot:new:1:11112233-4455-4677-8899-aabbccddeeff", entry: {kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "11112233-4455-4677-8899-aabbccddeeff", deadline: Date.now() + 60_000}}}, ctx)).wait(ctx);
+    const entries = (await conversation.context(ctx)).entries;
+    for (const history of [entries, entries.filter(e => e.kind !== BOT_NOTICE_ENTRY_KIND)]) {
+      const ownership = await provenanceOfHistory(history, lookup);
+      assert.deepEqual(history.filter(e => e.model?.[0]?.role === "user" || e.kind === "pi.assistant").map(e => ownership.get(e.id)), ["person", "person", "unattended", "unattended"]);
+      assert.deepEqual(projectPersonTurns(history, ownership), {personInputs: 1, transcript: "[Person]: My name is Sam and I like tea\n\n[Bot]: answer"});
+    }
   } finally {
     await harness.close(ctx);
   }

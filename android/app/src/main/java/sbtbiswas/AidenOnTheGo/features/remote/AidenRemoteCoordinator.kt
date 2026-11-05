@@ -279,6 +279,16 @@ internal suspend fun aidenRequestChatNewWorktree(
         stillCurrent
     )
 
+internal suspend fun aidenRequestBotMessaging(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_MESSAGING, server, installation))
+        listOf(AidenRemoteCapability.BOT_MESSAGING) else emptyList(), client, stillCurrent
+)
+
 private suspend fun aidenRequestCapabilitiesAlone(
     missing: List<AidenRemoteCapability>,
     client: AidenRemoteClient,
@@ -641,13 +651,20 @@ class AidenRemoteCoordinator(
                     server = jobsServer,
                     request = ::aidenRequestRawUploads
                 )
-                // Revision 53: `chat:new-worktree` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 53: `chat:new-worktree` goes alone too.
+                val worktreeServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = rawUploadsServer,
                     request = ::aidenRequestChatNewWorktree
+                )
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = worktreeServer,
+                    request = ::aidenRequestBotMessaging
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(

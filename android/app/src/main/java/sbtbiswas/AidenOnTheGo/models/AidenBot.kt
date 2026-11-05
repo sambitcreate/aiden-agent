@@ -313,10 +313,13 @@ data class AidenBotSummary(
     }
 }
 
-@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotListSerializer::class)
 data class AidenBotList(
     val bots: List<AidenBotSummary>,
-    val maxBots: Int = AidenBotWire.MAX_BOTS
+    val maxBots: Int = AidenBotWire.MAX_BOTS,
+    val messaging: AidenBotMessagingSettings? = null
 ) {
     init {
         val allIds = bots.map { it.id }.toSet()
@@ -325,6 +328,12 @@ data class AidenBotList(
         ) {
             throw AidenBotContractException.InvalidField("bots")
         }
+    }
+}
+
+object AidenBotListSerializer : JsonTransformingSerializer<AidenBotList>(AidenBotList.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = element.also {
+        if ((it as? JsonObject)?.get("messaging") is JsonNull) throw AidenBotContractException.InvalidField("messaging")
     }
 }
 
@@ -367,9 +376,17 @@ open class AidenBotRetiredGreetingSerializer<T : Any>(base: KSerializer<T>) : Js
     override fun transformDeserialize(element: JsonElement): JsonElement = AidenBotRetiredGreeting.strip(element)
 }
 
-object AidenBotDetailSerializer : AidenBotRetiredGreetingSerializer<AidenBotDetail>(AidenBotDetail.generatedSerializer())
+object AidenBotDetailSerializer : AidenBotRetiredGreetingSerializer<AidenBotDetail>(AidenBotDetail.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = super.transformDeserialize(element).also {
+        if ((it as? JsonObject)?.get("botMessaging") is JsonNull) throw AidenBotContractException.InvalidField("botMessaging")
+    }
+}
 object AidenBotCreateRequestSerializer : AidenBotRetiredGreetingSerializer<AidenBotCreateRequest>(AidenBotCreateRequest.generatedSerializer())
-object AidenBotIdentityPatchSerializer : AidenBotRetiredGreetingSerializer<AidenBotIdentityPatch>(AidenBotIdentityPatch.generatedSerializer())
+object AidenBotIdentityPatchSerializer : AidenBotRetiredGreetingSerializer<AidenBotIdentityPatch>(AidenBotIdentityPatch.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement = super.transformDeserialize(element).also {
+        if ((it as? JsonObject)?.get("botMessaging") is JsonNull) throw AidenBotContractException.InvalidField("botMessaging")
+    }
+}
 
 /** A Bot's Chat activity choice (spec §7, contract revision 30). */
 @Serializable
@@ -396,6 +413,49 @@ data class AidenBotChatActivity(
     }
 }
 
+/** Revision 54, only for devices that negotiated `bot:messaging`. */
+@Serializable
+data class AidenBotMessaging(
+    @Serializable(with = AidenBotMessagingBooleanSerializer::class) val receive: Boolean,
+    @Serializable(with = AidenBotMessagingBooleanSerializer::class) val send: Boolean
+)
+
+@Serializable
+data class AidenBotMessagingSettings(
+    @Serializable(with = AidenBotMessagingBooleanSerializer::class) val enabled: Boolean
+)
+
+object AidenBotMessagingBooleanSerializer : KSerializer<Boolean> {
+    override val descriptor = PrimitiveSerialDescriptor("BotMessagingBoolean", PrimitiveKind.BOOLEAN)
+    override fun deserialize(decoder: Decoder): Boolean {
+        val value = (decoder as JsonDecoder).decodeJsonElement() as? JsonPrimitive
+        return value?.takeIf { !it.isString }?.booleanOrNull
+            ?: throw AidenBotContractException.InvalidField("botMessaging")
+    }
+    override fun serialize(encoder: Encoder, value: Boolean) = encoder.encodeBoolean(value)
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+@KeepGeneratedSerializer
+@Serializable(with = AidenBotMessagingPatchSerializer::class)
+data class AidenBotMessagingPatch(val receive: Boolean? = null, val send: Boolean? = null) {
+    init {
+        if (receive == null && send == null) throw AidenBotContractException.InvalidField("botMessaging")
+    }
+    fun applying(value: AidenBotMessaging) = AidenBotMessaging(receive ?: value.receive, send ?: value.send)
+}
+
+object AidenBotMessagingPatchSerializer : JsonTransformingSerializer<AidenBotMessagingPatch>(AidenBotMessagingPatch.generatedSerializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement {
+        val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("botMessaging")
+        if (obj.isEmpty() || obj.keys.any { it != "receive" && it != "send" } ||
+            obj.values.any { it !is JsonPrimitive || it.isString || it.booleanOrNull == null }) {
+            throw AidenBotContractException.InvalidField("botMessaging")
+        }
+        return obj
+    }
+}
+
 @OptIn(ExperimentalSerializationApi::class)
 @KeepGeneratedSerializer
 @Serializable(with = AidenBotDetailSerializer::class)
@@ -413,6 +473,7 @@ data class AidenBotDetail(
     val visionModelSelection: AidenBotModelSelection? = null,
     /** Revision 30 (`bot:activity`). */
     val chatActivity: AidenBotChatActivity? = null,
+    val botMessaging: AidenBotMessaging? = null,
     /**
      * Revision 37 (`bot:handoffs` devices only): the person paused this Bot. A holder's detail
      * always carries it; an older phone's never does, and a missing flag reads as false. False
@@ -475,10 +536,11 @@ data class AidenBotIdentityPatch(
     val instructions: String? = null,
     val avatar: AidenBotSemanticAvatar? = null,
     /** Revision 30 (`bot:activity`): how much a running turn shows in the chat. */
-    val chatActivity: AidenBotChatActivity? = null
+    val chatActivity: AidenBotChatActivity? = null,
+    val botMessaging: AidenBotMessagingPatch? = null
 ) {
     init {
-        if (name == null && purpose == null && instructions == null && avatar == null && chatActivity == null) {
+        if (name == null && purpose == null && instructions == null && avatar == null && chatActivity == null && botMessaging == null) {
             throw AidenBotContractException.InvalidCombination("empty identity patch")
         }
         name?.let { AidenBotWire.validateString(it, "name", AidenBotWire.MAX_NAME_LENGTH) }
@@ -492,7 +554,7 @@ data class AidenBotIdentityPatch(
      */
     fun forHost(supportsBotActivity: Boolean): AidenBotIdentityPatch? = when {
         supportsBotActivity || chatActivity == null -> this
-        name == null && purpose == null && instructions == null && avatar == null -> null
+        name == null && purpose == null && instructions == null && avatar == null && botMessaging == null -> null
         else -> copy(chatActivity = null)
     }
 }

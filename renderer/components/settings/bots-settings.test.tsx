@@ -71,3 +71,12 @@ test("the page lists what always comes to the person; Computer Use only where th
   mount({}, { computerUse: true });
   await screen.findByText("Using your Mac with Computer Use");
 });
+
+test('the messaging switch saves botMessaging', async () => {
+ const {saves}=mount({});
+ const toggle=await screen.findByRole('switch',{name:'Bots can message each other'});
+ await waitFor(()=>assert.equal(toggle.hasAttribute('disabled'),false));
+ assert.equal(toggle.getAttribute('aria-checked'),'true');
+ fireEvent.click(toggle);
+ await waitFor(()=>assert.deepEqual(saves(),[{botMessaging:false}]));
+});

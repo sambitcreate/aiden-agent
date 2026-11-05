@@ -771,7 +771,14 @@
         "renderer/shared/workspace-intake.test.ts",
         "renderer/shared/worktree-on-send.test.ts",
         "scripts/bot-inbox-writer.test.mjs",
-        "scripts/subagent-run-store.test.mjs"
+        "scripts/subagent-run-store.test.mjs",
+        "main/services/bot-messages/framing.test.ts",
+        "main/services/bot-messages/ledger.test.ts",
+        "main/services/bot-messages/courier.test.ts",
+        "main/services/bot-messages/tool.test.ts",
+        "main/services/bot-messages/lifecycle.test.ts",
+        "main/services/bot-messages/roster.test.ts",
+        "main/services/bot-messages/real-courier.test.ts"
       ],
       "preserved": [
         "worktree-remover-native",
@@ -1287,7 +1294,9 @@
         "main/handlers/transcript-images.test.ts",
         "renderer/components/transcript-image.test.tsx",
         "renderer/lib/work-details.test.ts",
-        "renderer/components/chat-preferences.test.tsx"
+        "renderer/components/chat-preferences.test.tsx",
+        "renderer/shared/bot-messages.test.ts",
+        "renderer/main/bots/bot-messaging-fields.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",
