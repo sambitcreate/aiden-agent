@@ -47,7 +47,8 @@ export type ToolApprovalOutcome = "allowed" | "denied" | "cancelled" | "detached
  * One prompt's lifetime. `publishing` is separate from `published` because a
  * publish callback can settle its own prompt before it returns, or even before
  * it throws. That prompt may have been shown, so it is withdrawn once the
- * callback ends.
+ * callback ends, unless a same-id replacement now owns the id: the replacement
+ * supersedes it, and withdrawal by id would remove the replacement.
  */
 type ApprovalPromptPhase = "admitted" | "publishing" | "published" | "settled";
 

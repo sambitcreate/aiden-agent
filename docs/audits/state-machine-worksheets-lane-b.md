@@ -79,7 +79,7 @@ Per-prompt lifetime is `admitted → publishing → published → settled`. Per-
 | publish starts | `admitted` | rechecked after the listener is attached | `publishing` | Prompt reaches the surface |
 | publish returns | `publishing` | | `published` | none |
 | publish throws, unsettled | `publishing` | | `settled` (`unavailable`) | No withdrawal |
-| settle during publish | `publishing` | | `settled` | Withdrawn once the callback ends, even if it then throws |
+| settle during publish | `publishing` | | `settled` | Withdrawn once the callback ends, even if it then throws, unless a same-id replacement owns the id |
 | `decide`, `decideAsHost` | `published` | owner document matches, or host authority | `settled` | Scope kept only if it was offered |
 | abort, `cancelStream`, `detachStream`, `shutdown` | any live phase | | `settled` | Withdrawn if shown |
 
