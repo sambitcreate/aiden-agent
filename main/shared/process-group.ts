@@ -7,6 +7,8 @@ import { execFile, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const POLL_MS = 25;
+// Slower than POLL_MS: each look past a lingering group runs `ps`.
+const STOP_POLL_MS = 100;
 // SIGKILL is asynchronous and can be denied, so sending it proves nothing.
 const KILL_CONFIRM_MS = 2_000;
 
@@ -64,6 +66,28 @@ export interface ProcessGroupProbe {
   stillRuns(): Promise<boolean>;
 }
 
+/**
+ * Whether the group stopped within `ms`: it is gone, or only zombies remain,
+ * which a non-reaping init may never clear. Every probe stays inside the
+ * deadline, and one that does not answer in time counts as still running.
+ */
+export async function groupStoppedWithin(probe: ProcessGroupProbe, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (!probe.exists()) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const runs = await Promise.race([
+      probe.stillRuns(),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), remaining); }),
+    ]);
+    clearTimeout(timer);
+    if (!runs) return true;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(STOP_POLL_MS, Math.max(0, deadline - Date.now()))));
+  }
+}
+
 export type ProcessGroupSettlement = "not_requested" | "exit_confirmed" | "cleanup_unconfirmed";
 
 export interface ProcessGroupTerminator {
@@ -95,14 +119,10 @@ export function createProcessGroupTerminator(
       : processGroupExists(child.pid));
   const stillRuns = options.probe?.stillRuns ?? (async () =>
     process.platform === "win32" ? alive() : processGroupStillRuns(child.pid!));
-  const confirmKilled = async (): Promise<ProcessGroupSettlement> => {
-    const deadline = Date.now() + (options.killConfirmMs ?? KILL_CONFIRM_MS);
-    while (alive() && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-    }
-    // Only zombies left means nothing runs, even if no init ever reaps them.
-    return alive() && await stillRuns() ? "cleanup_unconfirmed" : "exit_confirmed";
-  };
+  const confirmKilled = async (): Promise<ProcessGroupSettlement> =>
+    (await groupStoppedWithin({ exists: alive, stillRuns }, options.killConfirmMs ?? KILL_CONFIRM_MS))
+      ? "exit_confirmed"
+      : "cleanup_unconfirmed";
   return {
     get requested() {
       return requested;

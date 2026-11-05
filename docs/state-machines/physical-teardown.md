@@ -12,7 +12,7 @@ A process is stopped when something observed it gone. Asking it to stop, a timeo
 | `exit_confirmed` | The group is gone, or only zombies remain. |
 | `cleanup_unconfirmed` | Something in the group still ran after SIGKILL and the wait that follows it. |
 
-SIGTERM comes first, then SIGKILL after the grace period, then up to two seconds of confirmation. `runBoundedShellCommand` and `runScheduledScript` report `backgroundStopped` only when the stop was confirmed. Their timeout and abort stop watching before that wait, so cleanup cannot rewrite how the command ended.
+SIGTERM comes first, then SIGKILL after the grace period, then up to two seconds of confirmation. Every probe stays inside those two seconds, and a group of only zombies confirms straight away, since a non-reaping init may never clear it. `runBoundedShellCommand` and `runScheduledScript` report `backgroundStopped` only when the stop was confirmed. Their timeout and abort stop watching before that wait, so cleanup cannot rewrite how the command ended.
 
 `recordCheckGroup` in `follow-through/background-jobs.ts` already kept its durable record until exit was observable, and stays as it is. `git-clone-runner.ts` waits for `finished()` before removing its private staging folder but does not read the answer.
 
