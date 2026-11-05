@@ -43,6 +43,51 @@ function fakeFetch(status: number) {
   return { fetch, requests };
 }
 
+test("an immediate crash send reports success, keeps its id and time, and never reports a failure as sent", async () => {
+  const id = "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const message = {
+    distinctId: INSTALL_ID,
+    event: "app_crashed",
+    properties: { kind: "unclean_exit", ...SUPER },
+    uuid: id,
+    timestamp: "2026-10-30T12:00:00.000Z",
+  };
+
+  const { fetch, requests } = fakeFetch(200);
+  const healthy = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never, retryDelayMs: 1 });
+  assert.equal(await healthy.captureNow(message), true);
+  assert.equal(requests[0]!.events[0]!.uuid, id);
+  assert.equal((requests[0]!.events[0] as unknown as { timestamp: string }).timestamp, message.timestamp);
+  await healthy.shutdown();
+
+  const rejected = fakeFetch(400);
+  const refusing = createPostHogTransport({ apiKey: "phc_test", fetch: rejected.fetch as never, retryDelayMs: 1 });
+  assert.equal(await refusing.captureNow(message), false);
+  await refusing.discard();
+
+  const offline = createPostHogTransport({
+    apiKey: "phc_test",
+    fetch: (async () => { throw new TypeError("fetch failed"); }) as never,
+    retryDelayMs: 1,
+  });
+  assert.equal(await offline.captureNow(message), false);
+  await offline.discard();
+
+  const stopped = fakeFetch(200);
+  const revoked = createPostHogTransport({ apiKey: "phc_test", fetch: stopped.fetch as never, retryDelayMs: 1 });
+  await revoked.shutdown();
+  assert.equal(await revoked.captureNow(message), false);
+  assert.equal(stopped.requests.length, 0);
+
+  // A revoked client resolves without a request, which must not count as sent.
+  const silenced = fakeFetch(200);
+  const optedOut = createPostHogTransport({ apiKey: "phc_test", fetch: silenced.fetch as never, retryDelayMs: 1 });
+  optedOut.revokeQueue();
+  assert.equal(await optedOut.captureNow(message), false);
+  assert.equal(silenced.requests.length, 0);
+  await optedOut.discard();
+});
+
 test("batched events reach the US host with person and undeclared data stripped", async () => {
   const { fetch, requests } = fakeFetch(200);
   const transport = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never });
