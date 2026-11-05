@@ -368,7 +368,7 @@ export function TelegramSettings() {
             <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting}>
               Connect
             </Button>
-            <Button size="medium" variant="muted" onClick={disconnect} disabled={!polling}>
+            <Button size="medium" variant="muted" onClick={disconnect} disabled={!enabled}>
               Disconnect
             </Button>
             <span className="min-w-0 break-words text-secondary text-regular">
