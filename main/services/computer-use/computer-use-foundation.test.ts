@@ -1212,6 +1212,44 @@ test("a bridge that exits after shutdown already failed is still reclaimed", asy
   }
 });
 
+test("a late exit's lease directory gets its bounded retries after shutdown failed", async (t) => {
+  for (const [name, failures, expectedAttempts, expectedLeases] of [
+    ["one failed removal is retried until it succeeds", 1, 2, 0],
+    ["a removal that never succeeds stops at the retry limit", Infinity, 3, 1],
+  ] as const) {
+    await t.test(name, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-retry-"));
+      const logPath = path.join(root, "events.jsonl");
+      let exitSeen = false;
+      let attempts = 0;
+      const host = fakeHost(root, logPath, [], {
+        exitConfirmed: () => exitSeen,
+        removeDirectory: async (directory, options) => {
+          if (!exitSeen) return rm(directory, options);
+          attempts += 1;
+          if (attempts <= failures) throw new Error("simulated cleanup failure");
+          await rm(directory, options);
+        },
+      });
+      const leases = async () => (await readdir(root)).filter((entry) => entry.startsWith("acu-"));
+      try {
+        await host.createSession();
+        await assert.rejects(host.shutdown(), { code: "cleanup_unconfirmed" });
+        exitSeen = true;
+        for (let wait = 0; wait < 250 && attempts < expectedAttempts; wait += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        // One more poll interval shows the retries have stopped, not paused.
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+        assert.equal(attempts, expectedAttempts);
+        assert.equal((await leases()).length, expectedLeases);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 test("a session whose bridge exited normally still shuts down cleanly", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-clean-"));
   const logPath = path.join(root, "events.jsonl");
