@@ -4,6 +4,7 @@ import {
   AidenOperationReplayedRejection,
   type AidenIdempotencyLedger,
   type AidenIdempotencySnapshot,
+  type AidenOperationOwnership,
 } from "./aiden-remote-operation-contract.js";
 
 export interface AidenDurableOperationScope {
@@ -49,6 +50,11 @@ function operationKey(scope: AidenDurableOperationScope): string {
  *      the effect standing with no durable record, so the operation becomes
  *      unknown, in memory as on disk, and the caller is told so.
  *
+ * An action that proves it never ran frees its key, and that removal is an
+ * outcome like any other. If its write fails, a restart reads the admission and
+ * treats the key as unknown until a later write clears it. That can strand the
+ * key but cannot repeat an effect, which is the safe side of a disk that just failed.
+ *
  * Only the call that owns the operation writes. A replay or a join has nothing
  * of its own to record, so it answers with the owner's durable result: reading
  * the ledger directly could confirm an outcome whose write then fails.
@@ -70,21 +76,27 @@ export async function executeAidenDurableOperation<T>(
   });
   const operations = operationsFor(ledger);
   const operation = operationKey(scope);
-  let begun: { admitted: boolean; result: Promise<T> };
+  let begun: ReturnType<AidenIdempotencyLedger["begin"]> & { result: Promise<T> };
   try {
-    begun = ledger.begin(scope, input, async () => {
-      await admission;
-      return action();
-    });
+    begun = ledger.begin(
+      scope,
+      input,
+      async () => {
+        await admission;
+        return action();
+      },
+      undefined,
+      true,
+    );
   } catch (error) {
     const unfinished = operations.get(operation) as Promise<T> | undefined;
     if (error instanceof AidenOperationReplayedRejection && unfinished) return unfinished;
     throw error;
   }
-  const { admitted, result: pending } = begun;
-  if (!admitted) return (operations.get(operation) as Promise<T> | undefined) ?? pending;
+  const { result: pending, ownership } = begun;
+  if (!ownership) return (operations.get(operation) as Promise<T> | undefined) ?? pending;
 
-  const durable = settleDurably(owner, scope, pending, admit, refuse);
+  const durable = settleDurably(owner, ownership, pending, admit, refuse);
   operations.set(operation, durable);
   try {
     return await durable;
@@ -96,13 +108,15 @@ export async function executeAidenDurableOperation<T>(
 
 async function settleDurably<T>(
   owner: AidenDurableOperationOwner,
-  scope: AidenDurableOperationScope,
+  ownership: AidenOperationOwnership,
   pending: Promise<T>,
   admit: () => void,
   refuse: (error: unknown) => void,
 ): Promise<T> {
   const { ledger } = owner;
   const persist = owner.persist!;
+  const unrecorded = () =>
+    new AidenRemoteServiceError("idempotency_in_flight", owner.outcomeUnrecordedMessage, 409);
   try {
     await persist(ledger.snapshot());
     admit();
@@ -110,6 +124,7 @@ async function settleDurably<T>(
     const notPrepared = new AidenRemoteServiceError("internal_error", owner.notPreparedMessage, 500);
     refuse(new AidenOperationNotExecutedError(notPrepared));
     await pending.catch(() => undefined);
+    ownership.recorded();
     throw notPrepared;
   }
 
@@ -125,9 +140,10 @@ async function settleDurably<T>(
   try {
     await persist(ledger.snapshot());
   } catch {
-    ledger.markOutcomeUnrecorded(scope);
-    throw new AidenRemoteServiceError("idempotency_in_flight", owner.outcomeUnrecordedMessage, 409);
+    ownership.unrecorded();
+    throw unrecorded();
   }
-  if (failed) throw failure;
-  return result as T;
+  ownership.recorded();
+  if (!failed) return result as T;
+  throw ownership.outcomeUnknown() ? unrecorded() : failure;
 }
