@@ -8,26 +8,32 @@ Local baseline before any extraction: every CLI suite passes. A fresh worktree f
 
 ## C09: daemon turn admission and handoff
 
-Owner: `createDaemonChats` in `packages/cli/src/daemon-chats.ts`, over the shared `ChatTurnAdmission`. Three representations say a chat is busy: `reserved` (a live lease), the admission record (a live lease, or a revoked lease whose async work has not settled) and `active` (a generation).
+Owner: `DaemonTurnOwner` in `packages/cli/src/daemon-turn-lifecycle.ts`, over the shared `ChatTurnAdmission`, whose axes (authority, preparation) it reuses. It is the single writer of per-chat custody. `isChatBusy`, capacity, idle waits and shutdown all read that one map.
 
-| Event | Prior state | Guard | Next state | Effect | Linearization point | Visible result |
+Custody is `lease` (with preparation `pending` or `settled`), `settling` (revoked, admitted work still running), `generation`, or idle. Intake is `open` or `closed`.
+
+| Event | Prior custody | Guard | Next | Effect | Linearization point | Visible result |
 |---|---|---|---|---|---|---|
-| `beginChatTurn` | idle | intake open, chat not deleting, fewer than 3 reserved or active chats, no admission record, no reconciliation fence | reserved, preparation pending | lease with 60 s expiry | `admission.tryBegin` | lease |
-| `beginChatTurn` | anything else | | unchanged | none | | `null` |
-| `settleAsyncWork` | reserved | same lease | reserved, preparation settled | wakes idle waiters | | |
-| lease release or expiry | reserved, preparation settled | same lease | idle | frees the slot | `lease.release` | |
-| lease release, expiry or `cancelChat` | reserved, preparation pending | same lease | revoked, preparation pending: no slot held, chat still busy | | `lease.release` | later `start` refuses |
-| `settleAsyncWork` | revoked, preparation pending | same lease | idle | wakes idle waiters | | |
-| `start` | reserved, preparation settled | intake open, owner live, same chat, turn and owner | executing | session-file lease, then `handoff` registers `active`, activity and run journal, then releases the lease | `admission.handoff`, one synchronous step | `true` |
+| `beginChatTurn` | idle | intake open, chat not deleting, fewer than 3 chats in `lease` or `generation`, admission accepts | `lease`, `pending` | lease with 60 s expiry | `admission.tryBegin` | lease |
+| `beginChatTurn` | anything else, or a guard fails | | unchanged | none | | `null` |
+| `settleAsyncWork` | `lease`, `pending` | same lease | `lease`, `settled` | wakes idle waiters | | |
+| `settleAsyncWork` | `settling` | same lease | idle | wakes idle waiters | | |
+| lease release or expiry, `cancelChat` | `lease`, `settled` | same lease | idle | frees the slot | `lease.release` | |
+| lease release or expiry, `cancelChat` | `lease`, `pending` | same lease | `settling`: no capacity, chat still busy, shutdown waits | | `lease.release` | later `start` refuses |
+| `start` | `lease`, `settled` | intake open, owner live, same chat, turn and owner | `generation` | session-file lease, then `handoff` registers custody, activity and run journal, then releases the lease | `admission.handoff`, one synchronous step | `true` |
 | `start` | anything else | | unchanged | session-file lease released if taken | | `false`, no event |
-| `cancelChat` | executing | | executing, stop requested | abort, first origin recorded, session abort | `AbortController.abort` | terminal event later |
-| `stop` | any | | intake closed | revokes every lease, cancels with `application_shutdown`, waits for idle | `closed = true`, before the first await | `beginChatTurn` and `start` refuse |
+| generation released | `generation` | same run | idle | run's `settled` resolves | `turns.release` | |
+| `stop` | any | | intake closed | revokes every lease, cancels with `application_shutdown`, waits for every held chat | `closeIntake`, before the first await | `beginChatTurn` and `start` refuse |
+
+A lease or run whose chat has moved on to a newer entry changes nothing. Stale events are dropped by entry identity.
+
+Capacity stays as it was: a `settling` chat takes no slot, because it can start nothing. Its bytes stay charged in `ChatTurnAdmission`.
 
 Retained: `ChatTurnAdmission` and `ChatDeletionGate` are the shared owners. Lane A owns their internals.
 
 ## C10: daemon generation execution and persistence
 
-Owner: `perform` in `daemon-chats.ts`.
+Owner: `DaemonGenerationRun` in `daemon-turn-lifecycle.ts`, driven by `perform` in `daemon-chats.ts`.
 
 | Stage | Entered by | Stop request | Failure | Terminal |
 |---|---|---|---|---|
@@ -36,9 +42,19 @@ Owner: `perform` in `daemon-chats.ts`.
 | prompting and tools | `session.prompt` | session abort, approval lapses | partial answer saved once when any text or message exists | same |
 | final save | prompt ended with a final assistant message | not observed, the save completes | save failure: `chat:error`, then one retry as the partial answer | `completed` only once `appendMessage` returned |
 | cleanup | always | | handler errors stay contained: Pi's `emit` catches them | `session_shutdown`, dispose, closers, usage |
-| released | `perform` settled | | | `active` cleared, activity settled, run journal settled, session-file lease released, `settled` resolved |
+| released | `perform` settled | | a failing lease removal still ends the run | custody cleared, activity settled, run journal settled, session-file lease released, `settled` resolved |
 
-Independent axes: stop request (with its first origin), terminal persistence (`none`, final saved, partial saved, partial lost), client delivery, resource release. `chat:done` is sent after the durable save and before cleanup, so a chat stays busy briefly after `chat:done`. A timeout or lost owner is a stop with no origin.
+Independent axes: stop request (`requestStop`, with its first origin), terminal persistence (`none`, `final_saved`, `partial_saved`, `partial_lost`), client delivery, physical release. `chat:done` is sent after the durable save and before cleanup, so a chat stays busy briefly after `chat:done`. A timeout or lost owner is a stop with no origin.
+
+Kept as it was, and worth a product decision: when the final save fails, `chat:error` carries a timeline already finished as `completed`, because the timeline is written into the message being saved.
+
+## Defects fixed during extraction
+
+Each has a reproduction in `packages/cli/tests/daemon-turns.test.mjs` that failed before its fix.
+
+- **Shutdown did not wait for revoked work.** `stop()` listed only live leases and running generations. A cancelled or expired reservation whose append was still in flight was dropped from the list, so the process could exit under the write.
+- **A stop during a Bot authority check did not stop the prompt.** The Bot branch of `assertAuthority` returned straight after its awaited revalidation. A stop landing there let `session.prompt` run: the session abort had already come and gone, and Pi contains the `before_agent_start` rejection, so a provider request went out. The tool path had the same gap.
+- **A failed session-lease removal hung idle waiters.** An exception in `release` skipped resolving `settled`, so `waitForChatIdle` and shutdown never returned.
 
 ## C11: daemon tool approval
 

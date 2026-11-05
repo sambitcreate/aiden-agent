@@ -27,6 +27,7 @@ import { ChatDeletionGate } from "../../../main/services/chat-deletion-gate.js";
 import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
 import { createCliModelRuntime } from "./providers.ts";
 import { acquireLease } from "./state.ts";
+import { DaemonGenerationRun, DaemonTurnOwner } from "./daemon-turn-lifecycle.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
@@ -66,47 +67,21 @@ export function createDaemonChats(agentDir: string) {
   const recorders = createHostRunRecorders((_scope, message) => process.stderr.write(`aiden: ${message}\n`));
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
-  const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; cancellationOrigin?: GenerationCancellationOrigin; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
-  const reserved = new Set<string>();
-  const idleWaiters = new Map<string, Set<() => void>>();
-  const wakeIdle = (id: string) => { for (const wake of idleWaiters.get(id) ?? []) wake(); idleWaiters.delete(id); };
+  const turns = new DaemonTurnOwner<DaemonGenerationRun<AgentSession>>({ admission, isDeleting: (id) => deletion.isDeleting(id) });
   const approvals = new Map<string, { ownerId: string; resolve(allowed: boolean): void }>();
   const settleApproval = (id: string, decision: "allow" | "deny", ownerId?: string) => {
     const pending = approvals.get(id); if (!pending || (ownerId !== undefined && pending.ownerId !== ownerId)) return false;
     recorders.recordRunAttentionResolved(runs, id, { kind: "approval", decision });
     approvals.delete(id); pending.resolve(decision === "allow"); return true;
   };
-  // Set once shutdown begins: no ingress (phone, Telegram, socket, Bot) may start a turn while it drains.
-  let closed = false;
   const sessionPath = (id: string) => join(root, "journals", `${createHash("sha256").update(id).digest("hex")}.jsonl`);
   const llmClient = {
-    beginChatTurn(chatId: string, streamId: string, ownerId: string) {
-      if (closed || deletion.isDeleting(chatId) || new Set([...reserved, ...active.keys()]).size >= 3) return null;
-      const lease = admission.tryBegin(chatId, streamId, ownerId, active.has(chatId));
-      if (lease) {
-        reserved.add(chatId);
-        lease.onReleased(() => { reserved.delete(chatId); queueMicrotask(() => wakeIdle(chatId)); });
-        const settle = lease.settleAsyncWork;
-        lease.settleAsyncWork = () => { settle(); wakeIdle(chatId); };
-      }
-      return lease;
-    },
-    isChatBusy: (id: string) => active.has(id) || admission.isAdmitted(id),
-    async waitForChatIdle(id: string) {
-      while (active.has(id) || admission.isAdmitted(id)) {
-        const running = active.get(id);
-        if (running) await running.settled;
-        else await new Promise<void>((resolve) => {
-          const waiters = idleWaiters.get(id) ?? new Set(); waiters.add(resolve); idleWaiters.set(id, waiters);
-        });
-      }
-      return true;
-    },
+    beginChatTurn: (chatId: string, streamId: string, ownerId: string) => turns.begin(chatId, streamId, ownerId),
+    isChatBusy: (id: string) => turns.isBusy(id),
+    async waitForChatIdle(id: string) { await turns.waitForIdle(id); return true; },
     /** Stops the chat's turn; the first stop's origin is what its timeline records, as on the desktop. */
     async cancelChat(id: string, origin: GenerationCancellationOrigin = "chat_deletion") {
-      admission.releaseChat(id); const entry = active.get(id);
-      if (entry && !entry.abort.signal.aborted) entry.cancellationOrigin ??= origin;
-      entry?.abort.abort(); await entry?.session?.abort();
+      admission.releaseChat(id); await turns.run(id)?.requestStop(origin);
     },
     /** A Bot the person paused: its reply ends as their Stop, and the chat is kept. */
     async stopChatWork(id: string) { await llmClient.cancelChat(id, "user_stop"); return llmClient.waitForChatIdle(id); },
@@ -114,45 +89,46 @@ export function createDaemonChats(agentDir: string) {
     /** A paired desktop holding `runs:control` answers any run's approval, as the desktop host's own controls do. */
     approveAsHost: (id: string, decision: "allow" | "deny") => settleApproval(id, decision),
     cancel(streamId: string, ownerId: string) {
-      const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId && entry.ownerId === ownerId);
-      if (!pair) return false;
-      void llmClient.cancelChat(pair[0], "user_stop").catch(() => {}); return true;
+      const found = turns.findRun((run) => run.streamId === streamId && run.ownerId === ownerId);
+      if (!found) return false;
+      void llmClient.cancelChat(found.chatId, "user_stop").catch(() => {}); return true;
     },
     /** Stop a run by its stream id whoever started it (`runs:control`). */
     cancelRun(streamId: string) {
-      const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId);
-      if (!pair) return false;
-      void llmClient.cancelChat(pair[0], "user_stop").catch(() => {}); return true;
+      const found = turns.findRun((run) => run.streamId === streamId);
+      if (!found) return false;
+      void llmClient.cancelChat(found.chatId, "user_stop").catch(() => {}); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
-      if (closed || owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
-      let finish!: () => void;
-      const settled = new Promise<void>((resolve) => { finish = resolve; });
+      if (!turns.accepting || owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
       let releaseFile: () => void;
       try { releaseFile = acquireLease(sessionPath(params.chatId)); }
       catch (error) { admission.releaseMatching(params.chatId, options.turnId ?? streamId, owner.documentId); throw error; }
-      const entry = { streamId, ownerId: owner.documentId, workspaceId: params.workspaceId, abort: new AbortController(), settled, finish,
-        session: undefined as AgentSession | undefined,
-        release() { if (active.get(params.chatId) !== entry) return; active.delete(params.chatId); activity.settle(streamId); recorders.recordRunSettled(runs, streamId); releaseFile(); finish(); wakeIdle(params.chatId); },
+      const entry = new DaemonGenerationRun<AgentSession>({ streamId, ownerId: owner.documentId, workspaceId: params.workspaceId });
+      // A failed lease removal must still end the run: idle waiters and shutdown depend on it.
+      const release = () => {
+        if (!turns.release(params.chatId, entry)) return;
+        try { activity.settle(streamId); recorders.recordRunSettled(runs, streamId); releaseFile(); }
+        finally { entry.markReleased(); }
       };
-      const handedOff = admission.handoff(params.chatId, options.turnId ?? streamId, owner.documentId, () => { active.set(params.chatId, entry); activity.begin(streamId, params.chatId); recorders.recordRunBegin(runs, streamId, params.chatId, owner); });
+      const handedOff = turns.handoff(params.chatId, options.turnId ?? streamId, owner.documentId, entry, () => { activity.begin(streamId, params.chatId); recorders.recordRunBegin(runs, streamId, params.chatId, owner); });
       if (!handedOff) { releaseFile(); return false; }
-      void perform(streamId, params, owner, options, entry).finally(entry.release).catch(() => {
+      void perform(streamId, params, owner, options, entry).finally(release).catch(() => {
         process.stderr.write("aiden: Could not deliver the terminal generation event.\n");
       });
       return true;
     },
   };
-  async function perform(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }, entry: NonNullable<ReturnType<typeof active.get>>) {
+  async function perform(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }, entry: DaemonGenerationRun<AgentSession>) {
       let unsubscribe = () => {};
       let botAdmission: BotRuntimeAuthorityAdmission | undefined;
       let removeBotAbort = () => {};
-      const disposeOwner = owner.onInvalidated(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); });
-      const timer = setTimeout(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); }, 300_000);
+      const disposeOwner = owner.onInvalidated(() => entry.requestStopQuietly());
+      const timer = setTimeout(() => entry.requestStopQuietly(), 300_000);
       // Every event also feeds the run journal, so a paired desktop sees the run even after its owner leaves.
       const send: typeof owner.send = (channel, payload) => { recorders.recordRunNotification(runs, streamId, channel, payload); if (!owner.isDestroyed()) owner.send(channel, payload); };
       const produced: AssistantMessage[] = [];
-      let content = "", separator = false, persisted = false;
+      let content = "", separator = false;
       const timeline = new GenerationTimelineProjector(streamId, (value) => send("chat:timeline", { streamId, timeline: value }));
       // Extensions open their resources (MCP pool, memory store) before the session exists; a turn that
       // fails before then still runs their shutdown handlers and closers.
@@ -167,7 +143,7 @@ export function createDaemonChats(agentDir: string) {
           await bots.assertNotPaused(chat.botId);
           botAdmission = await bots.authority.admit({ audienceId: options.botAudienceId, botId: chat.botId, chatId: chat.id });
           assertBotRuntimeProviderSelection(botAdmission.authority.provider, { providerId: params.providerId, model: params.model });
-          const cancel = () => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); };
+          const cancel = () => entry.requestStopQuietly();
           botAdmission.signal.addEventListener("abort", cancel, { once: true });
           removeBotAbort = () => botAdmission?.signal.removeEventListener("abort", cancel);
           if (botAdmission.signal.aborted) cancel();
@@ -178,10 +154,12 @@ export function createDaemonChats(agentDir: string) {
         if (unattended && (!workspace.folderPath || accessFor(agentDir, workspace.folderPath) !== "full")) throw new Error("Unattended generation requires explicitly granted full workspace access.");
         const cwd = workspace.folderPath || root;
         const assertAuthority = async () => {
-          if (entry.abort.signal.aborted || owner.isDestroyed()) throw new Error("Generation authority was revoked.");
-          if (botAdmission) { await botAdmission.revalidateBeforeEffect(); return; }
+          const assertNotStopped = () => { if (entry.stopRequested || owner.isDestroyed()) throw new Error("Generation authority was revoked."); };
+          assertNotStopped();
+          // A stop can land during this await, and the next step may be the provider request.
+          if (botAdmission) { await botAdmission.revalidateBeforeEffect(); assertNotStopped(); return; }
           const current = (await workspaceStore(agentDir).load()).find((item) => item.id === workspace.id);
-          if (entry.abort.signal.aborted || owner.isDestroyed() || current?.folderPath !== workspace.folderPath || (unattended && accessFor(agentDir, cwd) !== "full")) throw new Error("The unattended workspace authority was revoked.");
+          if (entry.stopRequested || owner.isDestroyed() || current?.folderPath !== workspace.folderPath || (unattended && accessFor(agentDir, cwd) !== "full")) throw new Error("The unattended workspace authority was revoked.");
         };
         const runtime = await createCliModelRuntime(agentDir);
         const model = runtime.getModel(params.providerId, params.model);
@@ -298,20 +276,21 @@ export function createDaemonChats(agentDir: string) {
         const text = [input.content, ...attachments.filter((item) => item.kind === "image" && !model.input.includes("image")).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`), ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`)].join("\n\n");
         await assertAuthority();
         await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });
-        if (entry.abort.signal.aborted) throw new Error("Generation cancelled.");
+        if (entry.stopRequested) throw new Error("Generation cancelled.");
         const last = produced.at(-1);
         if (!last || last.stopReason === "error" || last.stopReason === "aborted") throw new Error(last?.errorMessage ?? "Generation returned no final answer.");
         content ||= produced.map((message) => messageText(message.content)).filter(Boolean).join("\n");
         const finalTimeline = timeline.finish("completed");
         const updated = await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }, { providerId: model.provider, model: model.id });
-        persisted = true;
+        entry.persistence = "final_saved";
         send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline }); return true;
       } catch (error) {
-        const cancelled = entry.abort.signal.aborted;
+        const cancelled = entry.stopRequested;
         const finalTimeline = cancelled ? timeline.finish("cancelled", entry.cancellationOrigin) : timeline.finish("failed");
-        if (!persisted && (content || produced.length)) {
-          await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }).catch(() => {
+        if (entry.persistence === "none" && (content || produced.length)) {
+          entry.persistence = await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }).then(() => "partial_saved" as const, () => {
             process.stderr.write("aiden: Could not persist the partial response.\n");
+            return "partial_lost" as const;
           });
         }
         send("chat:error", { streamId, message: error instanceof Error ? error.message : String(error), cancelled, timeline: finalTimeline }); return true;
@@ -331,6 +310,7 @@ export function createDaemonChats(agentDir: string) {
     /** Every activity change (a run began or ended, an approval was raised or settled). */
     onActivityChange(listener: (snapshot: ChatActivitySnapshot) => void) { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; },
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
-    async stop() { closed = true; const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
+    /** Closes intake before its first await, so no ingress stopping alongside it can begin a turn. */
+    async stop() { const ids = turns.closeIntake(); admission.releaseAll(); await Promise.allSettled(ids.map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all(ids.map((id) => llmClient.waitForChatIdle(id))); },
   };
 }
