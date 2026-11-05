@@ -41,7 +41,7 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 - `mcp-failure-diagnostics.test.ts` matched `8443` inside a random hash. Fixed in #768.
 
 - Rust `guard::tests::authenticated_bridge_lease_eof_revokes_the_whole_broker_group` failed once locally at load about 10 ("broker survived authenticated bridge lease EOF", `guard.rs:490`, two-second deadline). No `native/` change in this lane. Not fixed.
-- One JS failure in `npm run test:computer-use` on the #766 fix: 514 passed, 1 failed, log discarded, test unidentified. 11 later JS runs clean. The new lease-retry test is not ruled out. Recorded in #766.
+- One JS failure in `npm run test:computer-use` on the #766 fix: 514 passed, 1 failed, log discarded, test unidentified. 12 later JS runs clean. The new lease-retry test is not ruled out. Recorded in #766.
 
 ## Handed to the owner
 
