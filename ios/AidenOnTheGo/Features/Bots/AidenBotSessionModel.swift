@@ -512,6 +512,34 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     }
 }
 
+/// What a failed send does to a message in the outbox. Only a definite refusal
+/// gives up the key: anything that may have reached the Mac keeps it, whatever
+/// the bubble says, so a retry can never become a second request.
+enum AidenBotOutboxFailureStep: Equatable {
+    /// The Mac answered without running it; Try again is a new request.
+    case refused(attachmentsGone: Bool)
+    /// It keeps its place and key for the next connection or backoff.
+    case retryLater
+    /// Out of tries, but an entry with no submission id already shows it.
+    case settledByEcho
+    /// Out of tries: "Couldn’t send", and Try again keeps the key.
+    case outOfTries
+}
+
+/// `attempts` counts the tries before this failure.
+func aidenBotOutboxFailureStep(
+    ambiguous: Bool,
+    lostAttachment: Bool,
+    attempts: Int,
+    maxAttempts: Int,
+    echoed: Bool,
+    echoNamesSubmission: Bool
+) -> AidenBotOutboxFailureStep {
+    guard ambiguous else { return .refused(attachmentsGone: lostAttachment) }
+    if attempts + 1 < maxAttempts { return .retryLater }
+    return echoed && !echoNamesSubmission ? .settledByEcho : .outOfTries
+}
+
 /// How the chat draws an outgoing message (R14).
 enum AidenBotOutgoingLook: Equatable {
     /// On its way: drawn as sent, with "Sending…" once it has waited a moment.
@@ -1989,32 +2017,40 @@ final class AidenBotSessionModel {
                 purgeForAccessLoss()
                 return
             }
-            guard Self.messageFailureIsAmbiguous(error) else {
+            let step = aidenBotOutboxFailureStep(
+                ambiguous: Self.messageFailureIsAmbiguous(error),
+                lostAttachment: !outbox[current].attachments.isEmpty && Self.isLostAttachment(error),
+                attempts: outbox[current].connectionAttempts,
+                maxAttempts: Self.maxConnectionAttempts,
+                echoed: outbox[current].echoed,
+                echoNamesSubmission: outbox[current].echoSubmissionID != nil
+            )
+            if case let .refused(attachmentsGone) = step {
                 // Refused outright (R22): the Mac answered this key without running it,
                 // and replays that answer for as long as it keeps the key, so Try again
                 // is a new request with a new key, as on Android.
                 outbox[current].status = .failed
                 outbox[current].keepsKey = false
-                if !outbox[current].attachments.isEmpty, Self.isLostAttachment(error) {
-                    outbox[current].attachmentsGone = true
-                }
+                if attachmentsGone { outbox[current].attachmentsGone = true }
                 releaseEcho(at: current)
                 return
             }
             outbox[current].keepsKey = true
             outbox[current].connectionAttempts += 1
-            let attempts = outbox[current].connectionAttempts
-            if attempts < Self.maxConnectionAttempts {
+            switch step {
+            case .refused:
+                break
+            case .retryLater:
                 // It keeps its place and key: the next connection, or a short wait while
                 // connected, tries again. Nothing behind it overtakes it.
                 outbox[current].deferred = true
-                scheduleBackoff(after: attempts)
-            } else if outbox[current].echoed, outbox[current].echoSubmissionID == nil {
+                scheduleBackoff(after: outbox[current].connectionAttempts)
+            case .settledByEcho:
                 // The Mac's transcript already shows it.
                 outbox.remove(at: current)
-            } else {
-                // Out of tries. An entry naming another submission isn't this one:
-                // it says "Couldn’t send", and Try again keeps the key.
+            case .outOfTries:
+                // An entry naming another submission isn't this one: it says
+                // "Couldn’t send", and Try again keeps the key.
                 releaseEcho(at: current)
                 outbox[current].status = .failed
             }
@@ -2046,7 +2082,7 @@ final class AidenBotSessionModel {
 
     /// Whether a message request may have reached the Mac. A request the Mac is
     /// still working on (`409 idempotency_in_flight`) keeps its key too.
-    private static func messageFailureIsAmbiguous(_ error: Error) -> Bool {
+    static func messageFailureIsAmbiguous(_ error: Error) -> Bool {
         if case let AidenRemoteClientError.server(409, body) = error, body.code.rawValue == "idempotency_in_flight" {
             return true
         }
