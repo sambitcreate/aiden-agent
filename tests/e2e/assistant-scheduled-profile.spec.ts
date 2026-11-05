@@ -287,16 +287,22 @@ test.describe("conversational scheduling", () => {
     await expect(page.getByText("Deterministic E2E response received.", { exact: true }).first()).toBeVisible();
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       let pending = true;
+      let questionChatId: string | undefined;
       ipcMain.removeHandler("remote:getPendingQuestion");
-      ipcMain.handle("remote:getPendingQuestion", (_event, chatId) => pending ? ({
+      ipcMain.handle("remote:getPendingQuestion", (_event, chatId) => {
+        if (typeof chatId !== "string" || !chatId) throw new Error("Wrong question chat");
+        questionChatId ??= chatId;
+        if (chatId !== questionChatId) throw new Error("Question changed chats");
+        return pending ? ({
         version: 1, source: "remote", promptId: "phone-question", chatId,
         streamId: "phone-stream", toolCallId: "phone-call", expiresAt: new Date(Date.now() + 300_000).toISOString(),
         questions: [{ question: "Which cadence should I use from your phone?", header: "Cadence", multiSelect: false,
           options: [{ label: "Daily", description: "Every day." }, { label: "Weekly", description: "Every Friday." }] }],
-      }) : null);
+      }) : null;
+      });
       ipcMain.removeHandler("remote:respondQuestionFromHost");
       ipcMain.handle("remote:respondQuestionFromHost", (_event, chatId, promptId, response) => {
-        if (!chatId || promptId !== "phone-question" || response.answers[0]?.answer !== "Weekly") throw new Error("Wrong question answer or chat");
+        if (!pending || chatId !== questionChatId || promptId !== "phone-question" || response.answers[0]?.answer !== "Weekly") throw new Error("Wrong question answer or chat");
         pending = false;
         BrowserWindow.getAllWindows()[0]?.webContents.send("remote:approval-changed", { chatId });
         return { status: "answered" };
@@ -305,6 +311,9 @@ test.describe("conversational scheduling", () => {
       ipcMain.handle("chat:answerQuestionnaire", () => { throw new Error("Phone questions do not belong to this renderer"); });
     });
     await page.getByRole("button", { name: "Scheduled", exact: true }).click();
+    // The router retains ChatPane while Scheduled's lazy chunk loads. A second
+    // click before that route commits can keep the same pane and skip its read.
+    await expect(page.getByRole("searchbox", { name: "Search scheduled tasks" })).toBeVisible();
     await page.locator("[data-sidebar]").getByRole("button", { name: /Deterministic E2E response received/u }).first().click();
     await expect(page.getByRole("heading", { name: "Which cadence should I use from your phone?" })).toBeVisible();
     await page.getByRole("button", { name: "Weekly Every Friday." }).click();

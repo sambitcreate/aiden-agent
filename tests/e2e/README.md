@@ -76,3 +76,5 @@ an explicitly chosen compatible server with `AIDEN_E2E_LMSTUDIO_BASE_URL`.
 Local artifacts are written to `test-results/e2e` for traces and failure screenshots,
 and `playwright-report/e2e` for the HTML report. Hosted jobs upload only the sanitized
 failure receipt, under a shard-specific name with seven-day retention.
+
+When a journey leaves a chat through a lazy route and returns to trigger its mount-time reads, wait for the destination’s visible content before returning. A click starts navigation; the previous chat stays mounted until the lazy route commits. The phone-owned-question scheduling journey waits for the Scheduled searchbox and verifies the original chat and host responder.
