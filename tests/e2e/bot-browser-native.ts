@@ -26,6 +26,8 @@ const deadline = setTimeout(() => {
 const BOT = "bot:ada";
 const BOT_WORKSPACE = "bot-home-ada";
 const PERSON_WORKSPACE = "person";
+/** Has letters no frame id or port can spell: a plain "737" turned up in the fixture's URL (port 49737) or a hex frame id. */
+const TABLE_CODE = "zq737";
 const FIELD = "position:absolute;width:240px;height:44px;border:0;background:rgb(255,0,0);color:rgb(255,0,0)";
 
 function page(body: string): string {
@@ -85,7 +87,7 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
         <tr><td>Code</td><td><input id="code" autocomplete="one-time-code"></td></tr>
         <tr><td>Card</td><td><input id="number" autocomplete="cc-number"></td></tr></table>
         <label><input type="checkbox"> Save <input id="saved" autocomplete="cc-number"></label>
-        <div role="button" tabindex="0"><textarea autocomplete="cc-csc">737</textarea></div>
+        <div role="button" tabindex="0"><textarea autocomplete="cc-csc">${TABLE_CODE}</textarea></div>
         <button type="button">Pay</button></form>
         <script>for(const [id,value] of [["pw","hunter2xyz"],["code","550071"],["number","4000123412341234"],["saved","5555444433332222"]])document.getElementById(id).value=value;</script>`);
     case "/covered":
@@ -260,7 +262,7 @@ void app.whenReady().then(async () => {
   };
   const table = await snapshot(botTab);
   const tableSeen = {
-    leaked: leakedIn(["hunter2xyz", "550071", "4000123412341234", "5555444433332222", "737"], table.text, table.elements, table.accessibilityTree),
+    leaked: leakedIn(["hunter2xyz", "550071", "4000123412341234", "5555444433332222", TABLE_CODE], table.text, table.elements, table.accessibilityTree),
     // Each element's locator still finds it for the Bot.
     found: await Promise.all(table.elements.map((element) => outcome(agent({ action: "wait", tabId: botTab, locator: element.selector, timeoutMs: 300 })))),
     // The name the Bot's rules see for a click on the checkbox, and on Pay.
