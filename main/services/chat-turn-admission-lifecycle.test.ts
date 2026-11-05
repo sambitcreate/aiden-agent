@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { ChatTurnAdmission, type ChatTurnLease } from "./chat-turn-admission.js";
 import {
   INITIAL_CHAT_TURN_LIFECYCLE,
@@ -179,6 +180,9 @@ const skillPrompt = {
   userMessageId: "message-1",
 };
 
+const SKILL_SLOT_BYTES = SLASH_LIMITS.formattedInvocationBytes;
+const oneByteSkill = { ...skillPrompt, formattedPrompt: "x" };
+
 function assertPoolIsWhole(admission: ChatTurnAdmission, label: string): void {
   // The owner exposes no counters, so a pool is measured the way a sender meets
   // it. A negative charge would admit more than the limit; a leaked one, less.
@@ -189,26 +193,50 @@ function assertPoolIsWhole(admission: ChatTurnAdmission, label: string): void {
     leases.push(lease);
     return lease;
   };
-  for (let index = 0; index < MAX_TURNS; index += 1) {
-    const lease = begin(index);
-    lease.reserveAppendPayload(index === 0 ? MAX_APPEND_BYTES : 0);
-    lease.reserveSkillPreparation();
-  }
-  const over = begin(MAX_TURNS);
-  assert.throws(() => over.reserveAppendPayload(0), /Too many messages/u, `${label}: append turns`);
-  assert.throws(() => over.reserveSkillPreparation(), /Too many skill/u, `${label}: skill turns`);
-  for (const lease of leases) {
+  const end = (lease: ChatTurnLease) => {
     lease.release();
     lease.settleAsyncWork();
+  };
+
+  // Append: every turn slot, then exactly the byte limit.
+  for (let index = 0; index < MAX_TURNS; index += 1) {
+    begin(index).reserveAppendPayload(index === 0 ? MAX_APPEND_BYTES : 0);
   }
-  const byteProbe = begin(MAX_TURNS + 1);
+  const overAppend = begin(MAX_TURNS);
+  assert.throws(() => overAppend.reserveAppendPayload(0), /Too many messages/u, `${label}: append turns`);
+  leases.splice(0).forEach(end);
+  const byteProbe = begin(0);
   assert.throws(
     () => byteProbe.reserveAppendPayload(MAX_APPEND_BYTES + 1),
     /Too many messages/u,
-    `${label}: append bytes`,
+    `${label}: append bytes over`,
   );
-  byteProbe.release();
-  byteProbe.settleAsyncWork();
+  byteProbe.reserveAppendPayload(MAX_APPEND_BYTES);
+  leases.splice(0).forEach(end);
+
+  // Skill bytes bind before skill turns here: three slots fill the byte limit
+  // and a fourth turn is still free. One byte short must refuse a fourth slot.
+  const [first, second, third] = [begin(0), begin(1), begin(2)];
+  for (const lease of [first, second, third]) lease!.reserveSkillPreparation();
+  first!.prepareSkillInvocation(oneByteSkill);
+  const fourth = begin(3);
+  assert.throws(
+    () => fourth.reserveSkillPreparation(),
+    /Too many skill/u,
+    `${label}: one byte short of a slot`,
+  );
+  end(first!);
+  fourth.reserveSkillPreparation();
+
+  // Shrink everything: bytes are free, so now only the turn limit can refuse.
+  second!.prepareSkillInvocation(oneByteSkill);
+  third!.prepareSkillInvocation(oneByteSkill);
+  fourth.prepareSkillInvocation(oneByteSkill);
+  const fifth = begin(4);
+  fifth.reserveSkillPreparation();
+  const sixth = begin(5);
+  assert.throws(() => sixth.reserveSkillPreparation(), /Too many skill/u, `${label}: skill turns`);
+  leases.splice(0).forEach(end);
 }
 
 test("generated event orders keep one owner per chat and exact pool accounting", () => {
@@ -218,8 +246,8 @@ test("generated event orders keep one owner per chat and exact pool accounting",
     const admission = new ChatTurnAdmission({
       maxAppendTurns: MAX_TURNS,
       maxAppendBytes: MAX_APPEND_BYTES,
-      maxPreparedTurns: MAX_TURNS,
-      maxPreparedBytes: 64 * 1024 * 1024,
+      maxPreparedTurns: MAX_TURNS + 1,
+      maxPreparedBytes: MAX_TURNS * SKILL_SLOT_BYTES,
     });
     const leases: ChatTurnLease[] = [];
     const generationRefunds: (() => void)[] = [];

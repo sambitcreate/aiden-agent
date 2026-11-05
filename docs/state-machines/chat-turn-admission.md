@@ -42,7 +42,7 @@ Finalize removes the record, stops the timer and refunds whatever the lease stil
 - **Generation ownership:** registration succeeding inside `handoff`. The lease is gone by the time `handoff` returns, with no await between.
 - **Physical release:** bytes are refunded when the holder is done: settle for ordinary appends, release for a cached first-send receipt, generation cleanup for a handed-off skill.
 
-Expiry is evidence that authority ended. It is never evidence that the IO finished, so it does not refund.
+Expiry is evidence that authority ended. It is never evidence that the IO finished, so it refunds nothing while preparation is pending. Once preparation has settled, expiry is the real end of the lease and refunds what the lease still holds, such as a cached first-send receipt.
 
 ## Stale and rejected events
 

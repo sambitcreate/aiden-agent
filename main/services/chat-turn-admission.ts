@@ -5,6 +5,7 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 import {
   INITIAL_CHAT_TURN_LIFECYCLE,
+  canPrepareChatTurnSkill,
   chatTurnSkillBytes,
   holdsChatTurnAuthority,
   isChatTurnReadyForHandoff,
@@ -173,12 +174,17 @@ export class ChatTurnAdmission {
         if (rejected) throwSkillRejection(rejected);
       },
       prepareSkillInvocation: (invocation) => {
-        const rejected = reject({
+        const record = currentRecord();
+        // The payload is measured only for a turn that can still accept it.
+        if (!record || !canPrepareChatTurnSkill(record.lifecycle)) {
+          throwSkillRejection("unavailable");
+        }
+        const { rejected } = record.commit({
           type: "prepare-skill",
           bytes: Buffer.byteLength(invocation.formattedPrompt, "utf8"),
         });
         if (rejected) throwSkillRejection(rejected);
-        currentRecord()!.preparedSkillInvocation = invocation;
+        record.preparedSkillInvocation = invocation;
       },
       settleAsyncWork: (options) => {
         currentRecord()?.commit({

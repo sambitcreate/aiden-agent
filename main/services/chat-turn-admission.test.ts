@@ -258,6 +258,18 @@ test("a failed registration leaves the turn and its skill charge with the lease"
   }, /Too many skill messages/u, "The retry released the one slot exactly once");
 });
 
+test("an ended turn reports itself unavailable before looking at the skill payload", () => {
+  const admission = new ChatTurnAdmission();
+  const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
+  assert.ok(lease);
+  lease.release();
+  lease.settleAsyncWork();
+  assert.throws(
+    () => lease.prepareSkillInvocation({ formattedPrompt: undefined } as unknown as typeof preparedSkill),
+    /skill turn is no longer available/u,
+  );
+});
+
 test("a skill release requested during registration completes exactly once at transfer", () => {
   const admission = new ChatTurnAdmission({ maxPreparedTurns: 1, maxPreparedBytes: 1024 * 1024 });
   const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);

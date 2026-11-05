@@ -87,6 +87,16 @@ export function isChatTurnReadyForHandoff(state: ChatTurnLifecycle): boolean {
   return state.authority === "active" && state.preparation === "settled";
 }
 
+/** Whether a prepared skill could still be recorded, before its size is known. */
+export function canPrepareChatTurnSkill(state: ChatTurnLifecycle): boolean {
+  return (
+    state.authority === "active" &&
+    state.registration === "none" &&
+    state.skill.holder === "lease" &&
+    !state.skillPrepared
+  );
+}
+
 /** Bytes the generation takes over if registration succeeds, when any. */
 export function chatTurnSkillBytes(state: ChatTurnLifecycle): number | undefined {
   return state.skill.holder === "lease" ? state.skill.bytes : undefined;
@@ -142,7 +152,7 @@ export function transitionChatTurn(
       };
     }
     case "prepare-skill": {
-      if (!reservationsOpen || state.skill.holder !== "lease" || state.skillPrepared) {
+      if (!canPrepareChatTurnSkill(state) || state.skill.holder !== "lease") {
         return reject(state, "unavailable");
       }
       if (event.bytes > state.skill.bytes) return reject(state, "capacity");
