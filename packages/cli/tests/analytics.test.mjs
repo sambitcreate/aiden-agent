@@ -494,6 +494,15 @@ test("a crash report keeps the error's type, frames and code, and never its mess
   assert.ok(crash.properties.$exception_list[0].stacktrace.frames.length > 0, "frames still say where it failed");
   assert.doesNotMatch(JSON.stringify(crash), /acme|Bob|prompt/u);
 
+  const nested = harness(t, { state: allowed });
+  started(nested);
+  await settle();
+  const outer = new Error("could not save acme-merger-q3.md");
+  outer.cause = Object.assign(new Error("no room for acme-merger-q3.md"), { code: "ENOSPC" });
+  api.reportServerRejection(outer);
+  await settle();
+  assert.deepEqual(value(nested.sent.at(-1)), ["", "ENOSPC"], "each code stays with its own error");
+
   const logged = harness(t, { state: allowed });
   started(logged);
   await settle();

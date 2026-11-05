@@ -25,6 +25,7 @@ import {
 import type { AnalyticsCore, AnalyticsMessage } from "../../../main/services/analytics/analytics-core.js";
 import type { AnalyticsEventProps, AnalyticsSuperProperties } from "../../../main/services/analytics/analytics-events.js";
 import { setAnalyticsReporter, type AnalyticsReporter } from "../../../main/services/analytics/analytics-report.js";
+import type { SanitizedException, sanitizeException } from "../../../main/services/analytics/analytics-sanitize.js";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 import { atomicJson, cliLeaseHelperPath, leaseGuardPath } from "./state.ts";
 
@@ -227,25 +228,50 @@ function within(work: Promise<unknown>, ms: number): Promise<void> {
 const NODE_ERROR_CODE = /^[A-Z][A-Z0-9_]{1,63}$/u;
 const MAX_REPORTED_CAUSES = 4;
 
+interface MessagelessError {
+  name?: unknown;
+  stack?: unknown;
+  message: "";
+  code?: string;
+  cause?: MessagelessError;
+}
+
 /**
  * What a server's crash report may say about an error: its type, frames and
  * Node error code. A server's messages quote file names, hosts and prompt text
  * that no redactor can recognize, so the message itself never leaves.
  */
-function withoutMessage(value: unknown, depth = 0): unknown {
+function withoutMessage(value: unknown, depth = 0): MessagelessError {
   try {
     if (typeof value !== "object" || value === null) return { name: "NonError", message: "" };
     const { name, stack, code, cause } = value as { name?: unknown; stack?: unknown; code?: unknown; cause?: unknown };
     return {
       name,
       stack,
-      message: typeof code === "string" && NODE_ERROR_CODE.test(code) ? code : "",
+      message: "",
+      ...(typeof code === "string" && NODE_ERROR_CODE.test(code) ? { code } : {}),
       ...(cause !== undefined && cause !== null && depth < MAX_REPORTED_CAUSES ? { cause: withoutMessage(cause, depth + 1) } : {}),
     };
   } catch {
     // Reading an exotic thrown object can itself throw.
     return { name: "NonError", message: "" };
   }
+}
+
+/**
+ * The sanitizer keeps a message only if it is a runtime's own sentence, so a
+ * bare code would come out withheld. It sees no message here, and each error's
+ * checked code goes back in the message field afterwards.
+ */
+function serverException(value: unknown, sanitize: typeof sanitizeException, appRoots: readonly string[]): SanitizedException {
+  let link: MessagelessError | undefined = withoutMessage(value);
+  const exception = sanitize(link, { appRoots });
+  const errors = exception.errors.map((error) => {
+    const code = link?.code;
+    link = link?.cause;
+    return code ? { ...error, value: code } : error;
+  });
+  return { ...exception, errors };
 }
 
 export interface ServerAnalyticsRun {
@@ -273,6 +299,7 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
   const rethrow = context.rethrow ?? ((error: unknown) => { setImmediate(() => { throw error; }); });
   const early: ((ready: AnalyticsCore) => void)[] = [];
   let core: AnalyticsCore | undefined;
+  let sanitize: typeof sanitizeException | undefined;
   let transport: PostHogTransport | undefined;
   let installId: string | undefined;
   let stopped = false;
@@ -309,12 +336,14 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
     const state = updateServerAnalyticsState(context.agentDir, (current) => ensureInstallId(current, context.randomUUID ?? nodeRandomUUID));
     if (!state.enabled || !state.installId) { stop(); return; }
     installId = state.installId;
-    const [{ createAnalyticsCore }, created] = await Promise.all([
+    const [{ createAnalyticsCore }, sanitizer, created] = await Promise.all([
       import("../../../main/services/analytics/analytics-core.js"),
+      import("../../../main/services/analytics/analytics-sanitize.js"),
       createTransport(consentHolds),
     ]);
     if (stopped) { await created.discard(); return; }
     transport = created;
+    sanitize = sanitizer.sanitizeException;
     const ready = createAnalyticsCore({
       transport: created,
       getDistinctId: () => (consentHolds() ? installId : undefined),
@@ -331,6 +360,21 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
     else if (!stopped && early.length < MAX_EARLY_EVENTS) early.push((ready) => ready.track(event, props));
   };
 
+  function capture(error: unknown, level: "fatal" | "error", origin: "uncaught_exception" | "unhandled_rejection"): void {
+    try {
+      if (!core || !sanitize) return;
+      core.captureSanitizedException(serverException(error, sanitize, [context.appDir]), {
+        source: "server",
+        level,
+        processType: "server",
+        origin,
+        uptimeSeconds: process.uptime(),
+      });
+    } catch {
+      // A crash report must never become a crash of its own.
+    }
+  }
+
   function onUncaught(error: unknown, origin: string): void {
     if (crash) return;
     // With another listener Node would have kept running, so this one must too.
@@ -344,13 +388,7 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
       }
     }
     const reported = within(activation.then(() => {
-      core?.captureException(withoutMessage(error), {
-        source: "server",
-        level: fatal ? "fatal" : "error",
-        processType: "server",
-        origin: origin === "unhandledRejection" ? "unhandled_rejection" : "uncaught_exception",
-        uptimeSeconds: process.uptime(),
-      });
+      capture(error, fatal ? "fatal" : "error", origin === "unhandledRejection" ? "unhandled_rejection" : "uncaught_exception");
       return transport?.flush();
     }), context.crashFlushCapMs ?? CRASH_FLUSH_CAP_MS);
     crash = reported.then(() => {
@@ -364,13 +402,7 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
   setAnalyticsReporter(reporter);
   crashHost.on("uncaughtException", onUncaught);
   reportRejection = (reason) => {
-    void activation.then(() => core?.captureException(withoutMessage(reason), {
-      source: "server",
-      level: "error",
-      processType: "server",
-      origin: "unhandled_rejection",
-      uptimeSeconds: process.uptime(),
-    }));
+    void activation.then(() => capture(reason, "error", "unhandled_rejection"));
   };
 
   // Off the startup path: nothing here delays the server that is starting.
