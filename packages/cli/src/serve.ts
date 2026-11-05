@@ -64,14 +64,16 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     socket.on("data", (data) => {
       if (handled) return;
       buffer += data;
-      if (Buffer.byteLength(buffer) > 65536) { socket.destroy(); return; }
-      if (!buffer.includes("\n")) return;
+      const end = buffer.indexOf("\n");
+      // The ceiling is on the frame: bytes after its newline are ignored, not counted.
+      if (Buffer.byteLength(end < 0 ? buffer : buffer.slice(0, end)) > 65536) { socket.destroy(); return; }
+      if (end < 0) return;
       handled = true;
       socket.setTimeout(610_000, () => socket.destroy());
       lifetime.track((async () => {
         try {
           if (!lifetime.acceptsCommands) throw new Error("The Aiden daemon is shutting down.");
-          const request = JSON.parse(buffer.slice(0, buffer.indexOf("\n")));
+          const request = JSON.parse(buffer.slice(0, end));
           if (!["schedule", "remote", "bots", "workspace", "serve"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
           if (request.command === "remote" && !remote) throw new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls.");
           const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);

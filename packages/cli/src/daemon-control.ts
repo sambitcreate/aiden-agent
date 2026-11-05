@@ -23,10 +23,12 @@ export async function remoteDaemonCommand(agentDir: string, command: string, arg
     });
     socket.on("data", (data) => {
       buffer += data;
-      if (Buffer.byteLength(buffer) > 8 * 1024 * 1024) { socket.destroy(new Error("Daemon response is too large.")); return; }
-      if (!buffer.includes("\n")) return;
+      const end = buffer.indexOf("\n");
+      // The ceiling is on the frame: bytes after its newline are ignored, not counted.
+      if (Buffer.byteLength(end < 0 ? buffer : buffer.slice(0, end)) > 8 * 1024 * 1024) { socket.destroy(new Error("Daemon response is too large.")); return; }
+      if (end < 0) return;
       socket.end();
-      try { const response = JSON.parse(buffer.slice(0, buffer.indexOf("\n"))); if (response.error) reject(new Error(response.error)); else resolve(response.result); }
+      try { const response = JSON.parse(buffer.slice(0, end)); if (response.error) reject(new Error(response.error)); else resolve(response.result); }
       catch (error) { reject(error); }
     });
     socket.on("end", () => { if (!buffer.includes("\n")) reject(new Error("Daemon closed without a response.")); });

@@ -164,6 +164,18 @@ test("the control socket answers one framed request per connection and refuses m
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "shell", args: [] })}\n`), /Invalid daemon command/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "serve", args: [1] })}\n`), /Invalid daemon command/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "remote", args: ["status"] })}\n`), /Remote is off/u);
+  // The ceiling is on the frame, so bytes after a request that fits cannot push it over.
+  const full = `${JSON.stringify({ command: "serve", args: ["status"], padding: "x".repeat(65_000) })}\n`;
+  const fits = await new Promise((resolveReply, rejectReply) => {
+    const socket = createConnection(box.socket);
+    let reply = "";
+    socket.setEncoding("utf8").on("data", (part) => { reply += part; }).on("close", () => resolveReply(reply)).on("error", rejectReply);
+    socket.on("connect", () => {
+      socket.write(full.slice(0, 60_000));
+      setTimeout(() => socket.write(`${full.slice(60_000)}${"y".repeat(10_000)}`), 100);
+    });
+  });
+  assert.deepEqual(JSON.parse(fits), { result: { remote: { on: false } } });
   // A request with no newline inside the byte ceiling is cut off, with no reply.
   assert.equal(await exchange(box.socket, "x".repeat(70_000)), "");
   assert.deepEqual(JSON.parse(await exchange(box.socket, status)), { result: { remote: { on: false } } }, "the server is still healthy");
@@ -283,6 +295,13 @@ test("the command client settles once for every way a daemon can answer", posix,
     setTimeout(() => socket.end(`${oversized.slice(-16)}\n`), 100);
   });
   await assert.rejects(api.remoteDaemonCommand(crossing, "serve", ["status"]), /too large/u);
+  // The ceiling is on the frame, so bytes after a reply that fits cannot push it over.
+  const fits = "x".repeat(8 * 1024 * 1024 - 64), framed = JSON.stringify({ result: fits });
+  const padded = await fakeDaemon(t, (socket) => {
+    socket.write(framed.slice(0, -16));
+    setTimeout(() => socket.end(`${framed.slice(-16)}\n${"y".repeat(1024)}`), 100);
+  });
+  assert.equal((await api.remoteDaemonCommand(padded, "serve", ["status"])).length, fits.length);
   // The reply is its first frame: bytes after the newline do not turn it into an error.
   const trailing = await fakeDaemon(t, (socket) => { socket.end(`${JSON.stringify({ result: "ok" })}\nleftover`); });
   assert.equal(await api.remoteDaemonCommand(trailing, "serve", ["status"]), "ok");
