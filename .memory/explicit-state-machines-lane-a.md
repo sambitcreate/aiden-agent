@@ -18,4 +18,23 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 
 ## Status
 
-- P1a: `ChatTurnAdmission` extracted on `feature/sm-p1-admission`.
+- P0/P1: done apart from review and CI. #735 admission, #736 generation settlement, #741 run input, #742 Pi run gate, #743 generation stream, #744 background launch, #745 side-question slot, plus the first-send PR. Dispositions are in `docs/state-machines/retained-p1-owners.md`.
+- P5a: shared process settlement and subagent shell are in PRs. `docs/state-machines/physical-teardown.md` records the contract.
+- P5b, P5c, P5d: not started when this was written.
+
+## Lane overlap
+
+- Lane B's `feature/sm-p2-approvals` adds a recheck before `runShell` in `subagent-shell.ts`. The shell gate was edited so those 5 lines still merge: `return {` became `const gate = {` with no reindent.
+- `feature/sm-p2-consent` and four `feature/sm-p4*` branches touch `main/services/computer-use` or `native`. Check which files before P5b.
+
+## Test notes
+
+- E2E: use `CUA_SPACE=aiden-e2e` and read the Playwright totals, not only the exit code. An earlier Space never became ready and a piped `tail` hid it.
+- Conflict resolution on `retained-p1-owners.md`: the M106 row and the First send section share a hunk, so check both survive.
+
+## Unverified
+
+- Stop during initialization, first delta and terminal save are covered by E2E only.
+- Persist before release is covered only by a source-grep test.
+- C11 overlap edge. `git-clone-runner.ts` waits for `finished()` but ignores `cleanup_unconfirmed`; it only removes a private staging folder.
+- Process group ID reuse between check and signal is an existing race.

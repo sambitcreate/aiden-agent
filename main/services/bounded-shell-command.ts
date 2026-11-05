@@ -116,6 +116,10 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
     terminator.terminate();
   }, options.timeoutMs);
   timeout.unref?.();
+  const stopWatching = () => {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  };
 
   const result = (exitCode: number | null, extra: Partial<BoundedShellCommandResult>): BoundedShellCommandResult => ({
     stdout: decodeCappedUtf8(Buffer.concat(stdout), outputLimitExceeded),
@@ -161,6 +165,8 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       terminator.terminate();
       child.stdout.destroy();
       child.stderr.destroy();
+      // The run is over. Waiting for cleanup must not rewrite how it ended.
+      stopWatching();
       const stopConfirmed = await terminator.finished() !== "cleanup_unconfirmed";
       return result(released.code, { backgroundStopped: stopConfirmed && !timedOut && !outputLimitExceeded && !aborted });
     }
@@ -173,6 +179,7 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       if (admissionError) throw admissionError;
       if (processGroupExists(child.pid)) terminator.terminate();
     }
+    stopWatching();
     const stopConfirmed = await terminator.finished() !== "cleanup_unconfirmed";
     return result(code, {
       ...(pipesHeld ? {} : leftovers(child.pid, terminator.requested)),
@@ -181,8 +188,7 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       backgroundStopped: pipesHeld && stopConfirmed && !timedOut && !outputLimitExceeded && !aborted,
     });
   } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", abort);
+    stopWatching();
     // The shell can close before its descendants leave the process group.
     await terminator.finished();
     await admission;

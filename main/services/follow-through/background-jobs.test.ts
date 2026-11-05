@@ -844,10 +844,12 @@ test("a shell's background job that cannot be confirmed gone is not reported sto
     command: "sleep 30 &\necho started",
     env: process.env,
     cwd: os.tmpdir(),
-    timeoutMs: 35_000,
+    // Falls inside cleanup: the command itself finished well before this.
+    timeoutMs: 1_500,
     maxOutputBytes: 4_096,
     groupProbe: { exists: () => true, stillRuns: async () => true },
   });
   assert.equal(result.exitCode, 0);
+  assert.equal(result.timedOut, false);
   assert.equal(result.backgroundStopped, false);
 });

@@ -184,12 +184,18 @@ export async function runScheduledScript(
     terminator.terminate();
   }, timeoutMs);
   timeout.unref?.();
+  const stopWatching = () => {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abort);
+  };
 
   try {
     const { code, signal, pipesHeld } = await waitForChildExit(child, {
       drainMs: PIPE_DRAIN_MS,
       onPipesHeld: () => terminator.terminate(),
     });
+    // The run is over. Waiting for cleanup must not rewrite how it ended.
+    stopWatching();
     const stopConfirmed = await terminator.finished() !== "cleanup_unconfirmed";
     return {
       stdout: decodeCappedUtf8(Buffer.concat(stdout), outputLimitExceeded),
@@ -202,8 +208,7 @@ export async function runScheduledScript(
       backgroundStopped: pipesHeld && stopConfirmed && !timedOut && !outputLimitExceeded && !aborted,
     };
   } finally {
-    clearTimeout(timeout);
-    options.signal?.removeEventListener("abort", abort);
+    stopWatching();
     await terminator.finished();
   }
 }

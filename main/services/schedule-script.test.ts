@@ -138,10 +138,12 @@ test("a background job that cannot be confirmed gone is not reported stopped", a
     await fs.writeFile(script, "#!/bin/bash\nsleep 30 &\necho started", { mode: 0o755 });
     const result = await runScheduledScript(script, {
       cwd: files.root,
-      timeoutMs: 35_000,
+      // Falls inside cleanup: the script itself finished well before this.
+      timeoutMs: 1_500,
       groupProbe: { exists: () => true, stillRuns: async () => true },
     });
     assert.equal(result.exitCode, 0);
+    assert.equal(result.timedOut, false);
     assert.equal(result.backgroundStopped, false);
   } finally {
     await files.cleanup();
