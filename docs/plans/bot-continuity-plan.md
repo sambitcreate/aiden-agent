@@ -240,3 +240,7 @@ Main now uses Remote revision 58 for opt-in live-run history checkpoints. Contin
 ### 2026-11-05 integration after usage-data feature PR #734
 
 Main’s feature-event hooks are retained alongside continuity. The Bot send path keeps its execution claim/admission and saved fallback choices, reads only the admitted model for allowlisted analytics IDs, and excludes host-issued routine/watch and peer task/result inputs from person-message counts. The root package scripts and CI inventory retain both branches’ tests. Remote revision59, native contracts and fixtures are unchanged; physical/packaged/live Mail gates and historical iOS observations remain open. The delayed-metadata and queued-optout consent races found during review are fixed, and the documented Telegram message exclusion is enforced. Analytics167, runtime217, changed services783, protocol/router177, CLI102, owner metadata2, Telegram1, policy75 and Cua3 passed; reciprocal GPT-6.1 Sol high reviews are clear.
+
+### 2026-11-05 integration after Bot-browser PR #777
+
+Merged main’s held-page field-read and short-wait fixes while preserving continuity’s earlier held-observer masking regression and exact pixel controls. The browser now reads each held document on readiness and coalesces a follow-up when it loads during an active read; a Bot wait begins its condition budget after the mandatory privacy read. Browser command/authority gates, retries and release acceptance remain unchanged. Remote59, native fixtures and the package test union are unchanged.
