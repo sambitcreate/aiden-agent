@@ -23,7 +23,7 @@ export async function remoteDaemonCommand(agentDir: string, command: string, arg
     });
     socket.on("data", (data) => {
       buffer += data;
-      if (Buffer.byteLength(buffer) > 8 * 1024 * 1024) socket.destroy(new Error("Daemon response is too large."));
+      if (Buffer.byteLength(buffer) > 8 * 1024 * 1024) { socket.destroy(new Error("Daemon response is too large.")); return; }
       if (!buffer.includes("\n")) return;
       socket.end();
       try { const response = JSON.parse(buffer); if (response.error) reject(new Error(response.error)); else resolve(response.result); }

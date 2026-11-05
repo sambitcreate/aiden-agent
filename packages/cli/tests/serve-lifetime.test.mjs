@@ -277,6 +277,13 @@ test("the command client settles once for every way a daemon can answer", posix,
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => socket.end('{"partial"')), "serve", ["status"]), /closed without a response/u);
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => socket.end("not json\n")), "serve", ["status"]), SyntaxError);
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => { socket.write("x".repeat(9 * 1024 * 1024)); }), "serve", ["status"]), /too large/u);
+  // The ceiling holds even when the chunk that crosses it also completes the frame.
+  const oversized = JSON.stringify({ result: "x".repeat(8 * 1024 * 1024 - 8) });
+  const crossing = await fakeDaemon(t, (socket) => {
+    socket.write(oversized.slice(0, -16));
+    setTimeout(() => socket.end(`${oversized.slice(-16)}\n`), 100);
+  });
+  await assert.rejects(api.remoteDaemonCommand(crossing, "serve", ["status"]), /too large/u);
   const missing = sandbox(t);
   await assert.rejects(api.remoteDaemonCommand(missing.agentDir, "serve", ["status"]), (error) => error.code === "ENOENT" && /not running/u.test(error.message));
 });

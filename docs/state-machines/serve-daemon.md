@@ -127,4 +127,6 @@ Evidence of exit is `pidAlive`, never the signal.
 
 ## C04: local daemon command framing
 
-Owners: `remoteDaemonCommand` (`daemon-control.ts`) and the socket handler in `serve.ts`. One request per connection, framed by a newline, 64 KiB request ceiling, 8 MiB response ceiling, UTF-8 decoded across chunks. The client settles once for result, error, closed without a frame, oversized reply and transport error. It is a stream parser, not a product mode.
+Owners: `remoteDaemonCommand` (`daemon-control.ts`) and the socket handler in `serve.ts`. One request per connection, framed by a newline, 64 KiB request ceiling, 8 MiB response ceiling, UTF-8 decoded across chunks. The client settles once for result, error, closed without a frame, oversized reply and transport error. It is a stream parser, not a product mode. Retained as it was, with no state model: that would add nothing to a one-shot parser.
+
+**Defect fixed:** when the chunk that crossed the 8 MiB ceiling also completed the frame, the client destroyed the socket and then parsed and returned the reply anyway, so the ceiling did not hold on the last chunk.
