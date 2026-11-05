@@ -2,7 +2,7 @@
 // daemon processes, their control socket and the artifacts they leave behind.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { createConnection, createServer, Server } from "node:net";
@@ -197,6 +197,35 @@ test("shutdown keeps the lease until a running control command has answered", po
   await serving;
   assert.equal(existsSync(box.lock), false);
   assert.equal(existsSync(box.socket), false);
+});
+
+test("shutdown delivers the whole reply to a client that reads it slowly", posix, async (t) => {
+  const box = sandbox(t), controller = new AbortController(), ready = Promise.withResolvers();
+  const serving = api.serve(box.agentDir, controller.signal, { onReady: ready.resolve });
+  void serving.catch(ready.reject);
+  t.after(() => { controller.abort(); return serving.catch(() => {}); });
+  await ready.promise;
+  const workspace = await api.remoteDaemonCommand(box.agentDir, "workspace", ["add", box.agentDir]);
+  const input = join(box.agentDir, "input.json");
+  writeFileSync(input, JSON.stringify({ name: "Large", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Review", permission: "read-only", enabled: false, workspaceId: workspace.id }));
+  await api.remoteDaemonCommand(box.agentDir, "schedule", ["save", input]);
+  // Far more than a socket buffers, so the reply cannot finish until the client reads.
+  const file = join(box.agentDir, "schedules.json"), [task] = JSON.parse(readFileSync(file, "utf8"));
+  api.atomicJson(file, [{ ...task, prompt: "x".repeat(4 * 1024 * 1024) }]);
+  const client = createConnection(box.socket);
+  client.pause();
+  client.write(`${JSON.stringify({ command: "schedule", args: ["list"] })}\n`);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+  controller.abort();
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+  const chunks = [], closed = new Promise((resolveClose) => client.once("close", resolveClose));
+  client.on("data", (part) => chunks.push(part)).on("error", () => {});
+  client.resume();
+  await closed;
+  const { result } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  assert.equal(result[0].prompt.length, 4 * 1024 * 1024);
+  await serving;
+  assert.equal(existsSync(box.lock), false);
 });
 
 test("serve phases only move forward and draining waits for every accepted command", async () => {

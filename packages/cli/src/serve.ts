@@ -68,6 +68,12 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       if (!buffer.includes("\n")) return;
       handled = true;
       socket.setTimeout(610_000, () => socket.destroy());
+      // A reply is not delivered until it has flushed or its client has gone.
+      const reply = (body: unknown) => new Promise<void>((resolve) => {
+        if (socket.destroyed) { resolve(); return; }
+        socket.once("close", () => resolve());
+        socket.end(JSON.stringify(body) + "\n", () => resolve());
+      });
       lifetime.track((async () => {
         try {
           if (!lifetime.acceptsCommands) throw new Error("The Aiden daemon is shutting down.");
@@ -75,8 +81,8 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
           if (!["schedule", "remote", "bots", "workspace", "serve"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
           if (request.command === "remote" && !remote) throw new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls.");
           const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);
-          socket.end(JSON.stringify({ result }) + "\n");
-        } catch (error) { socket.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) + "\n"); }
+          await reply({ result });
+        } catch (error) { await reply({ error: error instanceof Error ? error.message : String(error) }); }
       })());
     });
   });
