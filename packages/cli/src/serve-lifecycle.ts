@@ -19,6 +19,7 @@ import { daemonSocket } from "./daemon-control.ts";
 import { acquireLease, atomicJson, cliLeaseHelperPath, leaseGuardPath, readJson } from "./state.ts";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 import { watchMcpProcessGroups } from "../../../main/services/mcp-stdio-transport.js";
+import { decideServeStopDeadline, decideServeStopStart, type ServeOwnerObservation, type ServeProcessClass } from "./serve-ownership.ts";
 
 const SERVE_LOCK = "serve.lock";
 const SERVE_LOG = "serve.log";
@@ -144,8 +145,6 @@ function cliEntryCandidates(): string[] {
   return [...candidates];
 }
 
-type PidClass = "daemon" | "aiden" | "foreign" | "unknown";
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -161,7 +160,7 @@ const RUNTIME_ARGV0 = /(?:^|[/\\])(?:node(?:js)?|bun|deno|tsx|aiden(?:-cli)?)(?:
  * - "foreign": cmdline inspectable and is not our CLI at all — a recycled PID.
  * - "unknown": cmdline cannot be inspected on this platform.
  */
-function classifyPid(pid: number, owner?: ServeOwner): PidClass {
+function classifyPid(pid: number, owner?: ServeOwner): ServeProcessClass {
   const command = processCommandLine(pid)?.trim();
   if (command === undefined) return "unknown";
   // Strongest check: acquireLease records the owner's argv, so matching the
@@ -359,24 +358,20 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
     throw new Error("The Aiden daemon is not running.");
   }
   const pid = owner.pid;
-  if (!pidAlive(pid)) {
-    clearServeArtifacts(agentDir, owner);
-    throw new Error(`The Aiden daemon was not running; cleared the stale lock left by PID ${pid}.`);
-  }
-  const klass = classifyPid(pid, owner);
-  if (klass === "foreign") {
-    // The PID was recycled by an unrelated process — never signal it.
-    clearServeArtifacts(agentDir, owner);
-    throw new Error(`The Aiden daemon was not running; cleared the stale lock left by PID ${pid}.`);
-  }
-  if (klass === "aiden") {
-    throw new Error(`PID ${pid} is a running Aiden command, not the daemon — its lock releases when the command exits.`);
-  }
-  if (klass === "unknown") {
-    throw new Error(
-      `Cannot verify that PID ${pid} is the Aiden daemon; refusing to signal it. ` +
-      `If it is, run kill ${pid} and remove ${join(agentDir, SERVE_LOCK)}.`,
-    );
+  const observe = (): ServeOwnerObservation => (pidAlive(pid) ? classifyPid(pid, owner) : "gone");
+  switch (decideServeStopStart(observe())) {
+    case "clear_stale":
+      // A dead owner, or a PID recycled by an unrelated process that is never signalled.
+      clearServeArtifacts(agentDir, owner);
+      throw new Error(`The Aiden daemon was not running; cleared the stale lock left by PID ${pid}.`);
+    case "refuse_aiden":
+      throw new Error(`PID ${pid} is a running Aiden command, not the daemon — its lock releases when the command exits.`);
+    case "refuse_unverified":
+      throw new Error(
+        `Cannot verify that PID ${pid} is the Aiden daemon; refusing to signal it. ` +
+        `If it is, run kill ${pid} and remove ${join(agentDir, SERVE_LOCK)}.`,
+      );
+    case "signal":
   }
   try {
     process.kill(pid, "SIGTERM");
@@ -400,8 +395,14 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
     polls += 1;
     await new Promise((resolveWait) => setTimeout(resolveWait, 150));
   }
-  // Re-verify the PID before the forced kill: it must still be this daemon.
-  if (pidAlive(pid) && classifyPid(pid, owner) === "daemon") {
+  // Re-verify the owner and PID before the forced kill: both must still be this daemon.
+  const atDeadline = decideServeStopDeadline(observe(), sameOwner(serveOwner(agentDir), owner));
+  if (atDeadline === "stopped") return { stopped: true, pid };
+  if (atDeadline === "clear_stale") {
+    clearServeArtifacts(agentDir, owner);
+    return { stopped: true, pid };
+  }
+  if (atDeadline === "force") {
     // A background daemon leads its own process group; killing the group also
     // takes its Remote advertiser instead of orphaning it. A foreground serve
     // shares its group with the shell job (`aiden serve | tee`), so only the

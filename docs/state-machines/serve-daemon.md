@@ -103,7 +103,24 @@ Owner: `packages/cli/src/serve-lifecycle.ts`, over `acquireLease` (`state.ts`). 
 
 Start: start lease, recover stale lease, refuse when running, spawn, poll until the socket answers and `owner.pid` is the spawned PID, or TERM, wait 2 s, KILL the group.
 
-Stop decision on the recorded owner: absent is `not running`; dead or foreign clears artifacts under the guard and reports `not running`; `aiden` refuses (a one-shot command holds the lock); `unknown` refuses (nothing can verify it); `daemon` sends TERM, then polls. The lease going away or changing owner means stopped. At the deadline, a process still verified as this daemon gets KILL (its group only when `detached` and it leads the group) plus its recorded MCP groups. Evidence of exit is `pidAlive`, not the signal.
+Stop decisions are pure tables in `packages/cli/src/serve-ownership.ts`. Signals, polling and cleanup stay in `serve-lifecycle.ts`. Startup stays there too: it is one linear path under its start lease, so a machine would add nothing.
+
+| When | Observed | Decision |
+|---|---|---|
+| Before signalling | `daemon` | TERM, then poll |
+| | `gone` or `foreign` | clear artifacts under the guard, report `not running` |
+| | `aiden` | refuse: a one-shot command holds the lock |
+| | `unknown` | refuse: nothing can verify it |
+| While polling | lease gone or owner changed | stopped |
+| | PID gone, or `foreign` on the periodic check | clear artifacts, stopped |
+| At the deadline | owner changed | stopped: a replacement is not the daemon asked to stop |
+| | same owner, `daemon` | KILL (its group only when `detached` and it leads the group) plus recorded MCP groups, then wait for `pidAlive` to confirm exit |
+| | same owner, `gone` or `foreign` | clear artifacts, stopped |
+| | same owner, `aiden` or `unknown` | report that the stop is unconfirmed |
+
+Evidence of exit is `pidAlive`, never the signal.
+
+**Defect fixed:** the periodic `foreign` check ran only every tenth poll, so a PID that stopped being ours just before the deadline fell through to `did not stop ... try kill -9 <pid>`, sending the person to kill an unrelated process. Reproduced in `tests/serve-lifetime.test.mjs` with a process that `exec`s into something else.
 
 ## C04: local daemon command framing
 

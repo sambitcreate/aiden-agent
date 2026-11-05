@@ -2,7 +2,7 @@
 // daemon processes, their control socket and the artifacts they leave behind.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { createConnection, createServer, Server } from "node:net";
@@ -218,6 +218,47 @@ test("serve phases only move forward and draining waits for every accepted comma
   second.resolve();
   await settling;
   assert.equal(settled, true);
+});
+
+test("a daemon PID that stops being ours before the stop deadline is never killed or blamed", posix, async (t) => {
+  const box = sandbox(t), script = join(box.agentDir, "becomes-foreign.sh");
+  // Ignores TERM like a stuck daemon, then its PID stops being a daemon at all.
+  writeFileSync(script, "trap '' TERM\nsleep 0.5\nexec sleep 30\n");
+  const child = spawn("/bin/sh", [script, "serve"], { stdio: "ignore" });
+  t.after(() => { child.kill("SIGKILL"); });
+  mkdirSync(box.lock, { mode: 0o700 });
+  writeFileSync(join(box.lock, "owner.json"), JSON.stringify({ pid: child.pid, argv: ["/bin/sh", script, "serve"], startedAt: 1, token: "legacy" }));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+  assert.deepEqual(await api.stopDaemon(box.agentDir, 1_000), { stopped: true, pid: child.pid });
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null, "the unrelated process was left alone");
+  assert.equal(existsSync(box.lock), false, "its stale lease is gone");
+});
+
+test("stop signals only a verified daemon, at the start and at the deadline", () => {
+  assert.equal(api.decideServeStopStart("daemon"), "signal");
+  for (const owner of ["gone", "foreign"]) assert.equal(api.decideServeStopStart(owner), "clear_stale");
+  assert.equal(api.decideServeStopStart("aiden"), "refuse_aiden");
+  assert.equal(api.decideServeStopStart("unknown"), "refuse_unverified");
+  assert.equal(api.decideServeStopDeadline("daemon", true), "force");
+  assert.equal(api.decideServeStopDeadline("daemon", false), "stopped", "a replacement daemon is not the one asked to stop");
+  for (const owner of ["gone", "foreign"]) assert.equal(api.decideServeStopDeadline(owner, true), "clear_stale");
+  for (const owner of ["aiden", "unknown"]) assert.equal(api.decideServeStopDeadline(owner, true), "unconfirmed");
+});
+
+test("two daemon starts cannot both spawn", posix, async (t) => {
+  const box = sandbox(t);
+  t.after(() => { run(["serve", "stop"], box.env); });
+  const release = api.acquireLease(join(box.agentDir, "serve-start"));
+  const refused = run(["serve", "--daemon", "--no-remote"], box.env);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /Another daemon start is already in progress/u);
+  release();
+  assert.equal(existsSync(box.lock), false, "the refused start spawned nothing");
+  assert.equal(run(["serve", "--daemon", "--no-remote"], box.env).status, 0);
+  const again = run(["serve", "--daemon", "--no-remote"], box.env);
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /already running/u);
 });
 
 /** A fake daemon that answers every connection with the given bytes. */
