@@ -70,8 +70,8 @@ test("generated event orders never admit input after a Stop in the same run", ()
     const trace: string[] = [];
     for (let step = 0; step < 40; step += 1) {
       const type = types[next() % types.length]!;
-      // The harness refuses reset while a run is live.
-      if (type === "reset" && state.running) continue;
+      // The harness refuses both of these while a run is live.
+      if ((type === "reset" || type === "run-started") && state.running) continue;
       trace.push(type);
       const before = state;
       state = transitionPiManagedRun(state, { type });

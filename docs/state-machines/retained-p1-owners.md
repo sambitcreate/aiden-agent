@@ -6,7 +6,7 @@ Each owner below was traced for the state-machine migration and already centrali
 |---|---|---|---|
 | `backend:M008` | `main/services/chat-run-input-admission.ts` | Retain, one fix | One linear function with a single writer. The probe, persist, recheck and queue steps are already ordered, and `chat-run-input-admission.test.ts` covers each race. |
 | `backend:M009` | `main/services/renderer-document-owner.ts`, `chat-generation-owner.ts` | Retain | Invalidation is one-way and listeners are removed once. The inventory places it in rank 1, so any identity change belongs with the authority work. |
-| `backend:M015` | `main/services/host-run-registry.ts` | Retain | Every run state change goes through `commit`. A terminal event clears prompts, and otherwise pending prompts decide the state. |
+| `backend:M015` | `main/services/host-run-registry.ts` | Retain | After `begin` sets `working`, every run state change goes through `commit`. A terminal event clears prompts, and otherwise pending prompts decide the state. |
 | `backend:M178` | `AidenRemoteStateRegistry` in `main/services/aiden-remote-state.ts` | Retain | The block is set before the durable write, a failed write lifts it, and the drain waits only after the revocation is durable. |
 
 `backend:M012` (`main/services/pi-agent-runtime-harness.ts`) is partly extracted. The run gate moved into `pi-managed-run-state.ts`: whether a managed run is live, whether its queue is open, and whether a Stop applies. Queue contents, tool maps, durable operations and abort controllers stay in the harness. Compaction, persistence and model completion remain separate transitions there.
