@@ -4,6 +4,7 @@ import { spawnSync as defaultSpawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 // Areas map to CI jobs:
 // - desktop: static, verify, unit lanes, Electron E2E
@@ -31,6 +32,21 @@ const LINUX_SPECIFIC = /(?:^|[/._-])linux(?:$|[/._-])/iu;
 const REMOTE_SERVER_PATH = /^main\/(?:services|handlers)\/(?:[^/]+\/)*aiden-remote[^/]*(?:\/.*)?$/u;
 const LOCK_FILE = /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
 const CONFIG_FILE = /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;
+// Shared renderer files that a native client mirrors by hand. The rest of
+// renderer/shared/ reaches only the desktop app and the CLI bundle.
+const MOBILE_MIRRORED_SHARED_PATHS = new Set([
+  "renderer/shared/appearance.ts",
+  "renderer/shared/bot-activity.ts",
+  "renderer/shared/bots.ts",
+  "renderer/shared/image-generation/placeholder-spec.ts",
+  "renderer/shared/inbox-state.ts",
+]);
+const HOST_AREAS = Object.freeze(["desktop", "cli", "linux"]);
+// Only the unit lanes read the lane registry.
+const TEST_REGISTRY_PATH = "scripts/ci-test-registry.json";
+const ROOT_MANIFEST_PATH = "package.json";
+// npm scripts the Apple and iOS jobs run. Android runs none.
+const NATIVE_JOB_NPM_SCRIPTS = Object.freeze(["test:native", "test:ios-release"]);
 
 function selectAreas(selected = []) {
   const areas = {};
@@ -121,7 +137,7 @@ function scoped(kind, selected, path) {
   return { areas: withImpliedAreas(areas), kind };
 }
 
-function classifyPath(path) {
+function classifyPath(path, { hostOnlyManifest = false } = {}) {
   if (!isSafePath(path)) {
     return { areas: fullAreas(), kind: "unknown" };
   }
@@ -149,10 +165,13 @@ function classifyPath(path) {
   }
 
   // Shared renderer code must exercise every consumer, including the CLI
-  // bundle and the mobile appearance contract. Check this before the rest of
+  // bundle and the files native clients mirror. Check this before the rest of
   // renderer/, which is desktop-only.
-  if (path.startsWith("renderer/shared/")) {
+  if (MOBILE_MIRRORED_SHARED_PATHS.has(path)) {
     return { areas: fullAreas(), kind: "shared" };
+  }
+  if (path.startsWith("renderer/shared/")) {
+    return scoped("shared", HOST_AREAS, path);
   }
   if (path.startsWith("renderer/") || path.startsWith("tests/e2e/")) {
     return scoped("desktop", ["desktop"], path);
@@ -183,7 +202,13 @@ function classifyPath(path) {
     return scoped("native", ["desktop", "apple"], path);
   }
   if (path.startsWith("native/")) {
-    return scoped("native", ["desktop", "cli", "linux"], path);
+    return scoped("native", HOST_AREAS, path);
+  }
+  if (path === TEST_REGISTRY_PATH) {
+    return scoped("infrastructure", ["desktop"], path);
+  }
+  if (path === ROOT_MANIFEST_PATH && hostOnlyManifest) {
+    return scoped("infrastructure", HOST_AREAS, path);
   }
   if (isInfrastructurePath(path)) {
     return { areas: fullAreas(), kind: "infrastructure" };
@@ -226,7 +251,7 @@ export function decideChangedAreas(paths, options = {}) {
 
   const areas = noAreas();
   for (const path of paths) {
-    mergeAreas(areas, classifyPath(path).areas);
+    mergeAreas(areas, classifyPath(path, options).areas);
     if (AREA_NAMES.every((area) => areas[area])) {
       return areas;
     }
@@ -250,7 +275,7 @@ export function analyzeChangedPaths(paths, options = {}) {
   }
 
   const areas = decideChangedAreas(paths, options);
-  const classifications = paths.map((path) => classifyPath(path));
+  const classifications = paths.map((path) => classifyPath(path, options));
   const safeDocsOnly = classifications.every(({ kind }) => kind === "documentation");
   const hasUnknown = classifications.some(({ kind }) => kind === "unknown");
   const reason = safeDocsOnly
@@ -334,6 +359,41 @@ function fullDetection(reason, changedCount = 0) {
   return decision(fullAreas(), changedCount, false, reason);
 }
 
+function readManifest(spawn, ref, cwd) {
+  const result = invokeGit(spawn, ["show", `${ref}:${ROOT_MANIFEST_PATH}`], cwd);
+  if (!result || result.error || result.status !== 0 || result.signal || typeof result.stdout !== "string") {
+    return null;
+  }
+  try {
+    const manifest = JSON.parse(result.stdout);
+    return manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) ? manifest : null;
+  } catch {
+    return null;
+  }
+}
+
+// True only when a pull request's root manifest differs in `scripts` alone and
+// leaves the npm scripts native jobs run untouched. Dependencies, overrides and
+// the app version can reach every job, so anything unreadable stays full.
+function manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd) {
+  const mergeBase = invokeGit(spawn, ["merge-base", baseSha, headSha], cwd);
+  const resolved = typeof mergeBase?.stdout === "string" ? mergeBase.stdout.trim() : "";
+  if (!mergeBase || mergeBase.error || mergeBase.status !== 0 || !validGitRef(resolved)) {
+    return false;
+  }
+  const base = readManifest(spawn, resolved, cwd);
+  const head = readManifest(spawn, headSha, cwd);
+  if (!base || !head) {
+    return false;
+  }
+  const { scripts: baseScripts, ...baseRest } = base;
+  const { scripts: headScripts, ...headRest } = head;
+  return (
+    isDeepStrictEqual(baseRest, headRest) &&
+    NATIVE_JOB_NPM_SCRIPTS.every((name) => baseScripts?.[name] === headScripts?.[name])
+  );
+}
+
 export function detectChangedAreas(options = {}) {
   const environment = options.env ?? process.env;
   const eventName = envValue(environment, options.eventName, "GITHUB_EVENT_NAME") ?? "push";
@@ -373,7 +433,12 @@ export function detectChangedAreas(options = {}) {
   if (!result || result.error || result.status !== 0 || result.signal || result.stdout === undefined || result.stdout === null) {
     return fullDetection("git-diff-failed");
   }
-  return analyzeChangedPaths(parseChangedPaths(result.stdout), { eventName, forceFull });
+  const paths = parseChangedPaths(result.stdout);
+  const hostOnlyManifest =
+    eventName === "pull_request" &&
+    paths.includes(ROOT_MANIFEST_PATH) &&
+    manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd);
+  return analyzeChangedPaths(paths, { eventName, forceFull, hostOnlyManifest });
 }
 
 export const runChangedAreaDetection = detectChangedAreas;

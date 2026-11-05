@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath, URL } from "node:url";
 
 import {
   analyzeChangedPaths,
@@ -63,7 +65,9 @@ test("changed-area classification is conservative and table-driven", () => {
     ["renderer/components/settings/linux-keyring.tsx", select("desktop", "catalog", "linux")],
     ["tests/e2e/chat.spec.ts", desktopOnly],
     ["tests/e2e/linux-packaging.spec.ts", select("desktop", "catalog", "linux")],
-    ["renderer/shared/provider.ts", allTrue],
+    ["renderer/shared/provider.ts", select("desktop", "catalog", "cli", "linux")],
+    ["renderer/shared/appearance.ts", allTrue],
+    ["renderer/shared/image-generation/placeholder-spec.ts", allTrue],
     ["main/services/chat.ts", select("desktop", "catalog", "cli", "linux")],
     ["main/services/aiden-remote-router.ts", select("desktop", "catalog", "cli", "linux", "ios", "android")],
     ["main/handlers/aiden-remote.ts", select("desktop", "catalog", "cli", "linux", "ios", "android")],
@@ -76,7 +80,9 @@ test("changed-area classification is conservative and table-driven", () => {
     ["resources/model-capabilities.json", select("catalog")],
     ["resources/generative-ui/runtime.js", allTrue],
     ["scripts/ci-changes.mjs", allTrue],
+    ["scripts/ci-test-registry.json", desktopOnly],
     [".github/workflows/ci.yml", allTrue],
+    ["package.json", allTrue],
     ["package-lock.json", allTrue],
     ["vite.config.ts", allTrue],
     ["unknown/new-file.bin", allTrue],
@@ -107,6 +113,21 @@ test("scoped paths never select mobile or Apple jobs for desktop-only server cha
   );
   // A CLI-only change keeps the desktop lanes, which run the CLI package tests.
   assert.deepEqual(decideChangedAreas(["packages/cli/src/commands.ts", ".memory/cli.md"]), select("desktop", "catalog", "cli"));
+});
+
+test("every shared file a native client names keeps the mobile jobs selected", () => {
+  const named = spawnSync(
+    "git",
+    ["grep", "-hoE", "renderer/shared/[A-Za-z0-9_/-]+\\.[a-z]+", "--", "ios", "android"],
+    { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8" },
+  );
+  assert.equal(named.status, 0, named.stderr);
+  const paths = new Set(named.stdout.trim().split("\n"));
+  assert.ok(paths.size > 0);
+  for (const path of paths) {
+    const areas = classifyChangedPath(path);
+    assert.ok(areas.ios && areas.android, `${path} must select iOS and Android`);
+  }
 });
 
 test("documentation-only decisions are restricted to the explicit safe paths", () => {
@@ -206,6 +227,7 @@ function fakeGit({
   catFileStatus = 0,
   mergeBaseStatus = 0,
   mergeBaseOutput = `${"a".repeat(40)}\n`,
+  showStatus = 0,
 } = {}) {
   const calls = [];
   const spawn = (command, args, options) => {
@@ -215,6 +237,9 @@ function fakeGit({
     }
     if (args[0] === "merge-base") {
       return { status: mergeBaseStatus, stdout: mergeBaseOutput, stderr: "" };
+    }
+    if (args[0] === "show") {
+      return { status: showStatus, stdout: "{}", stderr: "" };
     }
     return { status: diffStatus, stdout: diffOutput, stderr: "" };
   };
@@ -266,6 +291,87 @@ test("git-backed detection reads only NUL-safe output and fails open", () => {
       allTrue,
     );
   }
+});
+
+function manifestPullRequest(base, head, extraFiles = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "ci-changes-manifest-"));
+  const git = (...args) => {
+    const result = spawnSync(
+      "git",
+      ["-c", "user.name=ci", "-c", "user.email=ci@example.invalid", ...args],
+      { cwd: directory, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  try {
+    git("init", "--quiet");
+    writeFileSync(join(directory, "package.json"), base);
+    git("add", "-A");
+    git("commit", "--quiet", "-m", "base");
+    const baseSha = git("rev-parse", "HEAD");
+    writeFileSync(join(directory, "package.json"), head);
+    for (const [name, contents] of Object.entries(extraFiles)) {
+      writeFileSync(join(directory, name), contents);
+    }
+    git("add", "-A");
+    git("commit", "--quiet", "-m", "head");
+    return detectChangedAreas({
+      baseSha,
+      cwd: directory,
+      env: {},
+      eventName: "pull_request",
+      headSha: git("rev-parse", "HEAD"),
+    });
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
+
+test("a root manifest change skips the native jobs only when it touches host npm scripts alone", () => {
+  const hostAreas = select("desktop", "catalog", "cli", "linux");
+  const manifest = (fields) => JSON.stringify({ name: "aiden", version: "1.0.0", ...fields }, null, 2);
+  const scripts = { "test:foo": "tsx --test a.ts", "test:ios-release": "ruby a.rb", "test:native": "swift test" };
+
+  const added = manifestPullRequest(
+    manifest({ scripts }),
+    manifest({ scripts: { ...scripts, "test:bar": "tsx --test b.ts" } }),
+  );
+  assert.deepEqual(areasOf(added), hostAreas);
+
+  for (const [name, head] of [
+    ["a dependency", manifest({ dependencies: { left: "1.0.0" }, scripts })],
+    ["the version", manifest({ scripts, version: "1.0.1" })],
+    ["the iOS job's script", manifest({ scripts: { ...scripts, "test:ios-release": "ruby b.rb" } })],
+    ["the Apple job's script", manifest({ scripts: { ...scripts, "test:native": "swift build" } })],
+    ["a removed native script", manifest({ scripts: { "test:foo": scripts["test:foo"] } })],
+    ["an unparsable manifest", "{"],
+    ["a non-object manifest", "[]"],
+  ]) {
+    assert.deepEqual(areasOf(manifestPullRequest(manifest({ scripts }), head)), allTrue, name);
+  }
+
+  // Another infrastructure path in the same pull request keeps every job.
+  const mixed = manifestPullRequest(
+    manifest({ scripts }),
+    manifest({ scripts: { ...scripts, "test:bar": "tsx --test b.ts" } }),
+    { "package-lock.json": "{}" },
+  );
+  assert.deepEqual(areasOf(mixed), allTrue);
+});
+
+test("a root manifest that cannot be compared keeps every job", () => {
+  const options = { baseSha: "base", env: {}, eventName: "pull_request", headSha: "head" };
+  for (const failure of [{ mergeBaseStatus: 1 }, { mergeBaseOutput: "not a sha\n" }, { showStatus: 1 }]) {
+    const fake = fakeGit({ diffOutput: "package.json\0", ...failure });
+    assert.deepEqual(areasOf(detectChangedAreas({ ...options, spawn: fake.spawn })), allTrue, JSON.stringify(failure));
+  }
+
+  // Main pushes never read the manifest: they keep the path decision.
+  const push = fakeGit({ diffOutput: "package.json\0" });
+  const pushResult = detectChangedAreas({ ...options, eventName: "push", spawn: push.spawn });
+  assert.deepEqual(areasOf(pushResult), allTrue);
+  assert.ok(push.calls.every(({ args }) => args[0] !== "show"));
 });
 
 test("unknown changed paths force all checks even when a known area is also changed", () => {
