@@ -12,6 +12,7 @@ import { processGroupExists, processGroupStillRuns } from "../shared/process-gro
 import { StdioTransport, type McpTransport, type StdioTransportOptions } from "@earendil-works/pi-mcp";
 
 export interface McpStdioTransportOptions {
+  groupStillRuns?: (pid: number) => Promise<boolean>;
   command: string;
   args?: readonly string[];
   /** The server's declared environment, layered over a safe default set. */
@@ -29,6 +30,7 @@ export interface McpStdioTransportOptions {
 
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
 const GROUP_POLL_MS = 25;
+const SURVIVOR_POLL_MS = 1_000;
 // SIGKILL is asynchronous and can be denied, so sending it proves nothing.
 const KILL_CONFIRM_MS = 2_000;
 const liveGroups = new Set<number>();
@@ -124,6 +126,7 @@ class AidenStdioTransport extends StdioTransport {
     options: StdioTransportOptions,
     private readonly graceMs: number,
     private readonly processGroups: boolean,
+    private readonly groupStillRuns: (pid: number) => Promise<boolean> = processGroupStillRuns,
   ) {
     super(options);
     // Every pipe is closed, so nothing left in the group can reach Aiden. A
@@ -183,9 +186,21 @@ class AidenStdioTransport extends StdioTransport {
         signalGroup(pid, "SIGKILL");
         await groupGoneWithin(pid, KILL_CONFIRM_MS);
       }
-      if (!(await processGroupStillRuns(pid)) && liveGroups.delete(pid)) groupsChanged();
+      if (await this.groupStillRuns(pid)) this.forgetWhenGone(pid);
+      else if (liveGroups.delete(pid)) groupsChanged();
     })();
     return this.reaping;
+  }
+
+  /** A listed ID gets signalled later, so a dead group must not stay listed for reuse to hit. */
+  private forgetWhenGone(pid: number): void {
+    const timer = setTimeout(() => {
+      void this.groupStillRuns(pid).then((runs) => {
+        if (runs) this.forgetWhenGone(pid);
+        else if (liveGroups.delete(pid)) groupsChanged();
+      });
+    }, SURVIVOR_POLL_MS);
+    timer.unref?.();
   }
 }
 
@@ -208,5 +223,5 @@ export function createMcpStdioTransport(options: McpStdioTransportOptions): McpT
     ...(options.maxBufferSize === undefined ? {} : { maxMessageBytes: options.maxBufferSize }),
     closeTimeoutMs: graceMs,
   };
-  return new AidenStdioTransport(transportOptions, graceMs, process.platform !== "win32");
+  return new AidenStdioTransport(transportOptions, graceMs, process.platform !== "win32", options.groupStillRuns);
 }

@@ -153,6 +153,36 @@ test("a closed transport means the whole group is gone, even a descendant that i
   assert.equal(listedWhileAlive, true, "a running group left the list a force-stop owner reads");
 });
 
+test("a group that survives close leaves the list once it is gone, so its ID is never signalled again", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+  timeout: 15_000,
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reportFile = join(directory, "report.json");
+  let survives = true;
+  const transport = createMcpStdioTransport({
+    command: "node",
+    args: ["-e", SERVER],
+    env: { REPORT_FILE: reportFile },
+    closeGraceMs: 100,
+    // SIGKILL cannot be ignored, so the survivor is reported by the probe.
+    groupStillRuns: async () => survives,
+  });
+  const client = new McpClient({ name: "stdio-survivor", version: "1" });
+  await client.connect(transport);
+  let latest: readonly number[] = [];
+  const stop = watchMcpProcessGroups((groups) => { latest = groups; });
+  t.after(stop);
+  const listed = latest.length;
+  assert.ok(listed > 0);
+  await client.close();
+  assert.equal(latest.length, listed, "a survivor stays where a force-stop owner can find it");
+  survives = false;
+  for (let attempt = 0; attempt < 150 && latest.length === listed; attempt += 1) await delay(20);
+  assert.equal(latest.length, listed - 1);
+});
+
 /** A newline-framed MCP server with one tool, `echo`, that returns its input as text and structured content. */
 const TOOL_SERVER = `
 let buffer = "";

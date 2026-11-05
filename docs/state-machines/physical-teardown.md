@@ -32,7 +32,7 @@ Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession`
 
 ## MCP stdio servers
 
-`AidenStdioTransport` in `main/services/mcp-stdio-transport.ts` keeps protocol close and group cleanup apart. `close()` resolves only when the group is gone or the wait after SIGKILL ran out. A group leaves the published list only once nothing in it runs, so whoever force-stops this process can still find a survivor. SIGKILL is sent only to a group that still exists.
+`AidenStdioTransport` in `main/services/mcp-stdio-transport.ts` keeps protocol close and group cleanup apart. `close()` resolves only when the group is gone or the wait after SIGKILL ran out. A group leaves the published list only once nothing in it runs, so whoever force-stops this process can still find a survivor. A survivor is rechecked every second and leaves the list once gone, because a listed ID gets signalled later and could by then belong to something else. SIGKILL is sent only to a group that still exists.
 
 ## Owners kept as they are
 
