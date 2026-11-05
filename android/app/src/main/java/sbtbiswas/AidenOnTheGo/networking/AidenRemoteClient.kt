@@ -1509,13 +1509,15 @@ class AidenRemoteClient(
      * the run identity; a frame naming any other run ends the feed. */
     fun currentRunEvents(chatId: String): Flow<AidenRemoteRunEvent> = rawSseEvents(
         path = "/chats/$chatId/runs/current/events",
-        after = 0
+        after = 0,
+        runCheckpoint = true
     ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = null) }
 
     /** One run's feed, resumed after [after] with `?after` and `Last-Event-ID`. */
     fun runEvents(runId: String, after: Int = 0): Flow<AidenRemoteRunEvent> = rawSseEvents(
         path = "/runs/$runId/events",
-        after = after
+        after = after,
+        runCheckpoint = true
     ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = runId) }
 
     /** Stop a run this phone did not start. Control writes never auto-retry. */
@@ -1633,6 +1635,7 @@ class AidenRemoteClient(
         after: Int,
         epoch: String? = null,
         onOpen: suspend (Boolean) -> Unit = {},
+        runCheckpoint: Boolean = false,
         parse: (java.io.InputStream) -> Flow<T>
     ): Flow<T> = callbackFlow {
         if (credential.isNullOrEmpty()) {
@@ -1654,6 +1657,7 @@ class AidenRemoteClient(
             requestBuilder.addHeader("Last-Event-ID", after.toString())
         }
 
+        if (runCheckpoint) requestBuilder.header("Aiden-Run-Checkpoint", "1")
         epoch?.let { requestBuilder.header("Aiden-Progress-Epoch", it) }
         val call = httpClient.newCall(requestBuilder.build())
         val readerJob = launch(Dispatchers.IO) {

@@ -1,6 +1,6 @@
 # Usage data and crash reports
 
-Aiden's desktop app sends anonymous usage data so we can see how many people use it and what breaks. This release sends the app lifecycle events and crash reports below; feature-use events, which show which big features people use, arrive in a later release. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
+Aiden's desktop app sends anonymous usage data so we can see how many people use it, which big features they use and what breaks. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
 
 ## What is sent
 
@@ -11,7 +11,7 @@ Every event carries:
 - a random install ID, created on this device and deleted when you turn usage data off;
 - the app version, platform, CPU architecture, OS major version (on Linux, the kernel major version), surface (`desktop`) and build channel.
 
-Lifecycle events in this release:
+Lifecycle events:
 
 | Event | When | Extra fields |
 | --- | --- | --- |
@@ -21,7 +21,36 @@ Lifecycle events in this release:
 | `app_updated` | First launch on a new version | `from_version`, `to_version` |
 | `analytics_disabled` | When you turn usage data off (the last event sent) | none |
 
-Feature-use events are listed in the registry and arrive in a later release; the in-app sheet always shows the current list.
+Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`. An action in the first moments of a launch waits in memory, up to 100 events, until usage data has started, and is dropped if sending isn't allowed.
+
+| Event | When | Extra fields |
+| --- | --- | --- |
+| `chat_message_sent` | A person's message started a turn or was queued for one, including a scheduled run and a message to a Bot. A message that joins a running Bot turn, a message from another Bot, Telegram chats, Design runs and Aiden's own follow-up notices are not counted. | `provider_id`, `model_id`, `in_workspace`, `thinking`, `origin`: desktop, phone, peer (another paired Mac or Linux host), bot or schedule |
+| `chat_created` | A new chat from the sidebar, a phone, the first message of a draft, or the Assistant. Bots, schedules and forks are not counted. | `workspace_kind`: folder, scratch, worktree or none |
+| `provider_connected` | A sign-in or key was saved for a built-in provider, or a custom provider was added | `provider_id`, `auth`: key, oauth or local (a custom provider on this machine or one with no key) |
+| `workspace_added` | A folder, named or scratch workspace was added. A hidden No workspace folder is not. | `kind`: folder, scratch or path (a typed path or a clone) |
+| `bot_created` | A Bot was created | `preset_id`, `bot_count` bucket |
+| `bot_routine_ran` | A Bot routine finished with a result | `trigger`, `result`: success or failed |
+| `scheduled_task_ran` | A scheduled task finished with a result. A cancelled or skipped run is not counted; one blocked by a permission is `failed`. | `trigger`, `result`: success, silent or failed |
+| `subagent_launched` | A subagent started | `role` |
+| `skill_used` | A skill was run by name and its message was saved | `source`: builtin or user, and `skill_id` for a bundled skill only |
+| `connector_added` | A connector was added. Editing one is not counted. | `preset_id`, `transport`: stdio or http |
+| `web_search_used` | A search finished without an error, even with no results | `search_provider` |
+| `voice_used` | A Live session opened, a hotkey dictation delivered its text (pasted or copied), a phone transcribed speech, or read aloud started. The microphone in the Mac composer is not counted. | `mode`: live, dictation or read_aloud; `engine`: local or cloud |
+| `phone_paired` | An iPhone, iPad or Android phone finished pairing | `transport`: lan or tailscale; `device_count`: bucket of phones not revoked |
+| `peer_mac_paired` | Another Mac or Linux host was paired from this one | `method`: discovery, code or link |
+| `computer_use_enabled` | The global Computer Use switch went from off to on | none |
+| `bot_computer_set_up` | Bot computers finished Set up, or element control was added later | `element_control` |
+| `terminal_opened` | A terminal started | none |
+| `git_commit` | A commit was made from Aiden | none |
+| `worktree_created` | A managed worktree was created and saved as a workspace | none |
+
+How the values are limited:
+
+- `provider_id` and `model_id` are ids that ship in the app. A custom provider, a local model, or a model missing from the bundled catalog is sent as `custom`. Catalog ids are lowercased.
+- `preset_id` is a bundled Bot preset or connector, otherwise `custom`. `search_provider` is one of Aiden's own search routes.
+- `in_workspace` is true only for a real workspace. Messages to a Bot always report false, and report `origin: bot` whichever surface sent them.
+- `trigger` is automatic, manual, catch_up, retry, file_change, webhook or watch. `thinking` is the level chosen for the turn, or other when Aiden doesn't know it, as for a message to a Bot.
 
 ## Crash reports
 

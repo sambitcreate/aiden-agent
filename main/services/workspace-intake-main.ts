@@ -26,6 +26,7 @@ export const workspaceIntakeService = createWorkspaceIntakeService({
   removeTree: (target) => fs.rm(target, { recursive: true, force: true }),
   listWorkspaces: () => configStore.listWorkspaces(),
   getWorkspace: async (id) => (await configStore.getWorkspace(id)) ?? null,
-  createFromFolder: (folderPath, options) => workspaceApplicationService.createFromFolder(folderPath, undefined, options),
+  createFromFolder: (folderPath, options) =>
+    workspaceApplicationService.createFromFolder(folderPath, undefined, { ...options, fromPath: true }),
   runClone: createGitCloneRunner(),
 });

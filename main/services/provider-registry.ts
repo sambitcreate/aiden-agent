@@ -20,6 +20,7 @@ import {
   piProviderModelsStore,
   type ProviderModelsStore,
 } from "./pi-models-store.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { isCustomProviderId } from "./custom-provider-id.js";
 import { secrets } from "./secrets.js";
 import { configStore } from "./config-store.js";
@@ -320,6 +321,7 @@ export class ProviderRegistry {
         });
       },
     });
+    reportAnalyticsEvent("provider_connected", { provider_id: providerId, auth: "key" });
     const refreshErrors = await this.refreshBuiltinCatalogs([providerId]);
     const refreshedModels = await this.models.getAvailable(providerId);
     const accessible = new Set(usableModelIds);

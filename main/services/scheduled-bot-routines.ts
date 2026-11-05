@@ -1,4 +1,6 @@
 import { BOT_ROUTINE_EVENT_LIMITS } from "../../renderer/shared/bot-routine-trigger.js";
+import { analyticsRunTrigger } from "./analytics/analytics-ids.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { escapePromptText } from "./bot-system-prompt.js";
 import { unverifiedRoutineLine } from "./bot-runtime/bot-claim-check.js";
 import { randomUUID } from "node:crypto";
@@ -562,6 +564,13 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         ...(outcome.claimCheck !== undefined ? { claimCheck: outcome.claimCheck } : {}),
         ...(fingerprint !== undefined ? { fingerprint } : {}),
       });
+      // Skipped and blocked fires never ran, and a doubtful fire is settled by its retry.
+      if (outcome.result === "success" || outcome.result === "silent" || outcome.result === "error") {
+        reportAnalyticsEvent("bot_routine_ran", {
+          trigger: analyticsRunTrigger(trigger),
+          result: outcome.result === "error" ? "failed" : "success",
+        });
+      }
       let retrying = false;
       try {
         retrying = (await dependencies.afterRun?.(task, run, trigger))?.retrying === true;

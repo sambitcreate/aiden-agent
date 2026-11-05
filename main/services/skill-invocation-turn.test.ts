@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { SLASH_LIMITS, SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import {
+  commitSkillInvocationForAppend,
   formatPreparedSkillInvocation,
   prepareSkillInvocationForAppend,
   requireSkillInvocationWorkspace,
@@ -223,4 +225,23 @@ test("user formatting refuses model-only skills and permits explicitly requested
   );
   const prepared = formatPreparedSkillInvocation(skill({ modelInvocable: false }), "", "one", "message");
   assert.match(prepared.formattedPrompt, /Inspect the diff carefully/u);
+});
+
+test("a skill counts once after its message is saved, and only a bundled skill's name is sent", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const commit = (registered: RegisteredSkill, append: () => Promise<void>) =>
+    commitSkillInvocationForAppend(
+      { invocationId: registered.invocationId, role: "user", content: "Run it", attachments: [], workspaceId: "workspace-a", userMessageId: "message-a" },
+      { resolveFresh: async () => registered, isCurrent: () => true, prepareLease: () => undefined, append },
+    );
+
+  await assert.rejects(commit(skill(), async () => { throw new Error("append failed"); }), /append failed/u);
+  assert.deepEqual(sent, []);
+
+  await commit(skill({ name: "My Private Skill" }), async () => undefined);
+  await commit(skill({ name: "Frontend-Design", source: "builtin" }), async () => undefined);
+  assert.deepEqual(sent, [
+    { event: "skill_used", props: { source: "user" } },
+    { event: "skill_used", props: { source: "builtin", skill_id: "frontend-design" } },
+  ]);
 });
