@@ -72,9 +72,19 @@ export function createLifecycleCheck(onError: (error: unknown) => void): Lifecyc
 }
 
 /**
+ * Run `action` once no lifecycle action holds the check. Whoever holds it owns
+ * the outcome until it releases, so the action decides only after that.
+ */
+export function whenLifecycleCheckFree(check: LifecycleCheck, action: () => void): void {
+  if (check.inFlight) check.afterRelease(() => whenLifecycleCheckFree(check, action));
+  else action();
+}
+
+/**
  * An accepted update install waits for its quit. If that quit never begins
- * (another lifecycle action holds the check, or the window is gone), nothing
- * else would withdraw it, and the next ordinary quit would install unasked.
+ * (the window is gone), nothing else would withdraw it, and the next ordinary
+ * quit would install unasked. Call this with the check free: `false` from a
+ * busy check only says this caller lost the race.
  */
 export async function settleUpdateInstallQuit(
   quit: () => Promise<boolean>,

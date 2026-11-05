@@ -191,6 +191,7 @@ import { desktopVersionRequested } from "./desktop-cli-core.js";
 import {
   createLifecycleCheck,
   settleUpdateInstallQuit,
+  whenLifecycleCheckFree,
   shouldQuitAfterAllWindowsClose,
   shouldReleaseAuxiliaryWindows,
 } from "./application-lifecycle-core.js";
@@ -248,6 +249,8 @@ let shutdownStarted = false;
 /** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
 const imageQuitCoverage = new ImageQuitCoverage();
 let installUpdateOnQuit = false;
+/** A renderer veto interrupted a quit and scheduled its retry. */
+let quitRetryPending = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
   (snapshot) => {
@@ -548,6 +551,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       await prepareComputerUseForQuit();
     } catch (error) {
       shutdownStarted = false;
+      withdrawUpdateInstall();
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
@@ -1115,8 +1119,10 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     await shutdownAndQuit(true);
     return shutdownStarted;
   } finally {
+    // Before the release, so work queued behind this quit sees the outcome. A
+    // renderer veto schedules its own retry, and the install rides on that.
+    if (!quitRetryPending) withdrawUpdateInstall();
     lifecycleCheck.release();
-    withdrawUpdateInstall();
   }
 }
 
@@ -1125,6 +1131,18 @@ function withdrawUpdateInstall(): void {
   if (shutdownStarted || !installUpdateOnQuit) return;
   installUpdateOnQuit = false;
   appUpdateService.announceSnapshot();
+}
+
+/** Start a quit once the check is free, if it is still wanted by then. */
+function continueApplicationQuit(window: BrowserWindow, stillWanted: () => boolean): void {
+  whenLifecycleCheckFree(lifecycleCheck, () => {
+    if (!stillWanted() || shutdownStarted) return;
+    void settleUpdateInstallQuit(
+      () => requestApplicationQuit(window),
+      withdrawUpdateInstall,
+      (error) => logger.error("main", "A deferred quit failed.", error),
+    );
+  });
 }
 
 async function clearRendererOnboardingCompletion(
@@ -1440,11 +1458,7 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
 
   const window = mainWindow;
   installUpdateOnQuit = true;
-  setImmediate(() => void settleUpdateInstallQuit(
-    () => requestApplicationQuit(window),
-    withdrawUpdateInstall,
-    (error) => logger.error("updater", "The quit for an update install failed.", error),
-  ));
+  setImmediate(() => continueApplicationQuit(window, () => installUpdateOnQuit));
   return {
     accepted: true,
   };
@@ -1846,7 +1860,11 @@ async function createMainWindow(
     } else if (interruptedAction === "quit") {
       forceAppQuit = false;
       shutdownStarted = false;
-      setImmediate(() => void requestApplicationQuit(createdWindow));
+      quitRetryPending = true;
+      setImmediate(() => continueApplicationQuit(createdWindow, () => {
+        quitRetryPending = false;
+        return true;
+      }));
     } else if (interruptedAction === "close") {
       setImmediate(() => void requestWindowClose(createdWindow));
     } else if (interruptedAction === "reload") {

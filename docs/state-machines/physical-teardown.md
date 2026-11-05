@@ -44,7 +44,7 @@ Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession`
 
 ## Quit and update install
 
-`createLifecycleCheck` in `main/application-lifecycle-core.ts` serializes close, reload, quit and onboarding reset. `shutdownAndQuit` joins a shutdown already running, and `cleanupApplication` runs once. An accepted update install waits for its quit: if that quit never begins, the install is withdrawn and the update stays ready, so a later ordinary quit cannot install it unasked.
+`createLifecycleCheck` in `main/application-lifecycle-core.ts` serializes close, reload, quit and onboarding reset. `shutdownAndQuit` joins a shutdown already running, and `cleanupApplication` runs once. An accepted update install waits for the check to be free, because whoever holds it owns the outcome. A quit that completes installs the update. A quit cancelled for good withdraws the install before it releases the check, and the update stays ready, so a later ordinary quit cannot install it unasked. A renderer veto retries the quit, and the install rides on that retry. A failed shutdown also withdraws it.
 
 The flags in `main/index.ts` (`backend:M001`) stay where they are. Each is written in few places and the cancel paths reset them, but they have no Electron-free harness, so moving them would trade a read-checked flow for an untested one.
 

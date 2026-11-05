@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createLifecycleCheck,
   settleUpdateInstallQuit,
+  whenLifecycleCheckFree,
   shouldQuitAfterAllWindowsClose,
   shouldReleaseAuxiliaryWindows,
 } from "./application-lifecycle-core.js";
@@ -96,4 +97,35 @@ test("an accepted update install that never reaches the quit is withdrawn", asyn
     assert.equal(withdrawn, expected, name);
     assert.equal(errors.length, name === "the quit failed" ? 1 : 0, name);
   }
+});
+
+test("deferred quit work waits for the action holding the check, whoever that is", () => {
+  const check = createLifecycleCheck(() => assert.fail("no action should throw"));
+  const ran: string[] = [];
+  assert.equal(check.tryBegin(), true);
+  whenLifecycleCheckFree(check, () => { ran.push("install quit"); });
+  assert.equal(ran.length, 0, "a quit already deciding owns the outcome until it releases");
+
+  // The first queued action takes the check, so the next must keep waiting.
+  whenLifecycleCheckFree(check, () => { ran.push("second"); });
+  check.release();
+  assert.deepEqual(ran, ["install quit", "second"]);
+
+  whenLifecycleCheckFree(check, () => { ran.push("free"); });
+  assert.deepEqual(ran, ["install quit", "second", "free"], "a free check runs at once");
+});
+
+test("work queued behind a check retaken during release runs after that release", () => {
+  const check = createLifecycleCheck(() => assert.fail("no action should throw"));
+  const ran: string[] = [];
+  assert.equal(check.tryBegin(), true);
+  whenLifecycleCheckFree(check, () => {
+    ran.push("takes the check");
+    assert.equal(check.tryBegin(), true);
+  });
+  whenLifecycleCheckFree(check, () => { ran.push("waits for it"); });
+  check.release();
+  assert.deepEqual(ran, ["takes the check"]);
+  check.release();
+  assert.deepEqual(ran, ["takes the check", "waits for it"]);
 });
