@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-05 — Notification visibility during delivery.** Bot notification polls recheck their original messaging, issue, access-request, peer and read grants before posting and saving progress, including after system permission/post callbacks. Lost access keeps the original cursor and delivered IDs. Routine notifications retain older-host baseline behavior; no Remote wire or revision change.
+
 - **2026-11-05 — Combined Remote revision 58.** Connector watches, Open work, routine model management and approved Bot peers first enter the shared release at revision 58. Earlier revision numbers below describe branch implementation checkpoints; shipped messaging, access requests, plans and allowed-list capabilities retain revisions 54–57. Both `message` and `peer` notifications remain supported.
 
 - **2026-11-04 — Verified Calendar watch support.** Supporting Mac and Linux Electron hosts now offer Composio Calendar sources after authenticated exact-account/list/events/GET acceptance. Existing Watches controls can discover, preview and manage those sources; no new native contract revision is needed. iMCP Mail remains Mac-only. Watch diagnostics report only their own inspection/check outcome and do not authorize a source or change its availability.

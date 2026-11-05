@@ -22,7 +22,7 @@ The recipient still follows its rules. An uncovered Ask first rule still asks; a
 
 Only a final answer is forwarded. Silence, failure and an unanswered deadline produce a status row instead of another model turn. If the sender is paused, interrupted, over budget or unable to use its model, the saved answer stays visible without resuming it. A failed or stopped reply turn also keeps the answer as a display row.
 
-The normal final result and status notifications follow the Bot's configured delivery channels. A nested child's answer is relayed into its sender's chat, or shown there as saved text; its answer is never delivered separately through the delivery funnel. Text-free child status notifications can still say that it is waiting or could not finish.
+The normal final result and status notifications follow the Bot's configured delivery channels. Phone polls retain their cursor and delivered-ID progress if the pairing changes or any original notification projection grant is lost before posting completes. A nested child's answer is relayed into its sender's chat, or shown there as saved text; its answer is never delivered separately through the delivery funnel. Text-free child status notifications can still say that it is waiting or could not finish.
 
 ## Nesting and limits
 

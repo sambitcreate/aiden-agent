@@ -27,6 +27,10 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotRoutineNotification
 import sbtbiswas.AidenOnTheGo.models.AidenBotRoutineNotificationList
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledRunNotification
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.models.AidenInstallation
+import sbtbiswas.AidenOnTheGo.models.AidenServer
+import sbtbiswas.AidenOnTheGo.models.AidenBotNotificationKind
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
 
 /** What the Bot routine feed remembers per paired Mac: the host's last `now`, and the run ids already posted. */
@@ -47,14 +51,21 @@ class AidenBotRoutineNotificationDelivery(
     private val ledger: AidenBotRoutineNotificationLedger,
     private val post: (instanceId: String, notification: AidenBotRoutineNotification) -> Boolean
 ) {
+    suspend fun deliverFromHost(instanceId: String, installation: () -> AidenInstallation?, server: () -> AidenServer?,
+        isCurrent: () -> Boolean, fetch: suspend (Instant?) -> AidenBotRoutineNotificationList): Int =
+        deliver(instanceId, isCurrent = isCurrent, currentGrants = { audienceGrants(installation(), server()) }, fetch = fetch)
+
     /** Returns how many notifications were posted. */
     suspend fun deliver(
         instanceId: String,
         isCurrent:()->Boolean={true},
         mayDeliver:(AidenBotRoutineNotification)->Boolean={true},
+        currentGrants: () -> Set<AidenRemoteCapability> = { setOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ) },
         fetch: suspend (since: Instant?) -> AidenBotRoutineNotificationList
     ): Int = lock.withLock {
         val cursor = ledger.cursor(instanceId)
+        val fetchedGrants = currentGrants().toSet()
+        if (!isCurrent() || !fetchedGrants.containsAll(listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))) return@withLock 0
         val feed = try {
             fetch(cursor)
         } catch (cancelled: CancellationException) {
@@ -63,32 +74,54 @@ class AidenBotRoutineNotificationDelivery(
             // Keep the cursor so a later poll retries instead of skipping runs.
             return@withLock 0
         }
-        if(!isCurrent() || feed.notifications.any{!mayDeliver(it)})return@withLock 0
+        fun scopeAllowsProgress(): Boolean = isCurrent() && currentGrants().containsAll(fetchedGrants) && feed.notifications.all { item ->
+            mayDeliver(item) && when (item.kind ?: AidenBotNotificationKind.ROUTINE) {
+                AidenBotNotificationKind.ROUTINE -> true
+                AidenBotNotificationKind.PEER -> AidenRemoteCapability.BOT_PEERS in fetchedGrants
+                AidenBotNotificationKind.MESSAGE -> AidenRemoteCapability.BOT_MESSAGING in fetchedGrants
+                AidenBotNotificationKind.ISSUE -> AidenRemoteCapability.BOT_ISSUES in fetchedGrants
+            }
+        }
+        if (!scopeAllowsProgress()) return@withLock 0
         val delivered = LinkedHashSet(ledger.delivered(instanceId))
         val oldestFirst = feed.notifications.sortedBy { it.finishedAt }
         if (cursor == null) {
             delivered.addAll(oldestFirst.map { it.id })
+            if (!scopeAllowsProgress()) return@withLock 0
             ledger.save(instanceId, feed.now, delivered.toList().takeLast(MAX_DELIVERED_IDS))
             return@withLock 0
         }
         var nextCursor = feed.now
         var posted = 0
         for (item in oldestFirst) {
-            if(!isCurrent() || !mayDeliver(item))return@withLock posted
+            if (!scopeAllowsProgress()) return@withLock posted
             if (item.id in delivered) continue
             if (!post(instanceId, item)) {
                 nextCursor = maxOf(cursor, item.finishedAt.minusMillis(1))
                 break
             }
+            // The system may already have accepted the banner; a late loss
+            // cannot consume or recreate the old pairing's receipts.
+            if (!scopeAllowsProgress()) return@withLock posted
             delivered.add(item.id)
             posted += 1
         }
-        if(!isCurrent() || feed.notifications.any{!mayDeliver(it)})return@withLock posted
+        if (!scopeAllowsProgress()) return@withLock posted
         ledger.save(instanceId, nextCursor, delivered.toList().takeLast(MAX_DELIVERED_IDS))
         posted
     }
 
     companion object {
+        fun audienceGrants(installation: AidenInstallation?, server: AidenServer?): Set<AidenRemoteCapability> =
+            listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_PEERS,
+                AidenRemoteCapability.BOT_MESSAGING, AidenRemoteCapability.BOT_ISSUES, AidenRemoteCapability.BOT_ACCESS_REQUESTS)
+                .filter { capability ->
+                    if (installation == null || server == null || capability !in installation.deviceCapabilities || capability !in server.capabilities) false
+                    else if (capability == AidenRemoteCapability.BOT_READ || capability == AidenRemoteCapability.CHAT_READ)
+                        capability in (installation.serverCapabilities ?: installation.deviceCapabilities) && capability in (server.serverCapabilities ?: server.capabilities)
+                    else installation.hasNegotiatedAccess(capability) && server.serverCapabilities?.contains(capability) == true
+                }.toSet()
+
         const val MAX_DELIVERED_IDS = 500
         const val TAG_PREFIX = "aiden.bot-routine."
 
@@ -208,9 +241,9 @@ class AidenScheduledRunNotifier(context: Context) {
         val instanceId = coordinator.activeInstanceId ?: return
         if (!notificationsEnabled()) return
         val pairing=coordinator.activePairing ?: return
-        botDelivery.deliver(instanceId,
-            isCurrent={coordinator.holdsPairing(pairing) && coordinator.holdsReadAuthority(client,instanceId)},
-            mayDeliver={it.kind!=sbtbiswas.AidenOnTheGo.models.AidenBotNotificationKind.PEER || coordinator.serverInfo.value?.supportsBotPeerExchanges==true}) { since ->
+        botDelivery.deliverFromHost(instanceId,
+            installation = { coordinator.installationStore.activeInstallation }, server = { coordinator.serverInfo.value },
+            isCurrent={coordinator.holdsPairing(pairing) && coordinator.holdsReadAuthority(client,instanceId)}) { since ->
             val feed = client.botRoutineNotifications(since)
             // A pairing switched mid-poll must not advance the other Mac's cursor.
             if (!coordinator.holdsReadAuthority(client, instanceId)) throw IllegalStateException("pairing changed")

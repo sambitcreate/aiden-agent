@@ -188,6 +188,7 @@ private fun AidenBotSessionContent(
             scope,
             knownState,
             activitySupported = activitySupportedNow,
+            initialFeedGrants = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation),
             plansSupported = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_PLANS) == true,
             sessionKey = sessionKey,
             store = coordinator.botSessionStore,
@@ -204,17 +205,14 @@ private fun AidenBotSessionContent(
     // The Mac shapes the feed by the grants this phone holds when it opens (cards, Chat activity,
     // hand-offs and the paused state). This chat can open from the pairing's saved features while
     // it connects, before this connection has negotiated a grant (`bot:handoffs` after the Mac
-    // updates); once `/server` has answered, every grant is negotiated and saved, and a feed that
-    // opened without one opens again.
-    val feedOpenedWith = remember(controller) { aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) }
+    // updates). Once `/server` has answered, each gain or loss reopens the feed with that
+    // audience; the controller remembers the latest adopted set across repeated transitions.
     val grantsSettled = serverInfo != null
     controller.allowedSupported = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ALLOWED) == true
     val feedGrantsNow = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
     LaunchedEffect(controller, grantsSettled, feedGrantsNow) {
         controller.setPlansSupported(AidenRemoteCapability.BOT_PLANS in feedGrantsNow)
-        if (grantsSettled && aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) != feedOpenedWith) {
-            controller.reopenFeed()
-        }
+        if (grantsSettled) controller.updateFeedGrants(feedGrantsNow)
     }
     val ui by controller.state.collectAsStateWithLifecycle()
     val resumeUi=controller.resumeController?.state?.collectAsStateWithLifecycle()?.value ?: AidenBotResumeUiState()

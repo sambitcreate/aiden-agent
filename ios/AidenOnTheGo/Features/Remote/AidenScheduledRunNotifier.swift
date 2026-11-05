@@ -201,10 +201,19 @@ final class AidenBotRoutineNotifier {
               AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, coordinator: coordinator),
               let context = try? coordinator.requestContext(),
               let client = try? coordinator.remoteClient(for: context) else { return }
-        await deliver(instanceId: context.instanceId, transport: client, isCurrent: { coordinator.isCurrent(context) && coordinator.connectionState == .connected }, allowsPeers: { coordinator.server?.supportsBotPeerExchanges == true })
+        await deliverFromHost(instanceId: context.instanceId, transport: client,
+            isCurrent: { coordinator.isCurrent(context) && coordinator.connectionState == .connected },
+            installation: { coordinator.installationStore.activeInstallation }, server: { coordinator.server })
     }
 
-    func deliver(instanceId: String, transport: any AidenBotRoutineNotificationTransport, isCurrent: @escaping @MainActor () -> Bool = { true }, allowsPeers: @escaping @MainActor () -> Bool = { false }) async {
+    func deliverFromHost(instanceId: String, transport: any AidenBotRoutineNotificationTransport,
+                         isCurrent: @escaping @MainActor () -> Bool = { true },
+                         installation: @escaping @MainActor () -> AidenInstallation?, server: @escaping @MainActor () -> AidenServer?) async {
+        await deliver(instanceId: instanceId, transport: transport, isCurrent: isCurrent,
+            currentGrants: { Self.audienceGrants(installation: installation(), server: server()) })
+    }
+
+    func deliver(instanceId: String, transport: any AidenBotRoutineNotificationTransport, isCurrent: @escaping @MainActor () -> Bool = { true }, currentGrants: @escaping @MainActor () -> Set<AidenRemoteCapability> = { [.botRead, .chatRead] }) async {
         guard !polling.contains(instanceId) else { return }
         polling.insert(instanceId)
         defer { polling.remove(instanceId) }
@@ -213,6 +222,10 @@ final class AidenBotRoutineNotifier {
         let status = await center.currentAuthorizationStatus()
         guard status == .notDetermined || AidenRunAlertPolicy.isAuthorized(status) else { return }
         let cursor = defaults.string(forKey: Self.cursorKey(instanceId))
+        // Keep the original projection authority: an issue row intentionally
+        // does not reveal whether it required access-request visibility.
+        let fetchedGrants = currentGrants()
+        guard isCurrent(), Set([AidenRemoteCapability.botRead, .chatRead]).isSubset(of: fetchedGrants) else { return }
         let feed: AidenBotRoutineNotificationFeed
         do {
             feed = try await transport.botRoutineNotifications(since: cursor)
@@ -220,8 +233,16 @@ final class AidenBotRoutineNotifier {
             // Keep the cursor so the next poll asks again.
             return
         }
-        let requiresPeerAccess = feed.notifications.contains(where: { $0.kind == .peer })
-        func scopeAllowsProgress() -> Bool { isCurrent() && (!requiresPeerAccess || allowsPeers()) }
+        func scopeAllowsProgress() -> Bool {
+            isCurrent() && fetchedGrants.isSubset(of: currentGrants()) && feed.notifications.allSatisfy { item in
+                switch item.kind {
+                case .routine: return true
+                case .peer: return fetchedGrants.contains(.botPeers)
+                case .message: return fetchedGrants.contains(.botMessaging)
+                case .issue: return fetchedGrants.contains(.botIssues)
+                }
+            }
+        }
         guard scopeAllowsProgress() else { return }
         var deliveredOrder = defaults.stringArray(forKey: Self.deliveredKey(instanceId)) ?? []
         var delivered = Set(deliveredOrder)
@@ -269,6 +290,19 @@ final class AidenBotRoutineNotifier {
             }
         }
         persist(cursor: handledAll ? feed.now.rawValue : nextCursor)
+    }
+
+    /// Both the pairing's accepted grants and the current host projection
+    /// must agree. A host merely offering a capability grants no visibility.
+    static func audienceGrants(installation: AidenInstallation?, server: AidenServer?) -> Set<AidenRemoteCapability> {
+        Set([AidenRemoteCapability.botRead, .chatRead, .botPeers, .botMessaging, .botIssues, .botAccessRequests].filter {
+            guard let installation, let server, installation.deviceCapabilities.contains($0), server.capabilities.contains($0) else { return false }
+            if $0 == .botRead || $0 == .chatRead {
+                return (installation.serverCapabilities ?? installation.deviceCapabilities).contains($0)
+                    && (server.serverCapabilities ?? server.capabilities).contains($0)
+            }
+            return installation.hasNegotiatedAccess(to: $0) && server.serverCapabilities?.contains($0) == true
+        })
     }
 
     /// Title: the Bot's name. Body: the routine name and the preview. Opens

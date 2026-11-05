@@ -28,6 +28,9 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.peerFixture
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import java.time.Instant
 import sbtbiswas.AidenOnTheGo.COST_RECEIPT_A
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
@@ -3173,4 +3176,85 @@ class AidenBotSessionControllerTest {
         runCurrent()
         assertEquals("a closed chat opens no feed", 2, opens)
     }
+    @Test
+    fun peerAudienceGainLossAndRegainReopenTheSameChatWithoutRepeatingSends() = runTest {
+        val base = handoffSession.copy(handoff = null)
+        val peer = json.decodeFromJsonElement(AidenBotSessionEntry.serializer(), peerFixture().getValue("peerEntry"))
+        val issue = json.decodeFromJsonElement(AidenBotSession.serializer(), fixture.getValue("botIssues").jsonObject.getValue("session")).issues!!.first()
+        val ordinary = listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.BOT_IMAGES)
+        val offered = ordinary + AidenRemoteCapability.BOT_PEERS + AidenRemoteCapability.BOT_PLANS + AidenRemoteCapability.BOT_ISSUES
+        var installation = AidenInstallation(instanceId = "host", deviceId = "phone", name = "Mac", endpoint = "https://fixture.invalid/api/aiden/v1", serverSpkiSha256 = "sha256/test", deviceCapabilities = ordinary, serverCapabilities = offered, createdAt = Instant.EPOCH)
+        val reads = FakeTransport(base)
+        val audiences = mutableListOf<Boolean>()
+        val closed = mutableListOf<Int>()
+        val transport = object : AidenBotSessionTransport by reads {
+            override fun events(botId: String): Flow<AidenBotSessionEvent> = flow {
+                val open = audiences.size + 1
+                // The server fixes its projection from actual held access at subscribe time.
+                val peers = installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_PEERS)
+                audiences += peers
+                emit(snapshotOf(base.copy(epoch = "audience_$open", entries = base.entries + if (peers) listOf(peer) else emptyList(), issues = if (installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_ISSUES)) listOf(issue) else emptyList())))
+                try { awaitCancellation() } finally { closed += open }
+            }
+        }
+        val initialGrants = aidenBotSessionFeedGrants(installation).toMutableSet()
+        val controller = AidenBotSessionController(base.botId, transport, backgroundScope, initialFeedGrants = initialGrants)
+        initialGrants.clear()
+        controller.updateFeedGrants(aidenBotSessionFeedGrants(installation))
+        runCurrent()
+        assertTrue(audiences.isEmpty())
+        controller.start()
+        runCurrent()
+        assertEquals(listOf(false), audiences)
+        assertFalse(controller.state.value.session!!.entries.any { it is AidenBotSessionEntry.Peer })
+        assertTrue(controller.send("Keep this accepted message"))
+        runCurrent()
+        assertEquals(1, reads.sends.size)
+
+        fun grants(peers: Boolean, plans: Boolean = false, issues: Boolean = false): Set<AidenRemoteCapability> {
+            installation = installation.copy(deviceCapabilities = ordinary + (if (peers) listOf(AidenRemoteCapability.BOT_PEERS) else emptyList()) + (if (plans) listOf(AidenRemoteCapability.BOT_PLANS) else emptyList()) + (if (issues) listOf(AidenRemoteCapability.BOT_ISSUES) else emptyList()))
+            return aidenBotSessionFeedGrants(installation)
+        }
+        val granted = grants(peers = true).toMutableSet()
+        controller.updateFeedGrants(granted)
+        runCurrent()
+        granted.clear()
+        assertEquals(listOf(false, true), audiences)
+        assertEquals(listOf(1), closed)
+        assertEquals(peer, controller.state.value.session!!.entries.filterIsInstance<AidenBotSessionEntry.Peer>().single())
+        controller.updateFeedGrants(aidenBotSessionFeedGrants(installation))
+        runCurrent()
+        assertEquals("the same effective set does not reopen", 2, audiences.size)
+
+        controller.updateFeedGrants(grants(peers = false))
+        runCurrent()
+        assertEquals(listOf(false, true, false), audiences)
+        assertFalse("a fresh non-peer snapshot removes the old peer row", controller.state.value.session!!.entries.any { it is AidenBotSessionEntry.Peer })
+        controller.updateFeedGrants(grants(peers = true))
+        runCurrent()
+        assertEquals(listOf(false, true, false, true), audiences)
+        assertEquals(1, controller.state.value.session!!.entries.filterIsInstance<AidenBotSessionEntry.Peer>().size)
+        controller.updateFeedGrants(grants(peers = true, plans = true))
+        runCurrent()
+        controller.updateFeedGrants(grants(peers = true, plans = false))
+        runCurrent()
+        assertEquals("losing a different grant also returns to the last adopted peer set", 6, audiences.size)
+        controller.updateFeedGrants(grants(peers = true, issues = true))
+        runCurrent()
+        assertEquals(7, audiences.size)
+        assertEquals(listOf(issue), controller.state.value.openIssues)
+        controller.updateFeedGrants(grants(peers = true, issues = false))
+        runCurrent()
+        assertEquals(8, audiences.size)
+        assertTrue("a fresh non-issue snapshot removes the previous issue", controller.state.value.openIssues.isEmpty())
+        assertEquals("issue loss leaves the independent peer audience", 1, controller.state.value.session!!.entries.filterIsInstance<AidenBotSessionEntry.Peer>().size)
+        assertEquals(1, reads.sends.size)
+        assertTrue(aidenBotSessionFeedGrants(installation).contains(AidenRemoteCapability.BOT_IMAGES))
+        controller.stopFollowing()
+        runCurrent()
+        controller.updateFeedGrants(grants(peers = false))
+        runCurrent()
+        assertEquals("a closed chat opens no feed", 8, audiences.size)
+    }
+
 }

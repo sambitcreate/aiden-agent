@@ -337,11 +337,11 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
 }
 
 /**
- * Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`, `bot:handoff-on-mac` and `bot:images` [installation] holds. The Mac shapes a
+ * The audience-shaping Bot session grants [installation] holds. The Mac shapes a
  * Bot session feed by these (its cards, Chat activity, hand-offs and the paused state) when the
  * feed opens, and keeps that shape for the feed's life. A Bot chat can open from the pairing's
  * saved features while it connects, before this connection has negotiated a grant, so the chat
- * compares these once `/server` has answered and reopens a feed that opened without one
+ * adopts each changed grant set once `/server` has answered and reopens its feed
  * ([AidenBotSessionController.reopenFeed]).
  */
 fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemoteCapability> =
@@ -352,6 +352,8 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_HANDOFF_NOTES,
         AidenRemoteCapability.BOT_HANDOFF_ON_MAC,
         AidenRemoteCapability.BOT_IMAGES,
+        AidenRemoteCapability.BOT_ISSUES,
+        AidenRemoteCapability.BOT_PEERS,
         AidenRemoteCapability.BOT_ACCESS_REQUESTS,
         AidenRemoteCapability.BOT_PLANS,
         AidenRemoteCapability.BOT_ALLOWED
@@ -602,11 +604,13 @@ class AidenBotSessionController(
     private val routineModelsSupported: () -> Boolean = { false },
     private val mayResume: () -> Boolean = { true },
     private val resumeLifetime: () -> String = { "active" },
-    resumeJournal: sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal? = null
+    resumeJournal: sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal? = null,
+    initialFeedGrants: Set<AidenRemoteCapability> = emptySet()
 ) {
     private val _state: MutableStateFlow<AidenBotSessionUiState>
     val state: StateFlow<AidenBotSessionUiState>
 
+    private var adoptedFeedGrants = initialFeedGrants.toSet()
     private var feedJob: Job? = null
     private var flushJob: Job? = null
     private var backoffJob: Job? = null
@@ -717,6 +721,13 @@ class AidenBotSessionController(
         unheldTimers.values.forEach { it.cancel() }
         unheldTimers.clear()
         sharedImages.clear()
+    }
+
+    /** Adopt every audience transition, including a loss back to the first-open set. */
+    fun updateFeedGrants(grants: Set<AidenRemoteCapability>) {
+        if (grants == adoptedFeedGrants) return
+        adoptedFeedGrants = grants.toSet()
+        reopenFeed()
     }
 
     /**

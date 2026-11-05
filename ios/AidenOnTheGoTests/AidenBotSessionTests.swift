@@ -737,6 +737,23 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(transport.streamRequests, 2)
     }
 
+    func testIssueGrantGainAndLossChangesTheOpenFeedsNegotiatedFingerprint() throws {
+        func installation(_ held: [AidenRemoteCapability]) throws -> AidenInstallation {
+            try AidenRemoteJSONDecoder.decode(AidenInstallation.self, from: JSONSerialization.data(withJSONObject: [
+                "instanceId": "host", "deviceId": "phone", "name": "Host", "endpoint": "https://host.test/api/aiden/v1",
+                "serverSpkiSha256": "sha256/" + String(repeating: "A", count: 43),
+                "deviceCapabilities": held.map(\.rawValue), "serverCapabilities": ["bot:read", "chat:read", "bot:issues"],
+                "createdAt": "2026-11-03T10:00:00.000Z",
+            ]))
+        }
+        let before = aidenBotSessionFeedGrants(try installation([.botRead, .chatRead]))
+        let granted = aidenBotSessionFeedGrants(try installation([.botRead, .chatRead, .botIssues]))
+        let removed = aidenBotSessionFeedGrants(try installation([.botRead, .chatRead]))
+        XCTAssertFalse(before.contains(.botIssues), "Host support alone cannot expose issue cards")
+        XCTAssertEqual(granted.subtracting(before), [.botIssues], "The visible chat must reopen its once-shaped feed on issue grant gain")
+        XCTAssertEqual(removed, before, "Grant loss changes the feed fingerprint again")
+    }
+
     func testReopeningTheFeedOpensANewConnectionAtOnceAndAppliesItsSnapshot() async throws {
         let transport = FakeBotSessionTransport()
         transport.queueStream([

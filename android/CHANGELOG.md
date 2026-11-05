@@ -4,6 +4,8 @@ Aiden On The Go for Android. Earlier Android changes are recorded in the pull re
 
 ## Unreleased
 
+- **2026-11-05 — Notification visibility during delivery.** Bot notification polls recheck their original messaging, issue, access-request, peer and read grants before posting and saving progress, including after system permission/post callbacks. Lost access keeps the original cursor and delivered IDs. Routine notifications retain older-host baseline behavior; no Remote wire or revision change.
+
 - **2026-11-05 — Combined Remote revision 58.** Connector watches, Open work, routine model management and approved Bot peers first enter the shared release at revision 58. Earlier revision numbers below describe branch implementation checkpoints; shipped messaging, access requests, plans and allowed-list capabilities retain revisions 54–57. Both `message` and `peer` notifications remain supported.
 
 - **Bot peers** (Remote revision57, `bot:peers`) adds full Profile pair management: owner routing descriptions, explicit named bidirectional approval and revocation, read-only catalog access, exchange detail/source/result text and protected same-request Stop checks. Peer transcript and Open-work links open the scoped exchange. Exact encrypted journals retain drafts and unknown operations across restart and permission loss; accepted Bot deletion purges only that Bot’s records and fences late replies. Peer completion uses the existing notification feed with stable deduplication and late access checks. See [Bot peers](PEERS.md).

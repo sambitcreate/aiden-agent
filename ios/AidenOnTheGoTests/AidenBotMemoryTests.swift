@@ -372,12 +372,14 @@ private final class FakeNotificationCenter: AidenRunAlertCenter {
     var status: UNAuthorizationStatus = .authorized
     var failNextAdd = false
     var grantsAuthorization = true
+    var beforeAuthorization: (() -> Void)?
     private(set) var authorizationRequests = 0
     private(set) var posted: [UNNotificationRequest] = []
 
     func currentAuthorizationStatus() async -> UNAuthorizationStatus { status }
     func requestAlertAuthorization() async -> Bool {
         authorizationRequests += 1
+        beforeAuthorization?()
         status = grantsAuthorization ? .authorized : .denied
         return grantsAuthorization
     }
@@ -409,6 +411,7 @@ private final class FakeNotificationFeed: AidenBotRoutineNotificationTransport, 
     private let lock = NSLock()
     private var _feeds: [AidenBotRoutineNotificationFeed] = []
     private var _cursors: [String?] = []
+    var beforeReturn: (() -> Void)?
 
     func queue(_ feed: AidenBotRoutineNotificationFeed) {
         lock.lock(); defer { lock.unlock() }
@@ -424,6 +427,7 @@ private final class FakeNotificationFeed: AidenBotRoutineNotificationTransport, 
         lock.lock(); defer { lock.unlock() }
         _cursors.append(since)
         guard !_feeds.isEmpty else { throw URLError(.notConnectedToInternet) }
+        beforeReturn?()
         return _feeds.removeFirst()
     }
 }
@@ -466,15 +470,121 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
             "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "The final review includes the peer’s findings."
         ]], "now": now]))
     }
+    private var allAudienceGrants: Set<AidenRemoteCapability> { [.botRead, .chatRead, .botPeers, .botMessaging, .botIssues, .botAccessRequests] }
+
+    private func installation(held: Set<AidenRemoteCapability>, offered: Set<AidenRemoteCapability>? = nil, legacy: Bool = false) throws -> AidenInstallation {
+        var object: [String: Any] = [
+            "instanceId": instance, "deviceId": "phone", "name": "Host", "endpoint": "https://host.test/api/aiden/v1",
+            "serverSpkiSha256": "sha256/" + String(repeating: "A", count: 43),
+            "deviceCapabilities": held.map(\.rawValue), "serverCapabilities": legacy ? NSNull() : (offered ?? allAudienceGrants).map(\.rawValue), "createdAt": "2026-11-03T10:00:00.000Z",
+        ]
+        if legacy { object.removeValue(forKey: "serverCapabilities") }
+        return try AidenRemoteJSONDecoder.decode(AidenInstallation.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+    private func host(held: Set<AidenRemoteCapability>, offered: Set<AidenRemoteCapability>? = nil, legacy: Bool = false) -> AidenServer {
+        AidenServer(protocolVersion: 1, instanceId: instance, name: "Host", appVersion: "test", capabilities: Array(held), serverCapabilities: legacy ? nil : Array(offered ?? allAudienceGrants), connectionMode: .lan, minimumClientVersion: nil, serverTime: Date())
+    }
+    private func audience(_ held: Set<AidenRemoteCapability>, offered: Set<AidenRemoteCapability>? = nil, hostHeld: Set<AidenRemoteCapability>? = nil) throws -> Set<AidenRemoteCapability> {
+        AidenBotRoutineNotifier.audienceGrants(installation: try installation(held: held, offered: offered), server: host(held: hostHeld ?? held, offered: offered))
+    }
+
+    private func projectedFeed(kind: String, title: String = "Needs you") throws -> AidenBotRoutineNotificationFeed {
+        try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotificationFeed.self, from: JSONSerialization.data(withJSONObject: ["notifications": [[
+            "id": "projected-final", "kind": kind, "botId": "bot_fixture_01", "botName": "Planner", "routineName": title,
+            "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "A bounded host preview."
+        ]], "now": "2026-11-03T12:01:00.000Z"]))
+    }
+
+    func testMessageAndIssueProjectionLossBeforePostKeepsCursorAndReceipts() async throws {
+        for (kind, capability) in [("message", AidenRemoteCapability.botMessaging), ("issue", .botIssues), ("issue", .botAccessRequests)] {
+            for boundary in ["fetch", "permission"] {
+                defaults.removePersistentDomain(forName: suiteName)
+                let start = "2026-11-03T11:00:00.000Z"
+                defaults.set(start, forKey: AidenBotRoutineNotifier.cursorKey(instance))
+                defaults.set(["prior-receipt"], forKey: AidenBotRoutineNotifier.deliveredKey(instance))
+                let center = FakeNotificationCenter(); let transport = FakeNotificationFeed()
+                let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center)
+                var installed = try installation(held: allAudienceGrants)
+                let server = host(held: allAudienceGrants)
+                let reduced = try installation(held: allAudienceGrants.subtracting([capability]))
+                if boundary == "fetch" { transport.beforeReturn = { installed = reduced } }
+                else { center.status = .notDetermined; center.beforeAuthorization = { installed = reduced } }
+                transport.queue(try projectedFeed(kind: kind))
+                await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
+                XCTAssertTrue(center.posted.isEmpty, "\(kind) / \(capability) / \(boundary)")
+                XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), start)
+                XCTAssertEqual(defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)), ["prior-receipt"])
+            }
+        }
+    }
+
+    func testMessageAndIssueGrantLossDuringSystemPostRetainsOriginalProgressUntilFreshFetch() async throws {
+        for (kind, capability) in [("message", AidenRemoteCapability.botMessaging), ("issue", .botIssues), ("issue", .botAccessRequests)] {
+            defaults.removePersistentDomain(forName: suiteName)
+            let start = "2026-11-03T11:00:00.000Z"
+            defaults.set(start, forKey: AidenBotRoutineNotifier.cursorKey(instance))
+            defaults.set(["prior-receipt"], forKey: AidenBotRoutineNotifier.deliveredKey(instance))
+            let center = SuspendingPeerNotificationCenter(); let transport = FakeNotificationFeed()
+            let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center)
+            var installed = try installation(held: allAudienceGrants)
+            let server = host(held: allAudienceGrants)
+            transport.queue(try projectedFeed(kind: kind)); center.holdNextAdd = true
+            let posting = Task { await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server }) }
+            while center.heldAdd == nil { await Task.yield() }
+            installed = try installation(held: allAudienceGrants.subtracting([capability]))
+            center.releaseAdd(); await posting.value
+            XCTAssertEqual(center.posted.count, 1)
+            XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), start)
+            XCTAssertEqual(defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)), ["prior-receipt"])
+            installed = try installation(held: allAudienceGrants)
+            transport.queue(try projectedFeed(kind: kind))
+            await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
+            XCTAssertEqual(defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)), ["prior-receipt", "projected-final"])
+        }
+    }
+
+    func testAudienceRequiresAcceptedAndCurrentHostGrantsRatherThanOffersAlone() async throws {
+        let offered = allAudienceGrants
+        XCTAssertFalse(try audience(offered.subtracting([.botMessaging]), offered: offered, hostHeld: offered).contains(.botMessaging))
+        XCTAssertFalse(try audience(offered, offered: offered, hostHeld: offered.subtracting([.botIssues])).contains(.botIssues))
+    }
+
+    func testProductionAudienceRejectsOfferedOnlyMessagesAndMissingOptInsButKeepsLegacyRoutineFeed() async throws {
+        let center = FakeNotificationCenter(); let transport = FakeNotificationFeed()
+        let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center)
+        let start = "2026-11-03T11:00:00.000Z"
+        defaults.set(start, forKey: AidenBotRoutineNotifier.cursorKey(instance))
+        var installed = try installation(held: allAudienceGrants.subtracting([.botMessaging]))
+        var server = host(held: allAudienceGrants)
+        transport.queue(try projectedFeed(kind: "message"))
+        await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
+        XCTAssertTrue(center.posted.isEmpty)
+        installed = try installation(held: allAudienceGrants)
+        server = host(held: allAudienceGrants, legacy: true)
+        transport.queue(try projectedFeed(kind: "message"))
+        await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
+        XCTAssertTrue(center.posted.isEmpty, "Missing optional support never infers a messaging opt-in")
+        installed = try installation(held: allAudienceGrants, legacy: true)
+        server = host(held: allAudienceGrants)
+        transport.queue(try projectedFeed(kind: "message"))
+        await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
+        XCTAssertTrue(center.posted.isEmpty, "Missing accepted support inventory never infers a messaging opt-in")
+        installed = try installation(held: [.botRead, .chatRead])
+        server = host(held: [.botRead, .chatRead], legacy: true)
+        transport.queue(try feed([("legacy-routine", "2026-11-03T12:00:00.000Z")], now: "2026-11-03T12:01:00.000Z"))
+        await notifier.deliverFromHost(instanceId: instance, transport: transport, installation: { installed }, server: { server })
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.legacy-routine"])
+    }
+
     func testPeerFinalNotificationRequiresCurrentCapabilityDeduplicatesAndOpensInitiatorChat() async throws {
         let center = FakeNotificationCenter(); let transport = FakeNotificationFeed(); let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center)
         transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z"))
         for _ in 0..<3 { transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z")) }
-        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { true })
-        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { false })
+        await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead, .botPeers] })
+        await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead] })
         XCTAssertTrue(center.posted.isEmpty); XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z", "A late grant loss cannot consume a final update")
-        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { true })
-        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { true })
+        await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead, .botPeers] })
+        await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { [.botRead, .chatRead, .botPeers] })
         XCTAssertEqual(center.posted.count, 1); XCTAssertEqual(center.posted.first?.identifier, "aiden.bot-routine.peer_root_final_one")
         let content = try XCTUnwrap(center.posted.first?.content); XCTAssertEqual(content.threadIdentifier, "aiden.bot-peer.\(instance).bot_fixture_01")
         XCTAssertEqual(AidenRunAlertNotifier.deepLink(from: content.userInfo), AidenDeepLink.botChatURL(instanceId: instance, botId: "bot_fixture_01"))
@@ -483,16 +593,16 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         let center = SuspendingPeerNotificationCenter(); let transport = FakeNotificationFeed()
         let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center); var allowsPeers = true
         transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z"))
-        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { allowsPeers })
+        await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { allowsPeers ? [.botRead, .chatRead, .botPeers] : [.botRead, .chatRead] })
         transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z")); center.holdNextAdd = true
-        let posting = Task { await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { allowsPeers }) }
+        let posting = Task { await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { allowsPeers ? [.botRead, .chatRead, .botPeers] : [.botRead, .chatRead] }) }
         while center.heldAdd == nil { await Task.yield() }
         allowsPeers = false; center.releaseAdd(); await posting.value
         XCTAssertEqual(center.posted.count, 1, "The system may already have accepted the banner; no removal API is assumed")
         XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z")
         XCTAssertFalse((defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)) ?? []).contains("peer_root_final_one"))
         allowsPeers = true; transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z"))
-        await notifier.deliver(instanceId: instance, transport: transport, allowsPeers: { allowsPeers })
+        await notifier.deliver(instanceId: instance, transport: transport, currentGrants: { allowsPeers ? [.botRead, .chatRead, .botPeers] : [.botRead, .chatRead] })
         XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.peer_root_final_one", "aiden.bot-routine.peer_root_final_one"])
         XCTAssertEqual(defaults.stringArray(forKey: AidenBotRoutineNotifier.deliveredKey(instance)), ["peer_root_final_one"])
     }
@@ -500,9 +610,9 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         let center = SuspendingPeerNotificationCenter(); let transport = FakeNotificationFeed()
         let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center); var current = true
         transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z"))
-        await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { current }, allowsPeers: { true })
+        await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { current }, currentGrants: { [.botRead, .chatRead, .botPeers] })
         transport.queue(try peerFeed(now: "2026-11-03T12:01:00.000Z")); center.holdNextAdd = true
-        let posting = Task { await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { current }, allowsPeers: { true }) }
+        let posting = Task { await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { current }, currentGrants: { [.botRead, .chatRead, .botPeers] }) }
         while center.heldAdd == nil { await Task.yield() }
         current = false
         defaults.removeObject(forKey: AidenBotRoutineNotifier.cursorKey(instance)); defaults.removeObject(forKey: AidenBotRoutineNotifier.deliveredKey(instance))
@@ -520,7 +630,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBotRoutineNotification.self, from: JSONSerialization.data(withJSONObject: item)))
         let center = FakeNotificationCenter(); let transport = FakeNotificationFeed(); let notifier = AidenBotRoutineNotifier(defaults: defaults, center: center)
         transport.queue(try feed([], now: "2026-11-03T11:00:00.000Z")); await notifier.deliver(instanceId: instance, transport: transport)
-        transport.queue(parsed); await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { false }, allowsPeers: { true })
+        transport.queue(parsed); await notifier.deliver(instanceId: instance, transport: transport, isCurrent: { false }, currentGrants: { [.botRead, .chatRead, .botPeers] })
         XCTAssertTrue(center.posted.isEmpty); XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instance)), "2026-11-03T11:00:00.000Z")
     }
 
