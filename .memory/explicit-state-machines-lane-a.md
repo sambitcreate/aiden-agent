@@ -34,6 +34,16 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 - E2E: use `CUA_SPACE=aiden-e2e` and read the Playwright totals, not only the exit code. An earlier Space never became ready and a piped `tail` hid it.
 - Conflict resolution on `retained-p1-owners.md`: the M106 row and the First send section share a hunk, so check both survive.
 
+## Known failures
+
+- `tests/e2e/follow-through-lifecycle.spec.ts:30` and `:64` fail in the Cua Space on the unmodified base `bc663001f` too, with the same lines and messages (`alive(pid)` true; `git:createWorktree` disk capacity). Not from this lane. Whether they pass elsewhere rests on macOS CI.
+- `use-assistant-live.test.tsx`, "Live device preparation failure...", failed once on #743. Cause unknown, not fixed.
+- `mcp-failure-diagnostics.test.ts` matched `8443` inside a random hash. Fixed in #768.
+
+## Handed to the owner
+
+- `aiden serve stop` cannot force-stop an MCP survivor whose wrapper exited: `daemonMcpGroups()` in `packages/cli/src/serve-lifecycle.ts` needs a direct child of the daemon. Predates this lane, needs `packages/cli` work, and `feature/sm-serve-*` branches change that file.
+
 ## Unverified
 
 - Stop during initialization, first delta and terminal save are covered by E2E only.
