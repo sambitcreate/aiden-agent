@@ -141,6 +141,23 @@ test("renderer invalidation cancels only the ephemeral operation", async () => {
   assert.equal(terminal?.type === "terminal" ? terminal.status : undefined, "cancelled");
 });
 
+test("startup that fails twice still frees the slot and reports the first failure", async () => {
+  const app = fixture();
+  const service = app.service as unknown as { thread: unknown };
+  const thread = service.thread;
+  service.thread = () => { throw new Error("thread unavailable"); };
+  await assert.rejects(
+    app.service.start("chat-a", "Question", {
+      ...app.owner,
+      onInvalidated: () => () => { throw new Error("listener already gone"); },
+    }),
+    /thread unavailable/u,
+  );
+  service.thread = thread;
+  await app.service.start("chat-a", "Asked again", app.owner);
+  await waitForTerminal(app.events);
+});
+
 test("an owner hook that throws cannot keep the side question's slot", async () => {
   const app = fixture();
   await assert.rejects(
