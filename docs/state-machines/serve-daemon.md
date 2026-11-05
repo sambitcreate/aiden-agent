@@ -42,7 +42,7 @@ Owner: `DaemonGenerationRun` in `daemon-turn-lifecycle.ts`, driven by `perform` 
 | prompting and tools | `session.prompt` | session abort, approval lapses | partial answer saved once when any text or message exists | same |
 | final save | prompt ended with a final assistant message | not observed, the save completes | save failure: `chat:error`, then one retry as the partial answer | `completed` only once `appendMessage` returned |
 | cleanup | always | | handler errors stay contained: Pi's `emit` catches them | `session_shutdown`, dispose, closers, usage |
-| released | `perform` settled | | a failing lease removal still ends the run | custody cleared, activity settled, run journal settled, session-file lease released, `settled` resolved |
+| released | `perform` settled | | each cleanup step runs whatever an earlier one threw | custody cleared, activity settled, run journal settled, session-file lease released, `settled` resolved |
 
 Independent axes: stop request (`requestStop`, with its first origin), terminal persistence (`none`, `final_saved`, `partial_saved`, `partial_lost`), client delivery, physical release. `chat:done` is sent after the durable save and before cleanup, so a chat stays busy briefly after `chat:done`. A timeout or lost owner is a stop with no origin.
 
@@ -55,6 +55,8 @@ Each has a reproduction in `packages/cli/tests/daemon-turns.test.mjs` that faile
 - **Shutdown did not wait for revoked work.** `stop()` listed only live leases and running generations. A cancelled or expired reservation whose append was still in flight was dropped from the list, so the process could exit under the write.
 - **A stop during a Bot authority check did not stop the prompt.** The Bot branch of `assertAuthority` returned straight after its awaited revalidation. A stop landing there let `session.prompt` run: the session abort had already come and gone, and Pi contains the `before_agent_start` rejection, so a provider request went out. The tool path had the same gap.
 - **A failed session-lease removal hung idle waiters.** An exception in `release` skipped resolving `settled`, so `waitForChatIdle` and shutdown never returned.
+- **A throwing activity listener reported idle with the session lease held.** One `try` covered activity, run journal and lease removal, so a listener that threw skipped the other two while `settled` still resolved. The next turn on that chat then failed to take its lease. Each step now runs on its own.
+- **A run that failed to register held the chat forever.** If `activity.begin` or the run journal threw inside `handoff`, custody stayed `generation` with a run that nothing would ever start or release, so the chat stayed busy and `stop()` hung. `start` now returns the chat and rethrows.
 
 ## C11: daemon tool approval
 

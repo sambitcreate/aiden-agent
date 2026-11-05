@@ -105,13 +105,26 @@ export function createDaemonChats(agentDir: string) {
       try { releaseFile = acquireLease(sessionPath(params.chatId)); }
       catch (error) { admission.releaseMatching(params.chatId, options.turnId ?? streamId, owner.documentId); throw error; }
       const entry = new DaemonGenerationRun<AgentSession>({ streamId, ownerId: owner.documentId, workspaceId: params.workspaceId });
-      // A failed lease removal must still end the run: idle waiters and shutdown depend on it.
-      const release = () => {
-        if (!turns.release(params.chatId, entry)) return;
-        try { activity.settle(streamId); recorders.recordRunSettled(runs, streamId); releaseFile(); }
-        finally { entry.markReleased(); }
+      // Each step runs whatever an earlier one threw: idle waiters and shutdown read `settled` as all of them.
+      const cleanUp = () => {
+        const failures: unknown[] = [];
+        for (const step of [() => activity.settle(streamId), () => recorders.recordRunSettled(runs, streamId), releaseFile]) {
+          try { step(); } catch (error) { failures.push(error); }
+        }
+        entry.markReleased();
+        if (failures.length) throw failures[0];
       };
-      const handedOff = turns.handoff(params.chatId, options.turnId ?? streamId, owner.documentId, entry, () => { activity.begin(streamId, params.chatId); recorders.recordRunBegin(runs, streamId, params.chatId, owner); });
+      const release = () => { if (turns.release(params.chatId, entry)) cleanUp(); };
+      let handedOff: boolean;
+      try {
+        handedOff = turns.handoff(params.chatId, options.turnId ?? streamId, owner.documentId, entry, () => { activity.begin(streamId, params.chatId); recorders.recordRunBegin(runs, streamId, params.chatId, owner); });
+      } catch (error) {
+        // Registration failed partway, so nothing will ever run or release this entry.
+        turns.release(params.chatId, entry);
+        admission.releaseMatching(params.chatId, options.turnId ?? streamId, owner.documentId);
+        try { cleanUp(); } catch { /* The registration failure is the one to report. */ }
+        throw error;
+      }
       if (!handedOff) { releaseFile(); return false; }
       void perform(streamId, params, owner, options, entry).finally(release).catch(() => {
         process.stderr.write("aiden: Could not deliver the terminal generation event.\n");

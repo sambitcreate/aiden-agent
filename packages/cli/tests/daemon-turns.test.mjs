@@ -104,6 +104,37 @@ test("a completed turn saves one answer, tells the client, and frees the chat", 
   assertSessionReleased(f.daemon, "complete");
 });
 
+test("a failing activity listener cannot leave the session lease held after idle", async (t) => {
+  const f = await fixture(t);
+  f.steps.push(reply("Answer"));
+  let armed = false;
+  const remove = f.daemon.onActivityChange(() => { if (armed) throw new Error("listener failed"); });
+  t.after(remove);
+  const { started } = await beginTurn(f, "listener");
+  assert.equal(started, true);
+  armed = true;
+  await f.daemon.llmClient.waitForChatIdle("listener");
+  armed = false;
+  assertSessionReleased(f.daemon, "listener");
+  assert.equal(f.daemon.runs.summary("stream-listener")?.state, "done");
+});
+
+test("a run that cannot register gives the chat back and does not hold shutdown", async (t) => {
+  const f = await fixture(t);
+  let armed = true;
+  const remove = f.daemon.onActivityChange(() => { if (armed) throw new Error("listener failed"); });
+  t.after(remove);
+  await assert.rejects(beginTurn(f, "unregistered"), /listener failed/u);
+  armed = false;
+  assert.equal(f.daemon.llmClient.isChatBusy("unregistered"), false);
+  assertSessionReleased(f.daemon, "unregistered");
+  f.steps.push(reply("Second try"));
+  const { started } = await beginTurn(f, "unregistered", { streamId: "again", create: false });
+  assert.equal(started, true);
+  await f.daemon.llmClient.waitForChatIdle("unregistered");
+  await f.daemon.stop();
+});
+
 test("a chat holds one turn at a time and the daemon holds three chats", async (t) => {
   const { daemon } = await fixture(t);
   const leases = ["one", "two", "three"].map((id) => daemon.llmClient.beginChatTurn(id, `s-${id}`, "owner"));
