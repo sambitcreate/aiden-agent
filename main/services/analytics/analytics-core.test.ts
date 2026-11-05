@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createAnalyticsCore, validateOutgoingEvent, type AnalyticsMessage } from "./analytics-core.js";
+import { WITHHELD_MESSAGE } from "./analytics-sanitize.js";
 import type { AnalyticsSuperProperties } from "./analytics-events.js";
 
 const APP_ROOT = "/Applications/Aiden.app/Contents/Resources/app.asar";
@@ -236,6 +237,27 @@ test("the outgoing guard rejects an exception whose fields were not built by the
     { ...valid, $exception_list: undefined },
   ]) {
     assert.equal(validateOutgoingEvent({ event: "$exception", properties }), null);
+  }
+});
+
+test("the outgoing guard keeps a listed system error code on a server's report and nowhere else", () => {
+  const report = (source: "server" | "main" | "renderer", value: string) => {
+    const { core, sent } = harness();
+    core.captureSanitizedException(
+      { errors: [{ type: "Error", value, frames: [] }], fingerprint: "0123456789abcdef0123456789abcdef" },
+      { source, level: "fatal" },
+    );
+    const [message] = sent;
+    const checked = validateOutgoingEvent({ event: message!.event, properties: message!.properties });
+    return (checked?.properties?.$exception_list as { value: string }[])[0]!.value;
+  };
+
+  assert.equal(report("server", "EACCES"), "EACCES");
+  assert.equal(report("server", "ECONNRESET"), "ECONNRESET");
+  assert.equal(report("main", "EACCES"), WITHHELD_MESSAGE);
+  assert.equal(report("renderer", "ENOSPC"), WITHHELD_MESSAGE);
+  for (const text of ["ACME_MERGER_Q3", "EVERYONE_KNOWS_BOB", "eacces", "EACCES acme-merger-q3.md"]) {
+    assert.equal(report("server", text), WITHHELD_MESSAGE);
   }
 });
 

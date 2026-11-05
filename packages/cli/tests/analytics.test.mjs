@@ -482,7 +482,8 @@ test("a crash report keeps the error's type, frames and code, and never its mess
   const h = harness(t, { state: allowed, crashFlushCapMs: 20 });
   started(h);
   await settle();
-  const value = (message) => message.properties.$exception_list.map((entry) => entry.value);
+  // What PostHog receives: the real transport runs this guard on every message.
+  const value = (message) => api.validateOutgoingEvent(message).properties.$exception_list.map((entry) => entry.value);
 
   const unreadable = Object.assign(new TypeError("EACCES: permission denied, open 'acme-merger-q3.md'"), { code: "EACCES" });
   unreadable.cause = new Error('Your prompt "fire Bob next Tuesday" was flagged by db.internal.acme.com');
@@ -506,10 +507,10 @@ test("a crash report keeps the error's type, frames and code, and never its mess
   const logged = harness(t, { state: allowed });
   started(logged);
   await settle();
-  for (const reason of ["notes/board-minutes.pdf is gone", new Error("~/work/acme/plan.md failed"), Object.assign(new Error("hello my ssn"), { code: "not a code" })]) api.reportServerRejection(reason);
+  for (const reason of ["notes/board-minutes.pdf is gone", new Error("~/work/acme/plan.md failed"), Object.assign(new Error("hello my ssn"), { code: "not a code" }), Object.assign(new Error("hello my ssn"), { code: "ACME_MERGER_Q3" })]) api.reportServerRejection(reason);
   await settle();
   const reports = logged.sent.filter((message) => message.event === "$exception");
-  assert.equal(reports.length, 3);
+  assert.equal(reports.length, 4);
   for (const report of reports) assert.deepEqual(value(report), [""]);
 });
 

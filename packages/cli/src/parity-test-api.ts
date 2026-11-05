@@ -2,6 +2,7 @@ export * from "./state.ts";
 export * from "./server-analytics.ts";
 export { telemetryCommand } from "./telemetry.ts";
 export { reportAnalyticsEvent } from "../../../main/services/analytics/analytics-report.js";
+export { validateOutgoingEvent } from "../../../main/services/analytics/analytics-core.js";
 export * from "./workspaces.ts";
 export * from "./workspace-application.ts";
 export * from "./sessions.ts";

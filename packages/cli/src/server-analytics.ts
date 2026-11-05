@@ -25,7 +25,7 @@ import {
 import type { AnalyticsCore, AnalyticsMessage } from "../../../main/services/analytics/analytics-core.js";
 import type { AnalyticsEventProps, AnalyticsSuperProperties } from "../../../main/services/analytics/analytics-events.js";
 import { setAnalyticsReporter, type AnalyticsReporter } from "../../../main/services/analytics/analytics-report.js";
-import type { SanitizedException, sanitizeException } from "../../../main/services/analytics/analytics-sanitize.js";
+import type { SanitizedException, isSystemErrorCode, sanitizeException } from "../../../main/services/analytics/analytics-sanitize.js";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 import { atomicJson, cliLeaseHelperPath, leaseGuardPath } from "./state.ts";
 
@@ -225,20 +225,24 @@ function within(work: Promise<unknown>, ms: number): Promise<void> {
   ]).finally(() => clearTimeout(timer));
 }
 
-const NODE_ERROR_CODE = /^[A-Z][A-Z0-9_]{1,63}$/u;
 const MAX_REPORTED_CAUSES = 4;
+
+interface Sanitizer {
+  sanitizeException: typeof sanitizeException;
+  isSystemErrorCode: typeof isSystemErrorCode;
+}
 
 interface MessagelessError {
   name?: unknown;
   stack?: unknown;
   message: "";
-  code?: string;
+  code?: unknown;
   cause?: MessagelessError;
 }
 
 /**
  * What a server's crash report may say about an error: its type, frames and
- * Node error code. A server's messages quote file names, hosts and prompt text
+ * system error code. A server's messages quote file names, hosts and prompt text
  * that no redactor can recognize, so the message itself never leaves.
  */
 function withoutMessage(value: unknown, depth = 0): MessagelessError {
@@ -249,7 +253,7 @@ function withoutMessage(value: unknown, depth = 0): MessagelessError {
       name,
       stack,
       message: "",
-      ...(typeof code === "string" && NODE_ERROR_CODE.test(code) ? { code } : {}),
+      code,
       ...(cause !== undefined && cause !== null && depth < MAX_REPORTED_CAUSES ? { cause: withoutMessage(cause, depth + 1) } : {}),
     };
   } catch {
@@ -261,15 +265,16 @@ function withoutMessage(value: unknown, depth = 0): MessagelessError {
 /**
  * The sanitizer keeps a message only if it is a runtime's own sentence, so a
  * bare code would come out withheld. It sees no message here, and each error's
- * checked code goes back in the message field afterwards.
+ * code goes back in the message field afterwards if it is on the fixed list,
+ * which is also all the outgoing guard admits from a server.
  */
-function serverException(value: unknown, sanitize: typeof sanitizeException, appRoots: readonly string[]): SanitizedException {
+function serverException(value: unknown, sanitizer: Sanitizer, appRoots: readonly string[]): SanitizedException {
   let link: MessagelessError | undefined = withoutMessage(value);
-  const exception = sanitize(link, { appRoots });
+  const exception = sanitizer.sanitizeException(link, { appRoots });
   const errors = exception.errors.map((error) => {
     const code = link?.code;
     link = link?.cause;
-    return code ? { ...error, value: code } : error;
+    return sanitizer.isSystemErrorCode(code) ? { ...error, value: code } : error;
   });
   return { ...exception, errors };
 }
@@ -299,7 +304,7 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
   const rethrow = context.rethrow ?? ((error: unknown) => { setImmediate(() => { throw error; }); });
   const early: ((ready: AnalyticsCore) => void)[] = [];
   let core: AnalyticsCore | undefined;
-  let sanitize: typeof sanitizeException | undefined;
+  let sanitizer: Sanitizer | undefined;
   let transport: PostHogTransport | undefined;
   let installId: string | undefined;
   let stopped = false;
@@ -336,14 +341,14 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
     const state = updateServerAnalyticsState(context.agentDir, (current) => ensureInstallId(current, context.randomUUID ?? nodeRandomUUID));
     if (!state.enabled || !state.installId) { stop(); return; }
     installId = state.installId;
-    const [{ createAnalyticsCore }, sanitizer, created] = await Promise.all([
+    const [{ createAnalyticsCore }, loadedSanitizer, created] = await Promise.all([
       import("../../../main/services/analytics/analytics-core.js"),
       import("../../../main/services/analytics/analytics-sanitize.js"),
       createTransport(consentHolds),
     ]);
     if (stopped) { await created.discard(); return; }
     transport = created;
-    sanitize = sanitizer.sanitizeException;
+    sanitizer = loadedSanitizer;
     const ready = createAnalyticsCore({
       transport: created,
       getDistinctId: () => (consentHolds() ? installId : undefined),
@@ -362,8 +367,8 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
 
   function capture(error: unknown, level: "fatal" | "error", origin: "uncaught_exception" | "unhandled_rejection"): void {
     try {
-      if (!core || !sanitize) return;
-      core.captureSanitizedException(serverException(error, sanitize, [context.appDir]), {
+      if (!core || !sanitizer) return;
+      core.captureSanitizedException(serverException(error, sanitizer, [context.appDir]), {
         source: "server",
         level,
         processType: "server",
