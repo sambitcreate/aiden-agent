@@ -194,6 +194,45 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   );
 });
 
+test("an authorized plan that expires before execution cannot be consumed", () => {
+  let now = 500_000;
+  const ledger = new FormFillBatchLedger({ now: () => now });
+  const plan = makePlan({ planId: "ffp-late" });
+  const { token } = ledger.authorize(plan.planId, ledger.mint(plan));
+  now = plan.expiresAt;
+  assert.throws(
+    () => ledger.consume(token, plan),
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_expired",
+  );
+  now = 500_000;
+  assert.throws(
+    () => ledger.consume(token, plan),
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_expired",
+    "a clock rollback must not revive it",
+  );
+  assert.equal(ledger.statusOf(plan.planId), "expired");
+});
+
+test("revoking an authorized plan closes its token, and a consumed plan stays consumed", () => {
+  const ledger = new FormFillBatchLedger({ now: () => 500_000 });
+  const revoked = makePlan({ planId: "ffp-token-revoked" });
+  const { token } = ledger.authorize(revoked.planId, ledger.mint(revoked));
+  ledger.revoke(revoked.planId);
+  assert.throws(
+    () => ledger.consume(token, revoked),
+    (error: unknown) =>
+      error instanceof FormFillBatchError && error.code === "plan_revoked",
+  );
+
+  const used = makePlan({ planId: "ffp-used" });
+  const authority = ledger.authorize(used.planId, ledger.mint(used));
+  ledger.consume(authority.token, authority.plan);
+  ledger.revokeAll();
+  assert.equal(ledger.statusOf(used.planId), "consumed");
+});
+
 test("row deselection authorizes a strict subset with its own digest", () => {
   const ledger = new FormFillBatchLedger({ now: () => 500_000 });
   const plan = makePlan();

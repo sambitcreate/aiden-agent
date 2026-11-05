@@ -109,3 +109,35 @@ Fixed defects, reproduced by test:
 ### `backend:M028` Bot approval wait registry — deferred
 
 PR #730 rewrites `bot-approvals.ts`, and #727 also edits it. Reconcile after those land.
+
+## P2b: Remote pairing and single-use capabilities
+
+### `backend:M057` nearby pairing requests — retained
+
+`AidenRemotePairingRequestService` already has one `InternalState` union and a synchronous `approving` claim. `delivered` and `withdrawn` stay independent of it. The linearization points are:
+
+- `respond` setting `approving`, which decides who may act.
+- `authorizeCommit` inside the device write, which decides whether a device can exist.
+- `stillApproving` after the write and again after sealing, which decide whether the envelope is published.
+
+Every path that loses after commit revokes, and a failed revocation stays in `orphanedDeviceIds` for `close()` to retry.
+
+### `backend:M056` pairing window — retained, one fix
+
+`consumed` is set synchronously before any awaited work, so the secret is burned even if persistence fails. `cancelled` and window identity fence the issue.
+
+Fixed defect, reproduced by test: `authorizeCommit` passes inside the state write, so a window closed or replaced during that write reached the post-await check with a committed device. `exchange` refused the client but left the device record active. No credential escaped, but a device nobody could use stayed in the paired list. `exchange` now revokes it. A failed revocation is swallowed: the client still sees `pairing_closed`, and the record is the same unusable one as before this fix.
+
+### `backend:M142` form-fill batch consent — retained, one fix
+
+`FormFillBatchLedger` has an explicit `pending/authorized/consumed/revoked/expired` status. Expiry was enforced at `authorize` and by `statusOf`, but not at `consume`.
+
+Fixed defect, reproduced at the ledger boundary: an authorized plan could be consumed after its deadline. `consume` now records the expiry, and a clock rollback cannot revive the plan. In the running app authorize and execute are close together, so this needs a slow tool dispatch to matter.
+
+### `backend:M182` Computer Use one-shot grant — retained
+
+`ComputerUseGrantLedger.consume` deletes the grant before validating it, so a rejected attempt also burns it. The fingerprint binds generation, target revision and bound target.
+
+### `backend:M191` Git snapshots, `backend:M067` schedule script claims — retained
+
+Reusable until expiry, bounded, and bound to device and workspace. Code read only, no new tests.

@@ -231,7 +231,7 @@ export class AidenRemotePairingService {
 
   constructor(
     private readonly instanceId: string,
-    private readonly devices: Pick<AidenRemoteStateRegistry, "issueDevice">,
+    private readonly devices: Pick<AidenRemoteStateRegistry, "issueDevice" | "revokeDevice">,
     private readonly dependencies: AidenRemotePairingDependencies = {
       now: Date.now,
       randomBytes,
@@ -511,6 +511,9 @@ export class AidenRemotePairingService {
         authorizeCommit: () => this.window === current && !current.cancelled,
       });
       if (this.window !== current || current.cancelled) {
+        // `authorizeCommit` passes inside the write, so the window can close
+        // after the record committed. Its credential never leaves this process.
+        await this.devices.revokeDevice(issued.device.id).catch(() => undefined);
         throw new AidenRemoteServiceError(
           "pairing_closed",
           "This pairing window was closed before the device was created.",
