@@ -176,6 +176,7 @@ private fun AidenBotSessionContent(
             scope,
             knownState,
             activitySupported = activitySupportedNow,
+            plansSupported = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_PLANS) == true,
             sessionKey = sessionKey,
             store = coordinator.botSessionStore
         )
@@ -191,7 +192,9 @@ private fun AidenBotSessionContent(
     // opened without one opens again.
     val feedOpenedWith = remember(controller) { aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) }
     val grantsSettled = serverInfo != null
-    LaunchedEffect(controller, grantsSettled) {
+    val feedGrantsNow = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
+    LaunchedEffect(controller, grantsSettled, feedGrantsNow) {
+        controller.setPlansSupported(AidenRemoteCapability.BOT_PLANS in feedGrantsNow)
         if (grantsSettled && aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) != feedOpenedWith) {
             controller.reopenFeed()
         }
@@ -557,6 +560,14 @@ private fun AidenBotSessionContent(
                         }
                     }
                 }
+                ui.session?.plan?.takeIf { ui.plansSupported }?.let { plan ->
+                    item(key = "plan-${plan.planId}") {
+                        AidenBotPlanCard(plan, botName,
+                            canAnswer = canWriteBots && ui.isConnected && plan.planId !in ui.respondingPlanIds,
+                            error = ui.planError,
+                            onRespond = { decision -> scope.launch { controller.respondToPlan(decision) } })
+                    }
+                }
                 ui.session?.accessRequest?.takeIf {
                     coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACCESS_REQUESTS) == true
                 }?.let { request ->
@@ -600,7 +611,7 @@ private fun AidenBotSessionContent(
             AidenBotSessionComposer(
                 draft = draft,
                 onDraftChange = { draft = it.take(AidenBotSessionWire.MAX_MESSAGE_LENGTH) },
-                placeholder = when (composerMode) {
+                placeholder = if (ui.composerHeldForPlan) "Review the plan to continue" else when (composerMode) {
                     AidenBotComposerMode.MESSAGE -> aidenBotChatPlaceholder(identity.name)
                     AidenBotComposerMode.HANDOFF_NOTE -> stringResource(R.string.bot_handoff_note_placeholder)
                     AidenBotComposerMode.HELD_FOR_SIGN_IN -> stringResource(R.string.bot_handoff_sign_in_placeholder)
@@ -608,11 +619,13 @@ private fun AidenBotSessionContent(
                     AidenBotComposerMode.PAUSED -> stringResource(R.string.bot_paused_placeholder, identity.name)
                 },
                 enabled = ui.composerEnabled,
+                sendHeld = ui.composerHeldForPlan,
                 // A hand-off note is one answer, never Steer or Queue.
                 busy = ui.offersBusyModes && composerMode == AidenBotComposerMode.MESSAGE,
                 busyMode = busyMode,
                 onPickBusyMode = { busyMode = it },
-                onSend = {
+                onSend = send@{
+                    if (ui.composerHeldForPlan) return@send
                     // The draft clears at once and the bubble shows (R14); a refused message comes back.
                     val text = draft
                     draft = ""
@@ -1010,6 +1023,7 @@ private fun AidenBotSessionComposer(
     onDraftChange: (String) -> Unit,
     placeholder: String,
     enabled: Boolean,
+    sendHeld: Boolean,
     busy: Boolean,
     busyMode: AidenStreamInputMode,
     onPickBusyMode: (AidenStreamInputMode) -> Unit,
@@ -1041,7 +1055,7 @@ private fun AidenBotSessionComposer(
             // parity). The menu opens with an empty draft too, so a mode can be picked first.
             AidenRunInputSplitButton(
                 mode = busyMode,
-                canSubmit = enabled && draft.isNotBlank(),
+                canSubmit = enabled && !sendHeld && draft.isNotBlank(),
                 canChooseMode = enabled,
                 onSubmit = onSend,
                 onPickMode = onPickBusyMode
@@ -1049,7 +1063,7 @@ private fun AidenBotSessionComposer(
         } else {
             FilledIconButton(
                 onClick = onSend,
-                enabled = enabled && draft.isNotBlank(),
+                enabled = enabled && !sendHeld && draft.isNotBlank(),
                 shape = AidenShape.Button,
                 colors = aidenFilledIconButtonColors(),
                 modifier = Modifier.size(AidenUi.MinimumTouchTarget)

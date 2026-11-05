@@ -1528,3 +1528,19 @@ test("replay-safe failures reconcile their durable receipt after ledger reconstr
   assert.deepEqual(await restarted.execute(scope,{choice:"always"},action),{recorded:true});
   assert.equal(publications,1);
 });
+
+test("plan_expired pre-effect refusals leave no rejected receipt across ledger reconstruction", async () => {
+  const { AidenOperationNotExecutedError } = await import("./aiden-remote-operation-contract.js");
+  const { AidenRemoteServiceError } = await import("./aiden-remote-errors.js");
+  const scope = { deviceId: "phone", route: "POST /bots/{id}/plans/{planId}/respond", resourceId: "bot:00000000-0000-4000-8000-000000000056:plan-56", key: "plan-expired-retry-56" };
+  const input = { planId: "plan-56", decision: "approve" };
+  const first = new AidenIdempotencyLedger();
+  await assert.rejects(first.execute(scope, input, async () => { throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("plan_expired", "This plan is no longer waiting.", 409)); }), error => error instanceof AidenRemoteServiceError && error.code === "plan_expired" && error.status === 409);
+  assert.deepEqual(first.snapshot().entries, []);
+  const restored = new AidenIdempotencyLedger(first.snapshot());
+  let effects = 0;
+  const approve = () => restored.execute(scope, input, async () => { effects++; return { planId: "plan-56", status: "active" }; });
+  assert.deepEqual(await approve(), { planId: "plan-56", status: "active" });
+  await approve(); assert.equal(effects, 1);
+  assert.equal(restored.snapshot().entries[0]?.state, "fulfilled");
+});

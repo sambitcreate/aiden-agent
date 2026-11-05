@@ -305,6 +305,8 @@ export interface BotSessionServiceDeps {
   onStateChange?(botId: string, state: BotSessionState): void;
   /** `resume` restarted an interrupted turn (not called for replays, blocked or no-op resumes). */
   onResumed?(botId: string): void;
+  /** A running reply was aborted by Stop, or an interrupted turn was dismissed. Must not await a plan serial. */
+  onStopped?(botId: string): void;
   onReport?(botId: string, error: unknown): void;
   /** Which Bots the person paused. Default: `<profileDir>/bot-service/bot-pauses.json`. */
   pauses?: BotPauseStore;
@@ -831,6 +833,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         // Pending tool calls settle against the Bot's tools while aborting.
         await registry.refresh().catch(() => undefined);
         await dismissPaused(conversation, before.submissionId);
+        deps.onStopped?.(botId);
         blocked.delete(botId);
         return remember(key, publish(botId, await currentState(botId)));
       });
@@ -842,6 +845,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (before.kind !== "running") return before;
         const { conversation } = await openBot(botId);
         await conversation.abort(ctx);
+        deps.onStopped?.(botId);
         return publish(botId, await currentState(botId));
       });
     },

@@ -1,3 +1,4 @@
+import { botPlanItemView, type BotPlanItem, type BotPlanView } from "../../renderer/shared/bot-plans.js";
 import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-runtime/bot-access-authorization.js";
 import { createBotRunAccess } from "./bot-runtime/bot-run-access.js";
@@ -25,6 +26,7 @@ import { AidenRemoteBotService } from "./aiden-remote-bots.js";
 import {
   AidenRemoteBotSessionService,
   projectAidenRemoteBotMemory,
+  projectAidenRemoteBotPlan,
   projectBotSessionActivity,
   projectBotSessionEntries,
   projectBotSessionState,
@@ -1526,7 +1528,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -3837,7 +3839,6 @@ test("a card's desktop-only settings action never crosses the wire, and a settle
   }
 });
 
-
 test("Bot messaging projects to existing labelled messages, including bounded saved answers", () => {
   const rows = projectBotSessionEntries([
     {id: 1, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Clean question"}},
@@ -4112,4 +4113,441 @@ test("an access dismissal settles despite unrelated failed status writes and its
     await issues.list(BOT_ID);await repaired;
     assert.equal((await store.read(BOT_ID)).every(row=>row.statusAppended!==false),true);
   } finally {failing=false;await service.close();rmSync(profile,{recursive:true,force:true});}
+});
+
+// Revision 56: plans share the desktop core and the real Bot idempotency ledger.
+async function planSession(items: BotPlanItem[] = [{ id: "i1", kind: "shell" }]) {
+  const { createBotPlans } = await import("./bot-plans/plans.js");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "remote-plan-"));
+  let validator = async () => {};
+  const plans = createBotPlans({ profileDir: dir, knownBot: async () => true, revalidate: async () => validator(), revokeAccess() {} });
+  const runtime = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => runtime.runtime, plans });
+  const folder = items.find((item): item is Extract<BotPlanItem, { kind: "files" }> => item.kind === "files" && item.grant);
+  const proposal = { title: "Prepare a draft", why: "Review it together", steps: ["Prepare a draft"], items,
+    authorization: { policyRevision: "private-policy", bindingRevision: "private-binding", proposalFingerprint: "private-proposal", rules: [],
+      ...(folder ? { folder: { ...accessRequestPrompt().authorization, root: folder.path } } : {}) } };
+  const { botPlanProposalFingerprint } = await import("./bot-plans/validate.js");
+  proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
+  const request = (planId = "plan-56") => plans.request({ botId: BOT_ID, planId, toolCallId: "private-tool-call", requestIds: ["private-request"], proposal, signal: undefined });
+  return { plans, service, request, setValidator: (next: typeof validator) => { validator = next; }, cleanup: async () => { await plans.endRuns(BOT_ID, "stopped"); await service.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("plan is omitted unless bot:plans is negotiated; pending snapshots, events and reconnect stay public", async () => {
+  const host = await planSession();
+  const holder = await openAudienceStream(host.service, { plans: true });
+  const legacy = await openAudienceStream(host.service, {});
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder attached");
+    await legacy.until(() => legacy.frames.length === 1, "legacy attached");
+    const waiting = host.request();
+    await waitFor(async () => (await host.plans.current(BOT_ID))?.status === "pending");
+    const snapshot = await host.service.session(BOT_ID, { plans: true });
+    assert.equal(snapshot.plan?.status, "pending");
+    assert.equal(Object.prototype.hasOwnProperty.call(await host.service.session(BOT_ID), "plan"), false);
+    await holder.until(() => holder.frames.some(f => f.type === "plan"), "pending plan frame");
+    const wire = JSON.stringify(snapshot.plan);
+    for (const privateText of ["private-", "authorization", "toolCallId", "requestIds", "revision", "shell-1", BOT_ID]) assert.equal(wire.includes(privateText), false, privateText);
+    assert.equal(legacy.frames.some(f => f.type === "plan" || (f.type === "snapshot" && Object.prototype.hasOwnProperty.call(f.payload.session, "plan"))), false);
+    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-approve-key-0001", { decision: "approve" });
+    assert.equal((await waiting).status, "approved");
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.status, "active");
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.expiresAt !== undefined, true);
+  } finally { await holder.close(); await legacy.close(); await host.cleanup(); }
+});
+
+test("respond approve reaches core once per key; settled refusals are forgotten and unknown decisions are 400", async () => {
+  const host = await planSession();
+  try {
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "approve" }), isError("plan_expired", 409));
+    const waiting = host.request();
+    await waitFor(async () => (await host.plans.current(BOT_ID))?.status === "pending");
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-bad-key-000001", { decision: "allow" }), isError("invalid_request", 400));
+    const calls: string[] = []; const original = host.plans.respond.bind(host.plans);
+    host.plans.respond = async (...args) => { calls.push(args[2]); return original(...args); };
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "approve" });
+    assert.deepEqual(await Promise.all([answer(), answer()]), [{ planId: "plan-56", status: "active" }, { planId: "plan-56", status: "active" }]);
+    assert.equal((await waiting).status, "approved");
+    await answer(); assert.deepEqual(calls, ["approve"]);
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-retry-key-0001", { decision: "stop" }), error => (error as { code?: string }).code === "idempotency_conflict");
+    await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-other-key-0001", { decision: "approve" }), isError("plan_expired", 409));
+    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-key-00001", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
+  } finally { await host.cleanup(); }
+});
+
+test("plan text is bounded and redacted member by member without projecting private proposal identities", () => {
+  const view = { planId: "plan-56", botId: "private-bot", revision: 78, status: "pending" as const,
+    title: "Read /Users/owner/private/report sk-abcdefghijklmnop and prepare", why: "\u202e" + "😀".repeat(301), from: "COS\u0000",
+    steps: [{ text: "\ud800" + "😀".repeat(201), status: "pending" as const }],
+    items: [{ id: "private-item", line: "Files · change /Users/owner/" + "folder/".repeat(100), details: ["/Users/owner/private/folder", "Tool " + "😀".repeat(200)] }, { id: "private-count", line: "Create events", details: [], used: 3, max: 5 }] };
+  const dto = projectAidenRemoteBotPlan(view);
+  assert.ok(dto);
+  assert.deepEqual(parseAidenRemoteBotSession({ botId: BOT_ID, epoch: "e1", seq: 0, state: "running", interrupted: false, entries: [], hasOlder: false, question: null, approval: null, plan: dto }).plan, dto);
+  assert.equal(dto.title, "Read [path] [redacted] and prepare");
+  assert.equal(dto.items[0]!.line, "Files · change [path]");
+  assert.equal(dto.items[0]!.details[0], "[path]");
+  assert.equal([...dto.items[0]!.details[1]!].length, 160);
+  assert.equal([...dto.why].length, 300);
+  assert.equal([...dto.steps[0]!.text].length, 200);
+  assert.equal(dto.from, "COS");
+  assert.equal(dto.steps[0]!.text.startsWith("�"), true);
+  assert.deepEqual(dto.items[1], { line: "Create events (up to 5)", details: [], used: 3, max: 5 });
+  const wire = JSON.stringify(dto);
+  for (const secret of ["owner", "abcdefghijklmnop", "private-bot", "private-item", "revision", "authorization"]) assert.equal(wire.includes(secret), false, secret);
+});
+
+test("maximum plan members are budgeted before partial, queued messages and transcript", async () => {
+  const driven = drivenConversation([user(1, "Plan dinners")], { "pi.live": { run: { inputs: [1] } } });
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  let plan: import("../../renderer/shared/bot-plans.js").BotPlanView | null = {
+    planId: "plan-budget", botId: BOT_ID, revision: 1, status: "pending", title: "界".repeat(80), why: "界".repeat(300), from: "界".repeat(120),
+    steps: Array.from({ length: 10 }, () => ({ text: "界".repeat(200), status: "pending" })),
+    items: Array.from({ length: 8 }, (_, n) => ({ id: `i${n}`, line: "界".repeat(120), details: Array.from({ length: 6 }, () => "界".repeat(160)), used: 25, max: 25 })),
+  };
+  let changed: (id: string) => void = () => {};
+  let off = 0;
+  const service = runningOn(driven, fake, { plans: { current: async () => plan, respond: async () => "not_waiting", onChange: fn => { changed = fn; return () => { off++; }; } } });
+  const holder = await openAudienceStream(service, { activity: true, plans: true });
+  const legacy = await openAudienceStream(service, { activity: true });
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder snapshot");
+    await legacy.until(() => legacy.frames.length === 1, "legacy snapshot");
+    assert.equal(holder.frames[0]!.payload.session.activity.phase, "waiting");
+    assert.equal(legacy.frames[0]!.payload.session.activity.phase, "waiting");
+    await driven.emitView([user(1, "Plan dinners"), assistant(2, ESCAPED.repeat(100_000))], {
+      "pi.live": { generation: { message: { content: [{ type: "text", text: ESCAPED.repeat(100_000) }] } } },
+      ...waitingInbox(Array.from({ length: 3 }, (_, n) => escapedMessage(`m${n}`, 32_000))),
+    });
+    const snapshot = await service.session(BOT_ID, { activity: true, plans: true });
+    assert.deepEqual(snapshot.plan, projectAidenRemoteBotPlan(plan));
+    assert.equal(snapshot.hasOlder, true);
+    assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) < AIDEN_REMOTE_MAX_SSE_FRAME_BYTES);
+    plan = null; changed(BOT_ID);
+    await holder.until(() => holder.frames.some(f => f.type === "plan" && f.payload.plan === null), "plan cleared");
+    await legacy.until(() => legacy.frames[legacy.frames.length - 1]!.seq === holder.frames[holder.frames.length - 1]!.seq, "legacy caught up");
+    assert.equal(legacy.frames.some(f => f.type === "plan"), false);
+    assert.equal(gapless(holder.frames), true); assert.equal(gapless(legacy.frames), true);
+    assertEveryFrameFits(holder.blocks); assertEveryFrameFits(legacy.blocks);
+  } finally { await holder.close(); await legacy.close(); await service.close(); }
+  assert.equal(off, 1);
+});
+
+test("a transient plan read leaves the pending card answerable with the same key", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const current = host.plans.current.bind(host.plans); let failed = false;
+    host.plans.current = async (...args) => { if (!failed) { failed = true; throw new Error("plan storage temporarily unavailable"); } return current(...args); };
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-transient-key-01", { decision: "approve" });
+    await assert.rejects(answer(), /temporarily unavailable/u);
+    assert.equal((await current(BOT_ID))?.status, "pending");
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "active" });
+    assert.equal((await wait).status, "approved");
+  } finally { await host.cleanup(); }
+});
+
+test("a lost post-effect read never reapproves the same plan; distinct choices use distinct keys", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const original = host.plans.respond.bind(host.plans); let decisions = 0; let fail = true;
+    host.plans.respond = async (...args) => { decisions++; const result = await original(...args); if (fail) { fail = false; throw new Error("lost after settlement"); } return result; };
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lost-key-00001", { decision: "approve" });
+    await assert.rejects(answer(), /lost after settlement/u);
+    assert.equal((await wait).status, "approved");
+    await assert.rejects(answer(), isError("plan_expired", 409));
+    assert.equal(decisions, 1);
+    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-stop-new-key-01", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
+    assert.equal(decisions, 2);
+  } finally { await host.cleanup(); }
+});
+
+test("exact host status survives replacement and a Stop after core settlement", async () => {
+  const host = await planSession(); let next: ReturnType<typeof host.request> | undefined;
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const original = host.plans.respond.bind(host.plans);
+    host.plans.respond = async (...args) => { const result = await original(...args); await original(BOT_ID, "plan-56", "stop"); next = host.request("plan-next"); await host.plans.current(BOT_ID); return result; };
+    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-key-00001", { decision: "approve" }), { planId: "plan-56", status: "stopped" });
+    assert.equal((await wait).status, "approved");
+    assert.equal((await host.plans.current(BOT_ID))?.planId, "plan-next");
+    await original(BOT_ID, "plan-next", "not_now"); await next;
+  } finally { await host.cleanup(); }
+});
+
+test("approval revalidation failure grants nothing and does not poison a later exact same-key attempt", async () => {
+  const host = await planSession();
+  try {
+    host.setValidator(async () => { throw new Error("binding changed"); });
+    const wait = host.request(); const rejected = assert.rejects(wait, /binding changed/u); await host.plans.current(BOT_ID);
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-policy-key-001", { decision: "approve" });
+    await assert.rejects(answer(), /binding changed/u); await rejected;
+    assert.equal(await host.plans.current(BOT_ID), null);
+    await assert.rejects(answer(), isError("plan_expired", 409));
+    host.setValidator(async () => {});
+    const retry = host.request(); await host.plans.current(BOT_ID);
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "active" }); assert.equal((await retry).status, "approved");
+  } finally { await host.cleanup(); }
+});
+
+test("Not now clears the core wait and reconnect reflects ended and missing plans", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const answer = () => host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-decline-key-01", { decision: "not_now" });
+    assert.deepEqual(await answer(), { planId: "plan-56", status: "stopped" });
+    assert.equal((await wait).status, "declined"); assert.deepEqual(await answer(), { planId: "plan-56", status: "stopped" });
+    const reconnect = await openAudienceStream(host.service, { plans: true });
+    try { await reconnect.until(() => reconnect.frames.length === 1, "reconnect snapshot"); assert.equal(reconnect.frames[0]!.payload.session.plan, null); } finally { await reconnect.close(); }
+  } finally { await host.cleanup(); }
+});
+
+test("opposing plan decisions with independent keys settle exactly once", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    const answers = await Promise.allSettled([
+      host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-race-approve-01", { decision: "approve" }),
+      host.service.respondPlan("other-phone", BOT_ID, "plan-56", "plan-race-not-now-01", { decision: "not_now" }),
+    ]);
+    assert.equal(answers.filter(a => a.status === "fulfilled").length, 1);
+    const loser = answers.find(a => a.status === "rejected") as PromiseRejectedResult;
+    assert.ok(isError("plan_expired", 409)(loser.reason));
+    const result = await wait;
+    const current = await host.plans.current(BOT_ID);
+    assert.equal(current?.status === "active", result.status === "approved");
+    const success = answers.find(a => a.status === "fulfilled") as PromiseFulfilledResult<{ planId: string; status: string }>;
+    assert.equal(success.value.status, result.status === "approved" ? "active" : "stopped");
+  } finally { await host.cleanup(); }
+});
+
+test("host lifecycle changes reach reconnect; a host without plans never advertises or emits them", async () => {
+  const host = await planSession();
+  try {
+    const wait = host.request(); await host.plans.current(BOT_ID);
+    assert.equal(host.service.supportsPlans, true);
+    await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-lifecycle-key-1", { decision: "approve" }); await wait;
+    await host.plans.endRuns(BOT_ID, "finished");
+    const reconnect = await openAudienceStream(host.service, { plans: true });
+    try { await reconnect.until(() => reconnect.frames.length === 1, "ended reconnect"); assert.equal(reconnect.frames[0]!.payload.session.plan.status, "finished"); } finally { await reconnect.close(); }
+    await host.plans.forgetBot(BOT_ID);
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan, null);
+  } finally { await host.cleanup(); }
+  const bare = sessionService(fakeRuntime({ kind: "idle" }).runtime);
+  try {
+    assert.equal(bare.supportsPlans, false);
+    assert.equal(Object.prototype.hasOwnProperty.call(await bare.session(BOT_ID, { plans: true }), "plan"), false);
+    await assert.rejects(bare.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "plan-no-host-key-001", { decision: "approve" }), isError("not_found", 404));
+  } finally { await bare.close(); }
+});
+
+function hostPlanForItem(item: BotPlanItem): BotPlanView {
+  return { planId: "folder-plan", botId: BOT_ID, revision: 1, status: "pending",
+    title: "Read /Users/owner/private/report", why: "Review ~/private/why", from: "/Users/owner/private/from",
+    steps: [{ text: "Open /Users/owner/private/step", status: "pending" }], items: [botPlanItemView(item, 0)] };
+}
+
+function phonePlanForItem(item: BotPlanItem) {
+  const dto = projectAidenRemoteBotPlan(hostPlanForItem(item));
+  assert.ok(dto);
+  return dto;
+}
+
+test("phone file approval distinguishes enforced sensitive folders through the real host formatter", () => {
+  const file = (folder: string) => phonePlanForItem({ id: "files", kind: "files", path: folder, access: "write", grant: true });
+  const taxes = file("/Users/sam/Documents/Taxes");
+  const keys = file("/Users/sam/.ssh");
+  assert.notDeepEqual(taxes.items, keys.items);
+  assert.equal(taxes.items[0]!.line, "Files · change /Users/sam/Documents/Taxes for this plan");
+  assert.equal(keys.items[0]!.line, "Files · change /Users/sam/.ssh for this plan");
+  assert.equal(taxes.title, "Read [path]");
+  assert.equal(taxes.why, "Review [path]");
+  assert.equal(taxes.from, "[path]");
+  assert.equal(taxes.steps[0]!.text, "Open [path]");
+});
+
+test("phone file approval retains the whole outside folder with spaces and read/change lifetime", () => {
+  for (const access of ["read", "write"] as const) {
+    const item = phonePlanForItem({ id: "files", kind: "files", path: "/Volumes/Backup/Family Photos", access, grant: true }).items[0]!;
+    assert.equal(item.line, `Files · ${access === "read" ? "read" : "change"} /Volumes/Backup/Family Photos for this plan`);
+    assert.deepEqual(item.details, ["/Volumes/Backup/Family Photos", `${access === "read" ? "Read only" : "Read and change"} · allowed once, for this plan only`]);
+  }
+});
+
+test("phone pending long rule keeps its cap after trimming the actual host-built label", () => {
+  const label = "Ask before changing any calendar invitation for anyone outside the house ".repeat(2).slice(0, 120);
+  const item = phonePlanForItem({ id: "rule", kind: "rule", ruleId: "custom-rule", ruleFingerprint: "fp", label, max: 25 }).items[0]!;
+  assert.ok(item.line.endsWith(" (up to 25)"), item.line);
+  assert.ok([...item.line].length <= 120);
+  assert.equal(item.used, 0); assert.equal(item.max, 25);
+});
+
+test("phone files use home-relative locations and preserve root, Unicode and long folder names", () => {
+  const project = (folder: string) => phonePlanForItem({ id: "files", kind: "files", path: folder, access: "read", grant: false }).items[0]!;
+  assert.equal(project(path.join(os.homedir(), "Documents", "Tax Records")).line, "Files · read ~/Documents/Tax Records");
+  assert.equal(project(os.homedir()).line, "Files · read ~");
+  assert.equal(project("/").line, "Files · read /");
+  assert.equal(project("/Volumes/家族/👩‍👧 Photos").line, "Files · read /Volumes/家族/👩‍👧 Photos");
+  const folder = "/Volumes/" + "long parent/".repeat(20) + "Family Photos";
+  const item = project(folder);
+  assert.ok(item.line.endsWith("/Family Photos"), item.line);
+  assert.ok(item.line.includes("…"));
+  assert.ok([...item.line].length <= 120);
+  assert.equal(item.details.join(""), folder);
+  assert.ok(item.details.length <= 6);
+  for (const detail of item.details) assert.ok([...detail].length <= 160);
+  const basename = "Very long family photo folder ".repeat(8) + "final";
+  const long = project("/Volumes/" + basename);
+  assert.ok(long.line.includes("Very long family"), long.line);
+  assert.ok(long.line.endsWith("final"), long.line);
+  assert.equal(long.details.join(""), "/Volumes/" + basename);
+});
+
+test("phone counted caps survive long connector/site labels and redaction", () => {
+  for (const item of [
+    { id: "c", kind: "connector", app: "Calendar ".repeat(20), action: "change /Users/owner/private/files", tools: [{ modelName: "private", serverId: "private", remoteName: "private", title: "Open ~/private/tool" }], max: 25 },
+    { id: "s", kind: "site", host: "a".repeat(150) + ".example.com", max: 25 },
+    { id: "r", kind: "rule", ruleId: "private", ruleFingerprint: "private", label: "😀".repeat(120), max: 25 },
+  ] satisfies BotPlanItem[]) {
+    const dto = phonePlanForItem(item).items[0]!;
+    assert.ok(dto.line.endsWith(" (up to 25)"), dto.line);
+    assert.ok([...dto.line].length <= 120);
+    assert.equal(dto.used, 0); assert.equal(dto.max, 25);
+    assert.equal(JSON.stringify(dto).includes("/Users/owner"), false);
+    assert.equal(JSON.stringify(dto).includes("~/private"), false);
+  }
+});
+
+test("Files-looking connector/server/tool/rule prose cannot acquire trusted folder display", () => {
+  for (const item of [
+    { id: "c", kind: "connector", app: "Files", action: "change /Users/owner/private", tools: [{ modelName: "Files", serverId: "Files", remoteName: "private", title: "Files · read /Volumes/Backup/Secret" }], max: 2 },
+    { id: "r", kind: "rule", ruleId: "Files", ruleFingerprint: "private", label: "Files · change /Users/owner/private for this plan", max: 2 },
+  ] satisfies BotPlanItem[]) {
+    const wire = JSON.stringify(phonePlanForItem(item));
+    assert.ok(wire.includes("[path]"));
+    for (const location of ["/Users/owner/private", "/Volumes/Backup/Secret"]) assert.equal(wire.includes(location), false);
+  }
+});
+
+test("unrepresentable pending file scope offers no phone approval but active/ended plans retain Stop summaries", () => {
+  for (const folder of ["/Volumes/" + "parent/".repeat(140) + "Family Photos", "/Volumes/Hidden\u202e Photos", "/Volumes/bad\ud800name", "/Volumes/line\nbreak"]) {
+    const view = hostPlanForItem({ id: "files", kind: "files", path: folder, access: "write", grant: true });
+    assert.equal(projectAidenRemoteBotPlan(view), null);
+    for (const status of ["active", "finished", "stopped", "expired"] as const) {
+      const dto = projectAidenRemoteBotPlan({ ...view, status });
+      assert.ok(dto); assert.equal(dto.status, status);
+      const item = dto.items[0]!;
+      assert.ok(item.line.startsWith("Files · change ")); assert.ok(item.line.endsWith(" for this plan"));
+      assert.ok(item.details.includes("Review the full folder location on the host desktop."));
+      assert.ok(item.details.includes("Read and change · allowed once, for this plan only"));
+      assert.ok([...item.line].length <= 120);
+      assert.equal(parseAidenRemoteBotSession({ botId: BOT_ID, epoch: "e1", seq: 0, state: "running", interrupted: false, entries: [], hasOlder: false, question: null, approval: null, plan: dto }).plan?.status, status);
+    }
+  }
+});
+
+test("unrepresentable phone approval is a forgotten pre-effect refusal and desktop approval keeps phone Stop", async () => {
+  const host = await planSession([{ id: "i1", kind: "files", path: "/Volumes/" + "parent/".repeat(140) + "Family Photos", access: "write", grant: true }]);
+  const waiting = host.request(); let settled = false; let grants = 0;
+  const installation = waiting.then(async result => {
+    settled = true;
+    if (result.status === "approved" && result.fresh) await host.plans.grantFreshAccess(BOT_ID, "plan-56", async () => { grants++; });
+  });
+  try {
+    await host.plans.current(BOT_ID);
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan, null);
+    let calls = 0; const respond = host.plans.respond.bind(host.plans);
+    host.plans.respond = async (...args) => { calls++; return respond(...args); };
+    for (let n = 0; n < 2; n++) await assert.rejects(host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "unrepresented-key-001", { decision: "approve" }), isError("plan_expired", 409));
+    assert.equal(calls, 0); assert.equal(settled, false); assert.equal(grants, 0);
+    assert.equal((await host.plans.current(BOT_ID))?.status, "pending");
+    await respond(BOT_ID, "plan-56", "approve"); await installation;
+    assert.equal(grants, 1);
+    assert.equal((await host.service.session(BOT_ID, { plans: true })).plan?.status, "active");
+    assert.deepEqual(await host.service.respondPlan(DEVICE_ID, BOT_ID, "plan-56", "unrepresented-stop-01", { decision: "stop" }), { planId: "plan-56", status: "stopped" });
+    assert.equal(calls, 1);
+  } finally { await host.cleanup(); }
+});
+
+test("hidden pending folder scope preserves waiting activity and gapless legacy streams", async () => {
+  const driven = drivenConversation([user(1, "Review the folder")], { "pi.live": { run: { inputs: [1] } } });
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  let plan: BotPlanView | null = hostPlanForItem({ id: "files", kind: "files", path: "/Volumes/" + "parent/".repeat(140) + "Family Photos", access: "read", grant: true });
+  let changed: (id: string) => void = () => {};
+  const service = runningOn(driven, fake, { plans: { current: async () => plan, respond: async () => "not_waiting", onChange: fn => { changed = fn; return () => {}; } } });
+  const holder = await openAudienceStream(service, { activity: true, plans: true });
+  const legacy = await openAudienceStream(service, { activity: true });
+  try {
+    await holder.until(() => holder.frames.length === 1, "holder snapshot");
+    await legacy.until(() => legacy.frames.length === 1, "legacy snapshot");
+    assert.equal(holder.frames[0]!.payload.session.plan, null);
+    assert.equal(holder.frames[0]!.payload.session.activity.phase, "waiting");
+    assert.equal(legacy.frames[0]!.payload.session.activity.phase, "waiting");
+    assert.equal(Object.prototype.hasOwnProperty.call(legacy.frames[0]!.payload.session, "plan"), false);
+    plan = hostPlanForItem({ id: "files", kind: "files", path: "/Volumes/Family Photos", access: "read", grant: true }); changed(BOT_ID);
+    await holder.until(() => holder.frames.some(f => f.type === "plan" && f.payload.plan !== null), "representable card");
+    await legacy.until(() => last(legacy.frames)?.seq === last(holder.frames)?.seq, "legacy no-op");
+    plan = null; changed(BOT_ID);
+    await holder.until(() => holder.frames.some(f => f.type === "plan" && f.payload.plan === null), "clear card");
+    await legacy.until(() => last(legacy.frames)?.seq === last(holder.frames)?.seq, "legacy clear caught up");
+    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
+    assert.equal(legacy.frames.some(f => f.type === "plan"), false);
+    assertEveryFrameFits(holder.blocks); assertEveryFrameFits(legacy.blocks);
+  } finally { await holder.close(); await legacy.close(); await service.close(); }
+});
+
+test("canonical file displays are produced by real host items without forwarding display metadata", async () => {
+  const fixture = JSON.parse(await readFile(path.resolve("protocol/aiden-remote/v1/fixtures/contract.json"), "utf8"));
+  const projected = [
+    phonePlanForItem({ id: "i1", kind: "files", path: "/Volumes/Backup/Family Photos", access: "write", grant: true }).items[0],
+    phonePlanForItem({ id: "i1", kind: "files", path: "~/Documents/Tax Records", access: "read", grant: false }).items[0],
+  ];
+  assert.deepEqual(projected, fixture.botPlans.pending.items.slice(2));
+  assert.deepEqual(phonePlanForItem({ id: "i1", kind: "files", path: "/Volumes/Archive/Tax Records", access: "read", grant: true }).items, fixture.botPlans.readOnlyFolderPlan.items);
+  const wire = JSON.stringify(projected);
+  for (const privateMember of ["fileScope", "\"path\"", "\"access\"", "\"grant\"", "\"id\""]) assert.equal(wire.includes(privateMember), false);
+});
+
+
+test("phone file review fits every detail slot exactly and refuses the next scalar without losing scope", () => {
+  for (const [grant, capacity] of [[true, 800], [false, 960]] as const) {
+    const folder = "/" + "界".repeat(capacity - 1);
+    const view = hostPlanForItem({ id: "files", kind: "files", path: folder, access: "read", grant });
+    const dto = projectAidenRemoteBotPlan(view);
+    assert.ok(dto);
+    const details = dto.items[0]!.details;
+    assert.equal(details.length, 6);
+    assert.equal(details.slice(0, grant ? 5 : 6).join(""), folder);
+    assert.equal(projectAidenRemoteBotPlan(hostPlanForItem({ id: "files", kind: "files", path: folder + "界", access: "read", grant })), null);
+  }
+});
+
+test("an active unsafe ancestor still shows a safe folder name without changing its location", () => {
+  const view = hostPlanForItem({ id: "files", kind: "files", path: "/Volumes/hidden\u202e/Family Photos", access: "read", grant: true });
+  assert.equal(projectAidenRemoteBotPlan(view), null);
+  const dto = projectAidenRemoteBotPlan({ ...view, status: "active" });
+  assert.ok(dto);
+  assert.equal(dto.items[0]!.line, "Files · read …/Family Photos for this plan");
+  assert.deepEqual(dto.items[0]!.details, ["Review the full folder location on the host desktop.", "Read only · allowed once, for this plan only"]);
+});
+
+
+test("a refused phone key retries only after the host folder display becomes representable", async () => {
+  let view: BotPlanView = hostPlanForItem({ id: "i1", kind: "files", path: "/Volumes/" + "parent/".repeat(140) + "Family Photos", access: "write", grant: true });
+  let responses = 0;
+  const service = new AidenRemoteBotSessionService({ bots: botService(), runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
+    plans: { current: async (_botId, planId) => !planId || planId === view.planId ? view : null,
+      onChange: () => () => {}, respond: async () => { responses++; view = { ...view, status: "active" }; return "done"; } } });
+  const approve = () => service.respondPlan(DEVICE_ID, BOT_ID, "folder-plan", "display-retry-key-001", { decision: "approve" });
+  try {
+    await assert.rejects(approve(), isError("plan_expired", 409));
+    await assert.rejects(approve(), isError("plan_expired", 409));
+    assert.equal(responses, 0); assert.equal(view.status, "pending");
+    // A corrected authoritative display read is the only change. No rejected ledger
+    // receipt may prevent a newly representable view from being reviewed and answered.
+    view = hostPlanForItem({ id: "i1", kind: "files", path: "/Volumes/Family Photos", access: "write", grant: true });
+    assert.deepEqual(await approve(), { planId: "folder-plan", status: "active" });
+    assert.equal(responses, 1);
+    await approve(); assert.equal(responses, 1);
+  } finally { await service.close(); }
 });

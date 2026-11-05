@@ -18,7 +18,7 @@ A switch prevents new sends. An already accepted exchange keeps its original dea
 
 The recipient can ask the person to approve a step in its own chat. The sender shows a waiting line, such as "COS is waiting for you to approve: Create 3 events". Answer the actual approval card in the recipient's chat on desktop or a paired phone. There are no approval buttons on the sender's waiting line.
 
-The recipient still follows its rules. An Ask first rule still asks; a Hand off to me rule blocks the Bot-started step. The routines setting that goes ahead without asking does not apply to these turns. Bot-message turns cannot answer cards, change settings, save or recall personal memory, create routines or wake-ups, start subagents, or open question, hand-off, sign-in or browser flows.
+The recipient still follows its rules. An uncovered Ask first rule still asks; a Hand off to me rule blocks the Bot-started step. A [plan approved by the person](bot-rules.md#approve-a-plan-once) can cover eligible steps within this exchange's deadline. The routines setting that goes ahead without asking does not apply to these turns. Bot-message turns cannot answer cards, change settings, save or recall personal memory, create routines or wake-ups, start subagents, or open question, hand-off, sign-in or browser flows.
 
 Only a final answer is forwarded. Silence, failure and an unanswered deadline produce a status row instead of another model turn. If the sender is paused, interrupted, over budget or unable to use its model, the saved answer stays visible without resuming it. A failed or stopped reply turn also keeps the answer as a display row.
 

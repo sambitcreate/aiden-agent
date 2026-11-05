@@ -1564,7 +1564,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botMessaging, .botAccessRequests,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues, .botMessaging, .botAccessRequests, .botPlans,
             .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
@@ -2539,6 +2539,17 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     // MARK: Contract revision 37: Bot hand-offs and pause (`bot:handoffs`)
+
+    /// Revision 56. A receipt acknowledges the operation; only the session feed settles its card.
+    func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt {
+        try validateBotIdentifier(botId)
+        try AidenBotHandoffWire.validateWaitID(planId)
+        let receipt: AidenBotPlanRespondReceipt = try await send(
+            method: "POST", path: ["bots", botId, "plans", planId, "respond"], body: request,
+            headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200])
+        guard receipt.planId == planId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
 
     /// Answers an offered access choice. Only the opaque wait ID and choice leave the phone.
     func answerBotAccessRequest(

@@ -17,6 +17,7 @@ import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
 import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
+import { PlanCard } from "../../components/bots/plan-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
 import { detectedKeyboardPlatform } from "../../shared/keybindings";
@@ -1123,6 +1124,8 @@ export function BotChatPane({ botId }: { botId: string }) {
         snapshot?.question?.waitId,
         snapshot?.handoff?.waitId,
         snapshot?.accessRequest?.waitId,
+        snapshot?.plan?.planId,
+        snapshot?.plan?.revision,
         snapshot?.activity?.phase,
         snapshot?.queued?.length ?? 0,
         pendingSends.length,
@@ -1183,6 +1186,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   }
 
   const question = snapshot.question;
+  const plan = snapshot.plan ?? null;
+  const pendingPlan = plan?.status === "pending";
   const accessRequest = snapshot.accessRequest ?? null;
   const handoff = snapshot.handoff ?? null;
   const signInWaits = handoff?.kind === "sign_in";
@@ -1215,7 +1220,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   });
   // A message just sent says "Getting ready" at once, before main's state
   // catches up (as on the phones); a failed send drops its echo and the line.
-  const startingTurn = !running && !question && !handoff ? shownSends.find((send) => !send.queued) : undefined;
+  const startingTurn = !running && !question && !handoff && !pendingPlan ? shownSends.find((send) => !send.queued) : undefined;
   const statusActivity =
     snapshot.activity && !replyStreaming
       ? snapshot.activity
@@ -1523,8 +1528,19 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const footer = (
     <div className="flex flex-col">
-      {approvals.prompts.length > 0 || handoff || accessRequest ? (
+      {plan || approvals.prompts.length > 0 || handoff || accessRequest ? (
         <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
+          {plan ? (
+            <PlanCard
+              plan={plan}
+              botName={current.name}
+              avatar={current.avatar}
+              onRespond={async (decision) => {
+                const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
+                if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+              }}
+            />
+          ) : null}
           {accessRequest ? (
             <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
               busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
@@ -1579,9 +1595,11 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
-          ready={!noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          ready={!pendingPlan && !noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
-            state?.kind === "unavailable"
+            pendingPlan
+              ? "Answer the plan above, then send a message."
+              : state?.kind === "unavailable"
               ? BOT_UNAVAILABLE_LABEL
               : state?.kind === "paused"
                 ? botPausedText(current.name)

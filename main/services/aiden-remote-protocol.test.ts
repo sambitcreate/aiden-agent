@@ -466,6 +466,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   // Bot hand-offs and pause are revision 37.
   delete revision19.botHandoffs;
   delete revision19.botAccessRequests;
+  delete revision19.botPlans;
   // Bot issues on phones are revision 42.
   delete revision19.botIssues;
   // Schedule approval cards are revision 39.
@@ -700,6 +701,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/session/images/{entryId}",
     "/chats/{chatId}/recordings/{recordingId}",
     "/bots/messaging",
+    "/bots/{botId}/plans/{planId}/respond",
     "/bots/{botId}/access-requests/{waitId}/answer",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
@@ -2611,6 +2613,7 @@ test("Bot attachment references arrive in revision 33 and only where the host an
   }
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   older.contractRevision = 32;
   record(older.hostHealth, "hostHealth").contractRevision = 32;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require contract revision 33/u);
@@ -2873,6 +2876,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const raw = (await json("fixtures/contract.json")) as Record<string, any>;
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
@@ -2913,6 +2917,7 @@ test("new worktree fixtures need their own revision, and a moved chat has no mes
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   older.contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION - 1;
   assert.throws(
@@ -2946,6 +2951,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -2993,6 +2999,7 @@ test("raw upload fixtures need their own revision, and every client spells a pic
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION - 1;
@@ -3027,6 +3034,7 @@ test("background job fixtures need their own revision, and the parser and schema
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   // Sections from later revisions leave with the downgrade, so only this one is refused.
   delete older.chatNewWorktree;
   older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
@@ -3119,6 +3127,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
   delete older.browserRecordings;
@@ -3159,6 +3168,7 @@ test("browser recordings need their own revision, and a recording step carries o
 
   const older = structuredClone(raw);
   delete older.botAccessRequests;
+  delete older.botPlans;
   older.contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
   assert.throws(
@@ -3532,9 +3542,10 @@ test("revision 55 access fixtures and strict public DTOs reject private fields a
   for (const change of [{ label: "x".repeat(121) }, { why: "x".repeat(401) }, { place: "x".repeat(513) }, { why: " " }, { label: "Bad\u0000" }, { place: "relative/path" }, { waitId: "bad_id" }, { choices: ["once", "always", "not_now"] }, { choices: ["not_now", "once", "once"] }]) assert.throws(() => card({ ...section.folder, ...change }));
   assert.throws(() => card({ ...section.wholeMac, choices: ["not_now", "always", "once"] }));
   assert.throws(() => card({ ...section.wholeMac, place: "~/Reports" }));
-  const older = structuredClone(raw); older.contractRevision = 54; older.hostHealth.contractRevision = 54;
+  const older = structuredClone(raw); delete older.botPlans; older.contractRevision = 54; older.hostHealth.contractRevision = 54;
   assert.throws(() => parseAidenRemoteContractFixture(older), /require revision 55/u);
   delete older.botAccessRequests;
+  delete older.botPlans;
   assert.equal(parseAidenRemoteContractFixture(older).botAccessRequests, undefined);
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
@@ -3557,4 +3568,91 @@ test("the access fixture refuses a holder field in a legacy snapshot or event", 
   const eventLeak = structuredClone(raw);
   eventLeak.botAccessRequests.legacy.events = raw.botAccessRequests.events;
   assert.throws(() => parseAidenRemoteContractFixture(eventLeak), /must not carry access_request/u);
+});
+
+test("revision 56 plans decode strictly, preserve absent versus null, and exclude private identities", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
+  assert.deepEqual(section, raw.botPlans);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 56);
+  assert.equal(section.pending.status, "pending");
+  assert.equal(section.active.steps[0].status, "done");
+  const parse = protocol.parseAidenRemoteBotPlan;
+  for (const change of [{ botId: "private" }, { revision: 1 }, { authorization: {} }, { requestIds: [] }, { title: "x".repeat(81) }, { why: "x".repeat(301) }, { from: null }, { expiresAt: null }, { title: "Bad\u202e" }, { steps: [{ text: "x", status: "unknown" }] }, { items: [{ line: "x", details: [], used: 1 }] }, { items: [{ line: "x", details: [], max: 26, used: 0 }] }, { items: [{ line: "x", details: [], used: 6, max: 5 }] }, { items: [{ id: "private", line: "x", details: [] }] }]) assert.throws(() => parse({ ...section.pending, ...change }));
+  for (const input of [{}, { decision: "allow" }, { decision: "approve", planId: "private" }]) assert.throws(() => protocol.parseAidenRemoteBotPlanRespondRequest(input));
+  for (const decision of ["approve", "not_now", "stop"]) assert.deepEqual(protocol.parseAidenRemoteBotPlanRespondRequest({ decision }), { decision });
+  assert.equal(protocol.parseAidenRemoteBotSession(section.legacy.session).plan, undefined);
+  assert.equal(protocol.parseAidenRemoteBotSession({ ...section.legacy.session, plan: null }).plan, null);
+  assert.throws(() => protocol.parseAidenRemoteBotSession({ ...section.legacy.session, plan: undefined }));
+  assert.throws(() => protocol.parseAidenRemoteBotSessionEvent({ ...section.events[1], payload: {} }));
+  const leaked = structuredClone(raw); leaked.botPlans.legacy.session.plan = null;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(leaked));
+  const older = structuredClone(raw); older.contractRevision = 55; older.hostHealth.contractRevision = 55;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 56/u);
+  delete older.botPlans;
+  assert.equal(protocol.parseAidenRemoteContractFixture(older).botPlans, undefined);
+});
+
+test("Bot plan OpenAPI validates canonical payloads and rejects unknown or missing members", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const schema = (name: string) => new Ajv2020({ strict: false, validateFormats: false }).compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const card = schema("BotPlan");
+  for (const plan of [raw.botPlans.pending, raw.botPlans.active]) assert.equal(card(plan), true, JSON.stringify(card.errors));
+  for (const change of [{ planId: "bad_id" }, { revision: 1 }, { title: "" }, { steps: [] }, { items: [{ line: "x", details: [], used: 0 }] }, { from: null }, { expiresAt: null }]) assert.equal(card({ ...raw.botPlans.pending, ...change }), false);
+  assert.equal(card({ ...raw.botPlans.pending, items: [{ line: "x", details: [], used: 6, max: 5 }] }), false);
+  assert.equal(card({ ...raw.botPlans.pending, title: "Read\ncarefully" }), true);
+  const request = schema("BotPlanRespondRequest");
+  assert.equal(request(raw.botPlans.respond.request), true);
+  assert.equal(request({ decision: "allow" }), false);
+  assert.equal(request({ decision: "stop", raw: true }), false);
+  const receipt = schema("BotPlanRespondReceipt");
+  assert.equal(receipt(raw.botPlans.respond.response), true);
+  assert.equal(receipt({ planId: "x", status: "pending" }), false);
+  const event = schema("BotSessionEvent");
+  for (const frame of raw.botPlans.events) assert.equal(event(frame), true, JSON.stringify(event.errors));
+  assert.equal(event({ ...raw.botPlans.events[1], payload: {} }), false);
+  assert.equal(event({ ...raw.botPlans.events[1], payload: { plan: null, raw: true } }), false);
+});
+
+test("plan collection and string bounds reject oversize payloads without weakening legacy sessions", async () => {
+  const { parseAidenRemoteBotPlan: parse } = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const plan = raw.botPlans.pending;
+  for (const change of [
+    { planId: "p".repeat(65) }, { title: " " }, { from: "😀".repeat(121) },
+    { steps: Array.from({ length: 11 }, () => ({ text: "x", status: "pending" })) },
+    { steps: [{ text: "😀".repeat(201), status: "pending" }] },
+    { items: Array.from({ length: 9 }, () => ({ line: "x", details: [] })) },
+    { items: [{ line: "😀".repeat(121), details: [] }] },
+    { items: [{ line: "x", details: ["😀".repeat(161)] }] },
+    { items: [{ line: "x", details: Array.from({ length: 7 }, () => "x") }] },
+    { items: [{ line: "x", details: [], used: null, max: null }] },
+    { items: [{ line: "x", details: [], used: 0.5, max: 1 }] },
+    { expiresAt: "tomorrow" }, { planId: "x/y" },
+  ]) assert.throws(() => parse({ ...plan, ...change }));
+  const maximum = parse({ ...plan, title: "😀".repeat(80), why: "😀".repeat(300), from: "😀".repeat(120), steps: [{ text: "😀".repeat(200), status: "done" }], items: [{ line: "😀".repeat(120), details: ["😀".repeat(160)], used: 25, max: 25 }] });
+  assert.equal([...maximum.title].length, 80);
+  assert.equal(maximum.items[0]!.used, 25);
+});
+
+test("canonical phone plan fixtures identify enforced folders, modes and temporary grant lifetime", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const plans = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
+  const files = [
+    { line: "Files · change /Volumes/Backup/Family Photos for this plan", details: ["/Volumes/Backup/Family Photos", "Read and change · allowed once, for this plan only"] },
+    { line: "Files · read ~/Documents/Tax Records", details: ["~/Documents/Tax Records"] },
+  ];
+  for (const plan of [plans.pending, plans.active, plans.session.plan, ...plans.events.flatMap(event => event.type === "snapshot" ? [event.payload.session.plan] : event.type === "plan" && event.payload.plan ? [event.payload.plan] : [])]) {
+    assert.ok(plan);
+    assert.deepEqual(plan.items.slice(2), files);
+    assert.equal(plan.items.filter(item => item.line.endsWith(" for this plan")).length, 1);
+  }
+  assert.ok(raw.botPlans.readOnlyFolderPlan);
+  const readOnly = protocol.parseAidenRemoteBotPlan(raw.botPlans.readOnlyFolderPlan);
+  assert.deepEqual(readOnly.items, [{ line: "Files · read /Volumes/Archive/Tax Records for this plan", details: ["/Volumes/Archive/Tax Records", "Read only · allowed once, for this plan only"] }]);
 });

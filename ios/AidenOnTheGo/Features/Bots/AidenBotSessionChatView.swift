@@ -229,6 +229,7 @@ struct AidenBotSessionChatView: View {
         .onChange(of: aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)) { _, grants in
             guard let model, grants != feedOpenedWith else { return }
             feedOpenedWith = grants
+            model.plansSupported = grants.contains(.botPlans)
             model.reopenFeed()
         }
         // A first load that failed is a quiet hint while the chat keeps
@@ -728,6 +729,12 @@ struct AidenBotSessionChatView: View {
                 .disabled(!canRespondToApprovals || !model.canAnswerApproval)
                 .id(approval.waitId)
             }
+            if let plan = model.plan, model.plansSupported {
+                AidenBotPlanCard(plan: plan, botName: bot?.name ?? "Bot",
+                    canAnswer: canWrite && model.canRespondToPlan(plan), error: model.planError,
+                    onRespond: { decision in Task { await model.respondToPlan(decision) } })
+                    .id(plan.planId)
+            }
             if let request = model.accessRequest,
                coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true {
                 AidenBotAccessRequestCard(request: request, botName: bot?.name ?? "Bot",
@@ -834,6 +841,7 @@ struct AidenBotSessionChatView: View {
     /// is its note instead and Send marks the step done, when the card's own
     /// Done could (connected); staged photos or files say to wait.
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
+        guard !model.composerHeldForPlan else { return }
         if model.composerAnswersHandoff {
             let note = draft
             let connected = canWrite
@@ -857,7 +865,7 @@ struct AidenBotSessionChatView: View {
     /// name sends in that mode; touch and hold for the menu, which works with an
     /// empty draft too, so the mode can be picked before typing.
     private func busyPill(_ model: AidenBotSessionModel) -> some View {
-        let available = canCompose && model.canSend
+        let available = canCompose && model.canSend && !model.composerHeldForPlan
         let enabled = available && hasMessage(model) && !model.isAttaching
         return Menu {
             ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
@@ -957,6 +965,7 @@ struct AidenBotSessionChatView: View {
     }
 
     private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
+        if model.composerHeldForPlan { return "Review the plan to continue" }
         if model.isPaused { return AidenBotSessionCopy.pausedPlaceholder(bot?.name ?? "This Bot") }
         switch model.handoff?.kind {
         case .action:
@@ -1132,7 +1141,7 @@ struct AidenBotSessionChatView: View {
         }
         .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
         .disabled(
-            !canCompose || !model.canSend || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
+            !canCompose || !model.canSend || model.composerHeldForPlan || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
                 || (model.composerAnswersHandoff && !(canWrite && model.canAnswerHandoff))
         )
         .accessibilityLabel(model.composerAnswersHandoff ? "Send and mark done" : "Send")
@@ -1152,7 +1161,8 @@ struct AidenBotSessionChatView: View {
         let model = AidenBotSessionModel(
             botID: botID,
             transport: client,
-            cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID)
+            cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID),
+            plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true
         )
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
         model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)

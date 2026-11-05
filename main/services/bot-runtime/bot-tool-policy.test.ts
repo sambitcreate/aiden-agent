@@ -6,6 +6,17 @@ import { botIngressAllowsTool, botRunUnattended, botToolApprovalSummary, botTool
 const QUESTION = "ask_user_question";
 const HANDOFF = "hand_off";
 
+test("plan tools allow only genuine-person or strict message-request ingress for every input", async () => {
+  const message = "bot:jester:1:00112233-4455-4677-8899-aabbccddeeff";
+  const reply = "botreply:00112233-4455-4677-8899-aabbccddeeff";
+  for (const tool of ["propose_plan", "plan_step"]) {
+    for (const ids of [[undefined], ["person"], [message], ["person", message], [undefined, message]]) assert.equal(botIngressAllowsTool(tool, ids), true, `${tool}: ${ids}`);
+    for (const ids of [[], ["routine:x"], ["tg:1"], ["intro:bot"], [reply], ["bot:jester:1:d1"], ["botreply:bad"], [message, reply], ["person", "routine:x"]]) assert.equal(botIngressAllowsTool(tool, ids), false, `${tool}: ${ids}`);
+    assert.deepEqual(await botToolVerdict(tool, bareFacts(), { botMessage: true }), { allowed: true });
+    for (const turn of [{ routine: true }, { telegram: true }, { routine: true, botMessage: true }]) assert.deepEqual(await botToolVerdict(tool, bareFacts(), turn), { allowed: false, reason: "Plans are off for this Bot turn." });
+  }
+});
+
 test("request_access is offered only to scoped Custom Bots and remains callable to raise unattended issues", async () => {
   const base = bareFacts();
   for (const [accessMode, mode, allowed, reason] of [

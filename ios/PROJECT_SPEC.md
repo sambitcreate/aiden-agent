@@ -175,3 +175,7 @@ on-device-only/server-TTS exclusions specifically for `tts-v1`. See
 ownership rules. No mobile speech setup mutations, arbitrary transcripts, direct Google
 requests or speech-provider credentials are permitted. Legacy servers fail closed with
 update/setup guidance; there is no silent alternate-model or on-device fallback.
+
+### Plan response reconciliation
+
+An identical pending-plan snapshot does not supersede an in-flight answer. A matching `409 plan_expired` clears that card and releases its Send hold. A changed plan, changed status or explicit response generation still prevents a late response from touching newer state. The host remains authoritative for approvals and plan progress.

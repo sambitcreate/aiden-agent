@@ -7255,6 +7255,68 @@
         "description": "Revision 54. Requires bot:write and negotiated bot:messaging. Exact boolean enabled. Changes gate new sends only; accepted deliveries finish. No inference or catalog access."
       }
     },
+    "/bots/{botId}/plans/{planId}/respond": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "planId",
+          "in": "path",
+          "required": true,
+          "description": "The current access request waitId.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "respondBotPlan",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:plans"
+        ],
+        "description": "Revision 56. Respond to an exact plan with approve, not_now or stop. Requires Idempotency-Key. Duplicate success replays its original receipt. Unknown decision is 400 invalid_request. A settled, missing or expired plan is 409 plan_expired, a pre-effect refusal that leaves no durable rejected key. Transient errors permit retry with the same key and exact plan identity; first answer wins. Unwired hosts return 404. not_now returns stopped; other statuses come from the exact host plan.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPlanRespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The host authorized and settled the answer, or replayed its original receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPlanRespondReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bots/{botId}/access-requests/{waitId}/answer": {
       "parameters": [
         {
@@ -8075,6 +8137,7 @@
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
                 "bot:access-requests",
+                "bot:plans",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8123,6 +8186,7 @@
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
                 "bot:access-requests",
+                "bot:plans",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8274,6 +8338,7 @@
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
                 "bot:access-requests",
+                "bot:plans",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -8331,6 +8396,7 @@
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
                 "bot:access-requests",
+                "bot:plans",
                 "bot:images",
                 "bot:issues",
                 "schedule:cards",
@@ -15094,7 +15160,8 @@
           "routine_proposal_not_found",
           "bot_paused",
           "handoff_expired",
-          "access_request_expired"
+          "access_request_expired",
+          "plan_expired"
         ]
       },
       "ErrorDetails": {
@@ -17184,6 +17251,17 @@
               }
             ],
             "description": "Revision 55. Present only for bot:access-requests holders."
+          },
+          "plan": {
+            "description": "Revision 56. Present only for bot:plans holders. null clears the current plan; absence means the capability is not negotiated.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "unevaluatedProperties": false
@@ -17441,15 +17519,50 @@
               "handoff",
               "issues",
               "closed",
-              "access_request"
+              "access_request",
+              "plan"
             ]
           },
           "payload": {
-            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances. Revision 55 access_request carries {accessRequest: BotAccessRequest | null} only for bot:access-requests holders. Legacy phones and paired desktops receive an assistant access-notice entry, removed by an authoritative snapshot on settlement or replacement.",
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances. Revision 55 access_request carries {accessRequest: BotAccessRequest | null} only for bot:access-requests holders. Legacy phones and paired desktops receive an assistant access-notice entry, removed by an authoritative snapshot on settlement or replacement. Revision 56 plan carries {plan: BotPlan | null} only for bot:plans holders. Other devices receive a state frame at the same sequence.",
             "type": "object"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "plan"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "required": [
+                    "plan"
+                  ],
+                  "properties": {
+                    "plan": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/BotPlan"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ]
       },
       "BotMessageRequest": {
         "type": "object",
@@ -18913,6 +19026,201 @@
           },
           "send": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPlan": {
+        "type": "object",
+        "required": [
+          "planId",
+          "status",
+          "title",
+          "why",
+          "steps",
+          "items"
+        ],
+        "properties": {
+          "planId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "active",
+              "finished",
+              "stopped",
+              "expired"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": [
+                "text",
+                "status"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "done",
+                    "skipped"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "required": [
+                "line",
+                "details"
+              ],
+              "properties": {
+                "line": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120,
+                  "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                },
+                "details": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+                  }
+                },
+                "used": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 25
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 25
+                }
+              },
+              "additionalProperties": false,
+              "dependentRequired": {
+                "used": [
+                  "max"
+                ],
+                "max": [
+                  "used"
+                ]
+              },
+              "allOf": [
+                {"if":{"properties":{"max":{"const":1}},"required":["max"]},"then":{"properties":{"used":{"maximum":1}}}},
+                {"if":{"properties":{"max":{"const":2}},"required":["max"]},"then":{"properties":{"used":{"maximum":2}}}},
+                {"if":{"properties":{"max":{"const":3}},"required":["max"]},"then":{"properties":{"used":{"maximum":3}}}},
+                {"if":{"properties":{"max":{"const":4}},"required":["max"]},"then":{"properties":{"used":{"maximum":4}}}},
+                {"if":{"properties":{"max":{"const":5}},"required":["max"]},"then":{"properties":{"used":{"maximum":5}}}},
+                {"if":{"properties":{"max":{"const":6}},"required":["max"]},"then":{"properties":{"used":{"maximum":6}}}},
+                {"if":{"properties":{"max":{"const":7}},"required":["max"]},"then":{"properties":{"used":{"maximum":7}}}},
+                {"if":{"properties":{"max":{"const":8}},"required":["max"]},"then":{"properties":{"used":{"maximum":8}}}},
+                {"if":{"properties":{"max":{"const":9}},"required":["max"]},"then":{"properties":{"used":{"maximum":9}}}},
+                {"if":{"properties":{"max":{"const":10}},"required":["max"]},"then":{"properties":{"used":{"maximum":10}}}},
+                {"if":{"properties":{"max":{"const":11}},"required":["max"]},"then":{"properties":{"used":{"maximum":11}}}},
+                {"if":{"properties":{"max":{"const":12}},"required":["max"]},"then":{"properties":{"used":{"maximum":12}}}},
+                {"if":{"properties":{"max":{"const":13}},"required":["max"]},"then":{"properties":{"used":{"maximum":13}}}},
+                {"if":{"properties":{"max":{"const":14}},"required":["max"]},"then":{"properties":{"used":{"maximum":14}}}},
+                {"if":{"properties":{"max":{"const":15}},"required":["max"]},"then":{"properties":{"used":{"maximum":15}}}},
+                {"if":{"properties":{"max":{"const":16}},"required":["max"]},"then":{"properties":{"used":{"maximum":16}}}},
+                {"if":{"properties":{"max":{"const":17}},"required":["max"]},"then":{"properties":{"used":{"maximum":17}}}},
+                {"if":{"properties":{"max":{"const":18}},"required":["max"]},"then":{"properties":{"used":{"maximum":18}}}},
+                {"if":{"properties":{"max":{"const":19}},"required":["max"]},"then":{"properties":{"used":{"maximum":19}}}},
+                {"if":{"properties":{"max":{"const":20}},"required":["max"]},"then":{"properties":{"used":{"maximum":20}}}},
+                {"if":{"properties":{"max":{"const":21}},"required":["max"]},"then":{"properties":{"used":{"maximum":21}}}},
+                {"if":{"properties":{"max":{"const":22}},"required":["max"]},"then":{"properties":{"used":{"maximum":22}}}},
+                {"if":{"properties":{"max":{"const":23}},"required":["max"]},"then":{"properties":{"used":{"maximum":23}}}},
+                {"if":{"properties":{"max":{"const":24}},"required":["max"]},"then":{"properties":{"used":{"maximum":24}}}}
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?!\\s*$)[^\\u0000-\\u0008\\u000e-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u206f\\ufeff\\ufff9-\\ufffb]+$"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Revision 56, bot:plans holders only. Display-only plan with bounded text. Bot-written text is redacted; host-formatted file items disclose the enforced folder location, access mode and temporary-grant lifetime. No Bot/item IDs, authorization, runtime request identities, raw proposal, binding, model tool names or revision. Counted items carry both used and max, with used <= max."
+      },
+      "BotPlanRespondRequest": {
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "not_now",
+              "stop"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotPlanRespondReceipt": {
+        "type": "object",
+        "required": [
+          "planId",
+          "status"
+        ],
+        "properties": {
+          "planId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "finished",
+              "stopped",
+              "expired"
+            ]
           }
         },
         "additionalProperties": false

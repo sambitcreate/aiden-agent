@@ -1,6 +1,6 @@
 # Bots that work together: implementation plan
 
-Status: implementation in progress (2026-11-03). Phase A Tasks 1–11 are implemented, locally verified across desktop, Remote, CLI, iOS and Android, and accepted by Opus 5.5 medium and OpenCode Go DeepSeek V4.1 Flash high at `dc89b16ce` in full-A round 4. Phase B access requests are implemented and locally validated on the stacked `feature/bot-access-requests` branch, and accepted by both Gate 3 reviewers at `494d6b39f` in round 4; C and D remain pending. The A implementation is on `feature/bot-messaging`, with main `a5c5db8b1` merged. PRs, final Astra review and exact-head CI are still pending.
+Status: implementation in progress (2026-11-04). A Tasks1–11 passed full-A review at `dc89b16ce`, and B Tasks1–10 passed both Gate3 reviewers at `494d6b39f`. C Tasks1–9 are implemented and locally verified across desktop, Remote56 and both native clients. C enforcement Gate4 accepted `054e953fa`; Gate5 accepted all C Tasks1–9 at `55678558e` after the payment-subdomain correction. D is next. The stack is `feature/bot-messaging` → `feature/bot-access-requests` → `feature/bot-plan-approval`; main `a5c5db8b1` was merged into A. Four PRs, final GPT-6 Astra high review and exact-head CI remain pending.
 
 This is the master plan. It records the owner's decisions and how the four detailed plans fit together. Research and design: [bot-to-bot-messaging-research.md](bot-to-bot-messaging-research.md).
 
@@ -124,13 +124,13 @@ GPT-6 Astra reviewed the master, all four detailed plans, research and current r
 
 After four Astra review rounds and the corrections above, the final focused review found no blocking or important plan issues. This is acceptance of the written contracts, not runtime acceptance. Local document checks passed for whitespace, links, fenced blocks and task numbering.
 
-Phases A and B have passed their source review gates. C and D remain plans. The acceptance cases in each task must be implemented and run before that phase is accepted. Keep the earlier research as a dated design record; the master and corrected detailed contracts govern implementation.
+Phases A and B have passed their source review gates. C enforcement passed Gate4 at `054e953fa`; C Tasks1–9 passed both Gate5 reviewers at `55678558e`. D is next. The acceptance cases and review gates must pass before advancing each phase. Keep the earlier research as a dated design record; the master and corrected detailed contracts govern implementation.
 
 ## Status
 
 - [x] A: `message_bot`
 - [x] B: `request_access`
-- [ ] C: plan approval
+- [x] C: plan approval
 - [ ] D: allow list and nudge
 
 
@@ -195,3 +195,12 @@ Opus 5.5 medium accepted `35acdf3d33409ea6d9454734f31be631a0951ed8` for narrow s
 R10-1 is retained as a display-maintenance Low: CLI's five-field declaration mapping duplicates the existing roster mapping. Drift can change descriptions but cannot bypass the fresh posting roster. A shared helper is optional; root keeps this correction bounded rather than adding an unreviewed runtime refactor. R10-2's current plan-index wording is updated. All earlier retained observations and original hosted failure disclosures remain.
 
 The reviewer independently passed messaging 96, session/real-courier/tool 60, TypeScript and two real-module probes, in addition to the three mutation checks. Two setup attempts ran no tests. Its scope is the correction and called paths, with unchanged code resting on prior rounds; it did not run CLI, native, Cua or network commands. Root's prior A full CLI183/three PTY skips is changed-source evidence before commit. The integrated top messaging96, types and rebuilt messaging parity1 also passed. Root is now completing a separate full CLI, runtime, lint and CLI-types run on the accepted executable source to fill the stated top-check evidence gaps. No claim of completed exact-head hosted CI, diagnosed timing root cause, device or package acceptance, or merge authorization follows.
+
+
+### 2026-11-04: Plan review keyboard-scroll E2E synchronization
+
+C head `7b0793ac5` failed Electron E2E shard 1/3 in run 41911499447/job 126875041234. The plan approval case's first-step viewport assertion after Home failed with viewport ratio zero, then the test passed on retry; `--fail-on-flaky-tests` correctly rejected the shard, with 118 passed, four skipped and one flaky. Aggregate job 126906002244 failed downstream. Root did not rerun either unchanged hosted job.
+
+The test previously waited only until the last coverage row entered the viewport after End, which does not establish that native scrolling has reached its bottom boundary. It now also waits until scrollTop reaches scrollHeight minus clientHeight within one CSS pixel, and verifies the review region still owns focus, before pressing Home. The original End/Home actions, first/last-row viewport checks, approval visibility, draft, host settlement and no-inference assertions remain. No arbitrary sleep, timeout/retry change, forced first-row scroll, or production UI/runtime change is added. Native-scroll overlap is a plausible explanation, not a cause proved from the hosted log.
+
+The complete two-case plan/onboarding E2E spec passed on its first changed-source Cua Linux run, 2/2 with no flaky retry, in 11.4 seconds. E2E TypeScript, scoped ESLint and diff checks passed. Logs `/tmp/bot-pr729-plan-scroll-{cua,types,lint}.log`; artifacts are in the ignored Cua result directory. This is Linux Electron test evidence, not a new macOS, native-phone, live-provider or release acceptance. C and D need fresh exact-head hosted CI/reviews after publication; A/B remain untouched. All earlier failures and retained source-review observations remain disclosed, and no merge is authorized.

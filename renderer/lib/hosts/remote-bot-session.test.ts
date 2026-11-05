@@ -349,3 +349,13 @@ test("paired desktops advance access request frames without exposing a phone car
   assert.equal(next?.snapshot.accessRequest, undefined);
   assert.deepEqual(next?.snapshot.entries, view.snapshot.entries);
 });
+
+test("paired desktops advance plan frames without exposing a phone plan card", () => {
+  const before = remoteBotSessionView(session());
+  const frame = event(5, { type: "plan", payload: { plan: parseAidenRemoteBotSession(contract.botPlans.session).plan! } });
+  const after = applyRemoteBotSessionEvent(before, frame);
+  assert.ok(after);
+  assert.equal(after.snapshot.seq, 5);
+  assert.deepEqual(after.snapshot, { ...before.snapshot, seq: 5 });
+  assert.equal(Object.prototype.hasOwnProperty.call(after.snapshot, "plan"), false);
+});

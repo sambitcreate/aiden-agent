@@ -290,7 +290,8 @@ export const AIDEN_REMOTE_NEW_WORKTREE_CONTRACT_REVISION = 53 as const;
 /** Revision 54: Bot messaging switches and message notifications, negotiated with bot:messaging. */
 export const AIDEN_REMOTE_BOT_MESSAGING_CONTRACT_REVISION = 54 as const;
 export const AIDEN_REMOTE_BOT_ACCESS_REQUESTS_CONTRACT_REVISION = 55 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_ACCESS_REQUESTS_CONTRACT_REVISION;
+export const AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION = 56 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -521,12 +522,15 @@ export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPAB
 /** Opt-ins that change what a device is sent, never what it may do. */
 export const AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES = ["bot:access-requests"] as const;
 
+export const AIDEN_REMOTE_BOT_PLAN_CAPABILITIES = ["bot:plans"] as const;
+
 export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
 ] as const;
@@ -591,6 +595,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
@@ -614,6 +619,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_PLAN_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
@@ -902,6 +908,7 @@ export const AIDEN_REMOTE_ERROR_CODES = [
   "bot_paused",
   "handoff_expired",
   "access_request_expired",
+  "plan_expired",
 ] as const;
 
 export type AidenRemoteErrorCode = (typeof AIDEN_REMOTE_ERROR_CODES)[number];
@@ -1437,6 +1444,7 @@ export const AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES = [
   "queued",
   "handoff",
   "access_request",
+  "plan",
   "issues",
   "closed",
 ] as const;
@@ -1863,6 +1871,20 @@ export interface AidenRemoteBotIssueActReceipt {
   result: "done" | "not_open";
 }
 
+/** Revision 56. Display-only plan; private authorization and runtime identities stay on the host. */
+export interface AidenRemoteBotPlan {
+  planId: string;
+  status: "pending" | "active" | "finished" | "stopped" | "expired";
+  title: string;
+  why: string;
+  steps: { text: string; status: "pending" | "done" | "skipped" }[];
+  items: { line: string; details: string[]; used?: number; max?: number }[];
+  expiresAt?: string;
+  from?: string;
+}
+export interface AidenRemoteBotPlanRespondRequest { decision: "approve" | "not_now" | "stop" }
+export interface AidenRemoteBotPlanRespondReceipt { planId: string; status: Exclude<AidenRemoteBotPlan["status"], "pending"> }
+
 /** `GET /bots/{botId}/session`: the newest entries plus the in-flight partial. */
 export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   botId: string;
@@ -1885,6 +1907,8 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   /** Revision 37, only for `bot:handoffs` devices: the hand-off the Bot is waiting on, or null. */
   handoff?: AidenRemoteBotHandoff | null;
   accessRequest?: AidenRemoteBotAccessRequest | null;
+  /** Present only for bot:plans holders; null clears the current card. */
+  plan?: AidenRemoteBotPlan | null;
   /** Revision 42, only for `bot:issues` devices: the Bot's issue cards, oldest first. */
   issues?: AidenRemoteBotIssue[];
 }
@@ -1898,6 +1922,7 @@ export type AidenRemoteBotSessionEventPayload =
   | { type: "approval"; payload: { approval: AidenRemoteBotApproval | null } }
   | { type: "activity"; payload: { activity: AidenRemoteBotSessionActivity | null } }
   | { type: "queued"; payload: { queued: AidenRemoteBotQueuedMessage[] } }
+  | { type: "plan"; payload: { plan: AidenRemoteBotPlan | null } }
   | { type: "access_request"; payload: { accessRequest: AidenRemoteBotAccessRequest | null } }
   | { type: "handoff"; payload: { handoff: AidenRemoteBotHandoff | null } }
   | { type: "issues"; payload: { issues: AidenRemoteBotIssue[] } }
@@ -2179,6 +2204,7 @@ export interface AidenRemoteContractFixture {
   /** Revision 37 (`bot:handoffs`): hand-offs and pause, for holders and as legacy devices see them. */
   botHandoffs?: AidenRemoteBotHandoffsFixture;
   botAccessRequests?: AidenRemoteBotAccessRequestsFixture;
+  botPlans?: AidenRemoteBotPlansFixture;
   /** Revision 42 (`bot:issues`): issue cards, their frames, the act route and the phone notification. */
   botIssues?: AidenRemoteBotIssuesFixture;
   /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
@@ -2552,6 +2578,7 @@ const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "chatProgressEvents",
   "botHandoffs",
   "botAccessRequests",
+  "botPlans",
   "botIssues",
 ]);
 
@@ -6274,7 +6301,7 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
   if (!isRecord(value)) throw new Error("Bot session must be an object.");
   assertExactKeys(
     value,
-    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval", "activity", "queued", "handoff", "issues", "accessRequest"],
+    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval", "activity", "queued", "handoff", "issues", "accessRequest", "plan"],
     "Bot session",
   );
   if (!hasOwn(value, "question")) throw new Error("Bot session question is required.");
@@ -6306,6 +6333,7 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
       ? { handoff: value.handoff === null ? null : parseAidenRemoteBotHandoff(value.handoff) }
       : {}),
     ...(hasOwn(value, "issues") ? { issues: parseAidenRemoteBotIssueList(value.issues) } : {}),
+    ...(hasOwn(value, "plan") ? { plan: value.plan === null ? null : parseAidenRemoteBotPlan(value.plan) } : {}),
     ...(hasOwn(value, "accessRequest") ? { accessRequest: value.accessRequest === null ? null : parseAidenRemoteBotAccessRequest(value.accessRequest) } : {}),
   };
 }
@@ -6371,6 +6399,10 @@ export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotS
     case "queued":
       assertExactKeys(payload, ["queued"], "Bot session queued event");
       return { ...base, type, payload: { queued: parseAidenRemoteBotQueuedList(payload.queued) } };
+    case "plan":
+      assertExactKeys(payload, ["plan"], "Bot plan event");
+      if (!hasOwn(payload, "plan")) throw new Error("Bot plan event plan is required.");
+      return { ...base, type: "plan", payload: { plan: payload.plan === null ? null : parseAidenRemoteBotPlan(payload.plan) } };
     case "access_request":
       assertExactKeys(payload, ["accessRequest"], "Bot access request event");
       if (!hasOwn(payload, "accessRequest")) throw new Error("Bot access request event accessRequest is required.");
@@ -6482,6 +6514,53 @@ export function parseAidenRemoteBotQuestionAnswerReceipt(value: unknown): AidenR
 }
 
 /** A wait id in a hand-off route or payload (the same grammar as a question's). */
+export function parseAidenRemoteBotPlanId(value: unknown): string {
+  const id = boundedText(value, "Bot plan id", 64);
+  if (!/^[A-Za-z0-9-]{1,64}$/u.test(id)) throw new Error("Bot plan id is invalid.");
+  return id;
+}
+function planDisplayText(value: unknown, maximum: number): string {
+  const text = boundedText(value, "Bot plan text", maximum);
+  if (!text.trim() || withoutBotHandoffControls(text) !== text) throw new Error("Bot plan text is invalid.");
+  return text;
+}
+export function parseAidenRemoteBotPlan(value: unknown): AidenRemoteBotPlan {
+  if (!isRecord(value)) throw new Error("Bot plan must be an object.");
+  assertExactKeys(value, ["planId", "status", "title", "why", "steps", "items", "expiresAt", "from"], "Bot plan");
+  const status = value.status;
+  if (status !== "pending" && status !== "active" && status !== "finished" && status !== "stopped" && status !== "expired") throw new Error("Bot plan status is invalid.");
+  if (!Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 10 || !Array.isArray(value.items) || value.items.length < 1 || value.items.length > 8) throw new Error("Bot plan lists are invalid.");
+  const steps = value.steps.map((step): AidenRemoteBotPlan["steps"][number] => {
+    if (!isRecord(step)) throw new Error("Bot plan step is invalid.");
+    assertExactKeys(step, ["text", "status"], "Bot plan step");
+    if (step.status !== "pending" && step.status !== "done" && step.status !== "skipped") throw new Error("Bot plan step status is invalid.");
+    return { text: planDisplayText(step.text, 200), status: step.status };
+  });
+  const items = value.items.map((item): AidenRemoteBotPlan["items"][number] => {
+    if (!isRecord(item)) throw new Error("Bot plan item is invalid.");
+    assertExactKeys(item, ["line", "details", "used", "max"], "Bot plan item");
+    if (!Array.isArray(item.details) || item.details.length > 6) throw new Error("Bot plan details are invalid.");
+    const counted = hasOwn(item, "used") || hasOwn(item, "max");
+    if (counted && (!Number.isInteger(item.used) || !Number.isInteger(item.max) || (item.used as number) < 0 || (item.max as number) < 1 || (item.max as number) > 25 || (item.used as number) > (item.max as number))) throw new Error("Bot plan counts are invalid.");
+    return { line: planDisplayText(item.line, 120), details: item.details.map(detail => planDisplayText(detail, 160)), ...(counted ? { used: item.used as number, max: item.max as number } : {}) };
+  });
+  return { planId: parseAidenRemoteBotPlanId(value.planId), status, title: planDisplayText(value.title, 80), why: planDisplayText(value.why, 300), steps, items,
+    ...(hasOwn(value, "expiresAt") ? { expiresAt: dateTimeValue(value.expiresAt, "Bot plan expiry") } : {}),
+    ...(hasOwn(value, "from") ? { from: planDisplayText(value.from, 120) } : {}) };
+}
+export function parseAidenRemoteBotPlanRespondRequest(value: unknown): AidenRemoteBotPlanRespondRequest {
+  if (!isRecord(value)) throw new Error("Bot plan response must be an object.");
+  assertExactKeys(value, ["decision"], "Bot plan response");
+  if (value.decision !== "approve" && value.decision !== "not_now" && value.decision !== "stop") throw new Error("Bot plan decision is invalid.");
+  return { decision: value.decision };
+}
+export function parseAidenRemoteBotPlanRespondReceipt(value: unknown): AidenRemoteBotPlanRespondReceipt {
+  if (!isRecord(value)) throw new Error("Bot plan receipt must be an object.");
+  assertExactKeys(value, ["planId", "status"], "Bot plan receipt");
+  if (value.status !== "active" && value.status !== "finished" && value.status !== "stopped" && value.status !== "expired") throw new Error("Bot plan receipt status is invalid.");
+  return { planId: parseAidenRemoteBotPlanId(value.planId), status: value.status };
+}
+
 export function parseAidenRemoteBotAccessRequest(value: unknown): AidenRemoteBotAccessRequest {
   if (!isRecord(value)) throw new Error("Bot access request must be an object.");
   assertExactKeys(value, ["waitId", "target", "label", "place", "why", "choices"], "Bot access request");
@@ -6858,10 +6937,19 @@ export interface AidenRemoteBotActivityFixture {
   send: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
 }
 
-/**
- * Revision 37: what a `bot:handoffs` device and a device without it each
- * receive for one hand-off and one pause.
- */
+/** Canonical revision 56 plan examples shared by host and native decoders. */
+export interface AidenRemoteBotPlansFixture {
+  capability: "bot:plans";
+  pending: AidenRemoteBotPlan;
+  active: AidenRemoteBotPlan;
+  readOnlyFolderPlan: AidenRemoteBotPlan;
+  session: AidenRemoteBotSession;
+  events: AidenRemoteBotSessionEvent[];
+  respond: { request: AidenRemoteBotPlanRespondRequest; response: AidenRemoteBotPlanRespondReceipt };
+  expired: AidenRemoteErrorEnvelope;
+  legacy: { session: AidenRemoteBotSession; events: AidenRemoteBotSessionEvent[] };
+}
+
 export interface AidenRemoteBotAccessRequestsFixture {
   capability: "bot:access-requests";
   folder: AidenRemoteBotAccessRequest;
@@ -7029,6 +7117,29 @@ function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixt
     cards,
     rejected,
   };
+}
+
+function parseBotPlansFixture(value: unknown): AidenRemoteBotPlansFixture {
+  if (!isRecord(value)) throw new Error("Bot plan fixtures must be an object.");
+  assertExactKeys(value, ["capability", "pending", "active", "readOnlyFolderPlan", "session", "events", "respond", "expired", "legacy"], "Bot plan fixtures");
+  if (value.capability !== "bot:plans" || !isRecord(value.respond) || !isRecord(value.legacy)) throw new Error("Invalid Bot plan fixtures.");
+  assertExactKeys(value.respond, ["request", "response"], "Bot plan response fixture");
+  assertExactKeys(value.legacy, ["session", "events"], "Bot plan legacy fixture");
+  const events = (items: unknown) => {
+    if (!Array.isArray(items)) throw new Error("Bot plan events must be an array.");
+    return items.map(parseAidenRemoteBotSessionEvent);
+  };
+  const fixture: AidenRemoteBotPlansFixture = {
+    capability: value.capability, pending: parseAidenRemoteBotPlan(value.pending), active: parseAidenRemoteBotPlan(value.active),
+    readOnlyFolderPlan: parseAidenRemoteBotPlan(value.readOnlyFolderPlan),
+    session: parseAidenRemoteBotSession(value.session), events: events(value.events),
+    respond: { request: parseAidenRemoteBotPlanRespondRequest(value.respond.request), response: parseAidenRemoteBotPlanRespondReceipt(value.respond.response) },
+    expired: parseErrorEnvelopeFixture(value.expired, "Bot plan expired"),
+    legacy: { session: parseAidenRemoteBotSession(value.legacy.session), events: events(value.legacy.events) },
+  };
+  if (fixture.readOnlyFolderPlan.status !== "pending" || fixture.pending.status !== "pending" || fixture.active.status !== "active" || JSON.stringify(fixture.session.plan) !== JSON.stringify(fixture.pending) || fixture.expired.error.code !== "plan_expired") throw new Error("Bot plan fixture status is invalid.");
+  if (fixture.legacy.session.plan !== undefined || fixture.legacy.events.some(e => e.type === "plan" || (e.type === "snapshot" && e.payload.session.plan !== undefined))) throw new Error("Legacy Bot plans must not carry holder fields or frames.");
+  return fixture;
 }
 
 function parseBotAccessRequestsFixture(value: unknown): AidenRemoteBotAccessRequestsFixture {
@@ -8119,6 +8230,11 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     chatNewWorktree = parseChatNewWorktreeFixture(value.chatNewWorktree);
   }
+  let botPlans: AidenRemoteBotPlansFixture | undefined;
+  if (value.botPlans !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION) throw new Error("Bot plan fixtures require revision 56.");
+    botPlans = parseBotPlansFixture(value.botPlans);
+  }
   let botAccessRequests: AidenRemoteBotAccessRequestsFixture | undefined;
   if (value.botAccessRequests !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_ACCESS_REQUESTS_CONTRACT_REVISION) throw new Error("Bot access fixtures require revision 55.");
@@ -8223,6 +8339,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botAttachments ? { botAttachments } : {}),
     ...(botHandoffs ? { botHandoffs } : {}),
     ...(botAccessRequests ? { botAccessRequests } : {}),
+    ...(botPlans ? { botPlans } : {}),
     ...(botIssues ? { botIssues } : {}),
     ...(scheduleCards ? { scheduleCards } : {}),
     ...(botImages ? { botImages } : {}),

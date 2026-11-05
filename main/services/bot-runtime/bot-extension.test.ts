@@ -35,6 +35,7 @@ import { createBotSessionService } from "./bot-session-service.js";
 import { botIngressAllowsTool } from "./bot-tool-policy.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
+import { inputIdentityDeps, type PlanReplayArgs } from "./test-support/assembly-fixtures.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { SCENARIO_RULE_HANDOFF, SCENARIO_SCRIPT_TOOL } from "./test-support/extension-scenario.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
@@ -896,7 +897,7 @@ test('an expired authoritative Bot input makes no provider request', async () =>
   const deps = {...recordingDeps(), now:()=>100};
   const {harness,root} = await memoryHarness(deps,faux);
   try {
-    await (await root.submit({type:'input',content:'message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:99}}},ctx)).wait(ctx);
+    await (await root.submit({type:'input',content:'message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',botId:'J',botName:'Jester',text:'message',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:99}}},ctx)).wait(ctx);
     assert.equal(faux.calls(),0);
   } finally {await harness.close(ctx);}
 });
@@ -912,7 +913,7 @@ test('Bot approvals carry actual owning input metadata and expiry blocks the eff
   const faux = createFauxModels([fauxAssistantMessage([fauxToolCall('change',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('must not request again')]);
   const {harness,root}=await memoryHarness({...deps,now:()=>now},faux);
   try {
-    await (await root.submit({type:'input',content:'message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx)).wait(ctx);
+    await (await root.submit({type:'input',content:'message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',botId:'J',botName:'Jester',text:'message',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx)).wait(ctx);
     assert.equal(tool.executions.length,0);
     assert.equal(faux.calls(),1);
   } finally {await harness.close(ctx);}
@@ -925,7 +926,7 @@ test('expiry with a joined human steer blocks new tools without aborting the per
  const faux=createFauxModels([fauxAssistantMessage([fauxToolCall('hold',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage([fauxToolCall('change',{text:'must block'})],{stopReason:'toolUse'}),fauxAssistantMessage('Answer for the person')]);
  const {harness,root}=await memoryHarness({...recordingDeps({tools:[{tool:hold,replay:'unsafe'},{tool:change,replay:'unsafe'}]}),now:()=>now},faux);
  try {
-  const bot=await root.submit({type:'input',content:'Bot message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx);
+  const bot=await root.submit({type:'input',content:'Bot message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',botId:'J',botName:'Jester',text:'message',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx);
   await waitFor(()=>entered);
   const person=await root.submit({type:'input',content:'Please also explain this to me',requestId:'human-steer',whenBusy:'steer'},ctx);
   now=101;release();
@@ -950,7 +951,7 @@ test('several approval cards retain actual run ownership when the first input is
  try {
   const person=await root.submit({type:'input',content:'Person first',requestId:'person-first'},ctx);
   await waitFor(()=>entered);
-  const bot=await root.submit({type:'input',content:'Bot second',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',whenBusy:'steer',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx);
+  const bot=await root.submit({type:'input',content:'Bot second',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',whenBusy:'steer',entry:{kind:'aiden.bot-message-input',data:{kind:'request',botId:'J',botName:'Jester',text:'message',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:100}}},ctx);
   release();await waitFor(()=>approvals.pending().length===2);
   for(const prompt of approvals.pending()) {
    assert.equal('owner' in publicBotApprovalPrompt(prompt),false);
@@ -971,7 +972,7 @@ test('host-owned Bot inputs never qualify for routine preapproval',async()=>{
  const faux=createFauxModels([fauxAssistantMessage([fauxToolCall('change',{text:'x'})],{stopReason:'toolUse'}),fauxAssistantMessage('answer')]);
  const {harness,root}=await memoryHarness(deps,faux);
  try {
-  await (await root.submit({type:'input',content:'Bot message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
+  await (await root.submit({type:'input',content:'Bot message',requestId:'bot:J:1:00112233-4455-4677-8899-aabbccddeeff',entry:{kind:'aiden.bot-message-input',data:{kind:'request',botId:'J',botName:'Jester',text:'message',deliveryId:'00112233-4455-4677-8899-aabbccddeeff',deadline:Date.now()+60_000}}},ctx)).wait(ctx);
   assert.equal(routine,false);assert.equal(tool.executions.length,1);
  } finally {await harness.close(ctx);}
 });
@@ -1001,7 +1002,7 @@ for (const source of ["person", "expiry", "allow_list"] as const) {
           requestId: "bot:J:1:00112233-4455-4677-8899-aabbccddeeff",
           entry: {
             kind: "aiden.bot-message-input",
-            data: { kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", deadline: 100 },
+            data: { kind: "request", botId: "J", botName: "Jester", text: "message", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", deadline: 100 },
           },
         },
         ctx,
@@ -1144,3 +1145,159 @@ for (const missingAt of ["request", "tool", "person"] as const) {
     }
   });
 }
+
+
+test("host input UUIDs are shared by concurrent tools, hidden, and distinct for later unnamed inputs", async () => {
+  const observed: Array<{ ids: readonly string[]; raw: readonly (string | undefined)[]; memo: unknown }> = [];
+  const tool = countingTool("identity_probe");
+  const deps = recordingDeps({ tools: [{ tool, replay: "safe", bind: call => ({ ...tool, async execute(...args) {
+    assert.equal(await call.readMemo?.("probe"), undefined);
+    await call.memo("probe", { value: 7 });
+    observed.push({ ids: await call.runInputIds!(), raw: await call.runRequestIds!(), memo: await call.readMemo?.("probe") });
+    return tool.execute(...args);
+  } }) }] });
+  const faux = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(tool.name, { text: "one" }, { id: "one" }), fauxToolCall(tool.name, { text: "two" }, { id: "two" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+    fauxAssistantMessage([fauxToolCall(tool.name, { text: "named" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+    fauxAssistantMessage([fauxToolCall(tool.name, { text: "later" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+  ]);
+  const { harness, root } = await memoryHarness(deps, faux);
+  try {
+    await (await root.submit({ type: "input", content: "unnamed" }, ctx)).wait(ctx);
+    assert.deepEqual(observed[0]?.ids, observed[1]?.ids);
+    assert.match(observed[0]!.ids[0]!, /^input:[0-9a-f-]{36}$/u);
+    assert.deepEqual(observed[0]?.raw, [undefined]);
+    assert.deepEqual(observed[0]?.memo, { value: 7 });
+    const firstIds = observed[0]!.ids;
+    let entries = (await root.context(ctx)).entries;
+    assert.equal(entries.filter(entry => entry.kind === "aiden.bot-input-identity").length, 1);
+    const transcript = JSON.stringify(projectBotTranscript(entries));
+    assert.equal(transcript.includes(firstIds[0]!), false);
+    const { provenanceOfHistory, personTurns } = await import("../bot-memory/review.js");
+    const provenance = await provenanceOfHistory(entries, ids => root.commit(tx => Promise.all(ids.map(id => tx.submissionByRequest(root.id, id))), ctx));
+    const memory = personTurns(entries, provenance);
+    assert.equal(memory.personInputs, 1);
+    assert.equal(memory.transcript.includes(firstIds[0]!), false);
+    assert.match(memory.transcript, /\[Person\]: unnamed/u);
+    await (await root.submit({ type: "input", content: "named", requestId: "named-person" }, ctx)).wait(ctx);
+    assert.deepEqual(observed[2]?.ids, ["named-person"]);
+    assert.deepEqual(observed[2]?.raw, ["named-person"]);
+    await (await root.submit({ type: "input", content: "another unnamed" }, ctx)).wait(ctx);
+    assert.notDeepEqual(observed[3]?.ids, firstIds);
+    entries = (await root.context(ctx)).entries;
+    assert.equal(entries.filter(entry => entry.kind === "aiden.bot-input-identity").length, 2);
+  } finally { await harness.close(ctx); }
+});
+
+for (const mixed of [false, true]) test(`runInputIds ${mixed ? "keeps stable UUIDs for mixed inputs" : "avoids bookkeeping transactions and history scans for fully named inputs"}`, async t => {
+  let generate!: () => void, generating!: () => void;
+  const released = new Promise<void>(resolve => { generate = resolve; });
+  const reached = new Promise<void>(resolve => { generating = resolve; });
+  const measurements: Array<{ ids: readonly string[]; commits: number; scans: number; identities: number }> = [];
+  let measuring = false, commits = 0, scans = 0, identities = 0;
+  const tool = countingTool("identity_probe");
+  const waitingTool = countingTool("wait_for_steer", async () => { generating(); await released; return "ready"; });
+  const deps = recordingDeps({ tools: [{ tool: waitingTool, replay: "safe" }, { tool, replay: "safe", bind: call => ({ ...tool, async execute(...args) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      commits = 0; scans = 0; identities = 0; measuring = true;
+      try {
+        const ids = await call.runInputIds!();
+        measurements.push({ ids, commits, scans, identities });
+      } finally { measuring = false; }
+    }
+    return tool.execute(...args);
+  } }) }] });
+  const faux = createFauxModels([
+    fauxAssistantMessage([fauxToolCall(waitingTool.name, { text: "wait" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(tool.name, { text: "inspect inputs" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+  ]);
+  const { harness, root } = await memoryHarness(deps, faux);
+  const conversation = harness.conversation.bind(harness);
+  t.mock.method(harness, "conversation", async (...args: Parameters<Harness["conversation"]>) => {
+    const current = await conversation(...args);
+    if (!current) return current;
+    return new Proxy(current, { get(target, key, receiver) {
+      if (key !== "commit") return Reflect.get(target, key, receiver);
+      const commit: Conversation["commit"] = (fn, context) => {
+        if (measuring) commits++;
+        return target.commit(tx => fn(new Proxy(tx, { get(transaction, field, transactionReceiver) {
+          if (field === "scanEntries") return (...scanArgs: Parameters<typeof tx.scanEntries>) => { if (measuring) scans++; return transaction.scanEntries(...scanArgs); };
+          if (field === "appendEntry") {
+            return (...entryArgs: unknown[]) => {
+              if (measuring && entryArgs.some(arg => arg && typeof arg === "object" && "kind" in arg && arg.kind === "aiden.bot-input-identity")) identities++;
+              return Reflect.apply(transaction.appendEntry, transaction, entryArgs);
+            };
+          }
+          const value = Reflect.get(transaction, field, transactionReceiver);
+          return typeof value === "function" ? value.bind(transaction) : value;
+        } })), context);
+      };
+      return commit;
+    } });
+  });
+  try {
+    const submitted = await root.submit({ type: "input", content: "first", ...(mixed ? {} : { requestId: "named-first" }) }, ctx);
+    await reached;
+    const joined = await root.submit({ type: "input", content: "joined", requestId: "named-steer", whenBusy: "steer" }, ctx);
+    generate();
+    await submitted.wait(ctx); await joined.wait(ctx);
+    assert.equal(measurements.length, 2, JSON.stringify(await toolResults(root)));
+    for (const measurement of measurements) {
+      assert.equal(measurement.ids[1], "named-steer");
+      if (mixed) {
+        assert.match(measurement.ids[0]!, /^input:[0-9a-f-]{36}$/u);
+        assert.ok(measurement.scans > 0);
+      } else {
+        assert.deepEqual(measurement.ids, ["named-first", "named-steer"]);
+        assert.equal(measurement.scans, 0, "fully named input ownership needs no history scan");
+        assert.equal(measurement.commits, 2, "only the two owner-entry validation reads transact");
+      }
+    }
+    assert.deepEqual(measurements[0]!.ids, measurements[1]!.ids);
+    assert.deepEqual(measurements.map(measurement => measurement.identities), mixed ? [1, 0] : [0, 0]);
+  } finally { generate(); await harness.close(ctx); }
+});
+
+for (const malformed of [
+  { kind: "reply", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", botId: "J" },
+  { kind: "request", deliveryId: "11112233-4455-4677-8899-aabbccddeeff", botId: "J" },
+  { kind: "request", deliveryId: "00112233-4455-4677-8899-aabbccddeeff", botId: "other-bot" },
+]) {
+  test(`committed Bot metadata mismatch fails closed: ${JSON.stringify(malformed)}`, async () => {
+    const faux = createFauxModels([fauxAssistantMessage("must not request")]);
+    const { harness, root } = await memoryHarness({ ...recordingDeps(), now: () => 1 }, faux);
+    try {
+      await (await root.submit({ type: "input", content: "message", requestId: "bot:J:1:00112233-4455-4677-8899-aabbccddeeff",
+        entry: { kind: "aiden.bot-message-input", data: { ...malformed, botName: "Jester", text: "message", deadline: 100 } } }, ctx)).wait(ctx);
+      assert.equal(faux.calls(), 0);
+    } finally { await harness.close(ctx); }
+  });
+}
+
+
+test("unnamed input identity survives SIGKILL and a fresh session DB mints a different UUID", async () => {
+  const args: PlanReplayArgs = { profileDir: tempProfile(), home: tempProfile(), botId: "bot:1db60946-078c-4628-b82c-e69c119b2cca", safe: true, phase: "admitted", identity: true };
+  const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "assembly-fixtures.ts");
+  const child = spawnHarnessChild("scenario", [file, JSON.stringify(args)]);
+  const original = JSON.parse(await child.waitFor("INPUT_IDS")) as string[];
+  await child.kill();
+  const replayed: Array<readonly string[]> = [];
+  const f = await inputIdentityDeps(args, ids => replayed.push(ids));
+  const faux = createFauxModels([fauxAssistantMessage("Recovered")]);
+  const { host, harness } = await reopenAfterKill(args.profileDir, args.botId, f.deps, faux);
+  try {
+    const submission = (await harness.inspect(ctx)).submissions[0]!;
+    harness.resume(); await (await harness.submission(submission.id, ctx))!.wait(ctx);
+    assert.deepEqual(replayed, [original]);
+  } finally { await host.shutdown(); }
+  const fresh: Array<readonly string[]> = [];
+  const blank = await inputIdentityDeps(args, ids => fresh.push(ids));
+  const next = await memoryHarness(blank.deps, createFauxModels([
+    fauxAssistantMessage([fauxToolCall(blank.tool.name, { text: "fresh" })], { stopReason: "toolUse" }), fauxAssistantMessage("done"),
+  ]));
+  try {
+    await (await next.root.submit({ type: "input", content: "fresh DB" }, ctx)).wait(ctx);
+    assert.equal(fresh.length, 1);
+    assert.notDeepEqual(fresh[0], original);
+  } finally { await next.harness.close(ctx); }
+});

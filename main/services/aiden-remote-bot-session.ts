@@ -1,3 +1,7 @@
+import type { BotPlans } from "./bot-plans/plans.js";
+import { homedir } from "node:os";
+import type { BotPlanItemView, BotPlanView } from "../../renderer/shared/bot-plans.js";
+import { withoutBotHandoffControls } from "../../renderer/shared/bot-handoffs.js";
 import type { BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { BotAccessRequestStaleError, type BotAccessRequests } from "./bot-runtime/bot-access-requests.js";
 import { botMessageRowLabel, botMessageStatusLine } from "../../renderer/shared/bot-messages.js";
@@ -106,6 +110,11 @@ import {
   parseAidenRemoteBotPresetCreateRequest,
   parseAidenRemoteBotPresetList,
   parseAidenRemoteBotQuestionAnswerRequest,
+  parseAidenRemoteBotPlan,
+  parseAidenRemoteBotPlanId,
+  parseAidenRemoteBotPlanRespondRequest,
+  type AidenRemoteBotPlan,
+  type AidenRemoteBotPlanRespondReceipt,
   parseAidenRemoteBotAccessRequest,
   parseAidenRemoteBotAccessAnswerRequest,
   type AidenRemoteBotAccessRequest,
@@ -256,6 +265,7 @@ export interface AidenRemoteBotSessionServiceOptions {
    * answers through). With it the host announces `bot:handoffs`.
    */
   handoffs?: Pick<BotHandoffs, "pending" | "get" | "answer" | "onChange">;
+  plans?: Pick<BotPlans, "current" | "respond" | "onChange">;
   accessRequests?: Pick<BotAccessRequests, "pending" | "get" | "onChange">;
   answerAccessRequest?(botId: string, waitId: string, choice: BotAccessChoice): Promise<{ answered: boolean; savedForFuture?: true }>;
   /** Revision 37: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
@@ -332,6 +342,75 @@ export interface AidenRemoteBotSessionServiceOptions {
   };
   now?(): number;
   projectorIdleMs?: number;
+}
+
+/** Keep both ends of a folder name, rather than losing it to a tail cut. */
+function elidePlanLocation(value: string, maximum: number): string {
+  const points = [...value];
+  if (points.length <= maximum) return value;
+  const tail = Math.floor((maximum - 1) / 2);
+  return points.slice(0, maximum - tail - 1).join("") + "…" + points.slice(-tail).join("");
+}
+
+function safePlanLocationText(value: string): boolean {
+  return withoutBotHandoffControls(value) === value && wireText(value, Infinity) === value &&
+    !Array.from(value).some(point => { const code = point.codePointAt(0)!; return code < 32 || (code >= 127 && code <= 159); });
+}
+
+function remotePlanFileScope(scope: NonNullable<BotPlanItemView["fileScope"]>): { line: string; details: string[]; complete: boolean } {
+  // The file formatter alone supplies this metadata. Never infer provenance from prose.
+  const home = homedir();
+  const place = scope.path === home ? "~" : scope.path.startsWith(home + "/") ? "~" + scope.path.slice(home.length) : scope.path;
+  const safe = safePlanLocationText(place) && (place.startsWith("/") || place === "~" || place.startsWith("~/"));
+  const prefix = `Files · ${scope.access === "write" ? "change" : "read"} `;
+  const suffix = scope.grant ? " for this plan" : "";
+  const lifetime = scope.grant ? [`${scope.access === "write" ? "Read and change" : "Read only"} · allowed once, for this plan only`] : [];
+  const pathPoints = [...place];
+  const chunks: string[] = [];
+  for (let offset = 0; offset < pathPoints.length; offset += 160) chunks.push(pathPoints.slice(offset, offset + 160).join(""));
+  const complete = safe && chunks.length > 0 && chunks.length + lifetime.length <= 6 && chunks.every(chunk => chunk.trim().length > 0);
+  const available = 120 - [...prefix + suffix].length;
+  // Prefer the entire basename when a long parent consumes the line's budget.
+  const withoutTrailingSlash = place.replace(/\/+$/u, "");
+  const basename = withoutTrailingSlash.slice(withoutTrailingSlash.lastIndexOf("/") + 1);
+  const shortPlace = pathPoints.length <= available ? place : [...basename].length + 2 <= available
+    ? "…/" + basename : "…/" + elidePlanLocation(basename, available - 2);
+  const summary = safe ? shortPlace : basename.trim() && safePlanLocationText(basename)
+    ? "…/" + elidePlanLocation(basename, available - 2) : "[folder location unavailable]";
+  return { line: prefix + summary + suffix,
+    details: complete ? [...chunks, ...lifetime] : ["Review the full folder location on the host desktop.", ...lifetime], complete };
+}
+
+/** Bound each public member before budgeting it; select fields explicitly. */
+export function projectAidenRemoteBotPlan(view: BotPlanView): AidenRemoteBotPlan | null {
+  const text = (value: string, maximum: number) => redactRemoteText(withoutBotHandoffControls(value), maximum) || "[unavailable]";
+  const items: AidenRemoteBotPlan["items"] = [];
+  for (const item of view.items) {
+    if (item.fileScope) {
+      const scope = remotePlanFileScope(item.fileScope);
+      // A pending card must identify every folder before offering approval. Active
+      // cards retain their real status and Stop even if full review needs the desktop.
+      if (!scope.complete && view.status === "pending") return null;
+      items.push({ line: scope.line, details: scope.details });
+    } else {
+      let line = text(item.line, Infinity);
+      if (item.max !== undefined) {
+        const suffix = ` (up to ${item.max})`;
+        if (line.endsWith(suffix)) line = line.slice(0, -suffix.length);
+        const available = 120 - [...suffix].length;
+        line = [...line].length > available ? wireText(line, available - 1) + "…" : line;
+        line += suffix;
+      } else line = wireText(line, 120);
+      items.push({ line, details: item.details.map(detail => text(detail, 160)),
+        ...(item.used !== undefined ? { used: item.used } : {}), ...(item.max !== undefined ? { max: item.max } : {}) });
+    }
+  }
+  return parseAidenRemoteBotPlan({
+    planId: view.planId, status: view.status, title: text(view.title, 80), why: text(view.why, 300),
+    steps: view.steps.map(step => ({ text: text(step.text, 200), status: step.status })), items,
+    ...(view.expiresAt !== undefined ? { expiresAt: new Date(view.expiresAt).toISOString() } : {}),
+    ...(view.from !== undefined ? { from: text(view.from, 120) } : {}),
+  });
 }
 
 /** A Bot memory view in the wire shape. */
@@ -753,6 +832,7 @@ interface Audience {
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
   accessRequests: boolean;
+  plans: boolean;
 }
 
 /**
@@ -815,6 +895,7 @@ class BotLiveProjector {
   /** The Bot's issue cards (revision 42), oldest first; only `bot:issues` devices are sent them. */
   issues: AidenRemoteBotIssue[] = [];
   legacyIssues: AidenRemoteBotIssue[] = [];
+  plan: AidenRemoteBotPlan | null = null;
   /** What the running turn is doing, in the §11 shape; null while no turn runs. */
   activity: AidenRemoteBotSessionActivity | null = null;
   /** The person's messages waiting for the running turn. */
@@ -869,6 +950,7 @@ class BotLiveProjector {
     /** Revision 42; without it no issue card is ever projected. */
     private readonly readIssues?: () => Promise<{ holder: AidenRemoteBotIssue[]; legacy: AidenRemoteBotIssue[] }>,
     private readonly readAccessRequest: () => Promise<BotLiveProjector["accessRequest"]> = async () => null,
+    private readonly readPlan: () => Promise<{ plan: AidenRemoteBotPlan | null; pending: boolean }> = async () => ({ plan: null, pending: false }),
   ) {
     this.classifier = activityDeps
       ? createQueuedInputClassifier({
@@ -900,6 +982,8 @@ class BotLiveProjector {
     this.approval = this.readApproval();
     this.handoff = await this.readHandoff();
     this.accessRequest = await this.readAccessRequest();
+    const planProjection = await this.readPlan();
+    this.plan = planProjection.plan;
     const issues = await this.readIssues?.();
     this.issues = issues?.holder ?? [];
     this.legacyIssues = issues?.legacy ?? [];
@@ -908,7 +992,7 @@ class BotLiveProjector {
       this.activity = this.deriveActivity(
         watch.value,
         this.state,
-        this.question !== null || this.approval !== null || this.handoff !== null || this.accessRequest !== null,
+        this.question !== null || this.approval !== null || this.handoff !== null || this.accessRequest !== null || planProjection.pending,
       );
       this.queued = await this.queuedFor(watch.value.docs);
     }
@@ -939,6 +1023,7 @@ class BotLiveProjector {
     if (audience.handoffs) used += memberBytes("handoff", handoff);
     if (audience.issues) used += memberBytes("issues", issues);
     if (audience.accessRequests) used += memberBytes("accessRequest", this.accessRequest?.card ?? null);
+    if (audience.plans) used += memberBytes("plan", this.plan);
     if (showActivity) used += memberBytes("activity", this.activity);
 
     let partial: string | undefined;
@@ -977,6 +1062,7 @@ class BotLiveProjector {
       ...(audience.handoffs ? { handoff } : {}),
       ...(audience.issues ? { issues } : {}),
       ...(audience.accessRequests ? { accessRequest: this.accessRequest?.card ?? null } : {}),
+      ...(audience.plans ? { plan: this.plan } : {}),
     });
   }
 
@@ -1005,7 +1091,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1066,6 +1152,7 @@ class BotLiveProjector {
       : undefined;
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
+      if (event.type === "plan" && !audience.plans) return noOp(audience);
       if (issuesOnly && !audience.issues) return noOp(audience);
       if (issuesOnly && !audience.accessRequests) return sseFrame(id, "issues", { ...data, payload: { issues: this.issuesFor(audience) } });
       if (accessOnly && !audience.accessRequests) {
@@ -1287,6 +1374,7 @@ class BotLiveProjector {
     const approval = this.readApproval();
     const handoff = await this.readHandoff();
     const accessRequest = await this.readAccessRequest();
+    const { plan, pending: planPending } = await this.readPlan();
     const projectedIssues = this.readIssues ? await this.readIssues().catch(() => ({ holder: this.issues, legacy: this.legacyIssues })) : { holder: [], legacy: [] };
     const issues = projectedIssues.holder;
     const legacyIssues = projectedIssues.legacy;
@@ -1295,7 +1383,7 @@ class BotLiveProjector {
     let activity: AidenRemoteBotSessionActivity | null = null;
     if (this.activityDeps) {
       this.trackRun(this.state, state, view.docs);
-      activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null || accessRequest !== null);
+      activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null || accessRequest !== null || planPending);
     }
 
     const previous = this.entries;
@@ -1322,6 +1410,7 @@ class BotLiveProjector {
       this.approval = approval;
       this.handoff = handoff;
       this.accessRequest = accessRequest;
+      this.plan = plan;
       this.activity = activity;
       this.queued = queued;
       this.issues = issues;
@@ -1362,6 +1451,10 @@ class BotLiveProjector {
       const shown = this.accessRequest !== null;
       this.accessRequest = accessRequest;
       this.frame({ type: "access_request", payload: { accessRequest: accessRequest?.card ?? null } }, shown ? "snapshot" : accessRequest?.notice);
+    }
+    if (JSON.stringify(plan) !== JSON.stringify(this.plan)) {
+      this.plan = plan;
+      this.frame({ type: "plan", payload: { plan } });
     }
     // After the state frame, so a phone never sees a phase for a turn that already ended.
     if (JSON.stringify(activity) !== JSON.stringify(this.activity)) {
@@ -1625,7 +1718,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -1656,6 +1749,7 @@ export class AidenRemoteBotSessionService {
   private readonly stopIntents: (() => void) | undefined;
   private readonly stopStateChanges: (() => void) | undefined;
   private readonly stopAccessRequests: (() => void) | undefined;
+  private readonly stopPlans: (() => void) | undefined;
   private readonly runStarts: BotRunStarts;
 
   constructor(private readonly options: AidenRemoteBotSessionServiceOptions) {
@@ -1668,6 +1762,7 @@ export class AidenRemoteBotSessionService {
     options.approvals?.onChange(refresh);
     options.handoffs?.onChange(refresh);
     this.stopAccessRequests = options.accessRequests?.onChange(refresh);
+    this.stopPlans = options.plans?.onChange(refresh);
     // Revision 42: a card raised, settled or superseded reaches open streams.
     options.issues?.onChange(refresh);
     // A pause or unpause on the Mac changes only the state; open streams hear it here.
@@ -1711,6 +1806,10 @@ export class AidenRemoteBotSessionService {
    * bridge and the Mac opener are wired. Without them the host never offers
    * the capability and every device gets the revision-35 view.
    */
+  get supportsPlans(): boolean {
+    return this.options.plans !== undefined;
+  }
+
   get supportsAccessRequests(): boolean {
     return Boolean(this.options.accessRequests && this.options.answerAccessRequest);
   }
@@ -2060,6 +2159,43 @@ export class AidenRemoteBotSessionService {
     }
   }
 
+  /** Exact plan identity and the core's first-answer-wins serialize every response. */
+  async respondPlan(deviceId: string, botId: string, planId: string, key: string, input: unknown): Promise<AidenRemoteBotPlanRespondReceipt> {
+    const plans = this.options.plans;
+    if (!plans) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const id = parseOrInvalid(parseAidenRemoteBotPlanId, planId, "The plan is invalid.");
+    const parsed = parseOrInvalid(parseAidenRemoteBotPlanRespondRequest, input, "The plan response is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    const expired = () => new AidenRemoteServiceError("plan_expired", "This plan is no longer waiting.", 409);
+    const receipt = await this.options.bots.executeIdempotent(
+      { deviceId, route: "POST /bots/{id}/plans/{planId}/respond", resourceId: `${bot.id}:${id}`, key },
+      { planId: id, ...parsed },
+      async () => {
+        try {
+          const before = await plans.current(bot.id, id);
+          if (!before || before.status !== (parsed.decision === "stop" ? "active" : "pending")) throw new AidenOperationNotExecutedError(expired());
+          if (parsed.decision === "approve" && projectAidenRemoteBotPlan(before) === null) {
+            throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("plan_expired", "Review this plan on the host desktop.", 409));
+          }
+          const result = await plans.respond(bot.id, id, parsed.decision);
+          if (result !== "done") throw new AidenOperationNotExecutedError(expired());
+          // Another pending card has UI precedence, so never read unqualified current here.
+          const after = await plans.current(bot.id, id);
+          if (parsed.decision === "not_now" && !after) return { planId: id, status: "stopped" as const };
+          if (!after || after.status === "pending") throw new AidenOperationNotExecutedError(expired());
+          return { planId: id, status: after.status };
+        } catch (error) {
+          if (error instanceof AidenOperationNotExecutedError) throw error;
+          // The exact core plan identity can only settle once. Retrying cannot
+          // reinstall a grant or publish a second answer, even after a lost receipt.
+          throw new AidenOperationReplaySafeRetryError(error);
+        }
+      },
+    );
+    await this.afterAction(bot.id);
+    return receipt;
+  }
+
   async answerAccessRequest(deviceId: string, botId: string, waitId: string, key: string, input: unknown): Promise<AidenRemoteBotAccessAnswerReceipt> {
     if (!this.supportsAccessRequests) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     const id = parseOrInvalid((value) => parseAidenRemoteBotHandoffWaitId(value), waitId, "The access request is invalid.");
@@ -2275,6 +2411,10 @@ export class AidenRemoteBotSessionService {
         () => this.handoffOf(botId),
         this.supportsIssues ? () => this.issuesOf(botId) : undefined,
         () => this.accessRequestOf(botId),
+        async () => {
+          const plan = await this.options.plans?.current(botId);
+          return { plan: plan ? projectAidenRemoteBotPlan(plan) : null, pending: plan?.status === "pending" };
+        },
       );
       await projector.attach(conversation);
       return projector;
@@ -2315,6 +2455,7 @@ export class AidenRemoteBotSessionService {
       images: options.images === true,
       issues: options.issues === true && this.supportsIssues,
       accessRequests: options.accessRequests === true && this.supportsAccessRequests,
+      plans: options.plans === true && this.supportsPlans,
     };
   }
 
@@ -2334,6 +2475,7 @@ export class AidenRemoteBotSessionService {
           ...(audience.handoffs ? { handoff: null } : {}),
           ...(audience.issues ? { issues: [] } : {}),
           ...(audience.accessRequests ? { accessRequest: null } : {}),
+          ...(audience.plans ? { plan: null } : {}),
         });
       }
       const projector = await this.liveProjector(bot.id);
@@ -2413,6 +2555,7 @@ export class AidenRemoteBotSessionService {
     this.stopIntents?.();
     this.stopStateChanges?.();
     this.stopAccessRequests?.();
+    this.stopPlans?.();
     for (const deviceId of [...this.subscriptions.keys()]) this.revokeDevice(deviceId);
     const projectors = await Promise.allSettled([...this.projectors.values()]);
     for (const result of projectors) if (result.status === "fulfilled") await result.value.close();
