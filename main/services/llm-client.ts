@@ -136,6 +136,7 @@ import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
+import { DESIGN_CANVAS_SKILLS } from "./design-canvas/skill.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -1541,6 +1542,19 @@ async function prepareGeneration(
   // exact MCP identities. Computer Use, skills, and delegation stay out.
   // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
   // Telegram and Bot turns get neither the tool nor its skill.
+  // Design mode: the canvas tools and the aiden-design skill go together.
+  const designCanvasOffered =
+    Boolean(folderPath) &&
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({
+      flagEnabled: designModeEnabled(),
+      designMode: chat.designMode,
+      localRenderer: rendererOwner && browserOwner?.kind !== "remote",
+      ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
+      assistant: assistantMode,
+      telegram: options.interactionSurface === "telegram",
+      hasWorkspaceFolder: permission !== "none",
+    });
   const offerWorkspaceArtifacts =
     !botContext &&
     !assistantMode &&
@@ -1554,6 +1568,9 @@ async function prepareGeneration(
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
   if (skillSnapshot && !offerWorkspaceArtifacts) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
+  }
+  if (skillSnapshot && !designCanvasOffered) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESIGN_CANVAS_SKILLS);
   }
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
@@ -2214,18 +2231,7 @@ async function prepareGeneration(
   }
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
-  if (
-    folderPath &&
-    designCanvasToolsAllowed({
-      flagEnabled: designModeEnabled(),
-      designMode: chat.designMode,
-      localRenderer: rendererOwner && browserOwner?.kind !== "remote",
-      ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
-      assistant: assistantMode,
-      telegram: options.interactionSurface === "telegram",
-      hasWorkspaceFolder: permission !== "none",
-    })
-  ) {
+  if (folderPath && designCanvasOffered) {
     const canvasRoot = folderPath;
     const canvasTools = createDesignCanvasTools({
       chatId: params.chatId,

@@ -1,6 +1,6 @@
 # Design mode P3: Aiden on the canvas
 
-Status: in progress, 2026-11-05. P3a and P3b done. Spec: [design mode §6](../specs/2026-10-31-design-mode-design.md#6-aiden-on-the-canvas). Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P2.
+Status: in progress, 2026-11-05. P3a, P3b and P3c done. Spec: [design mode §6](../specs/2026-10-31-design-mode-design.md#6-aiden-on-the-canvas). Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P2.
 
 **Goal:** in a chat with design mode on, Aiden can see the canvas, put its own designs on it, and tidy them, without the person adding frames by hand.
 
@@ -51,6 +51,8 @@ This is a built-in desktop skill, kept beside `AIDEN_ARTIFACTS_SKILL`, and dropp
 - say which file changed.
 
 The prompt section points to the skill.
+
+As built: the skill is registered only while `AIDEN_EXPERIMENTAL_DESIGN_MODE` is on, and a turn keeps it only when it also gets the canvas tools (one `designCanvasOffered` decision). Library paths are root-relative (`/__aiden/lib/<name>`), so they resolve under each page's own grant. A test checks that every canvas tool and library the skill names really exists.
 
 ### P3d: `design_mode` tool, consent card and `canvas_focus` (UI)
 
