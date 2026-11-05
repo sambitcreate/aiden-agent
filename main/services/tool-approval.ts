@@ -44,6 +44,13 @@ export interface ToolApprovalDecisionPayload {
 export type ToolApprovalOutcome = "allowed" | "denied" | "cancelled" | "detached" | "unavailable";
 
 /**
+ * One prompt's lifetime. `publishing` is separate from `published` because a
+ * publish callback can settle its own prompt before it returns. The prompt was
+ * still shown, so it is withdrawn once publication completes.
+ */
+type ApprovalPromptPhase = "admitted" | "publishing" | "published" | "settled";
+
+/**
  * The block reason returned to the model for a tool call that was not
  * allowed. A declined attended automation proposal tells the model to stop
  * retrying and hand the conversation back to the user.
@@ -123,22 +130,25 @@ export class ToolApprovalCoordinator {
     }
     this.pending.get(approvalId)?.settle("cancelled");
     return new Promise<ToolApprovalOutcome>((resolve) => {
-      let settled = false;
-      let published = false;
+      let phase: ApprovalPromptPhase = "admitted";
+      let settledWhilePublishing: ToolApprovalOutcome | undefined;
       const aborted = () => finish("cancelled");
+      const withdrawPrompt = (outcome: ToolApprovalOutcome) => {
+        try {
+          this.withdraw?.(approvalId, outcome);
+        } catch {
+          // Owner loss can make the withdrawal channel unavailable. The
+          // approval capability is still removed and must always settle.
+        }
+      };
       const finish = (outcome: ToolApprovalOutcome) => {
-        if (settled) return;
-        settled = true;
+        if (phase === "settled") return;
+        const priorPhase = phase;
+        phase = "settled";
         this.pending.delete(approvalId);
         signal?.removeEventListener("abort", aborted);
-        if (published) {
-          try {
-            this.withdraw?.(approvalId, outcome);
-          } catch {
-            // Owner loss can make the withdrawal channel unavailable. The
-            // approval capability is still removed and must always settle.
-          }
-        }
+        if (priorPhase === "published") withdrawPrompt(outcome);
+        if (priorPhase === "publishing") settledWhilePublishing = outcome;
         resolve(outcome);
       };
       this.pending.set(approvalId, {
@@ -159,9 +169,11 @@ export class ToolApprovalCoordinator {
         finish(closedOutcome);
         return;
       }
+      phase = "publishing";
       try {
         this.publish({ ...descriptor, approvalId });
-        published = true;
+        if (settledWhilePublishing !== undefined) withdrawPrompt(settledWhilePublishing);
+        else phase = "published";
       } catch {
         finish("unavailable");
       }

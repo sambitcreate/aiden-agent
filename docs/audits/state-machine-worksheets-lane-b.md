@@ -69,6 +69,43 @@ The inventory registry differs: it snapshots and clears its set before aborting,
 
 `bot-capability-state-checkpoint.ts` already models pending and committed heads with fail-closed poisoning. No change.
 
+### `backend:M019` tool approval coordinator — converted
+
+Per-prompt lifetime is `admitted → publishing → published → settled`. Per-stream admission is `open`, `cancelled` or `detached`, with `stopped` for the whole coordinator.
+
+| Event | Prior | Guard | Next | Effect |
+|---|---|---|---|---|
+| `request` | none | not stopped, signal live, stream open | `admitted` | Any older prompt with the same id settles `cancelled` |
+| publish starts | `admitted` | rechecked after the listener is attached | `publishing` | Prompt reaches the surface |
+| publish returns | `publishing` | | `published` | none |
+| publish throws | `publishing` | | `settled` (`unavailable`) | No withdrawal |
+| settle during publish | `publishing` | | `settled` | Withdrawn once publication returns |
+| `decide`, `decideAsHost` | `published` | owner document matches, or host authority | `settled` | Scope kept only if it was offered |
+| abort, `cancelStream`, `detachStream`, `shutdown` | any live phase | | `settled` | Withdrawn if shown |
+
+The first settlement is the linearization point, so the first answer across the desktop, phones and controllers wins. A detached stream cannot override a cancelled one.
+
+Fixed defect, reproduced by test: a prompt settled from inside its own publish callback was shown but never withdrawn, which left its attention row and run projection open.
+
+### `backend:M020` question coordinator — converted
+
+Same prompt phases as the approval coordinator, plus the deadline timer. `respondWithOutcome` treats a passed deadline as a timeout even if the timer has not fired.
+
+Fixed defects, reproduced by test:
+
+- The same publish re-entry as `M019`.
+- `shutdown` did not close admission. A question asked afterwards with a live signal was published and never settled, so its turn waited out the shutdown grace period.
+
+`llm-client` does not call `cancelStream` on this coordinator. Stop reaches questions through each request's abort signal, so stream cancellation does not need to close admission here.
+
+### `backend:M190` remembered approval scope — retained
+
+`ToolApprovalRuleBook` keys rules by tool, pattern and workspace. Chat rules are in memory and `always` rules are persisted. The coordinator stores a scope only if it was offered and the answer was allow. No change.
+
+### `backend:M029` Bot question wait registry — retained
+
+`bot-questions.ts` keeps one wait per `waitId`, and its `settle` is gated on prompt identity, so a stale abort cannot end the replacement wait. Baselines are in `bot-questions.test.ts`.
+
 ### `backend:M028` Bot approval wait registry — deferred
 
 PR #730 rewrites `bot-approvals.ts`, and #727 also edits it. Reconcile after those land.

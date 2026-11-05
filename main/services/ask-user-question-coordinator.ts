@@ -30,10 +30,18 @@ const MAX_EXPIRED_PROMPTS = 64;
 
 export type AskUserQuestionRespondOutcome = AskUserQuestionAnswerStatus | "rejected";
 
+/**
+ * One prompt's lifetime. `publishing` is separate from `published` because a
+ * publish callback can settle its own prompt before it returns. The prompt was
+ * still shown, so it is withdrawn once publication completes.
+ */
+type QuestionPromptPhase = "admitted" | "publishing" | "published" | "settled";
+
 export class AskUserQuestionCoordinator {
   private readonly pending = new Map<string, PendingQuestionnaire>();
   private readonly expired = new Map<string, string>();
   private readonly detachedStreams = new Set<string>();
+  private stopped = false;
 
   constructor(
     private readonly publish: (prompt: AskUserQuestionPromptV1) => void,
@@ -86,30 +94,38 @@ export class AskUserQuestionCoordinator {
       cancelled: true,
       answers: [],
     });
-    if (signal?.aborted) return Promise.resolve(cancelled());
+    if (this.stopped || signal?.aborted) return Promise.resolve(cancelled());
     if (this.detachedStreams.has(prompt.streamId)) {
       this.shortCircuited(prompt);
       return Promise.resolve(cancelled());
     }
     return new Promise<AskUserQuestionResponseV1>((resolve) => {
-      let settled = false;
-      let published = false;
+      let phase: QuestionPromptPhase = "admitted";
+      let settledWhilePublishing:
+        | { response: AskUserQuestionResponseV1; by: AskUserQuestionSettledBy }
+        | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const aborted = () => finish(cancelled());
+      const withdrawPrompt = (
+        response: AskUserQuestionResponseV1,
+        by: AskUserQuestionSettledBy,
+      ) => {
+        try {
+          this.withdraw?.(prompt.promptId, response, by);
+        } catch {
+          // Withdrawal is advisory row-state bookkeeping; the prompt still settles.
+        }
+      };
       const finish = (response: AskUserQuestionResponseV1, by: AskUserQuestionSettledBy = "host") => {
-        if (settled) return;
-        settled = true;
+        if (phase === "settled") return;
+        const priorPhase = phase;
+        phase = "settled";
         if (timer) clearTimeout(timer);
         this.pending.delete(prompt.promptId);
         signal?.removeEventListener("abort", aborted);
         if (response.timedOut) this.rememberExpired(prompt.promptId, ownerDocumentId);
-        if (published) {
-          try {
-            this.withdraw?.(prompt.promptId, response, by);
-          } catch {
-            // Withdrawal is advisory row-state bookkeeping; the prompt still settles.
-          }
-        }
+        if (priorPhase === "published") withdrawPrompt(response, by);
+        if (priorPhase === "publishing") settledWhilePublishing = { response, by };
         resolve(response);
       };
       this.pending.set(prompt.promptId, {
@@ -132,9 +148,14 @@ export class AskUserQuestionCoordinator {
         timer = setTimeout(() => finish(timedOut(prompt.promptId)), deadline - Date.now());
         timer.unref?.();
       }
+      phase = "publishing";
       try {
         this.publish(prompt);
-        published = true;
+        if (settledWhilePublishing) {
+          withdrawPrompt(settledWhilePublishing.response, settledWhilePublishing.by);
+        } else {
+          phase = "published";
+        }
       } catch {
         finish(cancelled());
       }
@@ -205,6 +226,7 @@ export class AskUserQuestionCoordinator {
   }
 
   shutdown(): void {
+    this.stopped = true;
     for (const entry of [...this.pending.values()]) this.cancelStream(entry.prompt.streamId);
     this.detachedStreams.clear();
     this.expired.clear();
