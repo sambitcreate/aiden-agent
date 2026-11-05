@@ -41,6 +41,9 @@ let resetsInProgress = 0;
 export const COMPUTER_USE_RESETTING_REASON =
   "Computer Use permissions are being reset. Ask again in a moment.";
 
+export const COMPUTER_USE_ACCESS_CHANGED_REASON =
+  "Computer Use access kept changing while this request was checked. Ask again.";
+
 /** Reads a decision may repeat when grants keep being revoked underneath it. */
 const MAX_DECIDE_ATTEMPTS = 3;
 
@@ -173,7 +176,7 @@ export function createComputerUseAccessGate(
   ): Promise<ComputerUseAccessDecision> =>
     attempt < MAX_DECIDE_ATTEMPTS
       ? decide(toolCallId, signal, attempt + 1)
-      : Promise.resolve({ allowed: false, reason: COMPUTER_USE_RESETTING_REASON });
+      : Promise.resolve({ allowed: false, reason: COMPUTER_USE_ACCESS_CHANGED_REASON });
 
   const decide = async (
     toolCallId: string,

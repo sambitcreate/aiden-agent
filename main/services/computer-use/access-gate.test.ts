@@ -9,6 +9,7 @@ import { createChatStore } from "../chat-store-core.js";
 import { ToolApprovalCoordinator, type ToolApprovalPrompt } from "../tool-approval.js";
 import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import {
+  COMPUTER_USE_ACCESS_CHANGED_REASON,
   COMPUTER_USE_DECLINED_REASON,
   COMPUTER_USE_RESETTING_REASON,
   COMPUTER_USE_SETUP_REASON,
@@ -516,7 +517,7 @@ test("grants revoked on every read end in a refusal, not an endless retry", asyn
   });
   assert.deepEqual(await gate.authorize("call-1"), {
     allowed: false,
-    reason: COMPUTER_USE_RESETTING_REASON,
+    reason: COMPUTER_USE_ACCESS_CHANGED_REASON,
   });
   assert.deepEqual(cards, []);
 });
