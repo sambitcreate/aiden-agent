@@ -303,19 +303,27 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
 });
 
 test("a chat deletion keeps its fences closed until the deletion is durably complete", async () => {
-  const closedDuringCompletion: number[] = [];
+  let attachmentFenceOpened = 0;
+  const closedDuringCompletion: [number, number][] = [];
   const application = fixture({
+    attachments: {
+      beginChatDeletion: () => () => { attachmentFenceOpened += 1; },
+      revokeChat: () => undefined,
+    } as unknown as ChatApplicationDependencies["attachments"],
     subagentRunStore: {
       deleteChat: async () => undefined,
-      completeChatDeletion: async () => { closedDuringCompletion.push(application.finishDeletionCalls()); },
+      completeChatDeletion: async () => {
+        closedDuringCompletion.push([application.finishDeletionCalls(), attachmentFenceOpened]);
+      },
       pendingChatDeletions: async () => [],
     } as ChatApplicationDependencies["subagentRunStore"],
   });
 
   await application.service.remove("chat-1");
 
-  assert.deepEqual(closedDuringCompletion, [0]);
+  assert.deepEqual(closedDuringCompletion, [[0, 0]]);
   assert.equal(application.finishDeletionCalls(), 1);
+  assert.equal(attachmentFenceOpened, 1);
 });
 
 test("a chat deletion whose tombstone status cannot be read stays fenced for startup", async () => {
