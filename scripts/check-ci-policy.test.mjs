@@ -202,7 +202,13 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.equal(jobs.e2e.strategy["fail-fast"], false);
   assert.equal(jobs.unit.strategy["fail-fast"], false);
   assert.deepEqual(jobs.unit.strategy.matrix.lane, readRegistry().lanes.map((lane) => lane.name));
-  const browserInstall = jobs.unit.steps.find((step) => step.run === "npx playwright install chromium");
+  // Pull requests keep one lane on the scarce macOS runners; main runs them all there.
+  assert.deepEqual(
+    jobs.unit.strategy.matrix.include.filter((entry) => entry.runner.startsWith("macos-")).map((entry) => entry.lane),
+    ["macos"],
+  );
+  assert.equal(jobs.unit["runs-on"], "${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}");
+  const browserInstall = jobs.unit.steps.find((step) => step.run === "npx playwright install --with-deps chromium");
   assert.equal(browserInstall.if, "${{ matrix.chromium == true }}");
   const registry = readRegistry();
   const browserModes = new Set(registry.preserved.filter((entry) => ["browser", "chromium"].includes(entry.kind)).map((entry) => entry.id));

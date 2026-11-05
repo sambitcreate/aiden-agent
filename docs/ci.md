@@ -14,9 +14,16 @@ Rename detection is disabled so both the removed and added paths select work.
 select nothing; contributor-instruction files such as `AGENTS.md` and the design
 guide are not treated as prose. Android-only and iOS-only PRs select their own
 platform checks, renderer-only PRs select desktop checks, and CLI-only PRs select
-the CLI jobs plus static checks. Desktop changes always imply `catalog`. Shared
-contracts, main-process/native code, infrastructure, unknown paths, empty diffs
-and detection failures select every area. Policy checks always run.
+the CLI jobs plus static checks. Desktop changes always imply `catalog`.
+`renderer/shared/` selects `desktop`, `cli` and `linux`; the files native clients
+mirror (listed in `scripts/ci-changes.mjs`) select every area. Infrastructure,
+unknown paths, empty diffs and detection failures select every area, with two
+narrower cases on PRs: `scripts/ci-test-registry.json` selects `desktop`, and a
+root `package.json` change confined to `scripts` selects `desktop`, `cli` and
+`linux`. That case compares the merge base and head manifests, and stays full if
+either cannot be read or the change touches what the Apple and iOS jobs execute:
+`test:native`, `test:ios-release`, their hooks and any script they reach through
+`npm run` or `npm run-script`. Policy checks always run.
 
 Every main push runs full validation except a push that changes only the
 generated model catalog (`resources/model-capabilities.json`, reason
@@ -47,7 +54,15 @@ superseded. Runner capacity can still cause queueing.
   `test-without-building` against the shared DerivedData. iOS-only changes also
   run shipping and TestFlight policies in that job; full desktop runs execute
   them through the preserved regression lane.
-- Three desktop lanes use `scripts/ci-test-registry.json`. Every ordinary file in
+- Four desktop lanes use `scripts/ci-test-registry.json`. GitHub allows five
+  concurrent macOS jobs on this plan, and macOS is where jobs queue, so on PRs
+  `core-git`, `runtime-subagents` and `renderer-other` run on Ubuntu and only the
+  `macos` lane runs on macOS. That lane holds every file that fails, skips or
+  asserts less off macOS, plus the native helper suites, terminal coverage and
+  Rust checks. Main runs all four lanes on macOS, so a macOS-only regression in a
+  file that stayed in an Ubuntu lane is caught at merge rather than on its PR.
+  When you add a test that only does its work on macOS, put its file in `macos`.
+- Every ordinary file in
   the `pretest:serial`/`test:serial` graph belongs to exactly one lane. New files
   require explicit assignment; unknown shell commands, environment changes, test
   flags and root `pretest`/`posttest` hooks fail the inventory check rather than
@@ -60,7 +75,7 @@ superseded. Runner capacity can still cause queueing.
   integration files, each with a reason). Prerequisite and preserved ids must be
   unique, so the runner schedules each build once.
 - `npm test` runs `scripts/run-ci-tests.mjs --parallel`: prerequisites first, the
-  three lanes concurrently with prefixed output (sharing one machine-sized pool
+  four lanes concurrently with prefixed output (sharing one machine-sized pool
   of Node test workers), then the preserved commands.
   Each registered file runs once. `npm run test:serial` keeps the original chain,
   which runs some files more than once, for comparison.
@@ -87,10 +102,11 @@ superseded. Runner capacity can still cause queueing.
   compilation is not physical-device XCTest acceptance.
 
 Use `node scripts/run-ci-tests.mjs --list` or `--dry-run` to inspect assignments.
-Use `--lane core-git`, `--lane runtime-subagents`, or `--lane renderer-other` to
-reproduce a lane, and `--summary` to report timings. Existing focused npm commands
-remain available. Browser-dependent lanes explicitly install Chromium; a warm
-local browser cache is not proof that hosted prerequisites are present.
+Use `--lane core-git`, `--lane runtime-subagents`, `--lane renderer-other`, or
+`--lane macos` to reproduce a lane, and `--summary` to report timings. The `macos`
+lane needs a Mac. Existing focused npm commands remain available. Browser-dependent
+lanes explicitly install Chromium; a warm local browser cache is not proof that
+hosted prerequisites are present.
 
 ## Measurement and rollout
 
