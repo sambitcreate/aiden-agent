@@ -87,10 +87,11 @@ The first settlement is the linearization point, so the first answer across the 
 
 Fixed defect, reproduced by test: a prompt settled from inside its own publish callback was shown but never withdrawn, which left its attention row and run projection open.
 
+Also fixed, reproduced by test: a publish callback that synchronously re-asks its own id let the first prompt's deferred withdrawal remove the replacement, so a Bot approval left `pending` while it could still be answered. The replacement now owns the id and is withdrawn once, on its own settlement. The older prompt gets no separate withdrawal, because surfaces key prompts by id. Question prompts use random ids and cannot hit this.
+
 Recorded, not changed:
 
 - "Publish throws, unsettled" means never shown, and existing tests require that no withdrawal follows. A surface whose publish shows the prompt and then throws in a later step would break that assumption. `bot-approvals.ts` is the one known case: it stores the waiting entry before calling its own publish, so a throw leaves that entry behind. See `backend:M028`. No desktop path that throws after showing a prompt was established.
-- A publish callback that synchronously requests a new prompt with the same id would let the first prompt's deferred withdrawal remove the second one's presentation. No caller does this, so no code was added for it.
 
 ### `backend:M020` question coordinator — converted
 
