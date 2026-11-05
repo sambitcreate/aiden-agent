@@ -381,4 +381,23 @@ class AidenBotRevision25ClientTest {
             )
         }
     }
+
+    @Test
+    fun messagingPatchSendsOnlyChangedFieldAndGlobalPutUsesContract() = runBlocking {
+        server.enqueue(ok(fixture.getValue("botMessagingDetail")))
+        client.updateBotIdentity("bot_fixture_01", "revision_current", AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(receive = false)), supportsBotMessaging = true)
+        val patch = server.takeRequest()
+        assertEquals("PATCH", patch.method)
+        assertEquals("/api/aiden/v1/bots/bot_fixture_01", patch.path)
+        assertEquals("revision_current", patch.getHeader("If-Match"))
+        assertEquals("1", patch.getHeader("Aiden-Protocol-Version"))
+        assertEquals("""{"botMessaging":{"receive":false}}""", patch.body.readUtf8())
+        server.enqueue(ok(fixture.getValue("botMessagingSettings")))
+        assertFalse(client.setBotMessaging(false).enabled)
+        val put = server.takeRequest()
+        assertEquals("PUT", put.method)
+        assertEquals("/api/aiden/v1/bots/messaging", put.path)
+        assertEquals("1", put.getHeader("Aiden-Protocol-Version"))
+        assertEquals("""{"enabled":false}""", put.body.readUtf8())
+    }
 }

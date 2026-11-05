@@ -22,6 +22,7 @@ import { BOT_ROUTINE_FAILED_PREVIEW } from "./scheduled-bot-routines.js";
 export interface BotNotificationFeedDependencies {
   log: BotDeliveryLog;
   /** The Bot's current name, or undefined when the Bot is gone. */
+  issueKind?(botId: string, issueId: string): Promise<string | undefined>;
   botName(botId: string): Promise<string | undefined>;
   now?(): number;
 }
@@ -35,7 +36,7 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
      */
     async list(
       since: number | undefined,
-      options: { issues?: boolean } = {},
+      options: { issues?: boolean; messaging?: boolean; accessRequests?: boolean } = {},
     ): Promise<AidenRemoteBotRoutineNotificationList> {
       const at = now();
       const names = new Map<string, Promise<string | undefined>>();
@@ -54,20 +55,26 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
         // decoder accepts `kind: "issue"`; every other device still gets
         // routine results alone.
         const issue = row.class === "issue" && options.issues === true;
-        if (!issue && (row.class !== "routine_result" || row.routineId === undefined)) continue;
+        if (issue && options.accessRequests !== true && row.requiredCapability === "bot:access-requests") continue;
+        if (issue && options.accessRequests !== true && row.requiredCapability === undefined && dependencies.issueKind && row.dedupeKey.startsWith("issue:")) {
+          const kind = await dependencies.issueKind(row.botId, row.dedupeKey.slice("issue:".length));
+          if (kind === "access_needed") continue;
+        }
+        const message = row.class === "bot_message" && options.messaging === true;
+        if (!issue && !message && (row.class !== "routine_result" || row.routineId === undefined)) continue;
         // A routine saved with notifications off never alerts a phone.
         if (row.quiet === true) continue;
         const botName = await nameOf(row.botId);
         if (botName === undefined) continue;
-        if (issue) {
+        if (issue || message) {
           notifications.push({
             // One local notification per issue card, never per repeat raise.
             id: row.requestId ?? row.id,
-            kind: "issue",
+            kind: message ? "message" : "issue",
             botId: row.botId,
             botName,
             // The card's title: the phone shows "{title}: {body}".
-            routineName: [...row.title.trim()].slice(0, 120).join("") || "Needs you",
+            routineName: (message && row.title === row.body ? "Bot message" : [...row.title.trim()].slice(0, 120).join("")) || (message ? "Bot message" : "Needs you"),
             finishedAt: new Date(row.createdAt).toISOString(),
             preview: redactRemoteText(row.body, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS),
           });

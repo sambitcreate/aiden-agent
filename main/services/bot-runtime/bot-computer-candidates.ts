@@ -10,9 +10,9 @@
 //   `computer_shell` doesn't. Both are `unsafe` to replay.
 // - Routine and Telegram runs are unattended: nobody answers a card there,
 //   so the guidance has no `hand_off`, and the run's two tools share one
-//   bounded wait for Give back. The registry holds the attended tool set (it
-//   is built without a turn), so each call asks which run it serves
-//   (`BotToolCall.runRequestIds`) and runs as that run's tool.
+//   bounded wait for Give back. Preparation may precede the calling turn,
+//   so each call asks which run it serves (`BotToolCall.runRequestIds`) and
+//   runs as that run's tool.
 // - The guest driver lane only for a computer whose base passed its probe.
 //
 // Policy (`bot-tool-policy.ts`) still decides afterwards what is offered.
@@ -84,7 +84,7 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
       async execute(toolCallId, params, signal, onUpdate) {
         const turns = ((await call.runRequestIds?.()) ?? []).map(botTurnOf);
         const routine = input.routine || turns.some((turn) => turn.routine);
-        const telegram = input.telegram || turns.some((turn) => turn.telegram);
+        const telegram = input.telegram || turns.some((turn) => turn.telegram || turn.botMessage);
         const key = `${routine}:${telegram}`;
         let tool = variants.get(key);
         if (tool === undefined) {

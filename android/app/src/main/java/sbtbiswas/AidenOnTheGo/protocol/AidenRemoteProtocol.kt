@@ -282,7 +282,8 @@ object AidenBotPrivateResponseValidator {
         "botRoutineNotifications", "botSessionCards",
         // Contract revision 37.
         "botHandoffs",
-        "botIssues"
+        "botAccessRequests", "botPlans", "botAllowed",
+        "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification"
     )
     private val botSessionRoots = setOf("botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionCards")
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
@@ -484,7 +485,7 @@ object AidenBotPrivateResponseValidator {
                 (parentPath + key).joinToString(".") in listOf("act.response.result", "notOpen.result")
         }
         if (key != "instructions" && key != "openingGreeting") return false
-        if (root == "botDetail") {
+        if (root == "botDetail" || root == "botMessagingDetail") {
             return parentPath.isEmpty()
         }
         // Revision 37: the hand-off fixture's paused Bot detail carries its own instructions.
@@ -554,6 +555,7 @@ data class AidenRemoteCapability(val rawValue: String) {
          * Contract revision 30: this phone receives the activity and queued session frames and
          * Bot detail `chatActivity`. It grants no authority.
          */
+        val BOT_MESSAGING = AidenRemoteCapability("bot:messaging")
         val BOT_ACTIVITY = AidenRemoteCapability("bot:activity")
         /**
          * Contract revision 37: this phone receives a Bot's hand-offs, the `paused` session
@@ -562,6 +564,12 @@ data class AidenRemoteCapability(val rawValue: String) {
          * `serverCapabilities`, and it is asked for in a call of its own.
          */
         val BOT_HANDOFFS = AidenRemoteCapability("bot:handoffs")
+        /** Revision 57: the allow list and repeated-approval offers, negotiated alone. */
+        val BOT_ALLOWED = AidenRemoteCapability("bot:allowed")
+        /** Revision 56: host-owned plan cards, negotiated alone. */
+        val BOT_PLANS = AidenRemoteCapability("bot:plans")
+        /** Revision 55: access cards and folder-access issues, negotiated alone. */
+        val BOT_ACCESS_REQUESTS = AidenRemoteCapability("bot:access-requests")
         /**
          * Contract revision 40: a hand-off card that takes no note says so (`takesNote`). It
          * grants no authority. A Mac on an earlier revision refuses the name, so this phone asks
@@ -645,6 +653,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val PHONE_BOT_CARDS = listOf(BOT_CARDS)
 
         /** Negotiable behind `bot-activity-v1`. */
+        val PHONE_BOT_MESSAGING = listOf(BOT_MESSAGING)
         val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
 
         /** Negotiable when the Mac lists them in `serverCapabilities`, in a call of their own. */
@@ -671,12 +680,12 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING + listOf(BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING + listOf(BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
     }
 }
 
@@ -745,6 +754,8 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val ROUTINE_PROPOSAL_NOT_FOUND = AidenRemoteErrorCode("routine_proposal_not_found")
         /** Contract revision 37: only `bot:handoffs` devices see these. */
         val BOT_PAUSED = AidenRemoteErrorCode("bot_paused")
+        val PLAN_EXPIRED = AidenRemoteErrorCode("plan_expired")
+        val ACCESS_REQUEST_EXPIRED = AidenRemoteErrorCode("access_request_expired")
         val HANDOFF_EXPIRED = AidenRemoteErrorCode("handoff_expired")
 
         val V1_KNOWN = setOf(
@@ -760,7 +771,7 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED,
             SKILL_UNAVAILABLE, RUN_GONE, APPROVAL_RESOLVED,
             MEMORY_ENTRY_NOT_FOUND, MEMORY_OVER_BUDGET, MEMORY_BLOCKED, ROUTINE_PROPOSAL_NOT_FOUND,
-            BOT_PAUSED, HANDOFF_EXPIRED
+            BOT_PAUSED, HANDOFF_EXPIRED, ACCESS_REQUEST_EXPIRED, PLAN_EXPIRED
         )
     }
 }

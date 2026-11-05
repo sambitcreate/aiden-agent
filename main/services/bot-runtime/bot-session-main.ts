@@ -1,3 +1,8 @@
+import { botMessages, disposeBotMessages } from "../bot-messages/messages-main.js";
+import { botMessageTurnOf } from "../../../renderer/shared/bot-messages.js";
+import { botPlans, configureBotPlanAuthority } from "../bot-plans/plans-main.js";
+import { createBotPlanAuthority } from "../bot-plans/authority.js";
+import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
 // Production wiring of the durable Bot runtime.
 //
 // One `BotSessionRuntime` per process, created after Bot storage and the
@@ -24,10 +29,11 @@
 // schedules the background review, and compaction flushes memory and steers
 // its summary.
 
-import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
-import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
+import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
+import os from "node:os";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { usageLimits } from "../usage-limit-main.js";
 import { spending } from "../spending-main.js";
@@ -36,13 +42,6 @@ import type { SpendingOwner } from "../spending-core.js";
 import { botRoutineTaskIdOf } from "../scheduled-bot-routines.js";
 import { isLocalModelProvider } from "../usage-accounting.js";
 import { aidenConfigDir } from "../aiden-config-dir.js";
-import { IMAGE_GENERATION_SETTINGS_FILE } from "../image-generation/settings-store.js";
-import {
-  LOCAL_CONFIG_FILENAME,
-  PORTABLE_CONFIG_FILENAME,
-  PROVIDER_MODEL_CACHE_FILENAME,
-  SETTINGS_FILENAME,
-} from "../portable-config-core.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
@@ -50,7 +49,7 @@ import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
-import { botServiceProtectedRoot } from "../bot-protected-settings.js";
+import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
 import { configStore } from "../config-store.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { botPauses, isBotPaused } from "../bot-pause-main.js";
@@ -67,7 +66,10 @@ import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
 import { resolveBotModelRuntime } from "../model-runtime.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
-import { botApprovals } from "./bot-approvals-main.js";
+import { botApprovals, configureBotApprovalDecisionLookup } from "./bot-approvals-main.js";
+import { createBotApprovalTallies } from "./bot-approval-tallies.js";
+import { createBotAllowList, reconcileBotAllowListHistory } from "./bot-allow-list.js";
+import { toolApprovalRules } from "../tool-approval-rules-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
@@ -83,10 +85,11 @@ import {
   recordMemoryChange,
 } from "../bot-learning/learning-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
+import { botAccessRequests } from "./bot-access-requests-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
 import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
-import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
+import { createBotHandoffNotifier, watchBotAccessRequests, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
@@ -99,7 +102,8 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
+import { botRunAccess, botFileLocations, createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
+import { botRunEnded } from "./bot-run-access.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -122,16 +126,9 @@ const profileDir = () => app.getPath("userData");
 // Aiden's settings files and Bot storage (definitions, access state, pauses;
 // not the Bots' own homes) are fenced the same way, so a Bot cannot change app
 // settings or its own access by editing them.
-setBotFileToolProtectedRoots(() => [
-  path.join(profileDir(), "bots"),
-  path.join(profileDir(), "bots.json"),
-  botServiceProtectedRoot(botServiceRoot()),
-  path.join(aidenConfigDir(), PORTABLE_CONFIG_FILENAME),
-  path.join(profileDir(), SETTINGS_FILENAME),
-  path.join(profileDir(), LOCAL_CONFIG_FILENAME),
-  path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
-  path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
-]);
+setBotFileToolProtectedRoots(() => desktopBotProtectedRoots(profileDir(), aidenConfigDir(), botServiceRoot()));
+// Temporary Home/whole-Mac access must not expose any app-private store.
+setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
 // A Bot's replies and routines wait out provider usage limits like a chat's.
 const runtimeModels = createBotRuntimeModels({
   usageLimits: (botId, runtime) =>
@@ -227,21 +224,89 @@ async function imageInput(botId: string): Promise<boolean> {
   return resolvedModels.get(botId)?.imageInput ?? false;
 }
 
+export const botAllowList = createBotAllowList({
+  rules: toolApprovalRules,
+  tallies: createBotApprovalTallies({ profileDir }),
+  approvals: botApprovals,
+  botName: async botId => (await botStore.get(botId))?.name,
+  connectionName: async serverId => (await configStore.listMcpServers()).find(server => server.id === serverId)?.name,
+  folderEntries: botId => botApplicationService.botFolderEntries(botId),
+  revokeFolder: (botId, sourceId) => botApplicationService.revokeBotFolder({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, sourceId }),
+  log: (message, error) => logger.warn("bots", message, error),
+});
+configureBotApprovalDecisionLookup((...args) => botAllowList.decision(...args));
+botApplicationService.onAccessChange(botId => botAllowList.changed(botId));
+
+/** Called after the application journal recovered and before runtime initialization.
+ * Only known committed history is reconciled; this never publishes new access. */
+export async function reconcileBotAllowList(): Promise<void> {
+  const [bots, receipts] = await Promise.all([botStore.list(), botApplicationService.botFolderApprovalReceipts()]);
+  await reconcileBotAllowListHistory(botAllowList, bots.map(bot => bot.id), receipts,
+    (_botId, error) => logger.warn("bots", "A Bot's approval history could not be reconciled.", error));
+}
+
 const toolSources = createBotToolSources({
+  policyRevision: async (botId) => (await botCapabilityStore.getBotPolicy(botId)).revision,
+  folderOffer: (botId, folder) => botAllowList.folderOffer(botId, folder),
   canonicalChatId,
   imageInput,
   admit,
   dismissals,
   botLacksConnection: (botId, sourceId) => botApplicationService.botLacksConnection(botId, sourceId),
   botName: async (botId) => (await botStore.get(botId))?.name,
+  planTools: {
+    plans: botPlans,
+    validate: (botId, input, call) => planAuthority.validate(botId, input, call),
+    access: {
+      scopeOf: (...args) => planAuthority.access.scopeOf(...args),
+      allowOnce: (...args) => planAuthority.access.allowOnce(...args),
+      revokePlan: (...args) => planAuthority.access.revokePlan(...args),
+    },
+    botName: async (botId) => (await botStore.get(botId))?.name,
+    botTurns: {
+      originOf: (ids) => {
+        for (const id of ids) {
+          const turn = botMessageTurnOf(id);
+          if (turn.kind === "message") return { originBotId: turn.fromBotId };
+        }
+        return undefined;
+      },
+      announceWaiting: async (...args) => {
+        try { return await botMessages().announceWaiting(...args); }
+        catch (error) {
+          logger.warn("bots", "The Bot plan's message delivery is unavailable.", error);
+          return undefined;
+        }
+      },
+    },
+  },
 });
 
+// Closures above are invoked only for a live tool call, after this wiring is
+// complete. Keep the process-wide plan bridge free of session import cycles.
+const planAuthority = createBotPlanAuthority({
+  admit,
+  facts: (botId, admission) => toolSources.facts(botId, admission),
+  rules: (botId) => botRules.rules(botId),
+  locations: botFileLocations,
+  resolveTarget: (requested) => resolveBotAccessTarget(requested, {
+    homeDirectory: os.homedir,
+    privateRoots: () => botAccessPrivateRoots(profileDir(), aidenConfigDir()),
+    approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state
+      .snapshot().then((state) => state.approvedRoots),
+  }),
+  runAccess: botRunAccess,
+});
+configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
+
 const tools = createBotToolAssembly({
+  allowList: botAllowList,
   admit,
   sources: toolSources,
   rules: (botId) => botRules.rules(botId),
   botName: async (botId) => (await botStore.get(botId))?.name,
   routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
+  plans: botPlans,
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
@@ -411,7 +476,12 @@ const extension: BotExtensionDeps = {
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
   afterReply: (botId) => memoryReview.afterReply(botId),
   beforeCompact: compactionSteering,
-  requestApproval: (request) => botApprovals.request(request),
+  settleApproval: (input, context) => botAllowList.settle(input, context),
+  requestApproval: async (request) => {
+    const window = await botMessages().announceWaiting(request.botId, request.owner?.inputs.map(i => i.requestId) ?? [], request.summary, request.waitId);
+    if (window?.expired) return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer: "deny", source: "expiry" };
+    return botApprovals.request(request);
+  },
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
   requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request, ruleHandoffTarget(request.toolName))),
   // Into the stopped call's own conversation, never through the harness host,
@@ -584,6 +654,23 @@ botHandoffs.onChange((botId) => {
   );
 });
 
+const stopAccessRequestProjection = botAccessRequests.onChange((botId) => {
+  void liveProjection?.refreshAccessRequest(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} access request view report.`, error),
+  );
+});
+
+const stopPlanProjection = botPlans.onChange((botId) => {
+  void liveProjection?.refreshPlan(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} plan view report.`, error),
+  );
+});
+
+const planLifecycle = createBotPlanLifecycle({
+  plans: botPlans,
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} plan lifecycle report.`, error),
+});
+
 // A card that opens while no Aiden window is focused also says so in a Mac
 // notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
 const handoffNotifier = createBotHandoffNotifier({
@@ -603,6 +690,21 @@ const handoffNotifier = createBotHandoffNotifier({
 });
 watchBotHandoffs(botHandoffs, handoffNotifier);
 
+const accessRequestNotifier = createBotHandoffNotifier({
+  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  show: ({ title, body, onClick }) => {
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({ title, body });
+    notification.on("click", onClick);
+    notification.show();
+  },
+  botName: async (botId) => (await botStore.get(botId))?.name,
+  onClick: async (botId) => { await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`); },
+  isPending: (botId, waitId) => botAccessRequests.get(botId, waitId) !== undefined,
+  onError: (stage) => logger.warn("bots", `Access request notification ${stage} failed.`),
+});
+const stopAccessRequestNotifications = watchBotAccessRequests(botAccessRequests, accessRequestNotifier);
+
 // An approval appearing or settling changes the line to and from "Waiting for you".
 botApprovals.onChange((botId) => {
   void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
@@ -613,10 +715,12 @@ botApprovals.onChange((botId) => {
 // "Needs you" in the Bots sidebar follows questions, approvals, hand-offs and
 // host-raised issues as they appear and settle; the renderer re-reads that
 // Bot's summary, whose open-issue check is the same file the card comes from.
-wireBotAttention({
+const stopBotAttention = wireBotAttention({
   questions: botQuestions,
   approvals: botApprovals,
   handoffs: botHandoffs,
+  accessRequests: botAccessRequests,
+  plans: botPlans,
   issues: botIssues,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
@@ -691,6 +795,7 @@ const runWatchdog = createBotRunWatchdog({
   },
   isWaitingOnPerson: (botId) =>
     botHandoffs.pending(botId).length > 0 ||
+    botAccessRequests.pending(botId).length > 0 ||
     botApprovals.pending(botId).length > 0 ||
     botQuestions.pending(botId).length > 0,
   // Held back only: a test request already sent can still hang, and the watchdog catches it.
@@ -752,11 +857,16 @@ export function botLiveProjection(): BotLiveProjection {
     quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
+    accessRequest: (botId) => botAccessRequests.pending(botId)[0] ?? null,
+    plan: (botId) => botPlans.current(botId),
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     issuePending: async (botId) => (await botIssues.list(botId, { open: true })).length > 0,
     connectCardStatus,
     runStarts: botRunStarts,
-    onRunSettled: broadcastState,
+    onRunSettled: (botId, state) => {
+      planLifecycle.settled(botId, state);
+      broadcastState(botId, state);
+    },
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
   });
   return liveProjection;
@@ -817,9 +927,12 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       },
       deleteRoutines,
       forgetDeliveries,
+      (botId) => botMessages().forgetBot(botId),
+      (botId) => { planLifecycle.forget(botId); return botPlans.forgetBot(botId); },
       (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
+      (botId) => botAllowList.forgetBot(botId),
       (botId) => botRules.forgetBot(botId),
       // Its computer stops and its VM is deleted before its home (the shared folder) goes.
       async (botId) => (await import("../bot-computers/bot-computers-main.js")).deleteBotComputer(botId),
@@ -829,7 +942,10 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     ],
     // Announced only here, after the session resumed, never by a route ahead of `resume`.
     onResumed: (botId) => botTurnIntents.announce(botId, "resuming"),
+    onStopped: (botId) => planLifecycle.stopped(botId),
     onStateChange: (botId, state) => {
+      if (botRunEnded(state)) botRunAccess.clearBot(botId);
+      planLifecycle.stateChanged(botId, state);
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
       for (const listener of stateListeners) {
@@ -858,6 +974,7 @@ export function initializeBotSessionRuntime(): Promise<void> {
   initialized ??= botSessionRuntime()
     .then(async (service) => {
       const { removedOrphans, interrupted } = await service.initialize();
+      await botMessages().start();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
       if (!watchingResume) {
@@ -877,7 +994,14 @@ export function initializeBotSessionRuntime(): Promise<void> {
 }
 
 export async function shutdownBotSessionRuntime(): Promise<void> {
+  stopPlanProjection();
+  planLifecycle.clear();
+  stopAccessRequestProjection();
+  stopAccessRequestNotifications();
+  stopBotAttention();
+  botRunAccess.clearAll();
   if (runtime === undefined) return;
+  await disposeBotMessages();
   const service = await runtime.catch(() => undefined);
   runtime = undefined;
   initialized = undefined;

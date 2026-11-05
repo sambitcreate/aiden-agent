@@ -429,6 +429,7 @@ private fun AidenBotsHomeContent(
         creating?.let { pending ->
             item(key = "creating") { AidenBotPendingCreateRow(pending.name, reduceMotion) }
         }
+        item(key = "bot-messaging") { AidenBotMessagingGlobalControl(coordinator) }
         when (contentState) {
             AidenBotsHomeContentState.LOADING -> item(key = "loading") { AidenBotHomeSkeleton(reduceMotion) }
             AidenBotsHomeContentState.ERROR -> item(key = "error") {
@@ -499,6 +500,7 @@ private fun AidenBotsHomeContent(
 
     advancedBot?.let { bot ->
         AidenBotAdvancedSheet(
+            messagingCoordinator = coordinator,
             bot = bot,
             client = advancedClient,
             onDismiss = {

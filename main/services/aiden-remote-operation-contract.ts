@@ -56,6 +56,19 @@ export class AidenOperationNotExecutedError extends Error {
   }
 }
 
+/**
+ * The effect may have committed, but the action has its own durable, exact
+ * operation receipt and can safely reconcile/replay without repeating it.
+ * Only use when the underlying operation ID survives ledger admission expiry
+ * and replay cannot restore authority the person subsequently removed.
+ */
+export class AidenOperationReplaySafeRetryError extends Error {
+  constructor(readonly cause: unknown) {
+    super("The operation can safely reconcile its own durable receipt on retry.");
+    this.name = "AidenOperationReplaySafeRetryError";
+  }
+}
+
 export interface AidenIdempotencySnapshotEntry {
   scopeDigest: string;
   requestDigest: string;
@@ -752,6 +765,12 @@ export class AidenIdempotencyLedger {
           }
           if (error instanceof AidenOperationNotExecutedError) {
             // Nothing ran: no rejection is recorded, so the same key re-evaluates next time.
+            if (this.entries.get(ledgerKey) === entry) this.entries.delete(ledgerKey);
+            throw error.cause;
+          }
+          if (error instanceof AidenOperationReplaySafeRetryError) {
+            // The action owns durable replay protection independently of this
+            // ledger. Let its next attempt reconcile the exact receipt.
             if (this.entries.get(ledgerKey) === entry) this.entries.delete(ledgerKey);
             throw error.cause;
           }

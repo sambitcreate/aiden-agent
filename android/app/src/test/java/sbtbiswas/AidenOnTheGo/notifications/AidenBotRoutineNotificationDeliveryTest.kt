@@ -119,4 +119,18 @@ class AidenBotRoutineNotificationDeliveryTest {
     fun eachRunIsTaggedByItsRunId() {
         assertEquals("aiden.bot-routine.run_fixture_bot_01", AidenBotRoutineNotificationDelivery.tag(fixtureRun))
     }
+
+    @Test
+    fun messageNotificationTapOpensItsBotAndRedactedPreviewStaysRedacted() = runTest {
+        val item = AidenBotWireJson.json.decodeFromString(AidenBotRoutineNotification.serializer(),
+            """{"id":"message_1","kind":"message","botId":"bot_fixture_01","botName":"COS","routineName":"COS replied","finishedAt":"2026-11-03T12:00:00.000Z","preview":"[redacted]"}""")
+        val ledger = MemoryLedger().apply { cursors["mac-1"] = Instant.parse("2026-11-03T11:59:00Z") }
+        val posted = mutableListOf<AidenBotRoutineNotification>()
+        val delivery = AidenBotRoutineNotificationDelivery(ledger) { _, message -> posted += message; true }
+        assertEquals(1, delivery.deliver("mac-1") { feed("2026-11-03T12:01:00Z", item) })
+        assertEquals("[redacted]", posted.single().preview)
+        assertEquals(AidenDeepLink.botChatUrl("bot_fixture_01", "mac-1"), AidenBotRoutineNotificationDelivery.chatUrl("mac-1", item))
+        assertEquals(0, delivery.deliver("mac-1") { feed("2026-11-03T12:02:00Z", item) })
+        assertEquals(1, posted.size)
+    }
 }

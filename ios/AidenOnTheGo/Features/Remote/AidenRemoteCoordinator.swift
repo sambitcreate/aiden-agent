@@ -148,11 +148,18 @@ struct AidenRemoteRequestContext: Equatable, Hashable, Sendable {
     let instanceId: String
     let deviceId: String
     fileprivate let generation: Int
+
+    init(instanceId: String, deviceId: String, generation: Int) {
+        self.instanceId = instanceId
+        self.deviceId = deviceId
+        self.generation = generation
+    }
 }
 
 @MainActor
 @Observable
 final class AidenRemoteCoordinator {
+    let botMessaging = AidenBotMessagingModel()
     typealias ClientFactory = (AidenInstallation, String) throws -> AidenRemoteClient
 
     private struct ActiveClientKey: Equatable {
@@ -855,6 +862,10 @@ final class AidenRemoteCoordinator {
         [.chatJobs],
         [.attachmentsRaw],
         [.chatNewWorktree],
+        [.botMessaging],
+        [.botAccessRequests],
+        [.botPlans],
+        [.botAllowed],
     ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
