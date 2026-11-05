@@ -161,13 +161,21 @@ export function createComputerUseAccessGate(
     }
   };
 
-  const setPending = (pending: boolean) =>
-    persist(
+  // Whether this gate has marked the chat. Readiness alone cannot say: setup can
+  // finish between calls, leaving a marker on a call that sees a ready Mac.
+  let marked = false;
+  const setPending = (pending: boolean) => {
+    marked = pending;
+    return persist(
       pending
         ? "Could not mark the chat to continue Computer Use."
         : "Could not clear the chat's Computer Use continue marker.",
       () => deps.setPendingContinue(pending),
     );
+  };
+  const clearPending = async () => {
+    if (marked) await setPending(false);
+  };
 
   const decideAgain = (
     toolCallId: string,
@@ -213,6 +221,8 @@ export function createComputerUseAccessGate(
     if (revision !== grantRevision) return decideAgain(toolCallId, signal, attempt);
     if (grantedAt === revision) {
       if (status.ready) {
+        await clearPending();
+        if (revision !== grantRevision) return decideAgain(toolCallId, signal, attempt);
         establishedAt = revision;
         return { allowed: true };
       }
@@ -253,17 +263,19 @@ export function createComputerUseAccessGate(
       // after setup (and a restart, if macOS needs one).
       if (!current.ready)
         return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
-      if (!status.ready) await setPending(false);
+      // A revoked allow goes back through a decision, which owns the marker.
+      if (answeredAt !== grantRevision) return decideAgain(toolCallId, signal, attempt);
+      await clearPending();
       if (answeredAt !== grantRevision) return decideAgain(toolCallId, signal, attempt);
       establishedAt = answeredAt;
       return { allowed: true };
     }
     if (outcome === "denied") {
       declined = true;
-      if (!status.ready) await setPending(false);
+      await clearPending();
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
     }
-    if (outcome === "cancelled" && !status.ready) {
+    if (outcome === "cancelled" && marked) {
       // Keep the marker across an app quit so the chat can offer Continue
       // after restart; a user Stop ends the request.
       const origin = deps.cancellationOrigin();

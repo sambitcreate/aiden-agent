@@ -303,6 +303,59 @@ test("Stop during a setup card clears the continue marker", async (t) => {
   assert.equal(stored?.computerUseAllowed, undefined);
 });
 
+test("finishing setup clears the continue marker when the next call passes on the saved grant", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  await d.chatStore.setComputerUseAllowed(chat.id, true);
+  d.setStatus(NEEDS_PERMISSIONS);
+  const { gate } = d.stream(chat.id);
+
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, true);
+
+  d.setStatus(READY);
+  assert.deepEqual(await gate.authorize("call-2"), { allowed: true });
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, undefined);
+});
+
+test("a deny after setup finished clears the marker an earlier call in the response set", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  d.setStatus(NEEDS_PERMISSIONS);
+  d.willAnswer(true);
+  const { gate } = d.stream(chat.id);
+  // The bare allow lapses for the next call once this revocation lands.
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, true);
+
+  revokeComputerUseGrants();
+  d.setStatus(READY);
+  d.willAnswer(false);
+  assert.deepEqual(await gate.authorize("call-2"), {
+    allowed: false,
+    reason: COMPUTER_USE_DECLINED_REASON,
+  });
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, undefined);
+});
+
+test("Stop on a later card clears the marker even though setup has since finished", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  d.setStatus(NEEDS_PERMISSIONS);
+  d.willAnswer(true);
+  const { gate, streamId } = d.stream(chat.id);
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+
+  revokeComputerUseGrants();
+  d.setStatus(READY);
+  d.willWait();
+  const pending = gate.authorize("call-2");
+  while (d.cards.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  d.cancel(streamId, "user_stop");
+  assert.equal((await pending).allowed, false);
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, undefined);
+});
+
 test("once a response runs Computer Use on a ready Mac, later calls skip the readiness probe", async (t) => {
   const d = await desktop(t);
   const chat = await d.chatStore.create({ title: "Notes" });
