@@ -4,6 +4,7 @@
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
+import { FrameTitle } from "./frame-title";
 import { DESIGN_CANVAS_LIMITS } from "../../shared/design-canvas/schema";
 import type { DesignNode } from "../canvas-adapter-core";
 import { useDesignNodeContext } from "./design-node-context";
@@ -25,7 +26,7 @@ export function NoteNode({ id, data, selected }: NodeProps<DesignNode>) {
   return (
     <>
       <DesignNodeResizer selected={selected} />
-      <CanvasNodeChrome title={frame.title} selected={selected} flush>
+      <CanvasNodeChrome title={frame.title} titleSlot={<FrameTitle frame={frame} />} selected={selected} flush>
         <textarea
           ref={field}
           aria-label="Note text"

@@ -312,6 +312,7 @@ export function ShortcutSettings() {
   );
   const sheetBinding = shortcuts.data.effective["shortcuts.show"];
   const builtIn = BUILT_IN_KEYS.filter((entry) => {
+    if (entry.requiresCapability && !capabilities[entry.requiresCapability]) return false;
     if (!normalizedQuery) return true;
     return [
       entry.title,

@@ -5,6 +5,7 @@ import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { DesignCanvasRegion } from "./design-canvas-region";
+import { emptyDesignCanvas } from "../shared/design-canvas/schema";
 import { DESIGN_CANVAS_EMPTY_COPY } from "./design-canvas-empty";
 
 // The lazy canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
@@ -20,7 +21,7 @@ afterEach(() => cleanup());
 // Must run first in this file: once the lazy chunk has loaded, React never shows the fallback again.
 test("while the canvas chunk loads, the region shows a neutral loading state, not the empty canvas", async () => {
   installBotTestIpc({
-    "designCanvas:get": () => ({ version: 1, revision: 0, viewport: { x: 0, y: 0, zoom: 1 }, frames: [], comments: [] }),
+    "designCanvas:get": () => emptyDesignCanvas(),
   });
   render(<DesignCanvasRegion chatId="chat-1" width={800} placement="split" hidden={false} />);
 

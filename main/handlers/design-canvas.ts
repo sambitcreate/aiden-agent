@@ -6,7 +6,7 @@ import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
   isDesignRelativePath,
-  type DesignCanvasV1,
+  type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
@@ -129,7 +129,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       throw new Error("Invalid canvas revision.");
     }
     const chat = await requireChat(chatId);
-    const result = await deps.store.save(chat.id, doc as DesignCanvasV1, baseRevision);
+    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision);
     if (result.ok) deps.broadcast({ chatId: chat.id, revision: result.revision });
     return result;
   });

@@ -1,8 +1,10 @@
-// The per-chat design canvas document (version 1) and its parser.
+// The per-chat design canvas document (version 2) and its parser.
 //
 // Pure on purpose: the renderer, main and the CLI bundle all import it, so it
-// must not touch Node. Every reader goes through `parseDesignCanvasV1`, which
+// must not touch Node. Every reader goes through `parseDesignCanvas`, which
 // clamps boxes, drops frames it cannot trust and reports how many it dropped.
+// It also reads version 1 documents (one page, no page ids) and returns them
+// as version 2, so the next save writes the new shape.
 
 export type DesignFrameKind = "file" | "artifact" | "image" | "note" | "group";
 export type DesignWidth = 390 | 768 | 1280 | 1440;
@@ -23,6 +25,8 @@ export type DesignFrame = {
   mediaId?: string;
   /** note. */
   text?: string;
+  /** The page the frame is on. */
+  pageId: string;
   createdBy: "person" | "aiden";
 };
 
@@ -36,6 +40,8 @@ export type DesignCommentAnchor = {
 
 export type DesignComment = {
   id: string;
+  /** The page the comment is on. */
+  pageId: string;
   frameId?: string;
   x: number;
   y: number;
@@ -47,10 +53,18 @@ export type DesignComment = {
   createdAt: string;
 };
 
-export type DesignCanvasV1 = {
-  version: 1;
+export type DesignViewport = { x: number; y: number; zoom: number };
+
+/** A page of the canvas: its own name and its own place to look at. */
+export type DesignPage = { id: string; name: string; viewport: DesignViewport };
+
+export type DesignCanvas = {
+  version: 2;
   revision: number;
-  viewport: { x: number; y: number; zoom: number };
+  /** At least one, in the order the page picker lists them. */
+  pages: DesignPage[];
+  /** The page on screen; always one of `pages`. */
+  activePageId: string;
   frames: DesignFrame[];
   comments: DesignComment[];
 };
@@ -58,6 +72,8 @@ export type DesignCanvasV1 = {
 export const DESIGN_CANVAS_LIMITS = {
   frames: 200,
   comments: 500,
+  pages: 50,
+  pageNameChars: 60,
   minSize: 40,
   maxSize: 8000,
   maxCoord: 1_000_000,
@@ -87,11 +103,43 @@ const MAX_MARKS = 64;
 const MAX_MARK_POINTS = 2000;
 
 export type DesignCanvasParseResult =
-  | { ok: true; doc: DesignCanvasV1; dropped: number }
+  | { ok: true; doc: DesignCanvas; dropped: number }
   | { ok: false; issues: string[] };
 
-export function emptyDesignCanvas(): DesignCanvasV1 {
-  return { version: 1, revision: 0, viewport: { x: 0, y: 0, zoom: 1 }, frames: [], comments: [] };
+/** The id of the page a version 1 document becomes, and of a new canvas's first page. */
+export const DESIGN_FIRST_PAGE_ID = "page-1";
+
+export function emptyDesignCanvas(): DesignCanvas {
+  return {
+    version: 2,
+    revision: 0,
+    pages: [{ id: DESIGN_FIRST_PAGE_ID, name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } }],
+    activePageId: DESIGN_FIRST_PAGE_ID,
+    frames: [],
+    comments: [],
+  };
+}
+
+/** The page on screen. */
+export function activeDesignPage(doc: DesignCanvas): DesignPage {
+  return doc.pages.find((page) => page.id === doc.activePageId) ?? doc.pages[0]!;
+}
+
+/** The frames on one page (the page on screen by default), in document order. */
+export function framesOnPage(doc: DesignCanvas, pageId: string = doc.activePageId): DesignFrame[] {
+  return doc.frames.filter((frame) => frame.pageId === pageId);
+}
+
+/** The document with the page on screen looking at `viewport`. */
+export function withActiveViewport(doc: DesignCanvas, viewport: DesignViewport): DesignCanvas {
+  const page = activeDesignPage(doc);
+  if (page.viewport.x === viewport.x && page.viewport.y === viewport.y && page.viewport.zoom === viewport.zoom) {
+    return doc;
+  }
+  return {
+    ...doc,
+    pages: doc.pages.map((entry) => (entry.id === page.id ? { ...entry, viewport: { ...viewport } } : entry)),
+  };
 }
 
 /**
@@ -109,10 +157,10 @@ export function isDesignRelativePath(value: unknown): value is string {
   return value.split("/").every((segment) => segment.length > 0 && !segment.startsWith("."));
 }
 
-export function parseDesignCanvasV1(value: unknown): DesignCanvasParseResult {
+export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   if (!isRecord(value)) return { ok: false, issues: ["The canvas document is not an object."] };
   const issues: string[] = [];
-  if (value.version !== 1) issues.push("The canvas document is not version 1.");
+  if (value.version !== 1 && value.version !== 2) issues.push("The canvas document is not version 1 or 2.");
   const revision = value.revision;
   if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
     issues.push("The canvas revision is not a non-negative integer.");
@@ -122,10 +170,24 @@ export function parseDesignCanvasV1(value: unknown): DesignCanvasParseResult {
   if (issues.length > 0) return { ok: false, issues };
 
   let dropped = 0;
+  // A version 1 document is one page looking where the document looked.
+  const pages =
+    value.version === 1
+      ? [{ id: DESIGN_FIRST_PAGE_ID, name: "Page 1", viewport: parseViewport(value.viewport) }]
+      : parsePages(value.pages);
+  const pageIds = new Set(pages.map((page) => page.id));
+  const firstPageId = pages[0]!.id;
+  const pageOf = (raw: unknown) => {
+    const id = isRecord(raw) ? identifier(raw.pageId) : undefined;
+    return id && pageIds.has(id) ? id : firstPageId;
+  };
+  const activePageId =
+    typeof value.activePageId === "string" && pageIds.has(value.activePageId) ? value.activePageId : firstPageId;
+
   const frames: DesignFrame[] = [];
   const frameIds = new Set<string>();
   for (const raw of value.frames as unknown[]) {
-    const frame = frames.length < DESIGN_CANVAS_LIMITS.frames ? parseFrame(raw) : null;
+    const frame = frames.length < DESIGN_CANVAS_LIMITS.frames ? parseFrame(raw, pageOf(raw)) : null;
     if (!frame || frameIds.has(frame.id)) {
       dropped += 1;
       continue;
@@ -133,24 +195,31 @@ export function parseDesignCanvasV1(value: unknown): DesignCanvasParseResult {
     frameIds.add(frame.id);
     frames.push(frame);
   }
-  const groupIds = new Set(
-    frames.filter((frame) => frame.kind === "group").map((frame) => frame.id),
+  // A frame belongs to a group on its own page only.
+  const groupPages = new Map(
+    frames.filter((frame) => frame.kind === "group").map((frame) => [frame.id, frame.pageId]),
   );
   for (const frame of frames) {
-    if (frame.groupId !== undefined && (frame.kind === "group" || !groupIds.has(frame.groupId))) {
+    if (
+      frame.groupId !== undefined &&
+      (frame.kind === "group" || groupPages.get(frame.groupId) !== frame.pageId)
+    ) {
       delete frame.groupId;
     }
   }
+  const framePages = new Map(frames.map((frame) => [frame.id, frame.pageId]));
 
   const comments: DesignComment[] = [];
   const commentIds = new Set<string>();
   for (const raw of value.comments as unknown[]) {
-    const comment = comments.length < DESIGN_CANVAS_LIMITS.comments ? parseComment(raw) : null;
+    const comment = comments.length < DESIGN_CANVAS_LIMITS.comments ? parseComment(raw, pageOf(raw)) : null;
     if (!comment || commentIds.has(comment.id)) {
       dropped += 1;
       continue;
     }
     if (comment.frameId !== undefined && !frameIds.has(comment.frameId)) delete comment.frameId;
+    // A comment on a frame is on that frame's page.
+    if (comment.frameId !== undefined) comment.pageId = framePages.get(comment.frameId)!;
     commentIds.add(comment.id);
     comments.push(comment);
   }
@@ -158,9 +227,10 @@ export function parseDesignCanvasV1(value: unknown): DesignCanvasParseResult {
   return {
     ok: true,
     doc: {
-      version: 1,
+      version: 2,
       revision: revision as number,
-      viewport: parseViewport(value.viewport),
+      pages,
+      activePageId,
       frames,
       comments,
     },
@@ -168,7 +238,32 @@ export function parseDesignCanvasV1(value: unknown): DesignCanvasParseResult {
   };
 }
 
-function parseViewport(value: unknown): DesignCanvasV1["viewport"] {
+/** The pages of a version 2 document; never empty, and ids are unique. */
+function parsePages(value: unknown): DesignPage[] {
+  const pages: DesignPage[] = [];
+  const ids = new Set<string>();
+  if (Array.isArray(value)) {
+    for (const raw of value) {
+      if (pages.length >= DESIGN_CANVAS_LIMITS.pages) break;
+      if (!isRecord(raw)) continue;
+      const id = identifier(raw.id);
+      if (!id || ids.has(id)) continue;
+      ids.add(id);
+      pages.push({ id, name: pageName(raw.name, pages.length), viewport: parseViewport(raw.viewport) });
+    }
+  }
+  if (pages.length === 0) {
+    pages.push({ id: DESIGN_FIRST_PAGE_ID, name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } });
+  }
+  return pages;
+}
+
+function pageName(value: unknown, index: number): string {
+  const name = typeof value === "string" ? value.trim().slice(0, DESIGN_CANVAS_LIMITS.pageNameChars) : "";
+  return name || `Page ${index + 1}`;
+}
+
+function parseViewport(value: unknown): DesignViewport {
   if (!isRecord(value)) return { x: 0, y: 0, zoom: 1 };
   const zoom = finite(value.zoom);
   return {
@@ -181,7 +276,7 @@ function parseViewport(value: unknown): DesignCanvasV1["viewport"] {
   };
 }
 
-function parseFrame(value: unknown): DesignFrame | null {
+function parseFrame(value: unknown, pageId: string): DesignFrame | null {
   if (!isRecord(value)) return null;
   const id = identifier(value.id);
   const kind = value.kind;
@@ -200,6 +295,7 @@ function parseFrame(value: unknown): DesignFrame | null {
     y: clampCoord(y),
     w: clampSize(w),
     h: clampSize(h),
+    pageId,
     createdBy: value.createdBy === "aiden" ? "aiden" : "person",
   };
   const groupId = identifier(value.groupId);
@@ -223,7 +319,7 @@ function parseFrame(value: unknown): DesignFrame | null {
   return frame;
 }
 
-function parseComment(value: unknown): DesignComment | null {
+function parseComment(value: unknown, pageId: string): DesignComment | null {
   if (!isRecord(value)) return null;
   const id = identifier(value.id);
   const x = finite(value.x);
@@ -236,6 +332,7 @@ function parseComment(value: unknown): DesignComment | null {
     return null;
   const comment: DesignComment = {
     id,
+    pageId,
     x: clampCoord(x),
     y: clampCoord(y),
     note: value.note.slice(0, DESIGN_CANVAS_LIMITS.noteChars),

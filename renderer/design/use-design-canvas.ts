@@ -18,16 +18,16 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush } from "../lib/lifecycle-guard";
-import type { DesignCanvasV1 } from "../shared/design-canvas/schema";
+import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
 
 export const DESIGN_CANVAS_SAVE_DELAY_MS = 800;
 
-type Mutation = (doc: DesignCanvasV1) => DesignCanvasV1;
+type Mutation = (doc: DesignCanvas) => DesignCanvas;
 export type DesignCanvasStatus = "loading" | "ready" | "saving" | "error";
 
 interface SyncState {
-  doc: DesignCanvasV1 | undefined;
+  doc: DesignCanvas | undefined;
   status: DesignCanvasStatus;
   canUndo: boolean;
   canRedo: boolean;
@@ -45,8 +45,8 @@ const EMPTY_HISTORY: CanvasHistory = { past: [], future: [] };
 
 function createCanvasSync(chatId: string, publish: (state: SyncState) => void): CanvasSync {
   /** The last canvas the store confirmed: the base every save is made from. */
-  let server: DesignCanvasV1 | null = null;
-  let local: DesignCanvasV1 | null = null;
+  let server: DesignCanvas | null = null;
+  let local: DesignCanvas | null = null;
   /** Edits not yet confirmed, oldest first; replayed onto the stored canvas after a conflict. */
   let unsent: Mutation[] = [];
   let inFlight: Promise<void> | null = null;
@@ -66,7 +66,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       canRedo: history.future.length > 0,
     });
   };
-  const replay = (base: DesignCanvasV1, edits: Mutation[]) => edits.reduce((doc, edit) => edit(doc), base);
+  const replay = (base: DesignCanvas, edits: Mutation[]) => edits.reduce((doc, edit) => edit(doc), base);
   const cancelTimer = () => {
     if (timer === null) return;
     clearTimeout(timer);
@@ -128,7 +128,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     if (unsent.length === 0 && timer === null && server && announced > server.revision) refetch();
   };
 
-  const apply = (mutate: Mutation, before: DesignCanvasV1 | null, nextHistory: CanvasHistory) => {
+  const apply = (mutate: Mutation, before: DesignCanvas | null, nextHistory: CanvasHistory) => {
     if (!local) return;
     const next = mutate(local);
     if (next === local) return;
@@ -212,7 +212,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
 }
 
 export function useDesignCanvas(chatId: string): {
-  doc: DesignCanvasV1 | undefined;
+  doc: DesignCanvas | undefined;
   status: DesignCanvasStatus;
   change(mutate: Mutation, opts?: { record?: boolean }): void;
   undo(): void;

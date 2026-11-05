@@ -4,7 +4,7 @@
 
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
-import { DESIGN_CANVAS_LIMITS, type DesignCanvasV1 } from "../../../renderer/shared/design-canvas/schema.js";
+import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
 import type { DesignCanvasStore } from "./store.js";
 
 /** An artifact frame's box when it first lands, in canvas units. */
@@ -20,10 +20,10 @@ export type CanvasArtifact = { mediaId: string; title: string };
  * the caller saves and broadcasts only real changes.
  */
 export function placeArtifactFrames(
-  doc: DesignCanvasV1,
+  doc: DesignCanvas,
   artifacts: readonly CanvasArtifact[],
   newId: () => string,
-): { doc: DesignCanvasV1; changed: boolean } {
+): { doc: DesignCanvas; changed: boolean } {
   let next = doc;
   let changed = false;
   for (const artifact of artifacts) {

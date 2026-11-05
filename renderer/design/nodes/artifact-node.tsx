@@ -5,6 +5,7 @@
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
+import { FrameTitle } from "./frame-title";
 import { HtmlArtifactIframe } from "../../components/html-artifact-frame";
 import { readGenerativeUiTheme } from "../../lib/generative-ui-theme-snapshot";
 import { chatsApi } from "../../lib/ipc";
@@ -68,7 +69,7 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
     <>
       <DesignNodeResizer selected={selected} />
       <div className="h-full w-full" onDoubleClick={() => canvas.enter(id)}>
-        <CanvasNodeChrome title={frame.title} selected={selected} flush>
+        <CanvasNodeChrome title={frame.title} titleSlot={<FrameTitle frame={frame} />} selected={selected} flush>
           <div ref={contentRef} className="h-full w-full overflow-hidden rounded-b-button">
             {body}
           </div>

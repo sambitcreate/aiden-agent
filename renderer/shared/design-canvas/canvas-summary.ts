@@ -2,7 +2,7 @@
 // and the one-line summary in the design mode prompt section. Pure, so main
 // and tests share it.
 
-import type { DesignCanvasV1, DesignFrame } from "./schema.js";
+import { activeDesignPage, type DesignCanvas, type DesignFrame } from "./schema.js";
 
 /**
  * The part of the canvas a person sees, in canvas units. Main does not know
@@ -29,8 +29,14 @@ export type CanvasFrameSummary = {
   openComments?: number;
 };
 
+export type CanvasPageSummary = { id: string; name: string; frames: number; onScreen: boolean };
+
 export type CanvasReadAnswer = {
   units: "canvas";
+  /** The page described below. */
+  page: { id: string; name: string };
+  /** Every page, in order; the person sees the one marked `onScreen`. */
+  pages: CanvasPageSummary[];
   view: CanvasView;
   frameCount: number;
   openComments: number;
@@ -41,12 +47,17 @@ export type CanvasReadAnswer = {
   omitted: number;
 };
 
-/** The canvas area the stored viewport shows, in canvas units. */
-export function canvasView(doc: DesignCanvasV1, size: { w: number; h: number } = DESIGN_REFERENCE_VIEW): CanvasView {
-  const zoom = doc.viewport.zoom || 1;
+/** The canvas area a page's stored viewport shows (the page on screen by default), in canvas units. */
+export function canvasView(
+  doc: DesignCanvas,
+  size: { w: number; h: number } = DESIGN_REFERENCE_VIEW,
+  pageId: string = doc.activePageId,
+): CanvasView {
+  const viewport = (doc.pages.find((page) => page.id === pageId) ?? activeDesignPage(doc)).viewport;
+  const zoom = viewport.zoom || 1;
   return {
-    x: Math.round(-doc.viewport.x / zoom) + 0,
-    y: Math.round(-doc.viewport.y / zoom) + 0,
+    x: Math.round(-viewport.x / zoom) + 0,
+    y: Math.round(-viewport.y / zoom) + 0,
     w: Math.round(size.w / zoom),
     h: Math.round(size.h / zoom),
   };
@@ -56,7 +67,7 @@ function overlaps(frame: DesignFrame, view: CanvasView): boolean {
   return frame.x < view.x + view.w && view.x < frame.x + frame.w && frame.y < view.y + view.h && view.y < frame.y + frame.h;
 }
 
-function openCommentCounts(doc: DesignCanvasV1): Map<string, number> {
+function openCommentCounts(doc: DesignCanvas): Map<string, number> {
   const counts = new Map<string, number>();
   for (const comment of doc.comments) {
     if (comment.state !== "open" || !comment.frameId) continue;
@@ -80,12 +91,22 @@ export function summarizeFrame(frame: DesignFrame, openComments = 0): CanvasFram
   };
 }
 
-export function describeCanvas(doc: DesignCanvasV1, view: CanvasView = canvasView(doc)): CanvasReadAnswer {
+/**
+ * One page of the canvas (the page on screen by default), as `canvas_read`
+ * answers: what the stored view shows in detail and the rest in counts.
+ */
+export function describeCanvas(
+  doc: DesignCanvas,
+  options: { pageId?: string; view?: CanvasView } = {},
+): CanvasReadAnswer {
+  const page = doc.pages.find((entry) => entry.id === options.pageId) ?? activeDesignPage(doc);
+  const view = options.view ?? canvasView(doc, DESIGN_REFERENCE_VIEW, page.id);
+  const frames = doc.frames.filter((frame) => frame.pageId === page.id);
   const comments = openCommentCounts(doc);
-  const visible = doc.frames.filter((frame) => overlaps(frame, view));
+  const visible = frames.filter((frame) => overlaps(frame, view));
   const outside = new Map<string, { groupId: string; title: string; frames: number }>();
-  const titles = new Map(doc.frames.filter((frame) => frame.kind === "group").map((frame) => [frame.id, frame.title]));
-  for (const frame of doc.frames) {
+  const titles = new Map(frames.filter((frame) => frame.kind === "group").map((frame) => [frame.id, frame.title]));
+  for (const frame of frames) {
     if (overlaps(frame, view)) continue;
     const groupId = frame.kind === "group" ? frame.id : (frame.groupId ?? "ungrouped");
     const entry = outside.get(groupId) ?? {
@@ -98,9 +119,16 @@ export function describeCanvas(doc: DesignCanvasV1, view: CanvasView = canvasVie
   }
   return {
     units: "canvas",
+    page: { id: page.id, name: page.name },
+    pages: doc.pages.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      frames: doc.frames.filter((frame) => frame.pageId === entry.id).length,
+      onScreen: entry.id === doc.activePageId,
+    })),
     view,
-    frameCount: doc.frames.length,
-    openComments: doc.comments.filter((comment) => comment.state === "open").length,
+    frameCount: frames.length,
+    openComments: doc.comments.filter((comment) => comment.state === "open" && comment.pageId === page.id).length,
     inView: visible.slice(0, CANVAS_READ_FRAME_LIMIT).map((frame) => summarizeFrame(frame, comments.get(frame.id))),
     outsideView: [...outside.values()],
     omitted: Math.max(0, visible.length - CANVAS_READ_FRAME_LIMIT),
@@ -108,13 +136,16 @@ export function describeCanvas(doc: DesignCanvasV1, view: CanvasView = canvasVie
 }
 
 /** The canvas in one line, for the design mode prompt section. */
-export function canvasPromptLine(doc: DesignCanvasV1): string {
+export function canvasPromptLine(doc: DesignCanvas): string {
   const frames = doc.frames.length;
   const open = doc.comments.filter((comment) => comment.state === "open").length;
-  if (frames === 0) return "The canvas is empty.";
-  const pages = doc.frames.filter((frame) => frame.kind === "file").length;
+  const onScreen = activeDesignPage(doc).name;
+  const where =
+    doc.pages.length > 1 ? ` It has ${doc.pages.length} pages; the person is looking at "${onScreen}".` : "";
+  if (frames === 0) return `The canvas is empty.${where}`;
+  const files = doc.frames.filter((frame) => frame.kind === "file").length;
   const parts = [`${frames} ${frames === 1 ? "frame" : "frames"}`];
-  if (pages > 0) parts.push(`${pages} ${pages === 1 ? "page" : "pages"}`);
+  if (files > 0) parts.push(`${files} HTML ${files === 1 ? "file" : "files"}`);
   parts.push(`${open} open ${open === 1 ? "comment" : "comments"}`);
-  return `The canvas has ${parts.join(", ")}.`;
+  return `The canvas has ${parts.join(", ")}.${where}`;
 }

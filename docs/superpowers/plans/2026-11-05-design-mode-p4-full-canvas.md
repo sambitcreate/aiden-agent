@@ -1,6 +1,6 @@
 # Design mode P4: the full canvas
 
-Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. In progress from P4a. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
+Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 (awaiting the owner's screenshot OK); P4e next. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
 
 **Goal:** the canvas does everything in the owner's 2026-11-05 reference screenshots of a design canvas (owner chose "add everything shown"). That is the original P4 (point, comment, draw, and send comments to Aiden) plus:
 - drawing tools;
@@ -44,7 +44,7 @@ Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. 
 
 ## Document schema v2
 
-One migration, done in P4a, so later slices only add fields.
+One migration, done in P4a, so later slices only add fields. P4a added only the page fields; the new kinds, frame fields and caps below arrive with the slices that use them, as optional fields the version 2 parser learns to read.
 
 - `version: 2`, read-migrated from v1, written as v2 only.
 - `pages: { id; name; viewport }[]`, at least one. Frames and comments get a `pageId`. v1 documents migrate to one page named "Page 1".
@@ -75,6 +75,13 @@ Each slice lands as its own commits with behavioral tests, then screenshots for 
 - Rename: double-click a frame's title, or F2.
 - Schema v2 migration.
 - Aiden tools: `canvas_read` and `canvas_place_frame` take an optional `page`, and `canvas_read` lists the pages.
+
+As built (2026-11-05):
+- `renderer/shared/design-canvas/pages.ts` holds the page edits (add after the page on screen, rename, duplicate with remapped groups, delete with its frames and comments, move, move frames to a page). Each page keeps its own view; panning is not an undo step, and undo restores page names and order but leaves each page's view where it is.
+- The toolbar (`renderer/design/design-toolbar.tsx`) has the page picker, Select, Hand, Note (`N`) and Add (Group, File…, Image…). Text, Frame, Draw and Shape join it in P4b, so it shows only tools that work today. `StudioCanvas` gained an additive `toolbar` prop; Create Images keeps its rail. The zoom controls stay at the bottom right: at the top right they sat under the Linux window controls.
+- Deleting a page shows a toast with Undo. `canvas_focus` on a frame on another page brings that page on screen first.
+- The Keyboard Shortcuts list (⌘/) and Settings show a **Design canvas** section while design mode is available.
+- Frame caps stay at 200 until P4b brings small elements.
 
 ### P4b: drawing tools
 

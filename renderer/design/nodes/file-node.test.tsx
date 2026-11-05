@@ -26,6 +26,7 @@ function page(overrides: Partial<DesignFrame> = {}): DesignFrame {
     h: 436,
     path: "design/hero page.html",
     designWidth: 1280,
+    pageId: "page-1",
     createdBy: "aiden",
     ...overrides,
   };

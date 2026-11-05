@@ -5,7 +5,7 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   emptyDesignCanvas,
-  type DesignCanvasV1,
+  type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { DesignCanvasStore } from "./store.js";
@@ -16,12 +16,12 @@ async function tempRoot(t: TestContext): Promise<string> {
   return path.join(root, "design-canvases");
 }
 
-function withNote(doc: DesignCanvasV1, id: string): DesignCanvasV1 {
+function withNote(doc: DesignCanvas, id: string): DesignCanvas {
   return {
     ...doc,
     frames: [
       ...doc.frames,
-      { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: id, createdBy: "person" },
+      { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: id, pageId: "page-1", createdBy: "person" },
     ],
   };
 }
@@ -97,14 +97,14 @@ test("update runs in order with saves on the same chat", async (t) => {
 test("update refuses a mutation that yields an invalid document", async (t) => {
   const root = await tempRoot(t);
   const store = new DesignCanvasStore({ root: () => root });
-  await assert.rejects(store.update("chat-1", () => ({ version: 2 }) as unknown as DesignCanvasV1));
+  await assert.rejects(store.update("chat-1", () => ({ version: 2 }) as unknown as DesignCanvas));
   assert.equal((await store.get("chat-1")).revision, 0);
 });
 
 test("a save of an invalid document is refused with its issues", async (t) => {
   const root = await tempRoot(t);
   const store = new DesignCanvasStore({ root: () => root });
-  const result = await store.save("chat-1", { version: 2 } as unknown as DesignCanvasV1, 0);
+  const result = await store.save("chat-1", { version: 2 } as unknown as DesignCanvas, 0);
   assert.equal(result.ok, false);
   if (result.ok || result.reason !== "invalid") return assert.fail("expected invalid");
   assert.ok(result.issues.length > 0);

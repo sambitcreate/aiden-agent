@@ -9,7 +9,7 @@ import type { Node, NodeChange } from "@xyflow/react";
 import { clampCoord, clampSize } from "../shared/design-canvas/placement";
 import {
   DESIGN_CANVAS_LIMITS,
-  type DesignCanvasV1,
+  type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
 
@@ -25,9 +25,11 @@ export {
   type PlaceFrameInput,
 } from "../shared/design-canvas/placement";
 
-export function nodesFromCanvas(doc: DesignCanvasV1, selection: ReadonlySet<string>): DesignNode[] {
-  const groups = doc.frames.filter((frame) => frame.kind === "group");
-  const others = doc.frames.filter((frame) => frame.kind !== "group");
+/** The page on screen as React Flow nodes; frames on other pages are not drawn. */
+export function nodesFromCanvas(doc: DesignCanvas, selection: ReadonlySet<string>): DesignNode[] {
+  const onPage = doc.frames.filter((frame) => frame.pageId === doc.activePageId);
+  const groups = onPage.filter((frame) => frame.kind === "group");
+  const others = onPage.filter((frame) => frame.kind !== "group");
   return [...groups, ...others].map((frame) => ({
     id: frame.id,
     type: frame.kind,
@@ -45,9 +47,9 @@ export function nodesFromCanvas(doc: DesignCanvasV1, selection: ReadonlySet<stri
  * document, the same object comes back so callers can skip the save.
  */
 export function applyNodeChanges(
-  doc: DesignCanvasV1,
+  doc: DesignCanvas,
   changes: NodeChange<DesignNode>[],
-): DesignCanvasV1 {
+): DesignCanvas {
   const boxes = new Map<string, Pick<DesignFrame, "x" | "y" | "w" | "h">>();
   const moved = new Set<string>();
   const removed = new Set<string>();
@@ -122,10 +124,10 @@ export function applyNodeChanges(
  * that would pass the frame limit returns `doc` unchanged.
  */
 export function duplicateFrames(
-  doc: DesignCanvasV1,
+  doc: DesignCanvas,
   ids: string[],
   newId: () => string,
-): DesignCanvasV1 {
+): DesignCanvas {
   const chosen = new Set(ids);
   const groupIds = new Set(
     doc.frames.filter((frame) => chosen.has(frame.id) && frame.kind === "group").map((frame) => frame.id),

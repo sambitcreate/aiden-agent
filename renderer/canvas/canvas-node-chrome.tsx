@@ -6,11 +6,14 @@ export function CanvasNodeChrome({
   title,
   selected,
   status,
+  titleSlot,
   toolbar,
   flush = false,
   children,
 }: React.PropsWithChildren<{
   title: string;
+  /** Drawn in place of the plain title text, for a title that can be edited. */
+  titleSlot?: React.ReactNode;
   selected: boolean;
   status?: string;
   toolbar?: React.ReactNode;
@@ -29,7 +32,7 @@ export function CanvasNodeChrome({
       )}
     >
       <div className="flex min-h-9 items-center gap-2 px-3">
-        <span className="min-w-0 flex-1 truncate text-strong text-primary">{title}</span>
+        {titleSlot ?? <span className="min-w-0 flex-1 truncate text-strong text-primary">{title}</span>}
         {status ? <span className="shrink-0 text-secondary">{status}</span> : null}
         {toolbar ? <div className="nodrag flex shrink-0 items-center gap-1">{toolbar}</div> : null}
       </div>

@@ -31,6 +31,11 @@ export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> = Om
    * canvas then prevents its default and the shared keymap does not run.
    */
   resolveKey?(event: CanvasKeyEvent, context: { editable: boolean }): boolean;
+  /**
+   * Replaces the default vertical Select/Hand rail with the caller's own
+   * toolbar, drawn at the top left.
+   */
+  toolbar?: React.ReactNode;
 };
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -58,6 +63,7 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
   onMinimapChange,
   emptyState,
   resolveKey,
+  toolbar,
   children,
   nodes,
   nodesDraggable,
@@ -132,9 +138,13 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
           {emptyState}
         </div>
       ) : null}
-      <div className="absolute left-3 top-1/2 -translate-y-1/2">
-        <CanvasToolRail tool={tool} onToolChange={onToolChange} />
-      </div>
+      {toolbar === undefined ? (
+        <div className="absolute left-3 top-1/2 -translate-y-1/2">
+          <CanvasToolRail tool={tool} onToolChange={onToolChange} />
+        </div>
+      ) : (
+        <div className="absolute left-3 top-3 max-w-[calc(100%-1.5rem)]">{toolbar}</div>
+      )}
       <div className="absolute bottom-3 right-3">
         <CanvasZoomControls
           zoom={zoom}

@@ -5,6 +5,7 @@ import type { NodeProps } from "@xyflow/react";
 import { cn } from "../../lib/ui-utils";
 import type { DesignNode } from "../canvas-adapter-core";
 import { DesignNodeResizer } from "./frame-parts";
+import { FrameTitle } from "./frame-title";
 
 export function GroupNode({ data, selected }: NodeProps<DesignNode>) {
   const { frame } = data;
@@ -17,7 +18,9 @@ export function GroupNode({ data, selected }: NodeProps<DesignNode>) {
         data-selected={selected ? "true" : "false"}
         className={cn("h-full w-full rounded-button bg-control/50", selected && "bg-list-selection")}
       >
-        <div className="truncate px-3 pt-2 text-strong text-secondary">{frame.title}</div>
+        <div className="flex min-w-0 px-3 pt-2">
+          <FrameTitle frame={frame} className="text-secondary" />
+        </div>
       </div>
     </>
   );

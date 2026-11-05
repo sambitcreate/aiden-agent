@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   emptyDesignCanvas,
-  type DesignCanvasV1,
+  type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
 import {
@@ -13,14 +13,14 @@ import {
 } from "./canvas-adapter-core";
 
 function frame(id: string, overrides: Partial<DesignFrame> = {}): DesignFrame {
-  return { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: "", createdBy: "person", ...overrides };
+  return { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: "", pageId: "page-1", createdBy: "person", ...overrides };
 }
 
-function canvas(...frames: DesignFrame[]): DesignCanvasV1 {
+function canvas(...frames: DesignFrame[]): DesignCanvas {
   return { ...emptyDesignCanvas(), revision: 3, frames };
 }
 
-const byId = (doc: DesignCanvasV1, id: string) => doc.frames.find((entry) => entry.id === id);
+const byId = (doc: DesignCanvas, id: string) => doc.frames.find((entry) => entry.id === id);
 const box = (entry: DesignFrame | undefined) => entry && { x: entry.x, y: entry.y, w: entry.w, h: entry.h };
 let counter = 0;
 const newId = () => `new-${++counter}`;
@@ -110,7 +110,7 @@ test("removing a frame drops only that frame", () => {
 test("a new frame on an empty canvas is centred in the view", () => {
   const placed = placeFrame(
     emptyDesignCanvas(),
-    { kind: "note", title: "Note", w: 200, h: 100, text: "", createdBy: "person" },
+    { kind: "note", title: "Note", w: 200, h: 100, text: "", pageId: "page-1", createdBy: "person" },
     { x: -500, y: 200, w: 1000, h: 600 },
     () => "n1",
   );
@@ -121,7 +121,7 @@ test("a new frame on an empty canvas is centred in the view", () => {
 
 test("a new frame beside others in view goes 64 px right of the last one, on the same top, not on top of it", () => {
   const view = { x: 0, y: 0, w: 1000, h: 800 };
-  const note = { kind: "note", title: "Note", w: 200, h: 100, text: "", createdBy: "person" } as const;
+  const note = { kind: "note", title: "Note", w: 200, h: 100, text: "", pageId: "page-1", createdBy: "person" } as const;
   const first = placeFrame(emptyDesignCanvas(), note, view, () => "n1");
   if ("error" in first) return assert.fail(first.error);
   const second = placeFrame(first.doc, note, view, () => "n2");
@@ -148,7 +148,7 @@ test("frames added one after another never land on each other, even once the row
   sizes.forEach((size, index) => {
     const placed = placeFrame(
       doc,
-      { kind: "note", title: `F${index}`, ...size, text: "", createdBy: "person" },
+      { kind: "note", title: `F${index}`, ...size, text: "", pageId: "page-1", createdBy: "person" },
       view,
       () => `f${index}`,
     );
@@ -167,7 +167,7 @@ test("frames added one after another never land on each other, even once the row
 test("a new frame is centred when every other frame is out of view", () => {
   const placed = placeFrame(
     grouped,
-    { kind: "note", title: "Note", w: 200, h: 100, text: "", createdBy: "person" },
+    { kind: "note", title: "Note", w: 200, h: 100, text: "", pageId: "page-1", createdBy: "person" },
     { x: 5000, y: 5000, w: 1000, h: 800 },
     () => "n4",
   );
@@ -178,7 +178,7 @@ test("a new frame is centred when every other frame is out of view", () => {
 test("a new frame in a group goes 64 px right of the group's last frame, on the same top", () => {
   const placed = placeFrame(
     grouped,
-    { kind: "file", title: "Pricing", w: 390, h: 844, groupId: "g", path: "design/pricing.html", createdBy: "aiden" },
+    { kind: "file", title: "Pricing", w: 390, h: 844, groupId: "g", path: "design/pricing.html", pageId: "page-1", createdBy: "aiden" },
     { x: 0, y: 0, w: 1000, h: 800 },
     () => "f1",
   );
@@ -191,7 +191,7 @@ test("a new frame in a group goes 64 px right of the group's last frame, on the 
 test("an explicit position is kept, and a size outside the limits is clamped", () => {
   const placed = placeFrame(
     grouped,
-    { kind: "note", title: "Here", x: 10, y: 20, w: 1, h: 99_999, text: "", createdBy: "person" },
+    { kind: "note", title: "Here", x: 10, y: 20, w: 1, h: 99_999, text: "", pageId: "page-1", createdBy: "person" },
     { x: 0, y: 0, w: 1000, h: 800 },
     () => "p1",
   );
@@ -203,7 +203,7 @@ test("a canvas holds at most 200 frames", () => {
   const full = canvas(...Array.from({ length: 200 }, (_, index) => frame(`f${index}`)));
   const result = placeFrame(
     full,
-    { kind: "note", title: "One more", w: 200, h: 100, text: "", createdBy: "person" },
+    { kind: "note", title: "One more", w: 200, h: 100, text: "", pageId: "page-1", createdBy: "person" },
     { x: 0, y: 0, w: 1000, h: 800 },
     () => "extra",
   );
@@ -211,7 +211,7 @@ test("a canvas holds at most 200 frames", () => {
   const almost = canvas(...Array.from({ length: 199 }, (_, index) => frame(`f${index}`)));
   assert.equal(
     "doc" in
-      placeFrame(almost, { kind: "note", title: "Last", w: 200, h: 100, text: "", createdBy: "person" }, { x: 0, y: 0, w: 1000, h: 800 }, () => "last"),
+      placeFrame(almost, { kind: "note", title: "Last", w: 200, h: 100, text: "", pageId: "page-1", createdBy: "person" }, { x: 0, y: 0, w: 1000, h: 800 }, () => "last"),
     true,
   );
 });

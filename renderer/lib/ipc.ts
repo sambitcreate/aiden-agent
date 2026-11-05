@@ -305,7 +305,7 @@ import type {
   WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
-import type { DesignCanvasV1 } from "../shared/design-canvas/schema";
+import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -2260,14 +2260,14 @@ export const ttsApi = {
 /** Result of `designCanvas:save`; mirrors main's `DesignCanvasSaveResult`. */
 export type DesignCanvasSaveResult =
   | { ok: true; revision: number }
-  | { ok: false; reason: "conflict"; doc: DesignCanvasV1 }
+  | { ok: false; reason: "conflict"; doc: DesignCanvas }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 /** The per-chat design canvas. Available only while design mode's flag is on. */
 export const designCanvasApi = {
-  getDesignCanvas: (chatId: string) => invoke<DesignCanvasV1>("designCanvas:get", chatId),
+  getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
   /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
-  saveDesignCanvas: (chatId: string, doc: DesignCanvasV1, baseRevision: number) =>
+  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
     invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),
   onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number }) => void) =>
     onNotification<{ chatId: string; revision: number }>("designCanvas:updated", handler),

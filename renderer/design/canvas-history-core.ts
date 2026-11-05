@@ -1,11 +1,11 @@
 // Undo and redo for the design canvas: whole documents, newest last. Pure, so
 // the hook can keep the history in React state and tests need no DOM.
 
-import type { DesignCanvasV1 } from "../shared/design-canvas/schema";
+import type { DesignCanvas } from "../shared/design-canvas/schema";
 
 export interface CanvasHistory {
-  past: DesignCanvasV1[];
-  future: DesignCanvasV1[];
+  past: DesignCanvas[];
+  future: DesignCanvas[];
 }
 
 export const CANVAS_HISTORY_LIMIT = 100;
@@ -13,7 +13,7 @@ export const CANVAS_HISTORY_LIMIT = 100;
 /** Remembers `before` as the state an edit started from. A new edit ends any redo. */
 export function record(
   history: CanvasHistory,
-  before: DesignCanvasV1,
+  before: DesignCanvas,
   limit: number = CANVAS_HISTORY_LIMIT,
 ): CanvasHistory {
   const past = [...history.past, before];
@@ -22,8 +22,8 @@ export function record(
 
 export function undo(
   history: CanvasHistory,
-  current: DesignCanvasV1,
-): { history: CanvasHistory; doc: DesignCanvasV1 } | null {
+  current: DesignCanvas,
+): { history: CanvasHistory; doc: DesignCanvas } | null {
   const doc = history.past[history.past.length - 1];
   if (!doc) return null;
   return { doc, history: { past: history.past.slice(0, -1), future: [current, ...history.future] } };
@@ -31,8 +31,8 @@ export function undo(
 
 export function redo(
   history: CanvasHistory,
-  current: DesignCanvasV1,
-): { history: CanvasHistory; doc: DesignCanvasV1 } | null {
+  current: DesignCanvas,
+): { history: CanvasHistory; doc: DesignCanvas } | null {
   const [doc, ...future] = history.future;
   if (!doc) return null;
   return { doc, history: { past: [...history.past, current], future } };
@@ -42,16 +42,19 @@ export function redo(
  * The edit that turns `from` into `to`, as a function that can also run on a
  * different canvas: it adds, removes and replaces only the frames that differ
  * between the two, so frames someone else changed in the meantime are kept.
- * Run on `from` itself it gives exactly `to`.
+ * Pages (names and order) and the page on screen are taken whole when the
+ * edit changed them; each page keeps the view it has now, since panning is
+ * not an edit. Run on `from` itself it gives exactly `to`.
  */
 export function changesBetween(
-  from: DesignCanvasV1,
-  to: DesignCanvasV1,
-): (doc: DesignCanvasV1) => DesignCanvasV1 {
+  from: DesignCanvas,
+  to: DesignCanvas,
+): (doc: DesignCanvas) => DesignCanvas {
   const before = new Map(from.frames.map((frame) => [frame.id, frame]));
   const after = new Map(to.frames.map((frame) => [frame.id, frame]));
-  const viewportChanged =
-    from.viewport.x !== to.viewport.x || from.viewport.y !== to.viewport.y || from.viewport.zoom !== to.viewport.zoom;
+  const outline = (doc: DesignCanvas) => JSON.stringify(doc.pages.map((page) => [page.id, page.name]));
+  const pagesChanged = outline(from) !== outline(to);
+  const activeChanged = from.activePageId !== to.activePageId;
   return (doc) => {
     if (doc === from) return to;
     const frames = doc.frames.flatMap((frame) => {
@@ -64,6 +67,15 @@ export function changesBetween(
     for (const frame of to.frames) {
       if (!before.has(frame.id) && !present.has(frame.id)) frames.push(frame);
     }
-    return { ...doc, frames, ...(viewportChanged ? { viewport: to.viewport } : {}) };
+    const views = new Map(doc.pages.map((page) => [page.id, page.viewport]));
+    const pages = pagesChanged
+      ? to.pages.map((page) => {
+          const viewport = views.get(page.id);
+          return viewport ? { ...page, viewport } : page;
+        })
+      : doc.pages;
+    const wanted = activeChanged ? to.activePageId : doc.activePageId;
+    const activePageId = pages.some((page) => page.id === wanted) ? wanted : pages[0]!.id;
+    return { ...doc, frames, pages, activePageId };
   };
 }

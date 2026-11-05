@@ -6,14 +6,14 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
   emptyDesignCanvas,
-  parseDesignCanvasV1,
-  type DesignCanvasV1,
+  parseDesignCanvas,
+  type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 
 export type DesignCanvasSaveResult =
   | { ok: true; revision: number }
-  | { ok: false; reason: "conflict"; doc: DesignCanvasV1 }
+  | { ok: false; reason: "conflict"; doc: DesignCanvas }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 /** Same alphabet and bound as the chat store's file names. */
@@ -49,7 +49,7 @@ export class DesignCanvasStore {
   }
 
   /** The chat's canvas, or `emptyDesignCanvas()` when it has none or its file is unreadable. */
-  async get(chatId: string): Promise<DesignCanvasV1> {
+  async get(chatId: string): Promise<DesignCanvas> {
     assertDesignCanvasChatId(chatId);
     return this.serialize(chatId, () => this.read(chatId));
   }
@@ -57,14 +57,14 @@ export class DesignCanvasStore {
   /** Stores `doc` as `baseRevision + 1` only if `baseRevision` is still the stored revision. */
   async save(
     chatId: string,
-    doc: DesignCanvasV1,
+    doc: DesignCanvas,
     baseRevision: number,
   ): Promise<DesignCanvasSaveResult> {
     assertDesignCanvasChatId(chatId);
     if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) {
       throw new Error("Invalid canvas revision.");
     }
-    const parsed = parseDesignCanvasV1(isRecord(doc) ? { ...doc, revision: baseRevision } : doc);
+    const parsed = parseDesignCanvas(isRecord(doc) ? { ...doc, revision: baseRevision } : doc);
     if (!parsed.ok) return { ok: false, reason: "invalid", issues: parsed.issues };
     if (this.tooLarge(parsed.doc)) {
       return { ok: false, reason: "invalid", issues: ["The canvas is too large to save."] };
@@ -81,14 +81,14 @@ export class DesignCanvasStore {
   /** Applies `mutate` to the latest canvas and stores the result at the next revision. */
   async update(
     chatId: string,
-    mutate: (doc: DesignCanvasV1) => DesignCanvasV1,
-  ): Promise<DesignCanvasV1> {
+    mutate: (doc: DesignCanvas) => DesignCanvas,
+  ): Promise<DesignCanvas> {
     assertDesignCanvasChatId(chatId);
     return this.serialize(chatId, async () => {
       const current = await this.read(chatId);
       const next = mutate(structuredClone(current));
       const revision = current.revision + 1;
-      const parsed = parseDesignCanvasV1(isRecord(next) ? { ...next, revision } : next);
+      const parsed = parseDesignCanvas(isRecord(next) ? { ...next, revision } : next);
       if (!parsed.ok) throw new Error(`The canvas update is invalid: ${parsed.issues.join(" ")}`);
       if (this.tooLarge(parsed.doc)) throw new Error("The canvas is too large to save.");
       await this.write(chatId, parsed.doc);
@@ -116,7 +116,7 @@ export class DesignCanvasStore {
     return path.join(this.root(), `${chatId}.json`);
   }
 
-  private async read(chatId: string): Promise<DesignCanvasV1> {
+  private async read(chatId: string): Promise<DesignCanvas> {
     let text: string;
     try {
       const file = this.file(chatId);
@@ -134,7 +134,7 @@ export class DesignCanvasStore {
     } catch {
       return this.setAside(chatId);
     }
-    const parsed = parseDesignCanvasV1(value);
+    const parsed = parseDesignCanvas(value);
     return parsed.ok ? parsed.doc : this.setAside(chatId);
   }
 
@@ -143,7 +143,7 @@ export class DesignCanvasStore {
    * save starts a fresh canvas without destroying what was there. Runs on the
    * chat's chain, so the file it moves is the one it just read.
    */
-  private async setAside(chatId: string): Promise<DesignCanvasV1> {
+  private async setAside(chatId: string): Promise<DesignCanvas> {
     const file = this.file(chatId);
     await fs.rename(file, `${file}.corrupt-${Date.now()}`).catch((error: unknown) => {
       if (!isMissing(error)) throw error;
@@ -152,11 +152,11 @@ export class DesignCanvasStore {
   }
 
   /** A document the read cap would turn back into an empty canvas is never written. */
-  private tooLarge(doc: DesignCanvasV1): boolean {
+  private tooLarge(doc: DesignCanvas): boolean {
     return Buffer.byteLength(JSON.stringify(doc), "utf8") > this.maxDocumentBytes;
   }
 
-  private write(chatId: string, doc: DesignCanvasV1): Promise<void> {
+  private write(chatId: string, doc: DesignCanvas): Promise<void> {
     return this.writeJson(this.file(chatId), doc, { mode: 0o600, mkdirMode: 0o700 });
   }
 

@@ -8,7 +8,7 @@ import * as React from "react";
 import { Toaster } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
-import { emptyDesignCanvas, type DesignCanvasV1, type DesignFrame } from "../shared/design-canvas/schema";
+import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
@@ -28,14 +28,14 @@ afterEach(() => {
   window.HTMLElement.prototype.getBoundingClientRect = restoreRect;
 });
 
-function canvasWith(...frames: DesignFrame[]): DesignCanvasV1 {
+function canvasWith(...frames: DesignFrame[]): DesignCanvas {
   return { ...emptyDesignCanvas(), revision: 1, frames };
 }
 
 function setup(
-  doc: DesignCanvasV1,
+  doc: DesignCanvas,
   extra: Record<string, (...args: unknown[]) => unknown> = {},
-): { calls: BotTestIpcCall[]; saved: () => DesignCanvasV1 | undefined } {
+): { calls: BotTestIpcCall[]; saved: () => DesignCanvas | undefined } {
   let revision = doc.revision;
   const calls = installBotTestIpc({
     "designCanvas:get": () => doc,
@@ -47,7 +47,7 @@ function setup(
   });
   const saved = () => {
     const saves = calls.filter((call) => call.channel === "designCanvas:save");
-    return saves[saves.length - 1]?.args[1] as DesignCanvasV1 | undefined;
+    return saves[saves.length - 1]?.args[1] as DesignCanvas | undefined;
   };
   return { calls, saved };
 }
@@ -85,11 +85,17 @@ test("an empty canvas invites a design or a note", async () => {
   assert.ok(screen.getByText("Ask Aiden to design something, or add a note."));
 });
 
-test("Add → Note places a note in the middle of the view and puts the cursor in it", async () => {
+async function choosePageItem(item: string, role: "menuitem" | "menuitemradio" = "menuitem") {
+  const trigger = screen.getByRole("button", { name: /^Page: / });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  fireEvent.click(await screen.findByRole(role, { name: item }));
+}
+
+test("the Note button places a note in the middle of the view and puts the cursor in it", async () => {
   measureCanvasAt1000x800();
   const { saved } = setup(canvasWith());
   await mount();
-  await chooseAdd("Note");
+  fireEvent.click(screen.getByRole("button", { name: "Note" }));
 
   const field = await screen.findByRole("textbox", { name: "Note text" });
   assert.equal(document.activeElement === field, true, "the cursor is in the new note");
@@ -139,7 +145,7 @@ test("cancelling the file picker adds nothing", async () => {
 });
 
 test("Delete removes the selected frame and Command-Z brings it back", async () => {
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", createdBy: "person" };
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
   setup(canvasWith(sticky));
   const region = await mount();
   fireEvent.click(screen.getByRole("group", { name: "Sticky" }));
@@ -159,7 +165,7 @@ function ChatComposer() {
 }
 
 test("canvas keys with a printable character stay with the canvas instead of typing into the chat", async () => {
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", createdBy: "person" };
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
   setup(canvasWith(sticky));
   render(<ChatComposer />);
   const composer = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
@@ -179,8 +185,8 @@ test("canvas keys with a printable character stay with the canvas instead of typ
 });
 
 test("Enter on a selected page enters it, so the keyboard reaches what a double-click does", async () => {
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, createdBy: "aiden" };
-  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 700, y: 0, w: 240, h: 160, text: "hello", createdBy: "person" };
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 700, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
   setup(canvasWith(hero, sticky));
   const region = await mount();
   const entered = () => document.querySelector("iframe")?.parentElement?.classList.contains("nodrag") === true;
@@ -205,12 +211,12 @@ test("a change the app cannot save says so instead of failing silently", async (
   });
   render(<Toaster />);
   await mount();
-  await chooseAdd("Note");
+  fireEvent.click(screen.getByRole("button", { name: "Note" }));
   assert.ok(await screen.findByText("The canvas couldn't save your latest changes.", {}, SAVE_WAIT));
 });
 
 test("Escape leaves an entered frame without leaving design mode", async () => {
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, createdBy: "aiden" };
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
   const { calls } = setup(canvasWith(hero));
   const region = await mount();
   fireEvent.doubleClick(screen.getByRole("group", { name: "Hero" }));
@@ -232,8 +238,8 @@ test("Escape leaves an entered frame without leaving design mode", async () => {
 });
 
 test("the canvas watches its pages and reloads one when its file changes", async () => {
-  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, createdBy: "aiden" };
-  const pic: DesignFrame = { id: "i1", kind: "image", title: "Logo", x: 700, y: 0, w: 200, h: 200, path: "assets/logo.png", createdBy: "person" };
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const pic: DesignFrame = { id: "i1", kind: "image", title: "Logo", x: 700, y: 0, w: 200, h: 200, path: "assets/logo.png", pageId: "page-1", createdBy: "person" };
   const { calls } = setup(canvasWith(hero, pic));
   await mount();
   await waitFor(() =>
@@ -258,7 +264,7 @@ test("the canvas watches its pages and reloads one when its file changes", async
 });
 
 test("a visual Aiden draws again under the same title replaces the one in its frame", async () => {
-  const chart: DesignFrame = { id: "a1", kind: "artifact", title: "Chart", x: 0, y: 0, w: 640, h: 480, mediaId: "m1", createdBy: "aiden" };
+  const chart: DesignFrame = { id: "a1", kind: "artifact", title: "Chart", x: 0, y: 0, w: 640, h: 480, mediaId: "m1", pageId: "page-1", createdBy: "aiden" };
   let doc = canvasWith(chart);
   const { calls } = setup(doc, {
     "designCanvas:get": () => doc,
@@ -298,4 +304,84 @@ test("Aiden's snapshot request is answered with a picture of the canvas region, 
     ),
   );
   assert.deepEqual(calls.find((call) => call.channel === "designCanvas:capture")?.args, [{ x: 0, y: 0, width: 1000, height: 800 }]);
+});
+
+const sticky = (id: string, title: string, pageId = "page-1"): DesignFrame => ({
+  id, kind: "note", title, x: 0, y: 0, w: 240, h: 160, text: "", pageId, createdBy: "person",
+});
+
+function twoPageCanvas(): DesignCanvas {
+  return {
+    ...canvasWith(sticky("n1", "On home"), sticky("n2", "On pricing", "p2")),
+    pages: [
+      { id: "page-1", name: "Home", viewport: { x: 0, y: 0, zoom: 1 } },
+      { id: "p2", name: "Pricing", viewport: { x: -300, y: -200, zoom: 0.5 } },
+    ],
+  };
+}
+
+test("the canvas shows one page at a time, and the page picker switches between them", async () => {
+  const { saved } = setup(twoPageCanvas());
+  await mount();
+  assert.ok(screen.getByRole("group", { name: "On home" }));
+  assert.equal(screen.queryByRole("group", { name: "On pricing" }), null);
+  assert.ok(screen.getByRole("button", { name: "Page: Home" }));
+
+  await choosePageItem("Pricing", "menuitemradio");
+  assert.ok(await screen.findByRole("group", { name: "On pricing" }));
+  assert.equal(screen.queryByRole("group", { name: "On home" }), null);
+  assert.ok(screen.getByRole("button", { name: "Page: Pricing" }));
+  await waitFor(() => assert.equal(saved()?.activePageId, "p2"), SAVE_WAIT);
+});
+
+test("a new page starts empty and is shown; deleting it can be undone from the toast", async () => {
+  const { saved } = setup(canvasWith(sticky("n1", "On home")));
+  render(<Toaster />);
+  await mount();
+  await choosePageItem("New page");
+  assert.ok(await screen.findByRole("button", { name: "Page: Page 2" }));
+  assert.equal(screen.queryByRole("group", { name: "On home" }), null);
+  await waitFor(() => assert.deepEqual(saved()?.pages.map((page) => page.name), ["Page 1", "Page 2"]), SAVE_WAIT);
+
+  await choosePageItem("Page 1", "menuitemradio");
+  assert.ok(await screen.findByRole("group", { name: "On home" }));
+  await choosePageItem("Delete page");
+  assert.ok(await screen.findByRole("button", { name: "Page: Page 2" }), "the page after it is shown");
+  fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+  assert.ok(await screen.findByRole("group", { name: "On home" }), "the page and its note are back");
+  assert.ok(screen.getByRole("button", { name: "Page: Page 1" }));
+});
+
+test("Rename page… names the page on screen", async () => {
+  const { saved } = setup(canvasWith());
+  await mount();
+  await choosePageItem("Rename page…");
+  const field = await screen.findByRole("textbox", { name: "Page name" });
+  fireEvent.change(field, { target: { value: "  Checkout  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+  assert.ok(await screen.findByRole("button", { name: "Page: Checkout" }));
+  await waitFor(() => assert.equal(saved()?.pages[0]?.name, "Checkout"), SAVE_WAIT);
+});
+
+test("double-clicking a frame's title renames it; Escape keeps the old name and F2 starts again", async () => {
+  const { saved } = setup(canvasWith(sticky("n1", "Sticky")));
+  const region = await mount();
+  fireEvent.doubleClick(screen.getByText("Sticky"));
+  let field = await screen.findByRole("textbox", { name: "Frame name" });
+  fireEvent.change(field, { target: { value: "Ideas" } });
+  fireEvent.keyDown(field, { key: "Escape", code: "Escape" });
+  assert.ok(await screen.findByRole("group", { name: "Sticky" }), "Escape keeps the old name");
+
+  fireEvent.click(screen.getByRole("group", { name: "Sticky" }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "F2", code: "F2" });
+  field = await screen.findByRole("textbox", { name: "Frame name" });
+  fireEvent.change(field, { target: { value: "Ideas" } });
+  fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
+  assert.ok(await screen.findByRole("group", { name: "Ideas" }));
+  await waitFor(() => assert.equal(saved()?.frames[0]?.title, "Ideas"), SAVE_WAIT);
+
+  region.focus();
+  fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
+  assert.ok(await screen.findByRole("group", { name: "Sticky" }), "the rename is one undo step");
 });

@@ -19,11 +19,13 @@ import {
 import {
   DESIGN_CANVAS_LIMITS,
   DESIGN_WIDTHS,
+  framesOnPage,
   isDesignRelativePath,
-  type DesignCanvasV1,
+  type DesignCanvas,
   type DesignFrame,
   type DesignWidth,
 } from "../../../renderer/shared/design-canvas/schema.js";
+import { showPage } from "../../../renderer/shared/design-canvas/pages.js";
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasStore } from "./store.js";
 
@@ -98,6 +100,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- A visual you draw with render_artifact also lands on the canvas. Drawing it again under the same title replaces it in place.",
   "- Move, resize or retitle your own frames with canvas_update_frame. Remove a frame the person added only when they ask, with confirm: true.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them. canvas_read with snapshot: true shows you the canvas as the person sees it.",
+  "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_read lists the pages, and canvas_read and canvas_place_frame take a page.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
 
@@ -174,12 +177,29 @@ async function checkedPath(root: string, value: unknown, kind: "file" | "image")
   return value;
 }
 
-function groupOf(doc: DesignCanvasV1, groupId: unknown): string | undefined {
+function groupOf(doc: DesignCanvas, groupId: unknown, pageId: string): string | undefined {
   if (groupId === undefined || groupId === null || groupId === "") return undefined;
-  if (typeof groupId !== "string" || !doc.frames.some((frame) => frame.id === groupId && frame.kind === "group")) {
-    throw new CanvasToolError("groupId must be the id of a group frame on this canvas.");
+  if (
+    typeof groupId !== "string" ||
+    !doc.frames.some((frame) => frame.id === groupId && frame.kind === "group" && frame.pageId === pageId)
+  ) {
+    throw new CanvasToolError("groupId must be the id of a group frame on the same page.");
   }
   return groupId;
+}
+
+/** A page named by its id or its name (case-insensitive); the page on screen when left out. */
+function pageOf(doc: DesignCanvas, value: unknown): string {
+  if (value === undefined || value === null || value === "") return doc.activePageId;
+  const wanted = typeof value === "string" ? value.trim().toLocaleLowerCase() : "";
+  const page = doc.pages.find((entry) => entry.id === value) ??
+    doc.pages.find((entry) => entry.name.toLocaleLowerCase() === wanted);
+  if (!page) {
+    throw new CanvasToolError(
+      `There is no page named ${JSON.stringify(value)}. The pages are: ${doc.pages.map((entry) => JSON.stringify(entry.name)).join(", ")}.`,
+    );
+  }
+  return page.id;
 }
 
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
@@ -211,7 +231,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
   };
 
   /** Applies a change and tells open canvases about it. `change` throws to refuse. */
-  const edit = async <T>(change: (doc: DesignCanvasV1) => { doc: DesignCanvasV1; value: T }): Promise<T> => {
+  const edit = async <T>(change: (doc: DesignCanvas) => { doc: DesignCanvas; value: T }): Promise<T> => {
     let value: T | undefined;
     const saved = await deps.store.update(deps.chatId, (doc) => {
       const next = change(doc);
@@ -222,7 +242,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     return value as T;
   };
 
-  const frameIn = (doc: DesignCanvasV1, id: unknown): DesignFrame => {
+  const frameIn = (doc: DesignCanvas, id: unknown): DesignFrame => {
     const frame = typeof id === "string" ? doc.frames.find((entry) => entry.id === id) : undefined;
     if (!frame) throw new CanvasToolError("No frame on this canvas has that id. Call canvas_read for the current frames.");
     return frame;
@@ -234,12 +254,18 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_read",
         label: "Read design canvas",
         description:
-          "Read the design canvas beside this chat: the visible area, the frames in it (id, kind, title, path, box, group, open comments) and a count of frames elsewhere. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.",
-        parameters: Type.Object({ snapshot: Type.Optional(Type.Boolean()) }),
+          "Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, open comments) and a count of frames elsewhere. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.",
+        parameters: Type.Object({
+          page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
+          snapshot: Type.Optional(Type.Boolean()),
+        }),
         execute: async (_id, raw, signal) =>
           run(async () => {
-            const answer = describeCanvas(await deps.store.get(deps.chatId));
-            if ((raw as { snapshot?: unknown } | undefined)?.snapshot !== true) return answer;
+            const p = (raw ?? {}) as { page?: unknown; snapshot?: unknown };
+            const doc = await deps.store.get(deps.chatId);
+            const answer = describeCanvas(doc, { pageId: pageOf(doc, p.page) });
+            // The snapshot shows the screen, so it only describes the page on screen.
+            if (p.snapshot !== true || answer.page.id !== doc.activePageId) return answer;
             const image = deps.snapshot ? await deps.snapshot(signal) : null;
             return image
               ? new WithImage({ ...answer, snapshot: "attached" }, image)
@@ -253,8 +279,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note or a group. Write the file first with your file tools; path is workspace-relative. Leave x and y out to place it right of the last frame in its group or in view. Boxes are in canvas units.",
+          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note or a group. Write the file first with your file tools; path is workspace-relative. It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view. Boxes are in canvas units.",
         parameters: Type.Object({
+          page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           kind: Type.Union([Type.Literal("file"), Type.Literal("image"), Type.Literal("note"), Type.Literal("group")]),
           title: Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars }),
           path: Type.Optional(Type.String({ maxLength: 1024 })),
@@ -283,10 +310,12 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const note = kind === "note" ? (typeof p.text === "string" ? p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : "") : undefined;
             const id = newId();
             return edit((doc) => {
-              const groupId = groupOf(doc, p.groupId);
+              const pageId = pageOf(doc, p.page);
+              const groupId = groupOf(doc, p.groupId, pageId);
               const input: PlaceFrameInput = {
                 kind,
                 title,
+                pageId,
                 w,
                 h,
                 createdBy: "aiden",
@@ -296,7 +325,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 ...(width ? { designWidth: width } : {}),
                 ...(note !== undefined ? { text: note } : {}),
               };
-              const placed = placeFrame(doc, input, canvasView(doc), () => id);
+              const placed = placeFrame(doc, input, canvasView(doc, undefined, pageId), () => id);
               if ("error" in placed) {
                 throw new CanvasToolError(`The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames). Remove a frame first.`);
               }
@@ -349,7 +378,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               };
               if (p.groupId !== undefined) {
                 if (frame.kind === "group") throw new CanvasToolError("A group cannot be put inside another group.");
-                const groupId = groupOf(doc, p.groupId);
+                const groupId = groupOf(doc, p.groupId, frame.pageId);
                 const { groupId: _old, ...rest } = next;
                 next = groupId ? { ...rest, groupId } : rest;
               }
@@ -407,7 +436,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_focus",
         label: "Show on design canvas",
         description:
-          "Pan and zoom the design canvas so the person sees these frames (every frame when ids is empty). The canvas leaves the view alone while the person is moving around it.",
+          "Pan and zoom the design canvas so the person sees these frames (every frame on the page on screen when ids is empty). Frames on another page bring that page on screen. The canvas leaves the view alone while the person is moving around it.",
         parameters: Type.Object({
           ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
         }),
@@ -417,10 +446,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const requested = (raw as { ids?: unknown } | undefined)?.ids;
             const ids = Array.isArray(requested) ? [...new Set(requested)] : [];
             const doc = await deps.store.get(deps.chatId);
-            for (const id of ids) frameIn(doc, id);
-            if (ids.length === 0 && doc.frames.length === 0) throw new CanvasToolError("The canvas is empty.");
+            const pages = new Set(ids.map((id) => frameIn(doc, id).pageId));
+            if (pages.size > 1) throw new CanvasToolError("Those frames are on different pages; show one page's frames at a time.");
+            const [pageId = doc.activePageId] = pages;
+            const onPage = framesOnPage(doc, pageId).length;
+            if (onPage === 0) throw new CanvasToolError("This page of the canvas is empty.");
+            // Frames on another page: that page comes on screen first.
+            if (pageId !== doc.activePageId) await edit((latest) => ({ doc: showPage(latest, pageId), value: null }));
             deps.focus(ids as string[]);
-            return { status: "requested", frames: ids.length || doc.frames.length };
+            return { status: "requested", frames: ids.length || onPage };
           }),
       },
       "never",

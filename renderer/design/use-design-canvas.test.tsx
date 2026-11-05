@@ -5,7 +5,7 @@ import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, render } from "@testing-library/react";
 import {
   emptyDesignCanvas,
-  type DesignCanvasV1,
+  type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
 import { useDesignCanvas } from "./use-design-canvas";
@@ -13,26 +13,26 @@ import { useDesignCanvas } from "./use-design-canvas";
 type Controller = ReturnType<typeof useDesignCanvas>;
 type SaveReply =
   | { ok: true; revision: number }
-  | { ok: false; reason: "conflict"; doc: DesignCanvasV1 }
+  | { ok: false; reason: "conflict"; doc: DesignCanvas }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 function note(id: string, x = 0): DesignFrame {
-  return { id, kind: "note", title: id, x, y: 0, w: 200, h: 120, text: id, createdBy: "person" };
+  return { id, kind: "note", title: id, x, y: 0, w: 200, h: 120, text: id, pageId: "page-1", createdBy: "person" };
 }
-function canvas(revision: number, ...frames: DesignFrame[]): DesignCanvasV1 {
+function canvas(revision: number, ...frames: DesignFrame[]): DesignCanvas {
   return { ...emptyDesignCanvas(), revision, frames };
 }
-const moveTo = (id: string, x: number) => (doc: DesignCanvasV1): DesignCanvasV1 => ({
+const moveTo = (id: string, x: number) => (doc: DesignCanvas): DesignCanvas => ({
   ...doc,
   frames: doc.frames.map((frame) => (frame.id === id ? { ...frame, x } : frame)),
 });
-const addNote = (id: string) => (doc: DesignCanvasV1): DesignCanvasV1 => ({ ...doc, frames: [...doc.frames, note(id)] });
-const xOf = (doc: DesignCanvasV1 | undefined, id: string) => doc?.frames.find((frame) => frame.id === id)?.x;
-const ids = (doc: DesignCanvasV1 | undefined) => doc?.frames.map((frame) => frame.id) ?? [];
+const addNote = (id: string) => (doc: DesignCanvas): DesignCanvas => ({ ...doc, frames: [...doc.frames, note(id)] });
+const xOf = (doc: DesignCanvas | undefined, id: string) => doc?.frames.find((frame) => frame.id === id)?.x;
+const ids = (doc: DesignCanvas | undefined) => doc?.frames.map((frame) => frame.id) ?? [];
 
 let calls: BotTestIpcCall[];
-let stored: DesignCanvasV1;
-let saveReplies: Array<(doc: DesignCanvasV1, base: number) => SaveReply>;
+let stored: DesignCanvas;
+let saveReplies: Array<(doc: DesignCanvas, base: number) => SaveReply>;
 let controller: Controller;
 
 function Probe({ chatId }: { chatId: string }) {
@@ -66,8 +66,8 @@ beforeEach(() => {
     "designCanvas:get": () => structuredClone(stored),
     "designCanvas:save": (_chatId, doc, base) => {
       const reply = saveReplies.shift();
-      if (reply) return reply(doc as DesignCanvasV1, base as number);
-      stored = { ...(doc as DesignCanvasV1), revision: (base as number) + 1 };
+      if (reply) return reply(doc as DesignCanvas, base as number);
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
       return { ok: true, revision: stored.revision };
     },
   });
@@ -92,7 +92,7 @@ test("the canvas loads, then two quick edits make one save from the loaded revis
   await tick(1);
 
   assert.equal(saves().length, 1);
-  const [chatId, doc, base] = saves()[0]!.args as [string, DesignCanvasV1, number];
+  const [chatId, doc, base] = saves()[0]!.args as [string, DesignCanvas, number];
   assert.equal(chatId, "chat-1");
   assert.equal(base, 4);
   assert.deepEqual(ids(doc), ["a", "b"]);
@@ -110,7 +110,7 @@ test("a conflicting save takes the other window's canvas and reapplies this edit
   await tick(800);
 
   assert.equal(saves().length, 2, "the edit is saved again straight after the conflict");
-  const [, retried, base] = saves()[1]!.args as [string, DesignCanvasV1, number];
+  const [, retried, base] = saves()[1]!.args as [string, DesignCanvas, number];
   assert.equal(base, 5);
   assert.deepEqual(ids(retried), ["a", "c"], "their frame is kept");
   assert.equal(xOf(retried, "a"), 300, "and so is this window's move");
@@ -168,7 +168,7 @@ test("leaving the canvas saves a pending edit at once", async () => {
   view.unmount();
   await settle();
   assert.equal(saves().length, 1, "saved without waiting for the debounce");
-  assert.deepEqual(ids(saves()[0]!.args[1] as DesignCanvasV1), ["a", "b"]);
+  assert.deepEqual(ids(saves()[0]!.args[1] as DesignCanvas), ["a", "b"]);
 });
 
 test("undo and redo step through recorded edits, and unrecorded edits fold into the last one", async () => {
@@ -192,7 +192,7 @@ test("undo and redo step through recorded edits, and unrecorded edits fold into 
   assert.equal(xOf(controller.doc, "a"), 30);
   await tick(800);
   assert.equal(saves().length, 1, "undo and redo are saved like any edit");
-  assert.equal(xOf(saves()[0]!.args[1] as DesignCanvasV1, "a"), 30);
+  assert.equal(xOf(saves()[0]!.args[1] as DesignCanvas, "a"), 30);
 });
 
 test("an undo waiting to save does not take back a frame another window added", async () => {
@@ -204,7 +204,7 @@ test("an undo waiting to save does not take back a frame another window added", 
   saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(5, note("a"), note("c", 900)) }));
   await tick(800);
 
-  const [, retried] = saves()[1]!.args as [string, DesignCanvasV1, number];
+  const [, retried] = saves()[1]!.args as [string, DesignCanvas, number];
   assert.deepEqual(ids(retried), ["a", "c"], "their frame is saved, and the undone note stays gone");
   assert.deepEqual(ids(controller.doc), ["a", "c"]);
 });
@@ -236,7 +236,7 @@ test("a save the app cannot deliver reports an error and waits for the next edit
   await act(async () => controller.change(addNote("b")));
   await tick(800);
   assert.equal(saves().length, 2);
-  const [, doc] = saves()[1]!.args as [string, DesignCanvasV1, number];
+  const [, doc] = saves()[1]!.args as [string, DesignCanvas, number];
   assert.equal(xOf(doc, "a"), 10, "the failed edit is still saved");
   assert.deepEqual(ids(doc), ["a", "b"]);
   assert.equal(controller.status, "ready");

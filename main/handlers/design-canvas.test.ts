@@ -5,7 +5,7 @@ import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   emptyDesignCanvas,
-  type DesignCanvasV1,
+  type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { DesignCanvasStore } from "../services/design-canvas/store.js";
@@ -21,7 +21,7 @@ import {
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
-const note: DesignCanvasV1 = {
+const note: DesignCanvas = {
   ...emptyDesignCanvas(),
   frames: [
     {
@@ -33,6 +33,7 @@ const note: DesignCanvasV1 = {
       w: 200,
       h: 120,
       text: "hi",
+      pageId: "page-1",
       createdBy: "person",
     },
   ],
@@ -130,10 +131,10 @@ test("with the flag off no designCanvas channel is registered", async (t) => {
 
 test("a successful save broadcasts the new revision and get reads it back", async (t) => {
   const { invoke, broadcasts } = await fixture(t);
-  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvasV1).revision, 0);
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, 0);
   assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 0), { ok: true, revision: 1 });
   assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1 }]);
-  const stored = (await invoke("designCanvas:get", "chat-1")) as DesignCanvasV1;
+  const stored = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
   assert.deepEqual(
     stored.frames.map((frame) => frame.id),
     ["n"],
@@ -203,7 +204,7 @@ test("a regular chat's last edit still saves after design mode turns off", async
     chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
   });
   assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 0), { ok: true, revision: 1 });
-  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvasV1).revision, 1);
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, 1);
 });
 
 test("every handler refuses once the flag turns off", async (t) => {

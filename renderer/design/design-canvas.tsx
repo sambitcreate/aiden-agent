@@ -1,7 +1,7 @@
 // Loaded on demand so React Flow and its CSS stay out of the entry chunk.
 import "../canvas/styles";
 import "./design-canvas.css";
-import { Panel, type NodeChange, type ReactFlowInstance, type Viewport } from "@xyflow/react";
+import { type NodeChange, type ReactFlowInstance, type Viewport } from "@xyflow/react";
 import * as React from "react";
 import { StudioCanvas, type CanvasTool } from "../canvas";
 import type { CanvasKeyEvent } from "../canvas/canvas-keymap-core";
@@ -9,7 +9,16 @@ import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { designCanvasApi } from "../lib/ipc";
-import type { DesignCanvasV1, DesignFrame } from "../shared/design-canvas/schema";
+import {
+  addPage,
+  deletePage,
+  duplicatePage,
+  movePage,
+  renamePage,
+  showPage,
+} from "../shared/design-canvas/pages";
+import { activeDesignPage, framesOnPage, withActiveViewport } from "../shared/design-canvas/schema";
+import type { DesignCanvas as CanvasDocument, DesignFrame } from "../shared/design-canvas/schema";
 import {
   applyNodeChanges,
   duplicateFrames,
@@ -20,8 +29,8 @@ import {
 } from "./canvas-adapter-core";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
 import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
-import { DesignAddMenu, type DesignAddKind } from "./design-add-menu";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
+import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { selectLiveFrames } from "./live-set-core";
 import { DesignNodeContext, DESIGN_DEFAULT_WIDTH, type DesignNodeContextValue } from "./nodes/design-node-context";
 import { designNodeTypes } from "./nodes/registry";
@@ -83,7 +92,7 @@ function LoadedDesignCanvas({
   canvas,
 }: {
   chatId: string;
-  doc: DesignCanvasV1;
+  doc: CanvasDocument;
   canvas: CanvasHandle;
 }) {
   const { change, undo, redo } = canvas;
@@ -95,13 +104,14 @@ function LoadedDesignCanvas({
   const [missing, setMissing] = React.useState<ReadonlyMap<string, number>>(() => new Map());
   const [grant, setGrant] = React.useState<string | null>(null);
   const [autoFocusId, setAutoFocusId] = React.useState<string | null>(null);
-  const [viewport, setViewport] = React.useState<Viewport>(doc.viewport);
+  const [renaming, setRenaming] = React.useState<string | null>(null);
+  const [viewport, setViewport] = React.useState<Viewport>(() => activeDesignPage(doc).viewport);
   const [viewSize, setViewSize] = React.useState({ w: 0, h: 0 });
   const [live, setLive] = React.useState<ReadonlySet<string>>(() => new Set());
 
   const wrapper = React.useRef<HTMLDivElement | null>(null);
   const flow = React.useRef<ReactFlowInstance<DesignNode> | null>(null);
-  const latestViewport = React.useRef<Viewport>(doc.viewport);
+  const latestViewport = React.useRef<Viewport>(activeDesignPage(doc).viewport);
   const moveFrame = React.useRef<number | null>(null);
   const gesture = React.useRef(false);
 
@@ -204,14 +214,30 @@ function LoadedDesignCanvas({
     [versions],
   );
 
+  // Another page on screen (the picker, an undo, or Aiden's canvas_focus):
+  // go to where that page was left, with nothing selected or entered.
+  const shownPage = React.useRef(doc.activePageId);
+  React.useEffect(() => {
+    if (shownPage.current === doc.activePageId) return;
+    shownPage.current = doc.activePageId;
+    const next = activeDesignPage(doc).viewport;
+    latestViewport.current = next;
+    setViewport(next);
+    void flow.current?.setViewport(next, { duration: 0 });
+    setSelection((current) => (current.size === 0 ? current : new Set()));
+    setEntered(null);
+    setRenaming(null);
+    // Only a change of page moves the view; the doc's other changes do not.
+  }, [doc]);
+
   // At most six frames run a real page; the rest show their snapshots.
   React.useEffect(() => {
-    const frames = doc.frames.filter((frame) => missing.get(frame.id) !== versionOf(frame.path));
+    const frames = framesOnPage(doc).filter((frame) => missing.get(frame.id) !== versionOf(frame.path));
     setLive((previous) => {
       const next = selectLiveFrames({ frames, viewport, view: viewSize, selected: selection, entered, previous });
       return sameSet(previous, next) ? previous : next;
     });
-  }, [doc.frames, missing, versionOf, viewport, viewSize, selection, entered]);
+  }, [doc, missing, versionOf, viewport, viewSize, selection, entered]);
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
 
@@ -354,6 +380,45 @@ function LoadedDesignCanvas({
     }
   };
 
+  const onPage = (action: DesignPageAction) => {
+    switch (action.type) {
+      case "show":
+        change((current) => showPage(current, action.id), { record: false });
+        return;
+      case "add": {
+        // The id is fixed up front so an edit replayed after a save conflict adds the same page.
+        const id = crypto.randomUUID();
+        change((current) => addPage(current, id));
+        return;
+      }
+      case "rename":
+        change((current) => renamePage(current, action.id, action.name));
+        return;
+      case "duplicate": {
+        const pageId = crypto.randomUUID();
+        const ids: string[] = [];
+        let made = true;
+        change((current) => {
+          let index = 0;
+          const next = duplicatePage(current, action.id, pageId, () => (ids[index++] ??= crypto.randomUUID()));
+          made = next !== current;
+          return next;
+        });
+        if (!made) toast.error("This canvas is full. Remove some frames to copy this page.");
+        return;
+      }
+      case "move":
+        change((current) => movePage(current, action.id, action.step));
+        return;
+      case "delete": {
+        const name = doc.pages.find((page) => page.id === action.id)?.name ?? "Page";
+        change((current) => deletePage(current, action.id));
+        toast(`Deleted "${name}"`, { action: { label: "Undo", onClick: () => undo() } });
+        return;
+      }
+    }
+  };
+
   const onAdd = (kind: DesignAddKind) => {
     if (kind === "note") {
       const id = add({ kind: "note", title: "Note", text: "", w: 240, h: 160, createdBy: "person" });
@@ -410,6 +475,15 @@ function LoadedDesignCanvas({
         setEntered(frame.id);
         return true;
       }
+      case "rename": {
+        if (selection.size !== 1) return false;
+        const [id] = selection;
+        setRenaming(id ?? null);
+        return true;
+      }
+      case "addNote":
+        onAdd("note");
+        return true;
       case "escape":
         if (entered !== null) setEntered(null);
         else if (selection.size > 0) setSelection(new Set());
@@ -454,8 +528,10 @@ function LoadedDesignCanvas({
       remove: (id) => removeFrames([id]),
       update,
       autoFocusDone: (id) => setAutoFocusId((current) => (current === id ? null : current)),
+      renaming,
+      rename: setRenaming,
     }),
-    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update],
+    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming],
   );
 
   return (
@@ -482,7 +558,7 @@ function LoadedDesignCanvas({
           onInit={(instance) => {
             flow.current = instance;
           }}
-          defaultViewport={doc.viewport}
+          defaultViewport={activeDesignPage(doc).viewport}
           onMove={(_event, next) => {
             latestViewport.current = next;
             if (moveFrame.current !== null) return;
@@ -493,13 +569,9 @@ function LoadedDesignCanvas({
           }}
           onMoveEnd={(_event, next) => {
             latestViewport.current = next;
-            change(
-              (current) =>
-                current.viewport.x === next.x && current.viewport.y === next.y && current.viewport.zoom === next.zoom
-                  ? current
-                  : { ...current, viewport: { x: next.x, y: next.y, zoom: next.zoom } },
-              { record: false },
-            );
+            change((current) => withActiveViewport(current, { x: next.x, y: next.y, zoom: next.zoom }), {
+              record: false,
+            });
           }}
           onPaneClick={() => setEntered(null)}
           deleteKeyCode={null}
@@ -507,11 +579,17 @@ function LoadedDesignCanvas({
           zoomOnDoubleClick={false}
           resolveKey={resolveKey}
           emptyState={<DesignCanvasEmpty />}
-        >
-          <Panel position="top-left">
-            <DesignAddMenu canAddFiles={grant !== null} onAdd={onAdd} />
-          </Panel>
-        </StudioCanvas>
+          toolbar={
+            <DesignToolbar
+              doc={doc}
+              tool={tool}
+              onToolChange={setTool}
+              canAddFiles={grant !== null}
+              onAdd={onAdd}
+              onPage={onPage}
+            />
+          }
+        />
       </DesignNodeContext.Provider>
     </div>
   );

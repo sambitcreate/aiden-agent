@@ -4,7 +4,7 @@ import type { DesignFrame } from "../shared/design-canvas/schema";
 import { DESIGN_LIVE_LIMIT, selectLiveFrames } from "./live-set-core";
 
 function file(id: string, x: number, y: number, w = 200, h = 200): DesignFrame {
-  return { id, kind: "file", title: id, x, y, w, h, path: `design/${id}.html`, createdBy: "aiden" };
+  return { id, kind: "file", title: id, x, y, w, h, path: `design/${id}.html`, pageId: "page-1", createdBy: "aiden" };
 }
 
 const view = { w: 1000, h: 800 };
@@ -34,10 +34,10 @@ function live(
 test("only file and artifact frames are ever live", () => {
   const frames: DesignFrame[] = [
     file("page", 0, 0),
-    { id: "art", kind: "artifact", title: "Art", x: 300, y: 0, w: 200, h: 200, mediaId: "a1", createdBy: "aiden" },
-    { id: "note", kind: "note", title: "Note", x: 0, y: 300, w: 200, h: 200, text: "", createdBy: "person" },
-    { id: "pic", kind: "image", title: "Pic", x: 300, y: 300, w: 200, h: 200, path: "a.png", createdBy: "person" },
-    { id: "group", kind: "group", title: "Group", x: 0, y: 0, w: 900, h: 700, createdBy: "person" },
+    { id: "art", kind: "artifact", title: "Art", x: 300, y: 0, w: 200, h: 200, mediaId: "a1", pageId: "page-1", createdBy: "aiden" },
+    { id: "note", kind: "note", title: "Note", x: 0, y: 300, w: 200, h: 200, text: "", pageId: "page-1", createdBy: "person" },
+    { id: "pic", kind: "image", title: "Pic", x: 300, y: 300, w: 200, h: 200, path: "a.png", pageId: "page-1", createdBy: "person" },
+    { id: "group", kind: "group", title: "Group", x: 0, y: 0, w: 900, h: 700, pageId: "page-1", createdBy: "person" },
   ];
   assert.deepEqual(sorted(live(frames, { selected: ["note", "group"], entered: "pic" })), ["art", "page"]);
 });

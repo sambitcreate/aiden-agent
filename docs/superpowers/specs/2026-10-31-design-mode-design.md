@@ -207,13 +207,14 @@ People comment on the canvas, and Aiden turns comments into edits.
 
 - **Path:** `userData/design-canvases/<chatId>.json`.
 - **Writes:** main reads and writes it with an atomic write plus a revision check (compare and swap), the same way the Create Images workflow store does.
-- **Shape (version 1):**
+- **Shape (version 2, since P4a):** a canvas has pages, each with its own name and view. A version 1 document (one `viewport`, no pages) is read as one page called "Page 1" that keeps its view, and is written back as version 2.
 
 ```ts
-type DesignCanvasV1 = {
-  version: 1;
+type DesignCanvas = {
+  version: 2;
   revision: number;
-  viewport: { x: number; y: number; zoom: number };
+  pages: { id: string; name: string; viewport: { x: number; y: number; zoom: number } }[]; // 1 to 50
+  activePageId: string;         // the page on screen
   frames: DesignFrame[];        // at most 200
   comments: DesignComment[];    // at most 500
 };
@@ -224,10 +225,11 @@ type DesignFrame = {
   path?: string;      // file, image: workspace-relative
   mediaId?: string;   // artifact
   text?: string;      // note
+  pageId: string;     // the page it is on
   createdBy: "person" | "aiden";
 };
 type DesignComment = {
-  id: string; frameId?: string; x: number; y: number;
+  id: string; pageId: string; frameId?: string; x: number; y: number;
   anchor?: { commentId: string; selector: string; text: string; tag: string; sourcePath?: string };
   marks?: { points: [number, number][] }[];
   note: string; state: "open" | "sent" | "resolved"; anchorState: "anchored" | "stale" | "lost";
@@ -242,6 +244,7 @@ type DesignComment = {
   - The parser rejects unknown kinds.
   - It clamps sizes to 40–8 000 px and coordinates to ±1 000 000.
   - It drops frames whose `path` fails containment.
+  - A frame or comment naming an unknown page moves to the first page. A frame leaves a group on another page, and a comment on a frame is on that frame's page.
 
 ## 6. Aiden on the canvas
 
@@ -251,8 +254,8 @@ The canvas tools are host-owned and registered only for desktop turns in a chat 
 
 | Tool | Does | Returns |
 |---|---|---|
-| `canvas_read` | Describes the canvas. | The viewport, the frames in view with their kind, title, path, box, group and open comments, a summary of the frames outside the view clustered by group, and the selection. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px). |
-| `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?}`. | The new frame's ID and box. If x and y are left out, the frame goes to the right of the last frame in its group, or of the current view, with a 64 px gap. |
+| `canvas_read` | Describes one page of the canvas (the one on screen unless `page` names another) and lists every page. | The viewport, the frames in view with their kind, title, path, box, group and open comments, a summary of the frames outside the view clustered by group, and the selection. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px). |
+| `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?, page?}`. | The new frame's ID and box. If x and y are left out, the frame goes to the right of the last frame in its group, or of the current view, with a 64 px gap. |
 | `canvas_update_frame` | Moves, resizes, retitles or regroups a frame. | The frame. |
 | `canvas_remove_frame` | Removes a frame Aiden created. Removing a person's frame needs `confirm: true` and shows a one-line notice in chat. | `removed`. |
 | `canvas_focus` | Pans and zooms to frames, but only while the person is not interacting with the canvas. | `focused` or `skipped`. |

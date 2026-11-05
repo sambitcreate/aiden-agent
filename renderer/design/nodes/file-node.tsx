@@ -6,6 +6,7 @@
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
+import { FrameTitle } from "./frame-title";
 import { cn } from "../../lib/ui-utils";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 import { designUrl } from "../../shared/design-canvas/url";
@@ -48,6 +49,8 @@ export type FileFrameProps = {
   onEnter(): void;
   onMissing(): void;
   onRemove(): void;
+  /** The editable title the canvas draws; a plain title without it. */
+  titleSlot?: React.ReactNode;
 };
 
 export function FileFrame({
@@ -60,6 +63,7 @@ export function FileFrame({
   onEnter,
   onMissing,
   onRemove,
+  titleSlot,
 }: FileFrameProps) {
   const designWidth = frame.designWidth ?? DESIGN_DEFAULT_WIDTH;
   const scale = frame.w / designWidth;
@@ -161,6 +165,7 @@ export function FileFrame({
     <div className="h-full w-full" onDoubleClick={missing ? undefined : onEnter}>
       <CanvasNodeChrome
         title={frame.title}
+        titleSlot={titleSlot}
         selected={selected}
         flush
         status={docHeight === null ? `${designWidth}` : `${designWidth} × ${docHeight}`}
@@ -190,6 +195,7 @@ export function FileNode({ id, data, selected }: NodeProps<DesignNode>) {
         onEnter={() => canvas.enter(id)}
         onMissing={() => canvas.markMissing(id, version)}
         onRemove={() => canvas.remove(id)}
+        titleSlot={<FrameTitle frame={frame} />}
       />
     </>
   );

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { emptyDesignCanvas, type DesignCanvasV1, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
+import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import { placeArtifactFrames, placeArtifactsOnCanvas } from "./artifact-frames.js";
 import { DesignCanvasStore } from "./store.js";
 
@@ -12,12 +12,12 @@ const ids = () => {
   return () => `frame-${++next}`;
 };
 
-function canvas(frames: DesignFrame[]): DesignCanvasV1 {
+function canvas(frames: DesignFrame[]): DesignCanvas {
   return { ...emptyDesignCanvas(), frames };
 }
 
 test("a new visual lands beside what is in view, as Aiden's artifact frame", () => {
-  const page: DesignFrame = { id: "p", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, createdBy: "person" };
+  const page: DesignFrame = { id: "p", kind: "file", title: "Home", path: "design/home.html", x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "person" };
   const { doc, changed } = placeArtifactFrames(canvas([page]), [{ mediaId: "m1", title: "Pricing table" }], ids());
   assert.equal(changed, true);
   const placed = doc.frames[1]!;
@@ -30,7 +30,7 @@ test("a new visual lands beside what is in view, as Aiden's artifact frame", () 
 
 test("drawing a visual again under the same title swaps its media and keeps where the person put it", () => {
   const first = placeArtifactFrames(canvas([]), [{ mediaId: "m1", title: "Chart" }], ids()).doc;
-  const moved: DesignCanvasV1 = { ...first, frames: [{ ...first.frames[0]!, x: 4000, y: -200, w: 900, h: 700 }] };
+  const moved: DesignCanvas = { ...first, frames: [{ ...first.frames[0]!, x: 4000, y: -200, w: 900, h: 700 }] };
   const { doc, changed } = placeArtifactFrames(moved, [{ mediaId: "m2", title: "Chart" }], ids());
   assert.equal(changed, true);
   assert.equal(doc.frames.length, 1);
@@ -41,7 +41,7 @@ test("drawing a visual again under the same title swaps its media and keeps wher
 });
 
 test("a person's frame with the same title is never swapped, and a visual already there changes nothing", () => {
-  const mine: DesignFrame = { id: "mine", kind: "artifact", title: "Chart", mediaId: "m0", x: 0, y: 0, w: 640, h: 480, createdBy: "person" };
+  const mine: DesignFrame = { id: "mine", kind: "artifact", title: "Chart", mediaId: "m0", x: 0, y: 0, w: 640, h: 480, pageId: "page-1", createdBy: "person" };
   const { doc } = placeArtifactFrames(canvas([mine]), [{ mediaId: "m1", title: "Chart" }], ids());
   assert.equal(doc.frames.length, 2);
   assert.equal(doc.frames[0]!.mediaId, "m0");

@@ -44,6 +44,15 @@ test("unmodified keys delete, fit the selection, escape and enter", () => {
   assert.equal(resolveDesignCanvasKey(key("Backspace", { key: "Backspace", metaKey: true }), mac), null);
 });
 
+test("F2 renames the selected frame and N adds a note, but not with a modifier or held down", () => {
+  assert.deepEqual(resolveDesignCanvasKey(key("F2", { key: "F2" }), mac), { type: "rename" });
+  assert.deepEqual(resolveDesignCanvasKey(key("KeyN"), other), { type: "addNote" });
+  assert.equal(resolveDesignCanvasKey(key("KeyN", { shiftKey: true, key: "N" }), mac), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyN", { repeat: true }), mac), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyN", { metaKey: true }), mac), null, "Command-N stays the app's new chat");
+  assert.equal(resolveDesignCanvasKey(key("KeyN"), { editable: true, platform: "darwin" }), null, "typing n in a note");
+});
+
 test("inside a text field every design key is left to the field, so Command-Z undoes typing", () => {
   const editable = { editable: true, platform: "darwin" } as const;
   for (const event of [

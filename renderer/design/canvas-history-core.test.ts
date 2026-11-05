@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyDesignCanvas, type DesignCanvasV1 } from "../shared/design-canvas/schema";
-import { record, redo, undo, type CanvasHistory } from "./canvas-history-core";
+import { emptyDesignCanvas, type DesignCanvas } from "../shared/design-canvas/schema";
+import { addPage, deletePage, showPage } from "../shared/design-canvas/pages";
+import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
 
-const state = (label: string): DesignCanvasV1 => ({
+const state = (label: string): DesignCanvas => ({
   ...emptyDesignCanvas(),
-  frames: [{ id: label, kind: "note", title: label, x: 0, y: 0, w: 200, h: 120, text: label, createdBy: "person" }],
+  frames: [{ id: label, kind: "note", title: label, x: 0, y: 0, w: 200, h: 120, text: label, pageId: "page-1", createdBy: "person" }],
 });
-const label = (doc: DesignCanvasV1 | undefined) => doc?.frames[0]?.id;
+const label = (doc: DesignCanvas | undefined) => doc?.frames[0]?.id;
 const fresh: CanvasHistory = { past: [], future: [] };
 
 test("undo walks back through recorded edits and redo walks forward again", () => {
@@ -44,4 +45,29 @@ test("history keeps the newest 100 states and drops the oldest", () => {
   assert.equal(label(history.past[history.past.length - 1]), "s100");
   assert.equal(record(fresh, state("a"), 2).past.length, 1);
   assert.equal(record(record(record(fresh, state("a"), 2), state("b"), 2), state("c"), 2).past.map(label).join(), "b,c");
+});
+
+test("undoing a page delete brings the page and its frames back, and keeps a frame someone else added meanwhile", () => {
+  const withPage = addPage(state("kept"), "p2", "Pricing");
+  const before: DesignCanvas = {
+    ...withPage,
+    frames: [...withPage.frames, { ...withPage.frames[0]!, id: "on-p2", pageId: "p2" }],
+  };
+  const deleted = deletePage(before, "p2");
+  assert.equal(deleted.activePageId, "page-1");
+  // Aiden adds a note while the delete is on screen.
+  const elsewhere: DesignCanvas = { ...deleted, frames: [...deleted.frames, { ...deleted.frames[0]!, id: "aiden" }] };
+  const restored = changesBetween(deleted, before)(elsewhere);
+  assert.deepEqual(restored.pages.map((page) => page.name), ["Page 1", "Pricing"]);
+  assert.equal(restored.activePageId, "p2", "the restored page is shown again");
+  assert.deepEqual(restored.frames.map((frame) => frame.id).sort(), ["aiden", "kept", "on-p2"]);
+});
+
+test("an undo never shows a page that no longer exists", () => {
+  const two = addPage(state("a"), "p2");
+  const back = showPage(two, "page-1");
+  // Someone else deleted p2 before the undo of "show Page 1" ran.
+  const gone = deletePage(back, "p2");
+  const undone = changesBetween(back, two)(gone);
+  assert.ok(undone.pages.some((page) => page.id === undone.activePageId));
 });

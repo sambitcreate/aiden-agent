@@ -3,6 +3,7 @@
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
+import { FrameTitle } from "./frame-title";
 import { designUrl } from "../../shared/design-canvas/url";
 import type { DesignNode } from "../canvas-adapter-core";
 import { useDesignNodeContext, withVersion } from "./design-node-context";
@@ -32,7 +33,7 @@ export function ImageNode({ id, data, selected }: NodeProps<DesignNode>) {
   return (
     <>
       <DesignNodeResizer selected={selected} />
-      <CanvasNodeChrome title={frame.title} selected={selected} flush>
+      <CanvasNodeChrome title={frame.title} titleSlot={<FrameTitle frame={frame} />} selected={selected} flush>
         <div className="h-full w-full overflow-hidden rounded-b-button">{body}</div>
       </CanvasNodeChrome>
     </>

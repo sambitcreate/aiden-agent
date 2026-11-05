@@ -4,7 +4,7 @@
 
 import {
   DESIGN_CANVAS_LIMITS,
-  type DesignCanvasV1,
+  type DesignCanvas,
   type DesignFrame,
 } from "./schema.js";
 
@@ -18,37 +18,43 @@ export const clampSize = (value: number) =>
 export const clampCoord = (value: number) =>
   Math.min(DESIGN_CANVAS_LIMITS.maxCoord, Math.max(-DESIGN_CANVAS_LIMITS.maxCoord, Math.round(value)));
 
-export type PlaceFrameInput = Omit<DesignFrame, "id" | "x" | "y"> & Partial<Pick<DesignFrame, "x" | "y">>;
+/** A frame to place; it goes on `pageId`, or on the page on screen. */
+export type PlaceFrameInput = Omit<DesignFrame, "id" | "x" | "y" | "pageId"> &
+  Partial<Pick<DesignFrame, "x" | "y" | "pageId">>;
 
 /**
  * Adds a frame. Without a position it goes 64 px right of the last frame in
  * its group (top-aligned), inside an empty group's corner, 64 px right of the
  * last ungrouped frame in the visible part of the canvas (`view`, in canvas
- * coordinates), or centred in that view when none is visible.
+ * coordinates), or centred in that view when none is visible. Only frames on
+ * the same page count, and a group on another page is no group.
  */
 export function placeFrame(
-  doc: DesignCanvasV1,
+  doc: DesignCanvas,
   frame: PlaceFrameInput,
   view: { x: number; y: number; w: number; h: number },
   newId: () => string,
-): { doc: DesignCanvasV1; id: string } | { error: "limit" } {
+): { doc: DesignCanvas; id: string } | { error: "limit" } {
   if (doc.frames.length >= DESIGN_CANVAS_LIMITS.frames) return { error: "limit" };
   const w = clampSize(frame.w);
   const h = clampSize(frame.h);
+  const pageId =
+    frame.pageId !== undefined && doc.pages.some((page) => page.id === frame.pageId) ? frame.pageId : doc.activePageId;
+  const onPage = doc.frames.filter((entry) => entry.pageId === pageId);
   const group = frame.groupId
-    ? doc.frames.find((entry) => entry.id === frame.groupId && entry.kind === "group")
+    ? onPage.find((entry) => entry.id === frame.groupId && entry.kind === "group")
     : undefined;
   let position: { x: number; y: number };
   if (frame.x !== undefined && frame.y !== undefined) {
     position = { x: frame.x, y: frame.y };
   } else if (group) {
-    const members = doc.frames.filter((entry) => entry.groupId === group.id);
+    const members = onPage.filter((entry) => entry.groupId === group.id);
     const last = members[members.length - 1];
     position = last
       ? { x: last.x + last.w + DESIGN_FRAME_GAP, y: last.y }
       : { x: group.x + GROUP_INSET.x, y: group.y + GROUP_INSET.y };
   } else {
-    const ungrouped = doc.frames.filter((entry) => entry.groupId === undefined);
+    const ungrouped = onPage.filter((entry) => entry.groupId === undefined);
     const overlaps = (entry: DesignFrame, box: { x: number; y: number; w: number; h: number }) =>
       entry.x < box.x + box.w && box.x < entry.x + entry.w && entry.y < box.y + box.h && box.y < entry.y + entry.h;
     const inView = ungrouped.filter((entry) => overlaps(entry, view));
@@ -64,9 +70,10 @@ export function placeFrame(
     }
   }
   const id = newId();
-  const { groupId: _groupId, ...rest } = frame;
+  const { groupId: _groupId, pageId: _pageId, ...rest } = frame;
   const placed: DesignFrame = {
     ...rest,
+    pageId,
     ...(group ? { groupId: group.id } : {}),
     id,
     x: clampCoord(position.x),

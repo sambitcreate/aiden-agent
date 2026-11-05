@@ -116,6 +116,10 @@ async function answerNextPick(
   }, file);
 }
 
+async function addNote(page: Page): Promise<void> {
+  await designCanvas(page).getByRole("button", { name: "Note", exact: true }).click();
+}
+
 async function addFromMenu(page: Page, item: string): Promise<void> {
   await designCanvas(page).getByRole("button", { name: "Add" }).click();
   const entry = page.getByRole("menuitem", { name: item });
@@ -177,8 +181,10 @@ async function zoomPercent(page: Page): Promise<number> {
 /** The saved canvas files, parsed. */
 async function savedCanvases(userDataDir: string): Promise<
   Array<{
-    frames: Array<{ kind: string; text?: string }>;
-    viewport: { zoom: number };
+    version: number;
+    frames: Array<{ kind: string; text?: string; title: string; pageId: string }>;
+    pages: Array<{ id: string; name: string; viewport: { zoom: number } }>;
+    activePageId: string;
   }>
 > {
   const root = path.join(userDataDir, "design-canvases");
@@ -233,7 +239,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await capture(page, "1440-canvas-empty");
 
   // A note takes the focus as soon as it is added, ready for typing.
-  await addFromMenu(page, "Note");
+  await addNote(page);
   const noteText = frame(page, "Note").getByRole("textbox", {
     name: "Note text",
   });
@@ -278,10 +284,10 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await capture(page, "1440-canvas-frames-selected");
 
   await designCanvas(page).getByRole("button", { name: "Add" }).click();
-  await expect(page.getByRole("menuitem", { name: "Note" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Group" })).toBeVisible();
   await capture(page, "1440-canvas-add-menu");
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("menuitem", { name: "Note" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Group" })).toHaveCount(0);
 
   // Everything is saved, then comes back where it was after a reload.
   await expect
@@ -291,7 +297,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
       return {
         kinds: doc.frames.map((saved) => saved.kind).sort(),
         note: doc.frames.find((saved) => saved.kind === "note")?.text,
-        zoomedIn: doc.viewport.zoom >= 0.25,
+        zoomedIn: doc.pages[0]!.viewport.zoom >= 0.25,
       };
     })
     .toEqual({
@@ -374,4 +380,59 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await expect(designCanvas(page).locator("iframe")).toHaveCount(0);
   await expect(frame(page, "hero.html")).toBeVisible();
   await capture(page, "1440-canvas-zoomed-out");
+
+  // A frame is renamed from its title: double-click, type, Return.
+  // The note's body is its text field, so select it by its title before fitting it.
+  const noteTitle = frame(page, "Note").getByText("Note", { exact: true });
+  await noteTitle.click();
+  await page.keyboard.press("Shift+Digit2");
+  await expect.poll(() => zoomPercent(page)).toBeGreaterThanOrEqual(100);
+  await noteTitle.dblclick();
+  const nameField = designCanvas(page).getByRole("textbox", { name: "Frame name" });
+  await expect(nameField).toBeFocused();
+  await nameField.fill("Ideas");
+  await capture(page, "1440-canvas-frame-rename");
+  await nameField.press("Enter");
+  await expect(frame(page, "Ideas")).toBeVisible();
+  await expect(nameField).toHaveCount(0);
+  await zoomToolbar(page).getByRole("button", { name: "Fit to screen" }).click();
+
+  // Pages: the picker adds an empty page and shows it; each page keeps its own frames.
+  const picker = designCanvas(page).getByRole("button", { name: /^Page: /u });
+  await expect(picker).toHaveAccessibleName("Page: Page 1");
+  await picker.click();
+  await expect(page.getByRole("menuitem", { name: "New page" })).toBeVisible();
+  await capture(page, "1440-canvas-page-menu");
+  await page.getByRole("menuitem", { name: "New page" }).click();
+  await expect(picker).toHaveAccessibleName("Page: Page 2");
+  await expect(frame(page, "hero.html")).toHaveCount(0);
+  await expect(designCanvas(page).getByText("Ask Aiden to design something, or add a note.")).toBeVisible();
+  await addNote(page);
+  await page.keyboard.type("Second page");
+  await capture(page, "1440-canvas-second-page");
+
+  await picker.click();
+  await page.getByRole("menuitemradio", { name: "Page 1" }).click();
+  await expect(picker).toHaveAccessibleName("Page: Page 1");
+  await expect(frame(page, "hero.html")).toBeVisible();
+  await expect(frame(page, "Note")).toHaveCount(0);
+  await expect
+    .poll(async () => {
+      const [doc] = await savedCanvases(userDataDir);
+      if (!doc) return null;
+      return {
+        version: doc.version,
+        pages: doc.pages.map((entry) => entry.name),
+        onScreen: doc.pages.find((entry) => entry.id === doc.activePageId)?.name,
+        renamed: doc.frames.some((saved) => saved.title === "Ideas"),
+        secondPage: doc.frames.filter((saved) => saved.pageId === doc.pages[1]?.id).map((saved) => saved.text),
+      };
+    })
+    .toEqual({
+      version: 2,
+      pages: ["Page 1", "Page 2"],
+      onScreen: "Page 1",
+      renamed: true,
+      secondPage: ["Second page"],
+    });
 });

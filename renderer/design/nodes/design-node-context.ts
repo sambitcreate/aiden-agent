@@ -27,6 +27,10 @@ export type DesignNodeContextValue = {
   update(id: string, patch: Partial<Pick<DesignFrame, "text" | "title">>, options: { record: boolean }): void;
   /** The frame took the focus it was asked to; it is not focused again on a later mount. */
   autoFocusDone(id: string): void;
+  /** The frame whose title is being edited. */
+  renaming: string | null;
+  /** Starts editing a frame's title, or stops (null). */
+  rename(id: string | null): void;
 };
 
 export const DesignNodeContext = React.createContext<DesignNodeContextValue | null>(null);
