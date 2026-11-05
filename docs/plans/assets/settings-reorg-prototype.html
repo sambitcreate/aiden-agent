@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aiden Settings Prototype</title>
+    <!--
+      Standalone design prototype for docs/plans/settings-reorg-and-info-hints-plan.md.
+      It shows structure and copy. All names, models and counts are sample data, and
+      nothing here saves or connects. Where it disagrees with the plan, the plan wins.
+    -->
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+        --bg: #f4f4f3;
+        --sidebar-bg: #ececeb;
+        --surface: #ffffff;
+        --surface-popover: #ffffff;
+        --surface-well: color-mix(in srgb, #ffffff 78%, #efefed);
+        --control: rgb(0 0 0 / 0.065);
+        --control-hover: rgb(0 0 0 / 0.105);
+        --control-active: rgb(0 0 0 / 0.15);
+        --list-hover: rgb(0 0 0 / 0.05);
+        --list-selection: rgb(0 0 0 / 0.09);
+        --separator: rgb(0 0 0 / 0.085);
+        --text-primary: #181817;
+        --text-secondary: rgb(24 24 23 / 0.62);
+        --text-tertiary: rgb(24 24 23 / 0.5);
+        --accent: #0b7de5;
+        --accent-hover: #0873d5;
+        --on-accent: #ffffff;
+        --danger: #c3322b;
+        --danger-surface: rgb(195 50 43 / 0.12);
+        --green: #087c58;
+        --green-surface: rgb(8 124 88 / 0.12);
+        --warning: #8a5c00;
+        --warning-surface: rgb(154 103 0 / 0.13);
+        --blue-surface: rgb(11 125 229 / 0.12);
+        --radius-card: 12px;
+        --radius-button: 16px;
+        --radius-control: 12px;
+        --radius-menu: 8px;
+        --radius-popover: 12px;
+        --motion-duration: 200ms;
+        --motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
+        --motion-popup-scale: 0.96;
+        --shadow-hairline: 0 0 0 0.5px rgb(0 0 0 / 0.09);
+        --shadow-card: var(--shadow-hairline), 0 1px 3px rgb(0 0 0 / 0.04);
+        --shadow-popover: var(--shadow-hairline), 0 10px 28px -4px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.06);
+        --focus-ring: var(--text-primary);
+      }
+
+      html[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #141413;
+        --sidebar-bg: #10100f;
+        --surface: #1c1c1b;
+        --surface-popover: #242422;
+        --surface-well: #1d1d1b;
+        --control: rgb(255 255 255 / 0.085);
+        --control-hover: rgb(255 255 255 / 0.13);
+        --control-active: rgb(255 255 255 / 0.18);
+        --list-hover: rgb(255 255 255 / 0.055);
+        --list-selection: rgb(255 255 255 / 0.11);
+        --separator: rgb(255 255 255 / 0.085);
+        --text-primary: #f5f5f3;
+        --text-secondary: rgb(245 245 243 / 0.64);
+        --text-tertiary: rgb(245 245 243 / 0.5);
+        --accent: #3b8ef3;
+        --accent-hover: #529df7;
+        --danger: #e55c55;
+        --danger-surface: rgb(229 92 85 / 0.16);
+        --green: #4cc395;
+        --green-surface: rgb(76 195 149 / 0.15);
+        --warning: #e5b54f;
+        --warning-surface: rgb(229 181 79 / 0.15);
+        --blue-surface: rgb(59 142 243 / 0.16);
+        --shadow-hairline: 0 0 0 0.5px rgb(255 255 255 / 0.09);
+        --shadow-card: var(--shadow-hairline), 0 2px 6px rgb(0 0 0 / 0.28);
+        --shadow-popover: var(--shadow-hairline), 0 14px 34px -6px rgb(0 0 0 / 0.65), 0 3px 10px rgb(0 0 0 / 0.4);
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text-primary);
+        font-size: 14px;
+        line-height: 1.45;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button, input, select, textarea { font: inherit; color: inherit; }
+      button { cursor: default; }
+      h1, h2, p { margin: 0; }
+      code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; }
+
+      /* Non-text controls get the neutral ring. Text entry never does. */
+      :focus { outline: none; }
+      :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+      input:not([type="checkbox"]):focus-visible,
+      textarea:focus-visible { outline: none; }
+
+      /* Prototype bar */
+      .proto-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        min-height: 48px;
+        padding: 6px 18px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--separator);
+      }
+      .proto-title { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 13px; }
+      .proto-pill {
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        background: var(--blue-surface);
+        color: var(--accent);
+        white-space: nowrap;
+      }
+      .proto-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      .proto-controls label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+
+      /* Shell */
+      .page { display: flex; flex-direction: column; height: 100%; }
+      .app-shell { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr); overflow: hidden; }
+
+      .settings-sidebar {
+        background: var(--sidebar-bg);
+        border-right: 1px solid var(--separator);
+        display: flex;
+        flex-direction: column;
+        padding: 12px 12px 20px;
+        overflow-y: auto;
+      }
+      .settings-sidebar > * { flex-shrink: 0; }
+      .back-btn {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        height: 36px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: var(--radius-control);
+        background: transparent;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+      }
+      .back-btn:hover { background: var(--list-hover); color: var(--text-primary); }
+      .search-box {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 36px;
+        padding: 0 11px;
+        border-radius: var(--radius-control);
+        background: var(--control);
+        margin-bottom: 16px;
+        color: var(--text-tertiary);
+        transition: background-color var(--motion-duration) var(--motion-easing);
+      }
+      .search-box:focus-within { background: var(--control-hover); }
+      .search-box input { flex: 1; min-width: 0; border: 0; background: transparent; font-size: 13.5px; color: var(--text-primary); }
+      .search-box input::placeholder { color: var(--text-tertiary); }
+      .nav-group { margin-bottom: 16px; }
+      .nav-group-label { padding: 0 10px; margin-bottom: 5px; font-size: 12px; font-weight: 600; color: var(--text-tertiary); }
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 36px;
+        padding: 6px 10px;
+        border: 0;
+        border-radius: var(--radius-control);
+        background: transparent;
+        color: var(--text-primary);
+        text-align: left;
+        transition: background-color var(--motion-duration) var(--motion-easing);
+      }
+      .nav-item:hover { background: var(--list-hover); }
+      .nav-item[aria-current="page"] { background: var(--list-selection); font-weight: 550; }
+      .nav-icon { width: 20px; height: 20px; color: var(--text-secondary); flex-shrink: 0; }
+      .nav-item-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .nav-empty { padding: 8px 10px; font-size: 13px; color: var(--text-secondary); }
+
+      .settings-main { overflow-y: auto; padding: 28px 32px 64px; }
+      .settings-container { max-width: 760px; margin: 0 auto; }
+
+      /* Review notes */
+      .notes {
+        margin-bottom: 22px;
+        padding: 12px 16px;
+        border-radius: var(--radius-card);
+        background: var(--blue-surface);
+        font-size: 12.5px;
+      }
+      .notes strong { display: block; margin-bottom: 3px; font-size: 13px; }
+      .notes ul { margin: 4px 0 0; padding-left: 18px; color: var(--text-secondary); }
+      .notes li { margin-bottom: 2px; }
+
+      /* Headings and tabs */
+      .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+      .page-heading h1 { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.2; }
+      .page-heading p { margin-top: 4px; color: var(--text-secondary); text-wrap: pretty; }
+      .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 20px; }
+      .tab {
+        height: 28px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: var(--radius-menu);
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 13px;
+        transition: background-color var(--motion-duration) var(--motion-easing), color var(--motion-duration) var(--motion-easing);
+      }
+      .tab:hover { background: var(--list-hover); color: var(--text-primary); }
+      .tab[aria-selected="true"] { background: var(--list-selection); color: var(--text-primary); font-weight: 550; }
+
+      /* Groups and rows */
+      .settings-group { margin-bottom: 26px; scroll-margin-top: 12px; }
+      .group-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; margin: 0 4px 6px; }
+      .group-title { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; }
+      .group-card { border-radius: var(--radius-card); background: var(--surface); box-shadow: var(--shadow-card); }
+      .row {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 6px 20px;
+        padding: 11px 16px;
+        min-height: 48px;
+        scroll-margin-top: 12px;
+      }
+      .row + .row::before, .group-card > .note + .row::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 16px;
+        right: 16px;
+        height: 1px;
+        background: var(--separator);
+      }
+      .row.vertical { grid-template-columns: minmax(0, 1fr); }
+      .row-label { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 14px; font-weight: 500; }
+      .row-desc { margin-top: 1px; font-size: 12.5px; color: var(--text-secondary); text-wrap: pretty; }
+      .row-control { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+      .row.vertical .row-control { justify-content: flex-start; }
+      .row.flash { animation: flash 1.4s var(--motion-easing); }
+      @keyframes flash { 0%, 50% { background: var(--list-selection); } 100% { background: transparent; } }
+
+      .note { padding: 10px 16px; font-size: 12.5px; color: var(--text-secondary); text-wrap: pretty; }
+      .group-note { margin: 6px 4px 0; font-size: 12.5px; color: var(--text-secondary); text-wrap: pretty; }
+      .callout { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 12px 16px; border-radius: var(--radius-card); margin-bottom: 18px; background: var(--blue-surface); }
+      .callout.warning { background: var(--warning-surface); }
+      .callout.compact { margin: 8px 12px 12px; padding: 10px 12px; }
+      .callout-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-weight: 600; font-size: 13.5px; }
+      .callout p { margin-top: 2px; font-size: 12.5px; color: var(--text-secondary); text-wrap: pretty; }
+
+      /* Controls */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 30px;
+        padding: 4px 13px;
+        border: 0;
+        border-radius: var(--radius-button);
+        corner-shape: squircle;
+        background: var(--control);
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
+        transition: background-color var(--motion-duration) var(--motion-easing), transform 100ms var(--motion-easing);
+      }
+      .btn:hover { background: var(--control-hover); }
+      .btn:active { background: var(--control-active); transform: translateY(1px); }
+      .btn.accent { background: var(--accent); color: var(--on-accent); }
+      .btn.accent:hover { background: var(--accent-hover); }
+      .btn.danger { background: var(--danger-surface); color: var(--danger); }
+      .btn.ghost { background: transparent; color: var(--text-secondary); }
+      .btn.ghost:hover { background: var(--list-hover); color: var(--text-primary); }
+      .btn:disabled { opacity: 0.45; pointer-events: none; }
+
+      .select {
+        max-width: 100%;
+        min-height: 30px;
+        padding: 4px 8px;
+        border: 0;
+        border-radius: var(--radius-control);
+        background: var(--control);
+        font-size: 13px;
+      }
+      .input {
+        width: 100%;
+        min-height: 32px;
+        padding: 6px 10px;
+        border: 0;
+        border-radius: var(--radius-control);
+        background: var(--control);
+        font-size: 13px;
+        transition: background-color var(--motion-duration) var(--motion-easing);
+      }
+      .input:focus { background: var(--control-hover); }
+      .input::placeholder { color: var(--text-tertiary); }
+      .input.narrow { width: 220px; }
+
+      .switch {
+        position: relative;
+        flex-shrink: 0;
+        width: 34px;
+        height: 20px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: var(--control-active);
+        transition: background-color var(--motion-duration) var(--motion-easing);
+      }
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+        transition: transform var(--motion-duration) var(--motion-easing);
+      }
+      .switch[aria-checked="true"] { background: var(--accent); }
+      .switch[aria-checked="true"]::after { transform: translateX(14px); }
+      .switch:disabled { opacity: 0.45; }
+
+      .badge { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 11.5px; font-weight: 550; white-space: nowrap; background: var(--control); color: var(--text-secondary); }
+      .badge.green { background: var(--green-surface); color: var(--green); }
+      .badge.warning { background: var(--warning-surface); color: var(--warning); }
+      .badge.blue { background: var(--blue-surface); color: var(--accent); }
+      .badge.red { background: var(--danger-surface); color: var(--danger); }
+
+      .segmented { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: var(--radius-control); background: var(--control); }
+      .segment { min-height: 26px; padding: 2px 11px; border: 0; border-radius: 10px; corner-shape: squircle; background: transparent; color: var(--text-secondary); font-size: 13px; }
+      .segment[aria-checked="true"] { background: var(--surface); color: var(--text-primary); font-weight: 550; box-shadow: var(--shadow-card); }
+
+      .radio-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; width: 100%; }
+      .radio-card {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 40px;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: var(--radius-control);
+        corner-shape: squircle;
+        background: var(--control);
+        font-size: 13px;
+        text-align: left;
+      }
+      .radio-card:hover { background: var(--control-hover); }
+      .radio-card[aria-checked="true"] { background: var(--list-selection); font-weight: 550; }
+      .radio-dot { width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%; background: var(--control-active); display: grid; place-items: center; }
+      [aria-checked="true"] > .radio-dot { background: var(--accent); }
+      [aria-checked="true"] > .radio-dot::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--on-accent); }
+
+      details.disclosure { position: relative; }
+      details.disclosure summary {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 16px;
+        min-height: 48px;
+        list-style: none;
+        border-radius: var(--radius-card);
+      }
+      details.disclosure summary::-webkit-details-marker { display: none; }
+      details.disclosure .chev { color: var(--text-tertiary); transition: transform var(--motion-duration) var(--motion-easing); }
+      details.disclosure[open] .chev { transform: rotate(90deg); }
+      details.disclosure .disclosure-body { padding-bottom: 4px; }
+      .row + details.disclosure::before, details.disclosure + .row::before { content: ""; position: absolute; top: 0; left: 16px; right: 16px; height: 1px; background: var(--separator); }
+      .disclosure-body > .row:first-child::before { content: ""; position: absolute; top: 0; left: 16px; right: 16px; height: 1px; background: var(--separator); }
+      .steps { margin: 0; padding: 0 16px 12px 34px; font-size: 13px; color: var(--text-secondary); }
+      .steps li { margin-bottom: 3px; }
+
+      .pad-canvas { display: grid; place-items: center; height: 220px; margin: 12px 16px; border-radius: var(--radius-control); background: var(--surface-well); color: var(--text-tertiary); font-size: 13px; }
+
+      /* InfoHint: same trigger and popover geometry as ui-info-hint.tsx */
+      .hint {
+        display: inline-grid;
+        place-items: center;
+        flex-shrink: 0;
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        background: transparent;
+        color: var(--text-tertiary);
+        transition: background-color var(--motion-duration) var(--motion-easing), color var(--motion-duration) var(--motion-easing);
+      }
+      .hint:hover, .hint[aria-expanded="true"] { background: var(--control); color: var(--text-primary); }
+      .hint svg { width: 14px; height: 14px; }
+      #hint-pop {
+        position: fixed;
+        z-index: 70;
+        top: 0;
+        left: 0;
+        width: max-content;
+        max-width: min(256px, calc(100vw - 16px));
+        padding: 10px 12px;
+        border-radius: var(--radius-popover);
+        background: var(--surface-popover);
+        color: var(--text-secondary);
+        font-size: 12.5px;
+        box-shadow: var(--shadow-popover);
+        animation: pop var(--motion-duration) var(--motion-easing);
+      }
+      #hint-pop[hidden] { display: none; }
+      @keyframes pop { from { opacity: 0; transform: scale(var(--motion-popup-scale)); } }
+
+      dialog {
+        width: min(460px, calc(100vw - 32px));
+        padding: 0;
+        border: 0;
+        border-radius: var(--radius-popover);
+        background: var(--surface-popover);
+        color: var(--text-primary);
+        box-shadow: var(--shadow-popover);
+      }
+      dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+      .dialog-body { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
+      .dialog-body h2 { font-size: 16px; font-weight: 650; }
+      .dialog-body p { font-size: 13px; color: var(--text-secondary); text-wrap: pretty; }
+      .dialog-body label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-secondary); }
+      .dialog-body label.inline { flex-direction: row; align-items: center; justify-content: space-between; }
+      .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+      #toast {
+        position: fixed;
+        left: 50%;
+        bottom: 20px;
+        z-index: 80;
+        max-width: calc(100vw - 32px);
+        padding: 7px 14px;
+        border-radius: 999px;
+        background: var(--surface-popover);
+        box-shadow: var(--shadow-popover);
+        font-size: 12.5px;
+        transform: translateX(-50%);
+      }
+      #toast[hidden] { display: none; }
+
+      @media (max-width: 760px) {
+        .app-shell { display: block; overflow-y: auto; }
+        .settings-sidebar { border-right: 0; border-bottom: 1px solid var(--separator); overflow: visible; }
+        .settings-main { overflow: visible; padding: 20px 16px 48px; }
+        .radio-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 540px) {
+        .row { grid-template-columns: minmax(0, 1fr); }
+        .row-control { justify-content: flex-start; }
+        .input.narrow { width: 100%; }
+        .page-heading { flex-direction: column; gap: 10px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation: none !important; transition: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="proto-bar">
+        <div class="proto-title">
+          Settings prototype
+          <span class="proto-pill" id="proto-count"></span>
+        </div>
+        <div class="proto-controls">
+          <label>View
+            <select class="select" id="ctl-view">
+              <option value="proposed">Proposed</option>
+              <option value="today">Today's sidebar</option>
+            </select>
+          </label>
+          <label>Host
+            <select class="select" id="ctl-host">
+              <option value="apple">Apple silicon Mac</option>
+              <option value="intel">Intel Mac</option>
+              <option value="linux">Linux</option>
+            </select>
+          </label>
+          <label>Theme
+            <select class="select" id="ctl-theme">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </label>
+          <button class="btn" id="ctl-notes" type="button" aria-pressed="true">Review notes</button>
+        </div>
+      </header>
+      <div class="app-shell">
+        <aside class="settings-sidebar" aria-label="Settings">
+          <button class="back-btn" id="back-btn" type="button"><span class="nav-icon" data-icon="back"></span>Back to app</button>
+          <div class="search-box">
+            <span class="nav-icon" data-icon="search"></span>
+            <input id="nav-search" type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" />
+          </div>
+          <nav id="sidebar-nav" aria-label="Settings pages"></nav>
+        </aside>
+        <main class="settings-main" id="settings-main">
+          <div class="settings-container" id="content"></div>
+        </main>
+      </div>
+    </div>
+    <div id="hint-pop" role="tooltip" hidden></div>
+    <div id="toast" role="status" hidden></div>
+    <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+
+    <script>
+      "use strict";
+
+      /* ---------- Icons (lucide outlines; Memory is the app's SD card) ---------- */
+      const svg = (body) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+      const ICONS = {
+        back: svg('<path d="m15 18-6-6 6-6"/>'),
+        search: svg('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'),
+        info: svg('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>'),
+        chevron: svg('<path d="m9 18 6-6-6-6"/>'),
+        server: svg('<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/>'),
+        chart: svg('<path d="M3 3v16a2 2 0 0 0 2 2h16"/><circle cx="8" cy="15" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="17" cy="13" r="1"/><circle cx="18" cy="6" r="1"/>'),
+        hourglass: svg('<path d="M5 22h14M5 2h14M17 22v-4.2a2 2 0 0 0-.6-1.4L12 12l-4.4 4.4a2 2 0 0 0-.6 1.4V22M7 2v4.2a2 2 0 0 0 .6 1.4L12 12l4.4-4.4a2 2 0 0 0 .6-1.4V2"/>'),
+        wand: svg('<path d="m21.6 2.4-1-1L2.4 19.6l1 1zM14 7l3 3M5 6v4M19 14v4M10 2v2M7 8H3M21 16h-4M11 3H9"/>'),
+        plug: svg('<path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>'),
+        globe: svg('<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/>'),
+        image: svg('<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'),
+        memory: svg('<path d="M7 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2Z"/><path d="M8 3v5m3-5v5m3-5v5M8 14h8v4H8z"/>'),
+        bot: svg('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/>'),
+        clock: svg('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>'),
+        monitor: svg('<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/>'),
+        pointer: svg('<path d="M4 4l7.07 17 2.51-7.39L21 11.07z"/>'),
+        devices: svg('<rect width="10" height="14" x="3" y="8" rx="2"/><path d="M5 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-2.4M8 18h.01"/>'),
+        mic: svg('<path d="M12 19v3M19 10v2a7 7 0 0 1-14 0v-2"/><rect width="6" height="13" x="9" y="2" rx="3"/>'),
+        volume: svg('<path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5zM16 9a5 5 0 0 1 0 6M19.4 18.4a9 9 0 0 0 0-12.8"/>'),
+        wave: svg('<path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/>'),
+        phone: svg('<rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/>'),
+        send: svg('<path d="M14.5 21.7a.5.5 0 0 0 .9 0l6.5-19a.5.5 0 0 0-.6-.6l-19 6.5a.5.5 0 0 0 0 .9l7.9 3.2a2 2 0 0 1 1.1 1.1zM21.9 2.1 10.9 13.1"/>'),
+        shield: svg('<path d="M20 13c0 5-3.5 7.5-7.7 9a1 1 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>'),
+        palette: svg('<path d="M12 22a10 10 0 1 1 10-10c0 2.8-2.2 4-4 4h-2a2 2 0 0 0-1.5 3.3c.5.6.3 2.7-2.5 2.7"/><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/>'),
+        keyboard: svg('<rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/>'),
+        link: svg('<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/>'),
+      };
+
+      /* ---------- Markup helpers ---------- */
+      const esc = (text) => String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+      const hint = (topic, text) => `<button type="button" class="hint" aria-label="About ${esc(topic)}" aria-expanded="false" data-hint="${esc(text)}">${ICONS.info}</button>`;
+      const badge = (text, tone = "") => `<span class="badge ${tone}">${esc(text)}</span>`;
+      const btn = (text, tone = "", attrs = "") => `<button type="button" class="btn ${tone}" ${attrs}>${esc(text)}</button>`;
+      const sw = (label, on = false, attrs = "") => `<button type="button" class="switch" role="switch" aria-checked="${on}" aria-label="${esc(label)}" ${attrs}></button>`;
+      const select = (label, options, attrs = "") => `<select class="select" aria-label="${esc(label)}" ${attrs}>${options.map((o) => `<option>${esc(o)}</option>`).join("")}</select>`;
+      const input = (label, placeholder = "", attrs = "") => `<input class="input narrow" type="text" aria-label="${esc(label)}" placeholder="${esc(placeholder)}" ${attrs} />`;
+      const seg = (label, options, selected = 0) => `<div class="segmented" role="radiogroup" aria-label="${esc(label)}">${options.map((o, i) => `<button type="button" class="segment" role="radio" aria-checked="${i === selected}" tabindex="${i === selected ? 0 : -1}">${esc(o)}</button>`).join("")}</div>`;
+      const radioCards = (label, options, selected = 0) => `<div class="radio-cards" role="radiogroup" aria-label="${esc(label)}">${options.map((o, i) => `<button type="button" class="radio-card" role="radio" aria-checked="${i === selected}" tabindex="${i === selected ? 0 : -1}"><span class="radio-dot"></span>${esc(o)}</button>`).join("")}</div>`;
+
+      /** `label` and `desc` are trusted markup from this file, so hints and badges can sit inline. */
+      const row = (label, desc, control = "", opts = {}) => `<div class="row ${opts.vertical ? "vertical" : ""}" ${opts.id ? `id="${opts.id}"` : ""}><div><div class="row-label">${label}</div>${desc ? `<div class="row-desc">${desc}</div>` : ""}</div>${control ? `<div class="row-control">${control}</div>` : ""}</div>`;
+      const group = (title, titleHint, body, action = "", after = "") => `<section class="settings-group">${title ? `<div class="group-header"><h2 class="group-title">${title}${titleHint}</h2>${action}</div>` : ""}<div class="group-card">${body}</div>${after}</section>`;
+      const callout = (title, text, tone = "", trailing = "") => `<div class="callout ${tone}"><div><div class="callout-title">${title}</div><p>${text}</p></div>${trailing}</div>`;
+      const disclosure = (label, desc, body, open = false) => `<details class="disclosure" ${open ? "open" : ""}><summary><div><div class="row-label">${label}</div>${desc ? `<div class="row-desc">${desc}</div>` : ""}</div><span class="chev">${ICONS.chevron}</span></summary><div class="disclosure-body">${body}</div></details>`;
+
+      /* ---------- Demo state ---------- */
+      const state = {
+        view: "proposed",
+        host: "apple",
+        section: "limits",
+        query: "",
+        notes: true,
+        cloudflare: "unset", // unset | form | ready
+        telegram: { tokenSaved: false, enabled: false },
+        helperUpdate: true,
+      };
+
+      const EXPOSURE_HELP = {
+        "On demand": "The model looks these tools up when it needs them, so they don’t take up room in every message.",
+        "Always visible": "Every message lists these tools to the model up front. Handy for tools you use constantly; uses more context.",
+        "Off for the model": "Chats, Bots, schedules and the Assistant can’t use this server. You can still test it and sign in here.",
+      };
+
+      const exposureRow = (name, status, initial) => row(
+        `${esc(name)} ${badge(status, "green")}`,
+        `<span data-exposure-help>${esc(EXPOSURE_HELP[initial])}</span>`,
+        `<select class="select" aria-label="Model access for ${esc(name)}" data-exposure>${Object.keys(EXPOSURE_HELP).map((o) => `<option ${o === initial ? "selected" : ""}>${o}</option>`).join("")}</select>${btn("Manage")}${sw(`Enable ${name}`, true)}`,
+      );
+
+      /* ---------- Sections: one per `section` ID, as in the plan ---------- */
+      const SECTIONS = {
+        providers: {
+          title: "Providers", icon: "server",
+          description: "Connect models to Aiden and manage the providers you use.",
+          keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"],
+          action: btn("Add provider", "accent"),
+          notes: ["ProviderInfo becomes an InfoHint only once its text fits two short sentences.", "Chat title generation is one row with a hint, replacing nested details.", "Model catalog is one row. Update model catalogs stays a manual action."],
+          render: () => group("Sign-in & On-device", "",
+            row(`ChatGPT / Codex ${badge("Connected", "green")} ${hint("ChatGPT sign-in", "Your credential stays encrypted on this device. It refreshes when a Codex request starts.")}`, "Signed in on this device · 6 models ready", btn("Sign in again") + btn("Sign out", "ghost")) +
+            row(`Chat title generation ${hint("chat title generation", "Automatic uses the on-device model when it can, then your chat model. On-device only never sends titles out.")}`, "", select("Chat title generation", ["Automatic", "On-device only", "Selected chat model"]))) +
+            group("Built-in providers", hint("built-in providers", "Aiden manages endpoints and model lists for these. Add a key to use their models."),
+              row(`Anthropic ${badge("Key saved", "green")}`, "8 models", btn("Manage")) +
+              row(`OpenAI ${badge("Key saved", "green")}`, "14 models", btn("Manage")) +
+              row(`Google Gemini ${badge("Key saved", "green")}`, "9 models", btn("Manage")) +
+              row(`OpenRouter ${badge("Needs API key", "warning")}`, "240+ models", btn("Set up"))) +
+            group("Model catalog", "",
+              row(`Model catalogs ${hint("model catalogs", "Updates model lists and display details from models.dev. No keys, chats or identifiers are sent.")}`, "Device cache · updated today", btn("Update model catalogs"))),
+        },
+        modelData: {
+          title: "Model Pad", icon: "chart",
+          description: "Arrange your models by capability and pace. Your map stays on this device.",
+          keywords: ["personal", "models", "arrange", "rank", "capability", "speed", "pace", "artificial analysis", "openrouter", "benchmark insights"],
+          notes: ["Unchanged. This page is the reference for how hints should read."],
+          render: () => group(`6 models`, hint("Pad markers", "Solid means you placed it. Faded means Aiden placed it from benchmarks."), `<div class="pad-canvas">Model Pad canvas and tray (unchanged)</div>`, btn("Add")) +
+            group("Data", "",
+              row(`Benchmark scores ${hint("benchmark scores", "Fetched only when you choose Fetch latest, with a dedicated key.")}`, "Artificial Analysis via OpenRouter", btn("Fetch latest")) +
+              row(`Measured speed ${hint("measured speed", "Worked out on this device from streaming replies.")}`, "6 models · from your chats", btn("Clear…"))),
+        },
+        limits: {
+          title: "Context & Limits", todayTitle: "Limits & spending", icon: "hourglass",
+          description: "Choose how long chats stay manageable, how long replies wait out a usage limit, and how much chats and Bots may spend.",
+          keywords: ["rate limit", "usage limit", "wait", "retry", "subscription", "weekly limit", "429", "spending", "cost", "budget", "cap", "money", "compaction", "cache", "warm"],
+          notes: ["Compaction, budgets and prompt cache move here from Memory, each as its own group, not through LimitsSettings.save.", "Both footer paragraphs become hints on the group titles, trimmed to two sentences.", "Budgets are a disclosure that opens when overrides exist, not a modal.", "Prompt cache charges stay visible on the page."],
+          render: () => group("Automatic compaction", hint("automatic compaction", "Aiden shortens a long chat as it nears the model’s context limit. Applies to new runs and manual compaction."),
+            row("Compaction engine", "How Aiden shortens long chats.", select("Automatic compaction engine", ["LLM compaction", "pi-vcc compaction (experimental)"]))) +
+            group("Prompt cache", "",
+              row("Warm caches during active chats", "Optional paid one-token requests keep an eligible provider cache warm during long desktop agent runs. Off by default.", sw("Warm prompt caches during active chats")) +
+              `<div class="note">Only refreshes when estimated savings reach $0.05. Charges appear in Usage.</div>`) +
+            group("", "",
+              disclosure("Model compaction budgets", "No overrides · models use automatic defaults",
+                row("Model", "Choose or enter an exact provider/model.", input("Model for compaction budget", "openai/gpt-6-sol")) +
+                row("Reserved tokens", "Space for the compaction summary. Leave blank for 16,384 tokens.", input("Compaction reserved tokens", "16384")) +
+                row("Recent tokens", "Recent conversation to retain. Leave blank for 20,000 tokens.", input("Compaction recent tokens", "20000")) +
+                row("", "", btn("Save budget")))) +
+            group("Usage limits", hint("usage limits", "Aiden retries once when the provider says the limit resets. Limits that last days and billing problems fail right away."),
+              row("Wait for a limit to clear", "", select("Longest wait for a usage limit", ["Up to 6 hours", "Up to 1 hour", "Don’t wait"]))) +
+            group("Spending limits", hint("spending limits", "Only API-key requests count, and sign-ins and on-device models count as $0. At a limit, the reply finishes its step, then stops."),
+              row("Each chat", "The whole chat, with the helpers it starts.", select("Spending limit for each chat", ["No limit", "$5", "$20"])) +
+              row("Each Bot, per month", "A Bot can set its own limit on its Profile.", select("Spending limit for each Bot per month", ["$50", "No limit"])) +
+              row("Each routine run", "Also counts toward its Bot’s month.", select("Spending limit for each routine run", ["$5", "No limit"])) +
+              row("A Bot’s month starts on", "", select("The day a Bot’s month starts", ["The 1st", "The 15th"]))),
+        },
+        skills: {
+          title: "Skills", icon: "wand",
+          description: "Choose the reusable instructions Aiden can load in chats.",
+          keywords: ["instructions", "tools"],
+          action: btn("New skill", "accent"),
+          notes: ["The paths paragraph becomes a hint on Built-in and discovered.", "The Skills are off text shortens to one line that stays while Skills is off.", "A search field appears past 8 discovered skills."],
+          render: () => group("", "",
+            row("Use skills", "Allow skills in chats, Bots and scheduled tasks.", sw("Use skills", true, 'data-off-note="skills-off"')), "", `<p class="group-note" id="skills-off" hidden>Skills are off. Chats keep their history, but hidden skill instructions won’t be replayed.</p>`) +
+            group("Your skills", "",
+              row("Release Checklist", "Verify version pins, changelog entries and CI gates before tagging.", sw("Enable Release Checklist", true)) +
+              row("PR Security Review", "Check IPC boundaries, path containment and credential sealing.", sw("Enable PR Security Review", true))) +
+            group("Built-in and discovered skills", hint("discovered skills", "These come from SKILL.md files in skills folders and enabled plugins. Availability follows the same rules as the composer."),
+              row(`aiden-app ${badge("Built-in")}`, "Built-in guide to Aiden’s features, settings and shortcuts.", "") +
+              row(`graphical-ui ${badge("Workspace")}`, "Build and edit frontend UI using Aiden’s theme tokens.", sw("Enable graphical-ui", true)),
+              `<input class="input narrow" type="search" aria-label="Filter skills" placeholder="Filter skills" />`),
+        },
+        mcp: {
+          title: "Connectors", icon: "plug",
+          description: "Connect tools and services to extend what Aiden can do.",
+          keywords: ["mcp", "plugins", "apps", "integrations", "tools", "servers", "composio"],
+          action: btn("Add custom connector", "accent"),
+          notes: ["EXPOSURE_HELP stays on the page. It is three strings keyed to the selection, so change a select to see the row’s text follow it."],
+          render: () => group("Your connectors", "", exposureRow("GitHub", "Connected · 18 tools", "On demand") + exposureRow("Linear", "Connected · 11 tools", "Always visible")),
+        },
+        websearch: {
+          title: "Web Search", icon: "globe",
+          description: "Choose how Aiden searches and reads the web.",
+          keywords: ["web access", "search", "internet", "providers", "route", "automatic", "fixed", "privacy", "exa"],
+          notes: ["Privacy and access stays with both grant buttons. Only the repeat of the route summary goes.", "What leaves this device stays visible wherever the Extract form is.", "The Extract form hides behind Set up Cloudflare… until it has an account ID or key. Extract can’t be turned on until setup is ready, so it can’t be the trigger."],
+          render: () => {
+            const cf = state.cloudflare;
+            const form = cf === "form" ? row("Account ID", "", input("Cloudflare account ID", "Account ID")) + row("API key", "", input("Cloudflare API key", "Stored encrypted on this device")) + row("", "", btn("Cancel", "ghost", 'data-cf="unset"') + btn("Save", "accent", 'data-cf="ready"')) : "";
+            const leaves = cf === "unset" ? "" : `<div class="note"><b>What leaves this device.</b> In extract mode the page’s text and the field names go to Cloudflare; your chat does not. Keys stay encrypted on this device and are never passed to the model.</div>`;
+            return group("Search", "",
+              row(`Web Search ${badge("2/2 ready", "green")}`, "Automatic route: Exa, then DuckDuckGo", btn("Browse providers") + sw("Enable Web Search", true)) +
+              row(`Route ${hint("search routing", "Automatic tries providers in order, one at a time. Fixed uses only the provider you pick.")}`, "", select("Web Search route", ["Automatic", "Fixed provider"]) + btn("Edit route…")) +
+              row("Try the next provider on", "Timeout, network error, quota or rate limit, temporary provider error", btn("Change…"))) +
+              group("Connected providers", "",
+                row(`Exa ${badge("Key saved", "green")}`, "Keys stay encrypted on this device.", btn("Manage")) +
+                row(`DuckDuckGo ${badge("Built in")}`, "No key needed.", "")) +
+              group("Web pages", "",
+                row(`Read web pages ${hint("reading web pages", "Opens public HTTP and HTTPS pages only. Local files and private addresses are never read.")}`, "Let Aiden open public URLs and read their text.", sw("Read web pages", true)) +
+                row(`Extract specific facts ${cf === "ready" ? badge("Ready", "green") : badge("Needs setup", "warning")}`, "Return only requested fields and quotes through Cloudflare.", (cf === "unset" ? btn("Set up Cloudflare…", "", 'data-cf="form"') : "") + sw("Extract specific facts", false, cf === "ready" ? "" : "disabled")) +
+                form + leaves) +
+              group("Privacy and access", "",
+                `<div class="note">Search queries go to Exa, then DuckDuckGo if Exa fails. Avoid private information. Provider keys remain encrypted on this device and are never passed to the model.</div>` +
+                row("Bots and schedules", "Turning Web Search off preserves routes and credentials. Bots and schedules still require their own explicit Web Search grant.", btn("Manage Bot grants") + btn("Manage schedule grants")));
+          },
+        },
+        imageGeneration: {
+          title: "Image Generation", icon: "image",
+          description: "Connect image providers and choose the models Aiden uses to make images.",
+          keywords: ["images", "image generation", "replicate", "fal", "openrouter", "flux", "nano banana", "seedream", "api keys"],
+          action: btn("Add model by ID…", "", 'data-dialog="addModel"'),
+          notes: ["Separate keys for images becomes a hint on Providers. The provider dialog already says the same thing.", "Add model by ID moves into a dialog from the header and keeps every field."],
+          render: () => group("Default", "", row("Default image model", "Used by default in chats and Create Images.", select("Default image model", ["Automatic", "FLUX.2 Pro (fal)", "Nano Banana (OpenRouter)"]))) +
+            group("Providers", hint("separate image keys", "Images use their own keys, stored encrypted on this device. Chat keys never make images, and image keys never run chats."),
+              row(`OpenRouter ${badge("Connected", "green")}`, "12 models · 4 enabled", btn("Manage")) +
+              row(`fal ${badge("Connected", "green")}`, "18 models · 6 enabled", btn("Manage")) +
+              row(`Replicate ${badge("Not connected")}`, "15 curated models", btn("Set up"))),
+        },
+        memory: {
+          title: "Memory", icon: "memory",
+          description: "Control what Aiden remembers across conversations.",
+          keywords: ["facts", "remember", "recall", "workspace memory"],
+          notes: ["Holds only memory settings now. Compaction moved to Context & Limits, with an aiden_open destination so the model can still open it.", "The two paragraphs outside a card become hints on Use memory and Workspaces.", "Saved facts keeps its workspace select."],
+          render: () => group("Memory controls", "", row(`Use memory ${hint("using memory", "Turning this off stops memory tools, prompt context and new indexing. Approved memories stay on this device.")}`, "Recall approved facts and suggest new ones during chats.", sw("Use memory globally", true))) +
+            group("Workspaces", hint("workspace memory", "These switches affect regular workspace chats. Bot memory has its own scope."),
+              row("aiden-agent", "Use memory in this workspace’s chats.", sw("Use memory in aiden-agent", true)) +
+              row("website", "Use memory in this workspace’s chats.", sw("Use memory in website", false))) +
+            group("Saved facts", "",
+              row("Run Playwright E2E inside a Cua Space on macOS", "Added Oct 28", btn("Delete", "ghost")),
+              select("Workspace for saved facts", ["aiden-agent", "website"])),
+        },
+        bots: {
+          title: "Bots", icon: "bot",
+          description: "Choose how every Bot handles steps that need your OK.",
+          keywords: ["agents", "routines", "bot autonomy", "allow list"],
+          notes: ["Always comes to you stays, with its Computer Use row gated on the host. Switch Host to Linux to see the row go.", "The footer paragraph moves into a hint on Go ahead without asking. The description keeps the connected-apps wording."],
+          render: () => group("Other Bots", "", row("Bots can message each other", "Bots can send each other messages and bring the answer back to their chat.", sw("Bots can message each other", true))) +
+            group("Routines", "", row(`Go ahead without asking ${hint("going ahead without asking", "With this off, a routine skips an Ask first step and tells you. A change in a connected app waits under Needs you.")}`, "When a Bot runs a routine on its own, steps set to Ask first and changes in connected apps go ahead without waiting for your OK. In chats, Bots still ask.", sw("Go ahead without asking"))) +
+            group("Allowed without asking", "", row("Release Bot · github.com", "Added Nov 2 · used 14 times", btn("Remove", "ghost"))) +
+            group("Always comes to you", "",
+              row("Passwords, 2FA codes and money", "Bots hand these to you, in chats and routines.", badge("Always")) +
+              row("Steps a Bot’s rules hand off to you", "Set a rule to Hand off to me on a Bot’s profile to keep that step yours.", badge("Always")) +
+              (state.host === "linux" ? "" : row("Using your Mac with Computer Use", "A Bot asks before each action on your own screen.", badge("Always")))),
+        },
+        approvals: {
+          title: "Tool approvals", icon: "shield",
+          description: "Review the exact actions Aiden may repeat without asking, and revoke them.",
+          keywords: ["permissions", "allow", "always allow", "revoke"],
+          notes: ["The footer drops from three sentences to two and moves to a hint on Always allowed."],
+          render: () => group("Always allowed", hint("always allowed rules", "Rules match only the exact command or file path you approved, in that workspace. They stay on this device."),
+            row("<code>npm run test:settings-design</code>", "aiden-agent · added Nov 4", btn("Revoke", "ghost")) +
+            row("<code>git status</code>", "aiden-agent · added Nov 1", btn("Revoke", "ghost")), btn("Revoke all", "danger")),
+        },
+        appControls: {
+          title: "Controls in chat", icon: "shield", isNew: true,
+          description: "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
+          keywords: ["agent app actions", "paired device", "chat controls"],
+          notes: ["New section ID. Moves from Appearance and converts to FieldSet and Field. Behavior doesn’t change.", "Turning on paired-device controls keeps its confirmation dialog."],
+          render: () => group("Controls in chat", "",
+            row("Agent app actions", "Let Aiden use app settings when you ask in chat.", select("Agent app actions", ["Safe controls", "Ask every time", "Disabled"])) +
+            row("Paired-device chat controls", "Allow paired clients to request access to supported host settings through chat. A phone’s own appearance stays separate.", sw("Paired-device chat controls", false, 'data-confirm="pairedControls"'))),
+        },
+        scheduledTasks: {
+          title: "Scheduled tasks", icon: "clock",
+          description: "Manage when Aiden works in the background.",
+          keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later"],
+          notes: ["Script folder paths move into a hint."],
+          render: () => group("Defaults", hint("script folders", "Tasks run while Aiden is open and your computer is awake. Workspace scripts take precedence over global ones."),
+            row("Enable scheduled tasks", "Pause or resume all automatic schedules.", sw("Enable scheduled tasks", true)) +
+            row("Default mode", "Applied when creating a new task.", select("Default mode", ["Ask Aiden", "Run script"])) +
+            row("Default permission", "", select("Default permission", ["Read-only", "Full access"])) +
+            row("Notifications", "Notify after non-silent task runs.", sw("Notifications", true))),
+        },
+        computerUse: {
+          title: "Computer Use", icon: "pointer",
+          description: "Manage Aiden’s access to native apps and your screen.",
+          keywords: ["screen", "accessibility", "screenshots", "control my mac", "desktop control"],
+          notes: ["How it behaves becomes one visible line for the data disclosure plus a hint for the rest.", "Form fill specialist hides while its model isn’t downloaded, because it has no control then.", "Switch Host to Intel Mac: the strip goes and the page is titled Computer Use. On Linux the page is hidden."],
+          available: () => state.host !== "linux",
+          render: () => group("Desktop control", "",
+            row(`Enable Computer Use ${badge("Beta", "blue")}`, "See your screen and interact with native apps.", sw("Enable Computer Use", true)) +
+            `<div class="note">In an allowed chat, your selected model may receive screenshots, window details and accessibility text. ${hint("how Computer Use behaves", "Aiden asks once in each chat, unless you turn on Always allow. Aiden doesn’t save that content.")}</div>` +
+            row(`macOS permissions ${badge("Ready", "green")}`, "Screen Recording and Accessibility granted.", btn("Check again")) +
+            row("Always allow in every chat", "Skip the once-per-chat prompt.", sw("Always allow in every chat"))),
+        },
+        botComputers: {
+          title: "Bot computers", icon: "monitor",
+          description: "Give a Bot its own macOS computer to work in, apart from yours.",
+          keywords: ["vm", "virtual machine", "lume", "macos", "restore image"],
+          notes: ["Row descriptions tighten but keep the manual download and start wording."],
+          available: () => state.host === "apple",
+          render: () => group("Base computer", hint("base computer", "Each Bot computer starts as a copy of this macOS base. Downloads happen only when you choose Set up or Update base."),
+            row(`macOS base ${badge("Ready", "green")}`, "Assign computers from each Bot’s profile.", btn("Update base")) +
+            row(`Element control ${hint("element control", "Lets Bots click controls by name inside the base computer.")}`, "Let Bots inspect and click elements by name.", btn("Set up element control"))) +
+            group("Limits and storage", "",
+              row(`Computers running at once ${hint("running limit", "At the limit, the least recently used idle computer stops, or the next Bot waits.")}`, "Uses about 8 GB of memory each.", select("Computers running at once", ["1 computer", "2 computers"])) +
+              row("Stop when idle", "Pause unused computers. A Bot starts its computer again when it needs it.", select("Stop when idle", ["After 30 minutes", "After 15 minutes"])) +
+              row("Disk used · 28.4 GB", "Base and 2 Bot computers. Bot folders stay on removal.", btn("Remove everything…", "danger"))),
+        },
+        simulator: {
+          title: "Simulator", icon: "devices",
+          description: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
+          keywords: ["ios", "iphone", "device", "stream", "ssh", "expo"],
+          notes: ["Keeps its devices gate, so it’s hidden on Linux here.", "Helper tools fold into a disclosure that opens when an update is available, and its summary shows that state.", "Remove installed tools stays outside the fold."],
+          available: () => state.host !== "linux",
+          render: () => group("Streaming and access", "",
+            row(`Simulator streaming ${badge("Running", "green")}`, "View and control iOS Simulators in Aiden.", sw("Simulator streaming", true)) +
+            row("Agent access", "Let Aiden tap, type and install apps in chat.", sw("Agent access", true)) +
+            row("Auto-show floating device", "Open active simulators in a floating player over chat.", sw("Auto-show floating device", true)) +
+            row(`Share with paired devices ${hint("simulator sharing", "Paired phones and Macs can watch, tap and shut down simulators. They can’t change these settings.")}`, "", select("Share with paired devices", ["Phones and Macs", "Off"]))) +
+            group("SSH hosts", hint("SSH hosts", "Needs Xcode, Node.js 22+ and npm on the remote Mac. Uses your system SSH keys."),
+              row(`Build server ${badge("Ready", "green")}`, "builder@build-mac.local · Hub 0.4.2", btn("Refresh")), btn("Add SSH host")) +
+            group("", "",
+              disclosure(`Helper tools ${state.helperUpdate ? badge("Update available", "warning") : badge("Up to date", "green")}`, "2 pinned packages installed",
+                row("Check device tool versions", "", btn("Check versions")) + row("Prune old versions", "", btn("Prune"))
+                , state.helperUpdate) +
+              row("Remove installed tools", "Installed in Aiden’s app data.", btn("Remove…", "danger"))),
+        },
+        voice: {
+          title: "Voice", icon: "mic",
+          description: "Set up voice input, transcription, and dictation.",
+          keywords: ["dictation", "transcription", "microphone", "whisper", "parakeet"],
+          notes: ["Shortcut behavior becomes a trailing select with a row that describes the selected option.", "Hold to dictate and Tap or hold only appear when the host can do them. Switch Host to Linux: one option left, so it’s a plain row."],
+          render: () => group("Transcription", "",
+            row("Voice processing", "Prefers an on-device model when installed.", select("Voice processing", ["Automatic", "On this device", "Online"])) +
+            row(`On-device model ${badge("Ready", "green")} ${hint("on-device model", "Runs on this device. It unloads after 15 minutes without use.")}`, "Parakeet TDT 0.6B v2", btn("Manage models…")) +
+            row("Language", "Spoken language, or Automatic to detect it.", select("Language", ["Automatic", "English"]))) +
+            group("Global Dictation", "",
+              row(`Dictation shortcut ${badge("Active · ⌥Space", "green")} ${hint("dictation paste", "Pastes into the focused text field. With nothing editable focused, it copies to the clipboard.")}`, "Dictate into any focused app.", "") +
+              (state.host === "apple"
+                ? row("Shortcut behavior", "<span data-shortcut-help>Tap to toggle, or hold to talk.</span>", `<select class="select" aria-label="Shortcut behavior" data-shortcut><option>Tap or hold</option><option>Hold to dictate</option><option>Press to toggle</option></select>`)
+                : row("Shortcut behavior", "Press to start and press again to stop.", "")) +
+              row(`Clean up transcript ${hint("transcript cleanup", "Sends the raw transcript to your active chat model. The original stays if cleanup fails.")}`, "Polish punctuation and filler words.", sw("Clean up transcript")) +
+              row(`Custom dictionary ${hint("custom dictionary", "Matches whole words, ignoring case.")}`, "3 custom spellings saved.", btn("Edit words…"))),
+        },
+        tts: {
+          title: "Text to Speech", icon: "volume",
+          description: "Read Aiden’s latest response aloud with Google Gemini.",
+          keywords: ["read aloud", "speech", "voice", "gemini", "tts"],
+          notes: ["Seven cards merge into three: Setup, Voice and delivery, and Privacy and storage.", "Privacy and storage is unchanged: the Cloud processing notice and Clear generated audio stay visible."],
+          render: () => group("Setup", "",
+            row(`Read aloud ${badge("Connected", "green")}`, "", sw("Read aloud", true)) +
+            row("Google API key", "Credentials stay encrypted; only readiness is shown.", select("Google API key source", ["Saved Google key", "Dedicated key"], "data-tts-key")) +
+            `<div id="tts-dedicated" hidden>${row("Dedicated key", "", input("Dedicated key", "Paste a Google API key"))}</div>` +
+            row("Model", "", select("Speech model", ["Gemini 3.8 Flash TTS", "Gemini 3.8 Flash-Lite TTS"]))) +
+            group("Voice and delivery", "",
+              row("Voice", "", select("Voice", ["Kore", "Puck", "Aoede"]) + btn("Preview")) +
+              row("Style", "A short preset applied as the speech style instruction.", select("Style", ["Conversational", "Neutral", "Calm"])) +
+              row("Optional delivery note", "", input("Optional delivery note", "Warm, unhurried")) +
+              row("Read inline code", "", sw("Read inline code", true)) +
+              row("Read fenced code blocks", "", sw("Read fenced code blocks"))) +
+            group("Privacy and storage", "",
+              row("Cloud processing", "Applies to responses from every provider, including local models.", "") +
+              `<div class="callout warning compact"><div><p>Read aloud sends the selected response text to Google. This also applies to responses generated by local models. Usage may be billed to your Google account.</p></div></div>` +
+              row("Audio retention", "Generated speech is kept in a bounded session cache and never enters chats or exports.", btn("Clear generated audio"))),
+        },
+        geminiLive: {
+          title: "Aiden Live", icon: "wave",
+          description: "Set up Aiden’s real-time voice, screen context, and approved actions.",
+          keywords: ["live", "voice assistant", "orb", "hotkey", "shortcut", "model", "access"],
+          notes: ["The Callout’s prose shortens but its state and Beta badge stay.", "Only the static Operate Aiden row goes. Scheduled tasks and Global shortcut keep their badges and actions."],
+          render: () => callout(`Aiden Live ${badge("Beta", "blue")} ${badge("Ready", "green")}`, "Speak naturally and let Aiden act on your screen during Live. Stop Live to end session access.") +
+            group("Session", "",
+              row("Enable Aiden Live", "Real-time voice and on-screen actions.", sw("Enable Aiden Live", true)) +
+              row("Show floating Live button", "The shortcut still works when this is hidden.", sw("Show floating Live button", true)) +
+              row(`Model and permissions ${badge("All ready", "green")}`, "Microphone and screen ready", btn("Manage")) +
+              row(`Microphone and speaker ${hint("Live audio devices", "Saved on this device. Changes apply on your next Live session.")}`, "Built-in microphone · built-in speakers", btn("Test speaker"))) +
+            group("Actions", "",
+              row(`Scheduled tasks ${badge("Available", "blue")}`, "Create or review one-time and recurring work through Aiden’s existing scheduled-task interface.", btn("Review")) +
+              row(`Global shortcut ${badge("Active", "green")}`, "The Aiden shortcut now opens setup, starts Live, or reveals the active Live controls.", btn("Manage"))),
+        },
+        remoteAccess: {
+          title: "Control this device", todayTitle: "Connections", icon: "phone",
+          description: "Use Aiden from your phone or another computer.",
+          keywords: ["aiden on the go", "remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
+          notes: ["Connections keeps its title and its tablist label. Local segment state goes; the section ID drives the tab.", "RemoteAccessInfo becomes an InfoHint only if the security copy fits. Otherwise it stays in a disclosure."],
+          render: () => group("Aiden On The Go", hint("Aiden On The Go", "Use your workspaces and Bots from a phone while Aiden runs here. Pairing works over your local network or Tailscale."),
+            row(`Remote access ${badge("Running · Tailscale + Wi-Fi", "green")}`, "Desktop name: Studio Mac", btn("Connect a phone") + sw("Remote access", true)) +
+            row(`Test iPhone ${badge("Active", "green")}`, "Tailscale · last seen just now", btn("Revoke", "ghost"))),
+        },
+        peerHosts: {
+          title: "Control other devices", icon: "monitor", isNew: true,
+          description: "Control your other computers from here.",
+          keywords: ["control other computers", "other devices", "multiple computers", "peer", "aiden serve"],
+          notes: ["New section ID. It replaces the local segment state in connections-settings.tsx."],
+          render: () => group("Paired computers", hint("controlling other computers", "Pair another computer running Aiden or aiden serve, over your local network or Tailscale."),
+            row(`Mac mini server ${badge("Connected · Tailscale", "green")}`, "3 workspaces · 2 Bots", btn("Manage")), btn("Pair computer")),
+        },
+        telegram: {
+          title: "Telegram", icon: "send",
+          description: "Connect your Telegram bots and choose how they respond.",
+          keywords: ["remote", "bot", "phone", "control"],
+          notes: ["Pending owner decision: the security plan says Telegram is being removed, and #747 is open. Polish waits for that.", "Every control stays. The Enable switch goes, but only after Disconnect moves to disabled={!enabled}, so a failed bridge can still be turned off.", "Connect keeps its review dialog. Try it: save a token, then Connect.", "The security notice stays visible, and How to connect is a disclosure that opens until a token is saved."],
+          render: () => {
+            const t = state.telegram;
+            const status = t.enabled ? badge("Connected", "green") : badge("Not connected");
+            return callout("Security notice", "Telegram turns run with full unattended authority — no approval prompts. Only the paired owner can trigger turns. Disconnect to stop immediately.", "warning") +
+              group("", "", disclosure("How to connect", "Six steps with @BotFather", `<ol class="steps"><li>Open @BotFather in Telegram.</li><li>Send /newbot and follow the prompts.</li><li>Copy the bot token and paste it below.</li><li>Choose a workspace and model.</li><li>Choose Connect and review what it allows.</li><li>Send /start to your bot to pair.</li></ol>`, !t.tokenSaved)) +
+              group("1. Connect Telegram", "", row(`Bot token ${t.tokenSaved ? badge("Saved", "green") : ""}`, "Stored encrypted on this device.", t.tokenSaved ? btn("Replace token…") : input("Bot token", "Paste your bot token") + btn("Save", "", 'data-tg="token"'))) +
+              group("2. Review model and access", "",
+                row("Workspace", "", select("Workspace", ["aiden-agent", "Assistant-only"])) +
+                row("Provider + model", "", select("Provider and model", ["Claude Sonnet", "GPT-6 Sol"]))) +
+              group("3. Connect and pair your account", "",
+                row(`Connection ${status}`, "Send /start in Telegram to verify.", btn("Connect", "accent", `data-dialog="telegramConnect" ${t.tokenSaved && !t.enabled ? "" : "disabled"}`) + btn("Disconnect", "", `data-tg="disconnect" ${t.enabled ? "" : "disabled"}`)) +
+                row("Paired owner", t.enabled ? "Waiting for /start" : "None", btn("Reset pairing", "ghost", t.enabled ? "" : "disabled")) +
+                row("Last error", "None", "")) +
+              group("Profiles and preferences", "",
+                row("Bot profile", "", select("Bot profile", ["Default"]) + btn("Add profile")) +
+                row("Thinking level", "", select("Thinking level", ["Medium", "Low", "High"])) +
+                row("Live answer drafts", "", sw("Live answer drafts", true)) +
+                row("Assistant rendering", "", select("Assistant rendering", ["Rich", "Plain"])) +
+                row("Voice replies", "", sw("Voice replies")) +
+                row("Private-chat threads", "", sw("Private-chat threads")) +
+                row("Technical activity", "", sw("Technical activity")) +
+                row("Recent diagnostics", "None yet", ""));
+          },
+        },
+        appearance: {
+          title: "Appearance", icon: "palette",
+          description: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
+          keywords: ["theme", "dark", "light", "chat width", "links", "open links", "browser", "where links open"],
+          notes: ["Controls in chat moves to Bots & Approvals.", "Links has no sidebar row now. Its section ID opens this page and scrolls to Open chat links in. Search for “links” to try it, or use the row in Today’s sidebar."],
+          render: () => group("Theme and layout", "",
+            row("Appearance mode", "", seg("Appearance mode", ["System", "Light", "Dark"], 2)) +
+            row("Theme preset", "10 palettes available", select("Theme preset", ["Aiden", "Graphite", "Paper", "Midnight"])) +
+            row("Chat width", "", radioCards("Chat width", ["Narrow", "Default", "Wide", "Full"], 1), { vertical: true }) +
+            row("Sidebar organization", "", select("Sidebar organization", ["By workspace", "Recent only", "Inbox (Beta)"]))) +
+            group("Chat", "",
+              row(`Work details ${hint("work details", "Sets how much tool activity shows. Compact hides steps and Verbose keeps them open.")}`, "How much tool activity is shown during and after replies.", select("Work details", ["Standard", "Compact", "Detailed", "Verbose"]) + select("Collapse timing", ["Collapse on completion", "Collapse on next message"])) +
+              row(`Open chat links in ${hint("opening links", "Local dev servers always open in Aiden. ⌘-click a link to use the other browser.")}`, "Choose where links you click open.", select("Open chat links in", ["Ask each time", "Aiden browser", "System browser"]), { id: "links-row" }) +
+              row(`Send behavior while busy ${hint("busy send behavior", "⌘↩ always does the opposite action. Steer accepts text only.")}`, "Default Enter action while a reply is running.", select("Send behavior while busy", ["Queue", "Steer"])) +
+              row("Show context usage in composer", "Display the token meter beside your message.", sw("Show context usage in composer", true)) +
+              row("Inline visuals", "Draw interactive charts and diagrams in chat.", select("Inline visuals", ["Automatic", "Only when I ask", "Off"]))),
+        },
+        shortcut: {
+          title: "Keyboard shortcuts", icon: "keyboard",
+          description: "Customize the keyboard controls for Aiden and the app.",
+          keywords: ["hotkey", "keybinding", "global shortcut"],
+          notes: ["The recorder sits beside the switch instead of on its own row."],
+          render: () => group("Global shortcuts", hint("global shortcuts", "These work while Aiden is in the background."),
+            row(`Open Aiden Live ${badge("Active", "green")}`, "Start or focus Aiden Live from anywhere.", btn("⇧⌘Space") + sw("Open Aiden Live shortcut", true)) +
+            row(`Dictate ${badge("Active", "green")}`, "Dictate into the focused text field in any app.", btn("⌥Space") + sw("Dictate shortcut", true))),
+        },
+        about: {
+          title: "About", icon: "info",
+          description: "App information, updates, and diagnostics.",
+          keywords: ["version", "update", "diagnostics", "usage data", "reset", "privacy"],
+          notes: ["Crash-capture retention moves to a hint.", "Usage data keeps its wording and its What’s sent sheet."],
+          render: () => group("Application", "",
+            row("Aiden Agent", "Version 0.64.0", "") +
+            row("Onboarding", "", btn("Show onboarding")) +
+            row("Software update", "", btn("Check for updates"))) +
+            group("Privacy and diagnostics", "",
+              row("Usage data", "Help improve Aiden with anonymous usage data and crash reports. Never your chats, files or keys.", btn("What’s sent") + sw("Usage data", true)) +
+              row(`Local diagnostics ${hint("local diagnostics", "A size-limited journal on this device. Nothing is uploaded automatically.")}`, "1.4 MB across 3 local files.", btn("Reveal") + btn("Export…") + btn("Delete…", "ghost"))) +
+            group("Reset", "",
+              row(`Reset profile, providers and preferences ${hint("resetting Aiden", "Removes saved keys, sign-ins and preferences, then restarts into onboarding.")}`, "Chats and projects stay.", btn("Reset and restart…", "danger"))),
+        },
+      };
+
+      /* links is a section with no tab: it resolves to an anchor on Appearance. */
+      const LINKS = { title: "Links", icon: "link", description: "Choose where links you click open.", keywords: ["open links", "browser", "where links open"] };
+
+      /* ---------- Pages, mirroring SETTINGS_PAGES ---------- */
+      const PAGES = [
+        { group: "Models & Context", id: "providers", title: "Providers", tabs: ["providers"] },
+        { group: "Models & Context", id: "modelData", title: "Model Pad", tabs: ["modelData"] },
+        { group: "Models & Context", id: "limits", title: "Context & Limits", tabs: ["limits"] },
+        { group: "Capabilities", id: "skills", title: "Skills", tabs: ["skills"] },
+        { group: "Capabilities", id: "mcp", title: "Connectors", tabs: ["mcp"] },
+        { group: "Capabilities", id: "websearch", title: "Web Search", tabs: ["websearch"] },
+        { group: "Capabilities", id: "imageGeneration", title: "Image Generation", tabs: ["imageGeneration"] },
+        { group: "Capabilities", id: "memory", title: "Memory", tabs: ["memory"] },
+        { group: "Autonomy & Devices", id: "botsApprovals", title: "Bots & Approvals", icon: "bot", tabs: ["bots", "approvals", "appControls"] },
+        { group: "Autonomy & Devices", id: "scheduledTasks", title: "Scheduled tasks", tabs: ["scheduledTasks"] },
+        { group: "Autonomy & Devices", id: "computers", title: "Computers & VMs", icon: "monitor", tabs: ["computerUse", "botComputers"] },
+        { group: "Autonomy & Devices", id: "simulator", title: "Simulator", tabs: ["simulator"] },
+        { group: "Voice & Channels", id: "voiceSpeech", title: "Voice & Speech", icon: "mic", tabs: ["voice", "tts", "geminiLive"] },
+        { group: "Voice & Channels", id: "connections", title: "Connections", icon: "phone", tabs: ["remoteAccess", "peerHosts", "telegram"] },
+        { group: "App", id: "appearance", title: "Appearance", tabs: ["appearance"] },
+        { group: "App", id: "shortcut", title: "Keyboard shortcuts", tabs: ["shortcut"] },
+        { group: "App", id: "about", title: "About", tabs: ["about"] },
+      ];
+
+      /* Today's order from SETTINGS_DESTINATIONS, for comparison. */
+      const TODAY = {
+        Agent: ["providers", "modelData", "limits", "skills", "mcp", "websearch", "imageGeneration", "telegram", "remoteAccess", "scheduledTasks", "geminiLive", "approvals", "computerUse", "bots", "botComputers", "simulator", "memory"],
+        App: ["voice", "tts", "links", "shortcut", "appearance", "about"],
+      };
+
+      const sectionOf = (id) => (id === "links" ? LINKS : SECTIONS[id]);
+      const isAvailable = (id) => SECTIONS[id].available ? SECTIONS[id].available() : true;
+      const availableTabs = (page) => page.tabs.filter(isAvailable);
+      const availablePages = () => PAGES.filter((page) => availableTabs(page).length > 0);
+      const pageFor = (id) => PAGES.find((page) => page.tabs.includes(id === "links" ? "appearance" : id));
+      const pageTitle = (page) => {
+        const tabs = availableTabs(page);
+        return tabs.length === 1 ? SECTIONS[tabs[0]].title : page.title;
+      };
+      const pageIcon = (page) => ICONS[page.icon || SECTIONS[page.tabs[0]].icon];
+      const matches = (id, query) => {
+        const s = sectionOf(id);
+        return [s.title, s.todayTitle || "", s.description, ...s.keywords].some((text) => text.toLowerCase().includes(query));
+      };
+      const todayAvailable = (id) => id === "links" || isAvailable(id);
+
+      /** Unavailable section: first available tab on the page, otherwise Providers. */
+      function resolveSection(id) {
+        if (id === "links") return "links";
+        if (isAvailable(id)) return id;
+        const page = pageFor(id);
+        return (page && availableTabs(page)[0]) || "providers";
+      }
+
+      /* ---------- Rendering ---------- */
+      function renderNav() {
+        const nav = document.getElementById("sidebar-nav");
+        const query = state.query.trim().toLowerCase();
+        const groups = [];
+        if (state.view === "today") {
+          for (const [label, ids] of Object.entries(TODAY)) {
+            const items = ids.filter(todayAvailable).filter((id) => !query || matches(id, query)).map((id) => {
+              const s = sectionOf(id);
+              return { key: id, target: id, title: s.todayTitle || s.title, icon: ICONS[s.icon], current: state.section === id };
+            });
+            if (items.length) groups.push({ label, items });
+          }
+        } else {
+          const labels = [...new Set(PAGES.map((page) => page.group))];
+          for (const label of labels) {
+            const items = availablePages().filter((page) => page.group === label).flatMap((page) => {
+              const tabs = availableTabs(page);
+              const candidates = page.id === "appearance" ? ["links", ...tabs] : tabs;
+              const hit = query ? candidates.find((id) => matches(id, query)) : tabs[0];
+              if (!hit) return [];
+              return [{ key: page.id, target: hit, title: pageTitle(page), icon: pageIcon(page), current: pageFor(state.section) === page }];
+            });
+            if (items.length) groups.push({ label, items });
+          }
+        }
+        nav.innerHTML = groups.length
+          ? groups.map((g) => `<div class="nav-group"><div class="nav-group-label">${esc(g.label)}</div>${g.items.map((item) => `<button type="button" class="nav-item" id="nav-${item.key}" data-target="${item.target}" ${item.current ? 'aria-current="page"' : ""}><span class="nav-icon">${item.icon}</span><span class="nav-item-title">${esc(item.title)}</span></button>`).join("")}</div>`).join("")
+          : `<p class="nav-empty" role="status">No settings match “${esc(state.query.trim())}”.</p>`;
+      }
+
+      function renderContent() {
+        hideHint();
+        const content = document.getElementById("content");
+        const id = state.section === "links" ? "appearance" : state.section;
+        const section = SECTIONS[id];
+        const page = pageFor(id);
+        const tabs = state.view === "today" ? [id] : availableTabs(page);
+        const title = state.view === "today" ? section.todayTitle || section.title : pageTitle(page);
+        const showTabs = tabs.length > 1;
+        const description = state.section === "links" && state.view === "today" ? LINKS.description : section.description;
+        const notes = state.notes
+          ? `<aside class="notes" aria-label="Review notes"><strong>What changes here</strong><ul>${(state.view === "today" ? ["Today’s sidebar with the proposed page content, for comparing navigation only."] : section.notes).map((n) => `<li>${esc(n)}</li>`).join("")}</ul></aside>`
+          : "";
+        const tablist = showTabs
+          ? `<div class="tabs" role="tablist" aria-label="${esc(page.title)}">${tabs.map((tab) => `<button type="button" class="tab" role="tab" id="tab-${tab}" aria-controls="panel-${tab}" aria-selected="${tab === id}" tabindex="${tab === id ? 0 : -1}" data-tab="${tab}">${esc(SECTIONS[tab].title)}</button>`).join("")}</div>`
+          : "";
+        content.innerHTML = `${notes}<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(description)}</p></div>${section.action || ""}</div>${tablist}<div ${showTabs ? `role="tabpanel" id="panel-${id}" aria-labelledby="tab-${id}"` : ""}>${section.render()}</div>`;
+      }
+
+      function render() {
+        document.getElementById("proto-count").textContent = state.view === "today" ? "23 destinations, 2 groups" : `${availablePages().length} pages, 5 groups`;
+        renderNav();
+        renderContent();
+      }
+
+      function open(id, focusSelector) {
+        state.section = resolveSection(id);
+        render();
+        const main = document.getElementById("settings-main");
+        const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (state.section === "links") {
+          const target = document.getElementById("links-row");
+          target.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+          target.classList.add("flash");
+        } else if (!focusSelector?.startsWith("#tab-")) {
+          main.scrollTop = 0;
+          document.scrollingElement.scrollTop = 0;
+        }
+        if (focusSelector) document.querySelector(focusSelector)?.focus();
+      }
+
+      /* ---------- InfoHint: mirrors ui-info-hint.tsx ---------- */
+      const OPEN_DELAY_MS = 250;
+      const CLOSE_DELAY_MS = 120;
+      const pop = document.getElementById("hint-pop");
+      const H = { button: null, pinned: false, timer: undefined };
+
+      function placeHint() {
+        if (!H.button) return;
+        const pad = 8;
+        const offset = 6;
+        const anchor = H.button.getBoundingClientRect();
+        // Layout size, not getBoundingClientRect: the open animation scales the popover.
+        const box = { width: pop.offsetWidth, height: pop.offsetHeight };
+        const below = anchor.bottom + offset;
+        const fitsBelow = below + box.height + pad <= innerHeight;
+        const fitsAbove = anchor.top - offset - box.height >= pad;
+        const top = fitsBelow || !fitsAbove ? below : anchor.top - offset - box.height;
+        const left = Math.max(pad, Math.min(anchor.left, innerWidth - box.width - pad));
+        pop.style.top = `${Math.max(pad, top)}px`;
+        pop.style.left = `${left}px`;
+      }
+      function showHint(button, pinned) {
+        clearTimeout(H.timer);
+        if (H.button && H.button !== button) hideHint();
+        H.button = button;
+        if (pinned) H.pinned = true;
+        pop.textContent = button.dataset.hint;
+        pop.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+        button.setAttribute("aria-describedby", "hint-pop");
+        placeHint();
+      }
+      function hideHint() {
+        clearTimeout(H.timer);
+        H.pinned = false;
+        if (H.button) {
+          H.button.setAttribute("aria-expanded", "false");
+          H.button.removeAttribute("aria-describedby");
+        }
+        H.button = null;
+        pop.hidden = true;
+      }
+      const toggleHint = (button) => (H.button === button && H.pinned ? hideHint() : showHint(button, true));
+      const scheduleHide = () => {
+        if (H.button && !H.pinned && document.activeElement !== H.button) H.timer = setTimeout(hideHint, CLOSE_DELAY_MS);
+      };
+
+      document.addEventListener("pointerenter", (event) => {
+        if (!(event.target instanceof Element)) return;
+        if (event.target === pop) return clearTimeout(H.timer);
+        if (!event.target.matches(".hint") || event.pointerType === "touch") return;
+        clearTimeout(H.timer);
+        const button = event.target;
+        if (H.button !== button) H.timer = setTimeout(() => showHint(button, false), OPEN_DELAY_MS);
+      }, true);
+      document.addEventListener("pointerleave", (event) => {
+        if (!(event.target instanceof Element)) return;
+        if (event.target === pop) return scheduleHide();
+        if (!event.target.matches(".hint")) return;
+        clearTimeout(H.timer);
+        scheduleHide();
+      }, true);
+      document.addEventListener("focusin", (event) => {
+        if (event.target instanceof Element && event.target.matches(".hint") && H.button !== event.target) showHint(event.target, false);
+      });
+      document.addEventListener("focusout", (event) => {
+        if (event.target instanceof Element && event.target.matches(".hint")) hideHint();
+      });
+      document.addEventListener("pointerdown", (event) => {
+        if (H.button && !H.button.contains(event.target) && !pop.contains(event.target)) hideHint();
+      });
+      document.addEventListener("scroll", placeHint, true);
+      addEventListener("resize", placeHint);
+
+      /* ---------- Dialogs ---------- */
+      const dialog = document.getElementById("dialog");
+      const DIALOGS = {
+        telegramConnect: {
+          title: "Connect Telegram?",
+          body: "<p>Telegram turns run with full unattended authority, with no approval prompts. Only the paired owner can trigger turns.</p>",
+          confirm: "Enable and connect",
+          onConfirm: () => { state.telegram.enabled = true; renderContent(); },
+        },
+        pairedControls: {
+          title: "Allow paired-device chat controls?",
+          body: "<p>Paired clients may request access to theme, chat width, Memory, Web Search and Skills controls on this host. Their pairing and workspace grants, app policy and existing setup requirements still apply. This does not allow credentials, terminal access or arbitrary app administration.</p>",
+          confirm: "Allow",
+          onConfirm: () => document.querySelector('[data-confirm="pairedControls"]')?.setAttribute("aria-checked", "true"),
+        },
+        addModel: {
+          title: "Add model by ID",
+          body: `<p>Add a model the lists don’t include yet. Aiden checks the ID format here; the provider checks the rest when you generate.</p>
+            <label>Provider ${select("Provider for the new model", ["OpenRouter", "fal", "Replicate"])}</label>
+            <label>Model ID <input class="input" type="text" placeholder="fal-ai/endpoint" /></label>
+            <label>Name (optional) <input class="input" type="text" /></label>
+            <label>Edit endpoint (optional) <input class="input" type="text" placeholder="fal-ai/endpoint/edit" /></label>
+            <label>Reference image input (optional) ${select("Reference image input", ["image_input", "input_images"])}</label>
+            <label class="inline">Takes reference images ${sw("Takes reference images")}</label>`,
+          confirm: "Add model",
+          onConfirm: () => toast("Prototype only: nothing was added"),
+        },
+      };
+      let dialogConfirm = () => {};
+      function openDialog(name) {
+        const d = DIALOGS[name];
+        dialogConfirm = d.onConfirm;
+        dialog.innerHTML = `<form method="dialog" class="dialog-body"><h2 id="dialog-title">${esc(d.title)}</h2>${d.body}<div class="dialog-actions"><button class="btn" value="cancel">Cancel</button><button class="btn accent" value="confirm">${esc(d.confirm)}</button></div></form>`;
+        dialog.returnValue = "cancel";
+        dialog.showModal();
+      }
+      dialog.addEventListener("close", () => { if (dialog.returnValue === "confirm") dialogConfirm(); });
+
+      /* ---------- Toast ---------- */
+      const toastEl = document.getElementById("toast");
+      let toastTimer;
+      function toast(text) {
+        toastEl.textContent = text;
+        toastEl.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toastEl.hidden = true; }, 1800);
+      }
+
+      /* ---------- Events ---------- */
+      function selectRadio(radio) {
+        const radios = [...radio.closest('[role="radiogroup"]').querySelectorAll('[role="radio"]')];
+        for (const r of radios) {
+          r.setAttribute("aria-checked", String(r === radio));
+          r.tabIndex = r === radio ? 0 : -1;
+        }
+      }
+
+      document.addEventListener("click", (event) => {
+        const t = event.target instanceof Element ? event.target : null;
+        if (!t) return;
+        const hintButton = t.closest(".hint");
+        if (hintButton) return toggleHint(hintButton);
+
+        const nav = t.closest(".nav-item");
+        if (nav) {
+          open(nav.dataset.target, `#${nav.id}`);
+          /* Below 760px the sidebar sits above the page, so bring the page into view. */
+          if (state.section !== "links" && matchMedia("(max-width: 760px)").matches) {
+            document.getElementById("settings-main").scrollIntoView({ block: "start" });
+          }
+          return;
+        }
+
+        const tab = t.closest('[role="tab"]');
+        if (tab) return open(tab.dataset.tab, `#tab-${tab.dataset.tab}`);
+
+        const radio = t.closest('[role="radio"]');
+        if (radio) return selectRadio(radio);
+
+        const toggle = t.closest('[role="switch"]');
+        if (toggle) {
+          if (toggle.dataset.confirm && toggle.getAttribute("aria-checked") === "false") return openDialog(toggle.dataset.confirm);
+          const on = toggle.getAttribute("aria-checked") !== "true";
+          toggle.setAttribute("aria-checked", String(on));
+          if (toggle.dataset.offNote) document.getElementById(toggle.dataset.offNote).hidden = on;
+          return;
+        }
+
+        const action = t.closest(".btn");
+        if (!action || action.closest("dialog") || action.closest(".proto-bar")) return;
+        if (action.dataset.dialog) return openDialog(action.dataset.dialog);
+        if (action.dataset.cf) { state.cloudflare = action.dataset.cf; return renderContent(); }
+        if (action.dataset.tg === "token") { state.telegram.tokenSaved = true; return renderContent(); }
+        if (action.dataset.tg === "disconnect") { state.telegram.enabled = false; return renderContent(); }
+        toast("Prototype only: this action does nothing");
+      });
+
+      document.addEventListener("keydown", (event) => {
+        const t = event.target instanceof Element ? event.target : null;
+        if (event.key === "Escape" && H.button) return hideHint();
+        if (!t) return;
+
+        if (t.matches(".hint") && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          return toggleHint(t);
+        }
+
+        const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+        if (t.matches('[role="tab"]')) {
+          const tabs = [...t.parentElement.children];
+          const index = tabs.indexOf(t);
+          const next = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[tabs.length - 1]
+            : event.key === "ArrowRight" || event.key === "ArrowLeft" ? tabs[(index + step + tabs.length) % tabs.length] : null;
+          if (next) {
+            event.preventDefault();
+            open(next.dataset.tab, `#tab-${next.dataset.tab}`);
+          }
+          return;
+        }
+        if (t.matches('[role="radio"]') && step) {
+          event.preventDefault();
+          const radios = [...t.closest('[role="radiogroup"]').querySelectorAll('[role="radio"]')];
+          const next = radios[(radios.indexOf(t) + step + radios.length) % radios.length];
+          selectRadio(next);
+          next.focus();
+        }
+      });
+
+      document.addEventListener("change", (event) => {
+        const t = event.target;
+        if (t.matches("[data-exposure]")) {
+          t.closest(".row").querySelector("[data-exposure-help]").textContent = EXPOSURE_HELP[t.value];
+        } else if (t.matches("[data-tts-key]")) {
+          document.getElementById("tts-dedicated").hidden = t.value !== "Dedicated key";
+        } else if (t.matches("[data-shortcut]")) {
+          t.closest(".row").querySelector("[data-shortcut-help]").textContent = {
+            "Tap or hold": "Tap to toggle, or hold to talk.",
+            "Hold to dictate": "Hold the shortcut while you speak.",
+            "Press to toggle": "Press to start and press again to stop.",
+          }[t.value];
+        }
+      });
+
+      document.getElementById("nav-search").addEventListener("input", (event) => {
+        state.query = event.target.value;
+        renderNav();
+      });
+      document.getElementById("back-btn").addEventListener("click", () => toast("Prototype only: Back to app leaves Settings"));
+      document.getElementById("ctl-view").addEventListener("change", (event) => {
+        state.view = event.target.value;
+        if (state.view === "proposed" && !isAvailable(state.section === "links" ? "appearance" : state.section)) state.section = "providers";
+        render();
+      });
+      document.getElementById("ctl-host").addEventListener("change", (event) => {
+        state.host = event.target.value;
+        state.section = resolveSection(state.section);
+        render();
+      });
+      document.getElementById("ctl-theme").addEventListener("change", (event) => {
+        document.documentElement.dataset.theme = event.target.value;
+      });
+      document.getElementById("ctl-notes").addEventListener("click", (event) => {
+        state.notes = !state.notes;
+        event.currentTarget.setAttribute("aria-pressed", String(state.notes));
+        renderContent();
+      });
+
+      document.querySelectorAll("[data-icon]").forEach((el) => { el.innerHTML = ICONS[el.dataset.icon]; });
+      render();
+    </script>
+  </body>
+</html>

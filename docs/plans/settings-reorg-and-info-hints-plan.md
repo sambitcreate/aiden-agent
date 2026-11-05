@@ -1,122 +1,295 @@
-# Settings UI Deep-Dive Audit & Reorganization Plan
+# Settings reorganization and InfoHint plan
 
-> [!IMPORTANT]
-> **Executive Diagnosis**: Aiden’s Settings has grown to **23 top-level destinations** (17 dumped into a single `"Agent"` sidebar group) and over **2,400 words of inline explanatory prose**, detached footer paragraphs, static control-less cards, and duplicated controls. Only `Model Pad` and `Connectors` currently use the shared `<InfoHint>` (`(i)`) component (`renderer/components/ui-info-hint.tsx`).
+Status: Proposed, revised 2026-11-05 after a code review of the first draft. Nothing here has shipped.
 
----
+Prototype: [`assets/settings-reorg-prototype.html`](assets/settings-reorg-prototype.html). It's a static mock that runs in a browser, with no app code behind it.
 
-## 1. Information Architecture Reorganization (23 → 16 Destinations across 5 Groups)
+## Summary
 
-Currently, `renderer/shared/settings-section.ts` puts 17 items in `"Agent"` and 6 in `"App"`. Several pages are 1-control duplicates, split across groups, or overloaded with unrelated controls:
+Settings has 23 destinations in two sidebar groups, 17 in Agent and 6 in App. Related controls sit far apart: what Aiden may do without asking is split across Bots, Tool approvals, Computer Use and Appearance, and voice is split across Voice, Text to Speech and Aiden Live. The Memory page opens with compaction and cache cards before it reaches memory. Only Model Pad and Connectors use the shared `InfoHint`, so most pages explain themselves in paragraphs.
+
+This plan makes three changes:
+
+1. Reduce the sidebar to 17 pages in 5 groups. Four merged pages use tabs. Links leaves the sidebar because Appearance already embeds it.
+2. Keep every existing `section` ID working, in links, search, the command palette and the assistant.
+3. Move explanation behind `InfoHint` where it's safe. Controls, privacy disclosures and safety notices stay on the page.
+
+Out of scope: new settings, storage or schema changes, Aiden Remote protocol changes, and mobile Settings screens. Native apps don't mirror these sections; only two copy strings change (see [Docs and copy](#docs-and-copy)).
+
+The regrouping covers `UI-55` in `.memory/ux-settings-sidebar-devices.md`, which asked for a prototype first, and `X-7` in `docs/performance/optimization-audit-2026-10-03.md`.
+
+## Sidebar
+
+### Pages
+
+Titles stay as they are today unless a page's contents change. That keeps search terms and doc references stable, and leaves `UI-59`, the renames decision, with the owner.
+
+| Group | Page | Tabs (`section` IDs) | Change |
+|---|---|---|---|
+| Models & Context | Providers | `providers` | None |
+| | Model Pad | `modelData` | None |
+| | Context & Limits | `limits` | Renamed from Limits & spending. Takes compaction, budgets and prompt cache from Memory |
+| Capabilities | Skills | `skills` | None |
+| | Connectors | `mcp` | None |
+| | Web Search | `websearch` | None |
+| | Image Generation | `imageGeneration` | None |
+| | Memory | `memory` | Holds only memory settings |
+| Autonomy & Devices | Bots & Approvals | Bots `bots`, Tool approvals `approvals`, Controls in chat `appControls` (new) | Merged. Controls in chat moves from Appearance |
+| | Scheduled tasks | `scheduledTasks` | None |
+| | Computers & VMs | Computer Use `computerUse`, Bot computers `botComputers` | Merged |
+| | Simulator | `simulator` | None |
+| Voice & Channels | Voice & Speech | Voice `voice`, Text to Speech `tts`, Aiden Live `geminiLive` | Merged |
+| | Connections | Control this device `remoteAccess`, Control other devices `peerHosts` (new), Telegram `telegram` | Telegram joins as a third tab |
+| App | Appearance | `appearance`, plus `links` as an anchor | Loses Controls in chat. `links` opens here |
+| | Keyboard shortcuts | `shortcut` | None |
+| | About | `about` | None |
+
+That's 3 + 5 + 4 + 2 + 3 = 17 pages. Tab labels match today's destination titles and the existing Connections labels. The first draft's labels (Voice Input, Read Aloud, This Mac, Control this Mac) are dropped: they added renames without helping the regrouping, and "Mac" is wrong on Linux.
+
+The page stays **Connections**, not the draft's Remote & Channels. It avoids a rename, and the page still makes sense if Telegram goes away (see [Owner decisions](#owner-decisions)).
+
+The two new IDs exist because each tab needs a `section` value. Controls in chat has no ID today, and Connections switches segments with local state. Adding them takes `SETTINGS_SECTIONS` from 23 to 25 entries.
 
 ```mermaid
 flowchart LR
-    subgraph Before["Current Sidebar (23 items in 2 groups)"]
-        B1["Agent (17 items): Providers, Model Pad, Limits, Skills, Connectors, Web Search, Images, Telegram, Connections, Scheduled, Aiden Live, Approvals, Computer Use, Bots, Bot computers, Simulator, Memory"]
-        B2["App (6 items): Voice, Text to Speech, Links (1 dropdown!), Shortcuts, Appearance (+ Controls in chat!), About"]
+    subgraph Before["Today: 23 destinations, 2 groups"]
+        B1["Agent (17)"]
+        B2["App (6)"]
     end
-    subgraph After["Proposed Sidebar (16 items in 5 semantic groups)"]
-        A1["Models & Context (3): Providers · Model Pad · Context & Limits"]
-        A2["Capabilities (5): Skills · Connectors · Web Search · Images · Memory"]
-        A3["Autonomy & Devices (4): Bots & Approvals · Scheduled Tasks · Computers & VMs · Simulator"]
-        A4["Voice & Channels (2): Voice & Speech · Remote & Channels"]
-        A5["App (3): Appearance · Shortcuts · About"]
+    subgraph After["Proposed: 17 pages, 5 groups"]
+        A1["Models & Context (3)"]
+        A2["Capabilities (5)"]
+        A3["Autonomy & Devices (4)"]
+        A4["Voice & Channels (2)"]
+        A5["App (3)"]
     end
     Before --> After
 ```
 
-### Key Consolidations & Moves
+### Open PRs that add destinations
 
-| Proposed Group & Destination | What Moves / Merges | Why |
+Three open PRs edit the same lists in `renderer/shared/settings-section.ts` and `renderer/main/settings-view.tsx`:
+
+| PR | Adds | Group today | Place in this plan |
+|---|---|---|---|
+| [#731](https://github.com/sambitcreate/aiden-agent/pull/731), [#773](https://github.com/sambitcreate/aiden-agent/pull/773) | `storage` ("Storage") | App | App, before About |
+| [#687](https://github.com/sambitcreate/aiden-agent/pull/687) | `hooks` ("Hooks"), gated by `capabilities.hooks` | Agent | Capabilities, after Connectors |
+
+If both land, the sidebar has 19 pages. Whichever PR merges second resolves the conflict: the destination goes into `SETTINGS_PAGES` with the group above, and a `hooks` gate stays in the shared availability filter. The coverage test below fails if a new section has no page.
+
+## Navigation contract
+
+### Data model
+
+`section` stays the only URL state and selects a tab. The existing per-section entries stay, so search and the palette keep their inventory. Pages are a layer on top:
+
+```ts
+type SettingsGroup = "Models & Context" | "Capabilities" | "Autonomy & Devices" | "Voice & Channels" | "App";
+
+export const SETTINGS_PAGES: ReadonlyArray<{
+  id: string;
+  title: string;
+  group: SettingsGroup;
+  tabs: readonly SettingsSection[]; // first available tab is the default
+}>;
+
+export function pageFor(section: SettingsSection): SettingsPage;
+export function availableSettingsPages(capabilities): SettingsPage[]; // tabs filtered, empty pages removed
+```
+
+`SETTINGS_DESTINATIONS` drops `group` and derives it from the page. `links` is the one section that isn't a tab: `pageFor("links")` returns Appearance, and it's handled as an anchor.
+
+### Behavior
+
+- **Links in.** All 23 existing IDs and both new ones parse, and `parseSettingsSearch` keeps dropping other keys. Existing callers need no change, including `section: "remoteAccess"` from `chat-sidebar.tsx:871`, `remote-new-chat-view.tsx:602` and `remote-chat-view.tsx:1295`.
+- **Sidebar click.** Opens the page's first available tab. There's no remembered tab; Settings doesn't persist a section today and this doesn't add that.
+- **Tab switch.** Navigates with `replace: true`, as the sidebar already does. Otherwise **Back to app** (`router.history.back()`) would walk back through every tab.
+- **Selection and headings.** The sidebar highlights `pageFor(section)`. The heading uses the page title and the description stays `DESCRIPTIONS[section]`, so it changes with the tab. Today both key on `section` (`settings-view.tsx:238,285,286`). `CONTENT` stays keyed by section.
+- **One tab available.** The strip is hidden, and both the sidebar row and heading use the tab's own title. An Intel Mac sees "Computer Use", not "Computers & VMs".
+- **Unavailable section.** If the page has another available tab, open the first one. Otherwise fall back to `providers`, as `settings-view.tsx:175-176` does now.
+- **`links`.** Opens Appearance and scrolls the links row into view, instantly under Reduce Motion. It gets no sidebar row, but stays in the palette and search.
+- **Compaction.** It gets no ID or anchor. It's a titled group on a short page, and Context & Limits takes the `compaction`, `cache` and `warm` keywords from Memory.
+
+### Platform gating
+
+Sidebar, palette and assistant lists must filter the same way, through one shared filter.
+
+| Host | `computerUse` | `botComputers` | Result |
+|---|---|---|---|
+| Apple silicon Mac | yes | yes | Computers & VMs with two tabs |
+| Intel Mac | yes | no | One tab, titled Computer Use |
+| Linux | no | no | Page hidden |
+
+The gates are in `main/services/host-platform-capabilities.ts:35-36`. `assistantSettingsSections` (`settings-section.ts:253`) doesn't filter `computerUse` today, so the assistant can name a Linux-hidden page. Phase 1 fixes that. Simulator keeps its `devices` gate.
+
+### Search and palette
+
+- Sidebar search matches a page if any available tab matches on title, keywords or description, and the row opens the first matching tab. Searching "read aloud" shows Voice & Speech and opens Text to Speech.
+- The palette (`command-palette.tsx:321,1124`) keeps one row per section and shows the page title as its detail. "Links" stays findable.
+- Links keywords also go on Appearance.
+
+### Tabs
+
+- Use the shared `Tabs` primitive with `idBase` and `tabIds` (`renderer/components/ui-primitives.tsx:77`). It's built on Radix, so arrow keys and roving focus come with it, and the global `:focus-visible` rule in `renderer/styles.css` gives it the neutral ring.
+- The caller renders the `role="tabpanel"` element, linked through `tabIds`.
+- Only the selected panel mounts, matching today's page switch. Unsaved form drafts are lost on a switch, as they are when changing pages now.
+- `ConnectionsSegments`, `connectionsSegmentForKey` and the local segment state in `connections-settings.tsx` go away. The tablist's `aria-label` stays "Connections", which keeps `remote-access-lifecycle.spec.ts:212` valid. The other merged pages use their page title.
+- `Segmented` is the radio primitive and isn't used for page tabs.
+
+### Model-visible text
+
+The assistant reads these strings, so they ship with the navigation change:
+
+- `resources/aiden-help/manifest.json`, the `setup`, `changing-settings`, `voice` and `bots` entries and any other page references. `packages/cli/src/commands.ts:15` ships the same file, so the CLI must still build.
+- `main/services/assistant/system-prompt.ts:201` lists section IDs and picks up the new ones automatically. Check the wording still reads correctly.
+- `main/services/aiden-app-knowledge.ts:77` tells the model to name the Settings page. Use page titles there.
+- `aiden_open` (`main/services/aiden-app-navigation.ts:4-10`) can open `memory`, which no longer holds compaction. Add a `limits` destination so the model can still open those settings.
+- Image Generation keeps its title, so the errors in `pi-model-tools.ts:21` and `create-images/run-coordinator.ts:143` stay valid.
+
+## InfoHint rules
+
+`InfoHint` (`renderer/components/ui-info-hint.tsx`) explains one thing in at most two short sentences. It's `max-w-64`, and focus stays on the trigger, closing on blur, so a link or button inside it can't be reached by keyboard. These rules follow from that:
+
+| Content | Where it goes |
+|---|---|
+| One fact, two short sentences at most, nothing to click | `InfoHint` |
+| Longer steps or reference text | `Disclosure` on the page, opening by default when the user needs it |
+| Any button, link or control | Stays on the page |
+| Privacy disclosure, data leaving the device, charges or unattended authority | Stays visible, shortened where possible |
+| Text that changes with the current selection or status | Stays next to that control |
+
+### Must stay on the page
+
+The first draft would have hidden or deleted these:
+
+| Item | Where | Why |
 |---|---|---|
-| **1. Models & Context**<br/>• `Providers`<br/>• `Model Pad`<br/>• `Context & Limits` | Move **Automatic compaction**, **Model compaction budgets**, and **Prompt cache** out of `Memory` into `Context & Limits` (alongside `Usage limits` and `Spending limits`). | Previously, `Memory` started with 3 massive context/token-budget cards before the user even reached `Use memory` below the fold (`X-7` / `UI-55` in the optimization audit). |
-| **2. Capabilities**<br/>• `Skills`<br/>• `Connectors`<br/>• `Web Search`<br/>• `Images`<br/>• `Memory` | `Memory` now contains **only Memory** (`Use memory` global switch, `Workspaces` switches, and `Memory facts` table). | Makes `Memory` clean, scannable, and immediately understandable. |
-| **3. Autonomy & Devices**<br/>• `Bots & Approvals`<br/>• `Scheduled Tasks`<br/>• `Computers & VMs`<br/>• `Simulator` | • **Bots & Approvals** unifies `Bots`, `Tool approvals`, and `Controls in chat` (currently misplaced at the top of `Appearance`!) via segmented tabs (`[Bots \| Tool approvals \| Controls in chat]`).<br/>• **Computers & VMs** unifies `Computer Use` (This Mac) and `Bot computers` (Lume VMs) via segmented tabs (`[This Mac \| Bot computers]`). | Eliminates hunting across 4 different places (`Bots`, `Tool approvals`, `Appearance`, `Computer Use`) to see what Aiden and Bots are allowed to do without asking. |
-| **4. Voice & Channels**<br/>• `Voice & Speech`<br/>• `Remote & Channels` | • **Voice & Speech** unifies `Voice` (input/dictation), `Text to Speech` (Read Aloud), and `Aiden Live` (`[Voice Input \| Read Aloud \| Aiden Live]`).<br/>• **Remote & Channels** adds `Telegram` as a 3rd tab in `Connections` (`[Control this Mac \| Control other Macs \| Telegram]`). | Previously, speaking to Aiden (`Voice`), hearing Aiden (`Text to Speech`), and live voice (`Aiden Live`) were 3 separate sidebar pages split between `Agent` and `App`. |
-| **5. App**<br/>• `Appearance`<br/>• `Shortcuts`<br/>• `About` | • **Delete standalone `Links` nav item** (`links-settings.tsx` is a single dropdown that is *already* rendered inside `Appearance → Chat` via `<LinksSettings embedded />`!).<br/>• Delete orphaned `assistant-settings.tsx`. | Removes a 1-control duplicate page and keeps `Appearance` strictly focused on visual theme and layout. |
+| Cloud processing notice | `tts-settings.tsx:491-515` | Text goes to Google, even for local-model replies, and may be billed |
+| **Clear generated audio** | `tts-settings.tsx:510-512` | Only control for clearing the cache |
+| Screenshots, window details and accessibility text going to the model | `computer-use-settings.tsx:345-359` | Data disclosure |
+| What leaves this device | `web-page-settings.tsx:170-174` | Data disclosure |
+| **Manage Bot grants**, **Manage schedule grants** | `web-search-settings.tsx:2064-2102` | Controls |
+| Always comes to you | `bots-settings.tsx` | Safety list; `docs/settings-design-system.md` documents it as designed |
+| Telegram's unattended-authority notice | `telegram-settings.tsx` ~593 | Safety notice; the review dialog alone isn't enough |
+| Aiden Live state and Beta badge | `gemini-live-settings.tsx:124-140` | Live status |
+| Aiden Live Scheduled tasks and Global shortcut rows | `gemini-live-settings.tsx:193-233` | Status badges with Review and Manage actions |
+| `EXPOSURE_HELP` | `mcp-exposure-controls.tsx:20-24` | Three strings keyed to the selected exposure, not one repeated sentence |
 
-> [!TIP]
-> **Zero Broken Deep Links**: `parseSettingsSection` and `SettingsView` will keep accepting all 23 existing `SettingsSection` IDs (`links`, `tts`, `geminiLive`, `telegram`, `approvals`, `botComputers`) and automatically open the consolidated page with the matching tab selected.
+## Page changes
 
----
+### Cards and notices
 
-## 2. Standardizing `(i)` `InfoHint` & Eliminating Static Prose Blocks
+| File | Change |
+|---|---|
+| `computer-use-settings.tsx` | Replace the How it behaves card with one visible line for the data disclosure and an `InfoHint` for the rest, including "asks once per chat". Hide `FormFillSpecialistField` when `status.state === "not-downloaded"`; it has no control then |
+| `bots-settings.tsx` | Keep Always comes to you, including its `computerUse`-gated third row. Move the footer paragraph into an `InfoHint` on **Go ahead without asking**, and keep the description's mention of connected apps |
+| `tts-settings.tsx` | Merge 7 cards into 3: Setup (Read aloud, Connection, Speech model), Voice and delivery (Voice, Delivery, Reading preferences), Privacy and storage (unchanged) |
+| `web-search-settings.tsx` | Keep Privacy and access with both buttons. Remove only the repeat of `routeRecipientSummary`, leaving it once on the page |
+| `web-page-settings.tsx` | Keep What leaves this device visible wherever the Extract form is |
+| `gemini-live-settings.tsx` | Shorten the Callout's prose and keep its state and badge. Remove only the static Operate Aiden row |
+| `image-generation-settings.tsx` | Move Separate keys for images to an `InfoHint` on Providers. The provider dialog already says the same thing |
+| `telegram-settings.tsx` | See [Telegram](#telegram) |
 
-Across the 23 pages, we identified **4 categories of text clutter** to eliminate or move behind `<InfoHint topic="...">` (`renderer/components/ui-info-hint.tsx`):
+### Footer paragraphs
 
-### A. Delete Control-less "Static Explanation" Cards & Rows (Move to `InfoHint`)
-1. **`computer-use-settings.tsx` (`FieldSet` `"How it behaves"`, lines 345–359)**:
-   - **Current**: Entire `FieldSet` card with zero controls — just a 4-sentence paragraph and a static `Asks once per chat` badge.
-   - **Change**: Delete the `FieldSet`. Move the 2-sentence summary into `<InfoHint topic="Computer Use behavior">` on the `"Desktop control"` group header. Also hide `FormFillSpecialistField` when `status.state === "not-downloaded"`.
-2. **`bots-settings.tsx` (`FieldSet` `"Always comes to you"` + detached footer, lines 91–106)**:
-   - **Current**: 3-row read-only card with lock icons (`Passwords, 2FA codes and money`, `Steps a Bot's rules hand off`, `Using your Mac with Computer Use`) plus a detached 33-word paragraph below it explaining what `"Go ahead without asking"` does when off.
-   - **Change**: Move both into `<InfoHint topic="unattended routines">` on the `"Run routine steps without asking"` switch row.
-3. **`tts-settings.tsx` (`FieldSet` `"Privacy and storage"`, lines 348–371)**:
-   - **Current**: 3 static rows (`Cloud processing`, `Saved audio`, `Voice safety`) with zero controls, plus 6 other separate 1-row `FieldSet` cards on the same page.
-   - **Change**: Delete the `"Privacy and storage"` `FieldSet` and move its disclosure into `<InfoHint topic="Read Aloud privacy">` on the main `"Read aloud"` group header. Consolidate the remaining 6 tiny `FieldSet`s into 2 clean cards (`Read aloud` and `Delivery & code`).
-4. **`web-search-settings.tsx` (`Privacy and access` card, lines 2064–2102) & `web-page-settings.tsx` (`What leaves this device` row, lines 170–174)**:
-   - **Current**: Repeats `routeRecipientSummary` for a second time on the same page; `"What leaves this device"` is a control-less `<Field>` row.
-   - **Change**: Delete both static blocks and place their content inside `<InfoHint topic="Web Search">` and `<InfoHint topic="extract mode">`.
-5. **`gemini-live-settings.tsx` (Hero `<Callout>` + `"Actions"` `FieldSet`, lines 124–140, 193–233)**:
-   - **Current**: Giant top `<Callout>` repeats the page heading; `"Actions"` `FieldSet` has a control-less `"Operate Aiden"` badge row and two cross-link rows.
-   - **Change**: Move the hero explanation into `<InfoHint topic="Aiden Live">` on the header, delete the static `"Operate Aiden"` row, and fold `"Global shortcut"` into the main card.
-6. **`image-generation-settings.tsx` (Top `<Callout>` `"Separate keys for images"`, lines 242–248)**:
-   - **Current**: Full-width banner repeating the same key-isolation note shown in the provider dialog.
-   - **Change**: Delete the banner and place it in `<InfoHint topic="image provider keys">` on the `Providers` header.
-7. **`telegram-settings.tsx` (`"How to connect"` 6-step list & `"⚠ Security notice"` rows inside Advanced, lines 593–621)**:
-   - **Current**: 12 lines of static setup steps and security warnings buried at the bottom of `Advanced Telegram settings`, plus a duplicate `"Enable Telegram bridge"` switch and a card-inside-a-card `<details>` wrapper.
-   - **Change**: Move the setup steps and security notice into `<InfoHint topic="connecting a Telegram bot">` on Step 1; remove the duplicate switch and fix the nested `<FieldSet>`.
+Each hint is rewritten to fit two short sentences.
 
-### B. Delete Detached Footer Paragraphs Outside `FieldSet`s (Move to `InfoHint`)
-- **`limits-settings.tsx` (lines 106–110 & 158–162)**: Delete both 3–4 sentence footer paragraphs (94 words) and attach `<InfoHint topic="usage limit waiting">` and `<InfoHint topic="spending limits">` to the group titles.
-- **`memory-settings.tsx` (lines 141–151, 168, 184–187, 219–222)**: Delete all 4 detached paragraphs (165 words) and move their explanations into `<InfoHint>`s on `Automatic compaction`, `Warm caches`, and `Use memory`.
-- **`tool-approval-settings.tsx` (lines 94–98)**: Move the 3-sentence footer paragraph into `<InfoHint topic="remembered approvals">` on the `"Always allowed"` group title.
-- **`skills-settings.tsx` (lines 126–131 & 180–184)**: Move the 48-word `.agents/skills` / `.claude/skills` / `plugin:name` paragraph into `<InfoHint topic="discovered skills">` on `"Built-in and discovered"`, and delete the redundant `"Skills are off"` paragraph.
-- **`mcp-exposure-controls.tsx` (lines 75–77)**: Remove the inline `EXPOSURE_HELP` sentence repeated under every connected MCP server and put a single `<InfoHint topic="model access">` next to the `"Model access"` label.
+| File | Change |
+|---|---|
+| `limits-settings.tsx` ~106-110, ~158-162 | Move both footers to `InfoHint`s on the group titles |
+| `memory-settings.tsx` | The page has 5 paragraphs, about 170 words, and only "Turning memory off..." and "Workspace switches..." sit outside a `FieldSet`. Move those two to `InfoHint`s on Use memory and Workspaces. Reword "Current-chat recall works independently of memory below", which goes stale when compaction moves |
+| `tool-approval-settings.tsx:94-98` | Trim 3 sentences to 2 and move them to an `InfoHint` on Always allowed |
+| `skills-settings.tsx:126-131` | Move the paths paragraph to an `InfoHint` on Built-in and discovered |
+| `skills-settings.tsx:180-184` | Shorten to one line that stays while Skills is off |
 
-### C. Progressive Disclosure for Advanced Forms
-- **`web-page-settings.tsx`**: Only show the `Cloudflare account ID` and `API keys` pool editor when the user clicks `Set up Cloudflare…` (or when `Extract only the values asked for` is turned on), instead of dumping 25 lines of Cloudflare inputs whenever basic `"Read web pages"` is enabled.
-- **`image-generation-settings.tsx`**: Move the always-expanded 5-field `"Add model by ID"` bottom form into an `"Add custom model…"` `<Dialog>` button in the header.
-- **`compaction-budget-settings.tsx`**: Collapse the 3-input per-model token budget form behind a `"Manage overrides…"` disclosure/dialog when no overrides are configured.
-- **`dictation-shortcut-settings.tsx`**: Replace the 3 tall vertical radio cards for `"Shortcut behavior"` with a compact trailing `<Select>` (`Tap or hold`, `Hold to dictate`, `Press to toggle`).
-- **`simulator-settings.tsx`**: Collapse the 5-row `"Helper tools"` npm maintenance section into a `<Disclosure>` summary row, and move `"Auto-show floating device"` into the main simulator card.
+### Progressive disclosure
 
-### D. Replace Bespoke Info Buttons with Shared `<InfoHint>`
-- Replace `<ProviderInfo>` in [`providers-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/providers-settings.tsx#L211-L240) and `<RemoteAccessInfo>` in [`remote-access-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/remote-access-settings.tsx#L194-L228) with the shared [`InfoHint`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/ui-info-hint.tsx#L18-L133).
-
----
-
-## 3. Page-by-Page Copy & Structural Changes Table
-
-| File | Current Visible Copy / Cards | Proposed Change |
+| File | Change | Must preserve |
 |---|---|---|
-| [`providers-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/providers-settings.tsx) & [`codex-provider-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/codex-provider-settings.tsx) | 5 groups, ~20 lines of copy, custom `ProviderInfo`, nested `<details>` for Chat title generation, 4 text blocks in `Model catalog`. | Use `<InfoHint>`, make `Chat title generation` a 1-line `Field` row with `<InfoHint>`, expand `"More built-in providers"` in the same card, and collapse `Model catalog` to 1 row + `<InfoHint>`. |
-| [`limits-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/limits-settings.tsx) + [`compaction-budget-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/compaction-budget-settings.tsx) | 5 selects + 127 words of prose in `limits-settings`; 3 compaction/cache cards in `memory-settings`. | Combine into **Context & Limits**. Delete 4 detached footer paragraphs; move details into `<InfoHint>`s; collapse per-model compaction budget inputs behind a disclosure/modal. |
-| [`skills-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/skills-settings.tsx) | 48-word path/collision paragraph + 27-word switch description + 26-word off warning; unsearchable discovered list. | Shorten switch description to 7 words + `<InfoHint>`; move discovered paths into `<InfoHint>`; add search input when `discoveredList.length > 8`. |
-| [`mcp-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/mcp-settings.tsx) & [`mcp-exposure-controls.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/mcp-exposure-controls.tsx) | Repeats `EXPOSURE_HELP` sentence under every connected server row. | Replace per-row `EXPOSURE_HELP` line with a single `<InfoHint topic="model access">` on the `"Model access"` label. |
-| [`web-search-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/web-search-settings.tsx) & [`web-page-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/web-page-settings.tsx) | 30+ lines of repeated privacy prose; standalone `Privacy and access` card; always-open Cloudflare form when `Read web pages` is on. | Delete `Privacy and access` card and `What leaves this device` row (move to `<InfoHint>`); open `ProviderSetupDialog` directly from `Browse providers`; hide Cloudflare form behind `Set up…` until needed. |
-| [`image-generation-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/image-generation-settings.tsx) | Top `<Callout>` banner + always-open 5-field `Add model by ID` form at bottom. | Move key-isolation note to `<InfoHint>`; move `Add model by ID` into a header button `<Dialog>`. |
-| [`memory-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/memory-settings.tsx) | Compaction & cache cards push `Use memory` below the fold; 2 detached footer paragraphs. | Keep only `Use memory`, `Workspaces`, and `MemoryFactsSection`; move footer notes into `<InfoHint>`. |
-| [`bots-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/bots-settings.tsx), [`tool-approval-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/tool-approval-settings.tsx), [`app-control-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/app-control-settings.tsx) | 3 separate places for permissions/authority; static 3-row `Always comes to you` card; detached footers. | Unify under **Bots & Approvals** (`[Bots \| Tool approvals \| Controls in chat]`); replace static card and footers with `<InfoHint>`s; convert `AppControlSettings` to `FieldSet`/`Field`. |
-| [`computer-use-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/computer-use-settings.tsx) & [`bot-computers-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/bot-computers-settings.tsx) | Static `How it behaves` card; dead `Form fill specialist` row; 3–5 sentence descriptions on every VM row. | Unify under **Computers & VMs** (`[This Mac \| Bot computers]`); delete `How it behaves` card (move to `<InfoHint>`); hide `Form fill specialist` when not downloaded; tighten VM copy with `<InfoHint>`s. |
-| [`simulator-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/simulator-settings.tsx) & [`device-workspace-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/device-workspace-settings.tsx) | 4 `FieldSet`s, 12+ verbose rows, 5 always-visible npm helper rows. | Move `Auto-show floating device` to top card; collapse `Helper tools` into `<Disclosure>`; move SSH requirements into `<InfoHint>`. |
-| [`voice-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/voice-settings.tsx), [`tts-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/tts-settings.tsx), [`gemini-live-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/gemini-live-settings.tsx) | 3 separate sidebar pages; 7 `FieldSet`s on TTS (including static `Privacy and storage` card); Hero `<Callout>` + static `Actions` card on Live; 3 tall radio cards for Dictation shortcut behavior. | Unify under **Voice & Speech** (`[Voice Input \| Read Aloud \| Aiden Live]`); collapse TTS into 2 `FieldSet`s + `<InfoHint>`; convert Dictation shortcut behavior to `<Select>`; delete dead `assistant-settings.tsx`. |
-| [`connections-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/connections-settings.tsx) & [`telegram-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/telegram-settings.tsx) | Separate sidebar items; bespoke `RemoteAccessInfo`; Telegram has duplicate switch, card-in-card bug, and buried 6-step guide. | Unify under **Remote & Channels** (`[Control this Mac \| Control other Macs \| Telegram]`); use `<InfoHint>` for @BotFather guide & security notice; remove duplicate switch. |
-| [`appearance-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/appearance-settings.tsx) & [`links-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/links-settings.tsx) | Standalone `Links` nav item duplicates `<LinksSettings embedded />` in `Appearance → Chat`; `AppControlSettings` sits at top of `Appearance`. | Remove standalone `Links` nav item (route `section=links` to `Appearance`); move `AppControlSettings` to `Bots & Approvals`; shorten `Chat` row descriptions with `<InfoHint>`s. |
-| [`shortcut-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/shortcut-settings.tsx) & [`about-settings.tsx`](file:///Users/sambitbiswas/.gemini/antigravity/worktrees/aiden-macos/reorganize_settings_ui/renderer/components/settings/about-settings.tsx) | Two-story shortcut rows; verbose crash-capture descriptions in `DiagnosticsSettings`. | Place shortcut recorder inline on the right beside the switch; move crash-capture retention details into `<InfoHint>`. |
+| `web-page-settings.tsx` | Show **Set up Cloudflare…** until an account ID or key exists | The form stays visible when configured or paused. Extract can't be turned on until setup is ready, so it can't act as the trigger |
+| `image-generation-settings.tsx` | Move Add model by ID into a Dialog opened from the header | All 5 fields |
+| `compaction-budget-settings.tsx` | Put the budget form in a `Disclosure` | `defaultOpen` when overrides exist |
+| `dictation-shortcut-settings.tsx` | Replace the radio cards with a trailing Select and a row describing the selected option | Hold to dictate and Tap or hold appear only when `canChooseHold`; keep the `isDictationActivationMode` coercion and the `holdBusy` disable. With one option, show a plain row, not a one-item Select |
+| `simulator-settings.tsx` | Put Helper tools in a `Disclosure` with a summary row | It opens by default when an update is available, and the summary shows that state. **Remove installed tools** stays outside the fold |
 
----
+### Moving compaction to Context & Limits
 
-## 4. Implementation & Verification Phases
+Move these from `memory-settings.tsx` into their own group components rendered by the Limits page:
 
-1. **Phase 1 — Shared Primitives & Navigation (`settings-section.ts`, `settings-view.tsx`)**
-   - Update `SETTINGS_DESTINATIONS` with the 5 semantic groups (`Models & Context`, `Capabilities`, `Autonomy & Devices`, `Voice & Channels`, `App`) and consolidated destinations while preserving all legacy `SettingsSection` IDs in `parseSettingsSection` so deep links and assistant navigation continue to work.
-   - Replace `ProviderInfo` and `RemoteAccessInfo` with `<InfoHint>`.
-2. **Phase 2 — Models, Context & Capabilities (`providers`, `limits`, `memory`, `skills`, `mcp`, `websearch`, `imageGeneration`)**
-   - Move Compaction & Prompt Cache from `MemorySettings` to `LimitsSettings` (`Context & Limits`).
-   - Apply all `<InfoHint>` conversions, remove static disclaimer cards/rows, and add progressive disclosure for Cloudflare Extract credentials, custom image models, and compaction budgets.
-3. **Phase 3 — Autonomy, Devices, Voice & Channels (`bots`, `approvals`, `computerUse`, `botComputers`, `simulator`, `voice`, `tts`, `geminiLive`, `remoteAccess`, `telegram`)**
-   - Add segmented tab wrappers where pages are merged (`Bots & Approvals`, `Computers & VMs`, `Voice & Speech`, `Remote & Channels`), or keep any pages separate that you prefer as standalone sidebar items.
-   - Apply `<InfoHint>` copy reductions and delete static cards (`How it behaves`, `Always comes to you`, `Privacy and storage`, `Actions`) and dead `assistant-settings.tsx`.
-4. **Phase 4 — App Settings, Tests & Docs (`appearance`, `links`, `shortcut`, `about`, `docs/settings-design-system.md`)**
-   - Remove standalone `Links` from sidebar nav (keeping `<LinksSettings embedded />` in `Appearance → Chat`), tighten `ShortcutSettings` and `DiagnosticsSettings`, update unit & Playwright tests (`npm run test:settings-design`), and update `docs/settings-design-system.md`.
+- The compaction engine and warming controls, with `setCompactionEngine`, `setWarmingEnabled`, and their saving flags and ref.
+- `useProviders`, the `codexModels` query (`enabled: false`) and `budgetModelKeys`.
+- `CompactionBudgetSettings`.
+
+Don't route them through `LimitsSettings.save`. It has one `saving` flag, so a second change made during a save would be dropped.
+
+### Controls in chat
+
+`AppControlSettings` moves to the `appControls` tab and converts to `FieldSet` and `Field`. Its behavior doesn't change. The help text in `manifest.json:12` currently says Settings → Appearance → Controls in chat.
+
+### Telegram
+
+- Switch Disconnect from `disabled={!polling}` to `disabled={!enabled}`. `enabled` is the setting and `polling` is the service: when polling fails or another process owns the transport, `started` is false, so `getStatus` reports `disabled` and `polling` is false while `enabled` is still true (`telegram-service-core.ts:376,385-402`, `main/handlers/telegram.ts:47`).
+- Then remove the Enable switch (`telegram-settings.tsx:457-471`). Doing this in the other order would leave a failed bridge with no way to turn it off.
+- Connect keeps its review dialog (~625-628).
+- Move How to connect into a `Disclosure` that opens by default until a token is saved. Six steps don't fit an `InfoHint`.
+- Keep the security notice visible.
+- Fix the nested card.
+
+### Bespoke info buttons
+
+`ProviderInfo` (`providers-settings.tsx:84`, used at :353, :448, :552) is a click-opened popover with a title, and `RemoteAccessInfo` (`remote-access-settings.tsx:187`, used at :603) is a hover card. Both are `w-80`. Replace them with `InfoHint` only after trimming each message to two short sentences. If the Remote Access security copy can't fit, it stays in a `Disclosure` instead of being cut down.
+
+### Other pages
+
+| File | Change |
+|---|---|
+| `providers-settings.tsx` | Make Chat title generation one `Field` row with a hint, replacing nested `<details>`. Collapse Model catalog to one row with a hint, keeping the manual **Update model catalogs** action |
+| `skills-settings.tsx` | Add a search field past 8 discovered skills, matching workspace settings |
+| `bot-computers-settings.tsx` | Tighten row descriptions without removing the manual download and start wording |
+| `shortcut-settings.tsx` | Put the recorder beside the switch |
+| `about-settings.tsx` | Move crash-capture retention detail to a hint. The **Usage data** row keeps its wording and its "What's sent" sheet |
+| `assistant-settings.tsx` | Delete; nothing imports it. Remove its doc mentions in the same PR |
+
+## Phases
+
+Each phase is one PR that leaves Settings shippable. Run `npm run test:settings-design`, the suites for touched pages, and the affected Playwright specs through `npm run test:e2e:space`.
+
+1. **Navigation.** Everything in [Navigation contract](#navigation-contract): `SETTINGS_PAGES`, the new groups, all four tabbed pages, `peerHosts` and `appControls`, the `links` anchor, gating, search, palette, model-visible text, onboarding copy and the docs sweep. Page contents otherwise stay the same. The first draft split navigation across two phases; one change avoids shipping a half-migrated sidebar.
+2. **Compaction move.** Context & Limits and the cleaned-up Memory page, with the `limits` destination in `aiden_open`.
+3. **Telegram fix.** The Disconnect gate first, then removing the switch. Small, and it follows the decision below.
+4. **Hints and cards.** Footers, cards, the bespoke buttons and the `InfoHint` rules in `docs/settings-design-system.md`.
+5. **Progressive disclosure.** The table above, one page at a time.
+
+## Tests
+
+Follow the rules in `AGENTS.md`: behavior over source text, and no tautological or change-detector tests.
+
+| Test | Change |
+|---|---|
+| `renderer/lib/settings-section.test.ts` | Update `:29-36,44` for pages. Add: every section has exactly one page, all 25 IDs resolve, `links` resolves to Appearance, Linux hides Computers & VMs, Intel gets one tab titled Computer Use, a search for a tab's keyword finds its page and opens that tab, `assistantSettingsSections` drops `computerUse` on Linux |
+| `tests/e2e/settings-model-picker.spec.ts:3-16,54-90` | Update the sidebar list |
+| `tests/e2e/remote-access-lifecycle.spec.ts:212` | Reach segments as page tabs; add the Telegram tab to the keyboard walk |
+| New e2e case | Opening a merged page, switching tabs and pressing **Back to app** returns to the previous screen in one step |
+| `connections-settings.test.tsx:184-191` | Replace the `ConnectionsSegments` and key-helper tests with tab behavior |
+| `memory-settings.test.tsx:7` | It greps `memory-settings.tsx`. Changing that page requires a behavioral replacement in the same PR, as `AGENTS.md` asks |
+| New `limits-settings.test.tsx` | Compaction, warming and budget changes save independently, including a change made during a save. Register it in `package.json` and `scripts/ci-test-registry.json`, then run `npm run test:ci-policy` |
+| `telegram-settings` test | Disconnect works when `enabled` is true and `polling` is false |
+| `onboarding-flow.test.tsx:346,391,501`, `onboarding-bots-step.test.tsx:88` | Update for changed page names |
+| `main/services/aiden-app-navigation.test.ts` | `limits` opens |
+
+## Docs and copy
+
+Phase 1 updates these. Dated records stay as they are.
+
+- **`Settings → <page>` references.** Approximate counts: Bots 48, Voice 47, Bot computers 19, Connections 14, Links 14, Limits & spending 12, Tool approvals 11, Text to Speech 9, Computer Use 6, Aiden Live 5, Telegram 4. Connections stays valid. Image Generation (41) and Keyboard shortcuts (3) keep their titles and need no change. Sweep with `rg 'Settings → '`.
+- **`AGENTS.md`.** Lines 44 and 52 name Settings pages.
+- **Onboarding.** `onboarding-flow.tsx:712,718,722,1016`, `onboarding-bots-step.tsx:25`, `onboarding-feature-gallery.tsx:249`.
+- **Mobile copy.** `ios/AidenOnTheGo/Networking/AidenRemoteClient.swift:4215` and `AidenReadAloud.kt:6` both say Settings → Text to Speech. Check both clients, then run their suites.
+- **`docs/settings-design-system.md`.** Add the page and tab rule, and the `InfoHint` rules above. It already defines the headings, cards and rows this plan reuses.
+- **UI references.** Before building the tab strip or restyling a page, review `docs/chatgpt-desktop-ui-inspiration.md` (compact nested tabs, progressive disclosure) and `docs/chatgpt-ui-element-specimen.html` (the `role="tablist"` environment tabs), as `AGENTS.md` requires.
+- **`README.md`, `PRODUCT.md`, `docs/linux.md`, `docs/devices.md`, `docs/aiden-on-the-go-remote-access.md`, `packages/cli/README.md`.** Check for page names and platform claims.
+
+## Owner decisions
+
+1. **Does Telegram stay?** `docs/plans/security-remediation-plan-2026-10-27.md:7` records that Telegram "is being removed from Aiden", yet [#747](https://github.com/sambitcreate/aiden-agent/pull/747), a Telegram PR, is still open and the feature is on `main`. Recommendation: Phase 1 adds the tab either way, since removing it later is a one-line change. If removal is confirmed, skip Phase 3 and all Telegram cleanup.
+2. **Are the new page names right?** Context & Limits, Bots & Approvals, Computers & VMs and Voice & Speech are the only renames, and the group names are new. Recommendation: use them as written, which settles `UI-59` for these pages.
