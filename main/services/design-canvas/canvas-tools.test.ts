@@ -173,3 +173,55 @@ test("only an attended desktop chat with design mode on and a folder gets the ca
   assert.equal(designCanvasToolsAllowed({ ...base, telegram: true }), false);
   assert.equal(designCanvasToolsAllowed({ ...base, hasWorkspaceFolder: false }), false);
 });
+
+test("canvas_focus asks the canvas to show frames that exist, and refuses ones that do not", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-focus-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const store = new DesignCanvasStore({ root: () => base });
+  const focused: string[][] = [];
+  const tools = createDesignCanvasTools({
+    chatId: "chat-1",
+    workspaceRoot: base,
+    store,
+    broadcast: () => undefined,
+    focus: (ids) => focused.push(ids),
+  });
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const output = await tools.find((tool) => tool.name === name)!.execute("c", args as never);
+    const first = output.content[0];
+    assert.ok(first && first.type === "text");
+    return JSON.parse(first.text) as Record<string, any>;
+  };
+  assert.equal((await call("canvas_focus", {})).status, "error", "an empty canvas has nothing to show");
+  const note = await call("canvas_place_frame", { kind: "note", title: "Idea" });
+  assert.equal((await call("canvas_focus", { ids: ["missing"] })).status, "error");
+  assert.deepEqual(await call("canvas_focus", { ids: [note.frame.id, note.frame.id] }), { status: "requested", frames: 1 });
+  assert.deepEqual(await call("canvas_focus", {}), { status: "requested", frames: 1 });
+  assert.deepEqual(focused, [[note.frame.id], []]);
+});
+
+test("canvas_read with snapshot shows Aiden the canvas picture, or says it is not on screen", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-canvas-snapshot-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  let picture: { data: string; mimeType: string } | null = { data: "iVBORw0KGgo=", mimeType: "image/png" };
+  const read = createDesignCanvasTools({
+    chatId: "chat-1",
+    workspaceRoot: base,
+    store: new DesignCanvasStore({ root: () => base }),
+    broadcast: () => undefined,
+    snapshot: async () => picture,
+  }).find((tool) => tool.name === "canvas_read")!;
+
+  const plain = await read.execute("c", {} as never);
+  assert.deepEqual(plain.content.map((part) => part.type), ["text"], "no picture unless asked");
+  const withPicture = await read.execute("c", { snapshot: true } as never);
+  assert.deepEqual(withPicture.content.map((part) => part.type), ["text", "image"]);
+  assert.deepEqual(withPicture.content[1], { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" });
+
+  picture = null;
+  const offScreen = await read.execute("c", { snapshot: true } as never);
+  assert.deepEqual(offScreen.content.map((part) => part.type), ["text"]);
+  const first = offScreen.content[0];
+  assert.ok(first && first.type === "text");
+  assert.equal(JSON.parse(first.text).snapshot, "unavailable");
+});

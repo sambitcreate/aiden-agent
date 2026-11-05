@@ -2289,4 +2289,22 @@ export const designCanvasApi = {
       | { cancelled: true }
       | { error: "outside-workspace" | "unsupported" | "unavailable" }
     >("designCanvas:pickFile", chatId, kind),
+  /** Aiden asked to enter design mode; this window shows the card. */
+  onDesignModeConsent: (handler: (request: { requestId: string; chatId: string; reason: string }) => void) =>
+    onNotification<{ requestId: string; chatId: string; reason: string }>("designCanvas:consent", handler),
+  /** A card stopped waiting: answered, the reply stopped, or it timed out. */
+  onDesignModeConsentClosed: (handler: (closed: { requestId: string }) => void) =>
+    onNotification<{ requestId: string }>("designCanvas:consentClosed", handler),
+  /** The person's answer. Enter turns design mode on in main before Aiden hears it. False when the card expired. */
+  answerDesignModeConsent: (requestId: string, answer: "enter" | "decline") =>
+    invoke<boolean>("designCanvas:consentAnswer", requestId, answer),
+  /** Aiden asks the canvas to fit these frames (all when empty). */
+  onDesignCanvasFocus: (handler: (request: { chatId: string; frameIds: string[] }) => void) =>
+    onNotification<{ chatId: string; frameIds: string[] }>("designCanvas:focus", handler),
+  /** Aiden asks for a picture of the canvas; answer with `answerDesignCanvasSnapshot`. */
+  onDesignCanvasSnapshot: (handler: (request: { requestId: string; chatId: string }) => void) =>
+    onNotification<{ requestId: string; chatId: string }>("designCanvas:snapshot", handler),
+  /** A PNG data URL of the canvas region, or null when it is not on screen. */
+  answerDesignCanvasSnapshot: (requestId: string, dataUrl: string | null) =>
+    invoke<boolean>("designCanvas:snapshotAnswer", requestId, dataUrl),
 };

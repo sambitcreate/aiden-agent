@@ -1,6 +1,6 @@
 # Design mode P3: Aiden on the canvas
 
-Status: in progress, 2026-11-05. P3a, P3b and P3c done. Spec: [design mode §6](../specs/2026-10-31-design-mode-design.md#6-aiden-on-the-canvas). Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P2.
+Status: done, 2026-11-05 (P3a–P3d). Spec: [design mode §6](../specs/2026-10-31-design-mode-design.md#6-aiden-on-the-canvas). Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P2.
 
 **Goal:** in a chat with design mode on, Aiden can see the canvas, put its own designs on it, and tidy them, without the person adding frames by hand.
 
@@ -63,6 +63,13 @@ As built: the skill is registered only while `AIDEN_EXPERIMENTAL_DESIGN_MODE` is
 - `canvas_focus` asks the renderer to fit frames, and is skipped while the person is interacting with the canvas.
 - `canvas_read {snapshot: true}` attaches a downscaled capture of the canvas region through the renderer.
 - Card states get light and dark screenshots, and the E2E extends `design-mode.spec.ts`.
+
+As built:
+- The card sits above the composer of the chat that asked (`renderer/design/design-mode-consent.tsx`), with the reason, **Not now** and **Enter design mode**. Enter turns design mode on in main (`designCanvas:consentAnswer`, the same rules as the Design toggle) before Aiden hears `entered`, and the layout makes room as it does for the toggle. A card stops waiting when the reply stops, its window closes, a newer card replaces it, or after 10 minutes.
+- `design_mode` is on the load-on-demand list. A turn that offers it also builds the canvas tools; they are declared from the step after Enter (`withEnteredCanvasTools` in the turn's context preparation), so one reply can ask, then place and focus its frames. The `aiden-design` skill is listed in such a turn too.
+- `canvas_focus {ids?}` sends `designCanvas:focus` to the turn's window. The canvas waits up to 3 s for frames that are still arriving or not yet measured, never zooms past 100 %, and skips the request if the person touched the canvas in the last 3 s. A request that arrives while the canvas is still loading is kept for it.
+- `canvas_read {snapshot: true}` asks the turn's window for a PNG of its canvas region (`designCanvas:snapshot` / `designCanvas:snapshotAnswer`, at most 1024 px on a side through the existing capture). It is attached only for a model that reads images, and is "unavailable" when the canvas is not on screen.
+- E2E: `design-mode.spec.ts` drives the real card with the deterministic tool script: Not now (declined, design mode stays off), then Enter followed by `canvas_place_frame` and `canvas_focus` in the same reply. Screenshots: `1440-design-consent-card-{light,dark}` and `1440-design-entered-from-card-{light,dark}`.
 
 ## Deferred to P4 and P5
 

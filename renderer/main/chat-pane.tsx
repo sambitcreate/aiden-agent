@@ -110,6 +110,8 @@ import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
+import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
 import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
@@ -805,6 +807,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
   const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
+  // Aiden's "Open design mode?" card for this chat, while one is waiting.
+  const designModeConsent = useDesignModeConsent(capabilities.designMode ? chatId : undefined);
+  // Aiden's canvas_focus can arrive before the canvas loads; keep it until it does.
+  useCanvasFocusRequests(capabilities.designMode);
   // The prompt whose agent deadline passed while its card was still open.
   const [expiredQuestionnaireId, setExpiredQuestionnaireId] = React.useState<string | null>(null);
   // An answer submitted after the deadline, offered as a follow-up message.
@@ -3777,6 +3783,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             ) : null}
             {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
+            {designModeConsent && !questionnaire ? (
+              <DesignModeConsentCard key={designModeConsent.requestId} request={designModeConsent} />
+            ) : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}

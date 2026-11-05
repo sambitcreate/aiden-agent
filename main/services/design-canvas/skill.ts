@@ -23,6 +23,7 @@ export const AIDEN_DESIGN_SKILL = Object.freeze({
     "1. Call canvas_read to see what is already there.",
     "2. Place each new file with canvas_place_frame (kind file). A file already on the canvas reloads by itself when you save it, so do not place it twice.",
     "3. When the person wants options, make at most 3 directions per request. Put each direction in its own group (canvas_place_frame kind group, then the files with its groupId).",
+    "4. Call canvas_focus with the new frames' ids so the person sees them. To check how the canvas looks, call canvas_read with snapshot: true.",
     "",
     "Editing:",
     "- Make small edits to one file at a time, and keep the rest of the page as it is.",

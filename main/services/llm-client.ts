@@ -33,7 +33,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { type AgentContext, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
@@ -500,12 +500,15 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
-import { designCanvasStore } from "./design-canvas/main.js";
+import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent } from "./design-canvas/main.js";
 import {
   createDesignCanvasTools,
   DESIGN_MODE_PROMPT_SECTION,
   designCanvasToolsAllowed,
+  designModeToolAllowed,
 } from "./design-canvas/canvas-tools.js";
+import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
@@ -1543,18 +1546,21 @@ async function prepareGeneration(
   // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
   // Telegram and Bot turns get neither the tool nor its skill.
   // Design mode: the canvas tools and the aiden-design skill go together.
+  const designTurn = {
+    flagEnabled: designModeEnabled(),
+    localRenderer: rendererOwner && browserOwner?.kind !== "remote",
+    ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
+    assistant: assistantMode,
+    telegram: options.interactionSurface === "telegram",
+    hasWorkspaceFolder: Boolean(folderPath) && permission !== "none",
+  };
   const designCanvasOffered =
-    Boolean(folderPath) &&
     !options.excludeToolNames?.has("canvas_place_frame") &&
-    designCanvasToolsAllowed({
-      flagEnabled: designModeEnabled(),
-      designMode: chat.designMode,
-      localRenderer: rendererOwner && browserOwner?.kind !== "remote",
-      ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
-      assistant: assistantMode,
-      telegram: options.interactionSurface === "telegram",
-      hasWorkspaceFolder: permission !== "none",
-    });
+    designCanvasToolsAllowed({ ...designTurn, designMode: chat.designMode });
+  // Offered whether design mode is on (to leave) or off (to ask to enter).
+  const designModeToolOffered =
+    !options.excludeToolNames?.has(DESIGN_MODE_TOOL_NAME) &&
+    designModeToolAllowed({ ...designTurn, regularChat: chatSurface(chat) === "regular", inlineVisuals: params.inlineVisuals });
   const offerWorkspaceArtifacts =
     !botContext &&
     !assistantMode &&
@@ -1569,7 +1575,7 @@ async function prepareGeneration(
   if (skillSnapshot && !offerWorkspaceArtifacts) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
   }
-  if (skillSnapshot && !designCanvasOffered) {
+  if (skillSnapshot && !designCanvasOffered && !designModeToolOffered) {
     skillSnapshot = withoutSkills(skillSnapshot, DESIGN_CANVAS_SKILLS);
   }
   let botSkillToolNames: ReadonlySet<string> = new Set();
@@ -2231,24 +2237,34 @@ async function prepareGeneration(
   }
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
-  if (folderPath && designCanvasOffered) {
+  /** Canvas tools held back until the person enters design mode from Aiden's card mid-reply. */
+  let heldCanvasTools: AgentTool[] = [];
+  let enteredDesignModeThisTurn = false;
+  if (folderPath && (designCanvasOffered || designModeToolOffered)) {
     const canvasRoot = folderPath;
+    const designModeOn = async () => (await chatStore.getMeta(params.chatId))?.designMode === true;
     const canvasTools = createDesignCanvasTools({
       chatId: params.chatId,
       workspaceRoot: canvasRoot,
       store: designCanvasStore,
       broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      focus: (frameIds) => {
+        if (!browserOwner.isDestroyed()) browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+      },
+      snapshot: async (toolSignal) =>
+        supportsImages
+          ? designCanvasSnapshots.request({ chatId: params.chatId, owner: browserOwner, signal: toolSignal ?? signal })
+          : null,
       // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
       stillAvailable: async () => {
         if (signal.aborted) return false;
-        const meta = await chatStore.getMeta(params.chatId);
         const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
-        return meta?.designMode === true && current?.folderPath === canvasRoot && current.permission !== "none";
+        return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name));
     if (canvasTools.length > 0) {
       placeCanvasArtifacts = async (artifacts) => {
-        if ((await chatStore.getMeta(params.chatId))?.designMode !== true) return;
+        if (!(await designModeOn())) return;
         await placeArtifactsOnCanvas({
           chatId: params.chatId,
           artifacts,
@@ -2257,15 +2273,49 @@ async function prepareGeneration(
           newId: randomUUID,
         });
       };
+    }
+    const designModeTool = designModeToolOffered
+      ? [
+          createDesignModeTool({
+            isOn: designModeOn,
+            requestEnter: async (reason, toolSignal) => {
+              const answer = await designModeConsent.request({
+                chatId: params.chatId,
+                reason,
+                owner: browserOwner,
+                signal: toolSignal ?? signal,
+              });
+              if (answer === "entered") enteredDesignModeThisTurn = true;
+              return answer;
+            },
+            exit: async () => {
+              await chatStore.setDesignMode(params.chatId, false);
+              designGrants.revokeChat(params.chatId);
+              ipcMain.broadcast("chats:design-mode-changed", { chatId: params.chatId, designMode: false });
+            },
+          }),
+        ]
+      : [];
+    if (designCanvasOffered && canvasTools.length > 0) {
       const canvas = await designCanvasStore.get(params.chatId);
       generationExtensions.push({
         id: "aiden.design-canvas",
         systemPrompt: DESIGN_MODE_PROMPT_SECTION,
         volatileSystemPrompt: canvasPromptLine(canvas),
-        tools: canvasTools,
+        tools: [...canvasTools, ...designModeTool],
       });
+    } else {
+      heldCanvasTools = canvasTools;
+      if (designModeTool.length > 0) generationExtensions.push({ id: "aiden.design-mode", tools: designModeTool });
     }
   }
+  /** Declares the held canvas tools from the step after the person entered design mode. */
+  const withEnteredCanvasTools = (context: AgentContext): AgentContext => {
+    if (!enteredDesignModeThisTurn || heldCanvasTools.length === 0) return context;
+    const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
+    const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
+    return additions.length > 0 ? { ...context, tools: [...(context.tools ?? []), ...additions] } : context;
+  };
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -2306,6 +2356,7 @@ async function prepareGeneration(
     displayedImages,
     displayedHtmlArtifacts,
     placeCanvasArtifacts,
+    withEnteredCanvasTools,
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -2680,6 +2731,7 @@ export const llmClient = {
       displayedImages,
       displayedHtmlArtifacts,
       placeCanvasArtifacts,
+      withEnteredCanvasTools,
       appPanels,
       htmlArtifactPlacements,
       imagePlacements,
@@ -3812,6 +3864,7 @@ export const llmClient = {
                 : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
+            prepared = withEnteredCanvasTools(prepared);
             if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
             return mcpServersSection.apply(prepared);
           },

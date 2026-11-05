@@ -7,6 +7,7 @@ import { StudioCanvas, type CanvasTool } from "../canvas";
 import type { CanvasKeyEvent } from "../canvas/canvas-keymap-core";
 import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { designCanvasApi } from "../lib/ipc";
 import type { DesignCanvasV1, DesignFrame } from "../shared/design-canvas/schema";
 import {
@@ -18,6 +19,7 @@ import {
   type PlaceFrameInput,
 } from "./canvas-adapter-core";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
+import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
 import { DesignAddMenu, type DesignAddKind } from "./design-add-menu";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { selectLiveFrames } from "./live-set-core";
@@ -69,6 +71,11 @@ const PICK_ERRORS = {
   unsupported: "That file can't be shown on the canvas.",
   unavailable: "Files can't be added to this chat's canvas.",
 } as const;
+
+/** Aiden's canvas_focus waits this long after the person last touched the canvas. */
+const FOCUS_QUIET_MS = 3_000;
+/** How long canvas_focus waits for frames that are still on their way. */
+const FOCUS_WAIT_MS = 3_000;
 
 function LoadedDesignCanvas({
   chatId,
@@ -149,6 +156,26 @@ function LoadedDesignCanvas({
     [chatId],
   );
 
+  // Aiden's canvas_read {snapshot: true}: a picture of the canvas region, or
+  // null when it is not on screen (the Chat tab of the stacked view, say).
+  React.useEffect(
+    () =>
+      designCanvasApi.onDesignCanvasSnapshot((request) => {
+        if (request?.chatId !== chatId || typeof request.requestId !== "string") return;
+        const answer = (dataUrl: string | null) =>
+          void designCanvasApi.answerDesignCanvasSnapshot(request.requestId, dataUrl).catch(() => undefined);
+        const rect = wrapper.current?.getBoundingClientRect();
+        if (!rect || rect.width < 1 || rect.height < 1 || document.visibilityState === "hidden") {
+          answer(null);
+          return;
+        }
+        void designCanvasApi
+          .captureDesignFrame({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+          .then((shot) => answer("dataUrl" in shot ? shot.dataUrl : null), () => answer(null));
+      }),
+    [chatId],
+  );
+
   // The canvas's size on screen, for the live set and for placing frames.
   React.useLayoutEffect(() => {
     const element = wrapper.current;
@@ -187,6 +214,53 @@ function LoadedDesignCanvas({
   }, [doc.frames, missing, versionOf, viewport, viewSize, selection, entered]);
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
+
+  // Aiden's canvas_focus: fit the frames it names once they have arrived,
+  // unless the person moved around the canvas in the last few seconds.
+  const lastInteraction = React.useRef(0);
+  const noteInteraction = React.useCallback(() => {
+    lastInteraction.current = Date.now();
+  }, []);
+  // A request that arrived while this canvas was still loading counts too.
+  const [pendingFocus, setPendingFocus] = React.useState<CanvasFocusRequest | null>(() =>
+    takeCanvasFocus(chatId, FOCUS_WAIT_MS),
+  );
+  React.useEffect(
+    () =>
+      designCanvasApi.onDesignCanvasFocus((payload) => {
+        const parsed = canvasFocusFrom(payload);
+        if (parsed?.chatId !== chatId) return;
+        forgetCanvasFocus(chatId);
+        setPendingFocus(parsed.request);
+      }),
+    [chatId],
+  );
+  React.useEffect(() => {
+    if (!pendingFocus) return;
+    if (gesture.current || Date.now() - lastInteraction.current < FOCUS_QUIET_MS) {
+      setPendingFocus(null);
+      return;
+    }
+    const present = pendingFocus.ids.filter((id) => nodes.some((node) => node.id === id));
+    // Frames Aiden just placed arrive with the next canvas read, and a canvas
+    // that just opened has not measured them yet; wait briefly for both.
+    const waited = Date.now() - pendingFocus.at;
+    const measured = flow.current?.getNodes().some((node) => (node.measured?.width ?? 0) > 0) ?? false;
+    const arriving = present.length < pendingFocus.ids.length || (nodes.length > 0 && !measured);
+    if (arriving && waited < FOCUS_WAIT_MS) {
+      const timer = setTimeout(() => setPendingFocus((current) => (current ? { ...current } : current)), 200);
+      return () => clearTimeout(timer);
+    }
+    setPendingFocus(null);
+    if (pendingFocus.ids.length > 0 && present.length === 0) return;
+    // Never zoom past 100 %: a single note should not fill the canvas.
+    void flow.current?.fitView({
+      duration: prefersReducedMotion() ? 0 : 300,
+      padding: 0.2,
+      maxZoom: 1,
+      ...(present.length > 0 ? { nodes: present.map((id) => ({ id })) } : {}),
+    });
+  }, [pendingFocus, nodes]);
 
   const onNodesChange = (changes: NodeChange<DesignNode>[]) => {
     const selects = changes.filter((entry) => entry.type === "select");
@@ -386,7 +460,14 @@ function LoadedDesignCanvas({
 
   return (
     // Its letter, digit and +/- keys are the canvas's own, so the chat's composer leaves them alone.
-    <div ref={wrapper} data-typing-surface="canvas" className="h-full w-full">
+    <div
+      ref={wrapper}
+      data-typing-surface="canvas"
+      className="h-full w-full"
+      onPointerDownCapture={noteInteraction}
+      onWheelCapture={noteInteraction}
+      onKeyDownCapture={noteInteraction}
+    >
       <DesignNodeContext.Provider value={context}>
         <StudioCanvas<DesignNode>
           label="Design canvas"

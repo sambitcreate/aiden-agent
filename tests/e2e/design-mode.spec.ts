@@ -666,3 +666,73 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
   await setWindowWidth(app, page, 420);
   await expectComposerFooterClear(page.locator(".composer-footer-row").first());
 });
+
+test("Aiden asks to open design mode on a card, then puts its work on the canvas; Not now leaves the chat as it was", async ({
+  aiden,
+}) => {
+  const { app, page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  await waitForToastsToClear(page);
+  await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
+  await sendFirstMessage(page, DESIGN_CHAT);
+  await setDisplayWidth(app, 1440);
+  await setWindowWidth(app, page, 1440);
+  const card = page.getByRole("group", { name: "Aiden asks to open design mode" });
+  const composer = page.locator("textarea").first();
+
+  // Not now: the reply carries on in the chat and design mode stays off.
+  const declinePrompt = "Design consent test: sketch a pricing page, but I'll say not now.";
+  const declined = lmStudio.enqueueToolScenario!({
+    prompt: declinePrompt,
+    calls: [{ name: "design_mode", arguments: { action: "enter", reason: "Pricing pages are easier to judge side by side." } }],
+    finalText: "No problem, here is the outline in the chat instead.",
+  });
+  await composer.fill(declinePrompt);
+  await composer.press("Enter");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("Pricing pages are easier to judge side by side.");
+  await capture(page, "1440-design-consent-card");
+  await card.getByRole("button", { name: "Not now" }).click();
+  await expect(card).toBeHidden();
+  await expect.poll(() => declined.completed).toBe(true);
+  expect(declined.error).toBeUndefined();
+  expect(JSON.stringify(declined.results)).toContain("declined");
+  await expect(designToggle(page)).toHaveAttribute("aria-pressed", "false");
+  await expect(designCanvas(page)).toHaveCount(0);
+
+  // Enter: the canvas opens, and the same reply places a note there with the canvas tools.
+  const enterPrompt = "Design consent test: lay out three pricing directions.";
+  const entered = lmStudio.enqueueToolScenario!({
+    prompt: enterPrompt,
+    calls: [
+      { name: "design_mode", arguments: { action: "enter", reason: "Comparing three directions is easier side by side." } },
+      { name: "canvas_place_frame", arguments: { kind: "note", title: "Pricing directions", text: "Calm, bold and editorial" } },
+      { name: "canvas_focus", arguments: {} },
+    ],
+    finalText: "The canvas is open with a note for the three directions.",
+  });
+  await composer.fill(enterPrompt);
+  await composer.press("Enter");
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "Enter design mode" }).click();
+  await expect(card).toBeHidden();
+  await expect(designLayout(page)).toHaveAttribute("data-design-layout", "split");
+  await expect(designToggle(page)).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => entered.completed).toBe(true);
+  expect(entered.error).toBeUndefined();
+  expect(entered.issuedToolNames).toEqual(["design_mode", "canvas_place_frame", "canvas_focus"]);
+  expect(JSON.stringify(entered.results)).toContain("entered");
+  expect(JSON.stringify(entered.results)).toContain("placed");
+  const note = designCanvas(page).getByRole("group", { name: "Pricing directions" });
+  await expect(note).toBeVisible();
+  // canvas_focus brings the new note into view, with room around it.
+  await expect
+    .poll(async () => {
+      const [frame, region] = await Promise.all([note.boundingBox(), canvasRegion(page).boundingBox()]);
+      if (!frame || !region) return false;
+      return frame.x >= region.x + 40 && frame.x + frame.width <= region.x + region.width - 40;
+    })
+    .toBe(true);
+  await waitForToastsToClear(page);
+  await capture(page, "1440-design-entered-from-card");
+});

@@ -32,6 +32,7 @@ export const DESIGN_CANVAS_TOOL_NAMES = [
   "canvas_place_frame",
   "canvas_update_frame",
   "canvas_remove_frame",
+  "canvas_focus",
 ] as const;
 
 /** Canvas tool calls one turn may make; past it each call returns `limit_reached`. */
@@ -46,26 +47,42 @@ const DEFAULT_BOX: Record<"file" | "image" | "note" | "group", { w: number; h: n
 };
 const DEFAULT_DESIGN_WIDTH: DesignWidth = 1280;
 
-/** Which turns get the canvas tools. Pure, so the rule is tested on its own. */
-export function designCanvasToolsAllowed(turn: {
+type DesignTurn = {
   flagEnabled: boolean;
-  designMode: boolean | undefined;
   /** A window on this desktop is the turn's owner (not a phone or paired Mac). */
   localRenderer: boolean;
   botId?: string;
   assistant: boolean;
   telegram: boolean;
   hasWorkspaceFolder: boolean;
-}): boolean {
+};
+
+/** An attended desktop turn with a workspace folder, where design mode could apply at all. */
+function designTurnEligible(turn: DesignTurn): boolean {
   return (
     turn.flagEnabled &&
-    turn.designMode === true &&
     turn.localRenderer &&
     !turn.botId &&
     !turn.assistant &&
     !turn.telegram &&
     turn.hasWorkspaceFolder
   );
+}
+
+/** Which turns get the canvas tools. Pure, so the rule is tested on its own. */
+export function designCanvasToolsAllowed(turn: DesignTurn & { designMode: boolean | undefined }): boolean {
+  return designTurnEligible(turn) && turn.designMode === true;
+}
+
+/**
+ * Which turns get `design_mode`: the same turns, in an ordinary project chat
+ * (not one a feature owns), while Settings → Inline visuals is automatic.
+ * People can still enter design mode themselves in every mode.
+ */
+export function designModeToolAllowed(
+  turn: DesignTurn & { regularChat: boolean; inlineVisuals: string | undefined },
+): boolean {
+  return designTurnEligible(turn) && turn.regularChat && (turn.inlineVisuals ?? "automatic") === "automatic";
 }
 
 /**
@@ -80,6 +97,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- To show a design, write a self-contained HTML file in the workspace (for example under design/), then place it with canvas_place_frame. Put each direction in its own group.",
   "- A visual you draw with render_artifact also lands on the canvas. Drawing it again under the same title replaces it in place.",
   "- Move, resize or retitle your own frames with canvas_update_frame. Remove a frame the person added only when they ask, with confirm: true.",
+  "- After placing or moving frames, call canvas_focus with their ids so the person sees them. canvas_read with snapshot: true shows you the canvas as the person sees it.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
 ].join("\n");
 
@@ -92,9 +110,21 @@ export type DesignCanvasToolDeps = {
   /** False once the chat left design mode or was deleted. Checked on every call. */
   stillAvailable?(): Promise<boolean>;
   newId?(): string;
+  /** Asks the window showing the canvas to fit these frames (all of them when empty). */
+  focus?(frameIds: string[]): void;
+  /** A downscaled PNG of the canvas as the person sees it, or null when it is not on screen. */
+  snapshot?(signal?: AbortSignal): Promise<{ data: string; mimeType: string } | null>;
 };
 
-type ToolResult = { content: { type: "text"; text: string }[]; details: null };
+type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+type ToolResult = { content: ToolContent[]; details: null };
+/** A tool answer that also shows the model a picture. */
+class WithImage {
+  constructor(
+    readonly value: unknown,
+    readonly image: { data: string; mimeType: string },
+  ) {}
+}
 const result = (value: unknown): ToolResult => ({
   content: [{ type: "text", text: JSON.stringify(value) }],
   details: null,
@@ -166,7 +196,14 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       return result({ status: "unavailable", reason: "Design mode is off in this chat." });
     }
     try {
-      return result(await body());
+      const value = await body();
+      if (value instanceof WithImage) {
+        return {
+          content: [{ type: "text", text: JSON.stringify(value.value) }, { type: "image", ...value.image }],
+          details: null,
+        };
+      }
+      return result(value);
     } catch (error) {
       if (error instanceof CanvasToolError) return result({ status: "error", message: error.message });
       throw error;
@@ -197,9 +234,17 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_read",
         label: "Read design canvas",
         description:
-          "Read the design canvas beside this chat: the visible area, the frames in it (id, kind, title, path, box, group, open comments) and a count of frames elsewhere. Boxes are in canvas units.",
-        parameters: Type.Object({}),
-        execute: async () => run(async () => describeCanvas(await deps.store.get(deps.chatId))),
+          "Read the design canvas beside this chat: the visible area, the frames in it (id, kind, title, path, box, group, open comments) and a count of frames elsewhere. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.",
+        parameters: Type.Object({ snapshot: Type.Optional(Type.Boolean()) }),
+        execute: async (_id, raw, signal) =>
+          run(async () => {
+            const answer = describeCanvas(await deps.store.get(deps.chatId));
+            if ((raw as { snapshot?: unknown } | undefined)?.snapshot !== true) return answer;
+            const image = deps.snapshot ? await deps.snapshot(signal) : null;
+            return image
+              ? new WithImage({ ...answer, snapshot: "attached" }, image)
+              : { ...answer, snapshot: "unavailable", snapshotReason: "The canvas is not on screen right now." };
+          }),
       },
       "safe",
     ),
@@ -353,6 +398,29 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 value: { status: "removed", id: frame.id, ...(frame.createdBy === "person" ? { personFrame: true } : {}) },
               };
             });
+          }),
+      },
+      "never",
+    ),
+    declarePiRuntimeReplay(
+      {
+        name: "canvas_focus",
+        label: "Show on design canvas",
+        description:
+          "Pan and zoom the design canvas so the person sees these frames (every frame when ids is empty). The canvas leaves the view alone while the person is moving around it.",
+        parameters: Type.Object({
+          ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
+        }),
+        execute: async (_id, raw) =>
+          run(async () => {
+            if (!deps.focus) return { status: "unavailable", reason: "No window is showing this canvas." };
+            const requested = (raw as { ids?: unknown } | undefined)?.ids;
+            const ids = Array.isArray(requested) ? [...new Set(requested)] : [];
+            const doc = await deps.store.get(deps.chatId);
+            for (const id of ids) frameIn(doc, id);
+            if (ids.length === 0 && doc.frames.length === 0) throw new CanvasToolError("The canvas is empty.");
+            deps.focus(ids as string[]);
+            return { status: "requested", frames: ids.length || doc.frames.length };
           }),
       },
       "never",

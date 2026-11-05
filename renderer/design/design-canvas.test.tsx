@@ -281,3 +281,21 @@ test("a visual Aiden draws again under the same title replaces the one in its fr
     ["m1", "m2"],
   );
 });
+
+test("Aiden's snapshot request is answered with a picture of the canvas region, and only for this chat", async () => {
+  measureCanvasAt1000x800();
+  const { calls } = setup(canvasWith(), {
+    "designCanvas:capture": () => ({ dataUrl: "data:image/png;base64,iVBORw0KGgo=" }),
+    "designCanvas:snapshotAnswer": () => true,
+  });
+  await mount();
+  act(() => emitBotTestNotification("designCanvas:snapshot", { requestId: "s0", chatId: "chat-2" }));
+  act(() => emitBotTestNotification("designCanvas:snapshot", { requestId: "s1", chatId: "chat-1" }));
+  await waitFor(() =>
+    assert.deepEqual(
+      calls.filter((call) => call.channel === "designCanvas:snapshotAnswer").map((call) => call.args),
+      [["s1", "data:image/png;base64,iVBORw0KGgo="]],
+    ),
+  );
+  assert.deepEqual(calls.find((call) => call.channel === "designCanvas:capture")?.args, [{ x: 0, y: 0, width: 1000, height: 800 }]);
+});

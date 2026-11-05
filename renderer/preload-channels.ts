@@ -122,6 +122,14 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "designCanvas:updated",
   /** Workspace files a chat's design canvas shows changed: `{chatId, paths}`. */
   "designCanvas:filesChanged",
+  /** Aiden asks to enter design mode; the turn's window shows a card: `{requestId, chatId, reason}`. */
+  "designCanvas:consent",
+  /** That card stopped waiting (answered, stopped or timed out): `{requestId}`. */
+  "designCanvas:consentClosed",
+  /** Aiden asks the canvas to fit frames (all when empty): `{chatId, frameIds}`. */
+  "designCanvas:focus",
+  /** Aiden asks for a picture of the canvas: `{requestId, chatId}`; answered with `designCanvas:snapshotAnswer`. */
+  "designCanvas:snapshot",
   "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",

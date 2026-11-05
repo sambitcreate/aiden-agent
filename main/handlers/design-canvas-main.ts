@@ -8,11 +8,34 @@ import {
   designCanvasStore,
   designFileWatcher,
   designGrants,
+  designCanvasSnapshots,
+  designModeConsent,
 } from "../services/design-canvas/main.js";
+import { chatApplicationService } from "../services/chat-application-service-main.js";
+import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, registerDesignCanvasHandlers } from "./design-canvas.js";
 
 export function registerDesignCanvasIpc(): void {
+  // The canvas picture Aiden asked for with canvas_read {snapshot: true}.
+  ipcMain.handle("designCanvas:snapshotAnswer", (event, requestId: unknown, dataUrl: unknown) =>
+    designModeEnabled() &&
+    designCanvasSnapshots.answer(requestId, dataUrl, rendererDocumentOwner(event, () => new Error("Active renderer required."))),
+  );
+  // The person's answer on Aiden's "Enter design mode?" card. Enter turns
+  // design mode on the way the Design toggle does, then tells every window.
+  ipcMain.handle("designCanvas:consentAnswer", async (event, requestId: unknown, answer: unknown) => {
+    if (!designModeEnabled()) return false;
+    return designModeConsent.answer(
+      requestId,
+      answer,
+      rendererDocumentOwner(event, () => new Error("Active renderer required.")),
+      async (chatId) => {
+        await chatApplicationService.setDesignMode(chatId, true, { rejectFeatureOwned: true });
+        ipcMain.broadcast("chats:design-mode-changed", { chatId, designMode: true });
+      },
+    );
+  });
   registerDesignCanvasHandlers<Electron.IpcMainInvokeEvent>({
     enabled: () => designModeEnabled(),
     handle: (channel, handler) => ipcMain.handle(channel, handler),

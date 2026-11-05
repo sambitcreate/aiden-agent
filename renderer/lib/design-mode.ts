@@ -9,7 +9,7 @@ import { queryKeys, useChat, useWorkspaces } from "./queries";
 import type { Chat, ChatDesignModeChanged, ChatMeta, Workspace } from "./types";
 
 /** Where a design mode change came from; P1 only uses it to name the action. */
-export type DesignModeSource = "toggle" | "shortcut" | "slash";
+export type DesignModeSource = "toggle" | "shortcut" | "slash" | "card";
 
 const DESIGN_MODE_FAILED = "Design mode could not be changed.";
 
@@ -75,6 +75,20 @@ const deferredBroadcasts = new Map<string, boolean>();
 // consumes it once to decide whether it may make room (collapse the sidebar,
 // widen the window); a launch, reload, chat switch or broadcast never sets it.
 const pendingEntries = new Map<string, DesignModeSource>();
+
+/**
+ * Notes an entry the person started outside `set`, such as Enter design mode
+ * on Aiden's card (main turns it on), so the layout makes room as it does for
+ * the toggle once the change arrives.
+ */
+export function notePendingDesignEntry(chatId: string, source: DesignModeSource): void {
+  pendingEntries.set(chatId, source);
+}
+
+/** Forgets a noted entry that did not happen (the card's answer failed). */
+export function forgetPendingDesignEntry(chatId: string): void {
+  pendingEntries.delete(chatId);
+}
 
 /**
  * The source of a design mode entry the person just started for this chat, or
