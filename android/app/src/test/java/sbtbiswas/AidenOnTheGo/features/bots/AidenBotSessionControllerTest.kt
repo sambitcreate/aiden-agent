@@ -1215,6 +1215,7 @@ class AidenBotSessionControllerTest {
     fun everyFailedSendTakesTheStepBothPhonesAgreeOn() {
         val fixture = outboxDeliveryFixture()
         val maxAttempts = fixture.getValue("maxConnectionAttempts").jsonPrimitive.int
+        assertEquals(AidenBotSessionController.MAX_CONNECTION_ATTEMPTS, maxAttempts)
         for (element in fixture.getValue("steps").jsonArray) {
             val row = element.jsonObject
             // Android has no Bot attachment sending.
@@ -1272,6 +1273,35 @@ class AidenBotSessionControllerTest {
         assertEquals(transport.sends[0].second, transport.sends[3].second)
         assertEquals(AidenBotOutgoingStatus.SENT, controller.state.value.outbox.single().status)
         assertEquals("the bubble keeps its identity", failed.id, controller.state.value.outbox.single().id)
+    }
+
+    @Test
+    fun aRefusedMessageGivesBackTheEntryItClaimedToTheMessageBehindIt() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope)
+        controller.refetch()
+        transport.sendGate = CompletableDeferred()
+        transport.sendFailures += serverError(400, AidenRemoteErrorCode.INVALID_REQUEST)
+        val refused = async { controller.send("Yes.") }
+        val behind = async { controller.send("Yes.") }
+        runCurrent()
+        // Its text matches, but it is the entry of the message behind, as that one's receipt will say.
+        controller.frame(AidenBotSessionEventPayload.Entry(userEntry("entry_41", "Yes.", "1")))
+        val claiming = controller.state.value.outbox.first()
+        assertEquals("entry_41", claiming.echoEntryId)
+
+        transport.sendGate!!.complete(Unit)
+        refused.await()
+        behind.await()
+        runCurrent()
+
+        val failed = controller.state.value.outbox.single()
+        assertEquals(claiming.id, failed.id)
+        assertEquals(AidenBotOutgoingStatus.FAILED, failed.status)
+        assertFalse(failed.keepsKey)
+        assertFalse(failed.echoed)
+        assertNull(failed.echoEntryId)
+        assertNull(failed.echoSubmissionId)
     }
 
     @Test
