@@ -358,6 +358,45 @@ struct AidenSolidFill: Equatable, Sendable {
     }
 }
 
+/// Status colours that are safe for text. The palette's `successHex`,
+/// `warningHex` and `dangerHex` stay as they are for fills, dots and icons.
+/// Text moves each one away from the ground (toward black on a light theme,
+/// toward white on a dark one) one percent at a time, only as far as 4.5:1
+/// needs on both the canvas and the raised surface. A hex that already passes
+/// does not move. Derived from the palette on read, so a new theme or a
+/// contrast adjustment needs no extra constants.
+extension AidenPalette {
+    static let minimumTextContrast = 4.5
+
+    var successTextHex: String { textSafeHex(successHex) }
+    var warningTextHex: String { textSafeHex(warningHex) }
+    var dangerTextHex: String { textSafeHex(dangerHex) }
+
+    var successText: Color { Color(aidenHex: successTextHex) }
+    var warningText: Color { Color(aidenHex: warningTextHex) }
+    var dangerText: Color { Color(aidenHex: dangerTextHex) }
+
+    func contrastRatio(foregroundHex: String, backgroundHex: String) -> Double {
+        Color.contrastRatio(foregroundHex, backgroundHex)
+    }
+
+    private func textSafeHex(_ statusHex: String) -> String {
+        let grounds = [canvasHex, raisedHex]
+        func passes(_ hex: String) -> Bool {
+            grounds.allSatisfy { Color.contrastRatio(hex, $0) >= Self.minimumTextContrast }
+        }
+        let base = Color.mixHex(statusHex, statusHex, fraction: 0)
+        guard !passes(base) else { return base }
+        // Black and white give equal contrast at a luminance of about 0.179.
+        let target = Color.relativeLuminance(canvasHex) > 0.179 ? "#000000" : "#FFFFFF"
+        for step in 1...100 {
+            let moved = Color.mixHex(base, target, fraction: Double(step) / 100)
+            if passes(moved) { return moved }
+        }
+        return target
+    }
+}
+
 enum AidenSolidFillTone: Sendable {
     case accent
     case danger
