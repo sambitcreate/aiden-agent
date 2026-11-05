@@ -171,7 +171,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 57)
+        XCTAssertEqual(fixture.contractRevision, 58)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         XCTAssertEqual(fixture.botIssues?.capability, .botIssues)
         // Revision 19 run-control losers learn the winning decision; phones keep
@@ -1524,6 +1524,19 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(projection.timeline?.status, .completed)
         _ = projection.apply(try frame(0, "snapshot", #"{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"#))
         XCTAssertNil(projection.timeline)
+    }
+
+    func testRunCheckpointRestoresVisibleWorkBeforeTheNextDelta() throws {
+        let fixture = try Data(contentsOf: XCTUnwrap(sharedContractFixtureURL))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
+        let wire = try JSONSerialization.data(withJSONObject: XCTUnwrap(root["runCheckpoint"]))
+        var projection = AidenForeignRunProjection(runId: "run-1")
+        _ = projection.apply(try AidenRemoteJSONDecoder.decodeRunSSEEvent(from: wire))
+        XCTAssertEqual(projection.liveText, "Checked the build.")
+        XCTAssertEqual(projection.reasoning, "Reviewing results")
+        XCTAssertEqual(projection.timeline?.steps.first?.toolName, "run_command")
+        XCTAssertEqual(projection.state, .running)
+        XCTAssertEqual(projection.lastSequence, 90)
     }
 
     func testRunStreamGapSnapshotAtSequenceZeroRestatesPendingPrompts() throws {
