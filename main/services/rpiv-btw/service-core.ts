@@ -128,27 +128,27 @@ export class BtwService {
       throw new Error("Finish the current response before asking a side question.");
     }
     let removeInvalidation = () => {};
+    // The slot is released whatever the owner's listener does.
+    const settle = () => {
+      try {
+        removeInvalidation();
+      } catch {
+        // Nothing is left to invalidate once the side question has ended.
+      }
+      release();
+    };
     let thread: EphemeralThread;
     try {
       removeInvalidation = owner.onInvalidated(() => controller.abort());
       thread = this.thread(chat.id, binding);
     } catch (error) {
-      removeInvalidation();
-      release();
+      settle();
       throw error;
     }
     const receipt = { version: 1 as const, chatId: chat.id, requestId };
     setTimeout(() => {
       void this.run({ chat, binding, question, requestId, owner, controller, thread })
-        .finally(() => {
-          // The slot is released whatever the owner's listener does.
-          try {
-            removeInvalidation();
-          } catch {
-            // Nothing is left to invalidate once the side question has ended.
-          }
-          release();
-        });
+        .finally(settle);
     }, 0).unref?.();
     return receipt;
   }
