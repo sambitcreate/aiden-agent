@@ -402,6 +402,10 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
     clearServeArtifacts(agentDir, owner);
     return { stopped: true, pid };
   }
+  if (atDeadline === "unconfirmed") {
+    // The PID is alive but cannot be shown to be this daemon, so nothing may suggest signalling it.
+    throw new Error(`Could not confirm that PID ${pid} is still the Aiden daemon ${Math.round(timeoutMs / 1000)}s after asking it to stop. Check what that process is before acting on it; its lock stays at ${join(agentDir, SERVE_LOCK)}.`);
+  }
   if (atDeadline === "force") {
     // A background daemon leads its own process group; killing the group also
     // takes its Remote advertiser instead of orphaning it. A foreground serve

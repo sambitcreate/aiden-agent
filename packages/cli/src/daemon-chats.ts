@@ -74,9 +74,16 @@ export function createDaemonChats(agentDir: string) {
   // its chat stays closed from here until recoverChatDeletions finishes the job.
   const tombstones = new JsonStore<string[]>(join(agentDir, "daemon-chat-deletions.json"), []);
   const interrupted = new Map<string, () => void>();
-  try { for (const id of new Set(readJson<string[]>(tombstones.file, []))) interrupted.set(id, deletion.begin(id)); }
-  catch { process.stderr.write("aiden: Could not read unfinished chat deletions.\n"); }
-  const turns = new DaemonTurnOwner<DaemonGenerationRun<AgentSession>>({ admission, isDeleting: (id) => deletion.isDeleting(id) });
+  // Without this record any chat may be one whose deletion committed, so all of them stay closed.
+  let deletionRecordFailure: Error | undefined;
+  try {
+    const ids = readJson<string[]>(tombstones.file, []);
+    if (!Array.isArray(ids)) throw new Error(`${tombstones.file} is not a list.`);
+    for (const id of new Set(ids)) interrupted.set(id, deletion.begin(id));
+  } catch (error) {
+    deletionRecordFailure = new Error(`Could not read unfinished chat deletions: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+  const turns = new DaemonTurnOwner<DaemonGenerationRun<AgentSession>>({ admission, isDeleting: (id) => deletionRecordFailure !== undefined || deletion.isDeleting(id) });
   const approvals = createDaemonApprovals({
     raised: (prompt) => activity.requestAttention(prompt.approvalId, prompt.streamId, "approval"),
     resolved: (id, decision) => { recorders.recordRunAttentionResolved(runs, id, { kind: "approval", decision }); activity.resolveAttention(id); },
@@ -316,7 +323,10 @@ export function createDaemonChats(agentDir: string) {
   return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
     /** Every activity change (a run began or ended, an approval was raised or settled). */
     /** Finishes deletions a crash interrupted. Repeatable: a failure leaves its tombstone and its chat closed. */
+    /** Unlike a deletion that fails to finish, a lost record cannot be scoped to its chats. */
+    assertChatDeletionsReadable() { if (deletionRecordFailure) throw deletionRecordFailure; },
     async recoverChatDeletions() {
+      if (deletionRecordFailure) throw deletionRecordFailure;
       for (const [id, reopen] of [...interrupted]) {
         await deleteCliBotSubagentHistory(agentDir, id);
         await rm(sessionPath(id), { force: true });
