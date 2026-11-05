@@ -56,3 +56,7 @@ Four single-worker shards now preserve the 20-minute job budget, retries and fai
 ### First four-shard hosted result (2026-11-04)
 
 After independent Sol high review cleared the measured allocation, published head `b278f4e4b` run 41801806234 completed all four Electron jobs successfully in 13m25s, 12m28s, 13m16s and 13m03s respectively. The 20-minute budget and flake policy were unchanged. These are whole-job elapsed times, including runner setup and cleanup. Other required surfaces also passed; a separately observed Linux x64 job was still running when recorded. This establishes the first hosted four-shard result, not the final PR head.
+
+## Linux E2E shards (2026-11-05, perf/ci-linux-e2e-shards)
+
+Linux x64 ran packaging then a 22-minute serial E2E step, about 36 minutes plus Fedora, which set the floor on a PR once macOS stopped queueing. `linux-e2e` now runs the shards from `scripts/ci-e2e-shards.mjs` beside packaging, using macOS-derived weights. `diagnostics-production.spec.ts` is left out of shards, and it only skipped on Linux before. The `linux-required` gate reads both jobs, so the ruleset's contexts did not change.

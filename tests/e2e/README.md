@@ -26,10 +26,12 @@ the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
 `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `sudo sysctl -w kernel.core_pattern=core`, `ulimit -c 0`, then
 `xvfb-run --auto-servernum npm run test:e2e`.
 
-Hosted CI splits deterministic spec files across three isolated macOS runners, each with
-one Playwright worker. `scripts/ci-e2e-shards.mjs` balances files using recorded hosted
-durations and automatically assigns newly added specs. After `npm run build`, reproduce
-one shard with `node scripts/ci-e2e-shards.mjs 1/3`; append `--list` to inspect its files.
+Hosted CI splits deterministic spec files across four isolated macOS runners (`e2e`)
+and three Ubuntu runners (`linux-e2e`), each with one Playwright worker. macOS shards reuse the
+`build` job's output; each Ubuntu shard builds the app itself and runs under `xvfb-run`.
+`scripts/ci-e2e-shards.mjs` balances files using recorded macOS durations and automatically
+assigns newly added specs. After `npm run build`, reproduce one shard with
+`node scripts/ci-e2e-shards.mjs 1/4` for macOS or `1/3` for Linux; append `--list` to inspect its files.
 Never run these shards concurrently against the same checkout or desktop session.
 
 The production-profile diagnostics spec runs separately after the desktop build job's
