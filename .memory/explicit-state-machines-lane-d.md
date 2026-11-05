@@ -14,4 +14,4 @@ Started 2026-11-04. Scope: `cli-native` C09, C10, C03, C01, C02, C11, C04, then 
 - Cleanup hooks in `node:test` (`t.after`) run in registration order here, so stop a daemon before removing its directory. `box.stopServer` in `tests/serve-lifetime.test.mjs` does that; an earlier `t.after(serve stop)` orphaned real daemons.
 - The local shell is zsh: an unquoted `$files` is one argument, so a looped `node --test $files` silently runs nothing. Check that a pass count came back.
 - Control-socket chunks stop near 64 KiB, so a ceiling test needs a frame near the limit plus a later write, not one big write.
-- Shared-owner note: a publish callback that settles its own approval is handled by Lane B's #738, not here.
+- `createDaemonApprovals` reports each raised prompt once from the settled outcome, so it does not rely on the coordinator's published flag, on `main` or after Lane B's #738.
