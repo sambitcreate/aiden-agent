@@ -286,6 +286,57 @@ test("a creation failure that cannot be recorded still reports the creation fail
   assert.equal(coordinator.activeCount, 0);
 });
 
+function holdStatusAfterCreate(
+  store: MemoryStore,
+  order: readonly string[],
+  action: () => Promise<void>,
+) {
+  const reached = deferred();
+  const original = store.get.bind(store);
+  let armed = true;
+  store.get = async (runId) => {
+    if (armed && order.includes(`create:${runId}`)) {
+      armed = false;
+      reached.resolve();
+      await action();
+    }
+    return original(runId);
+  };
+  return reached;
+}
+
+test("a Stop during launch ends the run instead of acknowledging it as queued", async () => {
+  const { store, children, order, coordinator } = harness();
+  const release = deferred();
+  const reached = holdStatusAfterCreate(store, order, () => release.promise);
+  const launching = coordinator.launch(prepared("run-early-stop"));
+  await reached.promise;
+
+  const stopping = coordinator.manage(
+    management(store.records.get("run-early-stop")!, "stop"),
+  );
+  release.resolve();
+  await launching;
+  const stopped = await stopping;
+
+  assert.equal(stopped.snapshot.state, "stopped");
+  assert.equal(store.records.get("run-early-stop")?.snapshot.state, "stopped");
+  await until("the launch to finish", () => coordinator.activeCount === 0);
+  assert.equal(children.get("run-early-stop")?.start, undefined, "The child never started");
+  assert.match(children.get("run-early-stop")?.stopped?.message ?? "", /stopped by its owner/u);
+});
+
+test("a child created for a launch that then fails is stopped, not abandoned", async () => {
+  const { store, children, order, coordinator } = harness();
+  holdStatusAfterCreate(store, order, async () => {
+    throw new Error("store unavailable");
+  });
+  await assert.rejects(coordinator.launch(prepared("run-orphan")), /store unavailable/u);
+  assert.equal(coordinator.activeCount, 0);
+  assert.equal(children.get("run-orphan")?.start, undefined);
+  assert.ok(children.get("run-orphan")?.stopped, "The created child is released");
+});
+
 test("wait observes terminal work or times out, and steering is delivered only at a safe boundary", async () => {
   const { store, children, coordinator } = harness();
   await coordinator.launch(prepared("run-wait"));

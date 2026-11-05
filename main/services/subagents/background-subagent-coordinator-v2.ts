@@ -98,6 +98,8 @@ function terminal(run: BackgroundSubagentRunV2): boolean {
  */
 export class BackgroundSubagentCoordinatorV2<Child> {
   private readonly active = new Map<string, ActiveBackgroundRunV2<Child>>();
+  /** Launches past durable acceptance whose child is not in `active` yet. */
+  private readonly installing = new Map<string, Promise<void>>();
 
   constructor(
     private readonly lifecycle: BackgroundSubagentLifecycleV2,
@@ -152,16 +154,57 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       }
       throw error;
     }
-    const acceptedRun = await this.lifecycle.manage({
-      version: 2,
-      action: "status",
-      runId: prepared.snapshot.runId,
-      chatId: prepared.authority.chatId,
-      workspaceId: prepared.authority.workspaceId,
-      ownerDocumentId: prepared.authority.ownerDocumentId,
-      authorityRevision: prepared.authority.authorityRevision,
-      expectedRevision: accepted.revision,
-    });
+    // Nothing else can reach this run until `active` holds it, so a management
+    // request arriving now waits here instead of missing the child.
+    let installed!: () => void;
+    this.installing.set(
+      prepared.snapshot.runId,
+      new Promise<void>((resolve) => {
+        installed = resolve;
+      }),
+    );
+    try {
+      await this.install(prepared, child, accepted.revision, () => {
+        this.installing.delete(prepared.snapshot.runId);
+        installed();
+      });
+    } finally {
+      this.installing.delete(prepared.snapshot.runId);
+      installed();
+    }
+    return accepted;
+  }
+
+  private async install(
+    prepared: PreparedBackgroundSubagentRunV2,
+    child: Child,
+    acceptedRevision: number,
+    releaseWaiters: () => void,
+  ): Promise<void> {
+    let acceptedRun: BackgroundSubagentRunV2;
+    try {
+      acceptedRun = await this.lifecycle.manage({
+        version: 2,
+        action: "status",
+        runId: prepared.snapshot.runId,
+        chatId: prepared.authority.chatId,
+        workspaceId: prepared.authority.workspaceId,
+        ownerDocumentId: prepared.authority.ownerDocumentId,
+        authorityRevision: prepared.authority.authorityRevision,
+        expectedRevision: acceptedRevision,
+      });
+    } catch (error) {
+      // The run moved on or its state is unreadable: this child has no owner.
+      try {
+        this.dependencies.stopChild?.(
+          child,
+          new Error("Background subagent could not start."),
+        );
+      } catch {
+        // The launch failure below is the one worth reporting.
+      }
+      throw error;
+    }
     const entry: ActiveBackgroundRunV2<Child> = {
       prepared,
       child,
@@ -172,12 +215,15 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       tail: Promise.resolve(),
     };
     this.active.set(prepared.snapshot.runId, entry);
-    void this.execute(entry);
-    return accepted;
+    // Requests already waiting queue on this entry before it starts, so a Stop
+    // sent during launch is judged against the revision its sender saw.
+    releaseWaiters();
+    queueMicrotask(() => void this.execute(entry));
   }
 
   async manage(value: unknown): Promise<BackgroundSubagentRunV2> {
     const request = parseBackgroundSubagentManagementRequestV2(value);
+    await this.installing.get(request.runId);
     const entry = this.active.get(request.runId);
     if (!entry) {
       const current = await this.lifecycle.manage(asStatus(request));

@@ -13,6 +13,21 @@ Each owner below was traced for the state-machine migration and already centrali
 
 `reset` keeps `shutdownInterrupted`, as it did before. Harnesses serve one generation, so it cannot reach another run through `llm-client`.
 
+## Host and harness owners
+
+Audited by a read-only review. Except where marked, these are inspection results, not exhaustive proof.
+
+| Inventory | Owner | Disposition | Why |
+|---|---|---|---|
+| `backend:M021` | `rpiv-btw/service-core.ts` | Retain, one fix | Reservation ownership is local to the service. A throwing owner hook no longer keeps the slot. |
+| `backend:M023` | `bot-runtime/harness-host.ts` | Retain | Per-Bot serialization owns open and close, and failed teardown keeps ownership. |
+| `backend:M024` | `bot-runtime/bot-session-service.ts` | Retain | Mutating commands use the per-Bot serializer, and durable harness state is the source of truth. |
+| `backend:M035` | `bot-lifecycle-journal-core.ts` | Retain | Serialized operations validate predecessor stages and write cloned documents. |
+| `backend:M100` | `subagents/subagent-supervisor-core.ts` | Deferred | Cancellation, cleanup and budget settlement are spread across nested and top-level paths, so extraction would be useful. No ordering defect was found, and it needs the P5a process-settlement work first. |
+| `backend:M101` | `subagents/subagent-nesting-core.ts` | Retain | The ledger and scheduler each own their counters. |
+| `backend:M105` | `subagents/subagent-control-v2.ts` | Retain | Updates converge on `publish` and terminal cleanup. |
+| `backend:M106` | `subagents/background-subagent-coordinator-v2.ts` | Retain, two fixes | The durable lifecycle stays the authority. Launch now holds requests until `active` has the child, so a Stop cannot be acknowledged as queued, and a failed launch stops its child. Both were reproduced in `background-subagent-coordinator-v2.test.ts`. |
+
 ## Renderer adapters
 
 The P1b work changed no IPC, so these needed no adapter change.
