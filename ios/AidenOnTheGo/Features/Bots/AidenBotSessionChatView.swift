@@ -1759,13 +1759,13 @@ private struct AidenBotAttachButtonCenterKey: PreferenceKey {
     }
 }
 
-/// Groups the composer's glass so nearby glass blends on iOS 26; elsewhere a plain stack.
+/// Groups the composer's glass so nearby glass blends; a plain stack under Reduce Transparency.
 private struct AidenBotComposerGlassContainer<Content: View>: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        if #available(iOS 26, *), !reduceTransparency {
+        if !reduceTransparency {
             GlassEffectContainer(spacing: 6) { content() }
         } else {
             content()
@@ -1773,14 +1773,14 @@ private struct AidenBotComposerGlassContainer<Content: View>: View {
     }
 }
 
-/// Messages scroll under the floating composer: on iOS 26 the edge softens
-/// so the words stay readable; under Reduce Transparency it stays plain.
+/// Messages scroll under the floating composer: the edge softens so the words
+/// stay readable; under Reduce Transparency it stays plain.
 private struct AidenBotSoftScrollEdge: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
+        if !reduceTransparency {
             content.scrollEdgeEffectStyle(.soft, for: .bottom)
         } else {
             content

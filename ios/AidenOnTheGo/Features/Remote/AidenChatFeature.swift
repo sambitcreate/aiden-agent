@@ -818,12 +818,10 @@ private struct AidenBotHeaderNameGlassModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.glassEffect(.regular.interactive(), in: Capsule())
-        } else if reduceTransparency {
+        if reduceTransparency {
             content.background(palette.raised, in: Capsule())
         } else {
-            content.background(.regularMaterial, in: Capsule())
+            content.glassEffect(.regular.interactive(), in: Capsule())
         }
     }
 }
@@ -2792,8 +2790,9 @@ final class AidenChatViewModel {
                     after: cursor,
                     epoch: cursorEpoch,
                     onOpen: { [weak self] resumed in
+                        guard let self else { return }
                         await MainActor.run {
-                            guard let self, resumed, self.isCurrentProgressObservation(generation, context: context) else { return }
+                            guard resumed, self.isCurrentProgressObservation(generation, context: context) else { return }
                             self.isTaskProgressStale = false
                             self.isAgentRosterStale = false
                         }
@@ -6685,12 +6684,10 @@ private struct AidenChatJumpToLatestGlassModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.glassEffect(.regular.interactive(), in: Circle())
-        } else if reduceTransparency {
+        if reduceTransparency {
             content.background(palette.raised, in: Circle())
         } else {
-            content.background(.ultraThinMaterial, in: Circle())
+            content.glassEffect(.regular.interactive(), in: Circle())
         }
     }
 }
@@ -9290,7 +9287,7 @@ private struct AidenApprovalActionGlassModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
+        if !reduceTransparency {
             if let tint {
                 content.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
             } else {
@@ -9298,14 +9295,10 @@ private struct AidenApprovalActionGlassModifier: ViewModifier {
             }
         } else if let tint {
             content.background(tint, in: Capsule())
-        } else if reduceTransparency {
+        } else {
             content
                 .background(palette.canvas, in: Capsule())
                 .overlay(Capsule().stroke(palette.foreground.opacity(0.14), lineWidth: 0.5))
-        } else {
-            content
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
         }
     }
 }
@@ -10578,15 +10571,13 @@ private struct AidenComposerGlassModifier: ViewModifier {
     func body(content: Content) -> some View {
         if !enabled {
             content
-        } else if #available(iOS 26, *), !reduceTransparency {
+        } else if !reduceTransparency {
             // The whole composer is a stable surface containing its own
             // interactive controls. Marking the container interactive causes
             // Liquid Glass to recompute multiple times during streamed updates.
             content.glassEffect(.regular, in: shape)
-        } else if reduceTransparency {
-            content.background(palette.raised, in: shape)
         } else {
-            content.background(.regularMaterial, in: shape)
+            content.background(palette.raised, in: shape)
         }
     }
 }

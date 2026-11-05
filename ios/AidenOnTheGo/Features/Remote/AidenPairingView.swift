@@ -551,11 +551,7 @@ struct AidenPairingView: View {
         .controlSize(.large)
         .aidenSolidFillTint()
 
-        if #available(iOS 26, *) {
-            button.buttonStyle(.glassProminent)
-        } else {
-            button.buttonStyle(.borderedProminent)
-        }
+        button.buttonStyle(.glassProminent)
     }
 
     private var preparePage: some View {

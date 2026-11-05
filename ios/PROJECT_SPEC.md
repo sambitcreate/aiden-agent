@@ -3,7 +3,7 @@
 Status: Approved implementation specification; bot-first extension approved August 22, 2026
 Protocol: Aiden Remote API v1 (`/api/aiden/v1`)
 Product: Aiden On The Go
-Platforms: iPhone and iPad, iOS/iPadOS 18+
+Platforms: iPhone and iPad, iOS/iPadOS 26+
 Authority: `docs/superpowers/specs/2026-10-07-bots-rework-design.md`, `docs/plans/bot-first-aiden-on-the-go-plan.md` (completed), `docs/plans/aiden-on-the-go-plan.md`, and `docs/aiden-remote-api-v1.md`
 
 ## 1. Product contract
@@ -134,7 +134,7 @@ Apple Distribution signing and App Store profiles for the app and Live Activity 
 ## 8. Bot avatars and Apple image creation
 
 - The semantic Aiden avatar editor remains the universal creation, offline, unsupported-device, and rollback path.
-- On iOS/iPadOS 18.4 or later, use the system SwiftUI Image Playground sheet only when `supportsImagePlayground` is true. Do not use the deprecated programmatic `ImageCreator` path or promise that generation is universally on-device; Private Cloud Compute is acceptable.
+- On iOS/iPadOS 26 or later (the minimum), use the system SwiftUI Image Playground sheet only when `supportsImagePlayground` is true. Do not use the deprecated programmatic `ImageCreator` path or promise that generation is universally on-device; Private Cloud Compute is acceptable.
 - Prefill only visible bot identity/purpose, keep personalization disabled, support the explicit non-personalized illustration/animation/sketch styles, and provide honest cancel, restriction, model-download, usage-limit, and unavailable states.
 - Preview and normalize locally. Nothing is uploaded until the person chooses **Use this image**. Then send the bounded accepted image to the paired Mac, which validates and stores the canonical bot photo with semantic fallback.
 - The connected iPhone 13 Pro is valid physical-device evidence for the unsupported fallback and absence of dead controls. A supported Apple Intelligence iPhone or iPad is still required to prove successful system-sheet generation and paired-Mac persistence.

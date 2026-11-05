@@ -123,7 +123,7 @@ Provide these notes only with a reachable, reviewer-safe paired Aiden Agent envi
 1. Pair the iPhone or iPad with the supplied Aiden Agent desktop, then tap the Aiden logo and choose **Bots**.
 2. New Bots start with Full Access; switch to **Custom** in the Bot's Advanced settings to reduce access. Full Access uses only capabilities already enabled on the paired desktop; Custom can reduce Files, commands, Connections, and Skills.
 3. Create a Bot with the built-in semantic avatar, save it, and start a chat. Apple Intelligence is not required for this complete path.
-4. On eligible Apple Intelligence hardware with iOS/iPadOS 18.4 or later, **Create with Apple Intelligence** opens Apple's system Image Playground. Apple controls generation and may use Private Cloud Compute. Aiden disables person/Photos personalization and sends the paired desktop only the image explicitly accepted and saved.
+4. On eligible Apple Intelligence hardware with iOS/iPadOS 26 or later, **Create with Apple Intelligence** opens Apple's system Image Playground. Apple controls generation and may use Private Cloud Compute. Aiden disables person/Photos personalization and sends the paired desktop only the image explicitly accepted and saved.
 5. On unsupported hardware, including iPhone 13 Pro, the editor honestly keeps the semantic avatar available and has no dead Image Playground action.
 
 Do not claim successful Image Playground generation in review notes until it has passed on supported physical hardware. Do not include pairing credentials, private prompts, paths, or provider secrets in metadata or notes.

@@ -1337,7 +1337,7 @@ final class AidenBotSessionModel {
         cacheKey: AidenBotSessionKey? = nil,
         allowedSupported: Bool = false,
         plansSupported: Bool = false,
-        cache: AidenBotSessionCache = .shared,
+        cache: AidenBotSessionCache? = nil,
         outboxStore: AidenBotOutboxStore? = .shared,
         retryDelays: [Duration] = [.seconds(1), .seconds(4)],
         requestLimit: Duration = .seconds(12),
@@ -1350,6 +1350,7 @@ final class AidenBotSessionModel {
         self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
         self.transport = transport
         self.cacheKey = cacheKey
+        let cache = cache ?? .shared
         self.cache = cache
         self.outboxStore = cacheKey == nil ? nil : outboxStore
         self.retryDelays = retryDelays

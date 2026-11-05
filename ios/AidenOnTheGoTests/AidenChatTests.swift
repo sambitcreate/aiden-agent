@@ -11968,6 +11968,20 @@ final class AidenAppearanceTests: XCTestCase {
         }
     }
 
+    func testChromeGlassResolvesToSolidFillUnderReduceTransparency() {
+        typealias Modifier = AidenChromeGlassModifier<Capsule>
+        for isInteractive in [true, false] {
+            XCTAssertEqual(
+                Modifier.mode(reduceTransparency: true, isInteractive: isInteractive),
+                .opaque
+            )
+            XCTAssertEqual(
+                Modifier.mode(reduceTransparency: false, isInteractive: isInteractive),
+                .glass(interactive: isInteractive)
+            )
+        }
+    }
+
     func testSolidFillsCarryReadableContentInEveryStateForEveryPreset() {
         for preset in AidenThemePresetID.allCases {
             for scheme in [ColorScheme.light, .dark] {
@@ -14917,9 +14931,11 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         XCTAssertTrue(controller.isFollowing)
     }
 
-    func testFollowTriggerBumpsFireWithoutReRunningTheOwner() {
+    func testFollowTriggerBumpsFireWithoutReRunningTheOwner() throws {
         let probe = AidenFollowTriggerProbe()
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
         window.rootViewController = UIHostingController(rootView: AidenFollowTriggerOwner(probe: probe))
         window.makeKeyAndVisible()
         defer { window.isHidden = true; window.rootViewController = nil }

@@ -1184,12 +1184,10 @@ private struct AidenAttachmentPanelSurface: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.glassEffect(.regular, in: shape)
-        } else if reduceTransparency {
+        if reduceTransparency {
             content.background(palette.raised, in: shape)
         } else {
-            content.background(.ultraThinMaterial, in: shape)
+            content.glassEffect(.regular, in: shape)
         }
     }
 }

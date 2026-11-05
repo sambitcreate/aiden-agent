@@ -295,10 +295,19 @@ test("Bot Image Playground stays Apple-owned, non-personalized, and availability
   );
 
   assert.match(source, /@Environment\(\\\.supportsImagePlayground\)/u);
-  assert.match(source, /if #available\(iOS 18\.4, \*\)/u);
-  assert.match(source, /@available\(iOS 18\.4, \*\)[\s\S]*?imagePlaygroundSheet/u);
+  // iOS 26 is the floor, so only the personalization API newer than that is gated.
+  assert.doesNotMatch(source, /#available\(iOS 18/u);
+  assert.match(
+    source,
+    /if #available\(iOS 26\.4, \*\) \{\s*content\.imagePlaygroundOptions\(Self\.nonPersonalizedOptions\)\s*\} else \{\s*content\.imagePlaygroundPersonalizationPolicy\(\.disabled\)\s*\}/u,
+  );
+  assert.equal([...source.matchAll(/\.imagePlaygroundOptions\(/gu)].length, 1);
+  assert.match(
+    source,
+    /@available\(iOS 26\.4, \*\)\s*private static var nonPersonalizedOptions: ImagePlaygroundOptions \{\s*var options = ImagePlaygroundOptions\(\)\s*options\.personalization = \.disabled\s*return options/u,
+  );
+  assert.doesNotMatch(source, /\.personalization = \.(?:automatic|enabled)/u);
   assert.match(source, /in: \[\.animation, \.illustration, \.sketch\]/u);
-  assert.match(source, /imagePlaygroundPersonalizationPolicy\(\.disabled\)/u);
   assert.match(source, /identity\.conceptTexts\.map\(ImagePlaygroundConcept\.text\)/u);
   assert.match(source, /copyImmediately\(fromSystemCompletionURL: temporaryURL\)/u);
   assert.match(source, /aidenBotImagePlaygroundCleanupAfterProcessLaunch/u);
@@ -530,8 +539,15 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     productShell,
-    /AidenProductSwitcherGlassModifier[\s\S]*?content\.buttonStyle\(\.glass\)[\s\S]*?background\(\.ultraThinMaterial, in: Capsule\(\)\)/u,
+    /AidenProductSwitcherGlassModifier[\s\S]*?if reduceTransparency \{[\s\S]*?background\(palette\.raised, in: Capsule\(\)\)[\s\S]*?\} else \{\s*content\.buttonStyle\(\.glass\)/u,
   );
+  // iOS 26 is the floor: no material fallback and no availability branch remain.
+  const switcherGlass = productShell.slice(
+    productShell.indexOf("struct AidenProductSwitcherGlassModifier"),
+    productShell.indexOf("struct AidenBotSwitcherCoachmarkView"),
+  );
+  assert.ok(switcherGlass.includes("buttonStyle(.glass)"));
+  assert.doesNotMatch(switcherGlass, /Material|#available\(iOS/u);
   for (const source of shippingSources) {
     assert.doesNotMatch(source, /ellipsis\.circle/u);
   }

@@ -82,10 +82,10 @@ private struct AidenLiquidGlassCapsuleModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
-        } else {
+        if reduceTransparency {
             content.background(tint, in: Capsule())
+        } else {
+            content.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
         }
     }
 }
@@ -96,18 +96,13 @@ private struct AidenProminentGlassButtonModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.buttonStyle(.glass)
-        } else if reduceTransparency {
+        if reduceTransparency {
             content
                 .buttonStyle(.plain)
                 .background(palette.raised, in: Capsule())
                 .overlay(Capsule().stroke(palette.foreground.opacity(0.16), lineWidth: 0.5))
         } else {
-            content
-                .buttonStyle(.plain)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+            content.buttonStyle(.glass)
         }
     }
 }

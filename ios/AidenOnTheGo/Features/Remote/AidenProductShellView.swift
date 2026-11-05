@@ -671,18 +671,13 @@ private struct AidenProductSwitcherGlassModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.buttonStyle(.glass)
-        } else if reduceTransparency {
+        if reduceTransparency {
             content
                 .buttonStyle(.plain)
                 .background(palette.raised, in: Capsule())
                 .overlay(Capsule().stroke(palette.foreground.opacity(0.16), lineWidth: 0.5))
         } else {
-            content
-                .buttonStyle(.plain)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+            content.buttonStyle(.glass)
         }
     }
 }
@@ -744,12 +739,10 @@ private struct AidenBotSwitcherCoachmarkGlassModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), !reduceTransparency {
-            content.glassEffect(.regular, in: shape)
-        } else if reduceTransparency {
+        if reduceTransparency {
             content.background(palette.raised, in: shape)
         } else {
-            content.background(.regularMaterial, in: shape)
+            content.glassEffect(.regular, in: shape)
         }
     }
 }
