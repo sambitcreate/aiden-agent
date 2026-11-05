@@ -655,6 +655,18 @@ body {
   corner-shape: squircle;
 }
 
+/* In a short window the approval card's icon is the first thing to go, so
+   the question, its details and the buttons keep the room. */
+@media (max-height: 560px) {
+  .approval-shell .approval-icon-tile {
+    display: none;
+  }
+
+  .approval-shell .approval-icon-tile + * {
+    margin-top: 0;
+  }
+}
+
 /* A diff's line bands run to the well's edge; a scrollbar appears only when it overflows. */
 .approval-diff {
   scrollbar-gutter: auto;
