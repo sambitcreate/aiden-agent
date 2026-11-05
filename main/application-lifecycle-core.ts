@@ -71,6 +71,51 @@ export function createLifecycleCheck(onError: (error: unknown) => void): Lifecyc
   };
 }
 
+export interface UpdateInstallIntent {
+  readonly armed: boolean;
+  arm(): void;
+  /** A renderer veto interrupted the quit and scheduled its retry. */
+  retryScheduled(): void;
+  retryBegan(): void;
+  /** The quit is off for good. Ignored while a retry or a shutdown still carries it. */
+  withdraw(): void;
+  /** Hand the install to the quit that is completing. */
+  take(): boolean;
+}
+
+/** An accepted install either installs as a quit completes or is withdrawn, never left armed. */
+export function createUpdateInstallIntent(deps: {
+  shutdownStarted(): boolean;
+  onWithdrawn(): void;
+}): UpdateInstallIntent {
+  let armed = false;
+  let retryPending = false;
+  return {
+    get armed() {
+      return armed;
+    },
+    arm() {
+      armed = true;
+    },
+    retryScheduled() {
+      retryPending = true;
+    },
+    retryBegan() {
+      retryPending = false;
+    },
+    withdraw() {
+      if (!armed || retryPending || deps.shutdownStarted()) return;
+      armed = false;
+      deps.onWithdrawn();
+    },
+    take() {
+      const was = armed;
+      armed = false;
+      return was;
+    },
+  };
+}
+
 /**
  * Run `action` once no lifecycle action holds the check. Whoever holds it owns
  * the outcome until it releases, so the action decides only after that.

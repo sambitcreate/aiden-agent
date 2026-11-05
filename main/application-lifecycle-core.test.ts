@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createLifecycleCheck,
+  createUpdateInstallIntent,
   settleUpdateInstallQuit,
   whenLifecycleCheckFree,
   shouldQuitAfterAllWindowsClose,
@@ -128,4 +129,50 @@ test("work queued behind a check retaken during release runs after that release"
   assert.deepEqual(ran, ["takes the check"]);
   check.release();
   assert.deepEqual(ran, ["takes the check", "waits for it"]);
+});
+
+function installIntent() {
+  const state = { shutdownStarted: false, announced: 0 };
+  const intent = createUpdateInstallIntent({
+    shutdownStarted: () => state.shutdownStarted,
+    onWithdrawn: () => { state.announced += 1; },
+  });
+  return { state, intent };
+}
+
+test("a renderer veto keeps the install for its retry, however many callers withdraw", () => {
+  const { state, intent } = installIntent();
+  intent.arm();
+  intent.retryScheduled();
+  // The vetoed quit's own cleanup and the wrapper around it both withdraw.
+  intent.withdraw();
+  intent.withdraw();
+  assert.equal(intent.armed, true);
+  assert.equal(state.announced, 0);
+  intent.retryBegan();
+  assert.equal(intent.take(), true, "the retried quit installs the update");
+  assert.equal(intent.armed, false);
+});
+
+test("a retry the person then declines withdraws the install once", () => {
+  const { state, intent } = installIntent();
+  intent.arm();
+  intent.retryScheduled();
+  intent.retryBegan();
+  intent.withdraw();
+  intent.withdraw();
+  assert.equal(intent.armed, false);
+  assert.equal(state.announced, 1);
+  assert.equal(intent.take(), false, "a later ordinary quit installs nothing");
+});
+
+test("a shutdown under way keeps the install, and failing it lets the withdrawal through", () => {
+  const { state, intent } = installIntent();
+  intent.arm();
+  state.shutdownStarted = true;
+  intent.withdraw();
+  assert.equal(intent.armed, true);
+  state.shutdownStarted = false;
+  intent.withdraw();
+  assert.equal(intent.armed, false);
 });

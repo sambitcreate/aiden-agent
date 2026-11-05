@@ -190,6 +190,7 @@ import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import {
   createLifecycleCheck,
+  createUpdateInstallIntent,
   settleUpdateInstallQuit,
   whenLifecycleCheckFree,
   shouldQuitAfterAllWindowsClose,
@@ -248,9 +249,10 @@ const lifecycleCheck = createLifecycleCheck((error) =>
 let shutdownStarted = false;
 /** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
 const imageQuitCoverage = new ImageQuitCoverage();
-let installUpdateOnQuit = false;
-/** A renderer veto interrupted a quit and scheduled its retry. */
-let quitRetryPending = false;
+const updateInstall = createUpdateInstallIntent({
+  shutdownStarted: () => shutdownStarted,
+  onWithdrawn: () => appUpdateService.announceSnapshot(),
+});
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
   (snapshot) => {
@@ -551,7 +553,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       await prepareComputerUseForQuit();
     } catch (error) {
       shutdownStarted = false;
-      withdrawUpdateInstall();
+      updateInstall.withdraw();
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
@@ -714,8 +716,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   await flushDiagnosticJournal(1_000);
   await flushDiagnosticHealth(1_000);
   forceAppQuit = true;
-  if (installUpdateOnQuit) {
-    installUpdateOnQuit = false;
+  if (updateInstall.take()) {
     if (appUpdateService.installDownloadedUpdateAndRestart()) {
       // The installer owns the exit from here; never cut it off mid-install.
       disarmShutdownCeiling();
@@ -1119,18 +1120,10 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     await shutdownAndQuit(true);
     return shutdownStarted;
   } finally {
-    // Before the release, so work queued behind this quit sees the outcome. A
-    // renderer veto schedules its own retry, and the install rides on that.
-    if (!quitRetryPending) withdrawUpdateInstall();
+    // Before the release, so work queued behind this quit sees the outcome.
+    updateInstall.withdraw();
     lifecycleCheck.release();
   }
-}
-
-/** The quit an install was waiting for is off: the update stays ready, and uninstalled. */
-function withdrawUpdateInstall(): void {
-  if (shutdownStarted || !installUpdateOnQuit) return;
-  installUpdateOnQuit = false;
-  appUpdateService.announceSnapshot();
 }
 
 /** Start a quit once the check is free, if it is still wanted by then. */
@@ -1139,7 +1132,7 @@ function continueApplicationQuit(window: BrowserWindow, stillWanted: () => boole
     if (!stillWanted() || shutdownStarted) return;
     void settleUpdateInstallQuit(
       () => requestApplicationQuit(window),
-      withdrawUpdateInstall,
+      () => updateInstall.withdraw(),
       (error) => logger.error("main", "A deferred quit failed.", error),
     );
   });
@@ -1194,7 +1187,7 @@ async function restoreRendererOnboardingCompletion(
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   if (
     shutdownStarted ||
-    installUpdateOnQuit ||
+    updateInstall.armed ||
     window.isDestroyed() ||
     !lifecycleCheck.tryBegin()
   ) {
@@ -1457,8 +1450,8 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
   }
 
   const window = mainWindow;
-  installUpdateOnQuit = true;
-  setImmediate(() => continueApplicationQuit(window, () => installUpdateOnQuit));
+  updateInstall.arm();
+  setImmediate(() => continueApplicationQuit(window, () => updateInstall.armed));
   return {
     accepted: true,
   };
@@ -1860,9 +1853,9 @@ async function createMainWindow(
     } else if (interruptedAction === "quit") {
       forceAppQuit = false;
       shutdownStarted = false;
-      quitRetryPending = true;
+      updateInstall.retryScheduled();
       setImmediate(() => continueApplicationQuit(createdWindow, () => {
-        quitRetryPending = false;
+        updateInstall.retryBegan();
         return true;
       }));
     } else if (interruptedAction === "close") {
