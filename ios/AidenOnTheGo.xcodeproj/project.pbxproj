@@ -61,6 +61,7 @@
 		A8C200000000000000000008 /* AidenInstallationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000008 /* AidenInstallationsView.swift */; };
 		A8C200000000000000000009 /* AidenFolderBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000009 /* AidenFolderBrowserView.swift */; };
 		A8C200000000000000000010 /* AidenWorkspaceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000010 /* AidenWorkspaceSettingsView.swift */; };
+		A8C200000000000000000011 /* AidenWorkspaceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000011 /* AidenWorkspaceDetailView.swift */; };
 		A0D700000000000000000001 /* AidenChat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000011 /* AidenChat.swift */; };
 		A1B0C0DE0000000000000001 /* AidenInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B0C0DE0000000000000011 /* AidenInbox.swift */; };
 		A1B0C0DE0000000000000002 /* AidenInboxViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B0C0DE0000000000000012 /* AidenInboxViews.swift */; };
@@ -270,6 +271,7 @@
 		A8C100000000000000000008 /* AidenInstallationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenInstallationsView.swift; sourceTree = "<group>"; };
 		A8C100000000000000000009 /* AidenFolderBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenFolderBrowserView.swift; sourceTree = "<group>"; };
 		A8C100000000000000000010 /* AidenWorkspaceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceSettingsView.swift; sourceTree = "<group>"; };
+		A8C100000000000000000011 /* AidenWorkspaceDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceDetailView.swift; sourceTree = "<group>"; };
 		A0D700000000000000000011 /* AidenChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChat.swift; sourceTree = "<group>"; };
 		A1B0C0DE0000000000000011 /* AidenInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenInbox.swift; sourceTree = "<group>"; };
 		A1B0C0DE0000000000000012 /* AidenInboxViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenInboxViews.swift; sourceTree = "<group>"; };
@@ -727,6 +729,7 @@
 				A8C100000000000000000008 /* AidenInstallationsView.swift */,
 				A8C100000000000000000009 /* AidenFolderBrowserView.swift */,
 				A8C100000000000000000010 /* AidenWorkspaceSettingsView.swift */,
+				A8C100000000000000000011 /* AidenWorkspaceDetailView.swift */,
 			);
 			path = Workspace;
 			sourceTree = "<group>";
@@ -1084,6 +1087,7 @@
 				A8C200000000000000000008 /* AidenInstallationsView.swift in Sources */,
 				A8C200000000000000000009 /* AidenFolderBrowserView.swift in Sources */,
 				A8C200000000000000000010 /* AidenWorkspaceSettingsView.swift in Sources */,
+				A8C200000000000000000011 /* AidenWorkspaceDetailView.swift in Sources */,
 				A0D700000000000000000001 /* AidenChat.swift in Sources */,
 				A1B0C0DE0000000000000001 /* AidenInbox.swift in Sources */,
 				A1B0C0DE0000000000000002 /* AidenInboxViews.swift in Sources */,
