@@ -729,6 +729,7 @@
         "main/services/subagents/subagent-effect-v2.test.ts",
         "main/services/subagents/subagent-event-projector.test.ts",
         "main/services/subagents/subagent-file-mutation-core.test.ts",
+        "main/services/subagents/subagent-file-mutation-transaction.test.ts",
         "main/services/subagents/subagent-file-mutator-io.test.ts",
         "main/services/subagents/subagent-foreground-persistence-v2.test.ts",
         "main/services/subagents/subagent-health-metrics-core.test.ts",
