@@ -150,23 +150,28 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
 test("Linux pull-request E2E never grants privileges to checkout content", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
   const linuxJob = workflow.match(/^ {2}linux:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
+  const e2eJob = workflow.match(/^ {2}linux-e2e:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
   assert.ok(linuxJob, "Linux package job is missing");
+  assert.ok(e2eJob, "Linux E2E job is missing");
 
-  assert.match(linuxJob, /^ {4}permissions:\n {6}contents: read\n {4}steps:/mu);
-  const checkout = linuxJob.match(/- name: Check out source\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
-  assert.match(checkout ?? "", /persist-credentials: false/u);
-  assert.doesNotMatch(linuxJob, /\$\{\{\s*secrets\./u);
+  for (const job of [linuxJob, e2eJob]) {
+    assert.match(job, /^ {4}permissions:\n {6}contents: read\n/mu);
+    const checkout = job.match(/- name: Check out source\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
+    assert.match(checkout ?? "", /persist-credentials: false/u);
+    assert.doesNotMatch(job, /\$\{\{\s*secrets\./u);
 
-  // npm ci runs PR-controlled lifecycle scripts, so nothing below the checkout
-  // may become setuid or root-owned.
-  assert.doesNotMatch(linuxJob, /sudo (chown|chmod)[^\n]*node_modules/u);
-  assert.doesNotMatch(linuxJob, /chmod [0-7]*[4-7][0-7]{3}\b[^\n]*node_modules/u);
-  const e2e = linuxJob.match(/- name: Run deterministic Electron E2E gate\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
+    // npm ci runs PR-controlled lifecycle scripts, so nothing below the checkout
+    // may become setuid or root-owned.
+    assert.doesNotMatch(job, /sudo (chown|chmod)[^\n]*node_modules/u);
+    assert.doesNotMatch(job, /chmod [0-7]*[4-7][0-7]{3}\b[^\n]*node_modules/u);
+  }
+  const e2e = e2eJob.match(/- name: Run deterministic Electron E2E gate\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
   assert.ok(e2e, "Linux E2E gate is missing");
   assert.match(e2e, /sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0/u);
   // Dumpable namespace-sandboxed renderers must not stall on apport core dumps.
   const commands = e2e.replace(/^\s*#.*$/gmu, "");
-  const e2eRun = commands.indexOf("npm run test:e2e");
+  const e2eRun = commands.indexOf("xvfb-run --auto-servernum node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3");
+  assert.ok(e2eRun >= 0);
   assert.ok(commands.indexOf("sudo sysctl -w kernel.core_pattern=core") >= 0);
   assert.ok(commands.indexOf("sudo sysctl -w kernel.core_pattern=core") < e2eRun);
   assert.ok(commands.indexOf("ulimit -c 0") >= 0 && commands.indexOf("ulimit -c 0") < e2eRun);
@@ -226,11 +231,12 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
   assert.equal(simulatorResults.with.path, "${{ runner.temp }}/AidenOnTheGoSimulator.xcresult");
   assert.equal(simulatorResults.with["retention-days"], 7);
-  // One job builds the production bundles; E2E shards and verify reuse them.
+  // One macOS job builds the production bundles; E2E shards and verify reuse
+  // them. Linux shards build their own so they never wait for a macOS slot.
   const builders = Object.entries(jobs)
     .filter(([, job]) => job.steps?.some((step) => step.run === "npm run build"))
     .map(([name]) => name);
-  assert.deepEqual(builders, ["build"]);
+  assert.deepEqual(builders, ["build", "linux-e2e"]);
   const bundle = jobs.build.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   // Downloads follow the producer output, even when only a consumer is rerun
   // and its github.run_attempt differs from the successful build's attempt.
@@ -407,31 +413,45 @@ test("Linux required contexts exist for scoped PRs and fail closed", async () =>
   assert.equal(gate.name, "Linux ${{ matrix.arch }}");
   assert.equal(gate.if, "${{ always() }}");
   assert.deepEqual(gate.strategy.matrix.arch, ["x64", "arm64"]);
-  assert.deepEqual(gate.needs, ["changes", "linux"]);
+  assert.deepEqual(gate.needs, ["changes", "linux", "linux-e2e"]);
+  assert.deepEqual(jobs["linux-e2e"].strategy.matrix.shard, [1, 2, 3]);
+  assert.equal(jobs["linux-e2e"].strategy["fail-fast"], false);
   assert.notEqual(jobs.linux.name, gate.name);
   const step = gate.steps[0];
   assert.deepEqual(step.env, {
     CHANGES_RESULT: "${{ needs.changes.result }}",
     LINUX_SELECTED: "${{ needs.changes.outputs.linux }}",
     LINUX_RESULT: "${{ needs.linux.result }}",
+    LINUX_E2E_RESULT: "${{ needs.linux-e2e.result }}",
   });
-  for (const [detection, selected, result, expected] of [
-    ["success", "false", "skipped", 0],
+  for (const [detection, selected, result, e2e, expected] of [
+    ["success", "false", "skipped", "skipped", 0],
     // The linux matrix always starts and skips its steps when unselected, so GitHub reports success.
-    ["success", "false", "success", 0],
-    ["success", "true", "success", 0],
-    ["success", "true", "failure", 1],
-    ["success", "true", "cancelled", 1],
-    ["success", "true", "skipped", 1],
-    ["failure", "false", "skipped", 1],
-    ["cancelled", "false", "skipped", 1],
-    ["success", "", "skipped", 1],
-    ["success", "false", "failure", 1],
+    ["success", "false", "success", "skipped", 0],
+    ["success", "true", "success", "success", 0],
+    ["success", "true", "failure", "success", 1],
+    ["success", "true", "cancelled", "success", 1],
+    ["success", "true", "skipped", "success", 1],
+    ["failure", "false", "skipped", "skipped", 1],
+    ["cancelled", "false", "skipped", "skipped", 1],
+    ["success", "", "skipped", "skipped", 1],
+    ["success", "false", "failure", "skipped", 1],
+    // A failed, cancelled or missing E2E shard fails the required checks.
+    ["success", "true", "success", "failure", 1],
+    ["success", "true", "success", "cancelled", 1],
+    ["success", "true", "success", "skipped", 1],
+    ["success", "false", "success", "failure", 1],
   ]) {
     const run = spawnSync("bash", ["-e", "-c", step.run], {
-      env: { ...process.env, CHANGES_RESULT: detection, LINUX_SELECTED: selected, LINUX_RESULT: result },
+      env: {
+        ...process.env,
+        CHANGES_RESULT: detection,
+        LINUX_SELECTED: selected,
+        LINUX_RESULT: result,
+        LINUX_E2E_RESULT: e2e,
+      },
       encoding: "utf8",
     });
-    assert.equal(run.status, expected, `${detection}/${selected}/${result}: ${run.stdout}${run.stderr}`);
+    assert.equal(run.status, expected, `${detection}/${selected}/${result}/${e2e}: ${run.stdout}${run.stderr}`);
   }
 });
