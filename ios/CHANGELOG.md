@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Aiden On The Go now needs iOS 26 or later (it was iOS 18). iPhones that cannot run iOS 26 stay on the last build they have. The app uses the system Liquid Glass and Image Playground APIs directly, without the older material fallbacks. Reduce Transparency still shows solid surfaces.
+
 - Debug builds can launch the real shell against fake machines: `-AidenDemoScenario <one|four|empty|busy|offline-mix|old-host>` serves every request from an in-process responder on `*.demo.invalid`, without touching your Keychain, pairings or caches. A new `AidenOnTheGoUITests` target uses it. CI runs one smoke test that opens the shell against every scenario; the screenshot matrix and accessibility audit stay a local tool. Release builds contain none of it. CI also gains a non-blocking Xcode 27 build and test check; releases stay on Xcode 26.6.
 
 - Remote revision 57 (`bot:allowed`): capable hosts offer Always allow for a Bot after repeated approvals, plus an Allowed without asking profile list. The list includes every rule and folder across pages. Remove waits for the host and keeps the row on failure. Unknown-outcome retries keep the exact decision/scope body and key; Always acknowledges “Always allow requested.” The host remains the authority for saved access. Eligible folder cards also show the host’s approval count. Older hosts keep their existing cards.
