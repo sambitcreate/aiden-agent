@@ -3,7 +3,7 @@
 Built in PR #554 on `claude/project-thread-7xf9t3`. The user guide is `docs/workspace-artifacts.md`, and the decisions are in `docs/plans/workspace-artifacts-plan.md` ("As built").
 
 Owner decisions:
-- The Artifacts tab shows only once the workspace has a page. (Relaxed 2026-11-03 by the New page entry, below: the launcher offers it once the list loads. Confirm with the owner.)
+- The launcher offers the Artifacts tab once the list loads, even before the first page (owner confirmed 2026-11-05; replaces the 2026-10-19 rule that it shows only once the workspace has a page).
 - The workspace owns its pages, and the person deletes them from the tab or by asking Aiden.
 - Access follows chat behavior.
 - Desktop only (macOS and Linux) for v1: no CLI, Bots, Telegram, phones or Remote protocol change.
