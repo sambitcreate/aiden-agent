@@ -89,7 +89,7 @@ Owners: `ServeLifetime` in `packages/cli/src/serve-lifetime.ts` for the control 
 | `serving` | `markServing`, before `onReady` | answers | open | signal |
 | `draining`: ingress closed | `beginDrain` | refuses new connections and commands | `chats.stop()` closes it synchronously | |
 | `draining`: services | `Promise.allSettled` of chats, Bots, Telegram, Remote, scheduler | accepted commands keep running | closed | all settled |
-| `draining`: commands | `settleCommands` | clients destroyed only afterwards | closed | every accepted command answered |
+| `draining`: commands | `settleCommands` | clients destroyed only afterwards | closed | every accepted command answered and its reply flushed, or its client gone |
 | released | socket removed, MCP recording stopped, lease released | absent | closed | process exit |
 
 Order matters in two places: `chats.stop()` runs first so no other stopping ingress can begin a turn, and every accepted command settles before the lease is released. A hung command therefore holds shutdown: `aiden serve stop` escalates to KILL at its deadline, and a second signal ends a foreground server.
@@ -119,7 +119,7 @@ Stop decisions are pure tables in `packages/cli/src/serve-ownership.ts`. Signals
 | At the deadline | owner changed | stopped: a replacement is not the daemon asked to stop |
 | | same owner, `daemon` | KILL (its group only when `detached` and it leads the group) plus recorded MCP groups, then wait for `pidAlive` to confirm exit |
 | | same owner, `gone` or `foreign` | clear artifacts, stopped |
-| | same owner, `aiden` or `unknown` | report that the stop is unconfirmed |
+| | same owner, `aiden` or `unknown` | report that the stop is unconfirmed, keep the lock, and advise no signal |
 
 Evidence of exit is `pidAlive`, never the signal.
 
@@ -129,7 +129,7 @@ Evidence of exit is `pidAlive`, never the signal.
 
 Owners: `remoteDaemonCommand` (`daemon-control.ts`) and the socket handler in `serve.ts`. One request per connection, framed by a newline, 64 KiB request ceiling, 8 MiB response ceiling, UTF-8 decoded across chunks. The client settles once for result, error, closed without a frame, oversized reply and transport error. It is a stream parser, not a product mode. Retained as it was, with no state model: that would add nothing to a one-shot parser.
 
-**Defect fixed:** both ends parsed their whole buffer, so a frame followed by more bytes in the same chunk failed as bad JSON, while the same bytes in two chunks succeeded. Each end now reads only its first frame, and its ceiling applies to that frame alone.
+**Defect fixed:** both ends parsed their whole buffer, so a frame followed by more bytes in the same chunk failed as bad JSON, while the same bytes in two chunks succeeded. Each end now reads only its first frame, and its ceiling applies to that frame alone. The client closes on that frame, so a peer that keeps writing can neither grow its buffer nor keep it alive.
 
 **Defect fixed:** when the chunk that crossed the 8 MiB ceiling also completed the frame, the client destroyed the socket and then parsed and returned the reply anyway, so the ceiling did not hold on the last chunk.
 

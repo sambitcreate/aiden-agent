@@ -8,7 +8,7 @@ export async function remoteDaemonCommand(agentDir: string, command: string, arg
     const socket = createConnection(daemonSocket(agentDir));
     // Decode across chunk boundaries so a multi-byte character split by the kernel is not mangled.
     socket.setEncoding("utf8");
-    let buffer = "";
+    let buffer = "", framed = false;
     socket.setTimeout(610_000, () => socket.destroy(new Error("Daemon response timed out.")));
     socket.on("connect", () => socket.write(JSON.stringify({ command, args }) + "\n"));
     socket.on("error", (error) => {
@@ -22,12 +22,15 @@ export async function remoteDaemonCommand(agentDir: string, command: string, arg
       reject(error);
     });
     socket.on("data", (data) => {
+      if (framed) return;
       buffer += data;
       const end = buffer.indexOf("\n");
       // The ceiling is on the frame: bytes after its newline are ignored, not counted.
       if (Buffer.byteLength(end < 0 ? buffer : buffer.slice(0, end)) > 8 * 1024 * 1024) { socket.destroy(new Error("Daemon response is too large.")); return; }
       if (end < 0) return;
-      socket.end();
+      // The first frame is the whole answer, so nothing a peer sends after it is read.
+      framed = true;
+      socket.destroy();
       try { const response = JSON.parse(buffer.slice(0, end)); if (response.error) reject(new Error(response.error)); else resolve(response.result); }
       catch (error) { reject(error); }
     });
