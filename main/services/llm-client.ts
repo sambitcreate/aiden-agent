@@ -497,6 +497,15 @@ import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
+import { designModeEnabled } from "./studio/feature-flags.js";
+import { designCanvasStore } from "./design-canvas/main.js";
+import {
+  createDesignCanvasTools,
+  DESIGN_MODE_PROMPT_SECTION,
+  designCanvasToolsAllowed,
+} from "./design-canvas/canvas-tools.js";
+import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setLimits({
@@ -2200,6 +2209,42 @@ async function prepareGeneration(
         appPanels.push(panel);
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
+  }
+  if (
+    folderPath &&
+    designCanvasToolsAllowed({
+      flagEnabled: designModeEnabled(),
+      designMode: chat.designMode,
+      localRenderer: rendererOwner && browserOwner?.kind !== "remote",
+      ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
+      assistant: assistantMode,
+      telegram: options.interactionSurface === "telegram",
+      hasWorkspaceFolder: permission !== "none",
+    })
+  ) {
+    const canvasRoot = folderPath;
+    const canvasTools = createDesignCanvasTools({
+      chatId: params.chatId,
+      workspaceRoot: canvasRoot,
+      store: designCanvasStore,
+      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
+      stillAvailable: async () => {
+        if (signal.aborted) return false;
+        const meta = await chatStore.getMeta(params.chatId);
+        const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+        return meta?.designMode === true && current?.folderPath === canvasRoot && current.permission !== "none";
+      },
+    }).filter((tool) => !options.excludeToolNames?.has(tool.name));
+    if (canvasTools.length > 0) {
+      const canvas = await designCanvasStore.get(params.chatId);
+      generationExtensions.push({
+        id: "aiden.design-canvas",
+        systemPrompt: DESIGN_MODE_PROMPT_SECTION,
+        volatileSystemPrompt: canvasPromptLine(canvas),
+        tools: canvasTools,
+      });
+    }
   }
   let googleWorkspaceSnapshot: string | undefined;
   if (

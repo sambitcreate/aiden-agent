@@ -6,6 +6,7 @@
 // members draw above them, and moving a group moves its members here.
 
 import type { Node, NodeChange } from "@xyflow/react";
+import { clampCoord, clampSize } from "../shared/design-canvas/placement";
 import {
   DESIGN_CANVAS_LIMITS,
   type DesignCanvasV1,
@@ -14,17 +15,15 @@ import {
 
 export type DesignNode = Node<{ frame: DesignFrame }, DesignFrame["kind"]>;
 
-/** Space between a group's frames when one is placed after the last. */
-export const DESIGN_FRAME_GAP = 64;
 /** How far a duplicate sits from its original. */
 export const DESIGN_DUPLICATE_OFFSET = 32;
-/** A group's first frame sits this far in from the group's top-left corner. */
-const GROUP_INSET = { x: 32, y: 48 } as const;
 
-const clampSize = (value: number) =>
-  Math.min(DESIGN_CANVAS_LIMITS.maxSize, Math.max(DESIGN_CANVAS_LIMITS.minSize, Math.round(value)));
-const clampCoord = (value: number) =>
-  Math.min(DESIGN_CANVAS_LIMITS.maxCoord, Math.max(-DESIGN_CANVAS_LIMITS.maxCoord, Math.round(value)));
+// Placement is shared with main, where Aiden's canvas tools place frames.
+export {
+  DESIGN_FRAME_GAP,
+  placeFrame,
+  type PlaceFrameInput,
+} from "../shared/design-canvas/placement";
 
 export function nodesFromCanvas(doc: DesignCanvasV1, selection: ReadonlySet<string>): DesignNode[] {
   const groups = doc.frames.filter((frame) => frame.kind === "group");
@@ -115,65 +114,6 @@ export function applyNodeChanges(
     frames.push(next);
   }
   return changed ? { ...doc, frames } : doc;
-}
-
-export type PlaceFrameInput = Omit<DesignFrame, "id" | "x" | "y"> & Partial<Pick<DesignFrame, "x" | "y">>;
-
-/**
- * Adds a frame. Without a position it goes 64 px right of the last frame in
- * its group (top-aligned), inside an empty group's corner, 64 px right of the
- * last ungrouped frame in the visible part of the canvas (`view`, in canvas
- * coordinates), or centred in that view when none is visible.
- */
-export function placeFrame(
-  doc: DesignCanvasV1,
-  frame: PlaceFrameInput,
-  view: { x: number; y: number; w: number; h: number },
-  newId: () => string,
-): { doc: DesignCanvasV1; id: string } | { error: "limit" } {
-  if (doc.frames.length >= DESIGN_CANVAS_LIMITS.frames) return { error: "limit" };
-  const w = clampSize(frame.w);
-  const h = clampSize(frame.h);
-  const group = frame.groupId
-    ? doc.frames.find((entry) => entry.id === frame.groupId && entry.kind === "group")
-    : undefined;
-  let position: { x: number; y: number };
-  if (frame.x !== undefined && frame.y !== undefined) {
-    position = { x: frame.x, y: frame.y };
-  } else if (group) {
-    const members = doc.frames.filter((entry) => entry.groupId === group.id);
-    const last = members[members.length - 1];
-    position = last
-      ? { x: last.x + last.w + DESIGN_FRAME_GAP, y: last.y }
-      : { x: group.x + GROUP_INSET.x, y: group.y + GROUP_INSET.y };
-  } else {
-    const ungrouped = doc.frames.filter((entry) => entry.groupId === undefined);
-    const overlaps = (entry: DesignFrame, box: { x: number; y: number; w: number; h: number }) =>
-      entry.x < box.x + box.w && box.x < entry.x + entry.w && entry.y < box.y + box.h && box.y < entry.y + entry.h;
-    const inView = ungrouped.filter((entry) => overlaps(entry, view));
-    const last = inView[inView.length - 1];
-    position = last
-      ? { x: last.x + last.w + DESIGN_FRAME_GAP, y: last.y }
-      : { x: view.x + (view.w - w) / 2, y: view.y + (view.h - h) / 2 };
-    // A frame already there (an earlier one that ran past the view) pushes the
-    // new one further right, so frames added in a row never stack.
-    for (let blocker = ungrouped.find((entry) => overlaps(entry, { ...position, w, h })); blocker; ) {
-      position = { x: blocker.x + blocker.w + DESIGN_FRAME_GAP, y: position.y };
-      blocker = ungrouped.find((entry) => overlaps(entry, { ...position, w, h }));
-    }
-  }
-  const id = newId();
-  const { groupId: _groupId, ...rest } = frame;
-  const placed: DesignFrame = {
-    ...rest,
-    ...(group ? { groupId: group.id } : {}),
-    id,
-    x: clampCoord(position.x),
-    y: clampCoord(position.y),
-    w,
-    h,
-  };
-  return { id, doc: { ...doc, frames: [...doc.frames, placed] } };
 }
 
 /**
