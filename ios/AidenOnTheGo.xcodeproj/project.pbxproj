@@ -60,7 +60,6 @@
 		4E7A00000000000000000001 /* AidenNetworkPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E7A00000000000000000011 /* AidenNetworkPath.swift */; };
 		4E7A00000000000000000002 /* AidenNetworkPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E7A00000000000000000012 /* AidenNetworkPathTests.swift */; };
 		A0D700000000000000000003 /* AidenChatCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000013 /* AidenChatCache.swift */; };
-		A0D700000000000000000004 /* AidenChatFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000014 /* AidenChatFeature.swift */; };
 		A0F100000000000000000041 /* AidenSceneRefreshGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F100000000000000000040 /* AidenSceneRefreshGate.swift */; };
 		A0F100000000000000000031 /* AidenMarkdownContentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F100000000000000000030 /* AidenMarkdownContentCache.swift */; };
 		A0D700000000000000000005 /* AidenChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D700000000000000000015 /* AidenChatTests.swift */; };
@@ -138,6 +137,7 @@
 		A7C200000000000000000011 /* AidenActivityFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000011 /* AidenActivityFeed.swift */; };
 		A7C200000000000000000012 /* AidenWorkspaceChatsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000012 /* AidenWorkspaceChatsModel.swift */; };
 		A7C200000000000000000013 /* AidenChatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000013 /* AidenChatsView.swift */; };
+		A7C200000000000000000014 /* AidenChatDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C100000000000000000014 /* AidenChatDetailView.swift */; };
 		A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */; };
 		A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */; };
 		A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */; };
@@ -261,7 +261,6 @@
 		A0D700000000000000000013 /* AidenChatCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatCache.swift; sourceTree = "<group>"; };
 		A0F100000000000000000030 /* AidenMarkdownContentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMarkdownContentCache.swift; sourceTree = "<group>"; };
 		A0F100000000000000000040 /* AidenSceneRefreshGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSceneRefreshGate.swift; sourceTree = "<group>"; };
-		A0D700000000000000000014 /* AidenChatFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatFeature.swift; sourceTree = "<group>"; };
 		A0F300000000000000000011 /* AidenVisualViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenVisualViewer.swift; sourceTree = "<group>"; };
 		A0F300000000000000000013 /* AidenVisualDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenVisualDocument.swift; sourceTree = "<group>"; };
 		A0F300000000000000000012 /* AidenVisualViewerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenVisualViewerTests.swift; sourceTree = "<group>"; };
@@ -318,6 +317,7 @@
 		A7C100000000000000000011 /* AidenActivityFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenActivityFeed.swift; sourceTree = "<group>"; };
 		A7C100000000000000000012 /* AidenWorkspaceChatsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceChatsModel.swift; sourceTree = "<group>"; };
 		A7C100000000000000000013 /* AidenChatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatsView.swift; sourceTree = "<group>"; };
+		A7C100000000000000000014 /* AidenChatDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatDetailView.swift; sourceTree = "<group>"; };
 		A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerVoiceInputController.swift; sourceTree = "<group>"; };
 		A711739233F64F4FA4C2B710 /* AidenAttachmentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentPicker.swift; sourceTree = "<group>"; };
 		A712739233F64F4FA4C2B710 /* AidenAttachmentCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAttachmentCamera.swift; sourceTree = "<group>"; };
@@ -605,7 +605,6 @@
 				A10520260000000000000002 /* AidenProvidersView.swift */,
 				A0D600000000000000000016 /* AidenWorkspaceShellView.swift */,
 				A1B0C0DE0000000000000012 /* AidenInboxViews.swift */,
-				A0D700000000000000000014 /* AidenChatFeature.swift */,
 				A0F300000000000000000011 /* AidenVisualViewer.swift */,
 				A0F300000000000000000013 /* AidenVisualDocument.swift */,
 				A0F700000000000000000011 /* AidenSpendingNotice.swift */,
@@ -689,6 +688,7 @@
 				A7C100000000000000000011 /* AidenActivityFeed.swift */,
 				A7C100000000000000000012 /* AidenWorkspaceChatsModel.swift */,
 				A7C100000000000000000013 /* AidenChatsView.swift */,
+				A7C100000000000000000014 /* AidenChatDetailView.swift */,
 				A710739233F64F4FA4C2B710 /* ComposerVoiceInputController.swift */,
 			);
 			path = Chat;
@@ -1019,6 +1019,7 @@
 				A7C200000000000000000011 /* AidenActivityFeed.swift in Sources */,
 				A7C200000000000000000012 /* AidenWorkspaceChatsModel.swift in Sources */,
 				A7C200000000000000000013 /* AidenChatsView.swift in Sources */,
+				A7C200000000000000000014 /* AidenChatDetailView.swift in Sources */,
 				A710739233F64F4FA4C2B700 /* ComposerVoiceInputController.swift in Sources */,
 				A711739233F64F4FA4C2B700 /* AidenAttachmentPicker.swift in Sources */,
 				A712739233F64F4FA4C2B700 /* AidenAttachmentCamera.swift in Sources */,
@@ -1055,7 +1056,6 @@
 				51A100000000000000000004 /* AidenSimulatorViewer.swift in Sources */,
 				4E7A00000000000000000001 /* AidenNetworkPath.swift in Sources */,
 				A0D700000000000000000003 /* AidenChatCache.swift in Sources */,
-				A0D700000000000000000004 /* AidenChatFeature.swift in Sources */,
 				A0F300000000000000000001 /* AidenVisualViewer.swift in Sources */,
 				A0F300000000000000000003 /* AidenVisualDocument.swift in Sources */,
 				A0F700000000000000000001 /* AidenSpendingNotice.swift in Sources */,

@@ -92,10 +92,10 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenActivityFeed.swift",
   "AidenOnTheGo/Features/Chat/AidenWorkspaceChatsModel.swift",
   "AidenOnTheGo/Features/Chat/AidenChatsView.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
-  "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
   "AidenOnTheGo/Features/Remote/AidenMarkdownContentCache.swift",
   "AidenOnTheGo/Features/Remote/AidenOnboardingArtwork.swift",
@@ -154,7 +154,6 @@ const appSourcePaths = [
 // used to read that one file read all of them, in the order the code used to appear.
 const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatPolicies.swift",
-  "AidenOnTheGo/Features/Remote/AidenChatFeature.swift",
   "AidenOnTheGo/Features/Chat/AidenWorkspaceChatsModel.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+Fork.swift",
@@ -162,6 +161,7 @@ const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+Recordings.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+ComposerPower.swift",
   "AidenOnTheGo/Features/Chat/AidenChatsView.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/AidenChatRows.swift",
   "AidenOnTheGo/Features/Chat/AidenActivityFeed.swift",
   "AidenOnTheGo/Features/Chat/AidenChatImages.swift",
