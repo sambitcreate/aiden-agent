@@ -378,6 +378,72 @@ test("an earlier owner finishing cannot expose a later owner's unrecorded outcom
   assert.equal(effects, 1);
 });
 
+test("an outcome still being written does not expire into a second execution", async () => {
+  let now = 1_000;
+  const ledger = new AidenIdempotencyLedger(undefined, { now: () => now, ttlMs: 10 });
+  const disk = heldWrites(2);
+  const durable = owner(ledger, disk.persist);
+  let effects = 0;
+  const action = async () => {
+    effects += 1;
+    return "committed";
+  };
+
+  const first = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  const firstAnswer = assert.rejects(first, code("idempotency_in_flight"));
+  await disk.write(2).arrived;
+  now = 2_000;
+  ledger.snapshot();
+  const retry = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  const retryAnswer = assert.rejects(retry, code("idempotency_in_flight"));
+  disk.write(2).fail(new Error("disk lost"));
+
+  await firstAnswer;
+  await retryAnswer;
+  assert.equal(effects, 1);
+});
+
+test("a result that cannot be recorded is unknown to its caller, as it is on disk", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  const durable = owner(ledger, async () => undefined);
+  let effects = 0;
+  const action = async () => {
+    effects += 1;
+    return undefined as unknown as string;
+  };
+
+  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), code("idempotency_in_flight"));
+  assert.equal(effects, 1);
+});
+
+test("an earlier owner's failed write leaves a later owner's recorded outcome alone", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  const disk = heldWrites(2, 4);
+  const durable = owner(ledger, disk.persist);
+
+  const earlier = executeAidenDurableOperation(durable, SCOPE, {}, async () => {
+    throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("not_found", "not run", 404));
+  });
+  const earlierAnswer = assert.rejects(earlier, code("idempotency_in_flight"));
+  await disk.write(2).arrived;
+
+  let effects = 0;
+  const action = async () => {
+    effects += 1;
+    return "committed";
+  };
+  const later = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  await disk.write(4).arrived;
+  disk.write(2).fail(new Error("disk lost"));
+  await earlierAnswer;
+  disk.write(4).release();
+
+  assert.equal(await later, "committed");
+  assert.equal(await executeAidenDurableOperation(durable, SCOPE, {}, action), "committed");
+  assert.equal(effects, 1);
+});
+
 test("a replay reports the settled outcome and writes nothing", async () => {
   const ledger = new AidenIdempotencyLedger();
   let failing = false;
