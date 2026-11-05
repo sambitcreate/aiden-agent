@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
-import { createProcessGroupTerminator, decodeCappedUtf8, waitForChildExit } from "../shared/process-group.js";
+import { createProcessGroupTerminator, decodeCappedUtf8, waitForChildExit, type ProcessGroupProbe } from "../shared/process-group.js";
 import { agentShellCommandEnvironment } from "./agent-command-environment.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import { validateScriptName } from "./schedule-store-core.js";
@@ -130,7 +130,7 @@ function scriptCommand(scriptPath: string): { command: string; args: string[] } 
  */
 export async function runScheduledScript(
   scriptPath: string,
-  options: { cwd: string; timeoutMs?: number; outputLimit?: number; signal?: AbortSignal },
+  options: { cwd: string; timeoutMs?: number; outputLimit?: number; signal?: AbortSignal; groupProbe?: ProcessGroupProbe },
 ): Promise<ScriptProcessResult> {
   const { command, args } = scriptCommand(scriptPath);
   const timeoutMs = options.timeoutMs ?? SCRIPT_TIMEOUT_MS;
@@ -154,7 +154,7 @@ export async function runScheduledScript(
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
+  const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS, probe: options.groupProbe });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let bytes = 0;
@@ -190,6 +190,7 @@ export async function runScheduledScript(
       drainMs: PIPE_DRAIN_MS,
       onPipesHeld: () => terminator.terminate(),
     });
+    const stopConfirmed = await terminator.finished() !== "cleanup_unconfirmed";
     return {
       stdout: decodeCappedUtf8(Buffer.concat(stdout), outputLimitExceeded),
       stderr: decodeCappedUtf8(Buffer.concat(stderr), outputLimitExceeded),
@@ -198,7 +199,7 @@ export async function runScheduledScript(
       timedOut,
       outputLimitExceeded,
       aborted,
-      backgroundStopped: pipesHeld && !timedOut && !outputLimitExceeded && !aborted,
+      backgroundStopped: pipesHeld && stopConfirmed && !timedOut && !outputLimitExceeded && !aborted,
     };
   } finally {
     clearTimeout(timeout);

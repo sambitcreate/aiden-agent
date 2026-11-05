@@ -838,3 +838,16 @@ test("a denied check-group stop retains recovery ownership and blocks only its w
   await restored.stopWorkspace("ws-1", "access-changed");
   assert.deepEqual(await ledger(), []);
 });
+
+test("a shell's background job that cannot be confirmed gone is not reported stopped", { skip: process.platform === "win32" }, async () => {
+  const result = await runBoundedShellCommand({
+    command: "sleep 30 &\necho started",
+    env: process.env,
+    cwd: os.tmpdir(),
+    timeoutMs: 35_000,
+    maxOutputBytes: 4_096,
+    groupProbe: { exists: () => true, stillRuns: async () => true },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.backgroundStopped, false);
+});
