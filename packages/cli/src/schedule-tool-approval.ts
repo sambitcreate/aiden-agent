@@ -49,7 +49,8 @@ export function assertScheduleApproval(agentDir: string, approval: ScheduleToolA
   if (!Number.isFinite(approval.expiresAt) || Date.now() >= approval.expiresAt || !isScheduleMutation(approval.action)) {
     throw new Error("Scheduled-task approval expired. Review the task again.");
   }
-  if (!approval.approvalFile || readJson(approval.approvalFile, null) !== approval.snapshot) {
+  // The first write consumes the receipt, so it can only be checked up to there.
+  if (firstWrite && (!approval.approvalFile || readJson(approval.approvalFile, null) !== approval.snapshot)) {
     throw new Error("Scheduled-task approval was cancelled. Review the task again.");
   }
   const expected = JSON.parse(approval.snapshot) as Record<string, unknown>;

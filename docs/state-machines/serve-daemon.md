@@ -155,11 +155,11 @@ Owner: `approvedMutation` in `createCliScheduler` (`schedules.ts`) over `assertS
 | Event | Prior | Next | Effect |
 |---|---|---|---|
 | command with consent | none | `first_write` | snapshot, expiry and receipt verified at entry |
-| durable write verified | `first_write` | `follow_on` | task checked once; later writes check only the environment |
+| durable write verified | `first_write` | `follow_on` | receipt consumed just before the write publishes, task checked once; later writes check only expiry and the environment |
 | verification fails | `first_write` or `follow_on` | `closed` | abort, so the shared lifecycle rolls back |
 | command ends | any | `closed` | this context is finished, and its receipt is spent |
 
-A receipt is spent as the command starts and removed when it ends, so it works once even if the command fails, and another scheduler instance cannot replay it. A `save` must also read back the input that was reviewed, because the file is read after consent.
+A receipt is spent in memory as the command starts, removed at the first write, and removed when the command ends if no write happened. It works once even if the command fails, and neither another scheduler nor a restart after a crash can replay it. A crash between that removal and the write loses the consent, so the person reviews again. Revocation holds up to the first write. A `save` must also read back the input that was reviewed, because the file is read after consent.
 
 **Defects fixed:** a `save` trusted whatever the file held by then, and a new-task consent could be replayed until it expired, since only the retired producer ever removed the receipt.
 

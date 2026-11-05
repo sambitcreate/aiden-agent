@@ -41,6 +41,8 @@ export function createCliScheduler(agentDir: string) {
         if (current && current.phase !== "closed") {
           try {
             assertScheduleApproval(agentDir, current.approval, current.phase === "first_write");
+            // Consumed just before the write publishes: a crash after it cannot leave consent to replay.
+            if (current.phase === "first_write") rmSync(current.approval.approvalFile, { force: true });
           } catch (error) {
             // A rejected mutation may rearm/restore the unchanged task, never reuse its consent.
             // Aborting lets the shared lifecycle roll back writes this mutation already made.

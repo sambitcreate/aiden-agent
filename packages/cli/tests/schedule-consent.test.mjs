@@ -98,3 +98,50 @@ test("consent revoked at the durable write stops the mutation and is not reused"
   api.JsonStore.prototype.update = update;
   assert.equal((await f.stored()).enabled, true);
 });
+
+/** Runs `afterFirstWrite` inside the command, as soon as its first durable write has landed. */
+function afterFirstWrite(t, inspect) {
+  const update = api.JsonStore.prototype.update;
+  let done = false;
+  api.JsonStore.prototype.update = async function (mutation, isCurrent, replace) {
+    const result = await update.call(this, mutation, isCurrent, replace);
+    if (!done && this.file.endsWith("schedules.json")) {
+      done = true;
+      await inspect((nextIsCurrent = isCurrent) => update.call(this, () => {}, nextIsCurrent));
+    }
+    return result;
+  };
+  t.after(() => { api.JsonStore.prototype.update = update; });
+}
+
+test("a crash after the first write cannot leave consent to replay", async (t) => {
+  const f = await fixture(t), file = join(f.dir, "new.json");
+  const reviewed = { name: "New", mode: "script", script: "true", cron: "0 9 * * *", timezone: "UTC", permission: "full", enabled: false, workspaceId: f.workspace.id };
+  writeFileSync(file, JSON.stringify(reviewed));
+  const approval = { cwd: f.dir, action: "save", input: reviewed, expiresAt: Date.now() + 60_000, approvalFile: join(f.dir, "crash.json") };
+  approval.snapshot = api.scheduleApprovalSnapshot(f.dir, approval);
+  writeFileSync(approval.approvalFile, JSON.stringify(approval.snapshot));
+  let replay;
+  afterFirstWrite(t, async () => {
+    // Everything a process that died here left on disk, seen by a new one.
+    replay = await api.createCliScheduler(f.dir).command(["save", file, JSON.stringify(approval)]).then(() => "saved", (error) => error.message);
+  });
+  await f.scheduler.command(["save", file, JSON.stringify(approval)]);
+  assert.match(replay, /cancelled/u);
+  assert.equal((await f.scheduler.command(["list"])).filter((task) => task.name === "New").length, 1);
+});
+
+test("follow-on writes skip the task check but still lapse with the environment", async (t) => {
+  const f = await fixture(t), approval = f.consent("pause");
+  let followOn, afterChange;
+  afterFirstWrite(t, async (write) => {
+    // The first write changed the task itself, which must not end the command's own consent.
+    followOn = await write().then(() => "written", (error) => error.message);
+    await api.workspaceCommand(f.dir, ["access", f.workspace.id, "ask"]);
+    afterChange = await write().then(() => "written", (error) => error.message);
+  });
+  await f.run("pause", approval).catch(() => {});
+  assert.equal(followOn, "written");
+  assert.match(afterChange, /changed after approval/u);
+});
+
