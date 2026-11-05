@@ -667,6 +667,19 @@ export class AidenIdempotencyLedger {
     action: () => Promise<T>,
     reference?: AidenIdempotencyOperationReference,
   ): Promise<T> {
+    return this.begin(scope, input, action, reference).result;
+  }
+
+  /**
+   * `execute`, also saying whether this call owns the operation. Only an owner
+   * runs `action`; any other call replays a settled outcome or joins the owner.
+   */
+  begin<T>(
+    scope: { deviceId: string; route: string; resourceId: string; key: string },
+    input: unknown,
+    action: () => Promise<T>,
+    reference?: AidenIdempotencyOperationReference,
+  ): { admitted: boolean; result: Promise<T> } {
     const now = this.now();
     this.prune(now);
     const ledgerKey = createHash("sha256").update(canonical(scope)).digest("base64url");
@@ -681,10 +694,13 @@ export class AidenIdempotencyLedger {
           throw new AidenOperationContractError("idempotency_in_flight");
         case "fulfilled": {
           const { value } = existing.phase;
-          return Promise.resolve().then(() => cloneDurableResult(value)) as Promise<T>;
+          return {
+            admitted: false,
+            result: Promise.resolve().then(() => cloneDurableResult(value)) as Promise<T>,
+          };
         }
         case "executing":
-          return existing.phase.result as Promise<T>;
+          return { admitted: false, result: existing.phase.result as Promise<T> };
       }
     }
     if (this.clockRollbackDetected) throw new AidenOperationContractError("idempotency_in_flight");
@@ -747,14 +763,30 @@ export class AidenIdempotencyLedger {
               expiresAt: this.settledExpiry(),
             });
           } catch {
-            // The caller still learns the original failure; the record does not.
+            // The rejection cannot be replayed, so it cannot be reported as settled either.
             entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_lost" });
+            throw new AidenOperationContractError("idempotency_in_flight");
           }
           throw error;
         },
       );
     entry.phase = { kind: "executing", result };
-    return result as Promise<T>;
+    return { admitted: true, result: result as Promise<T> };
+  }
+
+  /**
+   * The settled outcome of `scope` could not be written, so disk still holds it
+   * in flight and the caller was told it is unknown. Without this the live entry
+   * would expire on its TTL and let the same key execute again.
+   */
+  markOutcomeUnrecorded(scope: {
+    deviceId: string;
+    route: string;
+    resourceId: string;
+    key: string;
+  }): void {
+    const entry = this.entries.get(createHash("sha256").update(canonical(scope)).digest("base64url"));
+    if (entry) entry.phase = advanceAidenOperation(entry.phase, { type: "outcome_unrecorded" });
   }
 
   reconcile<T>(operationIdToFinalize: string, outcome: AidenIdempotencyOutcome<T>): void {
