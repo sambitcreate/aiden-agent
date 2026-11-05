@@ -358,7 +358,9 @@ test("the command client settles once for every way a daemon can answer", posix,
   assert.equal((await api.remoteDaemonCommand(padded, "serve", ["status"])).length, fits.length);
   // Once the first frame settles the command, a peer that keeps writing is cut off.
   const peer = sandbox(t), peerClosed = Promise.withResolvers();
+  let accepted;
   const talkative = createServer({ allowHalfOpen: true }, (socket) => {
+    accepted = socket;
     socket.on("error", () => {});
     socket.once("data", () => {
       socket.write('{"result":"ok"}\n');
@@ -367,7 +369,8 @@ test("the command client settles once for every way a daemon can answer", posix,
     });
   });
   await new Promise((resolveListen) => talkative.listen(peer.socket, resolveListen));
-  t.after(() => new Promise((resolveClose) => { talkative.close(resolveClose); }));
+  // A failed assertion must not leave cleanup waiting on a peer that is still writing.
+  t.after(() => new Promise((resolveClose) => { accepted?.destroy(); talkative.close(resolveClose); }));
   assert.equal(await api.remoteDaemonCommand(peer.agentDir, "serve", ["status"]), "ok");
   const timedOut = new Promise((resolveWait) => setTimeout(resolveWait, 1_000, "still connected").unref());
   assert.equal(await Promise.race([peerClosed.promise, timedOut]), "closed");
