@@ -89,6 +89,8 @@ function harness(
     longOutput?: boolean;
     waitForAbort?: boolean;
     onRunShellStart?: () => void;
+    onDispatchStarted?: () => void;
+    onAuthorizedWorkspaceRead?: () => void;
     implementerRunGrant?: boolean;
     parentPermission?: "ask" | "full";
   } = {},
@@ -99,6 +101,7 @@ function harness(
   let rawCalls = 0;
   let allocated = 0;
   let current: SubagentAuthorityV2 | undefined = granted;
+  const runControl = new AbortController();
   const input: SubagentShellBrokerV2Input = {
     authority: granted,
     childId: "child-shell",
@@ -113,12 +116,18 @@ function harness(
     journal: {
       prepareEffect: async () => transitions.push("prepared"),
       authorizeEffect: async () => transitions.push("authorized"),
-      markEffectDispatchStarted: async () => transitions.push("dispatch_started"),
+      markEffectDispatchStarted: async () => {
+        transitions.push("dispatch_started");
+        options.onDispatchStarted?.();
+      },
       cancelEffectBeforeDispatch: async () => transitions.push("cancelled_before_dispatch"),
       finishEffect: async ({ state }) => transitions.push(state),
     },
     currentAuthority: () => current,
-    currentWorkspace: async () => workspace,
+    currentWorkspace: async () => {
+      if (transitions.includes("authorized")) options.onAuthorizedWorkspaceRead?.();
+      return workspace;
+    },
     validateWorkspace: async () => {},
     requestApproval: async (prompt) => {
       prompts.push(prompt.details);
@@ -158,6 +167,7 @@ function harness(
     },
     registry: new WorkspaceOperationRegistry(),
     implementerRunGrant: options.implementerRunGrant,
+    runSignal: runControl.signal,
     now: () => 1_000,
     randomUUID: () => `shell-effect-${++allocated}`,
   };
@@ -168,6 +178,12 @@ function harness(
     rawCalls: () => rawCalls,
     revoke: () => {
       current = undefined;
+    },
+    /** What Stop does: abort the run, then revoke its authority and approvals. */
+    stopRun: () => {
+      runControl.abort(new Error("Subagent run stopped by its owner."));
+      current = undefined;
+      input.ledger.cancelRun(granted.runId);
     },
   };
 }
@@ -373,4 +389,59 @@ test("in-flight cancellation stops the helper path and throws the original abort
   await assert.rejects(pending, (error) => error === reason);
   assert.equal(run.rawCalls(), 1);
   assert.equal(run.transitions[run.transitions.length - 1], "remote_error");
+});
+
+test("a run stopped during the final workspace check never dispatches", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  const stopped = harness(workspace, { onAuthorizedWorkspaceRead: () => stopped.stopRun() });
+  assert.equal(await stopped.gate.beforeToolCall(call(command)), undefined);
+  await assert.rejects(
+    stopped.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    }),
+  );
+  assert.equal(stopped.rawCalls(), 0);
+  assert.equal(stopped.transitions.includes("dispatch_started"), false);
+  assert.equal(stopped.transitions[stopped.transitions.length - 1], "cancelled_before_dispatch");
+});
+
+test("a run stopped while dispatch is being journaled hands the helper an aborted signal", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  const stopped = harness(workspace, {
+    waitForAbort: true,
+    onDispatchStarted: () => stopped.stopRun(),
+  });
+  assert.equal(await stopped.gate.beforeToolCall(call(command)), undefined);
+  await assert.rejects(
+    stopped.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    }),
+    /stopped by its owner/u,
+  );
+  assert.ok(
+    !stopped.transitions.includes("completed"),
+    "a stopped dispatch must not be journaled as completed",
+  );
+});
+
+test("a consumed shell approval cannot be replayed", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  const once = harness(workspace);
+  const execute = () =>
+    once.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    });
+  assert.equal(await once.gate.beforeToolCall(call(command)), undefined);
+  await execute();
+  await assert.rejects(execute(), /no live one-shot approval/u);
+  assert.equal(once.rawCalls(), 1);
 });
