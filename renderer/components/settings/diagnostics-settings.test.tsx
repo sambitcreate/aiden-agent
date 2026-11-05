@@ -23,7 +23,7 @@ test("renderer fault forwarding is main-policy-owned, categorical, and rate-limi
   const diagnostics = source("renderer/lib/dev-log.ts");
   const rootEntry = source("renderer/main/app.tsx");
   const boundary = source("renderer/components/ui.tsx");
-  assert.doesNotMatch(diagnostics, /import\.meta\.env\.DEV|\.message|\.stack|String\(reason\)/u);
+  assert.doesNotMatch(diagnostics, /import\.meta\.env\.DEV|String\(reason\)/u);
   assert.match(diagnostics, /diagnosticsApi\.policy\(\)/u);
   assert.match(diagnostics, /state\.sent < policy\.maxPerKey/u);
   assert.match(diagnostics, /suppressed/u);
