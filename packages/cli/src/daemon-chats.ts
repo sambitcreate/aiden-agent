@@ -78,7 +78,7 @@ export function createDaemonChats(agentDir: string) {
   let deletionRecordFailure: Error | undefined;
   try {
     const ids = readJson<string[]>(tombstones.file, []);
-    if (!Array.isArray(ids)) throw new Error(`${tombstones.file} is not a list.`);
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) throw new Error(`${tombstones.file} is not a list of chat ids.`);
     for (const id of new Set(ids)) interrupted.set(id, deletion.begin(id));
   } catch (error) {
     deletionRecordFailure = new Error(`Could not read unfinished chat deletions: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

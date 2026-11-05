@@ -548,10 +548,10 @@ test("an interrupted chat deletion blocks new turns and finishes when the server
   lease.settleAsyncWork(); lease.release();
 });
 
-test("an unreadable deletion record closes every chat and refuses to start", async (t) => {
+for (const [name, record] of [["malformed", "{ not json"], ["a non-list", "{}"], ["a list of non-ids", "[123]"]]) test(`a deletion record that is ${name} closes every chat and refuses to start`, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-tombstones-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  writeFileSync(join(dir, "daemon-chat-deletions.json"), "{ not json");
+  writeFileSync(join(dir, "daemon-chat-deletions.json"), record);
   const daemon = api.createDaemonChats(dir);
   t.after(() => daemon.stop());
   assert.equal(daemon.llmClient.beginChatTurn("maybe-deleted", "stream", "owner"), null, "any chat may be one whose deletion committed");
