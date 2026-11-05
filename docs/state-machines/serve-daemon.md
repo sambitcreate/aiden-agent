@@ -46,8 +46,6 @@ Owner: `DaemonGenerationRun` in `daemon-turn-lifecycle.ts`, driven by `perform` 
 
 Independent axes: stop request (`requestStop`, with its first origin), terminal persistence (`none`, `final_saved`, `partial_saved`, `partial_lost`), client delivery, physical release. `chat:done` is sent after the durable save and before cleanup, so a chat stays busy briefly after `chat:done`. A timeout or lost owner is a stop with no origin.
 
-Kept as it was, and worth a product decision: when the final save fails, `chat:error` carries a timeline already finished as `completed`, because the timeline is written into the message being saved.
-
 ## Defects fixed during extraction
 
 Each has a reproduction in `packages/cli/tests/daemon-turns.test.mjs` that failed before its fix.
@@ -57,6 +55,7 @@ Each has a reproduction in `packages/cli/tests/daemon-turns.test.mjs` that faile
 - **A failed session-lease removal hung idle waiters.** An exception in `release` skipped resolving `settled`, so `waitForChatIdle` and shutdown never returned.
 - **A throwing activity listener reported idle with the session lease held.** One `try` covered activity, run journal and lease removal, so a listener that threw skipped the other two while `settled` still resolved. The next turn on that chat then failed to take its lease. Each step now runs on its own.
 - **A run that failed to register held the chat forever.** If `activity.begin` or the run journal threw inside `handoff`, custody stayed `generation` with a run that nothing would ever start or release, so the chat stayed busy and `stop()` hung. `start` now returns the chat and rethrows.
+- **A failed final save was recorded as completed.** The projector had already closed as `completed`, so `finish("failed")` changed nothing, and both `chat:error` and the retried message carried a `completed` timeline. Both now say `failed`. The transient `chat:timeline` event sent as the projector closed still says `completed`, because the projector is a shared owner.
 
 ## C11: daemon tool approval
 
