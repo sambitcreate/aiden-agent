@@ -4,20 +4,27 @@
 // tail and of anyone skimming it.
 
 const MAX_FAILURES = 50;
-const MAX_ERROR_LINES = 40;
-const STDERR_LIMIT = 4000;
+const MAX_ERROR_LINES = 60;
+const STDERR_LIMIT = 8000;
+const NOTABLE = /Error|ERR_|Cannot find|SyntaxError|does not provide|Transform failed|ReferenceError|TypeError|failed to load/u;
+const NOISE = /not wrapped in act|wrap-tests-with-act/u;
 
-/** Recent stderr for each file, plus a process-wide tail. A module that fails to load reports only "test failed"; the exception is stderr, sometimes attributed to the imported file rather than the test. */
+/** Recent stderr for each file. Act warnings from the rest of the lane are noise and must not crowd out the load error. */
 const stderrByFile = new Map();
-let stderrTail = "";
+const notableLines = [];
 
 function rememberStderr(file, chunk) {
   if (typeof chunk !== "string" || chunk.length === 0) return;
-  stderrTail = `${stderrTail}${chunk}`;
-  if (stderrTail.length > STDERR_LIMIT) stderrTail = stderrTail.slice(-STDERR_LIMIT);
-  if (!file) return;
-  const next = `${stderrByFile.get(file) ?? ""}${chunk}`;
-  stderrByFile.set(file, next.length > STDERR_LIMIT ? next.slice(-STDERR_LIMIT) : next);
+  if (file) {
+    const next = `${stderrByFile.get(file) ?? ""}${chunk}`;
+    stderrByFile.set(file, next.length > STDERR_LIMIT ? next.slice(-STDERR_LIMIT) : next);
+  }
+  for (const line of chunk.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || NOISE.test(trimmed) || !NOTABLE.test(trimmed)) continue;
+    notableLines.push(trimmed.slice(0, 500));
+    if (notableLines.length > 80) notableLines.shift();
+  }
 }
 
 /**
@@ -34,7 +41,13 @@ export function withRunnerStderr(digest, stderrTailLines) {
   return `${digest}\n  runner stderr:\n${extra}`;
 }
 
-function errorText(error, stderr) {
+function notableFor(file) {
+  const base = file?.split(/[\\/]/u).pop();
+  const matched = base ? notableLines.filter((line) => line.includes(base)) : [];
+  return (matched.length > 0 ? matched : notableLines).slice(-20);
+}
+
+function errorText(error, stderr, file) {
   // A failed test's error is ERR_TEST_FAILURE. A load failure's cause is the
   // string "test failed", and the exception was written to stderr instead.
   const cause = error?.code === "ERR_TEST_FAILURE" ? error.cause : undefined;
@@ -43,8 +56,10 @@ function errorText(error, stderr) {
   const lines = text.split("\n");
   // A load failure has no stack; the message is only "test failed".
   const unhelpful = !thrown?.stack || lines.every((line) => line.trim() === "" || /^(?:Error: )?test failed$/u.test(line.trim()));
-  if (unhelpful && stderr) {
-    lines.push("stderr:", ...stderr.trim().split("\n"));
+  if (unhelpful) {
+    const notable = notableFor(file);
+    if (notable.length > 0) lines.push("notable:", ...notable);
+    else if (stderr) lines.push("stderr:", ...stderr.trim().split("\n").slice(-15));
   }
   return lines.length > MAX_ERROR_LINES ? [...lines.slice(0, MAX_ERROR_LINES), "…"] : lines;
 }
@@ -63,8 +78,8 @@ export default async function* failureDigest(source) {
     if (failures > MAX_FAILURES) continue;
     const { name, file, line, column, details } = event.data;
     const where = file ? `${file}${line ? `:${line}${column ? `:${column}` : ""}` : ""}` : "(unknown file)";
-    const stderr = (file ? stderrByFile.get(file) : undefined) || stderrTail;
-    yield `not ok ${name}\n  at ${where}\n${errorText(details?.error, stderr).map((text) => `  ${text}`).join("\n")}\n\n`;
+    const stderr = file ? stderrByFile.get(file) : undefined;
+    yield `not ok ${name}\n  at ${where}\n${errorText(details?.error, stderr, file).map((text) => `  ${text}`).join("\n")}\n\n`;
   }
   if (failures > MAX_FAILURES) yield `…and ${failures - MAX_FAILURES} more failed tests.\n`;
 }
