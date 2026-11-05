@@ -190,6 +190,7 @@ import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import {
   createLifecycleCheck,
+  settleUpdateInstallQuit,
   shouldQuitAfterAllWindowsClose,
   shouldReleaseAuxiliaryWindows,
 } from "./application-lifecycle-core.js";
@@ -1115,11 +1116,15 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     return shutdownStarted;
   } finally {
     lifecycleCheck.release();
-    if (!shutdownStarted && installUpdateOnQuit) {
-      installUpdateOnQuit = false;
-      appUpdateService.announceSnapshot();
-    }
+    withdrawUpdateInstall();
   }
+}
+
+/** The quit an install was waiting for is off: the update stays ready, and uninstalled. */
+function withdrawUpdateInstall(): void {
+  if (shutdownStarted || !installUpdateOnQuit) return;
+  installUpdateOnQuit = false;
+  appUpdateService.announceSnapshot();
 }
 
 async function clearRendererOnboardingCompletion(
@@ -1435,7 +1440,11 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
 
   const window = mainWindow;
   installUpdateOnQuit = true;
-  setImmediate(() => void requestApplicationQuit(window));
+  setImmediate(() => void settleUpdateInstallQuit(
+    () => requestApplicationQuit(window),
+    withdrawUpdateInstall,
+    (error) => logger.error("updater", "The quit for an update install failed.", error),
+  ));
   return {
     accepted: true,
   };

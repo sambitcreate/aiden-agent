@@ -70,3 +70,22 @@ export function createLifecycleCheck(onError: (error: unknown) => void): Lifecyc
     },
   };
 }
+
+/**
+ * An accepted update install waits for its quit. If that quit never begins
+ * (another lifecycle action holds the check, or the window is gone), nothing
+ * else would withdraw it, and the next ordinary quit would install unasked.
+ */
+export async function settleUpdateInstallQuit(
+  quit: () => Promise<boolean>,
+  withdraw: () => void,
+  onError: (error: unknown) => void,
+): Promise<void> {
+  let quitting = false;
+  try {
+    quitting = await quit();
+  } catch (error) {
+    onError(error);
+  }
+  if (!quitting) withdraw();
+}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createLifecycleCheck,
+  settleUpdateInstallQuit,
   shouldQuitAfterAllWindowsClose,
   shouldReleaseAuxiliaryWindows,
 } from "./application-lifecycle-core.js";
@@ -80,4 +81,19 @@ test("only one lifecycle action holds the check, and queued work runs once", () 
   assert.equal(errors.length, 1);
   assert.equal(check.inFlight, false);
   assert.equal(check.tryBegin(), true);
+});
+
+test("an accepted update install that never reaches the quit is withdrawn", async () => {
+  const outcomes: Array<[string, () => Promise<boolean>, number]> = [
+    ["the quit began", async () => true, 0],
+    ["another lifecycle action held the check", async () => false, 1],
+    ["the quit failed", async () => { throw new Error("window gone"); }, 1],
+  ];
+  for (const [name, quit, expected] of outcomes) {
+    let withdrawn = 0;
+    const errors: unknown[] = [];
+    await settleUpdateInstallQuit(quit, () => { withdrawn += 1; }, (error) => errors.push(error));
+    assert.equal(withdrawn, expected, name);
+    assert.equal(errors.length, name === "the quit failed" ? 1 : 0, name);
+  }
 });

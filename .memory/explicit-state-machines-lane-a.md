@@ -20,7 +20,9 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 
 - P0/P1: done apart from review and CI. #735 admission, #736 generation settlement, #741 run input, #742 Pi run gate, #743 generation stream, #744 background launch, #745 side-question slot, plus the first-send PR. Dispositions are in `docs/state-machines/retained-p1-owners.md`.
 - P5a: shared process settlement and subagent shell are in PRs. `docs/state-machines/physical-teardown.md` records the contract.
-- P5b, P5c, P5d: not started when this was written.
+- P5b: Computer Use host in a PR. P5c: MCP stdio in a PR; Bot VM, ACP and subagent runtime kept as they are.
+- P5d: update-install withdrawal in a PR. Everything else in P5 is listed under "Not done in this slice" in `docs/state-machines/physical-teardown.md`, with reasons.
+- Blocked: the shutdown and restart trace across P1 to P4 needs Lanes B and C merged.
 
 ## Lane overlap
 
