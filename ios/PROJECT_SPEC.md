@@ -121,7 +121,7 @@ Derived from the owner's Contact Sheet Generator project:
 - Apple team: `5WP229CBB8`
 - Main bundle: `sbtbiswas.AidenOnTheGo`
 - Unit tests: `sbtbiswas.AidenOnTheGoTests`
-- UI tests: `sbtbiswas.AidenOnTheGoUITests`
+- UI tests: `sbtbiswas.AidenOnTheGoUITests` (target `AidenOnTheGoUITests`; Debug builds only, driven by `-AidenDemoScenario`)
 - Live Activity widget: `sbtbiswas.AidenOnTheGo.LiveActivityWidget`
 - App Group: `group.sbtbiswas.AidenOnTheGo`
 - Keychain service: `sbtbiswas.AidenOnTheGo.pairing`

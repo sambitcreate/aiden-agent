@@ -162,6 +162,12 @@ const testSources = [
   "AidenWorkspaceEnvironmentTests.swift",
 ];
 
+// UI tests never ship. They launch the Debug app against demo machines.
+const uiTestSources = [
+  "AidenShellUITests.swift",
+  "AidenStateMatrix.swift",
+];
+
 const widgetSources = [
   "AgentRunActivityAttributes.swift",
   "AidenDeepLink.swift",
@@ -189,15 +195,20 @@ test("shipping, test, and widget source phases stay on the reviewed Aiden allowl
     testSources.slice().sort(),
   );
   assert.deepEqual(
+    phaseSourceNames(project, "DE30000000000000000000C7"),
+    uiTestSources.slice().sort(),
+  );
+  assert.deepEqual(
     phaseSourceNames(project, "A04500000000000000000050"),
     widgetSources.slice().sort(),
   );
 });
 
 test("the iOS tree contains no orphan imported Swift sources", async () => {
-  const [appEntries, testEntries] = await Promise.all([
+  const [appEntries, testEntries, uiTestEntries] = await Promise.all([
     readdir(`${iosRoot}AidenOnTheGo`, { recursive: true }),
     readdir(`${iosRoot}AidenOnTheGoTests`, { recursive: true }),
+    readdir(`${iosRoot}AidenOnTheGoUITests`, { recursive: true }),
   ]);
 
   assert.deepEqual(
@@ -207,6 +218,10 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
   assert.deepEqual(
     testEntries.filter((path) => path.endsWith(".swift")).sort(),
     testSources.slice().sort(),
+  );
+  assert.deepEqual(
+    uiTestEntries.filter((path) => path.endsWith(".swift")).sort(),
+    uiTestSources.slice().sort(),
   );
 });
 

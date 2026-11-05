@@ -251,6 +251,57 @@ final class AidenDemoHostsTests: XCTestCase {
         XCTAssertEqual(first.string(forKey: "demo.marker"), "kept")
     }
 
+    func testEveryChatRowOpensWithAConversationThatDecodes() async throws {
+        for scenario in [AidenDemoScenario.one, .busy, .oldHost] {
+            let responder = AidenDemoResponder()
+            let coordinator = AidenDemoHosts.coordinator(scenario, responder: responder)
+            let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+            let machine = client(for: installation, responder: responder)
+            let rows = try await machine.preferredChatSummaries(advertised: installation.serverCapabilities != nil).summaries
+            XCTAssertFalse(rows.isEmpty, "\(scenario)")
+
+            for row in rows {
+                let chat = try await machine.chat(id: row.id)
+                XCTAssertEqual(chat.title, row.title, "\(scenario)/\(row.id)")
+                XCTAssertGreaterThanOrEqual(chat.messages.count, 2, "\(scenario)/\(row.id) needs a user and an assistant message")
+            }
+        }
+    }
+
+    func testDemoBotOpensWithASessionThatDecodes() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let machine = client(for: installation, responder: responder)
+
+        let bots = try await machine.bots().bots
+        let bot = try XCTUnwrap(bots.first)
+        XCTAssertEqual(bots.count, 1)
+        let detail = try await machine.bot(id: bot.id)
+        XCTAssertEqual(detail.name, bot.name)
+        let session = try await machine.botSession(botId: bot.id)
+        XCTAssertFalse(session.entries.isEmpty)
+    }
+
+    func testSettingsScreenCanReadMemorySettings() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+
+        let settings = try await client(for: installation, responder: responder).memorySettings()
+
+        XCTAssertTrue(settings.enabled)
+    }
+
+    func testEmptyScenarioHasNoBotSoTheEmptyStateCanBeCaptured() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.empty, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+
+        let bots = try await client(for: installation, responder: responder).bots().bots
+        XCTAssertTrue(bots.isEmpty)
+    }
+
     func testHeldRequestStaysPendingUntilReleased() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)

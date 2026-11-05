@@ -11,6 +11,8 @@
 		D85700000000000000000003 /* AidenBotAllowed.swift in Sources */ = {isa = PBXBuildFile; fileRef = D85700000000000000000004 /* AidenBotAllowed.swift */; };
 		DE30000000000000000000A1 /* AidenDemoHosts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000A2 /* AidenDemoHosts.swift */; };
 		DE30000000000000000000B1 /* AidenDemoHostsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000B2 /* AidenDemoHostsTests.swift */; };
+		DE30000000000000000000C1 /* AidenShellUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000C2 /* AidenShellUITests.swift */; };
+		DE30000000000000000000C3 /* AidenStateMatrix.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000C4 /* AidenStateMatrix.swift */; };
 		D85700000000000000000001 /* AidenBotAllowedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D85700000000000000000002 /* AidenBotAllowedTests.swift */; };
 		C85600000000000000000001 /* AidenBotPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85600000000000000000002 /* AidenBotPlanTests.swift */; };
 		51A100000000000000000006 /* AidenMJPEGMultipartParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000016 /* AidenMJPEGMultipartParser.swift */; };
@@ -150,6 +152,13 @@
 			remoteGlobalIDString = 1A2B3C4D5E6F700000000040;
 			remoteInfo = AidenOnTheGo;
 		};
+		DE30000000000000000000C9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A2B3C4D5E6F700000000070 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A2B3C4D5E6F700000000040;
+			remoteInfo = AidenOnTheGo;
+		};
 		A04500000000000000000030 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 1A2B3C4D5E6F700000000070 /* Project object */;
@@ -178,6 +187,9 @@
 		D85700000000000000000004 /* AidenBotAllowed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotAllowed.swift; sourceTree = "<group>"; };
 		DE30000000000000000000A2 /* AidenDemoHosts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenDemoHosts.swift; sourceTree = "<group>"; };
 		DE30000000000000000000B2 /* AidenDemoHostsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenDemoHostsTests.swift; sourceTree = "<group>"; };
+		DE30000000000000000000C2 /* AidenShellUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenShellUITests.swift; sourceTree = "<group>"; };
+		DE30000000000000000000C4 /* AidenStateMatrix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenStateMatrix.swift; sourceTree = "<group>"; };
+		DE30000000000000000000C5 /* AidenOnTheGoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AidenOnTheGoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D85700000000000000000002 /* AidenBotAllowedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotAllowedTests.swift; sourceTree = "<group>"; };
 		C85600000000000000000002 /* AidenBotPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPlanTests.swift; sourceTree = "<group>"; };
 		51A100000000000000000016 /* AidenMJPEGMultipartParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMJPEGMultipartParser.swift; sourceTree = "<group>"; };
@@ -327,6 +339,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DE30000000000000000000C8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A04500000000000000000061 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -343,6 +362,7 @@
 				351C0F1600000000000000A1 /* Shared.xcconfig */,
 				1A2B3C4D5E6F700000000031 /* AidenOnTheGo */,
 				1A2B3C4D5E6F700000000034 /* AidenOnTheGoTests */,
+				DE30000000000000000000C6 /* AidenOnTheGoUITests */,
 				A04500000000000000000021 /* AidenLiveActivityWidget */,
 				1A2B3C4D5E6F700000000032 /* Products */,
 			);
@@ -371,6 +391,7 @@
 			children = (
 				1A2B3C4D5E6F700000000010 /* AidenOnTheGo.app */,
 				1A2B3C4D5E6F700000000015 /* AidenOnTheGoTests.xctest */,
+				DE30000000000000000000C5 /* AidenOnTheGoUITests.xctest */,
 				A04500000000000000000017 /* AidenLiveActivityWidget.appex */,
 			);
 			name = Products;
@@ -389,6 +410,15 @@
 				488791F556304AD2AC59BC5D /* ThirdPartyNotices */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		DE30000000000000000000C6 /* AidenOnTheGoUITests */ = {
+			isa = PBXGroup;
+			children = (
+				DE30000000000000000000C2 /* AidenShellUITests.swift */,
+				DE30000000000000000000C4 /* AidenStateMatrix.swift */,
+			);
+			path = AidenOnTheGoUITests;
 			sourceTree = "<group>";
 		};
 		1A2B3C4D5E6F700000000034 /* AidenOnTheGoTests */ = {
@@ -731,6 +761,25 @@
 			productReference = 1A2B3C4D5E6F700000000015 /* AidenOnTheGoTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		DE30000000000000000000CB /* AidenOnTheGoUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DE30000000000000000000CC /* Build configuration list for PBXNativeTarget "AidenOnTheGoUITests" */;
+			buildPhases = (
+				DE30000000000000000000C7 /* Sources */,
+				DE30000000000000000000C8 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DE30000000000000000000CA /* PBXTargetDependency */,
+			);
+			name = AidenOnTheGoUITests;
+			packageProductDependencies = (
+			);
+			productName = AidenOnTheGoUITests;
+			productReference = DE30000000000000000000C5 /* AidenOnTheGoUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		A04500000000000000000040 /* AidenLiveActivityWidget */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A04500000000000000000041 /* Build configuration list for PBXNativeTarget "AidenLiveActivityWidget" */;
@@ -762,6 +811,10 @@
 						CreatedOnToolsVersion = 26.4.1;
 					};
 					1A2B3C4D5E6F700000000044 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = 1A2B3C4D5E6F700000000040;
+					};
+					DE30000000000000000000CB = {
 						CreatedOnToolsVersion = 26.4.1;
 						TestTargetID = 1A2B3C4D5E6F700000000040;
 					};
@@ -806,6 +859,7 @@
 			targets = (
 				1A2B3C4D5E6F700000000040 /* AidenOnTheGo */,
 				1A2B3C4D5E6F700000000044 /* AidenOnTheGoTests */,
+				DE30000000000000000000CB /* AidenOnTheGoUITests */,
 				A04500000000000000000040 /* AidenLiveActivityWidget */,
 			);
 		};
@@ -941,6 +995,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DE30000000000000000000C7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DE30000000000000000000C1 /* AidenShellUITests.swift in Sources */,
+				DE30000000000000000000C3 /* AidenStateMatrix.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1A2B3C4D5E6F700000000052 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -993,6 +1056,11 @@
 			isa = PBXTargetDependency;
 			target = 1A2B3C4D5E6F700000000040 /* AidenOnTheGo */;
 			targetProxy = 1A2B3C4D5E6F700000000036 /* PBXContainerItemProxy */;
+		};
+		DE30000000000000000000CA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A2B3C4D5E6F700000000040 /* AidenOnTheGo */;
+			targetProxy = DE30000000000000000000C9 /* PBXContainerItemProxy */;
 		};
 		A04500000000000000000031 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1233,6 +1301,50 @@
 			};
 			name = Release;
 		};
+		DE30000000000000000000CD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)UITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AidenOnTheGo;
+			};
+			name = Debug;
+		};
+		DE30000000000000000000CE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 22;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER)UITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AidenOnTheGo;
+			};
+			name = Release;
+		};
 		A04500000000000000000042 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1304,6 +1416,15 @@
 			buildConfigurations = (
 				1A2B3C4D5E6F700000000084 /* Debug */,
 				1A2B3C4D5E6F700000000085 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DE30000000000000000000CC /* Build configuration list for PBXNativeTarget "AidenOnTheGoUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DE30000000000000000000CD /* Debug */,
+				DE30000000000000000000CE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

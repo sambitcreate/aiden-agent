@@ -353,6 +353,22 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
+          -skip-testing:AidenOnTheGoUITests
+          CODE_SIGNING_ALLOWED=NO
+
+      # One smoke test: the real shell launches against every demo scenario. The
+      # screenshot matrix and accessibility audit stay a local tool.
+      - name: Run Aiden On The Go shell UI smoke test on the simulator
+        run: >-
+          xcodebuild test-without-building -quiet
+          -project ios/AidenOnTheGo.xcodeproj
+          -scheme AidenOnTheGo
+          -configuration Debug
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
+          -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
+          -resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'
+          -only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario
           CODE_SIGNING_ALLOWED=NO
 
       - name: Print failed iOS simulator test messages
@@ -373,7 +389,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ios-simulator-results-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+          path: |
+            ${{ runner.temp }}/AidenOnTheGoSimulator.xcresult
+            ${{ runner.temp }}/AidenOnTheGoShellUI.xcresult
           retention-days: 7
           if-no-files-found: warn
 

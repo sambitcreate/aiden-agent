@@ -295,6 +295,9 @@ enum AidenDemoHosts {
         /// Where in the row-state pattern this machine starts. The first machine
         /// opens on the busiest rows, the others on quieter ones.
         var patternStart = 0
+        /// Whether the machine has one Bot. The empty scenario has none, so the
+        /// Bots empty state stays reachable.
+        var hasBot = true
     }
 
     /// A paired machine as the app stores it after pairing and a first `/server`:
@@ -326,12 +329,20 @@ enum AidenDemoHosts {
         responder: AidenDemoResponder,
         haptics: (any AidenHapticEmitting)? = nil
     ) -> AidenRemoteCoordinator {
-        func machine(_ id: String, _ name: String, rows: Int, online: Bool = true, start: Int = 0) -> Machine {
+        func machine(
+            _ id: String,
+            _ name: String,
+            rows: Int,
+            online: Bool = true,
+            start: Int = 0,
+            hasBot: Bool = true
+        ) -> Machine {
             Machine(
                 installation: installation(instanceId: id, name: name),
                 rowCount: rows,
                 isOnline: online,
-                patternStart: start
+                patternStart: start,
+                hasBot: hasBot
             )
         }
         let studio = machine("studio", "Studio Mac", rows: 6)
@@ -345,7 +356,7 @@ enum AidenDemoHosts {
         case .four:
             machines = [studio, laptop, mini, machine("build", "Build Box", rows: 0, online: false)]
         case .empty:
-            machines = [machine("studio", "Studio Mac", rows: 0)]
+            machines = [machine("studio", "Studio Mac", rows: 0, hasBot: false)]
         case .busy:
             machines = [machine("studio", "Studio Mac", rows: 14)]
         case .offlineMix:
@@ -473,8 +484,25 @@ enum AidenDemoHosts {
         responder.reply(instanceId: id, path: "/workspaces", status: 200, json: AidenDemoContent.workspacesJSON())
         // Served for old hosts too, but only reached when a host advertises it.
         responder.reply(instanceId: id, path: "/chat-summaries", status: 200, json: AidenDemoContent.summariesJSON(rows))
+        // The Settings screen reads memory settings.
+        responder.reply(instanceId: id, path: "/memory/settings", status: 200, json: AidenDemoContent.memorySettingsJSON())
+        // Opening a row reads the whole chat.
+        for (index, row) in rows.enumerated() {
+            guard let chatId = row["id"] as? String else { continue }
+            responder.reply(
+                instanceId: id,
+                path: "/chats/\(chatId)",
+                status: 200,
+                json: AidenDemoContent.chatJSON(row: row, index: index)
+            )
+        }
         if installation.serverCapabilities == nil {
             responder.reply(instanceId: id, path: "/chats", status: 200, json: AidenDemoContent.legacyChatsJSON(rows))
+        } else if machine.hasBot {
+            let botPath = "/bots/\(AidenDemoContent.botId)"
+            responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
+            responder.reply(instanceId: id, path: botPath, status: 200, json: AidenDemoContent.botDetailJSON())
+            responder.reply(instanceId: id, path: "\(botPath)/session", status: 200, json: AidenDemoContent.botSessionJSON())
         } else {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.emptyBotsJSON())
         }
@@ -556,6 +584,99 @@ private enum AidenDemoContent {
 
     static func emptyBotsJSON() -> Data {
         data(["bots": [Any](), "maxBots": 256])
+    }
+
+    static func memorySettingsJSON() -> Data {
+        data(["enabled": true, "revision": "memory_settings_revision_1"])
+    }
+
+    // MARK: Chat
+
+    private static let answers = [
+        "I found the cause. The upload test waits on a timer that the fixture never advances.\n\n- Advance the clock in the fixture\n- Drop the fixed sleep\n\n```swift\nawait clock.advance(by: .seconds(5))\n```",
+        "Here is a first pass.\n\n1. Ship the inbox rework\n2. Cut the old shell\n3. Fold Bots into the same list\n\nThe risky item is step two.",
+        "The review had three themes: spacing, empty states, and the composer. Spacing is mostly done.",
+    ]
+
+    /// A whole chat for a summary row, as `GET /chats/{id}` returns it.
+    static func chatJSON(row: [String: Any], index: Int) -> Data {
+        let updated = row["updatedAt"] as? String ?? timestamp(Date())
+        let created = row["createdAt"] as? String ?? updated
+        let title = row["title"] as? String ?? "Chat"
+        return data([
+            "id": row["id"] as Any,
+            "workspaceId": row["workspaceId"] as Any,
+            "title": title,
+            "messages": [
+                ["id": "message_\(index + 1)_user", "role": "user", "text": "\(title). Where do we stand?", "createdAt": created],
+                ["id": "message_\(index + 1)_assistant", "role": "assistant", "text": answers[index % answers.count], "createdAt": updated],
+            ],
+            "createdAt": created,
+            "updatedAt": updated,
+            "revision": "chat_revision_\(index + 1)",
+        ])
+    }
+
+    // MARK: Bot
+
+    static let botId = "bot_scout"
+
+    private static func botSummaryObject() -> [String: Any] {
+        let created = timestamp(Date().addingTimeInterval(-3 * 86_400))
+        return [
+            "id": botId,
+            "name": "Scout",
+            "purpose": "Finds the signal in a busy week",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
+            "health": "ready",
+            "sessionState": "idle",
+            "createdAt": created,
+            "updatedAt": timestamp(Date().addingTimeInterval(-3_600)),
+            "revision": "bot_revision_1",
+        ]
+    }
+
+    static func botListJSON() -> Data {
+        data(["bots": [botSummaryObject()], "maxBots": 256])
+    }
+
+    static func botDetailJSON() -> Data {
+        var detail = botSummaryObject()
+        detail["instructions"] = "Find the important signal, explain it plainly, and keep the owner in control."
+        detail["access"] = [
+            "botId": botId,
+            "accessMode": "full",
+            "revision": "bot_policy_revision_1",
+            "policyEpoch": "bot_policy_epoch_1",
+            "summary": "Can use your Mac, shell, enabled connections, and skills.",
+        ]
+        detail["modelSelection"] = ["providerId": "provider_demo", "modelId": "model_demo"]
+        return data(detail)
+    }
+
+    static func botSessionJSON() -> Data {
+        let now = Date()
+        return data([
+            "botId": botId,
+            "epoch": "epoch_demo_01",
+            "seq": 4,
+            "state": "idle",
+            "interrupted": false,
+            "entries": [
+                [
+                    "type": "message", "id": "entry_1", "role": "user",
+                    "text": "Plan my week, please.", "createdAt": timestamp(now.addingTimeInterval(-7_200)),
+                ],
+                [
+                    "type": "message", "id": "entry_2", "role": "assistant",
+                    "text": "Here is a first pass at your week.\n\n- Monday: roadmap review\n- Wednesday: design critique\n- Friday: release notes",
+                    "createdAt": timestamp(now.addingTimeInterval(-7_180)),
+                ],
+            ],
+            "hasOlder": false,
+            "question": NSNull(),
+            "approval": NSNull(),
+        ])
     }
 
     static func notFound() -> Data {
