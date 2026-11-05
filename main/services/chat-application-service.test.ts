@@ -302,6 +302,32 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
   assert.equal(application.finishDeletionCalls(), 0);
 });
 
+test("a chat deletion whose tombstone status cannot be read stays fenced for startup", async () => {
+  const restored: string[] = [];
+  const events: string[] = [];
+  const application = fixture({
+    subagentRunStore: {
+      deleteChat: async () => { throw new Error("V2 tombstone failed"); },
+      completeChatDeletion: async () => undefined,
+      pendingChatDeletions: async () => { throw new Error("status unreadable"); },
+    } as ChatApplicationDependencies["subagentRunStore"],
+    followThrough: {
+      deleteChat: async () => undefined,
+      restoreChat: (chatId: string) => { restored.push(chatId); },
+    } as ChatApplicationDependencies["followThrough"],
+  });
+
+  await assert.rejects(
+    application.service.remove("chat-1", {
+      onDeletionRollForward: () => { events.push("roll-forward"); },
+    }),
+    /subagent history/u,
+  );
+  assert.deepEqual(events, ["roll-forward"]);
+  assert.deepEqual(restored, []);
+  assert.equal(application.finishDeletionCalls(), 0);
+});
+
 test("shared chat deletion publishes its roll-forward boundary before later cleanup can fail", async () => {
   const events: string[] = [];
   const application = fixture({
