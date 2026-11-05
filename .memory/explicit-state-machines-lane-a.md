@@ -43,6 +43,9 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 - Rust `guard::tests::authenticated_bridge_lease_eof_revokes_the_whole_broker_group` failed once locally at load about 10 ("broker survived authenticated bridge lease EOF", `guard.rs:490`, two-second deadline). No `native/` change in this lane. Not fixed.
 - One JS failure in `npm run test:computer-use` on the #766 fix: 514 passed, 1 failed, log discarded, test unidentified. 12 later JS runs clean. The new lease-retry test is not ruled out. Recorded in #766.
 
+- `tests/e2e/bot-browser.spec.ts:22` flaked once on #742 (line 143 expected `text`, got `password`) and `tests/e2e/chat-top-bar.spec.ts:104` once on #756 ("Resulting promise was garbage collected" at line 117). Both passed on retry and on the one whole-run rerun. Causes unknown, not fixed. Recorded in those PRs.
+- Electron E2E (3/3) hit the 20-minute job limit once on #755 at test 85 of 92, no test over 34s, so a slow runner. Normal time is 12 to 16 minutes, so the limit has little room. Recorded in #755.
+
 ## Handed to the owner
 
 - `aiden serve stop` cannot force-stop an MCP survivor whose wrapper exited: `daemonMcpGroups()` in `packages/cli/src/serve-lifecycle.ts` needs a direct child of the daemon. Predates this lane, needs `packages/cli` work, and `feature/sm-serve-*` branches change that file.
