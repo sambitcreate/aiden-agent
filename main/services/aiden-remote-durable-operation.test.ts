@@ -235,6 +235,50 @@ test("a request joined to a running action reports that action's result, whateve
   assert.equal(effects, 1);
 });
 
+test("a join or replay during the outcome write learns what the owner learns", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  let saves = 0;
+  let failOutcome!: (error: Error) => void;
+  let outcomeWriteStarted!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    outcomeWriteStarted = resolve;
+  });
+  const durable = owner(ledger, async () => {
+    saves += 1;
+    if (saves === 2) {
+      outcomeWriteStarted();
+      await new Promise<void>((_resolve, reject) => {
+        failOutcome = reject;
+      });
+    }
+  });
+  let effects = 0;
+  let finish!: (value: string) => void;
+  let announceStart!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStart = resolve;
+  });
+  const action = () => {
+    effects += 1;
+    announceStart();
+    return new Promise<string>((done) => {
+      finish = done;
+    });
+  };
+  const first = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  await started;
+  const joined = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  finish("committed");
+  await writing;
+  const replay = executeAidenDurableOperation(durable, SCOPE, {}, action);
+  failOutcome(new Error("disk lost"));
+
+  await assert.rejects(first, code("idempotency_in_flight"));
+  await assert.rejects(joined, code("idempotency_in_flight"));
+  await assert.rejects(replay, code("idempotency_in_flight"));
+  assert.equal(effects, 1);
+});
+
 test("a replay reports the settled outcome and writes nothing", async () => {
   const ledger = new AidenIdempotencyLedger();
   let failing = false;
