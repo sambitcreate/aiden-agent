@@ -94,7 +94,7 @@ final class AidenDemoResponder: @unchecked Sendable {
     func reply(instanceId: String, method: String = "GET", path: String, status: Int, json: Data) {
         lock.lock()
         defer { lock.unlock() }
-        clearLocked(instanceId: instanceId, path: path)
+        // Only this method's answer is replaced; other methods on the path stay.
         outcomes[Route(instanceId: instanceId, method: method, path: path)] = .reply(status: status, json: json)
     }
 
@@ -391,10 +391,7 @@ enum AidenDemoHosts {
         let store = AidenInstallationStore(keychain: AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
             .appending(path: "AidenDemoHosts-\(UUID().uuidString)", directoryHint: .isDirectory)
-        // A private defaults domain keeps "archived on this device" state out of the real one.
-        let suiteName = "AidenDemoHosts"
-        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
-        let defaults = UserDefaults(suiteName: suiteName) ?? UserDefaults()
+        let defaults = isolatedDefaults()
 
         for machine in machines {
             register(machine, with: responder)
@@ -449,6 +446,15 @@ enum AidenDemoHosts {
                 )
             }
         )
+    }
+
+    /// A defaults domain of its own, so "archived on this device" state stays out
+    /// of the real one and two coordinators cannot clobber each other.
+    static func isolatedDefaults() -> UserDefaults {
+        let suiteName = "AidenDemoHosts-\(UUID().uuidString)"
+        // A new name is always empty, but clear it anyway in case of a reused name.
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+        return UserDefaults(suiteName: suiteName) ?? UserDefaults()
     }
 
     private static func register(_ machine: Machine, with responder: AidenDemoResponder) {

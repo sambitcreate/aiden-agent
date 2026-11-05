@@ -181,6 +181,76 @@ final class AidenDemoHostsTests: XCTestCase {
         XCTAssertEqual(responder.requests(instanceId: "studio"), ["GET /chat-summaries"])
     }
 
+    func testReplyKeepsAnswersForOtherMethodsOnTheSamePath() async throws {
+        let responder = AidenDemoResponder()
+        responder.reply(instanceId: "studio", method: "POST", path: "/widgets", status: 201, json: Data("{}".utf8))
+        responder.reply(instanceId: "studio", method: "GET", path: "/widgets", status: 200, json: Data("{}".utf8))
+
+        let url = try XCTUnwrap(URL(string: "https://studio.demo.invalid/api/aiden/v1/widgets"))
+        var post = URLRequest(url: url)
+        post.httpMethod = "POST"
+        let (_, postResponse) = try await responder.session.data(for: post)
+        XCTAssertEqual((postResponse as? HTTPURLResponse)?.statusCode, 201, "A later GET answer must not erase the POST answer")
+        let (_, getResponse) = try await responder.session.data(for: URLRequest(url: url))
+        XCTAssertEqual((getResponse as? HTTPURLResponse)?.statusCode, 200)
+
+        // A second answer for the same method still replaces the first.
+        responder.reply(instanceId: "studio", method: "POST", path: "/widgets", status: 409, json: Data("{}".utf8))
+        let (_, replaced) = try await responder.session.data(for: post)
+        XCTAssertEqual((replaced as? HTTPURLResponse)?.statusCode, 409)
+        let (_, untouched) = try await responder.session.data(for: URLRequest(url: url))
+        XCTAssertEqual((untouched as? HTTPURLResponse)?.statusCode, 200)
+    }
+
+    func testFailStillReplacesEveryMethodOnThePath() async throws {
+        let responder = AidenDemoResponder()
+        responder.reply(instanceId: "studio", method: "POST", path: "/widgets", status: 201, json: Data("{}".utf8))
+        responder.reply(instanceId: "studio", method: "GET", path: "/widgets", status: 200, json: Data("{}".utf8))
+        responder.fail(instanceId: "studio", path: "/widgets", code: .timedOut)
+
+        let url = try XCTUnwrap(URL(string: "https://studio.demo.invalid/api/aiden/v1/widgets"))
+        var post = URLRequest(url: url)
+        post.httpMethod = "POST"
+        for request in [post, URLRequest(url: url)] {
+            do {
+                _ = try await responder.session.data(for: request)
+                XCTFail("\(request.httpMethod ?? "GET") should have failed")
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .timedOut)
+            }
+        }
+    }
+
+    func testTwoDemoCoordinatorsDoNotShareArchiveState() throws {
+        let first = AidenDemoHosts.coordinator(.one, responder: AidenDemoResponder())
+        first.workspaceArchiveStore.archive(workspaceID: "workspace_notes", instanceID: "studio")
+        XCTAssertTrue(first.workspaceArchiveStore.isArchived(workspaceID: "workspace_notes", instanceID: "studio"))
+
+        // Building another coordinator must not wipe, or inherit, the first one's state.
+        let second = AidenDemoHosts.coordinator(.one, responder: AidenDemoResponder())
+        XCTAssertFalse(second.workspaceArchiveStore.isArchived(workspaceID: "workspace_notes", instanceID: "studio"))
+        XCTAssertTrue(
+            first.workspaceArchiveStore.isArchived(workspaceID: "workspace_notes", instanceID: "studio"),
+            "A second coordinator must not clear the first one's archive"
+        )
+
+        second.workspaceArchiveStore.archive(workspaceID: "workspace_app", instanceID: "studio")
+        XCTAssertFalse(first.workspaceArchiveStore.isArchived(workspaceID: "workspace_app", instanceID: "studio"))
+    }
+
+    func testTwoDemoCoordinatorsDoNotShareDefaultsOnDisk() {
+        // The archive store keeps its snapshot in the defaults it is given. What
+        // the first coordinator saved must survive building a second one.
+        let first = AidenDemoHosts.isolatedDefaults()
+        first.set("kept", forKey: "demo.marker")
+        let second = AidenDemoHosts.isolatedDefaults()
+
+        XCTAssertEqual(first.string(forKey: "demo.marker"), "kept", "Building a second coordinator wiped the first")
+        XCTAssertNil(second.string(forKey: "demo.marker"), "The second coordinator inherited the first one's state")
+        second.set("other", forKey: "demo.marker")
+        XCTAssertEqual(first.string(forKey: "demo.marker"), "kept")
+    }
+
     func testHeldRequestStaysPendingUntilReleased() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
