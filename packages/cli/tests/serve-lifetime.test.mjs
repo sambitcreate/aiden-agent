@@ -356,6 +356,21 @@ test("the command client settles once for every way a daemon can answer", posix,
     setTimeout(() => socket.end(`${framed.slice(-16)}\n${"y".repeat(1024)}`), 100);
   });
   assert.equal((await api.remoteDaemonCommand(padded, "serve", ["status"])).length, fits.length);
+  // Once the first frame settles the command, a peer that keeps writing is cut off.
+  const peer = sandbox(t), peerClosed = Promise.withResolvers();
+  const talkative = createServer({ allowHalfOpen: true }, (socket) => {
+    socket.on("error", () => {});
+    socket.once("data", () => {
+      socket.write('{"result":"ok"}\n');
+      const flood = setInterval(() => socket.write("y".repeat(1024)), 5);
+      socket.once("close", () => { clearInterval(flood); peerClosed.resolve("closed"); });
+    });
+  });
+  await new Promise((resolveListen) => talkative.listen(peer.socket, resolveListen));
+  t.after(() => new Promise((resolveClose) => { talkative.close(resolveClose); }));
+  assert.equal(await api.remoteDaemonCommand(peer.agentDir, "serve", ["status"]), "ok");
+  const timedOut = new Promise((resolveWait) => setTimeout(resolveWait, 1_000, "still connected").unref());
+  assert.equal(await Promise.race([peerClosed.promise, timedOut]), "closed");
   // The reply is its first frame: bytes after the newline do not turn it into an error.
   const trailing = await fakeDaemon(t, (socket) => { socket.end(`${JSON.stringify({ result: "ok" })}\nleftover`); });
   assert.equal(await api.remoteDaemonCommand(trailing, "serve", ["status"]), "ok");
