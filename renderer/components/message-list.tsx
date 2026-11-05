@@ -92,6 +92,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
+  replayedTextLength?: number;
   /** Reasoning explicitly emitted by the current supported provider. */
   streamingReasoning: string | null;
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
@@ -158,6 +159,7 @@ interface AssistantResponseProps {
   workDetails?: WorkDetailsMode;
   retainWorkDetails?: boolean;
   content: string;
+  replayedTextLength?: number;
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
   attachments?: readonly Attachment[];
@@ -225,6 +227,7 @@ function AssistantResponse({
   workDetails = "standard",
   retainWorkDetails = false,
   content,
+  replayedTextLength = 0,
   timeline,
   reasoning,
   attachments,
@@ -362,6 +365,7 @@ function AssistantResponse({
               imageScope={imageScope}
               role="assistant"
               content={content}
+              replayedTextLength={replayedTextLength}
               streaming={streaming}
               streamComplete={streamComplete}
               onStreamHandoffComplete={onStreamHandoffComplete}
@@ -439,6 +443,7 @@ function AssistantResponse({
             imageScope={imageScope}
             role="assistant"
             content={row.content}
+            replayedTextLength={Math.max(0, replayedTextLength - row.startOffset)}
             // Every text row of a running turn stays on the gated reveal path,
             // so text a tool step closed keeps its release slot after newer
             // prose takes over the last row.
@@ -778,6 +783,7 @@ export function MessageList({
   chatId,
   messages,
   streamingText,
+  replayedTextLength,
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
@@ -1106,6 +1112,7 @@ export function MessageList({
       retainWorkDetails={collapseTiming === "next-input" && (settlingIndex < 0 || settlingIndex >= latestExchangeStart)}
       live={{
         content: streamingText ?? "",
+        replayedTextLength,
         timeline,
         reasoning: streamingReasoning,
         attachments: liveAttachments,

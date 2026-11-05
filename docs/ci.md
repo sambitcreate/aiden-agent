@@ -92,6 +92,11 @@ superseded. Runner capacity can still cause queueing.
   A separate completed run checks the allocation against independent timings;
   newly discovered specs get a default weight and always run. Live-provider specs
   remain opt-in; production diagnostics run separately with the production profile.
+- Linux runs the same Electron shards on three Ubuntu runners in `linux-e2e`,
+  beside the packaging job rather than after it. The required `Linux x64` and
+  `Linux arm64` checks fail if a selected shard does not pass. Each shard builds
+  the app itself, because waiting for the macOS `build` artifact would tie Linux
+  to the macOS queue.
 - Android retains unit tests, lint, test compilation and emulator coverage, with
   Gradle's build cache enabled and APK publication only on main. Hosted iOS
   compilation is not physical-device XCTest acceptance.

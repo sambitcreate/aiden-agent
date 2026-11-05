@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
 import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
@@ -480,4 +481,26 @@ test("a paired device's chat in a No workspace folder that holds another chat ge
   assert.notEqual(replacement, "released-home");
   assert.equal(app.registry.get(replacement)?.noWorkspace, true, "a gone home gets a fresh hidden folder");
   assert.equal(app.registry.has("released-home"), false);
+});
+
+test("each way of adding a workspace counts once, and a failed save counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const application = fixture({ existing: null });
+  await application.service.create({ name: "Named" });
+  await application.service.createFromFolder("/approved/picked");
+  await application.service.createFromFolder("/approved/typed", undefined, { fromPath: true });
+  await application.service.createScratch();
+  assert.deepEqual(sent, [
+    { event: "workspace_added", props: { kind: "folder" } },
+    { event: "workspace_added", props: { kind: "folder" } },
+    { event: "workspace_added", props: { kind: "path" } },
+    { event: "workspace_added", props: { kind: "scratch" } },
+  ]);
+
+  sent.length = 0;
+  const failing = fixture({ existing: null, saveError: new Error("persistence failed") });
+  await assert.rejects(failing.service.createScratch(), /persistence failed/u);
+  await assert.rejects(failing.service.create({ name: "Named" }), /persistence failed/u);
+  await assert.rejects(failing.service.createFromFolder("/approved/project"), /persistence failed/u);
+  assert.deepEqual(sent, []);
 });

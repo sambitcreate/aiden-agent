@@ -246,3 +246,12 @@ test("another computer's browser recording shows as its activity line without a 
   assert.equal(step.toolName, "browser_recording_stop");
   assert.equal(step && "recording" in step, false);
 });
+
+test("the host can remove the cached prefix or reveal earlier pages at the same anchor", () => {
+  const all = numbered(5);
+  const cached = mergeNewestWindow(emptyRemoteTranscript("chat-1"), served(all, { limit: 10 }));
+  const shortened = mergeNewestWindow(cached, served(all.slice(2), { limit: 10 }));
+  assert.deepEqual(shortened.messages.map((m) => m.id), ["m2", "m3", "m4"]);
+  const restored = mergeNewestWindow(shortened, served(all, { limit: 3 }));
+  assert.equal(restored.hasOlder, true);
+});

@@ -1,6 +1,6 @@
 # Anonymous Usage Analytics and Crash Reporting (PostHog)
 
-Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, shipped in 0.64.0; PR 4, crashes and errors, in review)
+Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, shipped in 0.64.0; PR 3, feature events, and PR 4, crashes and errors, merged)
 Date: 2026-10-28
 Base: `origin/main` at `8504c773c` (0.62.0 + #625–#628)
 Scope: Electron desktop app (macOS and Linux) first, then the `aiden` CLI. iOS and Android are out of scope.
@@ -143,7 +143,7 @@ Dashboards count active users from both `app_active` and real actions (`chat_mes
 | `computer_use_enabled` | Global switch turned on: `computerUse:setEnabled(true)` (`main/handlers/computer-use.ts:53`). Per-chat access-card grants are not counted. | — |
 | `bot_computer_set_up` | Set up completes (`main/handlers/bot-computers.ts:97`) | `element_control` (bool) |
 | `terminal_opened` | `terminal:create` (`main/handlers/terminal.ts:91`) | — |
-| `git_commit` | `git:commit` succeeds (`main/handlers/workspaces.ts:299`) | `pushed` (bool, set by a following `git:push` within the same action if available; otherwise separate) |
+| `git_commit` | `git:commit` succeeds (`main/handlers/workspaces.ts:299`) | — (`pushed` was dropped in PR 3: commit and push are separate service calls, so a commit can't honestly know it) |
 | `worktree_created` | `git:createWorktree` (`main/handlers/workspaces.ts:357`) | — |
 
 Only success moments are counted. Subagent turns are not `chat_message_sent` events; they are counted once by `subagent_launched`. Line numbers are as of the base commit; the implementer should hook the service function rather than the IPC wrapper where both exist, so CLI and phone-originated actions are counted once.
@@ -302,8 +302,8 @@ Behavioural, per `AGENTS.md` house style; every new file registered in the root 
 
 1. **Core, no sending.** `main/services/analytics/*` (registry, consent, sanitizer, core with fake transport, client wrapper, crash sink), `posthog-node` pinned exactly, tests. No key, no UI, nothing wired. Safe to merge on its own. Because nothing in main imports the client yet, `posthog-node` sits in `devDependencies` (as `scripts/main-runtime-dependencies.test.mjs` requires); PR 2 moves it to `dependencies` when main starts importing it.
 2. **Consent, lifecycle and "who's using it".** (In review, stacked on PR 1.) Settings group, onboarding row, existing-user notice, "What's sent" sheet, IPC, release-key injection, `app_opened` / `app_active` / `onboarding_finished` / `app_updated` / `analytics_disabled`. All docs and policy changes above. Screenshots in the PR.
-3. **Feature events.** Wire the core-use and big-feature tables at service level.
-4. **Crashes and errors.** (In review.) Journal sink (including rejections, through a new listener because the monitor never sees them in Electron), widened renderer IPC with main-side sanitizing, process-gone events, run marker, pending-crash file, flood control.
+3. **Feature events.** (Merged in #734.) Wire the core-use and big-feature tables at service level. Services bundled into the CLI report through `analytics-report.ts`, never `analytics-main.ts`; the desktop registers its reporter when it creates the analytics service. Registry changes from the tables above: `git_commit` lost `pushed`, `trigger` gained `watch` (an event-started run reports its source), `thinking` gained `max`, and `origin` gained `peer`, because a paired Mac sends turns through the same route as a phone. Telegram chats, Design runs and unattended follow-through notices are not `chat_message_sent`; a message to a Bot is, whichever surface it came from. `chat_message_sent` for a Bot always has `in_workspace: false` and `thinking: other`. `bot_computer_set_up` also fires when element control is added later. `worktree_created` fires once the workspace record is saved, because a checkout can still roll back after Git has made it. The Mac composer microphone is not `voice_used`: it shares its transcribers with the dictation pill, so counting it needs its own signal from the renderer. Not hooked yet, for PR 5: the daemon's own chat paths, `aiden auth` and `aiden git worktree`.
+4. **Crashes and errors.** (Merged in #732.) Journal sink (including rejections, through a new listener because the monitor never sees them in Electron), widened renderer IPC with main-side sanitizing, process-gone events, run marker, pending-crash file, flood control.
 5. **CLI.** Consent store, notice, `aiden telemetry`, `cli_started`, shared events, crash capture, `packages/cli/README.md`.
 
 Each PR runs the narrow suites locally before CI; PR 2 onwards also checks a packaged build sends to a test PostHog project (owner key) and that turning it off stops traffic (verified with a local proxy or the PostHog live events view).
@@ -318,7 +318,9 @@ Each PR runs the narrow suites locally before CI; PR 2 onwards also checks a pac
 
 Done 2026-10-30: project "aiden" (id 619947) in the US cloud with client IP discarded; session replay, autocapture, heatmaps, surveys, console log capture and performance capture off; the `AIDEN_POSTHOG_PROJECT_KEY` repository secret added. Dashboards and the privacy policy remain.
 
-Done 2026-11-03: the privacy policy at chatwithaiden.com/privacy describes app analytics ([aiden-website#12](https://github.com/sambitcreate/aiden-website/pull/12)). The keyed packaged check passed on a `npm run package` build of the 0.64.0 release branch with `AIDEN_DISTRIBUTION_BUILD=1` and the project key, in a throwaway profile: nothing was sent before onboarding; `app_opened`, `app_active` and `onboarding_finished` arrived through `posthog-node` with a random install ID, `$process_person_profile: false`, no IP and only registry properties; turning Usage data off sent one `analytics_disabled`, deleted the install ID, and nothing followed after a relaunch. Dashboards remain.
+Done 2026-11-03: the privacy policy at chatwithaiden.com/privacy describes app analytics ([aiden-website#12](https://github.com/sambitcreate/aiden-website/pull/12)). The keyed packaged check passed on a `npm run package` build of the 0.64.0 release branch with `AIDEN_DISTRIBUTION_BUILD=1` and the project key, in a throwaway profile: nothing was sent before onboarding; `app_opened`, `app_active` and `onboarding_finished` arrived through `posthog-node` with a random install ID, `$process_person_profile: false`, no IP and only registry properties; turning Usage data off sent one `analytics_disabled`, deleted the install ID, and nothing followed after a relaunch.
+
+Done 2026-11-04: the "Aiden usage and crashes" dashboard (2282400) exists in project 619947 with seven tiles: Active users (DAU / WAU / MAU), Crashes and errors, Feature adoption, Chats by provider, Active installs by version, Active installs by platform, and Analytics opt-outs. The Error Tracking issues list is a PostHog product page rather than a tile.
 
 ## Cost
 

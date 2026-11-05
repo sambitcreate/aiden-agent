@@ -1,5 +1,8 @@
 import * as path from "node:path";
 import { Notification, ipcMain, logger } from "../platform.js";
+import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
+import { analyticsRunTrigger, analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { requestAppPath } from "./app-navigation.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
@@ -102,6 +105,25 @@ async function appendSerializedChatMessage(
     turn.release();
     turn.settleAsyncWork();
   }
+}
+
+async function isFolderWorkspace(workspaceId: string | undefined): Promise<boolean> {
+  if (!workspaceId) return false;
+  return analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none";
+}
+
+// A cancelled or skipped run is neither a success nor a failure, so it is not
+// counted. A run that ended blocked by a permission did fail.
+function reportScheduledTaskRan(
+  result: ScheduledRun["result"],
+  trigger: ScheduledRunTrigger | undefined,
+  cancelled: boolean,
+): void {
+  if (cancelled || result === "skipped") return;
+  reportAnalyticsEvent("scheduled_task_ran", {
+    trigger: trigger ? analyticsRunTrigger(trigger) : "manual",
+    result: result === "success" || result === "silent" ? result : "failed",
+  });
 }
 
 function notify(task: ScheduledTask, body: string, chatId: string | undefined): void {
@@ -329,6 +351,12 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         background.owner,
       );
       if (!started) throw new Error("The scheduled generation was cancelled before it started.");
+      reportChatMessageSent({
+        providerId: surface.params.providerId,
+        model: surface.params.model,
+        origin: "schedule",
+        inWorkspace: () => isFolderWorkspace(surface.params.workspaceId),
+      });
       const terminal = await background.terminal;
       if (signal.aborted) {
         const error = "Scheduled task was cancelled.";
@@ -421,6 +449,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           error,
           chatId,
         });
+        reportScheduledTaskRan(result, trigger, controller.signal.aborted);
         if (result !== "silent") notify(task, error ?? output, chatId);
         ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
         return run;

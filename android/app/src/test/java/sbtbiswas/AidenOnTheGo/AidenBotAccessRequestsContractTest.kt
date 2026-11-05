@@ -30,7 +30,7 @@ class AidenBotAccessRequestsContractTest {
     private fun frame(element: JsonElement) = AidenBotSessionEventStream.decodeFrame(element.toString().toByteArray(), "bot_fixture_01")
 
     @Test fun canonicalCardsSessionFramesIssuesAndLegacySettlement() {
-        assertEquals(57, root.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(58, root.getValue("contractRevision").jsonPrimitive.int)
         assertEquals("bot:access-requests", fixture.getValue("capability").jsonPrimitive.content)
         val folder = AidenBotAccessRequest.parse(fixture.getValue("folder"))
         val mac = AidenBotAccessRequest.parse(fixture.getValue("wholeMac"))

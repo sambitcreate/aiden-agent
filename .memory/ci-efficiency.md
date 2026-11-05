@@ -56,5 +56,9 @@ GitHub caps macOS at 5 concurrent jobs on Free, Pro and Team, whatever the repo'
 - Worktree test failures on Linux (`managed-worktree-lifecycle`, `workspace-worktree-application-service`) were never root-caused; those files stay on macOS.
 - iOS routing: `renderer/shared/` and `scripts/ci-test-registry.json` no longer select iOS, and a scripts-only `package.json` change does not either. A real week had 58 of 116 iOS selections with no iOS, protocol or Remote server change.
 - Replay of that week with a 6-minute `macos` lane: PR wait p50 106 to about 50 min, p90 294 to about 169; main p50 115 to about 74. Moving main's lanes too would give about 43/152 for PRs, but main would never run those tests on macOS. The replay is a model: check real timings after a week.
-- Before merge the split passed in Ubuntu 24.04 arm64 (14,034 tests, none failed or skipped) and the `macos` lane passed on a Mac. Neither was a hosted runner.
-- Not done: Linux E2E sharding, `bot-browser` and `workspace-settings` flake fixes, and trimming PR macOS E2E, which should wait for a week of real runs.
+- Before push the split passed in Ubuntu 24.04 arm64 (14,034 tests, none failed or skipped) and the `macos` lane passed on a Mac. The first hosted x64 run then failed one `core-git` test: the image catalog single-flight test counted event-loop turns while the runtime read settings from disk, and it now waits for the request itself. Later hosted runs passed all four lanes.
+- Not done: trimming PR macOS E2E, which should wait for a week of real runs.
+
+## Linux E2E shards (2026-11-05, perf/ci-linux-e2e-shards)
+
+Linux x64 ran packaging then a 22-minute serial E2E step, about 36 minutes plus Fedora, which set the floor on a PR once macOS stopped queueing. `linux-e2e` now runs the shards from `scripts/ci-e2e-shards.mjs` beside packaging, using macOS-derived weights. `diagnostics-production.spec.ts` is left out of shards, and it only skipped on Linux before. The `linux-required` gate reads both jobs, so the ruleset's contexts did not change.
