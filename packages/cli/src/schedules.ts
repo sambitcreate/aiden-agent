@@ -25,7 +25,9 @@ async function providerFingerprint(agentDir: string, providerId?: string, modelI
 }
 
 export function createCliScheduler(agentDir: string) {
-  const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; active: boolean; firstWrite: boolean; cancellation: AbortController }>();
+  // Consent verifies the task on the first write and only the environment after it.
+  // `closed` is terminal: a rejected write or a finished command can never use it again.
+  const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; phase: "first_write" | "follow_on" | "closed"; cancellation: AbortController }>();
   const persistence = new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []);
   const tasks = {
     load: () => persistence.load(),
@@ -33,17 +35,17 @@ export function createCliScheduler(agentDir: string) {
       return persistence.update(mutation, () => {
         if (isCurrent && !isCurrent()) return false;
         const current = approvedMutation.getStore();
-        if (current?.active) {
+        if (current && current.phase !== "closed") {
           try {
-            assertScheduleApproval(agentDir, current.approval, current.firstWrite);
+            assertScheduleApproval(agentDir, current.approval, current.phase === "first_write");
           } catch (error) {
             // A rejected mutation may rearm/restore the unchanged task, never reuse its consent.
             // Aborting lets the shared lifecycle roll back writes this mutation already made.
-            current.active = false;
+            current.phase = "closed";
             current.cancellation.abort();
             throw error;
           }
-          current.firstWrite = false;
+          current.phase = "follow_on";
         }
         return true;
       });
@@ -113,20 +115,21 @@ export function createCliScheduler(agentDir: string) {
       const approval = JSON.parse(timezone) as ScheduleToolApproval;
       if (approval.action !== action) throw new Error("The approved schedule action changed.");
       assertScheduleApproval(agentDir, approval);
-      const current = { approval, active: true, firstWrite: true, cancellation: new AbortController() };
+      const current = { approval, phase: "first_write" as "first_write" | "follow_on" | "closed", cancellation: new AbortController() };
       try {
         return await approvedMutation.run(current, () => command(args.slice(0, 2)));
       } finally {
         // Cron callbacks can inherit this async context, but never its one-shot consent.
-        current.active = false;
+        current.phase = "closed";
       }
     }
     const currentApproval = approvedMutation.getStore();
-    const revision = currentApproval?.active
+    const consentOpen = currentApproval !== undefined && currentApproval.phase !== "closed";
+    const revision = consentOpen
       ? (JSON.parse(currentApproval.approval.snapshot) as { task?: { updatedAt?: number } }).task?.updatedAt
       : undefined;
     // A new task has no revision to pin, but its receipt can still be cancelled.
-    const mutationOptions = currentApproval?.active
+    const mutationOptions = consentOpen
       ? { ...(revision === undefined ? {} : { expectedUpdatedAt: revision }), signal: currentApproval.cancellation.signal }
       : undefined;
     switch (action) {

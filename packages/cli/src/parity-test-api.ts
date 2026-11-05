@@ -5,6 +5,7 @@ export * from "./sessions.ts";
 export * from "./providers.ts";
 export * from "./credentials.ts";
 export * from "./schedules.ts";
+export * from "./schedule-tool-approval.ts";
 export * from "./serve.ts";
 export * from "./serve-lifecycle.ts";
 export * from "./serve-lifetime.ts";
