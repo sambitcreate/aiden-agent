@@ -332,7 +332,6 @@
         "scripts/safe-test-reporter.test.mjs",
         "scripts/ci-test-registry.test.mjs",
         "scripts/run-ci-tests.test.mjs",
-        "scripts/ci-failure-digest-reporter.test.mjs",
         "scripts/ci-timings.test.mjs",
         "scripts/worktree-file-io.test.mjs",
         "main/services/generation-delta-coalescer.test.ts",

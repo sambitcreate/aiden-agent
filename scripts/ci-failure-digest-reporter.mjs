@@ -4,105 +4,19 @@
 // tail and of anyone skimming it.
 
 const MAX_FAILURES = 50;
-const MAX_ERROR_LINES = 60;
-const STDERR_LIMIT = 8000;
-const NOTABLE = /error|ERR_|Cannot find|does not provide|Transform failed|failed to load/iu;
-const NOISE = /not wrapped in act|wrap-tests-with-act|No handler registered|link-opening preference/u;
+const MAX_ERROR_LINES = 30;
 
-/** Recent stderr for each file. Act warnings from the rest of the lane are noise and must not crowd out the load error. */
-const stderrByFile = new Map();
-const notableLines = [];
-
-function rememberStderr(file, chunk) {
-  if (typeof chunk !== "string" || chunk.length === 0) return;
-  if (file) {
-    const next = `${stderrByFile.get(file) ?? ""}${chunk}`;
-    stderrByFile.set(file, next.length > STDERR_LIMIT ? next.slice(-STDERR_LIMIT) : next);
-  }
-  let keepNext = false;
-  for (const line of chunk.split("\n")) {
-    const trimmed = line.trim();
-    // esbuild prints the file and line on the line after [ERROR].
-    if (keepNext && trimmed && !NOISE.test(trimmed)) {
-      notableLines.push(trimmed.slice(0, 500));
-      keepNext = false;
-    }
-    if (!trimmed || NOISE.test(trimmed) || !NOTABLE.test(trimmed)) continue;
-    notableLines.push(trimmed.slice(0, 500));
-    keepNext = true;
-    if (notableLines.length > 80) notableLines.shift();
-  }
-}
-
-/**
- * A load failure's digest says only "test failed". The runner keeps the child
- * process's stderr, which is where tsx prints a transform or import error the
- * test reporter never receives as an event.
- */
-export function withRunnerStderr(digest, stderrTailLines) {
-  if (!digest || !Array.isArray(stderrTailLines) || stderrTailLines.length === 0) return digest;
-  if (digest.includes("\n  runner stderr:")) return digest;
-  const unhelpful = digest.split("\n").some((line) => line === "  Error: test failed" || line === "  test failed");
-  if (!unhelpful) return digest;
-  const extra = stderrTailLines.slice(-40).map((line) => `  ${String(line)}`).join("\n");
-  return `${digest}\n  runner stderr:\n${extra}`;
-}
-
-function fileStem(file) {
-  return file?.split(/[\\/]/u).pop()?.replace(/\.test\.[^.]+$/u, "") ?? "";
-}
-
-function stderrFor(file) {
-  const stem = fileStem(file);
-  if (!stem) return "";
-  const chunks = [];
-  for (const [path, text] of stderrByFile) {
-    if (!path.includes(stem) && !text.includes(stem)) continue;
-    chunks.push(text.slice(-2500));
-  }
-  return chunks.join("\n").trim();
-}
-
-function notableFor(file) {
-  const base = file?.split(/[\\/]/u).pop();
-  const stem = fileStem(file);
-  if (!base) return notableLines.slice(-20);
-  const picked = [];
-  for (let index = 0; index < notableLines.length; index += 1) {
-    const line = notableLines[index];
-    if (!line.includes(base) && !(stem && line.includes(stem))) continue;
-    if (index > 0 && !notableLines[index - 1].includes(base)) picked.push(notableLines[index - 1]);
-    picked.push(line);
-  }
-  return (picked.length > 0 ? picked : notableLines).slice(-20);
-}
-
-function errorText(error, stderr, file) {
-  // A failed test's error is ERR_TEST_FAILURE. A load failure's cause is the
-  // string "test failed", and the exception was written to stderr instead.
-  const cause = error?.code === "ERR_TEST_FAILURE" ? error.cause : undefined;
-  const thrown = cause instanceof Error ? cause : error;
-  const text = thrown instanceof Error ? (thrown.stack ?? `${thrown.name}: ${thrown.message}`) : String(thrown ?? "");
+function errorText(error) {
+  // A failed test's error is ERR_TEST_FAILURE; what the test threw is its cause.
+  const thrown = error?.code === "ERR_TEST_FAILURE" && error.cause !== undefined ? error.cause : error;
+  const text = thrown instanceof Error ? (thrown.stack ?? `${thrown.name}: ${thrown.message}`) : String(thrown);
   const lines = text.split("\n");
-  // A load failure has no stack; the message is only "test failed".
-  const unhelpful = !thrown?.stack || lines.every((line) => line.trim() === "" || /^(?:Error: )?test failed$/u.test(line.trim()));
-  if (unhelpful) {
-    const related = stderrFor(file);
-    if (related) lines.push("file stderr:", ...related.split("\n").slice(-25));
-    const notable = notableFor(file);
-    if (notable.length > 0) lines.push("notable:", ...notable);
-    else if (!related && stderr) lines.push("stderr:", ...stderr.trim().split("\n").slice(-15));
-  }
   return lines.length > MAX_ERROR_LINES ? [...lines.slice(0, MAX_ERROR_LINES), "…"] : lines;
 }
 
 export default async function* failureDigest(source) {
   let failures = 0;
   for await (const event of source) {
-    if (event.type === "test:stderr") {
-      rememberStderr(event.data?.file, event.data?.message);
-      continue;
-    }
     if (event.type !== "test:fail") continue;
     // A suite fails when a test inside it fails; that test is already listed.
     if (event.data.details?.type === "suite") continue;
@@ -110,8 +24,7 @@ export default async function* failureDigest(source) {
     if (failures > MAX_FAILURES) continue;
     const { name, file, line, column, details } = event.data;
     const where = file ? `${file}${line ? `:${line}${column ? `:${column}` : ""}` : ""}` : "(unknown file)";
-    const stderr = file ? stderrByFile.get(file) : undefined;
-    yield `not ok ${name}\n  at ${where}\n${errorText(details?.error, stderr, file).map((text) => `  ${text}`).join("\n")}\n\n`;
+    yield `not ok ${name}\n  at ${where}\n${errorText(details?.error).map((text) => `  ${text}`).join("\n")}\n\n`;
   }
   if (failures > MAX_FAILURES) yield `…and ${failures - MAX_FAILURES} more failed tests.\n`;
 }
