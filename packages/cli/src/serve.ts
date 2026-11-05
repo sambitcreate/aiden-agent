@@ -52,6 +52,9 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
   const path = daemonSocket(agentDir);
   const clients = new Set<import("node:net").Socket>();
   const lifetime = new ServeLifetime();
+  // A stop during startup closes the socket to new commands at once, not when startup ends.
+  if (signal.aborted) lifetime.beginDrain();
+  else signal.addEventListener("abort", () => lifetime.beginDrain(), { once: true });
   const server = createServer((socket) => {
     if (!lifetime.acceptsCommands || clients.size >= 64) { socket.destroy(); return; }
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
@@ -78,16 +81,21 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     });
   });
   try {
+    if (signal.aborted) return;
     if (options.remote) {
       try { remote = await createCliRemote(agentDir, chats, runtime, { bots }); await remote.start(); }
       catch (error) { throw new Error(`Remote could not start: ${(error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".")} Run \`aiden serve --no-remote\` to serve without Remote.`, { cause: error }); }
     }
+    if (signal.aborted) return;
     ensurePrivateDirectory(agentDir, "reject");
     rmSync(path, { force: true });
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(path, () => { server.removeListener("error", reject); resolve(); }); });
     chmodSync(path, 0o600);
+    if (signal.aborted) return;
     await runtime.service.start();
+    if (signal.aborted) return;
     await telegram.start();
+    if (signal.aborted) return;
     process.stderr.write(`Aiden scheduler listening at ${path}\n`);
     if (remote) {
       const status = await remote.service.status().catch(() => undefined);

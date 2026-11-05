@@ -82,7 +82,7 @@ Owners: `ServeLifetime` in `packages/cli/src/serve-lifetime.ts` for the control 
 | Phase | Entered by | Control socket | Chat admission | Leaves when |
 |---|---|---|---|---|
 | lease held | `acquireLease` | absent | none yet | a throw releases the lease |
-| `starting` | Remote, socket, scheduler, Telegram | answers once bound | open | ready, or failure into draining |
+| `starting` | Remote, socket, scheduler, Telegram | answers once bound | open | ready, failure or a signal, into draining |
 | `serving` | `markServing`, before `onReady` | answers | open | signal |
 | `draining`: ingress closed | `beginDrain` | refuses new connections and commands | `chats.stop()` closes it synchronously | |
 | `draining`: services | `Promise.allSettled` of chats, Bots, Telegram, Remote, scheduler | accepted commands keep running | closed | all settled |
@@ -90,6 +90,10 @@ Owners: `ServeLifetime` in `packages/cli/src/serve-lifetime.ts` for the control 
 | released | socket removed, MCP recording stopped, lease released | absent | closed | process exit |
 
 Order matters in two places: `chats.stop()` runs first so no other stopping ingress can begin a turn, and every accepted command settles before the lease is released. A hung command therefore holds shutdown: `aiden serve stop` escalates to KILL at its deadline, and a second signal ends a foreground server.
+
+A signal in `starting` drains the socket at once and skips every later startup step, without reporting ready. A step already running finishes first, so one that never settles is ended by `aiden serve stop` at its deadline.
+
+**Defect fixed:** a signal during startup was not seen until all of startup had finished. The socket kept taking commands, the scheduler and Telegram still started, and `onReady` still fired.
 
 **Defect fixed:** an accepted command was not tracked, so shutdown destroyed its client and released the lease while it was still changing state. The client saw `Daemon closed without a response`, and the write could land with no owner. Reproduced in `tests/serve-lifetime.test.mjs`.
 

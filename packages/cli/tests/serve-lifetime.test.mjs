@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import { createConnection, createServer } from "node:net";
+import { createConnection, createServer, Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +53,24 @@ function exchange(socketPath, ...writes) {
     socket.on("error", rejectReply);
   });
 }
+
+test("a stop that arrives during startup ends it there", posix, async (t) => {
+  const box = sandbox(t);
+  const previous = { agentDir: process.env.AIDEN_CODING_AGENT_DIR, home: process.env.HOME };
+  process.env.AIDEN_CODING_AGENT_DIR = box.agentDir; process.env.HOME = box.env.HOME;
+  const controller = new AbortController(), { listen } = Server.prototype;
+  // The socket is being bound, so scheduler and Telegram startup are still ahead.
+  Server.prototype.listen = function (...args) { controller.abort(); return listen.apply(this, args); };
+  t.after(() => {
+    Server.prototype.listen = listen;
+    process.env.AIDEN_CODING_AGENT_DIR = previous.agentDir; process.env.HOME = previous.home;
+  });
+  let ready = false;
+  await api.serve(box.agentDir, controller.signal, { remote: false, onReady: () => { ready = true; } });
+  assert.equal(ready, false, "a cancelled startup never reports ready");
+  assert.equal(existsSync(box.socket), false);
+  assert.equal(existsSync(box.lock), false);
+});
 
 test("a stopped server leaves nothing behind and a new one takes over at once", posix, async (t) => {
   const box = sandbox(t);
