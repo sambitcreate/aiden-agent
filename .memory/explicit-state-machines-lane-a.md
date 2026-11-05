@@ -46,6 +46,11 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 - `tests/e2e/bot-browser.spec.ts:22` flaked once on #742 (line 143 expected `text`, got `password`) and `tests/e2e/chat-top-bar.spec.ts:104` once on #756 ("Resulting promise was garbage collected" at line 117). Both passed on retry and on the one whole-run rerun. Causes unknown, not fixed. Recorded in those PRs.
 - Electron E2E (3/3) hit the 20-minute job limit once on #755 at test 85 of 92, no test over 34s, so a slow runner. Normal time is 12 to 16 minutes, so the limit has little room. Recorded in #755.
 
+- `bot-browser.spec.ts:22` flaked again on #745, at line 109: the masking check found `737` in a snapshot. Probably a chance match in a substring search, as in `69728320a`, but the run kept no snapshot, so a real leak is not ruled out. Needs the Bot browser owner.
+- `renderer/lib/use-voice-recorder.test.tsx` failed once on #736 at line 117: `recording` read right after waiting only for the transcript. Looks like a test race, unconfirmed, not fixed.
+- `chat-top-bar.spec.ts:563` flaked on #769: `notes.txt` was ENOENT while polling after Save, and the retry passed. Cause unknown. Worth checking whether a save can leave the file briefly missing.
+- A test that fails with an edited file open also reports "Electron shutdown timed out after 35000 ms". Reproduced with a throwaway spec on both `b96154694` and the unmodified base `bc663001f`, so not from this lane.
+
 ## Handed to the owner
 
 - `aiden serve stop` cannot force-stop an MCP survivor whose wrapper exited: `daemonMcpGroups()` in `packages/cli/src/serve-lifecycle.ts` needs a direct child of the daemon. Predates this lane, needs `packages/cli` work, and `feature/sm-serve-*` branches change that file.
