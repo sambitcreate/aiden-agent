@@ -26,13 +26,13 @@ Descendant cleanup is proved in `native/subagent-shell-runner/main.c`, which rep
 
 ## Computer Use host
 
-`CuaDriverHost` owns each session's bridge, broker launcher and lease directory. A runtime is reclaimed only when both children were seen to exit. If one was not, the host keeps the runtime and its directory and rechecks them before the next session and at shutdown, so a late exit is reclaimed. If an exit is still unseen at shutdown, `shutdown()` rejects with `cleanup_unconfirmed`, which the controller already reports as a failed teardown.
+`CuaDriverHost` owns each session's bridge, broker launcher and lease directory. A runtime is reclaimed only when both children were seen to exit. If one was not, the host keeps the runtime and its directory and rechecks them before the next session and at shutdown, so a late exit is reclaimed. If an exit is still unseen at shutdown, `shutdown()` rejects with `cleanup_unconfirmed`, which the controller already reports as a failed teardown. The host keeps watching after that, so a child that exits later is still reclaimed.
 
 Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession` and `ComputerUseController` already had one close promise, exactly-once close notification and a poisoned state (`backend:M116`, `M117`, `M118`). The native broker, guard, supervisor and JSON-RPC filter (`cli-native:N01` to `N04`) were not changed; their frames and process-group identity checks are out of bounds here.
 
 ## MCP stdio servers
 
-`AidenStdioTransport` in `main/services/mcp-stdio-transport.ts` keeps protocol close and group cleanup apart. `close()` resolves only when the group is gone or the wait after SIGKILL ran out. A group leaves the published list only once nothing in it runs, so whoever force-stops this process can still find a survivor. A survivor is rechecked every second and leaves the list once gone, because a listed ID gets signalled later and could by then belong to something else. SIGKILL is sent only to a group that still exists.
+`AidenStdioTransport` in `main/services/mcp-stdio-transport.ts` keeps protocol close and group cleanup apart. `close()` resolves only when the group is gone or the wait after SIGKILL ran out. A group leaves the published list only once nothing in it runs, so the exit hook can still reach a survivor. `aiden serve stop` cannot use a listed group once its wrapper exited: `daemonMcpGroups()` in `packages/cli` trusts a group only if a current member is a direct child of the daemon. That gap predates this work and is not fixed here. A survivor is rechecked every second and leaves the list once gone, because a listed ID gets signalled later and could by then belong to something else. SIGKILL is sent only to a group that still exists.
 
 ## Owners kept as they are
 
