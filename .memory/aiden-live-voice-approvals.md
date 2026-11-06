@@ -1,10 +1,11 @@
 # Aiden Live: answering chat approvals by voice (PR 3 of the voice upgrade, 2026-11-06)
 
-Branch `claude/project-thread-kc0y85-live-approvals`. Plan section: `docs/plans/aiden-live-voice-upgrade.md` → PR 3.
+Branch `claude/project-thread-kc0y85-live-approvals`. Plan section: `docs/plans/aiden-live-voice-upgrade.md` → PR 3 (has the full rule list).
 
-- Core: `renderer/lib/live-chat-approvals.ts`. `liveChatApprovals` store (chat pane publishes `{chatId, approvals, decide}`), `liveApprovalVoiceAnswerable` (tap-only policy: allow-list of plain workspace tools, no `details`, `canAllow` not false, `scopes` must include `once`, sensitive-word screen), `liveApprovalAction`/read-out text, and `LiveChatVoiceApprovals` controller (singleton `liveChatVoiceApprovals`). Ribbon source is `"approvals"`.
-- Hooks: `renderer/components/assistant/use-live-chat-voice-approvals.ts`. `useLiveChatVoiceApprovals(settings)` in `AssistantDock` (off until settings load); `usePublishLiveChatApprovals` + `useLiveApprovalVoiceHint` in `chat-pane.tsx`; `ChatApprovalCard` takes `liveVoice` ("voice" | "tap" | null).
-- Answers always go through the chat pane's `decideApproval(prompt, decision)` with no options, i.e. allow once. No "answered by voice" marker: the approval record has no field and adding one is a Remote contract change.
-- The publisher drops approvals carried over from the previous chat on the first render after a chat switch (same array reference, new chatId).
-- Live's own Computer Use voice approvals (`assistant-live-voice-approval.ts`) now use `matchLiveVoicePhrase` allow/deny; their receipts and baselines are unchanged (the dock still does not mount that listener).
-- Settings: `live-voice-approval-settings.tsx` (switch `aidenLiveVoiceApprovals`, languages line, What to say fold).
+- Core: `renderer/lib/live-chat-approvals.ts`. `liveChatApprovals` store (chat pane publishes `{chatId, approvals, decide}`; dedupes by `liveApprovalSignature`), `liveApprovalVoiceAnswerable` (tap-only policy), `liveApprovalOffersAllowOnce` (ribbon allow only where the card offers Allow once), `liveApprovalReadOut` (factual note, untrusted text JSON-quoted), and the `LiveChatVoiceApprovals` controller (singleton `liveChatVoiceApprovals`). Ribbon source `"approvals"`.
+- Voice is armed only after `liveSessionBus.note` resolves true plus `LIVE_APPROVAL_ARM_DELAY_MS` (2.5 s); baseline taken then. Refused notes retry every 3 s, up to 5 tries, and on session change. After a successful decide the target stays `answered` until the pane republishes.
+- Voice only for run_command/background_job/edit_file/write_file/share_image whose exact one-line target (≤120 chars) comes from the preview or Aiden's own summary prefix. ACP ("X wants to …:" summaries), `source: "remote"`, details, other tools and sensitive words (lookaround boundaries, `_` is a separator) are tap-only.
+- Hooks: `renderer/components/assistant/use-live-chat-voice-approvals.ts`. The publisher binds decide to its chatId (refuses after a switch) and drops carried-over approvals on the first render after a switch.
+- `LiveActivity` approval `allow` is optional (shared type in `renderer/lib/live-activity.ts`).
+- Live's own Computer Use voice matcher uses the phrase list, but `useAssistantLiveApprovals` is not mounted (dock passes a stub), so it is inactive.
+- No "answered by voice" marker: no field in the approval record; adding one is a Remote contract change.

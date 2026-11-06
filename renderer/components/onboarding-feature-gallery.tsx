@@ -229,7 +229,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Aiden Live",
     description:
-      "Talk to Aiden, share screen context, and approve each app action one at a time from the Live button.",
+      "Talk to Aiden and share screen context from the Live button. Say allow or deny to answer the open chat’s approvals; you can turn that off in Settings.",
     icon: AudioWaveform,
     size: "hero",
   },
