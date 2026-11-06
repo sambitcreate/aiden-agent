@@ -41,6 +41,10 @@ test("a phrase inside a longer sentence, a question, a bare yes, or a greeting n
     "Allow?",
     "deny ?",
     "再见？",
+    "Bye?!",
+    "Allow?!",
+    "¿Permitir!",
+    "¿adiós",
     "",
   ]) {
     assert.equal(matchLiveVoicePhrase(text), null, text);
