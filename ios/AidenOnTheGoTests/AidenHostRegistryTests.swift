@@ -80,7 +80,7 @@ final class AidenHostRegistryTests: XCTestCase {
         let later = AidenDemoHosts.installation(instanceId: "later", name: "Later")
         _ = try coordinator.installationStore.savePairing(exchange(later), trust: .init(mode: .system), name: later.name)
 
-        _ = try coordinator.requestContext(for: "later")
+        _ = try coordinator.ownerContext(for: "later")
 
         XCTAssertEqual(coordinator.hosts.ordered.map(\.instanceId).sorted(), ["later", "studio"])
         for connection in coordinator.hosts.ordered {
@@ -106,7 +106,7 @@ final class AidenHostRegistryTests: XCTestCase {
         let studio = try connection("studio", in: coordinator)
         let mini = try connection("mini", in: coordinator)
         let selectedContext = try coordinator.requestContext()
-        let forgotten = try coordinator.requestContext(for: "laptop")
+        let forgotten = try coordinator.ownerContext(for: "laptop")
 
         await coordinator.removeInstallation("laptop")
 
@@ -138,6 +138,7 @@ final class AidenHostRegistryTests: XCTestCase {
         await coordinator.start()
         let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
         let old = try coordinator.requestContext()
+        let oldOwner = try coordinator.ownerContext(for: "studio")
         let attempt = try connection("studio", in: coordinator).connectionGeneration
 
         await coordinator.removeInstallation("studio")
@@ -152,13 +153,16 @@ final class AidenHostRegistryTests: XCTestCase {
         XCTAssertGreaterThan(try connection("studio", in: coordinator).connectionGeneration, attempt)
         XCTAssertFalse(coordinator.isLive(old))
         XCTAssertFalse(coordinator.isCurrent(old))
+        XCTAssertGreaterThan(try coordinator.ownerContext(for: "studio").hostGeneration, oldOwner.hostGeneration)
+        XCTAssertFalse(coordinator.isLive(oldOwner))
+        XCTAssertThrowsError(try coordinator.remoteClient(for: oldOwner))
     }
 
     // MARK: Contexts and clients
 
     func testAContextForAnotherMachineIsLiveButNotCurrent() async throws {
         let c = AidenDemoHosts.coordinator(.four, responder: responder)
-        let ctx = try c.requestContext(for: "laptop")   // selected is studio
+        let ctx = try c.ownerContext(for: "laptop")   // selected is studio
         XCTAssertTrue(c.isLive(ctx)); XCTAssertFalse(c.isCurrent(ctx))
     }
 
@@ -177,25 +181,38 @@ final class AidenHostRegistryTests: XCTestCase {
 
     func testIsLiveTurnsFalseWhenThatMachinesGenerationMoves() throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        let laptop = try coordinator.requestContext(for: "laptop")
-        let mini = try coordinator.requestContext(for: "mini")
+        let laptop = try coordinator.ownerContext(for: "laptop")
+        let mini = try coordinator.ownerContext(for: "mini")
 
-        try connection("laptop", in: coordinator).advanceGeneration()
+        try connection("laptop", in: coordinator).disconnect()
 
         XCTAssertFalse(coordinator.isLive(laptop))
         XCTAssertThrowsError(try coordinator.remoteClient(for: laptop))
         XCTAssertTrue(coordinator.isLive(mini), "Another machine's generation is its own")
-        XCTAssertTrue(coordinator.isLive(try coordinator.requestContext(for: "laptop")))
+        XCTAssertTrue(coordinator.isLive(try coordinator.ownerContext(for: "laptop")))
+    }
+
+    func testARevokedMachineEndsItsContexts() throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        let context = try coordinator.ownerContext(for: "laptop")
+
+        try connection("laptop", in: coordinator).markRevoked()
+
+        XCTAssertFalse(coordinator.isLive(context))
+        XCTAssertThrowsError(try coordinator.remoteClient(for: context))
+        XCTAssertThrowsError(try coordinator.ownerContext(for: "laptop"))
     }
 
     func testIsLiveIsFalseForAContextWithAnotherDevice() throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        let context = try coordinator.requestContext(for: "laptop")
+        let context = try coordinator.ownerContext(for: "laptop")
 
         let otherDevice = AidenRemoteRequestContext(
             instanceId: context.instanceId,
             deviceId: "other-device",
-            generation: context.generation
+            generation: context.generation,
+            hostGeneration: context.hostGeneration,
+            scope: .owner
         )
 
         XCTAssertFalse(coordinator.isLive(otherDevice))
@@ -204,7 +221,7 @@ final class AidenHostRegistryTests: XCTestCase {
 
     func testIsLiveIsFalseWhenTheMachineIsPairedToAnotherDevice() throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        let context = try coordinator.requestContext(for: "laptop")
+        let context = try coordinator.ownerContext(for: "laptop")
         let installation = try XCTUnwrap(coordinator.installationStore.installations.first { $0.id == "laptop" })
 
         _ = try coordinator.installationStore.savePairing(
@@ -221,7 +238,7 @@ final class AidenHostRegistryTests: XCTestCase {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         await coordinator.start()
         let studio = try coordinator.requestContext()
-        let laptop = try coordinator.requestContext(for: "laptop")
+        let laptop = try coordinator.ownerContext(for: "laptop")
 
         try await repair("laptop", in: coordinator)
 
@@ -231,10 +248,21 @@ final class AidenHostRegistryTests: XCTestCase {
         XCTAssertFalse(coordinator.isCurrent(studio))
     }
 
-    func testRequestContextForAnUnpairedInstanceThrows() {
+    func testOwnerContextForAnUnpairedInstanceThrows() {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
 
-        XCTAssertThrowsError(try coordinator.requestContext(for: "nowhere")) { error in
+        XCTAssertThrowsError(try coordinator.ownerContext(for: "nowhere")) { error in
+            guard case AidenRemoteClientError.installationChanged = error else {
+                return XCTFail("Expected installationChanged, got \(error)")
+            }
+        }
+    }
+
+    func testRequestContextStaysOnTheSelectedMachine() throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+
+        XCTAssertEqual(try coordinator.requestContext(for: "studio").instanceId, "studio")
+        XCTAssertThrowsError(try coordinator.requestContext(for: "laptop")) { error in
             guard case AidenRemoteClientError.installationChanged = error else {
                 return XCTFail("Expected installationChanged, got \(error)")
             }
@@ -243,7 +271,7 @@ final class AidenHostRegistryTests: XCTestCase {
 
     func testANonSelectedMachineGivesAClientWithoutConnecting() async throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        let context = try coordinator.requestContext(for: "laptop")
+        let context = try coordinator.ownerContext(for: "laptop")
 
         let client = try coordinator.remoteClient(for: context)
 
@@ -270,7 +298,7 @@ final class AidenHostRegistryTests: XCTestCase {
 
     func testRetainedDataWorkRunsForANonSelectedMachineUntilItIsForgotten() async throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        let context = try coordinator.requestContext(for: "laptop")
+        let context = try coordinator.ownerContext(for: "laptop")
         var runs = 0
 
         let retained = await coordinator.withRetainedInstallationData(for: context) { runs += 1 }
@@ -301,18 +329,71 @@ final class AidenHostRegistryTests: XCTestCase {
         XCTAssertTrue(try connection("laptop", in: coordinator) === laptop)
     }
 
-    func testComingBackToAMachineEndsContextsFromBeforeIt() async throws {
+    func testASelectionContextLosesItsClientWhenTheSelectionMoves() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let context = try coordinator.requestContext()
+        XCTAssertNoThrow(try coordinator.remoteClient(for: context))
+
+        await coordinator.switchInstallation(to: "laptop")
+
+        XCTAssertTrue(coordinator.isLive(context))
+        XCTAssertThrowsError(try coordinator.remoteClient(for: context)) { error in
+            guard case AidenRemoteClientError.installationChanged = error else {
+                return XCTFail("Expected installationChanged, got \(error)")
+            }
+        }
+    }
+
+    func testComingBackToAMachineNeverRestoresASelectionContext() async throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         await coordinator.start()
         let first = try coordinator.requestContext()
 
         await coordinator.switchInstallation(to: "laptop")
-        XCTAssertTrue(coordinator.isLive(first))
         await coordinator.switchInstallation(to: "studio")
 
         XCTAssertFalse(coordinator.isCurrent(first))
-        XCTAssertFalse(coordinator.isLive(first))
         XCTAssertThrowsError(try coordinator.remoteClient(for: first))
+        XCTAssertNotEqual(try coordinator.requestContext(), first)
+    }
+
+    func testAnOwnerContextStaysLiveThroughAwayAndBack() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let context = try coordinator.ownerContext(for: "studio")
+
+        await coordinator.switchInstallation(to: "laptop")
+        XCTAssertTrue(coordinator.isLive(context))
+        XCTAssertNoThrow(try coordinator.remoteClient(for: context))
+        await coordinator.switchInstallation(to: "studio")
+
+        XCTAssertFalse(coordinator.isCurrent(context))
+        XCTAssertTrue(coordinator.isLive(context))
+        let server = try await coordinator.remoteClient(for: context).server()
+        XCTAssertEqual(server.instanceId, "studio")
+    }
+
+    func testAnOwnerContextStaysLiveWhenItsMachineBecomesSelected() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let context = try coordinator.ownerContext(for: "laptop")
+
+        await coordinator.switchInstallation(to: "laptop")
+
+        XCTAssertTrue(coordinator.isLive(context))
+        XCTAssertNoThrow(try coordinator.remoteClient(for: context))
+    }
+
+    func testAReconnectLeavesAnOwnerContextLive() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let context = try coordinator.ownerContext(for: "studio")
+
+        await coordinator.connectActiveInstallation()
+
+        XCTAssertTrue(coordinator.isLive(context))
+        XCTAssertTrue(coordinator.isCurrent(context))
     }
 
     func testAConnectionNeverHoldsAnotherMachinesData() async throws {

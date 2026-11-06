@@ -375,6 +375,7 @@ final class AidenRemoteCoordinator {
         )
         let connection = syncSelectedConnection()
         advanceActivationGeneration()
+        connection?.advanceHostGeneration()
         advanceConnectionGeneration()
         if let previousDeviceId, previousDeviceId != installation.deviceId {
             await purgeInstallationData(installation.id, knownWorkspaceIds: knownWorkspaceIds)
@@ -761,24 +762,42 @@ final class AidenRemoteCoordinator {
         try activeClient()
     }
 
-    /// A context for the named machine, selected or not, else for the selected
-    /// one. Asking starts no connection.
     func requestContext(for instanceId: String? = nil) throws -> AidenRemoteRequestContext {
-        let selected = syncSelectedConnection()
-        guard let connection = instanceId.map({ hosts.connection(for: $0) }) ?? selected else {
+        guard let activeInstanceId,
+              instanceId == nil || instanceId == activeInstanceId,
+              let connection = syncSelectedConnection() else {
             throw AidenRemoteClientError.installationChanged
         }
         return try connection.requestContext()
     }
 
-    /// The context's own machine's client, selected or not. Asking starts no
-    /// connection.
-    func remoteClient(for context: AidenRemoteRequestContext) throws -> AidenRemoteClient {
+    /// A context for work that belongs to one paired machine, selected or not.
+    /// It stays live while the selection moves. Asking starts no connection.
+    func ownerContext(for instanceId: String) throws -> AidenRemoteRequestContext {
         syncSelectedConnection()
-        guard isLive(context), let connection = hosts.connection(for: context.instanceId) else {
+        guard let connection = hosts.connection(for: instanceId) else {
             throw AidenRemoteClientError.installationChanged
         }
-        return try connection.client()
+        return try connection.requestContext(scope: .owner)
+    }
+
+    /// A `selected` context gets the selected machine's client and stops once
+    /// the selection moves. An `owner` context gets its own machine's client
+    /// while it is live. Asking starts no connection.
+    func remoteClient(for context: AidenRemoteRequestContext) throws -> AidenRemoteClient {
+        switch context.scope {
+        case .selected:
+            guard isCurrent(context) else {
+                throw AidenRemoteClientError.installationChanged
+            }
+            return try activeClient()
+        case .owner:
+            syncSelectedConnection()
+            guard isLive(context), let connection = hosts.connection(for: context.instanceId) else {
+                throw AidenRemoteClientError.installationChanged
+            }
+            return try connection.client()
+        }
     }
 
     func isCurrent(_ context: AidenRemoteRequestContext) -> Bool {
@@ -788,8 +807,8 @@ final class AidenRemoteCoordinator {
     }
 
     /// True while the context's machine is still paired to the same device and
-    /// its generation hasn't moved, selected or not. Current implies live, but a
-    /// context from a machine the selection left stays live and isn't current.
+    /// its `hostGeneration` hasn't moved. The selection plays no part: a context
+    /// stays live through A -> B -> A even though it stops being current.
     func isLive(_ context: AidenRemoteRequestContext) -> Bool {
         isRetained(context) && hosts.connection(for: context.instanceId)?.isLive(context) == true
     }
@@ -875,8 +894,8 @@ final class AidenRemoteCoordinator {
         )
     }
 
-    /// The selected machine's generation moves on arrival, not the old one's on
-    /// departure, so contexts from the machine the selection left stay live.
+    /// The selected machine's generation moves on arrival, so A -> B -> A can't
+    /// make an old context current again.
     private func advanceActivationGeneration() {
         selectedConnection?.advanceGeneration()
     }

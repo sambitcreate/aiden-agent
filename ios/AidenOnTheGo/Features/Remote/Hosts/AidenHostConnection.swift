@@ -1,18 +1,37 @@
 import Foundation
 import Observation
 
-/// An opaque lease on one paired machine, selected or not. The generation
-/// prevents an A -> B -> A switch from making work started during the first A
-/// activation current again.
+/// An opaque lease on one paired machine. `generation` prevents an A -> B -> A
+/// switch from making work started during the first A activation current
+/// again. `hostGeneration` says whether the machine's pairing is still the one
+/// this context was issued under, whatever the selection did since.
 struct AidenRemoteRequestContext: Equatable, Hashable, Sendable {
+    /// What may use the context. `selected` work stops once the selection
+    /// moves. `owner` work belongs to its machine and carries on until that
+    /// machine's lease ends.
+    enum Scope: Sendable {
+        case selected
+        case owner
+    }
+
     let instanceId: String
     let deviceId: String
     let generation: Int
+    let hostGeneration: Int
+    let scope: Scope
 
-    init(instanceId: String, deviceId: String, generation: Int) {
+    init(
+        instanceId: String,
+        deviceId: String,
+        generation: Int,
+        hostGeneration: Int = 0,
+        scope: Scope = .selected
+    ) {
         self.instanceId = instanceId
         self.deviceId = deviceId
         self.generation = generation
+        self.hostGeneration = hostGeneration
+        self.scope = scope
     }
 }
 
@@ -57,11 +76,15 @@ final class AidenHostConnection {
     private(set) var connectionIssue: AidenConnectionIssue?
     private(set) var server: AidenServer?
     private(set) var workspaces: [AidenWorkspace] = []
-    /// The lease every request context carries. A reconnect leaves it alone, so
-    /// contexts survive a dropped network, and leaving this machine for another
-    /// does too. Coming back moves it, so A -> B -> A can't make an old context
-    /// current again.
+    /// The activation lease every request context carries. A reconnect leaves
+    /// it alone, so contexts survive a dropped network. Each arrival of the
+    /// selection moves it, so A -> B -> A can't make an old context current
+    /// again.
     private(set) var generation: Int
+    /// The machine's own lease, which `isLive` compares. Only a re-pairing,
+    /// `disconnect()`, or a revocation moves it. The selection never does, so
+    /// owner work survives the selection leaving and coming back.
+    private(set) var hostGeneration: Int
     /// Moves on every connect attempt, so a late answer from an earlier attempt
     /// is dropped.
     private(set) var connectionGeneration: Int
@@ -77,6 +100,7 @@ final class AidenHostConnection {
         credential: @escaping () throws -> String,
         clientFactory: @escaping AidenRemoteCoordinator.ClientFactory,
         generation: Int = 0,
+        hostGeneration: Int = 0,
         connectionGeneration: Int = 0
     ) {
         instanceId = installation.id
@@ -84,6 +108,7 @@ final class AidenHostConnection {
         loadCredential = credential
         self.clientFactory = clientFactory
         self.generation = generation
+        self.hostGeneration = hostGeneration
         self.connectionGeneration = connectionGeneration
     }
 
@@ -107,6 +132,7 @@ final class AidenHostConnection {
     /// call go stale. The state returns to where a new connection starts.
     func disconnect() {
         generation &+= 1
+        hostGeneration &+= 1
         connectionGeneration &+= 1
         cachedClient = nil
         server = nil
@@ -115,12 +141,16 @@ final class AidenHostConnection {
         connectionState = .connecting
     }
 
-    func requestContext() throws -> AidenRemoteRequestContext {
+    func requestContext(
+        scope: AidenRemoteRequestContext.Scope = .selected
+    ) throws -> AidenRemoteRequestContext {
         guard !isRevoked else { throw AidenRemoteClientError.installationChanged }
         return AidenRemoteRequestContext(
             instanceId: instanceId,
             deviceId: installation.deviceId,
-            generation: generation
+            generation: generation,
+            hostGeneration: hostGeneration,
+            scope: scope
         )
     }
 
@@ -129,7 +159,7 @@ final class AidenHostConnection {
         !isRevoked
             && context.instanceId == instanceId
             && context.deviceId == installation.deviceId
-            && context.generation == generation
+            && context.hostGeneration == hostGeneration
     }
 
     func client() throws -> AidenRemoteClient {
@@ -242,6 +272,11 @@ final class AidenHostConnection {
         generation &+= 1
     }
 
+    /// A new pairing replaced the one earlier contexts were issued under.
+    func advanceHostGeneration() {
+        hostGeneration &+= 1
+    }
+
     func advanceConnectionGeneration() {
         connectionGeneration &+= 1
     }
@@ -250,6 +285,7 @@ final class AidenHostConnection {
     /// it issues no context or client and never connects again.
     func markRevoked() {
         isRevoked = true
+        hostGeneration &+= 1
     }
 
     // MARK: Private

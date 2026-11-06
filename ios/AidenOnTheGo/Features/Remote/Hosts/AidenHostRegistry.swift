@@ -19,6 +19,7 @@ final class AidenHostRegistry {
     // connection that has left, so a machine forgotten and paired again can't
     // reissue an old context or accept an answer from an old attempt.
     @ObservationIgnored private var firstGeneration = 0
+    @ObservationIgnored private var firstHostGeneration = 0
     @ObservationIgnored private var firstConnectionGeneration = 0
 
     var ordered: [AidenHostConnection] {
@@ -64,6 +65,7 @@ final class AidenHostRegistry {
             credential: { try loadCredential(instanceId) },
             clientFactory: clientFactory,
             generation: firstGeneration,
+            hostGeneration: firstHostGeneration,
             connectionGeneration: firstConnectionGeneration
         )
         connection.delegate = delegate
@@ -74,6 +76,7 @@ final class AidenHostRegistry {
         connections[connection.instanceId] = nil
         connection.disconnect()
         firstGeneration = max(firstGeneration, connection.generation &+ 1)
+        firstHostGeneration = max(firstHostGeneration, connection.hostGeneration &+ 1)
         firstConnectionGeneration = max(firstConnectionGeneration, connection.connectionGeneration &+ 1)
     }
 }
