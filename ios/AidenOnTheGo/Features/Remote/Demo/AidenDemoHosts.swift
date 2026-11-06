@@ -338,7 +338,8 @@ enum AidenDemoHosts {
     static func coordinator(
         _ scenario: AidenDemoScenario,
         responder: AidenDemoResponder,
-        haptics: (any AidenHapticEmitting)? = nil
+        haptics: (any AidenHapticEmitting)? = nil,
+        machinePreferences: AidenMachinePreferencesStore = .shared
     ) -> AidenRemoteCoordinator {
         func machine(
             _ id: String,
@@ -383,7 +384,7 @@ enum AidenDemoHosts {
                 rowCount: 4
             )]
         }
-        return makeCoordinator(machines, responder: responder, haptics: haptics)
+        return makeCoordinator(machines, responder: responder, haptics: haptics, machinePreferences: machinePreferences)
     }
 
     /// For tests that need machines of their own. Each gets the standard answers
@@ -396,14 +397,16 @@ enum AidenDemoHosts {
         responder: AidenDemoResponder,
         haptics: (any AidenHapticEmitting)? = nil,
         keychain: (any KeychainStoring)? = nil,
-        workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil
+        workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
+        machinePreferences: AidenMachinePreferencesStore = .shared
     ) -> AidenRemoteCoordinator {
         makeCoordinator(
             installations.map { Machine(installation: $0, rowCount: 4) },
             responder: responder,
             haptics: haptics,
             keychain: keychain,
-            workspaceEnvironmentCache: workspaceEnvironmentCache
+            workspaceEnvironmentCache: workspaceEnvironmentCache,
+            machinePreferences: machinePreferences
         )
     }
 
@@ -415,7 +418,8 @@ enum AidenDemoHosts {
         responder: AidenDemoResponder,
         haptics: (any AidenHapticEmitting)?,
         keychain: (any KeychainStoring)? = nil,
-        workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil
+        workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
+        machinePreferences: AidenMachinePreferencesStore = .shared
     ) -> AidenRemoteCoordinator {
         let store = AidenInstallationStore(keychain: keychain ?? AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
@@ -468,6 +472,7 @@ enum AidenDemoHosts {
             workspaceEnvironmentCache: workspaceEnvironmentCache
                 ?? AidenWorkspaceEnvironmentCache(directory: directory("environment")),
             haptics: haptics,
+            machinePreferences: machinePreferences,
             clientFactory: { installation, credential in
                 AidenRemoteClient(
                     endpoint: installation.endpoint,

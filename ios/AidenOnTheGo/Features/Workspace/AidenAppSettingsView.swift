@@ -6,7 +6,9 @@ struct AidenAppSettingsView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
     let addInstallation: () -> Void
+    var tabShellEnabled = AppConfig.tabShellEnabled
 
+    @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var readAloudStatus: AidenReadAloudStatus?
@@ -73,17 +75,25 @@ struct AidenAppSettingsView: View {
                         "Connected desktop",
                         value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
                     )
-                    NavigationLink {
-                        AidenMachinesView(
-                            coordinator: coordinator,
-                            preferences: .shared,
-                            addMachine: addInstallation
-                        )
-                    } label: {
-                        LabeledContent {
-                            Text(machinesSummary)
+                    if tabShellEnabled {
+                        NavigationLink {
+                            AidenMachinesView(
+                                coordinator: coordinator,
+                                preferences: .shared,
+                                addMachine: addInstallation
+                            )
                         } label: {
-                            Label("Machines", systemImage: "desktopcomputer")
+                            LabeledContent {
+                                Text(machinesSummary)
+                            } label: {
+                                Label("Machines", systemImage: "desktopcomputer")
+                            }
+                        }
+                    } else {
+                        Button {
+                            isShowingInstallations = true
+                        } label: {
+                            Label("Paired Installations", systemImage: "desktopcomputer")
                         }
                     }
                 }
@@ -195,6 +205,15 @@ struct AidenAppSettingsView: View {
         .task { await loadMemorySettings(); await loadReadAloudStatus() }
         .task(id: scenePhase) { if scenePhase == .active { await loadReadAloudStatus() } }
         .task(id: coordinator.server?.instanceId) { readAloudStatus = nil; await loadReadAloudStatus() }
+        .sheet(isPresented: $isShowingInstallations) {
+            AidenInstallationsView(
+                coordinator: coordinator,
+                addInstallation: {
+                    isShowingInstallations = false
+                    addInstallation()
+                }
+            )
+        }
         .sheet(isPresented: $isShowingAppearance) {
             AidenAppearanceSettingsView(appearance: appearance)
         }

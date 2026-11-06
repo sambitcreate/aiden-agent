@@ -260,18 +260,20 @@ struct AidenMachineDetailView: View {
                     LabeledContent("Workspaces", value: row.workspaceCount.formatted())
                 }
                 LabeledContent("Identity", value: String(row.id.suffix(4)).lowercased())
-                Button {
-                    Task { await model.reconnect(instanceId) }
-                } label: {
-                    HStack {
-                        Label("Reconnect", systemImage: "arrow.clockwise")
-                        if row.isReconnecting {
-                            Spacer()
-                            ProgressView()
+                if row.offersReconnect {
+                    Button {
+                        Task { await model.reconnect(instanceId) }
+                    } label: {
+                        HStack {
+                            Label("Reconnect", systemImage: "arrow.clockwise")
+                            if row.isReconnecting {
+                                Spacer()
+                                ProgressView()
+                            }
                         }
                     }
+                    .disabled(!row.canReconnect)
                 }
-                .disabled(row.isReconnecting)
                 if row.isSelected {
                     Label("This is the selected machine", systemImage: "checkmark")
                         .foregroundStyle(.secondary)
@@ -380,32 +382,35 @@ struct AidenMachineDetailView: View {
 
     private func switchToMachine() async {
         let key = "machine-switch:\(UUID().uuidString)"
-        switch await model.select(instanceId) {
+        let outcome = await model.select(instanceId)
+        switch outcome {
         case .success:
             model.playHaptic(.success, scope: hapticScope, key: key)
         case .failure:
             model.playHaptic(.error, scope: hapticScope, key: key)
-            failure = String(localized: "The machine did not answer. It is selected, and you can reconnect from here.")
-        case .busy:
-            failure = String(localized: "Another change is still running. Try again in a moment.")
-        case .cancelled, .stale:
+        case .busy, .cancelled, .stale:
             break
         }
+        // A switch that could not save says why through the coordinator; the machine
+        // only "did not answer" when the selection itself went through.
+        failure = model.failureMessage(
+            for: outcome,
+            fallback: String(localized: "The machine did not answer. It is now the selected machine, and you can reconnect from here.")
+        )
     }
 
     private func forget() async {
         let key = "machine-forget:\(UUID().uuidString)"
-        switch await model.forget(instanceId) {
+        let outcome = await model.forget(instanceId)
+        switch outcome {
         case .success:
             model.playHaptic(.success, scope: hapticScope, key: key)
             dismiss()
         case .failure:
             model.playHaptic(.error, scope: hapticScope, key: key)
-            failure = String(localized: "The machine is still paired. Try again in a moment.")
-        case .busy:
-            failure = String(localized: "Another change is still running. Try again in a moment.")
-        case .cancelled, .stale:
+        case .busy, .cancelled, .stale:
             break
         }
+        failure = model.failureMessage(for: outcome, fallback: String(localized: "The machine is still paired. Try again in a moment."))
     }
 }

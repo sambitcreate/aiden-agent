@@ -94,3 +94,18 @@ final class AidenMachinePreferencesStore {
         defaults.set(data, forKey: Self.storageKey)
     }
 }
+
+extension AidenMachinePreferencesStore {
+    /// The one store the app reads and writes. Each store keeps its own copy of
+    /// the saved choices, so two of them over the same defaults would overwrite
+    /// each other's edits.
+    static let shared: AidenMachinePreferencesStore = {
+#if DEBUG
+        // A demo run keeps its edits out of the person's real ones.
+        if AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) != nil {
+            return AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
+        }
+#endif
+        return AidenMachinePreferencesStore()
+    }()
+}

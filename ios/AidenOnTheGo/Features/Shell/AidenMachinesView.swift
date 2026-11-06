@@ -48,6 +48,11 @@ struct AidenMachineRow: Identifiable, Equatable {
     let lastConnectedAt: Date?
     let workspaceCount: Int
 
+    /// A machine that was revoked or lost its pairing can't be reconnected; it has to be paired again.
+    var offersReconnect: Bool { status != .revoked && status != .needsPairing }
+
+    var canReconnect: Bool { offersReconnect && !isReconnecting }
+
     var accessibilityLabel: String {
         if let identitySuffix {
             return String(localized: "\(name), identity \(identitySuffix), \(status.title)")
@@ -69,9 +74,10 @@ struct AidenMachineRow: Identifiable, Equatable {
 /// preferences store and is never sent to a machine.
 ///
 /// `AidenMachinePreferencesStore.preferences(for:)` assigns a colour the first
-/// time it sees a machine. That is a write, so it happens in `register()`, which
-/// runs from `init` and from a view's `.task`, never from a `body`. Rows only
-/// include machines `register()` has settled.
+/// time it sees a machine. That is a write, and `NavigationLink` builds its
+/// destination as soon as the row does, so nothing here writes while a model
+/// or a view is being built. `register()` does it, from a page's `.task` once
+/// it has loaded. Rows only include machines `register()` has settled.
 @MainActor
 @Observable
 final class AidenMachinesModel {
@@ -86,7 +92,6 @@ final class AidenMachinesModel {
     init(coordinator: AidenRemoteCoordinator, preferences: AidenMachinePreferencesStore) {
         self.coordinator = coordinator
         self.preferences = preferences
-        register()
     }
 
     /// Instance IDs of every paired machine, in pairing order.
@@ -95,8 +100,6 @@ final class AidenMachinesModel {
     var hasNoMachines: Bool { coordinator.installationStore.installations.isEmpty }
 
     var isBusy: Bool { coordinator.isMutating }
-
-    var onlineCount: Int { rows.filter { $0.status == .online }.count }
 
     var rows: [AidenMachineRow] {
         let connections = coordinator.hosts.ordered.filter { registered.contains($0.instanceId) }
@@ -193,13 +196,12 @@ final class AidenMachinesModel {
         await coordinator.switchInstallationOutcome(to: instanceId)
     }
 
-    /// Removes the pairing, its drafts and Bot outbox, then the phone-local
-    /// appearance. A forget that fails leaves all of it in place.
+    /// Removes the pairing, its drafts and Bot outbox, and (inside the
+    /// coordinator) its phone-local appearance. A forget that fails leaves all
+    /// of it in place.
     func forget(_ instanceId: String) async -> AidenRemoteMutationOutcome<Void> {
         let outcome = await coordinator.removeInstallationOutcome(instanceId)
-        // A cancelled forget can still have removed the pairing.
         if !coordinator.installationStore.installations.contains(where: { $0.id == instanceId }) {
-            preferences.remove(instanceId)
             registered.remove(instanceId)
         }
         return outcome
@@ -207,13 +209,27 @@ final class AidenMachinesModel {
 
     /// What the forget confirmation says will happen.
     func forgetMessage(for instanceId: String) -> String {
-        var message = String(localized: "This removes its pairing from this phone, along with drafts and queued Bot messages for this machine. Nothing is deleted on the machine, and you can pair it again later.")
+        var message = String(localized: "This removes its pairing from this phone, along with its name, symbol and colour here, drafts, queued Bot messages and chats saved on this phone. Nothing is deleted on the machine, and you can pair it again later.")
         if coordinator.installationStore.installations.count == 1 {
             message += " " + String(localized: "It is your only machine, so you will be asked to pair again.")
         } else if coordinator.activeInstanceId == instanceId {
             message += " " + String(localized: "Another machine will be selected.")
         }
         return message
+    }
+
+    /// What to tell the person when something failed, or nil when nothing needs
+    /// saying here. The coordinator puts its own reason in `presentedError`, and
+    /// the shell shows that, so a second alert would repeat it.
+    func failureMessage<Value>(for outcome: AidenRemoteMutationOutcome<Value>, fallback: String) -> String? {
+        switch outcome {
+        case .failure, .busy:
+            guard coordinator.presentedError == nil else { return nil }
+            if case .busy = outcome { return String(localized: "Another change is still running. Try again in a moment.") }
+            return fallback
+        case .success, .cancelled, .stale:
+            return nil
+        }
     }
 
     func playHaptic(_ event: AidenHapticEvent, scope: UUID, key: String) {
@@ -232,21 +248,6 @@ final class AidenMachinesModel {
         case .needsPairing: .needsPairing
         }
     }
-}
-
-extension AidenMachinePreferencesStore {
-    /// The one store the app reads and writes. Each store keeps its own copy of
-    /// the saved choices, so two of them over the same defaults would overwrite
-    /// each other's edits.
-    static let shared: AidenMachinePreferencesStore = {
-#if DEBUG
-        // A demo run keeps its edits out of the person's real ones.
-        if AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) != nil {
-            return AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
-        }
-#endif
-        return AidenMachinePreferencesStore()
-    }()
 }
 
 // MARK: Machines page
@@ -276,8 +277,7 @@ struct AidenMachinesView: View {
 
     var body: some View {
         List {
-            let rows = model.rows
-            if rows.isEmpty {
+            if model.hasNoMachines {
                 Section {
                     ContentUnavailableView(
                         "No machines paired",
@@ -288,17 +288,11 @@ struct AidenMachinesView: View {
                 }
             } else {
                 Section {
-                    ForEach(rows) { row in
-                        NavigationLink {
-                            AidenMachineDetailView(
-                                instanceId: row.id,
-                                coordinator: coordinator,
-                                preferences: preferences
-                            )
-                        } label: {
+                    ForEach(model.rows) { row in
+                        NavigationLink(value: AidenMachineLink(instanceId: row.id)) {
                             AidenMachineRowView(row: row)
                         }
-                        .accessibilityElement(children: .ignore)
+                        // Label and value only: hiding the children from a link drops its activation.
                         .accessibilityLabel(row.accessibilityLabel)
                         .accessibilityValue(row.accessibilityValue)
                         .swipeActions(edge: .trailing) {
@@ -306,9 +300,9 @@ struct AidenMachinesView: View {
                                 .disabled(model.isBusy)
                         }
                         .swipeActions(edge: .leading) {
-                            if row.status != .online {
+                            if row.offersReconnect, row.status != .online {
                                 Button("Reconnect") { Task { await model.reconnect(row.id) } }
-                                    .disabled(row.isReconnecting)
+                                    .disabled(!row.canReconnect)
                                     .tint(.accentColor)
                             }
                         }
@@ -326,6 +320,10 @@ struct AidenMachinesView: View {
         }
         .navigationTitle("Machines")
         .navigationBarTitleDisplayMode(.inline)
+        // Built when a row is opened, not when the list is.
+        .navigationDestination(for: AidenMachineLink.self) { link in
+            AidenMachineDetailView(instanceId: link.instanceId, coordinator: coordinator, preferences: preferences)
+        }
         .task(id: model.machineIDs) { model.register() }
         .onAppear { model.activateHaptics(scope: hapticScope) }
         .onDisappear { model.deactivateHaptics(scope: hapticScope) }
@@ -371,12 +369,28 @@ struct AidenMachinesView: View {
             model.playHaptic(.success, scope: hapticScope, key: key)
         case .failure:
             model.playHaptic(.error, scope: hapticScope, key: key)
-            forgetFailure = String(localized: "It is still paired. Try again in a moment.")
-        case .busy:
-            forgetFailure = String(localized: "Another change is still running. Try again in a moment.")
-        case .cancelled, .stale:
+        case .busy, .cancelled, .stale:
             break
         }
+        forgetFailure = model.failureMessage(for: outcome, fallback: String(localized: "It is still paired. Try again in a moment."))
+    }
+}
+
+/// What a row pushes. The page for it is built only when it is opened.
+private struct AidenMachineLink: Hashable {
+    let instanceId: String
+}
+
+/// The Machines page as a route of the tab shell, which has no sheet for pairing of its own.
+struct AidenMachinesRouteView: View {
+    let coordinator: AidenRemoteCoordinator
+    @State private var showsPairing = false
+
+    var body: some View {
+        AidenMachinesView(coordinator: coordinator, preferences: .shared, addMachine: { showsPairing = true })
+            .sheet(isPresented: $showsPairing) {
+                AidenPairingView(coordinator: coordinator, onPaired: { showsPairing = false })
+            }
     }
 }
 
