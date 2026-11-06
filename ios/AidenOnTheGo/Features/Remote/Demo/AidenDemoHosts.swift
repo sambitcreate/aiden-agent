@@ -378,16 +378,21 @@ enum AidenDemoHosts {
     /// For tests that need machines of their own. Each gets the standard answers
     /// (`/server`, `/workspaces`, `/chat-summaries`, and `/bots`, or `/chats` when
     /// the installation has no server inventory). The first is the selected machine.
+    /// `keychain` and `workspaceEnvironmentCache` let a test reach those two stores.
     @MainActor
     static func coordinator(
         installations: [AidenInstallation],
         responder: AidenDemoResponder,
-        haptics: (any AidenHapticEmitting)? = nil
+        haptics: (any AidenHapticEmitting)? = nil,
+        keychain: (any KeychainStoring)? = nil,
+        workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil
     ) -> AidenRemoteCoordinator {
         makeCoordinator(
             installations.map { Machine(installation: $0, rowCount: 4) },
             responder: responder,
-            haptics: haptics
+            haptics: haptics,
+            keychain: keychain,
+            workspaceEnvironmentCache: workspaceEnvironmentCache
         )
     }
 
@@ -397,9 +402,11 @@ enum AidenDemoHosts {
     private static func makeCoordinator(
         _ machines: [Machine],
         responder: AidenDemoResponder,
-        haptics: (any AidenHapticEmitting)?
+        haptics: (any AidenHapticEmitting)?,
+        keychain: (any KeychainStoring)? = nil,
+        workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil
     ) -> AidenRemoteCoordinator {
-        let store = AidenInstallationStore(keychain: AidenDemoMemoryKeychain())
+        let store = AidenInstallationStore(keychain: keychain ?? AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
             .appending(path: "AidenDemoHosts-\(UUID().uuidString)", directoryHint: .isDirectory)
         let defaults = isolatedDefaults()
@@ -447,7 +454,8 @@ enum AidenDemoHosts {
             chatCache: AidenChatCache(root: directory("chats")),
             chatDraftStore: AidenChatDraftStore(root: directory("drafts")),
             scheduledTaskCache: AidenScheduledTaskCache(root: directory("schedules")),
-            workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache(directory: directory("environment")),
+            workspaceEnvironmentCache: workspaceEnvironmentCache
+                ?? AidenWorkspaceEnvironmentCache(directory: directory("environment")),
             haptics: haptics,
             clientFactory: { installation, credential in
                 AidenRemoteClient(

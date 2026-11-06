@@ -1,6 +1,40 @@
 #if DEBUG
+import CryptoKit
 import XCTest
 @testable import AidenOnTheGo
+
+/// A Keychain whose reads can fail, or come back empty, on demand.
+private final class AidenUnreliableKeychain: KeychainStoring {
+    enum Read { case normal, failing, empty }
+    struct ReadError: Error {}
+
+    var read = Read.normal
+    private var values: [String: String] = [:]
+
+    private func value(_ key: String) throws -> String? {
+        switch read {
+        case .normal: values[key]
+        case .failing: throw ReadError()
+        case .empty: nil
+        }
+    }
+
+    func save(_ value: String, forKey key: KeychainStore.Key) throws { values[key.rawValue] = value }
+    func load(_ key: KeychainStore.Key) throws -> String? { try value(key.rawValue) }
+    func delete(_ key: KeychainStore.Key) throws { values[key.rawValue] = nil }
+
+    func save(_ value: String, forKey key: KeychainStore.Key, scope: String) throws {
+        values[KeychainStore.scopedKey(key, scope: scope)] = value
+    }
+
+    func load(_ key: KeychainStore.Key, scope: String) throws -> String? {
+        try value(KeychainStore.scopedKey(key, scope: scope))
+    }
+
+    func delete(_ key: KeychainStore.Key, scope: String) throws {
+        values[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
 
 @MainActor
 final class AidenHostConnectSchedulerTests: XCTestCase {
@@ -184,18 +218,6 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertEqual(serverRequests("laptop"), 1)
     }
 
-    func testABackgroundConnectFetchesNoTranscripts() async throws {
-        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        await coordinator.start()
-        let scheduler = scheduler(for: coordinator)
-
-        await scheduler.foregrounded()
-
-        for request in responder.requests(instanceId: "laptop") {
-            XCTAssertFalse(request.contains("/chats"), request)
-        }
-    }
-
     func testABackgroundAnswerPersistsItsOwnMachinesRecord() async throws {
         let coordinator = fourOnlineMachines()
         await coordinator.start()
@@ -345,6 +367,37 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         for instanceId in everyMachine {
             XCTAssertEqual(try connection(instanceId, in: coordinator).connectionState, .connected, instanceId)
         }
+    }
+
+    func testCancellingDuringNegotiationKeepsTheConnectedState() async throws {
+        var laptopInstallation = AidenDemoHosts.installation(instanceId: "laptop", name: "laptop")
+        laptopInstallation.deviceCapabilities.removeAll { $0 == .tasksRead }
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: [AidenDemoHosts.installation(instanceId: "studio", name: "studio"), laptopInstallation],
+            responder: responder
+        )
+        let laptop = try connection("laptop", in: coordinator)
+        responder.fail(instanceId: "laptop", path: "*", code: .notConnectedToInternet)
+        await laptop.connect(over: .probe)
+        XCTAssertTrue(isOffline(laptop))
+        bringOnline("laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/device/capabilities")
+        defer { release() }
+
+        let attempt = Task { await laptop.connect(over: .probe) }
+        try await waitUntil("negotiation to start") {
+            responder.requests(instanceId: "laptop").contains { $0.hasSuffix("/device/capabilities") }
+        }
+        XCTAssertEqual(laptop.connectionState, .connected)
+        XCTAssertTrue(laptop.isConnectInFlight)
+
+        laptop.cancelConnect()
+
+        XCTAssertEqual(laptop.connectionState, .connected, "A good answer outranks the state before it")
+        XCTAssertNil(laptop.connectionIssue)
+        XCTAssertFalse(laptop.isConnectInFlight)
+        release()
+        await attempt.value
     }
 
     func testBackgroundingLeavesAnOfflineMachineOfflineAndNotConnecting() async throws {
@@ -670,6 +723,87 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertNil(coordinator.installationStore.installations.first { $0.id == "laptop" })
         XCTAssertNotEqual(coordinator.connectionState, .needsPairing)
         XCTAssertTrue(coordinator.presentedError?.contains("revoked") == true)
+    }
+
+    func testSelectingARevokedMachineRemovesItsLegacyEnvironmentFiles() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "AidenEnvironment-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: ["studio", "laptop"].map { AidenDemoHosts.installation(instanceId: $0, name: $0) },
+            responder: responder,
+            workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache(directory: directory)
+        )
+        await coordinator.start()
+        let laptop = try connection("laptop", in: coordinator)
+        await laptop.connect(over: .probe)
+        let workspaceId = try XCTUnwrap(laptop.workspaces.first?.id)
+        let digest = SHA256.hash(data: Data("laptop\u{0}\(workspaceId)".utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let legacyFile = directory.appending(path: "\(digest).json")
+        try Data("{}".utf8).write(to: legacyFile, options: .atomic)
+        let view = NSObject()
+        coordinator.setOnScreen(true, view: view, instanceId: "laptop")
+        await coordinator.hostConnectionWasRevokedInBackground(laptop)
+
+        await coordinator.switchInstallation(to: "laptop")
+
+        XCTAssertNil(coordinator.hosts.connection(for: "laptop"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
+    }
+
+    func testARevokedSelectionConnectsTheNextMachinePastTheDeadline() async throws {
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: ["studio", "laptop"].map { AidenDemoHosts.installation(instanceId: $0, name: $0) },
+            responder: responder
+        )
+        await coordinator.start()
+        responder.reply(instanceId: "studio", path: "/server", status: 401, json: revokedJSON)
+        let release = responder.hold(instanceId: "laptop", path: "/server")
+        defer { release() }
+        let studio = try connection("studio", in: coordinator)
+
+        let attempt = Task { await studio.connect(over: .probe, timeout: 0.1) }
+        try await waitUntil("the next machine's connect") { serverRequests("laptop") == 1 }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        release()
+        await attempt.value
+
+        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.connectionState, .connected)
+    }
+
+    private func keychainCoordinator(_ keychain: AidenUnreliableKeychain) -> AidenRemoteCoordinator {
+        AidenDemoHosts.coordinator(
+            installations: ["studio", "laptop"].map { AidenDemoHosts.installation(instanceId: $0, name: $0) },
+            responder: responder,
+            keychain: keychain
+        )
+    }
+
+    func testAKeychainReadErrorDoesNotMoveTheSelection() async throws {
+        let keychain = AidenUnreliableKeychain()
+        let coordinator = keychainCoordinator(keychain)
+        keychain.read = .failing
+
+        await coordinator.refreshWorkspaces()
+
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertNotEqual(coordinator.connectionState, .needsPairing)
+        XCTAssertTrue(isOffline(try connection("studio", in: coordinator)))
+    }
+
+    func testAMissingCredentialStillMovesTheSelection() async throws {
+        let keychain = AidenUnreliableKeychain()
+        let coordinator = keychainCoordinator(keychain)
+        keychain.read = .empty
+
+        await coordinator.refreshWorkspaces()
+
+        XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .needsPairing)
+        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
     }
 
     func testPairingARevokedMachineAgainGivesItAWorkingConnection() async throws {

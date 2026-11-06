@@ -70,7 +70,8 @@ protocol AidenHostConnectionDelegate: AnyObject {
     /// The selected machine's credential was revoked.
     func hostConnectionWasRevoked(_ connection: AidenHostConnection) async
     /// A machine other than the selected one had its credential revoked. Its
-    /// cached data stays for as long as a view is showing it.
+    /// cached data stays while a view is on screen showing it. A view under a
+    /// full-screen cover counts as gone, because `.onDisappear` fires for it.
     func hostConnectionWasRevokedInBackground(_ connection: AidenHostConnection) async
     /// The machine can't go on without being paired again.
     func hostConnectionNeedsPairing(_ connection: AidenHostConnection)
@@ -185,7 +186,9 @@ final class AidenHostConnection {
         let deadline = timeout.map { timeout in
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                guard !Task.isCancelled else { return }
+                // An attempt that ended can still be running: a revocation carries
+                // on inside it to the next machine's connect.
+                guard !Task.isCancelled, isCurrent(attempt: attempt) else { return }
                 await expire(attempt: attempt, over: route)
                 work.cancel()
             }
@@ -211,13 +214,14 @@ final class AidenHostConnection {
     /// Stops the attempt in flight and puts the machine back where it stood
     /// before it. Only `connectionGeneration` moves, so every live context stays
     /// live. A machine that had never settled stays at `.connecting`, with
-    /// `isConnectInFlight` false, until something connects it again.
+    /// `isConnectInFlight` false, until something connects it again. One that
+    /// already answered stays `.connected`: only negotiation was left to stop.
     func cancelConnect() {
         guard isConnectInFlight else { return }
         connectInFlight?.work.cancel()
         connectInFlight = nil
         connectionGeneration &+= 1
-        if let settledState {
+        if connectionState == .connecting, let settledState {
             connectionState = settledState.connectionState
             connectionIssue = settledState.connectionIssue
         }

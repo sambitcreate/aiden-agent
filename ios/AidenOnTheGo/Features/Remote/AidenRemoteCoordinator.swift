@@ -460,8 +460,9 @@ final class AidenRemoteCoordinator {
                 advanceActivationGeneration()
             }
             // A machine that is already connected keeps what it holds. The
-            // connect below still checks it.
-            if connectionState != .connected {
+            // connect below still checks it. So does one with a purge pending:
+            // the purge needs its workspaces to find the legacy cache files.
+            if connectionState != .connected, selectedConnection?.isPurgePending != true {
                 server = nil
                 workspaces = []
             }
@@ -514,9 +515,19 @@ final class AidenRemoteCoordinator {
     }
 
     func refreshWorkspaces() async {
-        guard let installationId = activeInstanceId,
-              let client = try? activeClient() else {
+        guard let installationId = activeInstanceId else {
             connectionState = .needsPairing
+            return
+        }
+        let client: AidenRemoteClient
+        do {
+            client = try activeClient()
+        } catch AidenRemoteClientError.missingCredential {
+            connectionState = .needsPairing
+            return
+        } catch {
+            // A failed read, such as the Keychain's, says nothing about the pairing.
+            await handleConnectionError(error, installationId: installationId)
             return
         }
         let generation = connectionGeneration

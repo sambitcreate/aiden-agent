@@ -200,6 +200,11 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             switch sceneRefreshGate.transition(to: phase) {
             case .refresh:
+                // Above the guard, so a selected machine that needs pairing can't
+                // leave the scheduler in its background state. It runs beside the
+                // wait below, which stays on the selected machine alone, so no
+                // other machine can hold up the links it releases.
+                Task { await connectScheduler?.foregrounded() }
                 guard coordinator.connectionState != .needsPairing else { return }
                 sceneConnectionRefreshInProgress = true
                 Task {
@@ -219,9 +224,6 @@ struct ContentView: View {
                         )
                     }
                 }
-                // Runs beside the wait above, which stays on the selected machine
-                // alone, so no other machine can hold up the links it releases.
-                Task { await connectScheduler?.foregrounded() }
             case .suspend:
                 connectScheduler?.backgrounded()
                 externalNewChats.invalidate()

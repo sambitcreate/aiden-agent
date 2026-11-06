@@ -51,7 +51,9 @@ final class AidenHostConnectScheduler {
         await untilIdle()
     }
 
-    /// Stops what is waiting and what is running. Contexts stay live: only a
+    /// Stops the connects this scheduler queued or started, and marks every
+    /// machine to be checked again on return. A connect started elsewhere, like
+    /// the selected machine's own, keeps running. Contexts stay live: only a
     /// machine's connect attempt ends, so a chat keeps working on return.
     func backgrounded() {
         isForeground = false
