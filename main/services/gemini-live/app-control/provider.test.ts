@@ -4,6 +4,7 @@ import { Window } from "happy-dom";
 import { LiveActivityStore } from "../../../../renderer/lib/live-activity.js";
 import { LiveAppControlController } from "../../../../renderer/lib/live-app-control.js";
 import { LiveSessionBus } from "../../../../renderer/lib/live-session-bus.js";
+import { LIVE_UNTRUSTED_VOICE_START } from "../../../../renderer/lib/live-speech-onsets.js";
 import { LIVE_APP_CONTROL_RENDERER_TOOL } from "../../../../renderer/shared/live-app-control.js";
 import type { RendererDocumentOwner } from "../../renderer-document-owner.js";
 import { LiveRendererToolBroker, type LiveToolResponse } from "../live-tools.js";
@@ -200,6 +201,8 @@ function harness(
     maxActions?: number;
     sessionCalls?: number;
     refusePrompts?: boolean;
+    /** Hold the confirm prompt's delivery until `releasePrompt` is called. */
+    holdPrompts?: boolean;
     callTimeoutMs?: number;
   } = {},
 ) {
@@ -207,15 +210,22 @@ function harness(
   const bus = new LiveSessionBus();
   const notes: string[] = [];
   const noteWaiters: Array<() => void> = [];
+  const heldPrompts: Array<(delivered: boolean) => void> = [];
   const broker: LiveRendererToolBroker = new LiveRendererToolBroker("s1", (request) => {
     if (request.type === "tool_request") void bus.runToolRequest(request);
     else bus.cancelToolRequest(request.sessionId, request.requestId);
   });
   bus.setSession("s1", {
     toolResult: async (_sessionId, requestId, response) => broker.resolve(requestId, response),
-    note: async (_sessionId, text) => {
+    note: async (_sessionId, text, noteOptions) => {
       // Live's note queue can refuse a note; a refused prompt leaves tap only.
       if (options.refusePrompts && PROMPT.test(text)) return false;
+      // A delivery-awaited note can sit in Live's queue (behind a reply, say)
+      // and be dropped there, or be handed over later.
+      if (options.holdPrompts && noteOptions?.awaitDelivery && PROMPT.test(text)) {
+        const delivered = await new Promise<boolean>((resolve) => heldPrompts.push(resolve));
+        if (!delivered) return false;
+      }
       notes.push(text);
       for (const waiter of noteWaiters.splice(0)) waiter();
       return true;
@@ -273,7 +283,10 @@ function harness(
     }
   };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
-  const say = (text: string) => bus.publishVoiceInput(text);
+  const say = (text: string, startedAt?: number) => bus.publishVoiceInput(text, startedAt);
+  const releasePrompt = (delivered: boolean) => {
+    for (const release of heldPrompts.splice(0)) release(delivered);
+  };
   const dispose = () => {
     provider.close();
     broker.close();
@@ -294,6 +307,8 @@ function harness(
     noteMatching,
     settle,
     say,
+    bus,
+    releasePrompt,
     dispose,
   };
 }
@@ -489,6 +504,61 @@ test("a guarded control waits for the user's own spoken confirm after the prompt
     assert.equal(deleted, 1);
   } finally {
     h.dispose();
+  }
+});
+
+test("speech begun before Live's prompt, or with no known start, never confirms; a fresh confirm does", async () => {
+  const h = harness(`<div role="alertdialog" aria-label="Delete chat?"><button id="delete" data-live-guard="confirm">Delete</button></div>`);
+  try {
+    let deleted = 0;
+    h.document.getElementById("delete")!.addEventListener("click", () => (deleted += 1));
+    // The user starts "yes do it" before Live has asked, and finishes it after.
+    const begun = h.bus.beginVoiceInput();
+    assert.equal((await h.call("use_aiden", { element: await h.ref("Delete"), action: "press" })).status, "waiting_for_user");
+    await h.noteMatching(PROMPT);
+    await h.settle();
+    h.say("Yes, do it!", begun);
+    h.say("confirm", LIVE_UNTRUSTED_VOICE_START);
+    await h.settle();
+    assert.equal(deleted, 0, "neither answers the prompt");
+    assert.equal(h.activity.get()?.kind, "confirm", "the prompt still waits");
+    h.say("Yes, do it!");
+    await h.noteMatching(/^The user confirmed/u);
+    assert.equal(deleted, 1);
+  } finally {
+    h.dispose();
+  }
+});
+
+test("a confirm prompt Live hasn't been handed is tap-only, and one dropped from the queue stays so", async () => {
+  for (const delivered of [true, false]) {
+    const h = harness(`<button id="out" data-live-guard="confirm">Sign out</button>`, { holdPrompts: true });
+    try {
+      let pressed = 0;
+      h.document.getElementById("out")!.addEventListener("click", () => (pressed += 1));
+      assert.equal((await h.call("use_aiden", { element: await h.ref("Sign out"), action: "press" })).status, "waiting_for_user");
+      await h.settle();
+      h.say("confirm"); // Live hasn't asked yet: the prompt is still queued.
+      await h.settle();
+      assert.equal(pressed, 0, `queued, ${delivered}`);
+      h.releasePrompt(delivered);
+      await h.settle();
+      h.say("confirm");
+      await h.settle();
+      if (delivered) {
+        await h.noteMatching(/^The user confirmed/u);
+        assert.equal(pressed, 1, "once Live has asked, a fresh confirm answers");
+        continue;
+      }
+      assert.equal(pressed, 0, "a dropped prompt never arms speech");
+      const shown = h.activity.get();
+      assert.equal(shown?.kind, "confirm", "the ribbon still asks");
+      if (shown?.kind === "confirm") shown.confirm();
+      await h.noteMatching(/^The user confirmed/u);
+      assert.equal(pressed, 1, "tapping Confirm still works");
+    } finally {
+      h.dispose();
+    }
   }
 });
 

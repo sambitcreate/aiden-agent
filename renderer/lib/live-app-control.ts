@@ -24,8 +24,10 @@ export interface LiveAppControlState {
 export interface LiveAppControlDependencies {
   bus: {
     onVoiceInput(listener: (input: LiveVoiceInput) => void): () => void;
-    latestVoiceInputId(): number;
-    note(text: string): Promise<boolean>;
+    /** Latest speech start mark: only speech begun after it has a larger `startedAt`. */
+    voiceInputFence(): number;
+    /** With `awaitDelivery`, true only once main has actually handed the note to Live. */
+    note(text: string, options?: { awaitDelivery?: boolean }): Promise<boolean>;
   };
   activity: { set(source: string, activity: LiveActivity | null): void };
   confirmTimeoutMs?: number;
@@ -223,18 +225,27 @@ export class LiveAppControlController {
         return;
       }
       signal.addEventListener("abort", aborted, { once: true });
-      // Live asks the user aloud. Speech counts only after that prompt was
-      // accepted, and only a whole utterance that is a fixed confirm phrase
-      // answers yes; anything else refuses. A refused prompt leaves tap only.
+      // Live asks the user aloud. Speech is armed only once main has actually
+      // handed that prompt to Live, never on queueing; a prompt that is held,
+      // refused or dropped leaves the OK tap-only. Only speech the microphone
+      // heard begin after that point can answer: a whole utterance that is a
+      // fixed confirm phrase says yes, anything else refuses. Speech already
+      // under way at the fence, or with no provable onset, never says yes; a
+      // deny phrase there still refuses.
       void this.deps.bus
-        .note(`Ask the user to say confirm or tap Confirm to allow: ${shownLabel}. Nothing happens until they do.`)
+        .note(`Ask the user to say confirm or tap Confirm to allow: ${shownLabel}. Nothing happens until they do.`, {
+          awaitDelivery: true,
+        })
         .catch(() => false)
-        .then((sent) => {
-          if (settled || !sent) return;
-          const promptVoiceId = this.deps.bus.latestVoiceInputId();
+        .then((delivered) => {
+          if (settled || !delivered) return;
+          const fence = this.deps.bus.voiceInputFence();
           stopVoice = this.deps.bus.onVoiceInput((input) => {
-            if (input.id <= promptVoiceId) return;
             const phrase = matchLiveVoicePhrase(input.text);
+            if (!(input.startedAt > fence)) {
+              if (phrase?.kind === "deny") finish(false, "cancelled");
+              return;
+            }
             if (phrase?.kind === "confirm") finish(true, "confirmed");
             else finish(false, phrase?.kind === "deny" ? "cancelled" : "other_speech");
           });
