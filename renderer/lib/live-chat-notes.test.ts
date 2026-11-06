@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LiveChatNoteWatcher, liveChatEnding, type LiveChatActivity, type LiveChatEnding } from "./live-chat-notes";
+import {
+  LiveChatNoteWatcher,
+  liveChatEnding,
+  liveChatTurn,
+  type LiveChatActivity,
+  type LiveChatEnding,
+  type LiveChatTurn,
+} from "./live-chat-notes";
 
 function activity(input: { active?: string[]; approval?: string[]; input?: string[] } = {}): LiveChatActivity {
   return {
@@ -10,17 +17,18 @@ function activity(input: { active?: string[]; approval?: string[]; input?: strin
   };
 }
 
-function harness(endings: Record<string, LiveChatEnding> = {}) {
+/** Each chat's latest turn; Live's own turns unless told otherwise. */
+function harness(turns: Record<string, Partial<LiveChatTurn>> = {}) {
   const notes: string[] = [];
   const watcher = new LiveChatNoteWatcher({
     note: (text) => notes.push(text),
-    ending: async (chatId) => endings[chatId] ?? "finished",
+    turn: async (chatId) => ({ byVoice: true, ending: "finished" as LiveChatEnding, ...turns[chatId] }),
   });
   return { notes, watcher, settle: () => new Promise((resolve) => setImmediate(resolve)) };
 }
 
 test("a chat Live sent to gets one note when its reply finishes or fails", async () => {
-  const { notes, watcher, settle } = harness({ broken: "failed" });
+  const { notes, watcher, settle } = harness({ broken: { ending: "failed" } });
   watcher.observe(activity());
   watcher.watch("fix", "Fix login");
   watcher.watch("broken", "Deploy");
@@ -36,7 +44,7 @@ test("a chat Live sent to gets one note when its reply finishes or fails", async
 });
 
 test("waiting for an approval or an answer is a note; a reply the person stopped is not", async () => {
-  const { notes, watcher, settle } = harness({ fix: "stopped" });
+  const { notes, watcher, settle } = harness({ fix: { ending: "stopped" } });
   watcher.observe(activity({ active: ["fix"] }));
   watcher.watch("fix", "Fix login");
   watcher.observe(activity({ active: ["fix"], approval: ["fix"] }));
@@ -50,34 +58,32 @@ test("waiting for an approval or an answer is a note; a reply the person stopped
   ]);
 });
 
-test("the open chat is watched only while it is on screen; chats Live sent to stay watched", async () => {
-  const { notes, watcher, settle } = harness();
-  watcher.observe(activity({ active: ["open", "sent"] }));
-  watcher.setOpenChat("open", "On screen");
-  watcher.watch("sent", "Sent to");
-  watcher.setOpenChat("sent", "Sent to");
-  watcher.setOpenChat(null, "");
-  assert.equal(watcher.isWatching("open"), false);
-  assert.equal(watcher.isWatching("sent"), true);
+test("only chats Live sent to are watched, and a reply to a message the person typed gets no note", async () => {
+  const { notes, watcher, settle } = harness({ typed: { byVoice: false } });
+  watcher.observe(activity({ active: ["other", "typed"] }));
+  watcher.watch("typed", "Typed since");
+  assert.equal(watcher.isWatching("other"), false);
+  watcher.observe(activity({ approval: ["typed"] }));
   watcher.observe(activity());
   await settle();
-  assert.deepEqual(notes, ["The chat “Sent to” finished its reply."]);
+  assert.deepEqual(notes, []);
 });
 
-test("an ending read after the session ended sends nothing", async () => {
-  let release!: (ending: LiveChatEnding) => void;
+test("a read that lands after the session ended sends nothing", async () => {
+  let release!: (turn: LiveChatTurn) => void;
   const notes: string[] = [];
   const watcher = new LiveChatNoteWatcher({
     note: (text) => notes.push(text),
-    ending: () => new Promise((resolve) => (release = resolve)),
+    turn: () => new Promise((resolve) => (release = resolve)),
   });
   watcher.observe(activity({ active: ["fix"] }));
   watcher.watch("fix", "Fix login");
   watcher.observe(activity());
   watcher.reset();
-  release("finished");
+  release({ byVoice: true, ending: "finished" });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(notes, []);
+  assert.equal(watcher.isWatching("fix"), false);
 });
 
 test("an ending is read from the newest reply", () => {
@@ -89,5 +95,23 @@ test("an ending is read from the newest reply", () => {
   assert.equal(
     liveChatEnding([{ role: "assistant", providerFailure: {} }, { role: "assistant" }, { role: "user" }]),
     "finished",
+  );
+});
+
+test("the latest turn is Live's only when the newest user message came by voice", () => {
+  assert.deepEqual(liveChatTurn([]), { byVoice: false, ending: null });
+  assert.deepEqual(
+    liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "assistant" }]),
+    { byVoice: true, ending: "finished" },
+  );
+  // The person typed after Live's message: that reply is theirs.
+  assert.deepEqual(
+    liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "assistant" }, { role: "user" }, { role: "assistant" }]),
+    { byVoice: false, ending: "finished" },
+  );
+  // A notice row is not a message from the person; no reply yet means no ending.
+  assert.deepEqual(
+    liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "user", notice: { title: "x", summary: "y" } }]),
+    { byVoice: true, ending: null },
   );
 });

@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createLiveChatController, type LiveChatPaneState } from "./live-chat-controller";
+import "./bots/test-dom";
+import { cleanup, renderHook } from "@testing-library/react";
+import {
+  createLiveChatController,
+  liveChatReachable,
+  stopForLive,
+  useLiveChatController,
+  type LiveChatPaneState,
+} from "./live-chat-controller";
+import { liveChatControl } from "../lib/live-chat-control";
 import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
+import { appendReconciliationFailureMessage } from "../shared/chat-message-contract";
+import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
 
 function pane(overrides: Partial<LiveChatPaneState> = {}) {
   const calls: string[] = [];
@@ -13,6 +24,7 @@ function pane(overrides: Partial<LiveChatPaneState> = {}) {
     messageId: "m1",
   };
   const state: LiveChatPaneState = {
+    reachable: true,
     chatId: "chat-1",
     workspaceId: "ws-1",
     isDraft: false,
@@ -25,6 +37,7 @@ function pane(overrides: Partial<LiveChatPaneState> = {}) {
     steerAvailable: false,
     queueAvailable: true,
     hasQueued: false,
+    queuePaused: false,
     ready: true,
     firstSending: false,
     waitingForApproval: false,
@@ -113,6 +126,8 @@ test("stop is the composer's Stop, and says when nothing is running", () => {
   const working = pane({ busy: true });
   assert.deepEqual(working.controller.stop(), { ok: true, status: "stopping", title: "Fix login" });
   assert.deepEqual(working.calls, ["stop"]);
+  const queued = pane({ busy: true, hasQueued: true });
+  assert.deepEqual(queued.controller.stop(), { ok: true, status: "stopping", title: "Fix login", queuePaused: true });
   const starting = pane({ busy: true, stop: () => false });
   assert.equal((starting.controller.stop().error as { code: string }).code, "cannot_stop");
 });
@@ -126,4 +141,79 @@ test("read reports title, busy, a waiting approval and the bounded transcript", 
     messages: [{ role: "assistant", text: "Fixed it." }],
     truncated: true,
   });
+});
+
+test("Live's Stop pauses the queue only when the composer's Stop really stopped something", () => {
+  for (const stopped of [true, false]) {
+    const log: string[] = [];
+    const result = stopForLive({
+      stop: () => {
+        log.push("stop");
+        return stopped;
+      },
+      pauseQueue: () => log.push("pause"),
+      markStopRequested: () => log.push("stopping"),
+    });
+    assert.equal(result, stopped);
+    assert.deepEqual(log, stopped ? ["stop", "stopping", "pause"] : ["stop"]);
+  }
+});
+
+test("a paused queue is never fed: Live refuses instead of leaving the message waiting unseen", async () => {
+  const idleWithQueue = pane({ hasQueued: true, queuePaused: true });
+  const result = await idleWithQueue.controller.send("Next step", "auto");
+  assert.equal((result.error as { code: string }).code, "queue_paused");
+  const busy = pane({ busy: true, queuePaused: true });
+  assert.equal(((await busy.controller.send("Later", "queue")).error as { code: string }).code, "queue_paused");
+  assert.deepEqual([...idleWithQueue.calls, ...busy.calls], []);
+  // An idle chat with nothing queued still sends directly.
+  const idle = pane({ queuePaused: true });
+  assert.equal((await idle.controller.send("Hi", "auto")).status, "sent");
+});
+
+test("an unconfirmed send or steer is outcome_unknown, so Live never resends it", async () => {
+  const send = pane({
+    send: async () => {
+      throw new Error(`Error invoking remote method: ${appendReconciliationFailureMessage("current")}`);
+    },
+  });
+  const sent = await send.controller.send("Hello", "auto");
+  assert.equal((sent.error as { code: string }).code, "outcome_unknown");
+  assert.match((sent.error as { message: string }).message, /do not resend/u);
+  assert.equal(send.errors.length, 1);
+  const steer = pane({
+    busy: true,
+    steerAvailable: true,
+    steer: async () => {
+      throw new Error("lost");
+    },
+  });
+  const steered = await steer.controller.send("Use staging", "auto");
+  assert.equal((steered.error as { code: string }).code, "outcome_unknown");
+  assert.match((steered.error as { message: string }).message, /couldn't confirm the guidance/u);
+});
+
+test("only a loaded regular chat is reachable: never Bot, Assistant or feature chats", () => {
+  assert.equal(liveChatReachable(undefined), false, "not loaded yet");
+  assert.equal(liveChatReachable(null), false);
+  assert.equal(liveChatReachable({ workspaceId: "ws-1" }), true);
+  assert.equal(liveChatReachable({ workspaceId: "ws-1", botId: "bot-1" }), false);
+  assert.equal(liveChatReachable({ workspaceId: ASSISTANT_WORKSPACE_ID }), false);
+  assert.equal(liveChatReachable({ workspaceId: "ws-1", owner: { kind: "design-project", projectId: "p1" } }), false);
+});
+
+test("the pane registers its controller only while its chat is reachable", () => {
+  const base = pane().state;
+  const { rerender, unmount } = renderHook((state: LiveChatPaneState) => useLiveChatController(state), {
+    initialProps: { ...base, reachable: false },
+  });
+  assert.equal(liveChatControl.current(), null, "a Bot chat or an unloaded chat has no controller");
+  rerender({ ...base, reachable: true });
+  assert.equal(liveChatControl.current()?.chatId, "chat-1");
+  rerender({ ...base, reachable: false });
+  assert.equal(liveChatControl.current(), null);
+  rerender({ ...base, reachable: true });
+  unmount();
+  assert.equal(liveChatControl.current(), null);
+  cleanup();
 });

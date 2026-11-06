@@ -88,20 +88,33 @@ test("bad arguments are refused in main and never reach the window", async () =>
   assert.equal(requests.length, 0);
 });
 
-test("a cancelled call is withdrawn from the window", async () => {
+test("a cancelled call is withdrawn from the window; a lost send or stop is outcome_unknown, not cancelled", async () => {
   const requests: LiveRendererToolRequest[] = [];
   const cancels: string[] = [];
   const broker = new LiveRendererToolBroker("s1", (event) => {
     if (event.type === "tool_cancel") cancels.push(event.requestId);
     else requests.push(event);
-  });
+  }, 30_000, 20);
   const input = { owner: {} as RendererDocumentOwner, sessionId: "s1", signal: new AbortController().signal, renderer: broker };
   const provider = liveChatToolProviderFactory(input, {}, {})!;
   const registry = new LiveToolRegistry([provider], { sessionId: "s1", owner: input.owner });
-  const pending = registry.dispatch({ id: "c1", name: "stop_open_chat", args: {} });
+  const code = (response: Record<string, unknown>) => (response.error as { code: string }).code;
+
+  const read = registry.dispatch({ id: "c1", name: "read_open_chat", args: {} });
   await new Promise((resolve) => setImmediate(resolve));
   registry.cancel("c1");
-  const response = await pending;
-  assert.equal((response.error as { code: string }).code, "cancelled");
-  assert.deepEqual(cancels, [requests[0]!.requestId]);
+  assert.equal(code(await read), "cancelled");
+
+  for (const [id, name, args] of [
+    ["c2", "stop_open_chat", {}],
+    ["c3", "send_to_open_chat", { text: "Hi", mode: "auto" }],
+    ["c4", "start_new_chat", { text: "Hi" }],
+  ] as const) {
+    const pending = registry.dispatch({ id, name, args });
+    await new Promise((resolve) => setImmediate(resolve));
+    registry.cancel(id);
+    // Forwarded and never answered: it may have happened, so Live must not resend.
+    assert.equal(code(await pending), "outcome_unknown", name);
+  }
+  assert.deepEqual(cancels, requests.map((request) => request.requestId));
 });

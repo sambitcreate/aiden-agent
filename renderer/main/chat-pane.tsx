@@ -150,7 +150,7 @@ import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ChatApprovalCard } from "../components/chat-approval-card";
 import { liveOpenChat } from "../lib/live-open-chat";
-import { useLiveChatController } from "./live-chat-controller";
+import { liveChatReachable, stopForLive, useLiveChatController } from "./live-chat-controller";
 import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
@@ -2486,6 +2486,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Aiden Live's chat tools read, send to and stop this chat through the
   // composer's own paths; the message they send shows "By voice".
   useLiveChatController({
+    reachable: liveChatReachable(chat.data),
     chatId,
     workspaceId: chatWorkspaceId ?? null,
     isDraft: Boolean(draft),
@@ -2495,6 +2496,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     steerAvailable: !draft && !observedRunVisible && canSteerQueued,
     queueAvailable: !draft,
     hasQueued: queuedState.messages.length > 0,
+    queuePaused: queuedState.paused,
     ready: ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable,
     firstSending: draft?.sending === true,
     waitingForApproval: approvals.length > 0,
@@ -2512,13 +2514,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setDeniedApprovalChatId(null);
       return admitSteer(streamId, text, "voice");
     },
-    stop: () => {
-      // Same as the composer's Stop: queued follow-ups stay, paused.
-      messageQueue.pause();
-      const stopped = handleStop();
-      if (stopped) stopRequestedRef.current = true;
-      return stopped;
-    },
+    stop: () =>
+      stopForLive({
+        stop: handleStop,
+        pauseQueue: () => messageQueue.pause(),
+        markStopRequested: () => {
+          stopRequestedRef.current = true;
+        },
+      }),
     showError: (message) => toast.error(message),
   });
 

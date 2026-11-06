@@ -358,7 +358,8 @@ function RootContent() {
             .catch(() => undefined);
           if (git?.isRepo && !git.unborn) gitMode = "worktree";
         }
-        await openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
+        // The draft's id, or undefined when nothing opened (navigation blocked).
+        return openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,

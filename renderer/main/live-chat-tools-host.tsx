@@ -4,8 +4,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "../components/ui";
 import { chatsApi, settingsApi, workspacesApi } from "../lib/ipc";
 import { liveChatControl } from "../lib/live-chat-control";
-import { createLiveChatAccessNotice, createLiveChatToolHandlers } from "../lib/live-chat-tools";
-import { LiveChatNoteWatcher, liveChatEnding } from "../lib/live-chat-notes";
+import {
+  LiveChatRequestGate,
+  createLiveChatAccessNotice,
+  createLiveChatToolHandlers,
+  liveChatCandidates,
+} from "../lib/live-chat-tools";
+import { LiveChatNoteWatcher, liveChatTurn } from "../lib/live-chat-notes";
 import { liveOpenChat } from "../lib/live-open-chat";
 import { liveSessionBus } from "../lib/live-session-bus";
 import { useNewChatActions } from "../lib/new-chat-actions";
@@ -21,8 +26,8 @@ import { LIVE_CHAT_TOOL_NAMES } from "../shared/live-chat-tools";
 /**
  * Gives Aiden Live its chat tools in this window: read, send to and stop the
  * open chat, find and open another, and start a new one. Also turns the
- * activity of chats Live works with into short spoken notes. Mounted once in
- * the app shell; renders nothing.
+ * replies to messages Live sent into short spoken notes. Mounted once in the
+ * app shell; renders nothing.
  */
 export function LiveChatToolsHost({
   navigationBlockedReason,
@@ -42,16 +47,24 @@ export function LiveChatToolsHost({
   const noticeShownRef = React.useRef(preferences.chatAccessNoticeShown);
   noticeShownRef.current = preferences.chatAccessNoticeShown;
 
+  // Chat content Live sees (a read, a note) needs fresh speech before a send.
+  const requests = React.useMemo(
+    () => new LiveChatRequestGate(() => liveSessionBus.latestVoiceInputId()),
+    [],
+  );
   const watcher = React.useMemo(
     () =>
       new LiveChatNoteWatcher({
-        note: (text) => void liveSessionBus.note(text),
-        ending: async (chatId) => {
+        note: (text) => {
+          requests.exposed();
+          void liveSessionBus.note(text);
+        },
+        turn: async (chatId) => {
           const chat = await chatsApi.get(chatId);
-          return chat ? liveChatEnding(chat.messages) : null;
+          return chat ? liveChatTurn(chat.messages) : null;
         },
       }),
-    [],
+    [requests],
   );
 
   // One-time notice: the first chat tool use shows it and remembers it.
@@ -88,9 +101,7 @@ export function LiveChatToolsHost({
           queryFn: () => chatsApi.list(),
           staleTime: 5_000,
         });
-        return chats
-          .filter((chat) => !chat.botId && !chat.owner && chat.workspaceId !== ASSISTANT_WORKSPACE_ID)
-          .map((chat) => ({ id: chat.id, title: chat.title, updatedAt: chat.updatedAt }));
+        return liveChatCandidates(chats);
       },
       openChat: async (chatId) => {
         if (latest.current.navigationBlockedReason) return false;
@@ -109,10 +120,10 @@ export function LiveChatToolsHost({
       },
       currentWorkspaceId: () => liveOpenChat.get()?.workspaceId ?? latest.current.activeId ?? null,
       openNewChatIn: async (workspaceId) => {
-        if (latest.current.navigationBlockedReason) return false;
-        await latest.current.newChat.openNewChatIn(workspaceId);
-        return true;
+        if (latest.current.navigationBlockedReason) return null;
+        return (await latest.current.newChat.openNewChatIn(workspaceId)) ?? null;
       },
+      requests,
       used,
       watch: (chatId, title) => watcher.watch(chatId, title),
     });
@@ -120,23 +131,19 @@ export function LiveChatToolsHost({
     return () => {
       for (const release of unregister) release();
     };
-  }, [chatAccess, queryClient, used, watcher]);
+  }, [chatAccess, queryClient, requests, used, watcher]);
 
-  // Spoken notes: only while a session is on and chat access is allowed.
+  // Spoken notes: only while a session is on and chat access is allowed, and
+  // only for chats Live sent to in this session (main declares no chat tools
+  // under the kill switch, so nothing is watched then either).
   const activity = useChatActivityState();
   const [sessionId, setSessionId] = React.useState(() => liveSessionBus.currentSessionId());
   React.useEffect(() => liveSessionBus.onSession(setSessionId), []);
   const watching = Boolean(sessionId) && chatAccess;
   React.useEffect(() => {
     watcher.reset();
-    if (!watching) return;
-    const syncOpenChat = () => {
-      const open = liveOpenChat.get();
-      watcher.setOpenChat(open?.chatId ?? null, open?.title ?? "");
-    };
-    syncOpenChat();
-    return liveOpenChat.subscribe(syncOpenChat);
-  }, [watcher, watching, sessionId]);
+    requests.reset();
+  }, [requests, watcher, watching, sessionId]);
   React.useEffect(() => {
     if (watching) watcher.observe(activity);
   }, [activity, watcher, watching]);

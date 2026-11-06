@@ -8,6 +8,7 @@ import {
   findLiveWorkspace,
   liveChatNoteText,
   liveChatTranscript,
+  redactLiveChatSecrets,
   type LiveChatTranscriptMessage,
 } from "./live-chat-tools";
 
@@ -90,6 +91,14 @@ test("auto sends when the chat is idle and steers while it works", () => {
   assert.equal(decideLiveChatSend("auto", { ...idle, queueAvailable: false, hasQueued: true }), "send");
 });
 
+test("a paused queue refuses the messages that would wait in it", () => {
+  const paused = { busy: true, steerAvailable: false, queueAvailable: true, hasQueued: true, queuePaused: true };
+  assert.deepEqual(decideLiveChatSend("auto", paused), { refuse: { code: "queue_paused", message: "This chat's queue is paused. Ask the person to resume it in Aiden first." } });
+  assert.equal(decideLiveChatSend("auto", { ...paused, steerAvailable: true }), "steer");
+  assert.equal(typeof decideLiveChatSend("auto", { ...paused, busy: false }), "object", "idle with a held queue");
+  assert.equal(decideLiveChatSend("auto", { ...paused, busy: false, hasQueued: false }), "send");
+});
+
 test("steer and queue are refused with a reason when the chat can't take them", () => {
   const idle = { busy: false, steerAvailable: false, queueAvailable: true, hasQueued: false };
   const working = { busy: true, steerAvailable: false, queueAvailable: false, hasQueued: false };
@@ -141,6 +150,40 @@ test("a workspace is matched by name, and an unclear name matches none", () => {
   assert.equal(findLiveWorkspace(workspaces, "mobile")?.id, "w3");
   assert.equal(findLiveWorkspace(workspaces, "web"), null);
   assert.equal(findLiveWorkspace(workspaces, "backend"), null);
+  // Two workspaces with the same name: Live asks instead of picking one.
+  const twins = [...workspaces, { id: "w4", name: "Mobile app" }];
+  assert.equal(findLiveWorkspace(twins, "mobile app"), null);
+  assert.equal(findLiveWorkspace(twins, "mobile"), null);
+  assert.equal(findLiveWorkspace(twins, "website")?.id, "w1");
+});
+
+test("secret assignments and private key blocks never reach Live, while ordinary text does", () => {
+  const text = [
+    "DB_PASSWORD=hunter2",
+    "export GITHUB_TOKEN=abc123",
+    "OPENAI_API_KEY: sk-example",
+    "client-secret = shh",
+    "Password: letmein",
+    "TOKENIZER=fast",
+    "PASSAGE=keep this",
+    "Note: the build passed",
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "b3BlbnNzaC1rZXktdjEAAAAA",
+    "-----END OPENSSH PRIVATE KEY-----",
+    "after the key",
+  ].join("\n");
+  const redacted = redactLiveChatSecrets(text);
+  for (const secret of ["hunter2", "abc123", "sk-example", "shh", "letmein", "b3BlbnNzaC1rZXktdjEAAAAA"]) {
+    assert.ok(!redacted.includes(secret), secret);
+  }
+  for (const kept of ["DB_PASSWORD=", "TOKENIZER=fast", "PASSAGE=keep this", "Note: the build passed", "after the key"]) {
+    assert.ok(redacted.includes(kept), kept);
+  }
+  // An unfinished block is hidden to the end.
+  assert.equal(redactLiveChatSecrets("see\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow"), "see\n[hidden key]");
+  // The read applies it.
+  const read = liveChatTranscript([assistant("Set AWS_SECRET_ACCESS_KEY=wJalrXUt and retry.")]);
+  assert.doesNotMatch(read.messages[0]!.text, /wJalrXUt/u);
 });
 
 test("notes are one short sentence that never carries more than the title", () => {

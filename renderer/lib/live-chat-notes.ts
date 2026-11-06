@@ -1,7 +1,8 @@
-// Spoken update notes for Aiden Live. While a Live session is on, the chat on
-// screen and every chat Live sent a message to are watched; when one finishes
-// a reply, fails, or starts waiting for an approval or an answer, Live gets one
-// short note it may mention. Notes never carry the reply's text.
+// Spoken update notes for Aiden Live. While a Live session is on, each chat
+// Live sent a message to in that session is watched; when its reply to Live's
+// message finishes, fails, or starts waiting for an approval or an answer,
+// Live gets one short note it may mention. Replies to messages the person
+// typed get no note, and notes never carry the reply's text.
 
 import { liveChatNoteText, type LiveChatNoteKind } from "../shared/live-chat-tools";
 
@@ -15,10 +16,16 @@ export interface LiveChatActivity {
 /** How a chat's last reply ended, read once its run stops. */
 export type LiveChatEnding = "finished" | "failed" | "stopped" | null;
 
+/** The chat's latest turn: whose message started it, and how its reply ended. */
+export interface LiveChatTurn {
+  /** The newest message from the user's side is one Live sent ("By voice"). */
+  byVoice: boolean;
+  /** How the reply to that message ended; null while there is none. */
+  ending: LiveChatEnding;
+}
+
 interface Watched {
   title: string;
-  /** Live sent to it (kept when the person opens another chat). */
-  sent: boolean;
   active: boolean;
   approval: boolean;
   input: boolean;
@@ -31,47 +38,44 @@ const MAX_WATCHED = 12;
 
 export class LiveChatNoteWatcher {
   private readonly watched = new Map<string, Watched>();
-  private openChatId: string | null = null;
   private generation = 0;
   private last: LiveChatActivity | null = null;
 
   constructor(
     private readonly deps: {
       note(text: string): void;
-      /** Reads how the chat's latest reply ended; null when unknown. */
-      ending(chatId: string): Promise<LiveChatEnding>;
+      /** Reads the chat's latest turn; null when it can't be read. */
+      turn(chatId: string): Promise<LiveChatTurn | null>;
     },
   ) {}
 
-  /** Live sent a message to this chat. */
+  /** Live sent a message to this chat in this session. */
   watch(chatId: string, title: string): void {
     const entry = this.watched.get(chatId);
     if (entry) {
-      entry.sent = true;
       entry.title = title || entry.title;
       return;
     }
-    this.add(chatId, title, true);
-  }
-
-  /** The chat on screen while Live is on (null when none). */
-  setOpenChat(chatId: string | null, title: string): void {
-    if (this.openChatId && this.openChatId !== chatId) {
-      const previous = this.watched.get(this.openChatId);
-      if (previous && !previous.sent) this.watched.delete(this.openChatId);
+    if (this.watched.size >= MAX_WATCHED) {
+      const oldest = this.watched.keys().next().value;
+      if (oldest !== undefined) this.watched.delete(oldest);
     }
-    this.openChatId = chatId;
-    if (!chatId) return;
-    const entry = this.watched.get(chatId);
-    if (entry) entry.title = title || entry.title;
-    else this.add(chatId, title, false);
+    // Seeded from the latest activity, so a chat already running when Live
+    // first sends to it still gets its note when it finishes.
+    const last = this.last;
+    this.watched.set(chatId, {
+      title,
+      active: last?.activeChatIds.has(chatId) ?? false,
+      approval: last?.approvalChatIds.has(chatId) ?? false,
+      input: last?.inputChatIds.has(chatId) ?? false,
+      fresh: last === null,
+    });
   }
 
-  /** The session ended: forget everything and drop endings still being read. */
+  /** The session ended (or chat access went off): forget everything and drop reads in flight. */
   reset(): void {
     this.watched.clear();
     this.last = null;
-    this.openChatId = null;
     this.generation += 1;
   }
 
@@ -82,7 +86,6 @@ export class LiveChatNoteWatcher {
   /** Compares new activity with what each watched chat had and sends notes for the changes. */
   observe(activity: LiveChatActivity): void {
     this.last = activity;
-    const generation = this.generation;
     for (const [chatId, entry] of this.watched) {
       const active = activity.activeChatIds.has(chatId);
       const approval = activity.approvalChatIds.has(chatId);
@@ -91,38 +94,24 @@ export class LiveChatNoteWatcher {
         Object.assign(entry, { active, approval, input, fresh: false });
         continue;
       }
-      if (approval && !entry.approval) this.send("approval", entry.title);
-      if (input && !entry.input) this.send("question", entry.title);
-      if (entry.active && !active) {
-        const title = entry.title;
-        void this.deps
-          .ending(chatId)
-          .catch(() => null)
-          .then((ending) => {
-            if (generation !== this.generation || !this.watched.has(chatId)) return;
-            if (ending === "finished" || ending === "failed") this.send(ending, title);
-          });
-      }
+      if (approval && !entry.approval) this.noteTurn(chatId, entry.title, "approval");
+      if (input && !entry.input) this.noteTurn(chatId, entry.title, "question");
+      if (entry.active && !active) this.noteTurn(chatId, entry.title, "ending");
       Object.assign(entry, { active, approval, input });
     }
   }
 
-  private add(chatId: string, title: string, sent: boolean): void {
-    if (this.watched.size >= MAX_WATCHED) {
-      const oldest = [...this.watched.keys()].find((id) => id !== this.openChatId);
-      if (oldest) this.watched.delete(oldest);
-    }
-    // Seeded from the latest activity, so a chat already running when Live
-    // first sends to it still gets its note when it finishes.
-    const last = this.last;
-    this.watched.set(chatId, {
-      title,
-      sent,
-      active: last?.activeChatIds.has(chatId) ?? false,
-      approval: last?.approvalChatIds.has(chatId) ?? false,
-      input: last?.inputChatIds.has(chatId) ?? false,
-      fresh: last === null,
-    });
+  /** Notes only a turn Live started; an ending note says how the reply ended. */
+  private noteTurn(chatId: string, title: string, kind: "approval" | "question" | "ending"): void {
+    const generation = this.generation;
+    void this.deps
+      .turn(chatId)
+      .catch(() => null)
+      .then((turn) => {
+        if (generation !== this.generation || !this.watched.has(chatId) || !turn?.byVoice) return;
+        if (kind !== "ending") this.send(kind, title);
+        else if (turn.ending === "finished" || turn.ending === "failed") this.send(turn.ending, title);
+      });
   }
 
   private send(kind: LiveChatNoteKind, title: string): void {
@@ -130,17 +119,36 @@ export class LiveChatNoteWatcher {
   }
 }
 
+type TurnMessage = {
+  role: string;
+  inputSource?: string;
+  notice?: unknown;
+  providerFailure?: unknown;
+  timeline?: { status?: string };
+};
+
 /** How a reply ended, from the chat's newest assistant message. */
-export function liveChatEnding(
-  messages: ReadonlyArray<{
-    role: string;
-    providerFailure?: unknown;
-    timeline?: { status?: string };
-  }>,
-): LiveChatEnding {
+export function liveChatEnding(messages: readonly TurnMessage[]): LiveChatEnding {
   const last = [...messages].reverse().find((message) => message.role === "assistant");
   if (!last) return null;
   if (last.timeline?.status === "cancelled") return "stopped";
   if (last.providerFailure || last.timeline?.status === "failed") return "failed";
   return "finished";
+}
+
+/** The newest turn: was its message Live's, and how did the reply after it end. */
+export function liveChatTurn(messages: readonly TurnMessage[]): LiveChatTurn {
+  let lastUser = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "user" && !message.notice) {
+      lastUser = index;
+      break;
+    }
+  }
+  if (lastUser < 0) return { byVoice: false, ending: null };
+  return {
+    byVoice: messages[lastUser]!.inputSource === "voice",
+    ending: liveChatEnding(messages.slice(lastUser + 1)),
+  };
 }

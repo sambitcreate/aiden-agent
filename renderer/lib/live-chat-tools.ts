@@ -1,8 +1,9 @@
 // Window-side handlers for Aiden Live's chat tools. Main validates Gemini's
 // arguments and forwards each call here through the Live session bus; these
 // handlers check them again, use the open chat's controller for read, send and
-// stop, and the app shell's navigation for find and start. None of them can
-// answer a tool approval.
+// stop, and the app shell's navigation for find and start. Chat text comes back
+// only in `untrusted_chat_content`, a send or Stop needs fresh speech from the
+// person (LiveChatRequestGate), and none of them can answer a tool approval.
 
 import {
   LIVE_CHAT_ERRORS,
@@ -18,8 +19,38 @@ import {
   type LiveChatSendMode,
   type LiveChatToolName,
 } from "../shared/live-chat-tools";
+import { isUserVisibleChat, type ChatSurfaceInput } from "../shared/chat-visibility";
 import type { LiveChatController } from "./live-chat-control";
 import type { LiveRendererToolContext, LiveRendererToolHandler, LiveRendererToolResult } from "./live-session-bus";
+
+/**
+ * Whether the person has spoken since Live last saw chat content. Text in a
+ * chat (or a chat title, or a note about a chat) is data that could ask Live
+ * to send something; only fresh speech from the person authorizes a send,
+ * steer, queue, Stop or a new chat with a message.
+ */
+export class LiveChatRequestGate {
+  private seenAt: number;
+
+  constructor(private readonly latestVoiceInputId: () => number) {
+    this.seenAt = latestVoiceInputId();
+  }
+
+  /** Live just received chat content: a read_open_chat result or a note. */
+  exposed(): void {
+    this.seenAt = this.latestVoiceInputId();
+  }
+
+  /** A new session starts: speech from before it does not count. */
+  reset(): void {
+    this.seenAt = this.latestVoiceInputId();
+  }
+
+  /** The person said something after the latest chat content Live saw. */
+  allows(): boolean {
+    return this.latestVoiceInputId() > this.seenAt;
+  }
+}
 
 export interface LiveChatToolDeps {
   /** "Let Live use the open chat" is on. */
@@ -30,19 +61,30 @@ export interface LiveChatToolDeps {
     predicate: (controller: LiveChatController) => boolean,
     signal: AbortSignal,
   ): Promise<LiveChatController | null>;
-  /** Regular chats the person can open (never Bot or Assistant chats). */
+  /** Regular chats the person can open (see liveChatCandidates). */
   listChats(): Promise<LiveChatCandidate[]>;
   /** Opens a chat in the main window; false when navigation is blocked. */
   openChat(chatId: string): Promise<boolean>;
   listWorkspaces(): Promise<Array<{ id: string; name: string }>>;
   /** The workspace the person is in now. */
   currentWorkspaceId(): string | null;
-  /** Opens (or reuses) an empty draft there; false when navigation is blocked. */
-  openNewChatIn(workspaceId: string): Promise<boolean>;
+  /** Opens (or reuses) an empty draft there; its chat id, or null when nothing opened. */
+  openNewChatIn(workspaceId: string): Promise<string | null>;
+  /** Fresh speech since Live last saw chat content. */
+  requests: LiveChatRequestGate;
   /** Called on every chat tool use; shows the one-time notice the first time. */
   used(): void;
   /** Live sent to this chat: its finished, failed and approval moments become notes. */
   watch(chatId: string, title: string): void;
+}
+
+/** Chats Live may find and open: only ordinary user chats, never Bot, Assistant or feature chats. */
+export function liveChatCandidates(
+  chats: ReadonlyArray<ChatSurfaceInput & { id: string; title: string; updatedAt: number }>,
+): LiveChatCandidate[] {
+  return chats
+    .filter((chat) => isUserVisibleChat(chat))
+    .map((chat) => ({ id: chat.id, title: chat.title, updatedAt: chat.updatedAt }));
 }
 
 function boundedText(value: unknown, max: number): string | null {
@@ -55,22 +97,45 @@ function isSendMode(value: unknown): value is LiveChatSendMode {
   return typeof value === "string" && (LIVE_CHAT_SEND_MODES as readonly string[]).includes(value);
 }
 
-function cancelled(): LiveRendererToolResult {
-  return { ok: false, error: { code: "cancelled", message: "The request was cancelled." } };
+const cancelled = (): LiveRendererToolResult => liveChatFailure(LIVE_CHAT_ERRORS.cancelled);
+
+/**
+ * Moves chat-derived text (titles, workspace names) into
+ * `untrusted_chat_content`, the one field Live is told is data, never
+ * instructions.
+ */
+function withUntrustedTitle(result: LiveRendererToolResult): LiveRendererToolResult {
+  if (typeof result.title !== "string") return result;
+  const { title, ...rest } = result;
+  return { ...rest, untrusted_chat_content: { title } };
 }
 
 export function createLiveChatToolHandlers(
   deps: LiveChatToolDeps,
 ): Record<LiveChatToolName, LiveRendererToolHandler> {
-  /** Every handler: switch first, then the one-time notice, then the tool. */
+  // One chat tool at a time per window, so two calls never race on one chat.
+  let tail: Promise<unknown> = Promise.resolve();
+
+  /** Every handler: switch first, then the one-time notice, then the tool, in turn. */
   const guarded =
     (run: (args: Record<string, unknown>, context: LiveRendererToolContext) => Promise<LiveRendererToolResult> | LiveRendererToolResult): LiveRendererToolHandler =>
-    async (args, context) => {
-      if (!deps.enabled()) return liveChatFailure(LIVE_CHAT_ERRORS.off);
-      if (context.signal.aborted) return cancelled();
-      deps.used();
-      return run(args ?? {}, context);
+    (args, context) => {
+      const next = tail.then(async () => {
+        if (!deps.enabled()) return liveChatFailure(LIVE_CHAT_ERRORS.off);
+        if (context.signal.aborted) return cancelled();
+        deps.used();
+        return run(args ?? {}, context);
+      });
+      tail = next.catch(() => undefined);
+      return next;
     };
+
+  /** Checks the cancel and hands the action over; after this the outcome is always reported. */
+  const commit = (context: LiveRendererToolContext): boolean => {
+    if (context.signal.aborted) return false;
+    context.commit();
+    return true;
+  };
 
   const sendThrough = async (
     controller: LiveChatController,
@@ -80,7 +145,7 @@ export function createLiveChatToolHandlers(
     const before = controller.read(1).title;
     const result = await controller.send(text, mode);
     if (result.ok === true) deps.watch(controller.chatId, controller.read(1).title || before);
-    return result;
+    return withUntrustedTitle(result);
   };
 
   return {
@@ -92,14 +157,15 @@ export function createLiveChatToolHandlers(
           ? Math.min(LIVE_CHAT_MAX_READ_MESSAGES, Math.max(1, Math.floor(args.limit)))
           : undefined;
       const snapshot = controller.read(limit);
+      // From here on, a send needs the person to speak again.
+      deps.requests.exposed();
       return {
         ok: true,
         chat: {
-          title: snapshot.title,
           busy: snapshot.busy,
           ...(snapshot.waitingForApproval ? { waitingForApproval: true } : {}),
         },
-        messages: snapshot.messages,
+        untrusted_chat_content: { title: snapshot.title, messages: snapshot.messages },
         ...(snapshot.truncated ? { olderMessagesLeftOut: true } : {}),
       };
     }),
@@ -110,14 +176,17 @@ export function createLiveChatToolHandlers(
       if (!text || !isSendMode(mode)) return liveChatFailure(LIVE_CHAT_ERRORS.invalid);
       const controller = deps.controller();
       if (!controller) return liveChatFailure(LIVE_CHAT_ERRORS.noChat);
-      if (context.signal.aborted) return cancelled();
+      if (!deps.requests.allows()) return liveChatFailure(LIVE_CHAT_ERRORS.needsUserRequest);
+      if (!commit(context)) return cancelled();
       return sendThrough(controller, text, mode);
     }),
 
-    stop_open_chat: guarded(() => {
+    stop_open_chat: guarded((_args, context) => {
       const controller = deps.controller();
       if (!controller) return liveChatFailure(LIVE_CHAT_ERRORS.noChat);
-      return controller.stop();
+      if (!deps.requests.allows()) return liveChatFailure(LIVE_CHAT_ERRORS.needsUserRequest);
+      if (!commit(context)) return cancelled();
+      return withUntrustedTitle(controller.stop());
     }),
 
     find_and_open_chat: guarded(async (args, context) => {
@@ -127,13 +196,15 @@ export function createLiveChatToolHandlers(
       if (context.signal.aborted) return cancelled();
       if (found.kind === "none") return liveChatFailure(LIVE_CHAT_ERRORS.notFound);
       if (found.kind === "ambiguous") {
-        return { ok: true, opened: false, closeMatches: found.titles };
+        return { ok: true, opened: false, untrusted_chat_content: { closeMatches: found.titles } };
       }
+      const title = { untrusted_chat_content: { title: found.chat.title } };
       if (deps.controller()?.chatId === found.chat.id) {
-        return { ok: true, opened: true, title: found.chat.title, alreadyOpen: true };
+        return { ok: true, opened: true, alreadyOpen: true, ...title };
       }
+      if (!commit(context)) return cancelled();
       if (!(await deps.openChat(found.chat.id))) return liveChatFailure(LIVE_CHAT_ERRORS.navigationBlocked);
-      return { ok: true, opened: true, title: found.chat.title };
+      return { ok: true, opened: true, ...title };
     }),
 
     start_new_chat: guarded(async (args, context) => {
@@ -143,29 +214,39 @@ export function createLiveChatToolHandlers(
       if ((args.workspace !== undefined && !workspaceName) || (args.text !== undefined && !text)) {
         return liveChatFailure(LIVE_CHAT_ERRORS.invalid);
       }
+      if (text && !deps.requests.allows()) return liveChatFailure(LIVE_CHAT_ERRORS.needsUserRequest);
       const workspaces = await deps.listWorkspaces();
       const workspace = workspaceName
         ? findLiveWorkspace(workspaces, workspaceName)
         : (workspaces.find((entry) => entry.id === deps.currentWorkspaceId()) ?? null);
       if (!workspace) return liveChatFailure(LIVE_CHAT_ERRORS.workspaceNotFound);
-      if (context.signal.aborted) return cancelled();
-      let opened: boolean;
+      if (!commit(context)) return cancelled();
+      const started = { ok: true, started: true, untrusted_chat_content: { workspace: workspace.name } };
+      let draftId: string | null;
       try {
-        opened = await deps.openNewChatIn(workspace.id);
+        draftId = await deps.openNewChatIn(workspace.id);
       } catch {
         return liveChatFailure(LIVE_CHAT_ERRORS.newChatFailed);
       }
-      if (!opened) return liveChatFailure(LIVE_CHAT_ERRORS.navigationBlocked);
+      if (!draftId) return liveChatFailure(LIVE_CHAT_ERRORS.navigationBlocked);
+      // The chat opened; a cancel now only skips the message.
       const controller = await deps.waitForController(
-        (candidate) => candidate.isDraft && candidate.workspaceId === workspace.id,
+        (candidate) => candidate.chatId === draftId,
         context.signal,
       );
-      if (context.signal.aborted) return cancelled();
+      if (context.signal.aborted) return { ...started, sent: false };
       if (!controller) return liveChatFailure(LIVE_CHAT_ERRORS.newChatFailed);
-      if (!text) return { ok: true, started: true, workspace: workspace.name };
+      if (!text) return started;
       const sent = await sendThrough(controller, text, "auto");
-      if (sent.ok !== true) return sent;
-      return { ...sent, started: true, workspace: workspace.name };
+      if (sent.ok !== true) return { ...sent, started: true };
+      return {
+        ...sent,
+        started: true,
+        untrusted_chat_content: {
+          workspace: workspace.name,
+          ...(sent.untrusted_chat_content as Record<string, unknown> | undefined),
+        },
+      };
     }),
   };
 }
