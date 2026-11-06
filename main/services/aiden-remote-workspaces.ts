@@ -6,6 +6,7 @@ import path from "node:path";
 import { parsePeerProjectClone, PEER_PROJECT_CLONE_TIMEOUT_MS, type PeerProjectCloneRequest } from "../../renderer/shared/peer-project-clone.js";
 import { parseCloneUrl } from "../../renderer/shared/workspace-intake.js";
 import type { WorkspaceIntakeService } from "./workspace-intake.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -246,51 +247,17 @@ export class AidenRemoteWorkspaceService {
     input: unknown,
     action: () => Promise<T>,
   ): Promise<T> {
-    if (!this.options.persistIdempotency) {
-      return this.idempotency.execute(scope, input, action);
-    }
-    let release!: () => void;
-    let reject!: (error: unknown) => void;
-    const durableAdmission = new Promise<void>((resolve, rejectPromise) => {
-      release = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await durableAdmission;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      release();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError(
-        "internal_error",
-        "Aiden could not durably prepare this workspace request.",
-        500,
-      );
-    }
-    let result: T;
-    let actionError: unknown;
-    let actionFailed = false;
-    try {
-      result = await pending;
-    } catch (error) {
-      actionFailed = true;
-      actionError = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The workspace change may have completed, but Aiden could not durably record its outcome.",
-        409,
-      );
-    }
-    if (actionFailed) throw actionError;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not durably prepare this workspace request.",
+        outcomeUnrecordedMessage: "The workspace change may have completed, but Aiden could not durably record its outcome.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   async list(): Promise<{ workspaces: AidenRemoteWorkspaceProjection[] }> {

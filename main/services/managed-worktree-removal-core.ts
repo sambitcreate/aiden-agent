@@ -1,3 +1,36 @@
+export type ManagedWorktreeRemovalPhase =
+  | "prepared"
+  | "quarantined"
+  | "checkout_cleanup_started"
+  | "checkout_complete"
+  | "admin_cleanup_started"
+  | "needs_review"
+  | "filesystem_complete";
+
+const REMOVAL_PHASE_ORDER: readonly ManagedWorktreeRemovalPhase[] = [
+  "prepared",
+  "quarantined",
+  "checkout_cleanup_started",
+  "checkout_complete",
+  "admin_cleanup_started",
+  "filesystem_complete",
+];
+
+/**
+ * The deletion journal moves one step forward, or to `needs_review` from any
+ * phase. A write may repeat its phase to record a manifest digest. Nothing
+ * leaves `needs_review`: a person has to look at what it preserved, so no
+ * recovery path may walk it back into deletion.
+ */
+export function managedWorktreeRemovalPhaseAllowed(
+  from: ManagedWorktreeRemovalPhase,
+  to: ManagedWorktreeRemovalPhase,
+): boolean {
+  if (from === to || to === "needs_review") return true;
+  if (from === "needs_review") return false;
+  return REMOVAL_PHASE_ORDER.indexOf(to) === REMOVAL_PHASE_ORDER.indexOf(from) + 1;
+}
+
 export interface ManagedWorktreeRemovalDependencies<TResult> {
   deleteWorktree(): Promise<TResult>;
   destructiveMutationAttempted?(error: unknown): boolean | undefined;

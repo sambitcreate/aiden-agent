@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { redactCredentialTokens } from "../shared/redaction.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
@@ -321,29 +322,17 @@ export class AidenRemoteScheduleService {
     if (!IDEMPOTENCY_KEY_PATTERN.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) return this.idempotency.execute(scope, input, action);
-    let release!: () => void;
-    let reject!: (error: unknown) => void;
-    const admission = new Promise<void>((resolve, rejectPromise) => { release = resolve; reject = rejectPromise; });
-    const pending = this.idempotency.execute(scope, input, async () => { await admission; return action(); });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      release();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not durably prepare this scheduled-task request.", 500);
-    }
-    let result: T | undefined;
-    let failure: unknown;
-    try { result = await pending; } catch (error) { failure = error; }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError("idempotency_in_flight", "The scheduled-task change may have completed, but Aiden could not record its outcome.", 409);
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not durably prepare this scheduled-task request.",
+        outcomeUnrecordedMessage: "The scheduled-task change may have completed, but Aiden could not record its outcome.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   async list(deviceId: string) {

@@ -189,6 +189,42 @@ test("workspace idempotency is persisted before mutation and replays after resta
   assert.equal(restarted.notifications(), 0);
 });
 
+test("a request whose durable admission failed never ran, so the same key can still execute", async () => {
+  let saves = 0;
+  const app = fixture([], {
+    persistIdempotency: async () => {
+      saves += 1;
+      if (saves === 1) throw new Error("disk full");
+    },
+  });
+  const key = "durable-retry-key-0001";
+  await assert.rejects(
+    app.service.create("device-1", key, { mode: "folderless", name: "Retried" }),
+    (error: unknown) => (error as { code?: string }).code === "internal_error",
+  );
+  assert.equal(app.createCalls(), 0);
+
+  const created = await app.service.create("device-1", key, { mode: "folderless", name: "Retried" });
+  assert.equal(created.name, "Retried");
+  assert.equal(app.createCalls(), 1);
+});
+
+test("a replay answers from the ledger even while the disk refuses writes", async () => {
+  let failSaves = false;
+  const app = fixture([], {
+    persistIdempotency: async () => {
+      if (failSaves) throw new Error("disk full");
+    },
+  });
+  const key = "durable-replay-key-0001";
+  const created = await app.service.create("device-1", key, { mode: "folderless", name: "Replayed" });
+
+  failSaves = true;
+  const replay = await app.service.create("device-1", key, { mode: "folderless", name: "Replayed" });
+  assert.deepEqual(replay, created);
+  assert.equal(app.createCalls(), 1);
+});
+
 test("selected-folder creation consumes only a browser-issued path and never accepts raw paths", async () => {
   const app = fixture([]);
   const created = await app.service.create("device-1", "selected-folder-key-01", {
