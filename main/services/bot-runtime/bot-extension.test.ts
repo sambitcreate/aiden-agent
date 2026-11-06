@@ -1119,6 +1119,20 @@ test("(hk4) a Stop hook that always says keep going ends after the shared cap", 
   }
 });
 
+test("(hk4b) a reply cut off at the length limit doesn't run Stop hooks, and still reaches the person", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("half an ans", { stopReason: "length" })]);
+  const hooks = fakeHooks({ Stop: () => ({ continueTurn: true, reason: "again", reasonForModel: "<hook-data>again</hook-data>", ranHooks: ["nag"] }) });
+  const { harness, root } = await memoryHarness(withHooks(recordingDeps(), hooks), fauxModels);
+  try {
+    const settled = await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.equal(settled.status, "done");
+    assert.equal(fauxModels.calls(), 1);
+    assert.deepEqual(hooks.runs.filter((run) => run.event === "Stop"), []);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("(hk5) PreToolUse context joins PostToolUse's in the tool result; hook messages reach the person, never the model", async () => {
   const tool = countingTool("lookup");
   const fauxModels = createFauxModels([

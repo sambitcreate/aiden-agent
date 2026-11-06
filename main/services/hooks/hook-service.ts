@@ -12,7 +12,8 @@
  * command runs (see hook-script-files.ts), read from the folder it runs in,
  * so editing or swapping a script stops the hook until it is approved again.
  * The files are read again just before the command starts, so a script
- * swapped after the check refuses to run instead of running unapproved code.
+ * swapped before that read refuses to run. The shell opens the file a moment
+ * later, and a swap inside that gap isn't caught.
  * A command whose scripts can't all be checked (too many words or files, or
  * a file over the size cap) is unsupported; one that also runs something the
  * scan can't follow (`npm run`, `bash -c`, `cd`…) is listed as partial.
@@ -21,7 +22,7 @@
 import { randomBytes } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createHookDispatcher, normalizeHookPayload, type AidenHookDispatcher, type HookRunFunction } from "./hook-dispatcher.js";
+import { createHookDispatcher, normalizeHookPayload, type ActiveHook, type AidenHookDispatcher, type HookRunFunction } from "./hook-dispatcher.js";
 import { claudeToolName } from "./hook-aliases.js";
 import {
   hookDefinitionFor,
@@ -48,7 +49,7 @@ import {
   type StoredHookEntry,
   type WorkspaceHooksFile,
 } from "./hook-store.js";
-import { HookTrustStore } from "./hook-trust-store.js";
+import { HookTrustStore, type HookApprovalRecord } from "./hook-trust-store.js";
 import type {
   HookCommandHandler,
   HookDefinition,
@@ -207,6 +208,11 @@ export interface HookService {
 }
 
 const TOOL_EVENTS: ReadonlySet<HookEvent> = new Set(["PreToolUse", "PostToolUse"]);
+
+/** The Settings row id of a blocking hook that no longer exists. */
+function guardRowId(scope: HookScope, digest: string): string {
+  return `guard:${hookScopeKey(scope)}:${digest}`;
+}
 
 function workspaceRootOf(scope: HookScope): string | undefined {
   return scope.kind === "workspace" ? scope.workspaceRoot : undefined;
@@ -524,6 +530,30 @@ export function createHookService(deps: HookServiceDeps): HookService {
   const storedListingsIn = async (scope: HookScope, cwd?: string): Promise<HookListing[]> =>
     (await Promise.all(entries.entries().filter((entry) => hookScopesEqual(entry.scope, scope)).map((entry) => storedListing(entry, cwd)))).map(statusOf);
 
+  /** Approved blocking hooks in this scope with no running version among `listings`. */
+  const unmetGuards = (scope: HookScope, listings: readonly HookListing[]): HookApprovalRecord[] =>
+    trust.approvalsFor(scope).filter(
+      (record) =>
+        record.blocksWhenFailing === true &&
+        !trust.isDisabled({ scope, digest: record.digest }) &&
+        !listings.some((listing) => listing.status === "active" && listing.digest === record.digest),
+    );
+
+  /** The row for a guard whose hook no longer exists, so the owner can see and clear it. */
+  const missingGuardListing = (scope: HookScope, record: HookApprovalRecord): HookListing => ({
+    id: guardRowId(scope, record.digest),
+    name: record.name ?? "Blocking hook",
+    event: record.event,
+    configuredEvent: record.event,
+    configuredType: "command",
+    matcher: record.matcher,
+    handler: { type: "command", command: "" },
+    scope,
+    source: record.hookId.startsWith("repo:") ? "workspace-file" : "settings",
+    digest: record.digest,
+    status: "missing",
+  });
+
   const dispatcher = createHookDispatcher({
     run: recheckScriptsBeforeRun(runOne, now),
     now,
@@ -532,7 +562,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
         if (disabledByEnvironment()) return [];
         await ensureLoaded();
         if (hooksOff()) return [];
-        const active: HookDefinition[] = [];
+        const active: ActiveHook[] = [];
         for (const rawScope of scopes) {
           const scope = normalizeHookScope(rawScope);
           // Scripts are read from where the hook will run, so a different copy
@@ -556,6 +586,19 @@ export function createHookService(deps: HookServiceDeps): HookService {
             if (listing.status !== "active" || listing.event !== event) continue;
             const definition = listingDefinition(listing);
             if (definition) active.push(definition);
+          }
+          if (event === "PreToolUse") {
+            // A guard the owner approved stays in force when its hook changes or
+            // goes: otherwise editing the file would lift it. The dispatcher
+            // refuses the tools it covered, by the matcher they approved.
+            for (const record of unmetGuards(scope, listings)) {
+              const name = record.name ?? "A blocking hook";
+              active.push({
+                ...missingGuardListing(scope, record),
+                event,
+                refusal: `${name} changed or is missing, so its tools are blocked until you approve it again or remove it in Settings → Hooks`,
+              });
+            }
           }
         }
         return active;
@@ -599,6 +642,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
     for (const entry of entries.entries()) byKey.set(hookScopeKey(entry.scope), entry.scope);
     for (const key of trust.approvedScopeKeys()) {
       if (key.startsWith("workspace:")) byKey.set(key, { kind: "workspace", workspaceRoot: key.slice("workspace:".length) });
+      if (key.startsWith("chat:")) byKey.set(key, { kind: "chat", chatId: key.slice("chat:".length) });
+      if (key.startsWith("bot:")) byKey.set(key, { kind: "bot", botId: key.slice("bot:".length) });
     }
     for (const root of repoHookRoots.values()) byKey.set(`workspace:${root}`, { kind: "workspace", workspaceRoot: root });
     return [...byKey.values()];
@@ -828,13 +873,17 @@ export function createHookService(deps: HookServiceDeps): HookService {
         const key = hookScopeKey(scope);
         if (seen.has(key)) continue;
         seen.add(key);
-        hooks.push(...(await storedListingsIn(scope)).map(withLastRun));
+        const listings = await storedListingsIn(scope);
         const root = workspaceRootOf(scope);
         if (root) {
           const file = await readRepo(root);
-          hooks.push(...file.hooks.map((hook) => withLastRun(statusOf(hook))));
+          listings.push(...file.hooks.map(statusOf));
           workspaceFiles.push({ workspaceRoot: root, present: file.present, problems: file.problems, warnings: file.warnings });
         }
+        hooks.push(...listings.map(withLastRun));
+        // A guard with a row of its own (shown as changed) is cleared from that row.
+        const hasRow = (record: HookApprovalRecord) => listings.some((listing) => listing.status !== "active" && listing.id === record.hookId);
+        hooks.push(...unmetGuards(scope, listings).filter((record) => !hasRow(record)).map((record) => missingGuardListing(scope, record)));
       }
       return { hooks, paused: trust.paused, disabledByEnvironment: disabledByEnvironment(), workspaceFiles };
     },
@@ -927,6 +976,15 @@ export function createHookService(deps: HookServiceDeps): HookService {
         if (entry) {
           await entries.remove(hookId);
           await trust.revoke(await storedListing(entry));
+          changed({ reason: "hooks", hookId });
+          return { ok: true, value: undefined };
+        }
+        const guard = knownScopes()
+          .flatMap((scope) => trust.approvalsFor(scope).map((record) => ({ scope, record })))
+          .find(({ scope, record }) => guardRowId(scope, record.digest) === hookId);
+        if (guard) {
+          // By digest alone: the record's id may belong to another hook by now.
+          await trust.revoke({ id: hookId, digest: guard.record.digest, scope: guard.scope });
           changed({ reason: "hooks", hookId });
           return { ok: true, value: undefined };
         }

@@ -2,8 +2,14 @@
 // computer. Agent file tools (parent, Bot, subagent and ACP writes) never
 // create, replace or edit these paths, whatever the workspace permission:
 // a model that could rewrite them could grant itself code execution outside
-// any approval. Reading them stays allowed. `run_command` is out of scope
-// here; Aiden's hook digest check disables a hook whose file changed.
+// any approval. Reading them stays allowed. `.git/config` and `.git/hooks`
+// are here because `core.fsmonitor`, `core.sshCommand` and git's own hooks run
+// code the moment a hook (or anything else) calls git.
+//
+// `run_command` is out of scope: a shell can write anywhere the person can.
+// Aiden's digest check catches a changed hook file or script, but on the
+// desktop a shell command could also rewrite Aiden's own hook store. Only the
+// sandbox, or a person reading the approval card for that command, stops it.
 
 import { realpathSync } from "node:fs";
 import * as path from "node:path";
@@ -21,12 +27,14 @@ const PROTECTED_CONFIG_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new 
   [".claude", new Set(["settings.json", "settings.local.json", "hooks", "plugins"])],
   // Codex hooks and configuration (`[hooks]`, MCP servers, sandbox policy).
   [".codex", new Set(["config.toml", "hooks.json", "hooks"])],
+  // Git settings and hooks that run code on any git call.
+  [".git", new Set(["config", "hooks"])],
 ]);
 
 export const PROTECTED_AGENT_CONFIG_WRITE_MESSAGE =
   "File tools cannot change hook or agent settings files (.aiden/hooks.json, .aiden/hooks/, " +
   ".claude/settings.json, .claude/settings.local.json, .claude/hooks/, .claude/plugins/, " +
-  ".codex/config.toml, .codex/hooks.json, .codex/hooks/, or Aiden's own hooks folder) because they run commands on this computer. " +
+  ".codex/config.toml, .codex/hooks.json, .codex/hooks/, .git/config, .git/hooks/, or Aiden's own hooks folder) because they run commands on this computer. " +
   "Ask the person to change it in Settings → Hooks or to edit the file by hand.";
 
 /**

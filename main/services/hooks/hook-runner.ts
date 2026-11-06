@@ -166,6 +166,20 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
+/**
+ * What's wrong with a successful run's answer, when it tried to give one Aiden
+ * can't read: JSON that doesn't parse, or a decision that isn't one. Plain text
+ * and JSON with no decision are fine: the hook has nothing to say.
+ */
+function unreadableToolDecision(stdout: string, output: Record<string, unknown> | undefined): string | undefined {
+  if (!output) return stdout.trim().startsWith("{") ? "printed JSON Aiden couldn't read" : undefined;
+  const specific = output.hookSpecificOutput;
+  const given = specific && typeof specific === "object" ? (specific as Record<string, unknown>).permissionDecision : undefined;
+  if (given !== undefined && !isPermissionDecision(given)) return "gave a decision Aiden doesn't know";
+  if (given === undefined && output.decision !== undefined && output.decision !== "approve" && output.decision !== "block") return "gave a decision Aiden doesn't know";
+  return undefined;
+}
+
 /** Apply Claude Code's exit-code and output protocol to one finished run. */
 export function interpretHookRun(event: HookEvent, run: HookRawRun, handler: { failClosed?: boolean }): HookHandlerResult {
   const excerpt = excerptOf(run);
@@ -195,6 +209,10 @@ export function interpretHookRun(event: HookEvent, run: HookRawRun, handler: { f
     return { result: "ok", systemMessage: reason, excerpt };
   }
   const output = parseJsonObject(run.stdout);
+  if (event === "PreToolUse" && handler.failClosed) {
+    const unreadable = unreadableToolDecision(run.stdout, output);
+    if (unreadable) return { result: "error", decision: "deny", reason: `The hook ${unreadable}, and it is set to block when it fails.`, error: unreadable, excerpt };
+  }
   if (!output) {
     const text = run.stdout.trim();
     return PLAIN_CONTEXT_EVENTS.has(event) && text ? { result: "ok", additionalContext: text, excerpt } : { result: "ok", excerpt };

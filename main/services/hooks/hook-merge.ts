@@ -16,8 +16,16 @@ const MAX_MESSAGE_CHARS = 1_000;
 
 const RANK: Record<HookPermissionDecision, number> = { allow: 1, ask: 2, deny: 3 };
 
-/** Tools whose input a hook may never rewrite: the approval card showed the original. */
-const NO_UPDATED_INPUT_TOOLS: ReadonlySet<string> = new Set(["run_command"]);
+/**
+ * Tools whose input a hook may never rewrite: each one takes a shell command
+ * or code to run, and the person approves what the agent asked for.
+ */
+const NO_UPDATED_INPUT_TOOLS: ReadonlySet<string> = new Set(["run_command", "background_job", "computer_shell", "codemode", "workspace_artifact"]);
+
+/** Whether a hook's `updatedInput` may replace this tool's input. */
+export function hookMayRewriteInput(toolName: string): boolean {
+  return !NO_UPDATED_INPUT_TOOLS.has(toolName);
+}
 
 export interface HookMergeEntry {
   hook: Pick<HookDefinition, "id" | "name">;
@@ -70,7 +78,7 @@ export function mergeHookResults(event: HookEvent, entries: readonly HookMergeEn
       if (decision === "allow") {
         const toolName = payload?.aiden_tool_name ?? payload?.tool_name;
         const winner = entries.find((entry) => entry.result.decision === "allow" && entry.result.updatedInput);
-        if (winner?.result.updatedInput && toolName && !NO_UPDATED_INPUT_TOOLS.has(toolName)) {
+        if (winner?.result.updatedInput && toolName && hookMayRewriteInput(toolName)) {
           outcome.updatedInput = aidenToolInput(toolName, winner.result.updatedInput, payload?.tool_input);
         }
       }

@@ -77,6 +77,18 @@ test("any other exit code fails open unless the hook is set to fail closed", asy
   assert.equal(closed.result.decision, "deny");
 });
 
+test("a fail-closed hook whose output is cut off or says nothing readable blocks the tool", async (t) => {
+  const dir = await tempDir(t);
+  const hook = await script(dir, "garbled.sh", `printf '%s' '{"hookSpecificOutput": {"permissionDecision": "de'`);
+  const failClosed = await run("PreToolUse", { command: hook, failClosed: true }, dir);
+  assert.equal(failClosed.result.decision, "deny");
+  assert.match(failClosed.result.reason ?? "", /set to block when it fails/u);
+  // Without the setting a garbled answer is still only a failed hook, and plain text stays context.
+  assert.notEqual((await run("PreToolUse", { command: hook }, dir)).result.decision, "deny");
+  const plain = await script(dir, "plain.sh", "echo all good");
+  assert.notEqual((await run("PreToolUse", { command: plain, failClosed: true }, dir)).result.decision, "deny");
+});
+
 test("a timeout on a fail-closed hook blocks the tool", async (t) => {
   const dir = await tempDir(t);
   const hook = await script(dir, "slow.sh", `sleep 5`);

@@ -15,7 +15,7 @@ import { workspaceStore } from "./workspaces.ts";
 export const HOOKS_USAGE = "Usage: hooks list | approve <id> <digest> | disable <id> | enable <id> | pause | resume | test <id> <digest>";
 
 /** Commands that let a hook run, which only a person at a terminal may give. */
-const INTERACTIVE_ACTIONS = new Set(["approve", "enable"]);
+const INTERACTIVE_ACTIONS = new Set(["approve", "enable", "resume", "test"]);
 
 const DIGEST = /^[0-9a-f]{64}$/u;
 

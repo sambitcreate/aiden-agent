@@ -35,6 +35,7 @@ import { GenerationTimelineProjector } from "../../../main/services/generation-t
 import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
 import { MAX_STOP_HOOK_CONTINUATIONS, botSurfaceHooks, createSurfaceHooks, hookAskText, hookBlockText, hookNoticeLines, hookPostToolAdditions, hookStopContinuation, hookStopMessage, hookToolPayload } from "../../../main/services/agent-surface-hooks.js";
+import { toolCallIdempotencyKey } from "../../../main/services/hooks/hook-config.js";
 import type { HookOutcome } from "../../../main/services/hooks/hook-types.js";
 import { markWorkspaceChatCompacted, runPromptIntakeHooks, workspaceChatHookScopes } from "../../../main/services/workspace-chat-hooks.js";
 import { isProtectedAgentConfigPath, PROTECTED_AGENT_CONFIG_WRITE_MESSAGE } from "../../../main/services/protected-agent-config-paths.js";
@@ -311,7 +312,7 @@ export function createDaemonChats(agentDir: string) {
               // PreToolUse runs after Aiden's own rules allowed the call, so a
               // hook can only tighten them; its updatedInput is not applied.
               const hooked = await dispatchHook("PreToolUse", { ...hookToolPayload(daemonHookToolName(event.toolName), event.input), tool_use_id: event.toolCallId },
-                { idempotencyKey: `PreToolUse:${chat.id}:${event.toolCallId}`, signal: entry.abort.signal });
+                { idempotencyKey: toolCallIdempotencyKey(`PreToolUse:${chat.id}`, event.toolCallId, event.input), signal: entry.abort.signal });
               if (hooked) await assertAuthority();
               requestHookStop(hooked);
               if (hooked?.additionalContext) preToolContext.set(event.toolCallId, hooked.additionalContext);

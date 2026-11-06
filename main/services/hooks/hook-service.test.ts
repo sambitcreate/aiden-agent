@@ -620,10 +620,104 @@ test("an approved repo hooks file that becomes unreadable blocks tool calls inst
   await fs.writeFile(file, "{ not json");
   assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, "deny");
 
-  // Removing the file is a choice, not a failure: the hook is simply gone.
-  await fs.rm(file);
-  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined);
   assert.deepEqual(commands, []);
+});
+
+test("a blocking hook that was changed or removed keeps its tools blocked until the owner decides", async (t) => {
+  const f = await fixture(t);
+  const { run, commands } = recordingRun();
+  const guard = { type: "command" as const, command: "./guard.sh", failClosed: true };
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [guard] }] } });
+  const service = await f.create({ run });
+  const approved = (await service.listHooks(f.scopes)).hooks[0];
+  assert.ok(approved && (await service.approveDigest(approved.id, approved.digest)).ok);
+
+  // An agent's shell can edit or delete the file, so neither may lift the guard.
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ ...guard, command: "true" }] }] } });
+  const edited = await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context);
+  assert.equal(edited.decision, "deny");
+  assert.match(edited.reason ?? "", /changed or is missing/u);
+
+  await fs.rm(path.join(f.workspace, ".aiden", "hooks.json"));
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, "deny");
+  const readCall = { ...bashCall("ls"), aiden_tool_name: "read_file" };
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", readCall, f.context)).decision, undefined, "tools it never covered still run");
+  assert.deepEqual(commands, []);
+
+  const rows = (await service.listHooks(f.scopes)).hooks;
+  assert.deepEqual(rows.map((row) => row.status), ["missing"]);
+
+  // Removing it in Settings is the owner's decision, and lifts the block.
+  assert.ok((await service.deleteHook(rows[0]!.id)).ok);
+  assert.deepEqual((await service.listHooks(f.scopes)).hooks, []);
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined);
+});
+
+test("approving a changed blocking hook lifts the block, and moving it in the file never blocks", async (t) => {
+  const f = await fixture(t);
+  const { run, commands } = recordingRun();
+  const guard = { type: "command" as const, command: "./guard.sh", failClosed: true };
+  const entry = { matcher: "Bash", hooks: [guard] };
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [entry] } });
+  const service = await f.create({ run });
+  const first = (await service.listHooks(f.scopes)).hooks[0];
+  assert.ok(first && (await service.approveDigest(first.id, first.digest)).ok);
+
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: "echo other" }] }, entry] } });
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined);
+  assert.deepEqual(commands, ["./guard.sh"], "the same hook in a new place still runs");
+  commands.length = 0;
+
+  const changed = { ...guard, command: "./guard.sh --strict" };
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [changed] }] } });
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, "deny");
+  const row = (await service.listHooks(f.scopes)).hooks.find((hook) => hook.status === "changed");
+  assert.ok(row && (await service.approveDigest(row.id, row.digest)).ok);
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined);
+  assert.deepEqual(commands, ["./guard.sh --strict"]);
+});
+
+test("a hook that doesn't block on failure simply goes when its file does; a turned-off guard and pause lift nothing they shouldn't", async (t) => {
+  const f = await fixture(t);
+  const { run } = recordingRun();
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "./note.sh" }] }] } });
+  const service = await f.create({ run });
+  const plain = (await service.listHooks(f.scopes)).hooks[0];
+  assert.ok(plain && (await service.approveDigest(plain.id, plain.digest)).ok);
+  await fs.rm(path.join(f.workspace, ".aiden", "hooks.json"));
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined);
+  assert.deepEqual((await service.listHooks(f.scopes)).hooks, []);
+
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "./guard.sh", failClosed: true }] }] } });
+  const guard = (await service.listHooks(f.scopes)).hooks[0];
+  assert.ok(guard && (await service.approveDigest(guard.id, guard.digest)).ok);
+  assert.ok(await service.setEnabled(guard.id, false));
+  await fs.rm(path.join(f.workspace, ".aiden", "hooks.json"));
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined, "the owner turned it off first");
+
+  await writeRepoHooks(f.workspace, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "./guard.sh", failClosed: true }] }] } });
+  assert.ok(await service.setEnabled(guard.id, true));
+  await fs.rm(path.join(f.workspace, ".aiden", "hooks.json"));
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, "deny");
+  await service.setPaused(true);
+  assert.equal((await service.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, undefined, "pausing is the owner's switch for every hook");
+});
+
+test("a hook file of the wrong shape can't read as an empty list", async (t) => {
+  const f = await fixture(t);
+  const service = await f.create();
+  assert.ok((await service.saveHook({ scope: { kind: "global" }, event: "PreToolUse", matcher: "Bash", handler: { type: "command", command: "echo ok" } })).ok);
+  await service.flush();
+  for (const name of ["hooks.json", "hooks-trust.json"]) {
+    const file = path.join(f.root, name);
+    const original = await fs.readFile(file, "utf8");
+    await fs.writeFile(file, "[]");
+    const reloaded = createHookService({ root: () => f.root, env: { PATH: process.env.PATH }, homeDir: () => f.workspace });
+    await assert.rejects(reloaded.load(), /is not a hooks file/u);
+    assert.equal((await reloaded.dispatcher.dispatch("PreToolUse", bashCall("ls"), f.context)).decision, "deny", name);
+    assert.equal(await fs.readFile(file, "utf8"), "[]", "a bad file is left for the owner, not overwritten");
+    await fs.writeFile(file, original);
+  }
 });
 
 test("the same handler in several scopes runs once", async (t) => {

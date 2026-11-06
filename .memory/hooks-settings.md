@@ -20,7 +20,7 @@ Plan: `docs/plans/aiden-hooks-plan.md` §10 (Phase 2). Branch `feature/aiden-hoo
   - `HooksSettings` is the react-query container. It owns optimistic pause and switch overrides, rolled back on failure, and refreshes on `hooks:changed`.
   - `HooksSettingsView` takes props.
   - `hookProposalDiff` is exported for the update diff.
-- Settings section `hooks` (Agent group, after MCP, lucide `Webhook` icon) in `renderer/shared/settings-section.ts` and `renderer/main/settings-view.tsx`.
+- Settings section `hooks` (its own page in the Capabilities group after Connectors, lucide `Webhook` icon; hidden without the `hooks` capability) in `renderer/shared/settings-section.ts` and `renderer/main/settings-view.tsx`.
 
 ## Decisions
 - Approve of a repo hook sends `approveDigest(id, digest)` with the digest the person saw, so a file changed in between is refused.
@@ -35,5 +35,5 @@ Plan: `docs/plans/aiden-hooks-plan.md` §10 (Phase 2). Branch `feature/aiden-hoo
 - Both are in `test:hooks` and `scripts/ci-test-registry.json`.
 
 ## Screenshots
-- `npm run test:e2e:space` does not exist on this branch.
+- E2E on a Mac runs through `npm run test:e2e:space` with `CUA_SPACE` set, or in hosted CI.
 - Owner screenshots came from a scratchpad Vite harness that renders the real component with the real CSS, captured with headless Playwright Chromium. Nothing from the harness is committed.

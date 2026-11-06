@@ -7,7 +7,7 @@
  * Built-in Aiden tools never contain `__`.
  */
 
-const AIDEN_TO_CLAUDE: Readonly<Record<string, string>> = {
+const SHARED_NAMES: Readonly<Record<string, string>> = {
   run_command: "Bash",
   write_file: "Write",
   edit_file: "Edit",
@@ -24,8 +24,21 @@ const AIDEN_TO_CLAUDE: Readonly<Record<string, string>> = {
   computer_use: "computer",
 };
 
+/**
+ * Other tools that run a shell command. A `Bash` hook has to see them, or a
+ * rule on shell commands could be stepped around, but `Bash` as a name still
+ * means `run_command`. Matching goes by name, so `background_job`'s read, list
+ * and stop actions count too; their `tool_input` has no `command`.
+ */
+const OTHER_SHELL_TOOLS: Readonly<Record<string, string>> = {
+  background_job: "Bash",
+  computer_shell: "Bash",
+};
+
+const AIDEN_TO_CLAUDE: Readonly<Record<string, string>> = { ...SHARED_NAMES, ...OTHER_SHELL_TOOLS };
+
 const CLAUDE_TO_AIDEN: Readonly<Record<string, string>> = {
-  ...Object.fromEntries(Object.entries(AIDEN_TO_CLAUDE).map(([aiden, claude]) => [claude, aiden])),
+  ...Object.fromEntries(Object.entries(SHARED_NAMES).map(([aiden, claude]) => [claude, aiden])),
   MultiEdit: "edit_file",
   Agent: "subagent",
 };
@@ -56,6 +69,7 @@ export function aidenToolName(name: string): string {
 export function toolNameSpellings(name: string): string[] {
   const aiden = aidenToolName(name);
   const spellings = new Set<string>([aiden, claudeToolName(aiden), name]);
+  if (own(OTHER_SHELL_TOOLS, aiden)) spellings.add("run_command");
   for (const [claude, target] of Object.entries(CLAUDE_TO_AIDEN)) {
     if (target === aiden) spellings.add(claude);
   }

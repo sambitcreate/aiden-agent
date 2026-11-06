@@ -122,6 +122,8 @@ export function hookStatusPresentation(listing: Pick<HookListing, "status">): Ho
       return { label: "Not supported in Aiden", color: "gray" };
     case "disabled":
       return { label: "Off", color: "gray" };
+    case "missing":
+      return { label: "Missing — tools blocked", color: "red" };
   }
 }
 
@@ -141,7 +143,7 @@ export function hookSwitchOn(listing: Pick<HookListing, "status">): boolean {
 
 /** The owner can flip the switch: not for unsupported hooks, and not before approval (Approve is the action). */
 export function hookSwitchAvailable(listing: Pick<HookListing, "status">): boolean {
-  return listing.status !== "unsupported" && !hookNeedsApproval(listing);
+  return listing.status !== "unsupported" && listing.status !== "missing" && !hookNeedsApproval(listing);
 }
 
 export function hookScopeKey(scope: HookScope): string {

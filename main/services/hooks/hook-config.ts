@@ -140,6 +140,15 @@ export function clampHookTimeout(seconds: number | undefined, async?: boolean): 
  * re-approval. `async` is folded in only when set, so approvals of hooks
  * saved before it existed keep their digest.
  */
+/**
+ * The dispatch key of a tool call's hooks: the same call replayed reuses its
+ * answer, but a retry with other arguments is a different call and is checked.
+ */
+export function toolCallIdempotencyKey(prefix: string, toolCallId: string, args: unknown): string {
+  const inputHash = createHash("sha256").update(JSON.stringify(args) ?? "").digest("hex").slice(0, 16);
+  return `${prefix}:${toolCallId}:${inputHash}`;
+}
+
 export function hookDigest(input: { event: string; matcher: string; handler: HookCommandHandler; scope: HookScope; configuredType?: string }): string {
   const canonical = JSON.stringify({
     v: 1,

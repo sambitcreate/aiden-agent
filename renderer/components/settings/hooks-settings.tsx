@@ -163,7 +163,7 @@ function HookRow({
             <span>{eventAndMatcher(listing)}</span>
             <StatusBadge listing={listing} />
           </span>
-          <CommandBlock command={listing.handler.command} />
+          {listing.status === "missing" ? null : <CommandBlock command={listing.handler.command} />}
           {unsupported && listing.unsupportedReason ? <span>{listing.unsupportedReason}</span> : null}
         </span>
       }
@@ -271,7 +271,8 @@ function HookDetailSheet({
   const [deleting, setDeleting] = React.useState(false);
   const unsupported = listing.status === "unsupported";
   const needsApproval = hookNeedsApproval(listing);
-  const repoHook = listing.source === "workspace-file";
+  const missing = listing.status === "missing";
+  const repoHook = listing.source === "workspace-file" && !missing;
 
   const runTest = async () => {
     setTesting(true);
@@ -330,15 +331,25 @@ function HookDetailSheet({
         <div className="flex flex-col gap-4">
           {unsupported && listing.unsupportedReason ? <Callout>{listing.unsupportedReason}</Callout> : null}
           {listing.status === "changed" ? (
-            <Callout color="warning">This hook changed since you approved it. It won’t run until you approve the new version.</Callout>
+            <Callout color="warning">
+              This hook changed since you approved it. It won’t run until you approve the new version.
+              {listing.handler.failClosed ? " It blocks when it fails, so the tools it covers stay blocked until then." : ""}
+            </Callout>
+          ) : null}
+          {missing ? (
+            <Callout color="red">
+              This hook blocks when it fails, and it’s gone from where you approved it. The tools it covered stay blocked until you restore it or remove it here.
+            </Callout>
           ) : null}
           {listing.status === "disabled-after-failures" ? (
             <Callout color="red">It failed several times in a row, so Aiden turned it off. Turn it back on once it’s fixed.</Callout>
           ) : null}
-          <div className="flex flex-col gap-1.5">
-            <Text variant="small-strong">Command</Text>
-            <CommandBlock command={listing.handler.command} />
-          </div>
+          {missing ? null : (
+            <div className="flex flex-col gap-1.5">
+              <Text variant="small-strong">Command</Text>
+              <CommandBlock command={listing.handler.command} />
+            </div>
+          )}
           <dl className="flex flex-col">
             <DetailRow label="Event">{eventAndMatcher(listing)}</DetailRow>
             <DetailRow label="Where">{hookScopeLabel(listing.scope, workspaces)}</DetailRow>
@@ -396,14 +407,14 @@ function HookDetailSheet({
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="filled"
-              disabled={unsupported || testing}
+              disabled={unsupported || missing || testing}
               onClick={() => (needsApproval ? setConfirmTest(true) : void runTest())}
             >
               {testing ? "Testing…" : "Test"}
             </Button>
             {repoHook && needsApproval ? null : (
               <Button variant="destructive" disabled={deleting} onClick={() => setConfirmDelete(true)}>
-                {repoHook ? "Remove approval" : "Delete"}
+                {repoHook ? "Remove approval" : missing ? "Remove" : "Delete"}
               </Button>
             )}
             <Text variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
@@ -431,13 +442,15 @@ function HookDetailSheet({
       <AlertDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
-        title={repoHook ? `Remove approval for ${listing.name}?` : `Delete ${listing.name}?`}
+        title={repoHook ? `Remove approval for ${listing.name}?` : missing ? `Remove ${listing.name}?` : `Delete ${listing.name}?`}
         description={
           repoHook
             ? "It stays in the repo’s .aiden/hooks.json and won’t run until you approve it again."
-            : "It stops running and is removed from Aiden. This can’t be undone."
+            : missing
+              ? "The tools it covered can run again, with nothing checking them."
+              : "It stops running and is removed from Aiden. This can’t be undone."
         }
-        confirmLabel={deleting ? "Deleting…" : repoHook ? "Remove approval" : "Delete"}
+        confirmLabel={deleting ? "Deleting…" : repoHook ? "Remove approval" : missing ? "Remove" : "Delete"}
         confirmVariant="destructive"
         busy={deleting}
         keepOpenOnConfirm

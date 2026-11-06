@@ -2754,6 +2754,9 @@ test("daemon chats run approved hooks after Aiden's own rules, and file tools ca
   // Without a person at a terminal (an agent's shell command, a script), approve and enable are refused.
   await assert.rejects(api.hooksAdminCommand(dir, ["approve", id, digest], { isInteractive: () => false }), /person at a terminal/u);
   await assert.rejects(api.hooksAdminCommand(dir, ["enable", id], { isInteractive: () => false }), /person at a terminal/u);
+  // Resuming lets hooks run again and a test press runs the command, so neither can come from a script either.
+  await assert.rejects(api.hooksAdminCommand(dir, ["resume"], { isInteractive: () => false }), /person at a terminal/u);
+  await assert.rejects(api.hooksAdminCommand(dir, ["test", id, digest], { isInteractive: () => false }), /person at a terminal/u);
   // Approval names the digest that was read: without it, or with another hook's, nothing is approved.
   await assert.rejects(api.hooksAdminCommand(dir, ["approve", id], atTerminal), /Usage: hooks/u);
   await assert.rejects(api.hooksAdminCommand(dir, ["approve", id, "0".repeat(64)], atTerminal), /changed/u);

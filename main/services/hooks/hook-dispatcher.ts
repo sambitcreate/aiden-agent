@@ -61,12 +61,15 @@ export function isInsideHookRun(): boolean {
 
 const TOOL_EVENTS: ReadonlySet<HookEvent> = new Set(["PreToolUse", "PostToolUse"]);
 
+/** A hook to run, or, with `refusal`, a guard whose hook can't run: matching calls are refused. */
+export type ActiveHook = HookDefinition & { refusal?: string };
+
 export interface HookDispatcherSource {
   /**
    * Active hooks for `event` in `scopes`, in scope order. Called on every
    * dispatch, so drift is caught each fire. `cwd` is where they will run.
    */
-  activeHooks(event: HookEvent, scopes: readonly HookScope[], cwd: string): Promise<HookDefinition[]>;
+  activeHooks(event: HookEvent, scopes: readonly HookScope[], cwd: string): Promise<ActiveHook[]>;
   /** Cheap, synchronous and conservative: false only when no active hook can match. */
   mayHaveActiveHooks(event: HookEvent, scopes: readonly HookScope[], toolName?: string): boolean;
 }
@@ -362,7 +365,7 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
   const uncacheable = new WeakSet<HookOutcome>();
 
   const execute = async (event: HookEvent, payload: HookPayload, context: HookDispatchContext): Promise<HookOutcome> => {
-    let hooks: HookDefinition[];
+    let hooks: ActiveHook[];
     try {
       hooks = await options.source.activeHooks(event, context.scopes, context.cwd);
     } catch (error) {
@@ -379,8 +382,16 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
       return outcome;
     }
     const normalized = normalizeHookPayload(event, payload, context);
-    const selected = dedupeHooks(hooks.filter((hook) => hook.event === event && matches(hook, event, normalized)));
+    const matched = hooks.filter((hook) => hook.event === event && matches(hook, event, normalized));
+    const selected = dedupeHooks(matched);
     if (selected.length === 0 || context.signal?.aborted) return { ranHooks: [] };
+    const refusal = matched.find((hook) => hook.refusal)?.refusal;
+    if (refusal) {
+      const outcome: HookOutcome = { ranHooks: [], decision: "deny", reason: refusal, reasonForModel: fenceAsData("Hook result", refusal), notices: [`${refusal}.`] };
+      // Approving the new version lifts this; a replay must look again.
+      uncacheable.add(outcome);
+      return outcome;
+    }
     const background = selected.filter((hook) => hook.handler.async === true);
     if (background.length > 0) startBackground(background.map((hook) => ({ hook, event, payload: normalized, context })));
     const waited = selected.filter((hook) => hook.handler.async !== true);

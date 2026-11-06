@@ -276,6 +276,9 @@ test("parent file tools refuse to write hook and agent settings files but still 
       ".CLAUDE/Settings.JSON",
       "src/../.claude/settings.json",
       "claude-link/settings.json",
+      ".git/config",
+      ".git/hooks/pre-commit",
+      "packages/app/.git/hooks/post-checkout",
     ]) {
       await assert.rejects(write.execute("w", { path: target, content: "{}\n" }), refusal, target);
     }

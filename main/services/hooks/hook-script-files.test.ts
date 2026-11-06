@@ -144,6 +144,12 @@ test("commands whose code the scan can't follow are named", () => {
     ["deno eval 'import \"./g.ts\"'", ["deno eval"]],
     ["NODE_OPTIONS='--require ./g.js' node x.js", ["NODE_OPTIONS"]],
     ["env BASH_ENV=./g.sh bash ./x.sh", ["BASH_ENV"]],
+    ["PATH=./bin check", ["PATH"]],
+    ["PYTHONPATH=. python3 tool.py", ["PYTHONPATH"]],
+    ["env -C sub ./x.sh", ["env -C"]],
+    ["env --chdir=sub ./x.sh", ["env --chdir"]],
+    ["git status", ["git"]],
+    ["python3 - <<EOF\nimport guard\nEOF", ["here-document"]],
   ];
   for (const [command, expected] of cases) assert.deepEqual(unfollowedCommands(scanHookCommand(command)), expected, command);
 
@@ -152,6 +158,38 @@ test("commands whose code the scan can't follow are named", () => {
   for (const command of ["./check.sh", "bash ./check.sh", "node scripts/x.js", "node scripts/x.js -e", "npm install", "python3 tool.py", "python3 tool.py -c x", "echo make", "echo node -e"]) {
     assert.deepEqual(unfollowedCommands(scanHookCommand(command)), [], command);
   }
+});
+
+test("an apostrophe in a comment or here-document can't hide the commands after it", async (t) => {
+  const root = await workspace(t);
+  await fs.writeFile(path.join(root, "evil.sh"), "echo one\n");
+  await fs.writeFile(path.join(root, "next.sh"), "echo two\n");
+
+  assert.deepEqual((await scan(root, "true # it's fine\n./evil.sh")).paths, ["evil.sh"]);
+  assert.deepEqual((await scan(root, "cat <<EOF\nit's a note\nEOF\n./evil.sh")).paths, ["evil.sh"]);
+  assert.deepEqual((await scan(root, "cat <<-'END' && ./next.sh\n\tdon't\n\tEND\n./evil.sh")).paths.sort(), ["evil.sh", "next.sh"]);
+  // Text in a body or a comment isn't run, so it isn't pinned.
+  assert.deepEqual((await scan(root, "cat <<EOF\n./evil.sh\nEOF")).paths, []);
+  assert.deepEqual((await scan(root, "true # ./evil.sh")).paths, []);
+  // `#` inside a word is not a comment.
+  assert.deepEqual((await scan(root, "./evil.sh a#b")).paths, ["evil.sh"]);
+});
+
+test("a command whose quotes never close can't be checked, so it isn't approved as covered", async (t) => {
+  const root = await workspace(t);
+  await fs.writeFile(path.join(root, "evil.sh"), "echo one\n");
+  for (const command of ["echo 'never closed\n./evil.sh", 'echo "never closed\n./evil.sh']) {
+    assert.match((await scan(root, command)).overLimit ?? "", /never closes/u, command);
+  }
+});
+
+test("a folder given to a program is named as not covered, since what it runs from there isn't hashed", async (t) => {
+  const root = await workspace(t);
+  await fs.mkdir(path.join(root, "scripts"));
+  await fs.writeFile(path.join(root, "scripts", "index.js"), "console.log(1)\n");
+
+  assert.deepEqual((await scan(root, "node ./scripts")).unfollowed, ["./scripts"]);
+  assert.deepEqual((await scan(root, "python3 .")).unfollowed, ["."]);
 });
 
 test("a script reached only through a path built at run time is reported as not covered", async (t) => {

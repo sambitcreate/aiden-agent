@@ -5,11 +5,11 @@ import { writeJsonAtomic } from "../durable-fs.js";
  * A small profile-owned JSON document, read once and rewritten atomically.
  * Writes are serialized so a later state never loses to an earlier one.
  *
- * A missing file reads as empty. A file that exists but can't be read or
- * isn't JSON is an error, not an empty file: it may hold approvals or
- * fail-closed guards, so treating it as empty would quietly drop them. It is
- * left where it is for the owner to fix, and no write replaces it until a
- * later read succeeds.
+ * A missing file reads as empty. A file that exists but can't be read, isn't
+ * JSON or has the wrong shape (`sanitize` throws) is an error, not an empty
+ * file: it may hold approvals or fail-closed guards, so treating it as empty
+ * would quietly drop them. It is left where it is for the owner to fix, and no
+ * write replaces it until a later read succeeds.
  */
 export class HookJsonFile<T> {
   private writes: Promise<void> = Promise.resolve();
@@ -41,8 +41,15 @@ export class HookJsonFile<T> {
       this.readFailed = true;
       throw new Error(`${file} is not valid JSON (${(error as Error).message}); fix or remove it`);
     }
+    let value: T;
+    try {
+      value = this.sanitize(raw);
+    } catch (error) {
+      this.readFailed = true;
+      throw new Error(`${file} is not a hooks file (${(error as Error).message}); fix or remove it`);
+    }
     this.readFailed = false;
-    return this.sanitize(raw);
+    return value;
   }
 
   write(value: T): Promise<void> {

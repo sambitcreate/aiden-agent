@@ -22,6 +22,7 @@
  */
 
 import os from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage, AgentTool, AfterToolCallContext, AfterToolCallResult } from "@earendil-works/pi-agent-core";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { fenceAsData } from "../../renderer/shared/agent-notices.js";
@@ -35,9 +36,12 @@ import type {
   HookScope,
 } from "./hooks/hook-types.js";
 import { aidenToolInput, claudeToolInput, claudeToolName } from "./hooks/hook-aliases.js";
+import { toolCallIdempotencyKey } from "./hooks/hook-config.js";
+import { hookMayRewriteInput } from "./hooks/hook-merge.js";
 import {
   clearPromptHookBlock,
   isHookBlockedPrompt,
+  hookBlockedField,
   markPromptHookBlocked,
   type PromptHookBlockStore,
 } from "./hook-blocked-prompt.js";
@@ -49,9 +53,6 @@ import type {
 
 /** Stop hooks keep one person turn going at most this many times. */
 export const MAX_STOP_HOOK_CONTINUATIONS = 8;
-
-/** The tool whose input a hook may never rewrite: the card showed the command. */
-const SHELL_TOOL_NAME = "run_command";
 
 export interface WorkspaceChatHookTarget {
   chatId: string;
@@ -328,17 +329,16 @@ export function createWorkspaceChatHooks(
     dispatch,
     async preToolUse({ toolCallId, toolName, args, tools, signal }) {
       if (!has("PreToolUse", toolName)) return { kind: "none" };
-      const outcome = await dispatch("PreToolUse", toolPayload(toolName, args, toolCallId), {
-        idempotencyKey: `PreToolUse:${target.chatId}:${toolCallId}`,
-        signal,
-      });
-      if (!outcome) return { kind: "none" };
+      const idempotencyKey = toolCallIdempotencyKey(`PreToolUse:${target.chatId}`, toolCallId, args);
+      const first = await dispatch("PreToolUse", toolPayload(toolName, args, toolCallId), { idempotencyKey, signal });
+      if (!first) return { kind: "none" };
+      let outcome = first;
       // `continue: false` lets this call finish (unless denied) and then ends the turn.
       requestStop(outcome);
       if (outcome.decision === "deny") {
         return { kind: "block", reason: `Blocked by ${hooksLabel(outcome)}: ${modelReason(outcome, "no reason given")}` };
       }
-      if (outcome.updatedInput && toolName !== SHELL_TOOL_NAME && isRecord(args)) {
+      if (outcome.updatedInput && hookMayRewriteInput(toolName) && isRecord(args)) {
         const tool = tools?.find((candidate) => candidate.name === toolName);
         let validated: Record<string, unknown>;
         try {
@@ -357,7 +357,26 @@ export function createWorkspaceChatHooks(
             reason: `Blocked by ${hooksLabel(outcome)}: its updated input does not fit ${toolName} (${detail}).`,
           };
         }
+        // The other hooks judged the original input, so they judge what will
+        // really run too. Its answer is the one that counts, and a hook that
+        // keeps changing the input has no stable input to approve.
+        const checked = await dispatch("PreToolUse", toolPayload(toolName, validated, toolCallId), {
+          idempotencyKey: toolCallIdempotencyKey(`PreToolUse:${target.chatId}`, toolCallId, validated),
+          signal,
+        });
+        if (!checked) {
+          return { kind: "block", reason: `Blocked by ${hooksLabel(outcome)}: its updated input could not be checked.` };
+        }
+        requestStop(checked);
+        if (checked.decision === "deny") {
+          return { kind: "block", reason: `Blocked by ${hooksLabel(checked)}: ${modelReason(checked, "no reason given")}` };
+        }
+        if (checked.updatedInput && !isDeepStrictEqual(aidenToolInput(toolName, checked.updatedInput, validated), validated)) {
+          return { kind: "block", reason: `Blocked by ${hooksLabel(checked)}: it changed the tool's input again, so there is no settled input to run.` };
+        }
         replaceArgsInPlace(args, validated);
+        const context = [...new Set([outcome.additionalContext, checked.additionalContext].filter(Boolean))].join("\n");
+        outcome = { ...checked, ...(context ? { additionalContext: context } : {}) };
       }
       if (outcome.additionalContext) preToolContext.set(toolCallId, outcome.additionalContext);
       if (outcome.decision === "ask") {
@@ -559,6 +578,8 @@ export async function runPromptIntakeHooks(input: PromptIntakeInput): Promise<st
     context = hookTurnContextText([sessionStart?.additionalContext, promptSubmit?.additionalContext]);
   }
   if (prompt?.id && isHookBlockedPrompt({ ...prompt, role: "user" })) {
+    // Hooks don't run on this turn at all, so nothing has looked at it again.
+    if (!dispatch) throw new Error(hookBlockedField({ ...prompt, role: "user" }).hookBlocked?.reason);
     // Sent now (a retry after the hook changed or was turned off), so it is
     // no longer a blocked prompt.
     await clearPromptHookBlock(input.store, input.target.chatId, prompt as PromptIntakeMessage & { id: string }, (error) =>

@@ -41,3 +41,16 @@ The contract lives in `main/services/hooks/hook-types.ts`. Every surface goes th
 - After the shell exits, any background child that still holds the pipes is killed.
 - One that redirected its output keeps running.
 - `run_command` appends `BACKGROUND_STOPPED_NOTE`.
+
+**Landing review, 2026-11-06 (PR #687)**
+- Hook changes run through one `serialized` queue in `hook-service.ts`, so a stale proposal can't overwrite or revive a hook. `approveProposal` and delete recheck the target after every await.
+- A dispatcher failure denies PreToolUse, the same as a load failure (`hookDispatchFailure`). `botHooksWithoutFolder` covers a Bot whose folder can't be read.
+- A Bot's hook ask is its own card, raised inside the tool, so Full access can't answer it.
+- `hookBlockedField` also reads the in-process record (`holdHookBlockedPrompt`), so a fork of a chat whose mark write failed stays blocked. A blocked prompt sent where no hooks run stays refused. The record is lost if the write failed twice and the process then restarts.
+- `background_job` and `computer_shell` read as `Bash` to matchers. Tools that run code (`hookMayRewriteInput`) never take `updatedInput`.
+- A rewritten input goes through the hooks again; only the second answer counts, and a second change blocks the tool.
+- Idempotency keys are `toolCallIdempotencyKey(prefix, id, args)`, so retried args run hooks again. Bot PreToolUse memos still outlive a rule change after a crash.
+- A `failClosed` hook that output unreadable JSON denies. Plain stdout stays allowed.
+- `unmetGuards` in `hook-service.ts`: a `failClosed` hook that was approved and has since changed or gone keeps blocking matching tools (status `missing`) until it is approved again or removed.
+- Hook and trust files of the wrong shape throw, so they read as load failures rather than empty lists.
+- Known and documented: `run_command` can write the `<userData>/hooks/` store on the desktop; subagents' tools skip Pre/PostToolUse; the shell reopens a script after the recheck; transitive imports aren't pinned.

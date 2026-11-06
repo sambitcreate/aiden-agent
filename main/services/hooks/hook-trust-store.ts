@@ -21,6 +21,19 @@ export interface HookApprovalRecord {
   event: HookEvent;
   matcher: string;
   approvedAt: number;
+  /**
+   * Set when this hook is a blocking guard: a PreToolUse hook with `failClosed`.
+   * The guard outlives the hook, so editing or removing it can't lift it: matching
+   * tools stay blocked until the owner approves the new version or removes this.
+   */
+  blocksWhenFailing?: true;
+  /** The name to show for a guard whose hook is gone. */
+  name?: string;
+}
+
+/** Whether approving this hook makes it a guard that outlives an edit or removal. */
+export function hookBlocksWhenFailing(hook: Pick<HookDefinition, "event" | "handler">): boolean {
+  return hook.event === "PreToolUse" && hook.handler.failClosed === true && hook.handler.async !== true;
 }
 
 export interface HookTrustState {
@@ -56,24 +69,23 @@ function emptyTrust(): HookTrustState {
 
 function sanitizeTrust(raw: unknown): HookTrustState {
   const state = emptyTrust();
-  if (!raw || typeof raw !== "object") return state;
+  const approvals = (raw as { approvals?: unknown } | null | undefined)?.approvals;
+  if (!approvals || typeof approvals !== "object" || Array.isArray(approvals)) throw new Error("it has no approvals");
   const record = raw as Record<string, unknown>;
   state.paused = record.paused === true;
-  if (record.approvals && typeof record.approvals === "object") {
-    for (const [scope, list] of Object.entries(record.approvals as Record<string, unknown>)) {
-      if (!Array.isArray(list)) continue;
-      const approvals = list.filter(
-        (item): item is HookApprovalRecord =>
-          !!item &&
-          typeof item === "object" &&
-          typeof (item as HookApprovalRecord).hookId === "string" &&
-          typeof (item as HookApprovalRecord).digest === "string" &&
-          DIGEST.test((item as HookApprovalRecord).digest) &&
-          isHookEvent((item as HookApprovalRecord).event) &&
-          typeof (item as HookApprovalRecord).matcher === "string",
-      );
-      if (approvals.length > 0) state.approvals[scope] = approvals.map((item) => ({ ...item, approvedAt: Number(item.approvedAt) || 0 }));
-    }
+  for (const [scope, list] of Object.entries(approvals as Record<string, unknown>)) {
+    if (!Array.isArray(list)) continue;
+    const kept = list.filter(
+      (item): item is HookApprovalRecord =>
+        !!item &&
+        typeof item === "object" &&
+        typeof (item as HookApprovalRecord).hookId === "string" &&
+        typeof (item as HookApprovalRecord).digest === "string" &&
+        DIGEST.test((item as HookApprovalRecord).digest) &&
+        isHookEvent((item as HookApprovalRecord).event) &&
+        typeof (item as HookApprovalRecord).matcher === "string",
+    );
+    if (kept.length > 0) state.approvals[scope] = kept.map((item) => ({ ...item, approvedAt: Number(item.approvedAt) || 0 }));
   }
   // Flags saved under the older id keys are dropped: they could point at another hook now.
   if (Array.isArray(record.disabled)) {
@@ -140,7 +152,7 @@ export class HookTrustStore {
    * being dropped.
    */
   approve(
-    hook: Pick<HookDefinition, "id" | "digest" | "scope" | "event" | "matcher">,
+    hook: Pick<HookDefinition, "id" | "name" | "digest" | "scope" | "event" | "matcher" | "handler">,
     current: ReadonlyArray<Pick<HookDefinition, "id" | "digest">> = [],
   ): Promise<void> {
     const key = hookScopeKey(hook.scope);
@@ -155,7 +167,8 @@ export class HookTrustStore {
       const moved = current.find((candidate) => candidate.digest === record.digest && candidate.id !== hook.id);
       if (moved && !existing.some((other) => other.hookId === moved.id)) others.push({ ...record, hookId: moved.id });
     }
-    this.state.approvals[key] = [...others, { hookId: hook.id, digest: hook.digest, event: hook.event, matcher: hook.matcher, approvedAt: this.now() }];
+    const guard = hookBlocksWhenFailing(hook) ? { name: hook.name, blocksWhenFailing: true as const } : {};
+    this.state.approvals[key] = [...others, { hookId: hook.id, digest: hook.digest, event: hook.event, matcher: hook.matcher, approvedAt: this.now(), ...guard }];
     this.clearFlags(hook);
     return this.save();
   }

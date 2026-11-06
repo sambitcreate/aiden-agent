@@ -123,6 +123,7 @@ import {
   hookToolPayload,
   type SurfaceHooks,
 } from "../agent-surface-hooks.js";
+import { toolCallIdempotencyKey } from "../hooks/hook-config.js";
 import type { HookDispatcher } from "../hooks/hook-types.js";
 
 export const BOT_EXTENSION_NAME = "aiden-bot";
@@ -1206,7 +1207,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     if (stored !== undefined) return stored;
     if (!client.has("PreToolUse", call.name)) return undefined;
     const outcome = await client.dispatch("PreToolUse", hookToolPayload(call.name, call.arguments, call.id), {
-      idempotencyKey: `PreToolUse:bot:${botId}:${call.id}`,
+      idempotencyKey: toolCallIdempotencyKey(`PreToolUse:bot:${botId}`, call.id, call.arguments),
       signal: context.abortSignal,
     });
     if (context.abortSignal?.aborted) throw new Error("The turn stopped before the hook answered.");
@@ -1311,8 +1312,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         }
       },
       onYield: async (message, api, context) => {
-        // A Stop hook may keep the run going; the answer is final only when it doesn't.
-        const continuation = await stopHook(api, context);
+        // A Stop hook may keep the run going; the answer is final only when it
+        // doesn't. A reply cut off at the length limit isn't the Bot stopping.
+        const continuation = message.stopReason === "stop" ? await stopHook(api, context) : undefined;
         if (continuation !== undefined) return { continue: continuation };
         await deps.peerReply?.(botId, message, String(api.taskId));
         // The review decides later whether to run; the answer never waits on it.

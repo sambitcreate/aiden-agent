@@ -99,6 +99,54 @@ test("a folder chat runs global, workspace and chat hooks in its folder; a folde
   );
 });
 
+test("a tool call retried with other arguments is checked again, and an identical replay shares its answer", async () => {
+  const seen = fakeDispatcher({ PreToolUse: { ranHooks: ["guard"] } });
+  const hooks = createWorkspaceChatHooks({ chatId: "c" }, seen.dispatcher);
+  for (const command of ["ls", "ls", "rm -rf /"]) {
+    await hooks.preToolUse({ toolCallId: "reused-id", toolName: "run_command", args: { command } });
+  }
+  const [first, replay, other] = seen.calls.map((call) => call.context.idempotencyKey);
+  assert.equal(first, replay);
+  assert.notEqual(first, other);
+});
+
+test("rewritten input is judged again by every hook before it can run", async () => {
+  const args = { path: "src/a.ts", old_text: "a", new_text: "b" };
+  const rewriteOnce = (payload: HookPayload): HookOutcome => {
+    const input = payload.tool_input as Record<string, unknown>;
+    if (input.file_path === "src/safe.ts") return { decision: "ask", reason: "check this path", ranHooks: ["guard"] };
+    return { decision: "allow", updatedInput: { ...input, file_path: "src/safe.ts" }, ranHooks: ["rewrite"] };
+  };
+  const asked = fakeDispatcher({ PreToolUse: rewriteOnce });
+  const live = { ...args };
+  const decision = await createWorkspaceChatHooks({ chatId: "c" }, asked.dispatcher).preToolUse({ toolCallId: "1", toolName: "edit_file", args: live, tools: [editTool] });
+  assert.equal(asked.calls.length, 2);
+  assert.equal(((asked.calls[1]!.payload.tool_input) as Record<string, unknown>).file_path, "src/safe.ts");
+  assert.deepEqual(decision, { kind: "ask", reason: "Hook guard: check this path" }, "the check of the input that runs is the answer");
+  assert.equal(live.path, "src/safe.ts");
+
+  // A second hook refuses what the first one rewrote: nothing changes and nothing runs.
+  const denied = fakeDispatcher({
+    PreToolUse: (payload) => (payload.tool_input as Record<string, unknown>).file_path === "src/safe.ts"
+      ? { decision: "deny", reason: "no", reasonForModel: fenced("not that path"), ranHooks: ["guard"] }
+      : { decision: "allow", updatedInput: { ...(payload.tool_input as Record<string, unknown>), file_path: "src/safe.ts" }, ranHooks: ["rewrite"] },
+  });
+  const untouched = { ...args };
+  const refused = await createWorkspaceChatHooks({ chatId: "c" }, denied.dispatcher).preToolUse({ toolCallId: "2", toolName: "edit_file", args: untouched, tools: [editTool] });
+  assert.equal(refused.kind, "block");
+  assert.equal(untouched.path, "src/a.ts");
+
+  // A rewriter that never settles leaves no input anyone approved.
+  let turn = 0;
+  const restless = fakeDispatcher({
+    PreToolUse: (payload) => ({ decision: "allow", updatedInput: { ...(payload.tool_input as Record<string, unknown>), file_path: `src/${turn += 1}.ts` }, ranHooks: ["rewrite"] }),
+  });
+  const settled = { ...args };
+  const blocked = await createWorkspaceChatHooks({ chatId: "c" }, restless.dispatcher).preToolUse({ toolCallId: "3", toolName: "edit_file", args: settled, tools: [editTool] });
+  assert.equal(blocked.kind, "block");
+  assert.equal(settled.path, "src/a.ts");
+});
+
 test("PreToolUse deny blocks with the hooks' names and reason; ask and allow are reported, no hook is none", async () => {
   const deny = fakeDispatcher({
     PreToolUse: { decision: "deny", reason: "no", reasonForModel: fenced("main is protected"), ranHooks: ["guard.sh", "lint"] },
@@ -115,7 +163,7 @@ test("PreToolUse deny blocks with the hooks' names and reason; ask and allow are
   assert.equal(deny.calls[0]!.payload.tool_name, "Edit");
   assert.equal(deny.calls[0]!.payload.aiden_tool_name, "edit_file");
   assert.equal((deny.calls[0]!.payload.tool_input as Record<string, unknown>).file_path, "src/a.ts");
-  assert.equal(deny.calls[0]!.context.idempotencyKey, "PreToolUse:c:call-1");
+  assert.match(deny.calls[0]!.context.idempotencyKey ?? "", /^PreToolUse:c:call-1:/u);
   assert.equal(deny.calls[0]!.payload.tool_use_id, "call-1");
 
   const ask = fakeDispatcher({ PreToolUse: { decision: "ask", reason: "check the diff", ranHooks: ["review"] } });
@@ -773,4 +821,21 @@ test("SessionStart continue: false ends the turn before the prompt is checked, a
   assert.equal(isHookBlockedPrompt({ id: "locked-prompt", role: "user" }), false);
   assert.equal(workspaceChatSessionStartSource("locked", false), "startup", "the session did not start");
   resetWorkspaceChatSessionsForTests();
+});
+
+test("a blocked prompt sent on a turn where hooks don't run stays blocked; with hooks and none matching it goes through", async () => {
+  const cleared: Array<string | undefined> = [];
+  const store = { setPromptHookBlock: async (_chat: string, _id: string, reason: string | undefined) => { cleared.push(reason); return true; } };
+  const base = { target: { chatId: "c" }, hasPriorMessages: true, store, idempotencyKeys: { userPromptSubmit: "k" }, onStoreError: () => undefined };
+  const prompt = { id: "m1", content: "send the keys", hookBlocked: { reason: "No secrets." } };
+
+  await assert.rejects(runPromptIntakeHooks({ ...base, prompt }), /No secrets\./u);
+  assert.deepEqual(prompt.hookBlocked, { reason: "No secrets." });
+  assert.deepEqual(cleared, []);
+
+  // The hook that refused it is gone: the turn's check ran and found nothing to stop it.
+  const noHooks = async () => undefined;
+  assert.equal(await runPromptIntakeHooks({ ...base, prompt, dispatch: noHooks }), undefined);
+  assert.equal("hookBlocked" in prompt, false);
+  assert.deepEqual(cleared, [undefined]);
 });

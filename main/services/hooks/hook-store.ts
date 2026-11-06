@@ -62,7 +62,7 @@ function sanitizeScope(raw: unknown): HookScope | undefined {
 
 function sanitizeStore(raw: unknown): HookStoreState {
   const state = emptyStore();
-  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { entries?: unknown }).entries)) return state;
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { entries?: unknown }).entries)) throw new Error("it has no list of entries");
   const seen = new Set<string>();
   for (const item of (raw as { entries: unknown[] }).entries) {
     if (!item || typeof item !== "object") continue;

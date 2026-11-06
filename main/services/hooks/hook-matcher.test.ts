@@ -44,3 +44,11 @@ test("value matchers select SessionStart sources and similar fields", () => {
   assert.equal(matcherMatchesValue(compiled.matcher, "compact"), false);
   assert.equal(matcherMatchesValue(compiled.matcher, undefined), false);
 });
+
+test("a Bash matcher covers every tool that runs a shell", () => {
+  for (const tool of ["run_command", "background_job", "computer_shell"]) {
+    assert.equal(hookMatcherMatches("Bash", tool), true, tool);
+    assert.equal(hookMatcherMatches("run_command", tool), true, tool);
+  }
+  assert.equal(hookMatcherMatches("Bash", "read_file"), false);
+});

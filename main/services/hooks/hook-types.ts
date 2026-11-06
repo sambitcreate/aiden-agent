@@ -113,7 +113,9 @@ export type HookStatus =
   | "changed"
   | "disabled"
   | "disabled-after-failures"
-  | "unsupported";
+  | "unsupported"
+  /** An approved blocking hook that is gone: its tools stay blocked until the owner removes this. */
+  | "missing";
 
 export interface HookListing extends Omit<HookDefinition, "event"> {
   /** `unknown` when the file names an event Aiden does not support; see `configuredEvent`. */
