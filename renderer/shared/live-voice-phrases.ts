@@ -140,8 +140,9 @@ export function matchLiveVoicePhrase(
   text: string,
 ): { kind: LiveVoicePhraseKind; language: string } | null {
   if (typeof text !== "string" || text.length === 0 || text.length > 80) return null;
-  // "Allow?" asks about the phrase; it does not say it.
-  if (/[?？]\s*$/u.test(text)) return null;
+  // "Allow?", "Bye?!" and "¿Permitir?" ask about the phrase; they do not say
+  // it. Any question mark anywhere makes the utterance a question.
+  if (/[?？¿⸮\u037E؟]/u.test(text)) return null;
   const key = normalizeLiveVoicePhrase(text);
   if (key.length === 0) return null;
   return LOOKUP.get(key) ?? null;
