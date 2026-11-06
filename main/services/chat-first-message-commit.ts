@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ParsedChatFirstMessage } from "../handlers/chat-first-message-params.js";
-import type { Chat } from "./types.js";
+import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import type { Chat, Workspace } from "./types.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 import type { WorkspaceOperationAdmission } from "./workspace-operation-registry.js";
@@ -31,7 +33,7 @@ interface Dependencies {
   markReconciliation(ownerId: string): void;
   clearReconciliation(ownerId: string): void;
   admitWorkspace(workspaceId: string, owner: Owner): WorkspaceOperationAdmission;
-  workspaceExists(workspaceId: string): Promise<boolean>;
+  getWorkspace(workspaceId: string): Promise<Pick<Workspace, "noWorkspace" | "managedWorktree" | "scratch"> | null | undefined>;
   resolveSkill(workspaceId: string, invocationId: string): Promise<RegisteredSkill>;
 }
 
@@ -109,7 +111,8 @@ export function createFirstMessageCommitter(deps: Dependencies) {
           // must not authorize a second generation for the same user message.
           return existing;
         }
-        if (!(await deps.workspaceExists(input.workspaceId))) {
+        const target = await deps.getWorkspace(input.workspaceId);
+        if (!target) {
           throw new Error("The selected workspace is no longer available.");
         }
         assertCurrent();
@@ -150,6 +153,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
             })
           : await append();
         committed = true;
+        reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(target) });
         return chat;
       } catch (error) {
         if (isChatCreateReconciliationRequiredError(error)) {

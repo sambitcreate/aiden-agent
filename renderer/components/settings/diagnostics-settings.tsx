@@ -4,6 +4,7 @@ import { FileArchive, FolderOpen, Loader2, ShieldAlert, Trash2 } from "lucide-re
 import { diagnosticsApi } from "../../lib/ipc";
 import { quarantinedChatsNotice, type DiagnosticSupportStatusView } from "../../shared/diagnostics";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { UsageDataSettings } from "../usage-data";
 
 type Confirmation = "delete" | "dump-export" | "mode" | null;
@@ -133,6 +134,7 @@ export function DiagnosticsSettings() {
         <Field
           className="border-t border-separator"
           label="Crash capture"
+          hint={<InfoHint topic="crash capture">Dumps stay on this device and are never uploaded automatically. Aiden keeps at most three, for seven days.</InfoHint>}
           description={
             status?.diagnosticMode.enabled
               ? `Active until Aiden restarts. ${status.diagnosticMode.crashDumpCount} local crash dump${status.diagnosticMode.crashDumpCount === 1 ? "" : "s"} retained.`

@@ -1,3 +1,4 @@
+import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
 import type { BotPlans } from "./bot-plans/plans.js";
 import { homedir } from "node:os";
 import type { BotPlanItemView, BotPlanView } from "../../renderer/shared/bot-plans.js";
@@ -218,7 +219,7 @@ export interface AidenRemoteBotSessionRuntime {
       attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
     },
   ): Promise<{ submissionId: string; deduped: boolean }>;
-  resume(botId: string, requestId: string): Promise<BotSessionState>;
+  resume(botId: string, requestId: string, options?: { acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string }): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   /** Ends a running turn (serialized with send/resume/dismiss); a paused turn is left for Dismiss. */
   stop(botId: string): Promise<BotSessionState>;
@@ -337,7 +338,7 @@ export interface AidenRemoteBotSessionServiceOptions {
   routineNotifications?: {
     list(
       since: number | undefined,
-      options?: { issues?: boolean; messaging?: boolean; accessRequests?: boolean },
+      options?: { issues?: boolean; peers?: boolean; messaging?: boolean; accessRequests?: boolean },
     ): Promise<AidenRemoteBotRoutineNotificationList>;
   };
   now?(): number;
@@ -489,6 +490,11 @@ export function projectBotSessionEntries(
   for (const entry of projectBotTranscript(entries)) {
     const id = wireEntryId(entry.id);
     switch (entry.type) {
+      case "peer": {
+        const createdAt = isoOf(entry.at);
+        output.push({ type: "peer", id, exchangeId: entry.exchangeId, direction: entry.direction, peerBotId: entry.peerBotId, peerName: wireText(entry.peerName, 160), messageKind: entry.messageKind, ...(createdAt ? { createdAt } : {}), ...(entry.final === true ? { final: true as const } : {}) });
+        break;
+      }
       case "bot_message":
       case "bot_message_status": {
         const createdAt = isoOf(entry.at);
@@ -675,7 +681,8 @@ function withoutSubmissionId(entry: AidenRemoteBotSessionEntry): AidenRemoteBotS
  * `bot:activity`, shared images for `bot:images` (a line for everyone else).
  */
 function entriesFor(entries: readonly AidenRemoteBotSessionEntry[], audience: Audience): AidenRemoteBotSessionEntry[] {
-  const carded = audience.cards ? [...entries] : withoutBotCards(entries);
+  const peered = audience.peers ? [...entries] : entries.filter((entry) => entry.type !== "peer");
+  const carded = audience.cards ? peered : withoutBotCards(peered);
   const shown = audience.images ? carded : carded.map(withoutSharedImage);
   return audience.activity ? shown : shown.map(withoutSubmissionId);
 }
@@ -831,6 +838,8 @@ interface Audience {
   images: boolean;
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
+  /** `bot:peers`: closed peer exchange navigation entries (revision 59). */
+  peers: boolean;
   accessRequests: boolean;
   plans: boolean;
   allowed: boolean;
@@ -1094,7 +1103,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}:${subscriber.peers}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1155,6 +1164,7 @@ class BotLiveProjector {
       : undefined;
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
+      if (entry?.type === "peer" && !audience.peers) return noOp(audience);
       if (event.type === "approval") {
         const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed);
         return sseFrame(id, "approval", { ...data, payload: { approval } });
@@ -1305,7 +1315,7 @@ class BotLiveProjector {
 
   /**
    * The submission ids of the person's messages, by entry id (revision 30).
-   * Looked up on the serial lane when a new `pi.user` entry appears: its input
+   * Looked up on the serial lane when a new hosted input entry appears: its input
    * is placed in the same commit, so the session still lists it unless its
    * turn already ended. An id that can't be found is left out; phones then
    * match the bubble by its text.
@@ -1314,7 +1324,7 @@ class BotLiveProjector {
     if (!this.activityDeps) return this.submissionOf;
     let newest = this.placedThrough;
     for (const record of entries) {
-      if (record.kind === "pi.user" && Number(record.id) > newest) newest = Number(record.id);
+      if (isBotInputEntryKind(record.kind) && Number(record.id) > newest) newest = Number(record.id);
     }
     if (newest <= this.placedThrough) return this.submissionOf;
     this.placedThrough = newest;
@@ -1555,6 +1565,7 @@ const REFUSED_BEFORE_RUNNING: ReadonlySet<BotSessionErrorReason> = new Set([
   "bot_paused",
   "paused_by_person",
   "spending_limit",
+  "spending_unconfirmed",
 ]);
 
 /**
@@ -1632,6 +1643,7 @@ function mapSessionError(error: unknown, audience: AidenRemoteBotHandoffAudience
       case "unavailable":
       case "bot_paused":
       case "spending_limit":
+      case "spending_unconfirmed":
         throw new AidenRemoteServiceError("operation_stale", error.message, 409);
     }
   }
@@ -1739,7 +1751,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -2004,7 +2016,7 @@ export class AidenRemoteBotSessionService {
   /** Finished Bot routine runs a phone should announce, after `since` (ISO). */
   async routineNotificationFeed(
     since: string | undefined,
-    options: { issues?: boolean; messaging?: boolean; accessRequests?: boolean } = {},
+    options: { issues?: boolean; peers?: boolean; messaging?: boolean; accessRequests?: boolean } = {},
   ): Promise<AidenRemoteBotRoutineNotificationList> {
     const { routineNotifications } = this.proactive();
     let sinceMs: number | undefined;
@@ -2014,7 +2026,7 @@ export class AidenRemoteBotSessionService {
         throw new AidenRemoteServiceError("invalid_request", "since must be an ISO-8601 time.", 400);
       }
     }
-    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues, messaging: options.messaging === true, accessRequests: options.accessRequests === true && this.supportsAccessRequests });
+    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues, peers: options.peers === true, messaging: options.messaging === true, accessRequests: options.accessRequests === true && this.supportsAccessRequests });
   }
 
   /** The state as a `bot:handoffs` device sees it; `stateViewForAudience` projects it for the others. */
@@ -2477,6 +2489,7 @@ export class AidenRemoteBotSessionService {
       onMac: options.handoffs === true && options.handoffOnMac === true && this.supportsHandoffs,
       images: options.images === true,
       issues: options.issues === true && this.supportsIssues,
+      peers: options.peers === true,
       accessRequests: options.accessRequests === true && this.supportsAccessRequests,
       plans: options.plans === true && this.supportsPlans,
       allowed: options.allowed === true,
@@ -2679,23 +2692,27 @@ export class AidenRemoteBotSessionService {
     botId: string,
     key: string,
     input: unknown,
-    options: { handoffs?: boolean },
+    options: { handoffs?: boolean; routineModels?: boolean },
   ): Promise<AidenRemoteBotSessionStateView> {
     if (action === "pause" || action === "unpause") this.handoffService();
-    parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot request"), input ?? {}, "The Bot request is invalid.");
+    let acknowledgeUnknownCost: true | undefined, expectedSubmissionId: string | undefined, expectedCostReceiptId: string | undefined;
+    if (action === "resume" && options.routineModels) {
+      const parsed = parseOrInvalid(parseBotResumeAcknowledgement, input ?? {}, "Invalid Bot resume acknowledgement.");
+      acknowledgeUnknownCost = parsed.acknowledgeUnknownCost; expectedSubmissionId = parsed.expectedSubmissionId; expectedCostReceiptId = parsed.expectedCostReceiptId;
+    } else parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot request"), input ?? {}, "The Bot request is invalid.");
     const audience = this.audience(options);
     const bot = await this.options.bots.bot(botId);
     try {
       // Recorded in the holder's view, so a replay to any device projects the same truth.
       const view = await this.options.bots.executeIdempotent(
         { deviceId, route: CONTROL_ROUTES[action], resourceId: bot.id, key },
-        {},
+        acknowledgeUnknownCost ? { acknowledgeUnknownCost: true, expectedSubmissionId, expectedCostReceiptId } : {},
         async () => {
           const runtime = await this.options.runtime();
           const requestId = `remote:${deviceId}:${key}`;
           const holderView = (state: BotSessionState) => projectBotSessionState(state, HOLDER_AUDIENCE);
           if (action === "resume") {
-            return holderView(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId)));
+            return holderView(await unlessRefusedBeforeRunning(() => runtime.resume(bot.id, requestId, { acknowledgeUnknownCost, expectedSubmissionId, expectedCostReceiptId })));
           }
           if (action === "dismiss") {
             return holderView(await unlessRefusedBeforeRunning(() => runtime.dismiss(bot.id, requestId)));
@@ -2722,7 +2739,7 @@ export class AidenRemoteBotSessionService {
     }
   }
 
-  resume(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean } = {}) {
+  resume(deviceId: string, botId: string, key: string, input: unknown, options: { handoffs?: boolean; routineModels?: boolean } = {}) {
     return this.control("resume", deviceId, botId, key, input, options);
   }
 
@@ -2934,3 +2951,4 @@ function presetRoutineSchedule(
     ? { kind: "weekly", days: [...schedule.days], time }
     : { kind: schedule.frequency, time };
 }
+import { isBotInputEntryKind } from "./bot-runtime/bot-input-entry.js";

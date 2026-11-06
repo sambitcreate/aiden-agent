@@ -23,7 +23,7 @@ import {
 
 export const ROUTINE_LINK_DESCRIPTION =
   "Works on your network or Tailscale while this Mac is awake. It is shown only now; New link makes another and stops this one. The Mac's certificate is self-signed, so callers may need to allow that (curl -k).";
-export const ROUTINE_LINK_OFF_DESCRIPTION = "Turn on Aiden On The Go in Settings to use this routine's link.";
+export const ROUTINE_LINK_OFF_DESCRIPTION = "Turn on remote access in Settings → Connections to use this routine's link.";
 
 function ProposalIcon({ proposal }: { proposal: Pick<BotRoutineProposalEntryData, "trigger"> }) {
   if (proposal.trigger?.kind === "webhook") return <Link2 />;

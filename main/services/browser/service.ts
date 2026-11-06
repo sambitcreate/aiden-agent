@@ -213,7 +213,9 @@ interface LiveTab {
   /** Fields this tab has shown as sensitive, so a "show password" toggle can't uncover one. */
   sensitiveFields: SensitiveFieldMemory;
   /** Reads the fields of a held tab while the person uses it (`watchHeldFields`). */
-  heldFieldWatch?: { timer?: ReturnType<typeof setTimeout> };
+  heldFieldWatch?: { timer?: ReturnType<typeof setTimeout>; revision: number; observedDocument?: string; read(): void; invalidate(): void };
+  /** A released document was never inspected. Later plaintext reads cannot recover its history. */
+  heldFieldObservationLost?: true;
 }
 
 const ACTIONS_AGENT = new Set([
@@ -234,6 +236,7 @@ const ACTIONS_AGENT = new Set([
   "record_stop",
 ]);
 const MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
+const HELD_FIELDS_UNOBSERVED = "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
 const RECORDING_MAX_BYTES = 128 * 1024 * 1024;
 const PLAYWRIGHT_OPTIONS = {
   isUnderTest: false,
@@ -423,6 +426,11 @@ export class BrowserService {
   release(workspaceId: string, holdId: string): void {
     for (const tab of this.tabs.values()) {
       if (tab.state.workspaceId !== workspaceId || tab.hold?.holdId !== holdId) continue;
+      // Once the person has shown a field, a later scan cannot establish what
+      // it used to be. Keep this tab closed to Bot reads instead of guessing.
+      if (tab.pendingNavigationUrl !== undefined || tab.view.webContents.isLoading() ||
+        tab.heldFieldWatch?.observedDocument !== this.heldFieldDocument(tab))
+        tab.heldFieldObservationLost = true;
       tab.hold = undefined;
       delete tab.state.heldForPerson;
       this.unwatchHeldFields(tab);
@@ -524,6 +532,16 @@ export class BrowserService {
     );
     return redactBrowserData(clone(workspace.state));
   }
+  /** Bot state reads cannot reveal a page whose held-field coverage was lost. */
+  getBotState(workspaceId: string): BrowserState {
+    const state = this.getState(workspaceId);
+    state.tabs = state.tabs.map((tab) => {
+      if (!this.tabs.get(tab.id)?.heldFieldObservationLost) return tab;
+      const { favicon: _favicon, error: _error, ...rest } = tab;
+      return { ...rest, url: "", title: "Password protection unavailable", canGoBack: false, canGoForward: false };
+    });
+    return state;
+  }
   getApprovalTarget(workspaceId: string, tabId?: string): BrowserApprovalTarget {
     this.mainWindow(workspaceId);
     const selected = tabId ?? this.workspace(workspaceId).state.activeTabId;
@@ -545,6 +563,7 @@ export class BrowserService {
     signal?: AbortSignal,
   ): Promise<BrowserFieldProbe | undefined> {
     const tab = this.tab(workspaceId, tabId);
+    this.assertHeldFieldsObserved(tab);
     let pick: string;
     if (target.focused) pick = "__aidenFocused().element";
     else if (target.x !== undefined && target.y !== undefined) {
@@ -564,12 +583,14 @@ export class BrowserService {
     try {
       // A field that was a password field (a "show password" toggle) reads as one.
       await this.recallSensitiveFields(tab, signal);
+      this.assertHeldFieldsObserved(tab);
       const probe = await this.evaluate(
         tab,
         `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${BROWSER_BOUNDARY_NAME_SOURCE}const raw=${pick};if(!raw||raw.nodeType!==1)return null;const e=${control};const u=globalThis.__aidenPlaywright.utils;const attr=n=>{const v=e.getAttribute(n);return v===null?undefined:v.slice(0,200);};const form=e.form||e.closest('form');let host;try{if(form)host=new URL(form.getAttribute('action')||location.href,location.href).hostname;}catch{host=undefined;}let name;try{name=String(__aidenBoundaryName(e)).slice(0,300)||undefined;}catch{name=undefined;}return{tag:String(e.localName||''),type:__aidenSensitive(e)&&!__aidenSensitiveNow(e)?'password':attr('type'),autocomplete:attr('autocomplete'),role:u.getAriaRole(e)||(e.isContentEditable?'textbox':undefined),accessibleName:name,formActionHost:host};})()`,
         signal,
         true,
       );
+      this.assertHeldFieldsObserved(tab);
       if (!probe || typeof probe !== "object") return undefined;
       const field: BrowserFieldProbe = {};
       for (const key of ["tag", "type", "autocomplete", "role", "accessibleName", "formActionHost"] as const) {
@@ -578,6 +599,7 @@ export class BrowserService {
       }
       return field;
     } catch (error) {
+      this.assertHeldFieldsObserved(tab);
       // A locator the boundary refuses fails the call before any card asks.
       const refused = boundaryRefusalOf(error);
       if (refused !== error) throw refused;
@@ -791,6 +813,24 @@ export class BrowserService {
     wc.on("did-start-loading", publish);
     wc.on("did-stop-loading", publish);
     wc.on("did-stop-loading", () => this.finishPreviewNavigation(tab));
+    wc.on("did-stop-loading", () => tab.heldFieldWatch?.read());
+    // The pierced scan includes same-process child documents. A child can
+    // replace its password form without changing the main document identity.
+    // Use the watch's scalar revision for the whole frame tree, rather than
+    // retaining an unbounded collection of frame identifiers.
+    wc.on("did-frame-navigate", (_event, _url, _code, _status, isMainFrame) => {
+      if (!isMainFrame) tab.heldFieldWatch?.invalidate();
+    });
+    wc.on("did-frame-finish-load", (_event, isMainFrame) => {
+      if (!isMainFrame) {
+        tab.heldFieldWatch?.invalidate();
+        tab.heldFieldWatch?.read();
+      }
+    });
+    wc.on("dom-ready", () => {
+      tab.heldFieldWatch?.invalidate();
+      tab.heldFieldWatch?.read();
+    });
     wc.on("page-title-updated", publish);
     wc.on("media-started-playing", publish);
     wc.on("media-paused", publish);
@@ -832,6 +872,7 @@ export class BrowserService {
       publish();
     });
     wc.on("did-start-navigation", (_event, url, inPlace, isMainFrame) => {
+      if (!inPlace) tab.heldFieldWatch?.invalidate();
       if (isMainFrame && !inPlace) {
         // Capture native state before Electron delivers its queued crash event.
         // Loading alone cannot distinguish a replacement from a current crash.
@@ -1685,6 +1726,13 @@ export class BrowserService {
     const wc = tab.view.webContents;
     if (!wc.isDestroyed() && wc.getProcessId() === processId) tab.sensitiveFields.remember(processId, ids);
   }
+  private heldFieldDocument(tab: LiveTab): string {
+    const wc = tab.view.webContents;
+    return `${tab.navigationSequence}:${tab.committedNavigation}:${wc.isDestroyed() ? "closed" : wc.getProcessId()}`;
+  }
+  private assertHeldFieldsObserved(tab: LiveTab): void {
+    if (tab.heldFieldObservationLost) throw new Error(HELD_FIELDS_UNOBSERVED);
+  }
   /**
    * Read the page's sensitive fields into the tab's memory. With `mark`, a
    * field only memory knows (a password field the page turned into plain
@@ -1694,11 +1742,13 @@ export class BrowserService {
    * each of them.
    */
   private async recallSensitiveFields(tab: LiveTab, signal?: AbortSignal, mark = true): Promise<void> {
+    if (mark) this.assertHeldFieldsObserved(tab);
     const wc = tab.view.webContents;
     if (wc.isDestroyed()) return;
     const processId = wc.getProcessId();
     try {
       const scan = await scanSensitiveFields(this.cdpPort(tab, signal), tab.sensitiveFields.of(processId));
+      if (mark) this.assertHeldFieldsObserved(tab);
       this.rememberSensitiveFields(tab, processId, scan.sensitive);
       if (!mark || scan.recalled.length === 0) return;
       await this.evaluate(tab, "0", signal, true);
@@ -1718,23 +1768,48 @@ export class BrowserService {
   /**
    * While the person holds a tab, read its fields every so often, so a field
    * they turn into plain text ("show password") after it loaded stays covered
-   * once the Bot has the tab back. A slow read waits longer before the next.
+   * once the Bot has the tab back. A slow read waits longer before the next,
+   * so each page the person opens is also read as soon as it is ready: a page
+   * that loads during that wait would otherwise have its field shown unseen.
    */
   private watchHeldFields(tab: LiveTab): void {
     if (tab.heldFieldWatch) return;
-    const watch: NonNullable<LiveTab["heldFieldWatch"]> = {};
-    tab.heldFieldWatch = watch;
+    let reading = false, readAgain = false;
     const read = async () => {
+      if (reading) {
+        readAgain = true;
+        return;
+      }
+      reading = true;
+      clearTimeout(watch.timer);
       const started = Date.now();
-      await this.recallSensitiveFields(tab, undefined, false).catch(() => {});
+      const revision = watch.revision, document = this.heldFieldDocument(tab);
+      try {
+        await this.recallSensitiveFields(tab, undefined, false);
+        if (tab.heldFieldWatch === watch && revision === watch.revision && !tab.view.webContents.isDestroyed() &&
+          !tab.view.webContents.isLoading() && document === this.heldFieldDocument(tab))
+          watch.observedDocument = document;
+      } catch { /* An unread document remains unobserved. */ }
+      reading = false;
       if (tab.heldFieldWatch !== watch) return;
       if (!tab.hold || tab.closing || tab.view.webContents.isDestroyed()) {
         tab.heldFieldWatch = undefined;
         return;
       }
+      if (readAgain) {
+        readAgain = false;
+        void read();
+        return;
+      }
       watch.timer = setTimeout(() => void read(), Math.max(HELD_FIELD_SCAN_MS, 20 * (Date.now() - started)));
     };
-    void read();
+    const watch: NonNullable<LiveTab["heldFieldWatch"]> = {
+      revision: 0,
+      read: () => void read(),
+      invalidate() { watch.revision += 1; watch.observedDocument = undefined; },
+    };
+    tab.heldFieldWatch = watch;
+    watch.read();
   }
   private unwatchHeldFields(tab: LiveTab): void {
     if (tab.heldFieldWatch?.timer) clearTimeout(tab.heldFieldWatch.timer);
@@ -2636,6 +2711,7 @@ export class BrowserService {
         // While the person uses a held tab the agent can't read or drive it,
         // snapshots included; it may still open and use other tabs.
         if (context.source === "agent" && tab.hold) throw new Error(BROWSER_HELD_TAB_REFUSED);
+        if (context.source === "agent") this.assertHeldFieldsObserved(tab);
         // Panel cleanup can cancel an already inactive picker. Hiding browser
         // chrome must not interrupt automation or invalidate pending approval.
         if (command.action === "annotate" && !command.enabled && !tab.picking) break;
@@ -2670,7 +2746,10 @@ export class BrowserService {
           tab.timeline = tab.timeline.slice(-200);
         }
         await tab.queue.run(async (queueCheck) => {
-          const check = queueCheck;
+          const check = () => {
+            queueCheck();
+            if (context.source === "agent") this.assertHeldFieldsObserved(tab);
+          };
           const signals = [context.signal, tab.queue.signal].filter(
             (candidate): candidate is AbortSignal => Boolean(candidate),
           );
@@ -2977,6 +3056,7 @@ export class BrowserService {
               default:
                 throw new Error("Unknown browser command.");
             }
+            check();
             actionEvent.status = "succeeded";
           } catch (error) {
             actionEvent.status = "failed";
@@ -3073,7 +3153,6 @@ export class BrowserService {
     boundary = false,
   ): Promise<void> {
     const timeout = browserBoundedNumber(input.timeoutMs ?? 15000, 1, 60000, "Wait timeout");
-    const end = Date.now() + timeout;
     if (
       !input.selector &&
       !input.locator &&
@@ -3085,6 +3164,9 @@ export class BrowserService {
     const target = input.selector || input.locator ? this.target(tab, input, boundary) : undefined;
     // Before a Bot's locator runs, as before it types: see `recallSensitiveFields`.
     if (target && boundary) await this.recallSensitiveFields(tab, signal);
+    // The wait starts after that read, or a slow read would use up a short
+    // wait before its condition was tried once.
+    const end = Date.now() + timeout;
     while (Date.now() < end) {
       check();
       browserAbort(signal);

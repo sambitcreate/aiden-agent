@@ -3,9 +3,10 @@
 // Every N minutes (5–1440) the watch runs its source (watch-sources.ts) and
 // hashes the output's exact bytes. The first check stores a baseline and
 // wakes no one. An unchanged hash records `no_change` and runs no model. A
-// changed hash is saved BEFORE the event goes to the dispatcher, so a run that
-// fails or a quit never alerts twice; the event carries a bounded diff and the
-// new output. A failed check is an error, never a change, and leaves the hash
+// changed hash and a pending transition are saved together BEFORE dispatch.
+// Recovery retries that same transition until the dispatcher durably owns it;
+// its stable identity prevents a duplicate after a lost acknowledgement.
+// A failed check is an error, never a change, and leaves the hash
 // alone; three in a row turn the watch off with one Bot issue.
 //
 // Nothing is checked at startup beyond arming timers: a watch is checked once
@@ -128,8 +129,10 @@ export interface BotWatchDependencies {
   routines(): Promise<BotEventRoutine[]>;
   store: Pick<BotEventRoutineStore, "list" | "mutate">;
   /** Runs the routine's source once (watch-sources.ts in production). */
-  check(routine: BotEventRoutine): Promise<BotWatchCheck>;
+  check(routine: BotEventRoutine, signal: AbortSignal): Promise<BotWatchCheck>;
   dispatcher: Pick<BotRoutineEventDispatcher, "emit">;
+  /** Re-admit the source's current authority before delivering saved output, without running the source. */
+  authorizeDispatch?(routine: BotEventRoutine): Promise<{ signal: AbortSignal; release(): void } | { error: string }>;
   isPaused(botId: string): Promise<boolean>;
   /** Three failed checks in a row turned the watch off: one card for the person. */
   paused(routine: BotEventRoutine, error: string): Promise<void>;
@@ -149,11 +152,16 @@ const intervalMs = (routine: BotEventRoutine) =>
 
 export function createBotWatches(dependencies: BotWatchDependencies) {
   const timers = new Map<string, { key: string; timer: { cancel(): void } }>();
-  const inFlight = new Set<string>();
+  const checkWork = new Set<Promise<BotWatchOutcome>>();
+  const inFlight = new Map<string, { revision: number; abort: AbortController }>();
+  let generation = 0;
+  let disposed = false;
+  const live = (epoch: number) => !disposed && generation === epoch;
 
   const keyOf = (routine: BotEventRoutine, at: number) => `${JSON.stringify(routine.trigger)}@${at}`;
 
   function arm(routine: BotEventRoutine, at: number): void {
+    if (disposed) return;
     const key = keyOf(routine, at);
     if (timers.get(routine.id)?.key === key) return;
     timers.get(routine.id)?.timer.cancel();
@@ -168,6 +176,8 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
 
   /** Arms the watch at its persisted next-check time; one without one keeps its timer or waits an interval. */
   function armDue(routine: BotEventRoutine): void {
+    if (disposed) return;
+    if (routine.watch?.pending) return arm(routine, routine.watch.pending.nextAttemptAt);
     const at = routine.watch?.nextCheckAt;
     if (at !== undefined) return arm(routine, at);
     if (timers.get(routine.id)?.key.startsWith(`${JSON.stringify(routine.trigger)}@`)) return;
@@ -178,45 +188,122 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
     return (await dependencies.store.list(botId)).find((routine) => routine.id === id);
   }
 
+  /** Only discard a transition after durable dispatcher ownership/suppression. */
+  async function deliverPending(routine: BotEventRoutine, epoch: number): Promise<boolean> {
+    const pending = routine.watch?.pending;
+    if (!pending || !live(epoch)) return false;
+    let accepted = false;
+    let grant: { signal: AbortSignal; release(): void } | undefined;
+    try {
+      const admitted = await dependencies.authorizeDispatch?.(routine);
+      if (admitted && "error" in admitted) {
+        const paused = await dependencies.store.mutate(routine.botId, routine.id, (fresh) => {
+          if (!live(epoch) || !fresh.enabled || fresh.watch?.pending?.eventId !== pending.eventId ||
+            fresh.updatedAt !== pending.revision) return { result: undefined };
+          const next = { ...fresh, enabled: false, watch: { ...fresh.watch, lastResult: "error" as const,
+            failures: fresh.watch.failures + 1, unsettledFailure: true as const, lastError: admitted.error.slice(0, 200) } };
+          return { next, result: next };
+        });
+        if (paused && live(epoch)) await dependencies.paused(paused, admitted.error);
+        return false;
+      }
+      grant = admitted;
+      if (!live(epoch) || grant?.signal.aborted) return false;
+      const result = await dependencies.dispatcher.emit(routine.botId, routine.id, {
+        eventId: pending.eventId, payload: pending.payload, watchRevision: pending.revision,
+        isCurrent: () => live(epoch) && !grant?.signal.aborted,
+      });
+      accepted = result === "queued" || result === "held" || result === "duplicate" || result === "daily_limit";
+    } catch (error) {
+      dependencies.onError?.(error);
+    } finally {
+      grant?.release();
+    }
+    if (!live(epoch)) return false;
+    return await dependencies.store.mutate(routine.botId, routine.id, (fresh) => {
+      if (!live(epoch) || !fresh.watch?.pending || fresh.watch.pending.eventId !== pending.eventId ||
+            fresh.watch.pending.revision !== pending.revision) return { result: false };
+      const { pending: _pending, ...watch } = fresh.watch;
+      const { lastError: _lastError, unsettledFailure: _unsettled, ...healthy } = watch;
+      const healthUnchanged = fresh.enabled && watch.failures === routine.watch?.failures &&
+        watch.lastError === routine.watch?.lastError && watch.unsettledFailure === routine.watch?.unsettledFailure;
+      return {
+        next: { ...fresh, watch: accepted ? (healthUnchanged ? { ...healthy, failures: 0, lastResult: "changed" } : watch) :
+          { ...watch, pending: { ...pending, nextAttemptAt: dependencies.now() + 60_000 } } },
+        result: accepted && healthUnchanged,
+      };
+    }) === true;
+  }
+
   /** One check of one watch; exported for tests and for the timer. */
-  async function checkNow(botId: string, id: string): Promise<BotWatchOutcome> {
-    if (inFlight.has(id)) return "skipped";
-    inFlight.add(id);
+  async function performCheckNow(botId: string, id: string): Promise<BotWatchOutcome> {
+    if (disposed || inFlight.has(id)) return "skipped";
+    const epoch = generation;
+    const abort = new AbortController();
+    inFlight.set(id, { revision: -1, abort });
+    let sourcePublication:import("./watch-sources.js").BotWatchPublication|undefined;
     try {
       const routine = await current(botId, id);
-      if (!routine || !routine.enabled || routine.trigger.kind !== "watch") return "skipped";
+      if (!live(epoch) || !routine || !routine.enabled || routine.trigger.kind !== "watch") return "skipped";
+      inFlight.set(id, { revision: routine.updatedAt, abort });
       const triggerKey = JSON.stringify(routine.trigger);
       const every = intervalMs(routine);
       if (await dependencies.isPaused(botId)) {
         // No check while the Bot is paused; look again one interval later.
         const at = dependencies.now() + every;
         const next = await dependencies.store.mutate(botId, id, (fresh) =>
-          JSON.stringify(fresh.trigger) !== triggerKey
+          !live(epoch) || fresh.updatedAt !== routine.updatedAt || JSON.stringify(fresh.trigger) !== triggerKey
             ? { result: undefined }
-            : { next: { ...fresh, watch: { ...(fresh.watch ?? { failures: 0 }), nextCheckAt: at } }, result: fresh });
-        if (next) arm(next, at);
+            : { next: { ...fresh, watch: { ...(fresh.watch ?? { failures: 0 }), nextCheckAt: at,
+              ...(fresh.watch?.pending ? { pending: { ...fresh.watch.pending, nextAttemptAt: at } } : {}) } }, result: fresh });
+        if (next && live(epoch)) arm(next, at);
         return "skipped";
+      }
+      if (!live(epoch)) return "skipped";
+      if (routine.watch?.pending) {
+        const delivered = await deliverPending(routine, epoch);
+        if (delivered && (routine.watch.unsettledFailure || routine.watch.failures > 0)) await dependencies.recovered(routine);
+        return "changed";
       }
       const checkedAt = dependencies.now();
       let check: BotWatchCheck;
       try {
-        check = await dependencies.check(routine);
+        check = await dependencies.check(routine, abort.signal);
+        if(check.ok)sourcePublication=check.publication;
       } catch {
         check = { ok: false, error: "The check couldn't run." };
       }
+      if (!live(epoch) || abort.signal.aborted || await dependencies.isPaused(botId)) return "skipped";
+      if (!check.ok && check.skipped) return "skipped";
       const nextCheckAt = checkedAt + every;
-      type Decision = { outcome: BotWatchOutcome; routine: BotEventRoutine; before?: string; after?: string; hash?: string; hadFailure: boolean };
+      type Decision = { outcome: BotWatchOutcome; routine: BotEventRoutine; hadFailure: boolean };
       const decision = await dependencies.store.mutate<Decision | undefined>(botId, id, (fresh) => {
         // Edited, removed or turned off while the check ran: its result is stale.
-        if (!fresh.enabled || JSON.stringify(fresh.trigger) !== triggerKey) return { result: undefined };
+        if (!live(epoch) || abort.signal.aborted || !fresh.enabled || fresh.updatedAt !== routine.updatedAt ||
+          JSON.stringify(fresh.trigger) !== triggerKey) return { result: undefined };
         const state: BotWatchState = fresh.watch ?? { failures: 0 };
         const hadFailure = state.failures > 0 || state.lastResult === "error" || state.unsettledFailure === true;
         if (!check.ok) {
           const failures = state.failures + 1;
-          const pause = failures >= BOT_WATCH_LIMITS.failuresBeforePause;
+          const pause = check.pause === true || failures >= BOT_WATCH_LIMITS.failuresBeforePause;
           const watch: BotWatchState = { ...state, failures, lastError: check.error.slice(0, 200), lastResult: "error", lastCheckAt: checkedAt, nextCheckAt };
           const next: BotEventRoutine = { ...fresh, watch, ...(pause ? { enabled: false } : {}) };
           return { next, result: { outcome: pause ? "paused" : "error", routine: next, hadFailure } };
+        }
+        if (check.connector) {
+          const semantic = check.connector;
+          const hash = botWatchHash(check.bytes);
+          const { lastError: _error, unsettledFailure: _failure, pending: _oldPending, ...rest } = state;
+          const watch: BotWatchState = { ...rest, failures: 0, hash, connectorBaseline: semantic.baseline,
+            connectorItemCount: semantic.itemCount, lastCheckAt: checkedAt, nextCheckAt };
+          if (semantic.changeCount === 0 || !state.connectorBaseline && fresh.connector?.binding.adapter !== "composio-calendar-v1") {
+            const outcome = state.connectorBaseline ? "no_change" as const : "baseline" as const;
+            return { next: { ...fresh, watch: { ...watch, lastResult: outcome } }, result: { outcome, routine: { ...fresh, watch }, hadFailure } };
+          }
+          const pending = { eventId: `${hash.slice(0, 24)}-${checkedAt.toString(36)}`, payload: semantic.payload,
+            revision: fresh.updatedAt, nextAttemptAt: checkedAt };
+          const next = { ...fresh, watch: { ...watch, pending, sameSince: checkedAt, lastResult: "changed" as const } };
+          return { next, result: { outcome: "changed", routine: next, hadFailure } };
         }
         const hash = botWatchHash(check.bytes);
         const text = new TextDecoder("utf-8", { fatal: false }).decode(check.bytes);
@@ -231,43 +318,56 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
           const next = { ...fresh, watch: { ...base, lastResult: "no_change" as const } };
           return { next, result: { outcome: "no_change", routine: next, hadFailure } };
         }
-        // The new hash is written here, before the event is dispatched.
-        const next = { ...fresh, watch: { ...base, hash, snapshot, sameSince: checkedAt, lastResult: "changed" as const } };
-        return { next, result: { outcome: "changed", routine: next, before: state.snapshot ?? "", after: text, hash, hadFailure } };
-      });
-      if (!decision) return "skipped";
-      if (decision.outcome === "changed") {
-        // The hash and the check time: a status that flips back
-        // (passing → failing → passing) is a new event, not a duplicate.
-        const eventId = `${decision.hash!.slice(0, 24)}-${checkedAt.toString(36)}`;
-        await dependencies.dispatcher
-          .emit(botId, id, { eventId, payload: botWatchEventPayload(decision.before ?? "", decision.after ?? "") })
-          .catch((error: unknown) => dependencies.onError?.(error));
-      }
+        const pending = {
+          eventId: `${hash.slice(0, 24)}-${checkedAt.toString(36)}`,
+          payload: botWatchEventPayload(state.snapshot ?? "", text),
+          revision: fresh.updatedAt,
+          nextAttemptAt: checkedAt,
+        };
+        const next = { ...fresh, watch: { ...base, hash, snapshot, pending, sameSince: checkedAt, lastResult: "changed" as const } };
+        return { next, result: { outcome: "changed", routine: next, hadFailure } };
+      },sourcePublication?.guard);
+      if (!decision || !live(epoch)) return "skipped";
+      const delivered = decision.outcome !== "changed" || await deliverPending(decision.routine, epoch);
       if (decision.outcome === "paused") {
         await dependencies.paused(decision.routine, decision.routine.watch?.lastError ?? "").catch((error: unknown) => dependencies.onError?.(error));
-      } else if (decision.outcome !== "error" && decision.hadFailure) {
-        await dependencies.recovered(decision.routine).catch((error: unknown) => dependencies.onError?.(error));
+      } else if (delivered && decision.outcome !== "error" && decision.hadFailure) {
+        const fresh = await current(botId, id);
+        if (fresh?.enabled && fresh.watch?.failures === 0 && !fresh.watch.unsettledFailure) {
+          await dependencies.recovered(fresh).catch((error: unknown) => dependencies.onError?.(error));
+        }
       }
-      if (decision.routine.enabled) arm(decision.routine, nextCheckAt);
-      dependencies.checked?.(decision.routine);
+      dependencies.checked?.(await current(botId, id) ?? decision.routine);
       return decision.outcome;
     } finally {
+      sourcePublication?.release();
       inFlight.delete(id);
       // A rearm skipped this watch while it was checking (an edit, say): arm it now.
-      if (!timers.has(id)) {
+      if (live(epoch)) {
         const fresh = await current(botId, id).catch(() => undefined);
-        if (fresh?.enabled && fresh.trigger.kind === "watch") armDue(fresh);
+        if (live(epoch) && fresh?.enabled && fresh.trigger.kind === "watch") armDue(fresh);
       }
     }
   }
 
+  function checkNow(botId: string, id: string): Promise<BotWatchOutcome> {
+    const work = performCheckNow(botId, id);
+    checkWork.add(work);
+    void work.then(() => checkWork.delete(work), () => checkWork.delete(work));
+    return work;
+  }
+
   let rearming: Promise<void> = Promise.resolve();
 
-  async function rearmOnce(): Promise<void> {
+  async function rearmOnce(epoch: number): Promise<void> {
     const wanted = new Map<string, BotEventRoutine>();
     for (const routine of await dependencies.routines()) {
       if (routine.enabled && routine.trigger.kind === "watch") wanted.set(routine.id, routine);
+    }
+    if (!live(epoch)) return;
+    for (const [id, flight] of inFlight) {
+      const routine = wanted.get(id);
+      if (!routine || (flight.revision !== -1 && routine.updatedAt !== flight.revision)) flight.abort.abort();
     }
     for (const [id, entry] of timers) {
       if (!wanted.has(id)) {
@@ -283,16 +383,23 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
 
   return {
     checkNow,
+    /** Checks already started, including their durable hand-offs, have settled. */
+    async idle(): Promise<void> { while (checkWork.size) await Promise.allSettled([...checkWork]); },
     /** Serialized: arms one timer per enabled watch at its persisted next-check time; never checks by itself. */
     rearm(): Promise<void> {
-      const next = rearming.catch(() => undefined).then(rearmOnce);
+      const epoch = generation;
+      const next = rearming.catch(() => undefined).then(() => rearmOnce(epoch));
       rearming = next;
       return next;
     },
     dispose(): void {
+      disposed = true;
+      generation += 1;
+      for (const flight of inFlight.values()) flight.abort.abort();
       for (const entry of timers.values()) entry.timer.cancel();
       timers.clear();
     },
+    resume(): void { disposed = false; },
   };
 }
 

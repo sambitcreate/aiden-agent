@@ -9,6 +9,42 @@ Settings adapts the Appearance page and the desktop UI references in `chatgpt-de
 - `Field` supplies a label/description group, inset separator, and `settings-field-control`. Default rows put controls at the right; vertical rows suit editors, lists, previews, and complex forms. Direct switches retain a trailing column even on narrow windows.
 - Use the shared Button, Switch, Input, Select, and other control primitives. Inputs keep their resting border and use background/caret focus states. Non-text controls retain a neutral `--focus-ring` outline.
 
+## Pages and tabs
+
+`renderer/shared/settings-section.ts` is the single source for the Settings map. `SETTINGS_GROUPS` lists the sidebar groups, `SETTINGS_PAGES` lists each page with its ordered tabs, and every tab is a section. The section stays the URL state; a page is only how sections are shown. Add a new setting as a section on an existing page, and add a page only when no page fits.
+
+- A sidebar row opens the page's first available tab. Switching tabs navigates with `replace: true`, so Back to app leaves in one step.
+- The heading is the page title and the description comes from the selected section. Only the selected panel mounts, and the tablist's `aria-label` is the page title.
+- A page with one available tab hides the strip and uses that tab's own title for its sidebar row and heading. Unavailable sections resolve to the page's first available tab, then to `providers`.
+- Sidebar search matches a page when any tab or anchor matches, and the row opens the first matching tab, preferring a tab whose title matches. The palette keeps one row per section with the page title as detail.
+- An anchor (`links`) is a section with no tab or sidebar row. It opens its page and scrolls the row into view, instantly under Reduce Motion.
+
+Write user-facing paths with page titles: `Settings → Voice & Speech → Text to Speech`, naming a tab only when it helps.
+
+## InfoHint rules
+
+`InfoHint` (`renderer/components/ui-info-hint.tsx`) explains one thing in at most two short sentences. Its panel is narrow, and focus stays on the trigger and closes on blur, so a link or button inside it can't be reached by keyboard.
+
+| Content | Where it goes |
+|---|---|
+| One fact, two short sentences at most, nothing to click | `InfoHint` |
+| Longer steps or reference text | `SettingsDisclosure` on the page, open by default when the user needs it |
+| Any button, link or control | On the page |
+| Privacy disclosure, data leaving the device, charges or unattended authority | Visible on the page, shortened where possible |
+| Text that changes with the current selection or status | Next to that control |
+
+These stay on the page for those reasons: the Text to Speech cloud processing notice and **Clear generated audio**, the Computer Use data disclosure, "What leaves this device" for web pages, **Manage Bot grants** and **Manage schedule grants**, Always comes to you, the Telegram security notice, Aiden Live's state, Beta badge, Scheduled tasks and Global shortcut rows, and the connector exposure help. Context & Limits keeps "may be sent to your chat model" visible while the compaction override detail sits in a hint.
+
+Name a hint's `topic` so that "About <topic>" reads as a label for the trigger. Tests open it by that name and assert the `tooltip` text.
+
+## Folds and group actions
+
+`SettingsDisclosure` (`renderer/components/ui.tsx`) folds a group the user rarely needs behind a summary row. The `summary` states what's inside, so nobody has to open it to learn its state, and `badge` carries a status such as Update available. Set `defaultOpen` when the fold holds something that needs attention. If that turns true later the fold opens unless the user has already toggled it, and it stays open when the condition clears. Its children stay mounted, so a half-filled form survives closing it. Destructive actions stay outside the fold.
+
+A control that acts on a whole group goes in `FieldSet`'s `action`, at the end of the heading row. Image Generation opens **Add model by ID…** from there because the page heading is shared by every page and takes no controls.
+
+Web Search → Web pages folds its Cloudflare form behind **Set up Cloudflare…** until an account ID, a key or a paused Extract switch exists. It can't use the Extract switch as the trigger, because that switch stays disabled until setup is done. "What leaves this device" appears wherever the form does.
+
 ## Tokens and adaptation
 
 The `.settings-responsive` container defines `--settings-card-radius`, `--settings-card-fill`, `--settings-row-inset`, and `--settings-row-gap`. They derive from Aiden's semantic theme tokens; Appearance cards use these same variables. Shared heading metrics are 26/32px, with secondary copy and 26px spacing before content. Groups use soft neutral surfaces, inset separators, and restrained elevation, with no outline (Untitled borderless surfaces). Status appears in semantic labels, icons, and fills, never decorative colored borders.
@@ -39,11 +75,18 @@ While Inbox is the chosen view, and only on a host with the `badgeCount` capabil
 
 ## Aiden Live
 
-Settings → Aiden Live opens with an "Availability" group of two trailing switches (not titled "Aiden Live", so the page keeps one heading with that name). `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the Live readiness, Audio devices and Actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+
+## Page notes
+
+- **Text to Speech** has three groups: Setup, Voice and delivery, and Privacy and storage.
+- **Skills** shows a search field once more than 8 skills are discovered, the same field and threshold as workspace settings (`renderer/components/list-search-field.tsx`). It matches a skill's name and description.
+- **Providers** explains itself through hints. Chat title generation and Model catalog are one row each, and Model catalog keeps the manual **Update model catalogs** action.
+- **Keyboard shortcuts** puts the recorder beside the row's switch.
 
 ## Connectors
 
-Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add custom connector** and a ⋯ menu that holds **Reset connections**. Saved connectors sit in a "Your connectors" `FieldSet`; the directory below has its own group title with an ⓘ, a search field and category chips. Directory cards come from `renderer/shared/connector-catalog.ts`. A card's badge follows the live connection (`mcpPresetCardStatus`), so only a working connection is green. A connector marked unavailable shows its reason and a button that moves focus to its alternative instead of Set Up. A search that matches only an alias (Composio's apps, or the Mac apps iMCP reaches) shows the entry's one-line hint. Secret fields say values are stored encrypted on this device, never "this Mac's keychain".
+Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add custom connector** and a ⋯ menu that holds **Reset connections**. Saved connectors sit in a "Your connectors" `FieldSet`; the directory below has its own group title with an ⓘ, a search field and category chips. Directory cards come from `renderer/shared/connector-catalog.ts`. A card's badge follows the live connection (`mcpPresetCardStatus`), so only a working connection is green. A connector marked unavailable shows its reason and a button that moves focus to its alternative instead of Set Up. A search that matches only an alias (Composio's apps, or the Mac apps iMCP reaches) shows the entry's one-line hint. Secret fields say values are stored encrypted on this device, never "this Mac's keychain". Composio’s Tools sheet has one service switch. Enabled apps and operations are managed in Composio. Older individual exclusions keep that switch off until the person explicitly allows the service; changing visibility or exposure alone preserves them.
 
 Local connectors added outside Aiden remain blocked while their environment is sealed into encrypted device-local storage. The pending card shows variable names and saved/missing indicators, never plaintext values. **Review and approve** opens a trusted native confirmation containing the exact command, arguments and resolved environment overrides, JSON-escaped without truncation so settings such as `NODE_OPTIONS` and `PATH` can be reviewed. Cancel is the default. Main resolves and compares the effective launch again before approval, and rejects failed sealing, missing values or a changed configuration. An editor save that introduces a new launch also opens this review. Ordinary unchanged approved saves and storage-only migrations keep existing consent. No plaintext fallback is permitted.
 
@@ -60,19 +103,19 @@ Workspace settings is a pop-up, not a Settings page (`renderer/components/worksp
 
 Switches save at once on screen and roll back with a toast if saving fails. A short line under each list says changes apply from the next message. The stored off-lists (`Workspace.disabledSkills`, by canonical skill name, and `Workspace.disabledMcpServerIds`) live with the workspace in the device-local config. The main process enforces them for every chat in that workspace, including chats started from a phone and the subagents they start; Bots keep their own access, and the CLI does not read them yet.
 
-## Limits & spending
+## Context & Limits
 
-Settings → Limits & spending (section id `limits`, in the Agent group) has two `FieldSet` groups. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
+Settings → Context & Limits (section id `limits`, in the Models & Context group) keeps long chats manageable and bounds their cost. **Automatic compaction** has the compaction engine radios (`AppSettings.compactionEngine`), **Prompt cache** the optional warming switch (`AppSettings.cacheWarmingEnabled`), and the budget group saves a per-model compaction budget through `settingsApi.setCompactionModelBudget`. Each of the three saves only its own value. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
 
 ## Bots
 
-Settings → Bots (section id `bots`, in the Agent group, before Bot computers) has four `FieldSet` groups. **Other Bots** has the default-on "Bots can message each other" switch (`AppSettings.botMessaging`, only `false` is stored), saved immediately with rollback on failure. The Advanced → Other Bots group has independent receiving and sending switches for each Bot; global off disables both with "Turned off in Settings → Bots". Paired phones show the equivalent controls only when the host negotiates `bot:messaging`; see [Bot messaging](bot-messaging.md). **Routines** has one trailing switch, "Go ahead without asking" (`AppSettings.botRoutinesGoAhead`, off by default), saved at once and put back if the save fails. **Always comes to you** lists what the switch never covers, each row with a trailing lock and "Always", the same treatment as a Bot's locked rules: passwords, 2FA codes and money; steps a Bot's rules hand off; and Computer Use on the person's Mac (only where this Mac offers Computer Use). A secondary line under the groups says what routines do while the switch is off. Each Bot's Rules group ends with a secondary line saying what routines do with Ask first steps and an inline "Change this for every Bot" link to the page. See [Bot rules](bot-rules.md#routines-that-go-ahead-settings--bots).
+Settings → Bots & Approvals → Bots (section id `bots`, the page's first tab) has four `FieldSet` groups. **Other Bots** has the default-on "Bots can message each other" switch (`AppSettings.botMessaging`, only `false` is stored), saved immediately with rollback on failure. The Advanced → Other Bots group has independent receiving and sending switches for each Bot; global off disables both with "Turned off in Settings → Bots & Approvals". Paired phones show the equivalent controls only when the host negotiates `bot:messaging`; see [Bot messaging](bot-messaging.md). **Routines** has one trailing switch, "Go ahead without asking" (`AppSettings.botRoutinesGoAhead`, off by default), saved at once and put back if the save fails. **Always comes to you** lists what the switch never covers, each row with a trailing lock and "Always", the same treatment as a Bot's locked rules: passwords, 2FA codes and money; steps a Bot's rules hand off; and Computer Use on the person's Mac (only where this Mac offers Computer Use). A secondary line under the groups says what routines do while the switch is off. Each Bot's Rules group ends with a secondary line saying what routines do with Ask first steps and an inline "Change this for every Bot" link to the page. See [Bot rules](bot-rules.md#routines-that-go-ahead-settings--bots--approvals).
 
 **Allowed without asking** groups saved entries by Bot, using the shared inset rows and small transparent Remove buttons. Each app or website row shows when it was added and its usage count; folders show their location and added date. Removing a folder changes only that Bot's selected Custom access, not the shared approved root. The same list opens from the Bot's Profile. Loading, error and empty states are distinct; a pending removal disables its row, and a failed removal keeps it with an inline error. The Always card acknowledgement says “Always allow requested.” because saving happens after the choice is accepted. Host change events refresh both lists. With no entries, the group says “No Bot does anything without asking yet.”
 
 ## Web pages
 
-Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.
+Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved, and the row offers **Set up Cloudflare…** until the form is showing. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.
 
 ## Storage
 
@@ -121,8 +164,7 @@ Answers, visuals, approvals and question recaps keep their normal placement.
 Bot activity availability still follows each Bot's Quiet/Summary/Detailed level;
 the global mode and timing adjust Detailed recaps without adding hidden steps.
 
-The link row edits the same browser-service preference as Settings → Links,
-including Ask each time, Aiden browser and System browser. Local-file checks,
+The link row edits the browser-service preference, including Ask each time, Aiden browser and System browser. Local-file checks,
 loopback rules, modifier-click and restricted-content confirmation still apply.
 This preference remains separate from Appearance import/reset.
 

@@ -63,6 +63,8 @@ declare module "@tanstack/history" {
   interface HistoryState {
     /** Set on the history entry when the person asked for the Bot list (see `botListLocation`). */
     aidenBotList?: boolean;
+    /** Set when someone asks for a spot on a Settings page; a new value is a new request. Lives here, not in `settings-section.ts`, because the CLI compiles that file without TanStack. */
+    aidenSettingsAnchor?: number;
   }
 }
 

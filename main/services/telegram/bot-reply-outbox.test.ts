@@ -672,3 +672,14 @@ test("a reply that failed reaches the chat once as an error and is settled", asy
   assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "⚠️ Error: The Bot stopped before it could answer this." }]);
   assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
 });
+
+test("a peer final queued under an original Bot identity cannot reach a replacement after recovery",async()=>{
+ const file=path.join(tempDir(),"outbox.json"),delivered:TelegramBotReply[]=[];let current="old",release!:()=>void,reached!:()=>void;const barrier=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{reached=resolve;});const first=createTelegramBotIngress({file,session:untouchedSession().session,deliver:async reply=>{delivered.push(reply);},routineTargetEnabled:async row=>{reached();await barrier;return row.botIncarnation===current;}});
+ await first.enqueueRoutineDelivery({...routineDelivery,requestId:"peer-final-old",botIncarnation:"old",publication:{assertCurrent:async()=>{if(current!=="old")throw new Error("Previous Bot identity");}}});await entered;first.stop();current="replacement";release();await first.idle();assert.equal(delivered.length,0);
+ const reopened=createTelegramBotIngress({file,session:untouchedSession().session,deliver:async reply=>{delivered.push(reply);},routineTargetEnabled:async row=>row.botIncarnation===current});await reopened.recover();await reopened.idle();assert.equal(delivered.length,0);assert.equal((await reopened.rows())[0]?.botIncarnation,"old");assert.equal((await reopened.rows())[0]?.state,"failed");
+ current="replacement";await reopened.enqueueRoutineDelivery({...routineDelivery,requestId:"peer-final-new",botIncarnation:"replacement",publication:{assertCurrent:async()=>{if(current!=="replacement")throw new Error("Previous Bot identity");}}});await reopened.idle();assert.equal(delivered.length,1);assert.equal(delivered[0]?.botIncarnation,"replacement");
+});
+
+test("a peer final cannot publish its Telegram outbox row after its owner lifetime expires",async()=>{
+ const file=path.join(tempDir(),"outbox.json"),delivered:TelegramBotReply[]=[],ingress=createTelegramBotIngress({file,session:untouchedSession().session,deliver:async reply=>{delivered.push(reply);},routineTargetEnabled:async()=>true});await assert.rejects(ingress.enqueueRoutineDelivery({...routineDelivery,botIncarnation:"old",publication:{assertCurrent:async()=>{throw new Error("Previous Bot identity");}}}),/Previous Bot identity/u);assert.deepEqual(await ingress.rows(),[]);assert.deepEqual(delivered,[]);
+});

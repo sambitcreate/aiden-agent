@@ -19,6 +19,7 @@ import * as os from "os";
 import * as path from "path";
 import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
@@ -2460,7 +2461,7 @@ export class GitService {
       throw new GitServiceError("invalid_input", "Refresh Review before committing these changes.");
     }
     const repo = this.requireRepository(await this.repository(cwd));
-    return this.enqueueMutation(repo.commonDir, async () => {
+    const committed = await this.enqueueMutation(repo.commonDir, async () => {
       const transaction = await this.beginIndexTransaction(repo);
       let candidateCommit: string | undefined;
       let branchRef: string | undefined;
@@ -2773,6 +2774,8 @@ export class GitService {
         await this.releaseIndexTransaction(transaction);
       }
     });
+    reportAnalyticsEvent("git_commit", {});
+    return committed;
   }
 
   private async pushStateBlocker(

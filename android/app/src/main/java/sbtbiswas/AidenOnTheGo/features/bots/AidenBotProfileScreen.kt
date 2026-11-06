@@ -108,6 +108,11 @@ fun AidenBotProfileScreen(
     onNavigateToChat: (String) -> Unit,
     onNavigateToEditBot: (String) -> Unit,
     onNavigateToMemory: (String) -> Unit = {},
+    onNavigateToWatches: (String) -> Unit = {},
+    onNavigateToPeers: (String) -> Unit = {},
+    onNavigateToRoutineModels: (String) -> Unit = {},
+    onNavigateToOpenWork: (String) -> Unit = {},
+
     onNavigateToAllowed: (String) -> Unit = {},
     onBotMutated: () -> Unit = {},
     botDeleter: AidenBotDeleter? = null,
@@ -563,6 +568,50 @@ fun AidenBotProfileScreen(
                     }
                 }
 
+                if (serverInfo?.supportsBotPeers == true) {
+                    Surface(onClick={onNavigateToPeers(current.id)},color=palette.raised,shape=MaterialTheme.shapes.large,modifier=Modifier.fillMaxWidth()) {
+                        Row(Modifier.heightIn(min=56.dp).padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
+                            Text(stringResource(R.string.bot_peers_title),style=MaterialTheme.typography.bodyLarge,modifier=Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,contentDescription=null,tint=palette.secondary)
+                        }
+                    }
+                }
+                if (serverInfo?.supportsBotRoutineModels == true) {
+                    Surface(onClick = { onNavigateToRoutineModels(current.id) }, color = palette.raised,
+                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)) {
+                            Text(stringResource(R.string.bot_routine_models_title), style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground, modifier = Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
+                if (serverInfo?.supportsBotOpenWork == true) {
+                    Surface(onClick = { onNavigateToOpenWork(current.id) }, color = palette.raised,
+                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)) {
+                            Text(stringResource(R.string.bot_open_work_title), style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground, modifier = Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
+                if (serverInfo?.supportsBotWatches == true) {
+                    Surface(onClick = { onNavigateToWatches(current.id) }, color = palette.raised,
+                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)) {
+                            Text(stringResource(R.string.bot_watches_title), style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground, modifier = Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
                 if (serverInfo?.supportsBotRoutines == true) {
                     AidenBotRoutinesSection(
                         botId = current.id,
@@ -617,7 +666,7 @@ fun AidenBotProfileScreen(
                 scope.launch {
                     isDeleting = true
                     try {
-                        deleter.delete(cl, current.id)
+                        coordinator.deleteBot(cl,current.id,deleter)
                         confirmingDelete = false
                         onBotMutated()
                         onBotDeleted()

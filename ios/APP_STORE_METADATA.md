@@ -38,7 +38,7 @@ Description draft:
 
 Review-notes draft:
 
-> Aiden On The Go requires the companion Aiden Agent desktop app. In Aiden Agent, open Settings → Remote Access, enable the listener, and open a short-lived pairing session. On the iPhone or iPad, scan the pairing QR code or use the approved manual connection flow. The reviewer must be supplied with a reachable review desktop and any required setup instructions; no production credential is embedded in the app.
+> Aiden On The Go requires the companion Aiden Agent desktop app. In Aiden Agent, open Settings → Connections, enable the listener, and open a short-lived pairing session. On the iPhone or iPad, scan the pairing QR code or use the approved manual connection flow. The reviewer must be supplied with a reachable review desktop and any required setup instructions; no production credential is embedded in the app.
 
 ## Age-rating questionnaire draft
 

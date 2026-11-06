@@ -391,7 +391,7 @@ test(
       ],
     });
     try {
-      // Settings → Bot computers → Set up, then the Bot profile's Give Ada a computer.
+      // Settings → Computers & VMs → Bot computers → Set up, then the Bot profile's Give Ada a computer.
       await context.host.setUp();
       assert.equal((await context.host.status()).setup.kind, "ready");
       const given = await context.invoke<BotComputerStatus>(BOT_COMPUTER_CHANNELS.give, BOT);

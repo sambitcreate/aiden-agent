@@ -13,6 +13,7 @@ import { ANALYTICS_BUILD_CONFIG } from "./analytics-build-config.js";
 import type { PostHogTransport } from "./analytics-client.js";
 import { parseAnalyticsState, type AnalyticsState } from "./analytics-consent.js";
 import type { AnalyticsSuperProperties } from "./analytics-events.js";
+import { setAnalyticsReporter } from "./analytics-report.js";
 import { createAnalyticsService, createLoggingTransport, type AnalyticsService } from "./analytics-service.js";
 
 // macOS reports its own major (26); elsewhere this is the kernel major, which
@@ -68,7 +69,8 @@ let service: AnalyticsService | undefined;
 
 // Created on first use, after main has settled the userData path.
 export function analyticsService(): AnalyticsService {
-  service ??= createAnalyticsService({
+  if (service) return service;
+  const created = createAnalyticsService({
     store: {
       read: () => configStore.getAnalyticsState(),
       update: (mutate, isCurrent) => configStore.updateAnalyticsState(mutate, isCurrent),
@@ -84,7 +86,10 @@ export function analyticsService(): AnalyticsService {
     log: (message, error) =>
       logger.warn("analytics", message, { errorType: error instanceof Error ? error.name : typeof error }),
   });
-  return service;
+  service = created;
+  // Shared services report through the seam, so they never import this file.
+  setAnalyticsReporter((event, props) => created.track(event, props), () => created.actionReporter());
+  return created;
 }
 
 // Crashes and uncaught errors reach analytics through the diagnostics journal.

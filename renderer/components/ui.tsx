@@ -344,12 +344,27 @@ export const Label = React.forwardRef<
 
 export function FieldSet({
   title,
+  hint,
+  action,
   className,
   children,
-}: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
+}: React.PropsWithChildren<{
+  title?: React.ReactNode;
+  /** An `InfoHint` beside the title, kept out of the heading's accessible name. */
+  hint?: React.ReactNode;
+  /** A control for the whole group, at the end of the heading row. */
+  action?: React.ReactNode;
+  className?: string;
+}>) {
   return (
     <section className={cn("settings-group mb-7", className)}>
-      {title ? <h2 className="settings-group-title mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
+      {title ? (
+        <div className="settings-group-header mb-3 flex items-center gap-1.5 px-4">
+          <h2 className="settings-group-title text-large-strong text-primary">{title}</h2>
+          {hint}
+          {action ? <div className="ml-auto shrink-0">{action}</div> : null}
+        </div>
+      ) : null}
       <div className="settings-group-card overflow-visible rounded-card bg-well">{children}</div>
     </section>
   );
@@ -357,12 +372,15 @@ export function FieldSet({
 
 export function Field({
   label,
+  hint,
   description,
   orientation = "horizontal",
   className,
   children,
 }: React.PropsWithChildren<{
   label?: React.ReactNode;
+  /** An `InfoHint` beside the label, kept out of the row's accessible name. */
+  hint?: React.ReactNode;
   description?: React.ReactNode;
   orientation?: "horizontal" | "vertical";
   className?: string;
@@ -385,8 +403,11 @@ export function Field({
       {label || description || orientation === "horizontal" ? (
       <div className="min-w-0">
         {label ? (
-          <div id={labelId} className="text-strong text-primary">
-            {label}
+          <div className="flex items-center gap-1.5">
+            <div id={labelId} className="min-w-0 text-strong text-primary">
+              {label}
+            </div>
+            {hint}
           </div>
         ) : null}
         {description ? (
@@ -398,6 +419,59 @@ export function Field({
       ) : null}
       <div className="settings-field-control min-w-0">{children}</div>
     </div>
+  );
+}
+
+/**
+ * A grouped card that folds away reference controls behind a summary row. The
+ * contents stay mounted, so a half-filled form survives closing it.
+ *
+ * `defaultOpen` may turn true after mount, when the state it depends on loads
+ * late. The fold then opens, unless the person has already used it, and it stays
+ * open if that state later clears.
+ */
+export function SettingsDisclosure({
+  title,
+  summary,
+  badge,
+  defaultOpen = false,
+  className,
+  children,
+}: React.PropsWithChildren<{
+  title: string;
+  summary: React.ReactNode;
+  /** A status chip after the title, shown open or closed. */
+  badge?: React.ReactNode;
+  defaultOpen?: boolean;
+  className?: string;
+}>) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  const [touched, setTouched] = React.useState(false);
+  if (defaultOpen && !open && !touched) setOpen(true);
+  return (
+    <details open={open} className={cn("settings-card group mb-7 overflow-hidden rounded-card bg-well", className)}>
+      <summary
+        className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-list-hover [--keyboard-focus-offset:-2px] [&::-webkit-details-marker]:hidden"
+        onClick={(event) => {
+          event.preventDefault();
+          setTouched(true);
+          setOpen(!open);
+        }}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-large-strong text-primary">{title}</span>
+            {badge}
+          </span>
+          <span className="mt-0.5 block truncate text-small text-secondary">{summary}</span>
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-open:rotate-180"
+        />
+      </summary>
+      <div className="border-t border-separator">{children}</div>
+    </details>
   );
 }
 

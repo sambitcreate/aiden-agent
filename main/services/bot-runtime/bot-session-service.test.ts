@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { after, test } from "node:test";
+import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -45,6 +46,8 @@ import { blockingUntilAborted, countingTool, recordingDeps } from "./test-suppor
 import { QUESTION_ARGS, QUESTION_TOOL_NAME } from "./test-support/question-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
 
+import { issueBotRoutineInputOrigin } from "./bot-input-entry.js";
+import { BotResumeOperationsDoc } from "./bot-resume-operations.js";
 import { createBotIssueService } from "../bot-issues/service.js";
 import { createBotIssueStore, type BotIssueStore } from "../bot-issues/store.js";
 import { BOT_ISSUE_STATUS_ENTRY_KIND, botIssueStatusOf } from "../../../renderer/shared/bot-issues.js";
@@ -359,8 +362,8 @@ test("Resume called twice at once makes one fresh provider request", async () =>
     assert.deepEqual(second, first);
     await waitFor(async () => (await service.state("bot:killed")).kind === "idle", { what: "resumed turn to finish" });
     assert.equal(fauxModels.calls(), 1);
-    // A retried request replays its first answer.
-    assert.deepEqual(await service.resume("bot:killed", "phone-1"), first);
+    // A retried control observes fresh state without running Resume again.
+    assert.deepEqual(await service.resume("bot:killed", "phone-1"), { kind: "idle" });
     assert.equal(fauxModels.calls(), 1);
   } finally {
     await service.shutdown();
@@ -397,6 +400,22 @@ test("Resume reports it resumed only for the call that did: not for a replay, a 
   } finally {
     await refused.shutdown();
   }
+});
+
+test("paused Resume refusals do not consume the control key; accepted replay remains read-only while paused", async () => {
+  const profile = tempProfile(); await killMidStream(profile);
+  const fauxModels = createFauxModels([async (_messages, options) => { await new Promise<void>((resolve) => { if (options?.signal?.aborted) resolve(); else options?.signal?.addEventListener("abort", () => resolve(), { once: true }); }); return fauxAssistantMessage("interrupted again", { stopReason: "aborted" }); }, fauxAssistantMessage("fresh explicit Resume")]);
+  const service = await serviceFor(profile, fauxModels);
+  try {
+    await service.initialize(); await service.pause("bot:killed", "mac");
+    for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(service.resume("bot:killed", "paused-first-admission"), (error: unknown) => error instanceof BotSessionError && error.reason === "paused_by_person");
+    assert.equal(fauxModels.calls(), 0);
+    const conversation = await service.conversation("bot:killed"); const receiptCount = await conversation.commit(async (tx) => (await tx.doc(BotResumeOperationsDoc, conversation.id)).receipts.length, ctx); assert.equal(receiptCount, 0);
+    await service.unpause("bot:killed"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "running"); await waitFor(() => fauxModels.calls() === 1);
+    await service.pause("bot:killed", "mac"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "paused"); assert.equal(fauxModels.calls(), 1);
+    await service.unpause("bot:killed"); assert.equal((await service.resume("bot:killed", "paused-first-admission")).kind, "interrupted"); assert.equal(fauxModels.calls(), 1);
+    await service.resume("bot:killed", "fresh-explicit-after-pause"); await waitFor(async () => (await service.state("bot:killed")).kind === "idle"); assert.equal(fauxModels.calls(), 2);
+  } finally { await service.shutdown(); }
 });
 
 test("Dismiss after a restart makes no provider request and keeps the partial as interrupted", async () => {
@@ -748,7 +767,7 @@ function routineExecutor(service: BotSessionRuntime) {
       get: async () => undefined,
       settleRoutineFire: async () => undefined,
     },
-    ports: () => service,
+    ports: () => ({ ...service, send: (botId, input) => service.send(botId, { ...input, ...(input.routineOrigin ? { routineOrigin: issueBotRoutineInputOrigin(input.routineOrigin) } : {}) }) }),
     broadcast: () => undefined,
   });
 }
@@ -1102,6 +1121,98 @@ test("an open session keeps its memory snapshot; reopening after the idle close 
     await new Promise((resolve) => setTimeout(resolve, 300));
     await turn("desk-3");
     assert.ok(sections[2]!.includes("Has a dog."), "the reopened session reads current memory");
+  } finally {
+    await service.shutdown();
+  }
+});
+
+
+test("only host-issued routine origins reach the actual durable input; copied origins are refused before model preparation", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const fauxModels = createFauxModels([fauxAssistantMessage("routine done")]);
+  let prepared = 0;
+  const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => { prepared++; return FAUX_MODEL_REF; } });
+  const origin = issueBotRoutineInputOrigin({ version: 1, botId: "bot:a", routineId: "routine-one", runId: "routine:routine-one:manual-one", kind: "manual" });
+  try {
+    await assert.rejects(service.send("bot:a", { text: "fake", requestId: origin.runId, routineOrigin: { ...origin } }), /origin/u);
+    assert.equal(prepared, 0);
+    const admitted = await service.send("bot:a", { text: "Do the accepted routine", requestId: origin.runId, routineOrigin: origin });
+    await service.awaitReply("bot:a", admitted.submissionId, new AbortController().signal);
+    const entry = (await (await service.conversation("bot:a")).context(ctx)).entries.find((item) => item.kind === "aiden.routine-input");
+    assert.deepEqual(entry?.data, { routineOrigin: { ...origin } });
+    assert.equal(fauxModels.calls(), 1);
+    await analyticsSettled();
+    assert.deepEqual(sent, [], "a host-issued routine without a display label is not a person message");
+  } finally { await service.shutdown(); }
+});
+
+test("a steer into a running Bot turn is not a new message; a queued follow-up is", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const fauxModels = createFauxModels(
+    [slowAnswer(), fauxAssistantMessage("steered"), fauxAssistantMessage("followed")],
+    { tokensPerSecond: 40 },
+  );
+  const service = await serviceFor(tempProfile(), fauxModels);
+  try {
+    await service.send("bot:a", { text: "write a lot", requestId: "desk-1" });
+    await waitFor(async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
+      what: "turn start",
+    });
+    await service.send("bot:a", { text: "shorter", requestId: "desk-2", whenBusy: "steer" });
+    await analyticsSettled();
+    assert.equal(sent.length, 1, "the steer joined the turn that was already counted");
+    await service.send("bot:a", { text: "then this", requestId: "desk-3" });
+    await analyticsSettled();
+    assert.equal(sent.length, 2);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a person's message to a Bot counts once; a repeat, a routine, Telegram and a refused send do not", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const fauxModels = createFauxModels([fauxAssistantMessage("hi"), fauxAssistantMessage("[SILENT]"), fauxAssistantMessage("Telegram answer")]);
+  let model: ModelRef | null = FAUX_MODEL_REF;
+  const service = await serviceFor(tempProfile(), fauxModels, { resolveModel: async () => model });
+  try {
+    const first = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    await service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
+    await analyticsSettled();
+    assert.deepEqual(sent, [{
+      event: "chat_message_sent",
+      props: { provider_id: "custom", model_id: "custom", in_workspace: false, thinking: "other", origin: "bot" },
+    }]);
+
+    sent.length = 0;
+    const routine = await service.send("bot:a", { text: "new?", requestId: "routine:t1:1", label: "Inbox check" });
+    await service.awaitReply("bot:a", routine.submissionId, new AbortController().signal);
+    const telegram = await service.send("bot:a", { text: "Telegram person", requestId: "tg:123:456" });
+    await service.awaitReply("bot:a", telegram.submissionId, new AbortController().signal);
+    model = null;
+    await assert.rejects(service.send("bot:a", { text: "hi", requestId: "desk-2" }));
+    await analyticsSettled();
+    assert.deepEqual(sent, []);
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a message from another Bot is not a person's message", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const service = await serviceFor(tempProfile(), createFauxModels([fauxAssistantMessage("answer")]));
+  const deliveryId = "00112233-4455-4677-8899-aabbccddeeff";
+  try {
+    const delivered = await service.send("bot:a", {
+      text: "framed",
+      requestId: `bot:J:1:${deliveryId}`,
+      ifIdle: true,
+      ifNotInterrupted: true,
+      botMessage: { kind: "request", deliveryId, botId: "J", botName: "Jester", text: "clean", deadline: Date.now() + 60_000 },
+    });
+    await service.awaitReply("bot:a", delivered.submissionId, new AbortController().signal);
+    await analyticsSettled();
+    assert.deepEqual(sent, []);
   } finally {
     await service.shutdown();
   }
@@ -1467,4 +1578,35 @@ test("natural completion ends a real plan after a running observation and revoke
     assert.equal(store.access.location("bot:a", ["desk-plan-complete"], "policy"), undefined);
     assert.equal(store.access.location("bot:a", ["other-task"], "policy")?.root, "/Other");
   } finally { await projection.close(); await service.shutdown(); }
+});
+
+test("metadata commits dedupe concurrent issue effects and cannot append after deletion begins", async () => {
+  let enteredDelete!: () => void, releaseDelete!: () => void;
+  const deletingStarted = new Promise<void>(resolve => { enteredDelete = resolve; });
+  const deletionHeld = new Promise<void>(resolve => { releaseDelete = resolve; });
+  const service = await serviceFor(tempProfile(), createFauxModels([]), { beforeDelete: async () => { enteredDelete(); await deletionHeld; } });
+  try {
+    const conversation = await service.conversation("bot:a");
+    const kind = "aiden.bot-issue-status", data = { effectId: "issue-settled-once", issueId: "issue-1", resolution: "fixed" };
+    await Promise.all([service.appendEntry("bot:a", kind, data), service.appendEntry("bot:a", kind, data)]);
+    assert.equal((await conversation.context(ctx)).entries.filter(entry => entry.kind === kind).length, 1);
+    let entered!: () => void, release!: () => void;
+    const committing = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const commit = conversation.commit.bind(conversation);
+    let hold = true;
+    conversation.commit = async (...args) => {
+      if (hold) { hold = false; entered(); await held; }
+      return commit(...args);
+    };
+    const pending = service.appendEntry("bot:a", kind, { ...data, effectId: "late-old-owner" });
+    await committing;
+    const deleting = service.deleteBot("bot:a");
+    await deletingStarted;
+    release();
+    await assert.rejects(pending, /no longer exists|closed|destroyed/u);
+    releaseDelete();
+    await deleting;
+    await assert.rejects(service.appendEntry("bot:a", kind, data), /no longer exists/u);
+  } finally { await service.shutdown(); }
 });

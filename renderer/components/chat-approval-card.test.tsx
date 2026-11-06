@@ -64,7 +64,7 @@ test("the Allow menu offers the remembered scopes and sends the one picked", asy
     items.map((item) => item.textContent),
     [
       "Allow for this chatWon't ask again for this exact command until Aiden quits.",
-      "Always allow in this workspaceWon't ask again for this exact command here. Undo in Settings → Tool approvals.",
+      "Always allow in this workspaceWon't ask again for this exact command here. Undo in Settings → Bots & Approvals → Tool approvals.",
     ],
   );
   fireEvent.click(items[1]!);
@@ -80,7 +80,7 @@ test("a remembered file approval says it covers any later change to that file", 
     (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
     [
       "Allow for this chatWon't ask again for any edit to forecast.ts until Aiden quits.",
-      "Always allow in this workspaceWon't ask again for any edit to forecast.ts here. Undo in Settings → Tool approvals.",
+      "Always allow in this workspaceWon't ask again for any edit to forecast.ts here. Undo in Settings → Bots & Approvals → Tool approvals.",
     ],
   );
 });

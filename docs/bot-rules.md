@@ -6,8 +6,8 @@ Rules, and main checks them at every tool call they cover. Rules only make a
 Bot stricter: the strictest of the Bot's own approval and every matching rule
 wins, so no rule can let through a step the Bot would otherwise ask about.
 You can approve a bounded plan for the current task, as described below.
-Settings → Bots also has a routines-only go-ahead setting
-(see [Routines that go ahead](#routines-that-go-ahead-settings--bots)).
+Settings → Bots & Approvals also has a routines-only go-ahead setting
+(see [Routines that go ahead](#routines-that-go-ahead-settings--bots--approvals)).
 
 The design is in `docs/plans/bot-handoffs-rules-computers-plan.md` §6;
 implementation notes are in `.memory/bot-rules.md`.
@@ -36,7 +36,7 @@ implementation notes are in `.memory/bot-rules.md`.
   would hand off doesn't run, nor does a step a rule would ask about that has
   no approval of its own. The Bot is told why. A step with an approval of its
   own (a connection tool that changes something) waits under Needs you until
-  the person answers. Settings → Bots can let routines go ahead instead.
+  the person answers. Settings → Bots & Approvals can let routines go ahead instead.
 
 ## Approve a plan once
 
@@ -97,9 +97,9 @@ rest of its calls. The CLI host does not offer plan tools or coverage, and a
 desktop viewing another desktop's Bot does not show plan cards. Such a viewer
 can still show Waiting for you; answer on the host desktop or a supported phone.
 
-## Routines that go ahead (Settings → Bots)
+## Routines that go ahead (Settings → Bots & Approvals)
 
-Settings → Bots has one switch for every Bot on the desktop, **Go ahead without
+Settings → Bots & Approvals has one switch for every Bot on the desktop, **Go ahead without
 asking** under Routines (`AppSettings.botRoutinesGoAhead`, off by default).
 While it is on, a run made only of routine inputs (a scheduled, manual, event
 or missed-fire run, and a Bot's own wake-up) takes a step that would otherwise
@@ -132,7 +132,7 @@ for <Bot>**. A class is one exact connected app tool, or one website host and
 action such as click, type or press. Website names ignore letter case and a
 leading `www.`; other subdomains and actions remain separate.
 
-Use **Allowed without asking** on a Bot's Profile to review and remove app actions, website actions and selected Custom folders. The desktop also lists every Bot in Settings → Bots; paired iOS and Android clients show the profile list when the host grants `bot:allowed`. Each row names its scope.
+Use **Allowed without asking** on a Bot's Profile to review and remove app actions, website actions and selected Custom folders. The desktop also lists every Bot in Settings → Bots & Approvals; paired iOS and Android clients show the profile list when the host grants `bot:allowed`. Each row names its scope.
 
 Choosing Always saves that allowance for this Bot. Allow once keeps the card
 for next time; when an offer was present, the Bot may mention the option in
@@ -152,7 +152,7 @@ Aiden checks again before saving Always or running the action. If saving
 fails, the current one-time answer still applies; it does not promise a saved
 entry.
 
-**Allowed without asking** on the Bot's profile and in Settings → Bots lists
+**Allowed without asking** on the Bot's profile and in Settings → Bots & Approvals lists
 its remembered app/site actions and saved Custom folders. Remove stops that
 remembered allowance on the next call. A plan or the routines setting can still
 supply its own approval. Removing a folder deselects it for this Bot and keeps
