@@ -28,6 +28,9 @@ struct AidenTranscriptRowStack<Rows: View>: View {
     private let spacing: CGFloat
     private let bottomAnchorID: String
     private let rows: Rows
+    /// Which tool-step groups the reader has opened, held above the rows so a
+    /// row the lazy stack rebuilds keeps its choice.
+    @State private var toolGroupExpansion = AidenToolStepGroupExpansion()
 
     init(spacing: CGFloat, bottomAnchorID: String, @ViewBuilder rows: () -> Rows) {
         self.spacing = spacing
@@ -40,6 +43,7 @@ struct AidenTranscriptRowStack<Rows: View>: View {
             LazyVStack(alignment: .leading, spacing: spacing) { rows }
             Color.clear.frame(height: 1).id(bottomAnchorID)
         }
+        .environment(\.aidenToolGroupExpansion, toolGroupExpansion)
     }
 }
 

@@ -346,7 +346,8 @@ struct AidenMessageView: View, Equatable {
                             revealAttachmentID: imageArrivalRevealAttachmentID,
                             onArrivalRevealed: onImageArrivalRevealed
                         ))
-                    }
+                    },
+                    groupScope: message.timeline?.generationId ?? message.id
                 )
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {

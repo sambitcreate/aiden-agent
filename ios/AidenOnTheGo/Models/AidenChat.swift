@@ -1200,6 +1200,151 @@ enum AidenChronologicalProjection {
     }
 }
 
+/// A run of consecutive tool steps the transcript folds into one quiet line.
+/// Display only: the rows and the timeline behind them are unchanged.
+struct AidenToolStepGroup: Identifiable, Equatable {
+    /// The first step's row ID under the run's scope (see `groupedForDisplay`).
+    let id: String
+    /// The tool rows the group folds, in order. Every step in them is
+    /// settled, running or failed; none is waiting on the person.
+    let steps: [AidenChronologicalRow]
+    let summary: String
+    let isRunning: Bool
+    let hasFailure: Bool
+
+    /// Fewer steps than this stay as ordinary lines: one line folded into
+    /// another line saves nothing.
+    static let minimumStepCount = 2
+
+    var stepCount: Int { steps.reduce(0) { $0 + $1.steps.count } }
+
+    var latestStep: AidenAgentStep? { steps.last?.steps.last }
+
+    /// What a running group shows while it stays collapsed.
+    var runningLine: String? {
+        guard isRunning, let latestStep else { return nil }
+        return AidenAgentActivityPresentation.line(for: latestStep)
+    }
+
+    var failureCount: Int {
+        steps.reduce(0) { total, row in total + row.steps.filter { $0.status == .failed }.count }
+    }
+
+    /// One element: the summary, how many failed, and whether it is open.
+    func accessibilityLabel(isExpanded: Bool) -> String {
+        var parts = [summary]
+        if failureCount > 0 { parts.append("\(failureCount) failed") }
+        parts.append(isExpanded ? "expanded" : "collapsed")
+        return parts.joined(separator: ", ")
+    }
+
+    /// The scalars decide first, so a group a token didn't touch is told apart
+    /// from one it did without walking its steps.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.isRunning == rhs.isRunning && lhs.hasFailure == rhs.hasFailure
+            && lhs.summary == rhs.summary && lhs.steps == rhs.steps
+    }
+}
+
+enum AidenChronologicalBlock: Identifiable, Equatable {
+    case row(AidenChronologicalRow)
+    case toolGroup(AidenToolStepGroup)
+
+    var id: String {
+        switch self {
+        case .row(let row): row.id
+        case .toolGroup(let group): group.id
+        }
+    }
+}
+
+extension Array where Element == AidenChronologicalRow {
+    /// The rows as the transcript draws them: each run of tool steps with no
+    /// reply text, thinking, recap or visual between them folds into one group.
+    /// A step waiting for approval is never folded, so the person sees what is
+    /// asking. One pass over the rows, and nothing in a block depends on a row
+    /// after it, so a token landing in the last text row changes no block above.
+    ///
+    /// The Mac numbers steps from `tool-1` in every run, so `scope` (the run's
+    /// generation ID, the same live and settled) keeps one group's ID apart
+    /// from another's in the expansion state held above the rows.
+    func groupedForDisplay(scope: String = "") -> [AidenChronologicalBlock] {
+        var blocks: [AidenChronologicalBlock] = []
+        blocks.reserveCapacity(count)
+        var run: [AidenChronologicalRow] = []
+        var runStepCount = 0
+
+        func flush() {
+            defer {
+                run.removeAll(keepingCapacity: true)
+                runStepCount = 0
+            }
+            guard let first = run.first else { return }
+            guard runStepCount >= AidenToolStepGroup.minimumStepCount else {
+                blocks.append(contentsOf: run.map(AidenChronologicalBlock.row))
+                return
+            }
+            var running = false
+            var failed = false
+            var steps: [AidenAgentStep] = []
+            steps.reserveCapacity(runStepCount)
+            for row in run {
+                for step in row.steps {
+                    steps.append(step)
+                    if step.status == .pending || step.status == .running { running = true }
+                    if step.status == .failed { failed = true }
+                }
+            }
+            blocks.append(.toolGroup(AidenToolStepGroup(
+                id: scope.isEmpty ? first.id : "\(scope)/\(first.id)",
+                steps: run,
+                summary: AidenAgentActivityPresentation.summary(toolSteps: steps, running: running),
+                isRunning: running,
+                hasFailure: failed
+            )))
+        }
+
+        func toolRow(_ steps: ArraySlice<AidenAgentStep>) -> AidenChronologicalRow {
+            AidenChronologicalRow(id: "tool-\(steps[steps.startIndex].id)", kind: .tool, text: "", steps: [AidenAgentStep](steps))
+        }
+
+        for row in self {
+            guard row.kind == .tool else {
+                flush()
+                blocks.append(.row(row))
+                continue
+            }
+            if row.steps.allSatisfy(Self.canFold) {
+                run.append(row)
+                runStepCount += row.steps.count
+                continue
+            }
+            // A step waiting for approval splits its row: the steps either side
+            // fold, and the waiting one stands alone.
+            var start = row.steps.startIndex
+            for index in row.steps.indices where !Self.canFold(row.steps[index]) {
+                if start < index {
+                    run.append(toolRow(row.steps[start..<index]))
+                    runStepCount += index - start
+                }
+                flush()
+                blocks.append(.row(row.steps.count == 1 ? row : toolRow(row.steps[index...index])))
+                start = index + 1
+            }
+            if start < row.steps.endIndex {
+                run.append(toolRow(row.steps[start...]))
+                runStepCount += row.steps.endIndex - start
+            }
+        }
+        flush()
+        return blocks
+    }
+
+    private static func canFold(_ step: AidenAgentStep) -> Bool {
+        step.kind == .tool && step.status != .awaitingApproval
+    }
+}
+
 struct AidenGenerationTimeline: Codable, Equatable, Sendable {
     let version: Int
     let generationId: String
@@ -1618,7 +1763,12 @@ enum AidenAgentActivityPresentation {
         guard !toolSteps.isEmpty else {
             return timeline.status == .running ? "Thinking" : "Thought \(duration(timeline.steps.compactMap(\.durationMs).reduce(0, +)))"
         }
-        let running = timeline.status == .running
+        return summary(toolSteps: toolSteps, running: timeline.status == .running)
+    }
+
+    /// The same sentence for any run of tool steps: a whole timeline, or one
+    /// group of consecutive steps in the transcript.
+    static func summary(toolSteps: [AidenAgentStep], running: Bool) -> String {
         // Matches desktop: a denied or blocked call never ran, so it is
         // counted as skipped. A call still waiting for approval is not counted yet.
         let skipped = toolSteps.filter { $0.status == .blocked }
