@@ -286,6 +286,14 @@ extension AidenChatViewModel {
 
     var isOwnerRevoked: Bool { AidenDockInput.isRevoked(ownerHostConnection) }
 
+    /// Revision 49: a Workspace chat's background jobs, once this phone holds
+    /// `chat:jobs`. The owner's, for the same reason as `spendingTransport`.
+    var backgroundJobsTransport: AidenBackgroundJobTransport? {
+        guard !isReadOnlyFixture, !chat.isBotChat,
+              ownerServer?.capabilities.contains(.chatJobs) == true else { return nil }
+        return try? coordinator.remoteClient(for: owner)
+    }
+
     /// The owner's, since this chat can stay on screen across a machine switch.
     var spendingTransport: AidenSpendingTransport? {
         guard !isReadOnlyFixture, ownerServer?.supportsSpendingLimits == true else { return nil }

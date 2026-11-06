@@ -734,6 +734,28 @@ final class AidenChatDockTests: XCTestCase {
         XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /chats/c1/spending"), "Asked the selected machine")
     }
 
+    func testBackgroundJobsAskTheMachineThatOwnsTheChat() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let model = try chatModel(owner: "laptop")
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        await reachOwner("laptop")
+        for id in ["laptop", "studio"] {
+            let connection = try XCTUnwrap(coordinator.hosts.connection(for: id))
+            connection.adopt(server: try Self.withChatJobs(XCTUnwrap(connection.server)))
+            connection.adopt(connectionState: .connected)
+            responder.reply(instanceId: id, path: "/chats/c1/jobs", status: 200, json: Data(#"{"jobs":[]}"#.utf8))
+        }
+
+        let transport = try XCTUnwrap(model.backgroundJobsTransport)
+        _ = try? await transport.backgroundJobs(chatId: "c1")
+
+        XCTAssertTrue(responder.requests(instanceId: "laptop").contains("GET /chats/c1/jobs"))
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /chats/c1/jobs"), "Asked the selected machine")
+    }
+
     func testNoSpendingTransportWhenTheOwnerHasNoLimitsButTheSelectionDoes() async throws {
         try makeCoordinator(.four)
         await coordinator.start()
@@ -773,6 +795,21 @@ final class AidenChatDockTests: XCTestCase {
     }
 
     /// The same server, advertising spending limits.
+    private static func withChatJobs(_ server: AidenServer) throws -> AidenServer {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(server)) as? [String: Any])
+        for key in ["capabilities", "serverCapabilities"] {
+            let held = (object[key] as? [String]) ?? []
+            if !held.contains(AidenRemoteCapability.chatJobs.rawValue) {
+                object[key] = held + [AidenRemoteCapability.chatJobs.rawValue]
+            }
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(AidenServer.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
     private static func withSpendingLimits(_ server: AidenServer) throws -> AidenServer {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

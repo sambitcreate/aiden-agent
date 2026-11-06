@@ -20,6 +20,29 @@ struct AidenTranscriptScaffold<Transcript: View>: View {
     }
 }
 
+/// A transcript's rows, then the row a follow scrolls to. That row stays out of
+/// the lazy stack. As the stack's last child on iOS 26.5, with the keyboard up, it
+/// makes the stack drop the rows below the reader from its height once it scrolls
+/// out of reach. The offset then lands past the rows and the screen stays empty.
+struct AidenTranscriptRowStack<Rows: View>: View {
+    private let spacing: CGFloat
+    private let bottomAnchorID: String
+    private let rows: Rows
+
+    init(spacing: CGFloat, bottomAnchorID: String, @ViewBuilder rows: () -> Rows) {
+        self.spacing = spacing
+        self.bottomAnchorID = bottomAnchorID
+        self.rows = rows()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: spacing) {
+            LazyVStack(alignment: .leading, spacing: spacing) { rows }
+            Color.clear.frame(height: 1).id(bottomAnchorID)
+        }
+    }
+}
+
 enum AidenSessionAction: Hashable, Identifiable {
     case rename, fork, readAloud, profile, files, memory, advanced, delete
 

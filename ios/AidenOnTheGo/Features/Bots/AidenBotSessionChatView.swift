@@ -378,7 +378,7 @@ struct AidenBotSessionChatView: View {
         if let model {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    AidenTranscriptRowStack(spacing: 12, bottomAnchorID: "bottom") {
                         if model.showsSkeleton {
                             AidenBotSessionSkeletonBubbles(still: isUnreachable)
                         }
@@ -412,7 +412,6 @@ struct AidenBotSessionChatView: View {
                             approvalCard(approval, model: model)
                         }
                         AidenBotStatusLineView(model: model)
-                        Color.clear.frame(height: 1).id("bottom")
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)

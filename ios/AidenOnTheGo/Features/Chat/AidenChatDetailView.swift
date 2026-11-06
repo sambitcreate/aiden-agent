@@ -441,9 +441,9 @@ struct AidenChatDetailView: View {
     }
 
     private func messageList(_ proxy: ScrollViewProxy) -> some View {
-        LazyVStack(
-            alignment: .leading,
-            spacing: presentationStyle == .botMessages ? 3 : 18
+        AidenTranscriptRowStack(
+            spacing: presentationStyle == .botMessages ? 3 : 18,
+            bottomAnchorID: AidenChatScrollPolicy.transcriptBottomAnchorID
         ) {
             if let forkLabel = model.forkSource.label {
                 AidenChatForkLineageRow(label: forkLabel)
@@ -489,7 +489,6 @@ struct AidenChatDetailView: View {
             if model.showsLiveResponse {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
-            Color.clear.frame(height: 1).id(AidenChatScrollPolicy.transcriptBottomAnchorID)
         }
         .padding(.horizontal)
         .padding(.top, 20)
@@ -522,18 +521,13 @@ struct AidenChatDetailView: View {
 
     private var spendingTransport: AidenSpendingTransport? { model.spendingTransport }
 
-    /// Revision 49: a Workspace chat's background jobs, once this phone holds `chat:jobs`.
-    private var backgroundJobsTransport: AidenBackgroundJobTransport? {
-        guard !model.chat.isBotChat, let coordinator,
-              coordinator.server?.capabilities.contains(.chatJobs) == true else { return nil }
-        return try? coordinator.remoteClient()
-    }
+    private var backgroundJobsTransport: AidenBackgroundJobTransport? { model.backgroundJobsTransport }
 
     private var backgroundJobsRefreshKey: String {
         [
             model.chat.id,
-            coordinator?.activeInstanceId ?? "",
-            String(coordinator?.server?.capabilities.contains(.chatJobs) == true),
+            model.owner.instanceId,
+            String(model.ownerServer?.capabilities.contains(.chatJobs) == true),
             String(model.isStreaming),
             String(model.chat.messages.count),
             String(chatLoadEpoch),
