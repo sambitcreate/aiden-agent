@@ -100,6 +100,11 @@ interface BackgroundInstallationV2<Child> {
   invalidated?: Error;
 }
 
+interface BackgroundInvalidationV2 {
+  matches: (entry: { prepared: PreparedBackgroundSubagentRunV2 }) => boolean;
+  reason: Error;
+}
+
 /**
  * App-lifetime background executor with no parent-generation signal. The
  * lifecycle remains the sole durable authority; this class only owns live
@@ -109,6 +114,8 @@ export class BackgroundSubagentCoordinatorV2<Child> {
   private readonly active = new Map<string, ActiveBackgroundRunV2<Child>>();
   /** Launches whose run is not in `active` yet. Registered before acceptance. */
   private readonly installing = new Map<string, BackgroundInstallationV2<Child>>();
+  /** Invalidations still scanning. A launch one covers is refused, not accepted. */
+  private readonly invalidations = new Set<BackgroundInvalidationV2>();
 
   constructor(
     private readonly lifecycle: BackgroundSubagentLifecycleV2,
@@ -129,6 +136,9 @@ export class BackgroundSubagentCoordinatorV2<Child> {
     const { runId } = prepared.snapshot;
     if (this.active.has(runId) || this.installing.has(runId)) {
       throw new Error("Background subagent is already active.");
+    }
+    for (const invalidation of this.invalidations) {
+      if (invalidation.matches({ prepared })) throw invalidation.reason;
     }
     // Registered before the run is visible anywhere, so a request that learns
     // of it waits here and an invalidation can reach its child.
@@ -357,11 +367,19 @@ export class BackgroundSubagentCoordinatorV2<Child> {
     reason: Error,
     state: "stopped" | "interrupted",
   ): Promise<number> {
-    const count = await scan();
-    this.abortMatching(matches, reason, state);
-    // The scan reads one snapshot, and aborting only ends a run in memory. A run
-    // that went live after that read is durably terminal only after a second pass.
-    return count + await scan();
+    // Held for both scans, so no launch can start behind the last snapshot. A
+    // launch already registered is reached by abortMatching and the second scan.
+    const invalidation = { matches, reason };
+    this.invalidations.add(invalidation);
+    try {
+      const count = await scan();
+      this.abortMatching(matches, reason, state);
+      // The scan reads one snapshot, and aborting only ends a run in memory. A run
+      // that went live after that read is durably terminal only after a second pass.
+      return count + await scan();
+    } finally {
+      this.invalidations.delete(invalidation);
+    }
   }
 
   private async execute(entry: ActiveBackgroundRunV2<Child>): Promise<void> {
