@@ -343,6 +343,26 @@ export function designCommentsBlock(doc: DesignCanvas, comments: readonly Design
   return blockText(comments, entries);
 }
 
+/**
+ * How many comments a message's `<attached-design-comments>` block carries,
+ * or 0 when it has none (or its list can't be read).
+ */
+export function attachedDesignCommentCount(text: string): number {
+  const start = text.indexOf("<attached-design-comments>\n");
+  if (start === -1) return 0;
+  const end = text.indexOf("\n</attached-design-comments>", start);
+  if (end === -1) return 0;
+  const body = text.slice(start, end);
+  const from = body.indexOf("\n[");
+  if (from === -1) return 0;
+  try {
+    const entries: unknown = JSON.parse(body.slice(from + 1));
+    return Array.isArray(entries) ? entries.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** One comment as Aiden reads it: its id, page, note, and what it is on. */
 export function describeComment(doc: DesignCanvas, comment: DesignComment): Record<string, unknown> {
   const frame = comment.frameId ? doc.frames.find((entry) => entry.id === comment.frameId) : undefined;

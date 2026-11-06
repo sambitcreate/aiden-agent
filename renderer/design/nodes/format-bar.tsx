@@ -34,7 +34,7 @@ import {
 import { linkFromInput } from "../../shared/design-canvas/rich-text";
 import { DESIGN_COLORS, type DesignColor, type DesignFrame, type DesignTextSize } from "../../shared/design-canvas/schema";
 import { useDesignNodeContext } from "./design-node-context";
-import { designColorVar, designFillVar } from "./draw-style";
+import { designColorVar, designFillVar, DESIGN_COLOR_NAMES } from "./draw-style";
 import type { RichTextCommand, RichTextEditorHandle, RichTextState } from "./rich-text-editor";
 
 /** Marks the bar and its menus, so an editor that loses focus to them keeps editing. */
@@ -45,17 +45,6 @@ export function focusInFormatBar(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(`[${FORMAT_BAR_ATTRIBUTE}]`) !== null;
 }
 
-const COLOR_NAMES: Record<DesignColor, string> = {
-  ink: "Default",
-  gray: "Gray",
-  blue: "Blue",
-  green: "Green",
-  yellow: "Yellow",
-  red: "Red",
-  purple: "Purple",
-  teal: "Teal",
-  pink: "Pink",
-};
 const NOTE_COLORS: readonly DesignColor[] = ["yellow", "green", "blue", "purple", "pink", "red", "teal", "gray"];
 const SIZES: readonly { size: DesignTextSize; label: string }[] = [
   { size: "small", label: "Small" },
@@ -276,7 +265,7 @@ function ColorMenu({
   onCloseAutoFocus(event: Event): void;
   onChange(color: DesignColor | "none"): void;
 }) {
-  const shown = value === "none" ? "Default" : COLOR_NAMES[value];
+  const shown = value === "none" ? "Default" : DESIGN_COLOR_NAMES[value];
   return (
     <DropdownMenu onOpenChange={(open) => open && onOpen()}>
       <DropdownMenuTrigger asChild>
@@ -297,7 +286,7 @@ function ColorMenu({
           {colors.map((color) => (
             <DropdownMenuRadioItem key={color} value={color}>
               <span aria-hidden className="size-3.5 rounded-full" style={{ background: swatch(color) }} />
-              {COLOR_NAMES[color]}
+              {DESIGN_COLOR_NAMES[color]}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

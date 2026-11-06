@@ -10,6 +10,7 @@ import {
   applyAnchorReport,
   commentLabel,
   deleteComment,
+  attachedDesignCommentCount,
   designCommentsBlock,
   editComment,
   elementLabel,
@@ -214,6 +215,10 @@ test("the block lists each comment with its frame, file, element and id, as data
     element: { tag: "h1", text: "Ship faster", selector: "main > h1", source: "design/hero.html:12", found: "anchored" },
   });
   assert.deepEqual(json[1], { commentId: "c2", page: "Page 1", note: "Add a footer", at: { x: 12, y: 31, on: "canvas" } });
+  // What analytics counts from the sent message: the comments, never their words.
+  assert.equal(attachedDesignCommentCount(`Please fix these\n\n${block}`), 2);
+  assert.equal(attachedDesignCommentCount("No comments here"), 0);
+  assert.equal(attachedDesignCommentCount("<attached-design-comments>\n[not json\n</attached-design-comments>"), 0);
 });
 
 test("the parser keeps tray and sent fields only where they make sense", () => {

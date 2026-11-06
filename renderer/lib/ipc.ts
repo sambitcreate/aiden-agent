@@ -1641,7 +1641,8 @@ export const chatsApi = {
   setModel: (id: string, providerId: string, model: string) =>
     invoke<Chat | null>("chats:setModel", id, providerId, model),
   /** Turn design mode on or off for this chat; every window hears `chats:design-mode-changed`. */
-  setDesignMode: (id: string, enabled: boolean) => invoke<Chat | null>("chats:setDesignMode", id, enabled),
+  setDesignMode: (id: string, enabled: boolean, source?: "toggle" | "shortcut" | "slash" | "card") =>
+    invoke<Chat | null>("chats:setDesignMode", id, enabled, source),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.
@@ -2323,6 +2324,24 @@ export type DesignCanvasSaveResult =
 /** The per-chat design canvas. Available only while design mode's flag is on. */
 export const designCanvasApi = {
   getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
+  /** A page's file or an artifact's HTML, for the side panel's Code and Tweaks tabs. */
+  designFrameSource: (chatId: string, frameId: string) =>
+    invoke<{ text: string; truncated: boolean } | { error: "unavailable" | "missing" }>("designCanvas:source", chatId, frameId),
+  /** Writes a plain text change into a page's file, where its old words are found once. */
+  editDesignText: (chatId: string, frameId: string, changes: { before: string; after: string }[], stamp?: string) =>
+    invoke<
+      | { ok: true }
+      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
+    >("designCanvas:editText", chatId, frameId, changes, stamp),
+  /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. `theme` draws a dark artifact. */
+  exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source", theme?: unknown) =>
+    invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
+      "designCanvas:export",
+      chatId,
+      frameId,
+      format,
+      theme,
+    ),
   /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
   saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
     invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),

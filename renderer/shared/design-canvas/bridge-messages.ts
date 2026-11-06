@@ -5,12 +5,25 @@
 
 import type { DesignLocateResult, DesignPageElement } from "./comments.js";
 import { isSourceStamp, type DesignRect } from "./schema.js";
+import type { DesignTweakState } from "./tweaks.js";
+import { DESIGN_TEXT_EDIT_LIMITS, type DesignTextChange } from "./text-edit.js";
 
 export type DesignBridgeMessage =
   | { type: "ready" | "resize"; docHeight: number }
   | { type: "scroll"; x: number; y: number }
   | { type: "picked"; requestId: string; element: DesignPageElement | null; point: [number, number] }
-  | { type: "anchors"; requestId: string; results: Record<string, DesignLocateResult> };
+  | { type: "anchors"; requestId: string; results: Record<string, DesignLocateResult> }
+  | { type: "edit-start"; element: DesignPageElement }
+  | {
+      type: "edit-end";
+      cancelled: boolean;
+      /** Only words changed, each changed text node listed in `changes`. */
+      plain: boolean;
+      changes: DesignTextChange[];
+      beforeHtml: string;
+      afterHtml: string;
+      element: DesignPageElement | null;
+    };
 
 const PREFIX = "aiden-design:";
 const MAX_COORD = 10_000_000;
@@ -100,6 +113,33 @@ export function parseDesignBridgeMessage(data: unknown): DesignBridgeMessage | n
     if (raw.element !== null && !picked) return null;
     return { type, requestId, element: picked, point: [point[0], point[1]] };
   }
+  if (type === "edit-start") {
+    const found = element(raw.element);
+    return found ? { type, element: found } : null;
+  }
+  if (type === "edit-end") {
+    if (typeof raw.cancelled !== "boolean" || typeof raw.plain !== "boolean" || !Array.isArray(raw.changes)) return null;
+    if (raw.changes.length > DESIGN_TEXT_EDIT_LIMITS.changes) return null;
+    const changes: DesignTextChange[] = [];
+    for (const entry of raw.changes) {
+      const change = record(entry);
+      if (!change || typeof change.before !== "string" || typeof change.after !== "string") return null;
+      changes.push({
+        before: change.before.slice(0, DESIGN_TEXT_EDIT_LIMITS.chars),
+        after: change.after.slice(0, DESIGN_TEXT_EDIT_LIMITS.chars),
+      });
+    }
+    const html = (value: unknown) => (typeof value === "string" ? value.slice(0, DESIGN_TEXT_EDIT_LIMITS.chars) : "");
+    return {
+      type,
+      cancelled: raw.cancelled,
+      plain: raw.plain,
+      changes,
+      beforeHtml: html(raw.beforeHtml),
+      afterHtml: html(raw.afterHtml),
+      element: raw.element === null || raw.element === undefined ? null : element(raw.element),
+    };
+  }
   if (type === "anchors") {
     const requestId = id(raw.requestId);
     const results = record(raw.results);
@@ -121,7 +161,23 @@ export type DesignBridgeCommand =
   | { type: "pick-at"; requestId: string; x: number; y: number; wide?: boolean }
   | { type: "locate"; requestId: string; items: { commentId: string; selector: string; text: string; tag: string }[] }
   | { type: "highlight"; commentId: string; selector?: string }
-  | { type: "highlight"; clear: true };
+  | { type: "highlight"; clear: true }
+  | ({ type: "set-tweaks" } & DesignTweakState)
+  | { type: "edit-enable"; on: boolean }
+  | { type: "edit-command"; command: DesignTextCommand; value?: string }
+  | { type: "edit-finish"; cancel: boolean };
+
+/** What the formatting bar can do to the element being edited. */
+export type DesignTextCommand =
+  | "bold"
+  | "italic"
+  | "underline"
+  | "link"
+  | "unlink"
+  | "insertUnorderedList"
+  | "insertOrderedList"
+  | "align"
+  | "block";
 
 /** Posts a command to a page. Pages are sandboxed without an origin, so the target is `*`. */
 export function postToDesignPage(target: Window | null | undefined, command: DesignBridgeCommand): void {

@@ -12,6 +12,7 @@ import { chatsApi } from "../lib/ipc";
 import {
   readGenerativeUiTheme,
   subscribeGenerativeUiTheme,
+  type GenerativeUiThemeSnapshot,
 } from "../lib/generative-ui-theme-snapshot";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { Button, Callout, Text } from "./ui";
@@ -95,8 +96,8 @@ function cachedPreview(chatId: string, artifact: ChatHtmlArtifactV1): CachedPrev
   return cached;
 }
 
-function postThemeTo(guest: Window): void {
-  const theme = readGenerativeUiTheme();
+function postThemeTo(guest: Window, readTheme: () => GenerativeUiThemeSnapshot = readGenerativeUiTheme): void {
+  const theme = readTheme();
   guest.postMessage(
     { type: GENERATIVE_UI_THEME_MESSAGE, colorScheme: theme.colorScheme, vars: theme.vars },
     "*",
@@ -160,6 +161,7 @@ export function HtmlArtifactIframe({
   onHeight,
   onPrompt,
   onGuestFocus,
+  readTheme,
 }: {
   src: string;
   title: string;
@@ -170,8 +172,16 @@ export function HtmlArtifactIframe({
   onPrompt?: (text: string) => void;
   /** Focus moved into (true) or out of (false) the guest document. */
   onGuestFocus?: (focused: boolean) => void;
+  /** The theme to send the guest instead of Aiden's own; a new reader sends it again. */
+  readTheme?: () => GenerativeUiThemeSnapshot;
 }) {
   const frameRef = React.useRef<HTMLIFrameElement | null>(null);
+  const themeRef = React.useRef(readTheme);
+  React.useLayoutEffect(() => {
+    themeRef.current = readTheme;
+    const guest = frameRef.current?.contentWindow;
+    if (guest) postThemeTo(guest, readTheme);
+  }, [readTheme]);
   const handlers = React.useRef({ onEscape, onHeight, onPrompt, onGuestFocus });
   React.useLayoutEffect(() => {
     handlers.current = { onEscape, onHeight, onPrompt, onGuestFocus };
@@ -210,7 +220,7 @@ export function HtmlArtifactIframe({
       if (message.type === "escape") handlers.current.onEscape?.();
       // A streaming draft never fires load until it completes; the bridge
       // announces itself so the guest is themed from its first paint.
-      else if (message.type === "ready") postThemeTo(guest);
+      else if (message.type === "ready") postThemeTo(guest, themeRef.current);
       else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
       else handlers.current.onPrompt?.(message.text);
     };
@@ -231,7 +241,7 @@ export function HtmlArtifactIframe({
   React.useEffect(() => {
     const sendTheme = () => {
       const guest = frameRef.current?.contentWindow;
-      if (guest) postThemeTo(guest);
+      if (guest) postThemeTo(guest, themeRef.current);
     };
     const frame = frameRef.current;
     frame?.addEventListener("load", sendTheme);

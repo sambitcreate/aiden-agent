@@ -104,3 +104,23 @@ test("a feature tile scrolled out of the gallery is marked off-screen so its loo
   assert.equal(observer.targets.size, 0, "leaving onboarding stops watching the tiles");
   cleanup();
 });
+
+test("the Design Mode tile shows a canvas with a page, a comment pin and Send, and leaves the tour when design mode is off", () => {
+  const host = hostPlatformCapabilities("linux", "x64");
+  const features = visibleOnboardingFeatures(onboardingFeatures, { ...host, designMode: true });
+  const { container, unmount } = render(<OnboardingFeatureGallery features={features} platform={host.platform} />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="designMode"]');
+  assert.ok(tile, "design mode is part of the tour");
+  assert.match(tile.getAttribute("aria-label") ?? "", /^Design Mode\. Turn a chat into a design canvas/u);
+  const art = within(tile);
+  assert.ok(art.getByText("hero.html"), "a live page sits on the canvas");
+  assert.ok(art.getByText("1 comment"), "the tray holds the comment for Aiden");
+  assert.ok(art.getByText("Send"));
+  assert.equal(tile.querySelectorAll("img").length, 0, "the canvas is code-drawn");
+  unmount();
+  assert.equal(
+    visibleOnboardingFeatures(onboardingFeatures, { ...host, designMode: false }).some((feature) => feature.id === "designMode"),
+    false,
+    "AIDEN_DESIGN_MODE=0 keeps the tile out",
+  );
+});

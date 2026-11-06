@@ -7,6 +7,7 @@
 // as version 2, so the next save writes the new shape.
 
 import { syncConnectors } from "./connectors.js";
+import { parseDesignTweakValues, type DesignTweakValues } from "./tweaks.js";
 
 export type DesignFrameKind =
   | "file"
@@ -36,6 +37,12 @@ export const DESIGN_COLORS = [
 ] as const satisfies readonly DesignColor[];
 
 export type DesignShapeKind = "rect" | "oval";
+/** How a page prints: reflowed to the paper (flow), or laid out at its design width and scaled to fit (fixed). */
+export type DesignPrintMode = "flow" | "fixed";
+export type DesignPaper = "letter" | "a4";
+/** A layout guide drawn over a page, artifact or artboard: equal columns, or a square grid, in design pixels. */
+export type DesignGuide = "columns-4" | "columns-8" | "columns-12" | "grid-8";
+export const DESIGN_GUIDES = ["columns-4", "columns-8", "columns-12", "grid-8"] as const satisfies readonly DesignGuide[];
 export type DesignTextSize = "small" | "medium" | "large";
 export type DesignSide = "top" | "right" | "bottom" | "left";
 
@@ -67,8 +74,10 @@ export type DesignFrame = {
   size?: DesignTextSize;
   /** shape. */
   shape?: DesignShapeKind;
-  /** shape: its fill (none when left out); note: its colour (the plain card when left out). */
+  /** shape: its fill (none when left out); note: its colour (the plain card when left out); artboard: its background. */
   fill?: DesignColor;
+  /** artboard and rectangle: the corner radius, in canvas units. */
+  radius?: number;
   /** shape outline, connector, stroke, and the words of text and notes. */
   color?: DesignColor;
   /** connector and stroke, and a shape's outline: in canvas units. */
@@ -83,10 +92,34 @@ export type DesignFrame = {
   handles?: [number, number][];
   /** stroke drawn with the pen: the path returns to its first point. */
   closed?: true;
+  /** file and artifact: how its PDF lays out (flow when left out). */
+  printMode?: DesignPrintMode;
+  /** file and artifact: the PDF's paper (Letter when left out). */
+  paper?: DesignPaper;
+  /** file, artifact and artboard: a layout guide drawn over it. */
+  guide?: DesignGuide;
+  /** file and artifact: drawn in dark mode (`data-theme="dark"` and a dark color scheme on the page). */
+  dark?: true;
+  /** file: the page's own tweak values the person changed, by target (see `tweaks.ts`). */
+  tweaks?: DesignTweakValues;
+  /** Not drawn on the canvas (it stays in the layer list). */
+  hidden?: true;
+  /** Cannot be moved, resized or removed until it is unlocked. */
+  locked?: true;
   /** The page the frame is on. */
   pageId: string;
   createdBy: "person" | "aiden";
 };
+
+/** Kinds that print and export as a page: a workspace page or an artifact. */
+export function isDesignPrintable(kind: DesignFrameKind): boolean {
+  return kind === "file" || kind === "artifact";
+}
+
+/** Kinds a layout guide can be drawn over: pages, artifacts and artboards. */
+export function canDesignGuide(kind: DesignFrameKind): boolean {
+  return kind === "file" || kind === "artifact" || kind === "frame";
+}
 
 /** Kinds other frames can sit in, with `groupId`: a group, or an empty artboard drawn with the Frame tool. */
 export function isDesignContainer(kind: DesignFrameKind): boolean {
@@ -173,6 +206,7 @@ export const DESIGN_CANVAS_LIMITS = {
   strokePoints: 2000,
   minStrokeWidth: 1,
   maxStrokeWidth: 24,
+  maxRadius: 200,
 } as const;
 
 export const DESIGN_WIDTHS = [390, 768, 1280, 1440] as const;
@@ -191,6 +225,7 @@ const FRAME_KINDS: ReadonlySet<string> = new Set<DesignFrameKind>([
 ]);
 const COLORS: ReadonlySet<string> = new Set(DESIGN_COLORS);
 const SIDES: ReadonlySet<string> = new Set<DesignSide>(["top", "right", "bottom", "left"]);
+const GUIDES: ReadonlySet<string> = new Set(DESIGN_GUIDES);
 const TEXT_SIZES: ReadonlySet<string> = new Set<DesignTextSize>(["small", "medium", "large"]);
 const COMMENT_STATES: ReadonlySet<string> = new Set(["open", "sent", "resolved"]);
 const ANCHOR_STATES: ReadonlySet<string> = new Set(["anchored", "stale", "lost"]);
@@ -431,7 +466,21 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     if (typeof value.text === "string" && value.text) frame.text = value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars);
     if (isColor(value.fill)) frame.fill = value.fill;
   }
-  if (frame.kind === "note" && isColor(value.fill)) frame.fill = value.fill;
+  if ((frame.kind === "note" || frame.kind === "frame") && isColor(value.fill)) frame.fill = value.fill;
+  if (frame.kind === "frame" || (frame.kind === "shape" && frame.shape === "rect")) {
+    const radius = finite(value.radius);
+    if (radius !== undefined) frame.radius = clamp(Math.round(radius), 0, DESIGN_CANVAS_LIMITS.maxRadius);
+  }
+  if (canDesignGuide(frame.kind) && typeof value.guide === "string" && GUIDES.has(value.guide)) {
+    frame.guide = value.guide as DesignGuide;
+  }
+  if (value.hidden === true) frame.hidden = true;
+  if (value.locked === true) frame.locked = true;
+  if (isDesignPrintable(frame.kind) && value.dark === true) frame.dark = true;
+  if (frame.kind === "file") {
+    const tweaks = parseDesignTweakValues(value.tweaks);
+    if (tweaks) frame.tweaks = tweaks;
+  }
   if (frame.kind === "shape" || frame.kind === "text" || frame.kind === "note" || isDesignLine(frame.kind)) {
     if (isColor(value.color)) frame.color = value.color;
   }
@@ -448,6 +497,10 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     if (!from || !to) return null;
     frame.ends = [from, to];
     if (value.arrow === "end" || value.arrow === "both") frame.arrow = value.arrow;
+  }
+  if (isDesignPrintable(frame.kind)) {
+    if (value.printMode === "flow" || value.printMode === "fixed") frame.printMode = value.printMode;
+    if (value.paper === "letter" || value.paper === "a4") frame.paper = value.paper;
   }
   if (frame.kind === "stroke") {
     const points = parseFractions(value.points);

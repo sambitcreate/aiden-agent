@@ -14,16 +14,21 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
+  Frame,
   LayoutDashboard,
   ListPlus,
+  MessageCircle,
   MessageCirclePlus,
   MoreHorizontal,
   MousePointer2,
+  PenLine,
   Plus,
   RotateCw,
   Save,
   Search,
+  Square,
   SquareTerminal,
+  Type,
   Upload,
   X,
 } from "lucide-react";
@@ -547,6 +552,44 @@ export function WorkspaceArtifactsArt() {
         <div className="oa-artifacts-actions">
           <ArtButton variant="ghost">Ask Aiden</ArtButton>
         </div>
+      </div>
+    </ArtWindow>
+  );
+}
+
+const DESIGN_TOOLS = [MousePointer2, Type, Frame, Square, PenLine, MessageCircle] as const;
+
+export function DesignModeArt() {
+  return (
+    <ArtWindow className="oa-design-canvas" style={{ left: 12, top: 10, width: 214, height: 160 }}>
+      <div className="oa-design-toolbar">
+        {DESIGN_TOOLS.map((Icon, index) => (
+          <span key={index} className={index === 0 ? "oa-design-tool oa-selected" : "oa-design-tool"}>
+            <ArtIcon icon={Icon} />
+          </span>
+        ))}
+      </div>
+      <div className="oa-design-frame" style={{ left: 12, top: 38, width: 128, height: 46 }}>
+        <div className="oa-design-frame-title">hero.html</div>
+        <div className="oa-design-page">
+          <Bar width="72%" tone="ink" className="oa-design-heading" />
+          <Bar width="88%" tone="soft" />
+          <span className="oa-design-cta" />
+        </div>
+        <span className="oa-design-pin oa-anim-pop" style={{ left: 44, top: 25 }}>1</span>
+      </div>
+      <div className="oa-design-note oa-anim-float" style={{ left: 150, top: 38, width: 52 }}>
+        <Bar width="90%" />
+        <Bar width="70%" tone="soft" />
+        <Bar width="80%" tone="soft" />
+      </div>
+      <div className="oa-design-tray" style={{ top: 89 }}>
+        <ArtIcon icon={MessageCircle} />
+        <span className="oa-strong">1 comment</span>
+        <span className="oa-grow" />
+        <ArtButton variant="primary" className="oa-anim-press">
+          Send
+        </ArtButton>
       </div>
     </ArtWindow>
   );

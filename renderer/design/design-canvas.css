@@ -124,3 +124,35 @@
 .studio-canvas .design-rich-text b {
   font-weight: 600;
 }
+
+/* Present and Open full window fill the window. The main column is a layer of
+   its own (z-0), so it rises above the sidebar and the Live control meanwhile;
+   Aiden's own window buttons (z-80) stay on top. */
+main:has(.design-presenting) {
+  z-index: 75;
+}
+
+/* A presented page, artifact or image shows only itself: its title row keeps
+   its place (the view is fitted below it) but is not drawn. */
+.design-presenting .react-flow__node-file [data-canvas-chrome-header],
+.design-presenting .react-flow__node-artifact [data-canvas-chrome-header],
+.design-presenting .react-flow__node-image [data-canvas-chrome-header] {
+  visibility: hidden;
+}
+
+.design-presenting .react-flow__node-file [data-canvas-chrome],
+.design-presenting .react-flow__node-artifact [data-canvas-chrome],
+.design-presenting .react-flow__node-image [data-canvas-chrome] {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* A locked item shows its selection but has no resize handles. */
+.studio-canvas .react-flow__node.design-locked .react-flow__resize-control {
+  display: none;
+}
+
+/* Layout guides help while designing; a presentation shows the page alone. */
+.design-presenting [data-design-guide] {
+  display: none;
+}

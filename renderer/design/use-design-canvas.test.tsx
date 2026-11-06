@@ -356,3 +356,30 @@ test("an update from elsewhere that lands while a save is in flight is fetched o
   assert.deepEqual(ids(controller.doc), ["a", "remote"]);
   assert.equal(xOf(controller.doc, "a"), 10);
 });
+
+test("saving now says whether the stored canvas caught up, so readers of it can wait or stop", async () => {
+  await mount();
+  await act(async () => controller.change(addNote("b")));
+  let saved: boolean | undefined;
+  await act(async () => {
+    saved = await controller.flush();
+  });
+  assert.equal(saved, true);
+  assert.deepEqual(ids(stored), ["a", "b"], "main now reads the new frame");
+
+  saveReplies.push(() => ({ ok: false, reason: "invalid", issues: ["too big"] }));
+  await act(async () => controller.change(addNote("c")));
+  await act(async () => {
+    saved = await controller.flush();
+  });
+  assert.equal(saved, false, "the stored canvas is still missing c");
+  assert.deepEqual(ids(stored), ["a", "b"]);
+  assert.deepEqual(ids(controller.doc), ["a", "b", "c"], "the unsaved edit is kept on screen");
+
+  await act(async () => controller.change(moveTo("c", 30)));
+  await act(async () => {
+    saved = await controller.flush();
+  });
+  assert.equal(saved, true, "the next save takes the kept edit with it");
+  assert.deepEqual(ids(stored), ["a", "b", "c"]);
+});

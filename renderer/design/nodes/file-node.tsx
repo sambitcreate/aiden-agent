@@ -6,9 +6,13 @@
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
+import { FrameActions } from "./frame-actions";
 import { FrameTitle } from "./frame-title";
+import { LayoutGuide } from "./layout-guide";
 import { cn } from "../../lib/ui-utils";
-import { parseDesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
+import { parseDesignBridgeMessage, postToDesignPage, type DesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
+import { PageTextBar } from "./page-text-bar";
+import { designTweakState, withDesignTweakQuery, type DesignTweakState } from "../../shared/design-canvas/tweaks";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 import { designUrl } from "../../shared/design-canvas/url";
 import type { DesignNode } from "../canvas-adapter-core";
@@ -42,6 +46,10 @@ export type FileFrameProps = {
   onRemove(): void;
   /** The editable title the canvas draws; a plain title without it. */
   titleSlot?: React.ReactNode;
+  /** Buttons at the end of the title row. */
+  actions?: React.ReactNode;
+  /** Editing words inside the entered page; without it, a double-click there edits nothing. */
+  onEditMessage?(message: Extract<DesignBridgeMessage, { type: "edit-start" | "edit-end" }>): void;
 };
 
 export function FileFrame({
@@ -55,11 +63,28 @@ export function FileFrame({
   onMissing,
   onRemove,
   titleSlot,
+  actions,
+  onEditMessage,
 }: FileFrameProps) {
   const designWidth = frame.designWidth ?? DESIGN_DEFAULT_WIDTH;
   const scale = frame.w / designWidth;
   const contentHeight = Math.max(0, frame.h - DESIGN_FRAME_HEADER_PX);
-  const src = grant && frame.path ? withVersion(designUrl(grant, frame.path), version) : null;
+  const address = grant && frame.path ? withVersion(designUrl(grant, frame.path), version) : null;
+  // The Dark switch and tweaks ride on the address the page first loads
+  // with, so it never draws untweaked; later changes are posted to the page
+  // instead, so a change never reloads it.
+  const tweaks = designTweakState(frame);
+  const tweakKey = JSON.stringify(tweaks);
+  const [boot, setBoot] = React.useState(() => ({ address, tweakKey }));
+  if (boot.address !== address) setBoot({ address, tweakKey });
+  const src = address === null ? null : withDesignTweakQuery(address, JSON.parse(boot.tweakKey) as DesignTweakState);
+  const tweaksRef = React.useRef(tweaks);
+  const editable = entered && onEditMessage !== undefined;
+  const editRef = React.useRef({ editable, onEditMessage });
+  React.useLayoutEffect(() => {
+    tweaksRef.current = tweaks;
+    editRef.current = { editable, onEditMessage };
+  });
 
   const [docHeight, setDocHeight] = React.useState<number | null>(null);
   const [missingVersion, setMissingVersion] = React.useState<number | null>(null);
@@ -91,14 +116,32 @@ export function FileFrame({
       // A detached frame has no window; a sourceless message must never match.
       if (!guest || event.source !== guest) return;
       const message = parseDesignBridgeMessage(event.data);
+      if (message && (message.type === "edit-start" || message.type === "edit-end")) {
+        editRef.current.onEditMessage?.(message);
+        return;
+      }
       if (!message || (message.type !== "ready" && message.type !== "resize")) return;
       reportedFor.current = iframeRef.current?.getAttribute("src") ?? null;
       clearMissingTimer();
+      if (message.type === "ready") {
+        postToDesignPage(guest, { type: "set-tweaks", ...tweaksRef.current });
+        postToDesignPage(guest, { type: "edit-enable", on: editRef.current.editable });
+      }
       setDocHeight(Math.round(message.docHeight));
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, [showIframe]);
+
+  React.useEffect(() => {
+    if (!showIframe) return;
+    postToDesignPage(iframeRef.current?.contentWindow, { type: "set-tweaks", ...(JSON.parse(tweakKey) as DesignTweakState) });
+  }, [showIframe, tweakKey]);
+
+  React.useEffect(() => {
+    if (!showIframe) return;
+    postToDesignPage(iframeRef.current?.contentWindow, { type: "edit-enable", on: editable });
+  }, [showIframe, editable]);
 
   // A new address (a newer version, another grant) has to report in again.
   React.useEffect(() => {
@@ -145,6 +188,8 @@ export function FileFrame({
             height: `${scale > 0 ? contentHeight / scale : 0}px`,
             transform: `scale(${scale})`,
             transformOrigin: "0 0",
+            // A page that follows prefers-color-scheme follows the Dark switch too.
+            colorScheme: frame.dark ? "dark" : "light",
           }}
         />
       </div>
@@ -163,9 +208,11 @@ export function FileFrame({
         selected={selected}
         flush
         status={docHeight === null ? `${designWidth}` : `${designWidth} × ${docHeight}`}
+        toolbar={actions}
       >
-        <div ref={contentRef} className="h-full w-full overflow-hidden rounded-b-button">
+        <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
           {body}
+          {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}
         </div>
       </CanvasNodeChrome>
     </div>
@@ -190,7 +237,17 @@ export function FileNode({ id, data, selected }: NodeProps<DesignNode>) {
         onMissing={() => canvas.markMissing(id, version)}
         onRemove={() => canvas.remove(id)}
         titleSlot={<FrameTitle frame={frame} />}
+        actions={<FrameActions frame={frame} />}
+        onEditMessage={(message) => canvas.onPageEdit(id, message)}
       />
+      {canvas.pageEditing?.frameId === id ? (
+        <PageTextBar
+          tag={canvas.pageEditing.element.tag}
+          onCommand={canvas.pageEditCommand}
+          onDone={() => canvas.pageEditFinish(false)}
+          onComment={canvas.pageEditComment}
+        />
+      ) : null}
     </>
   );
 }

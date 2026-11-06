@@ -5,9 +5,11 @@
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
+import { FrameActions } from "./frame-actions";
+import { LayoutGuide } from "./layout-guide";
 import { FrameTitle } from "./frame-title";
 import { HtmlArtifactIframe } from "../../components/html-artifact-frame";
-import { readGenerativeUiTheme } from "../../lib/generative-ui-theme-snapshot";
+import { readDesignArtifactTheme } from "../artifact-theme";
 import { chatsApi } from "../../lib/ipc";
 import { cn } from "../../lib/ui-utils";
 import type { DesignNode } from "../canvas-adapter-core";
@@ -35,12 +37,19 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
   const retiring = useRetiringFrame({ frameId: id, version, live, showing: src !== null, content: contentRef });
   const { snapshot } = useFrameSnapshot(id, version);
   const wanted = (live || retiring) && frame.mediaId !== undefined;
+  const dark = frame.dark === true;
+  const darkRef = React.useRef(dark);
+  React.useLayoutEffect(() => {
+    darkRef.current = dark;
+  }, [dark]);
+  // A new reader when the switch changes, so the live visual is themed again in place.
+  const readTheme = React.useCallback(() => readDesignArtifactTheme(dark), [dark]);
 
   React.useEffect(() => {
     if (!wanted || src !== null || !frame.mediaId) return;
     const mediaId = frame.mediaId;
     let cancelled = false;
-    void chatsApi.htmlArtifactSrcdoc(canvas.chatId, mediaId, readGenerativeUiTheme()).then(
+    void chatsApi.htmlArtifactSrcdoc(canvas.chatId, mediaId, readDesignArtifactTheme(darkRef.current)).then(
       (preview) => {
         if (!cancelled && preview) setLoaded({ mediaId, src: preview.src });
       },
@@ -58,7 +67,7 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
         className={cn("h-full w-full", entered && "nodrag nowheel")}
         style={{ pointerEvents: entered ? undefined : "none" }}
       >
-        <HtmlArtifactIframe src={src} title={frame.title} />
+        <HtmlArtifactIframe src={src} title={frame.title} readTheme={readTheme} />
       </div>
     );
   } else if (snapshot) {
@@ -69,9 +78,16 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
     <>
       <DesignNodeResizer selected={selected} />
       <div className="h-full w-full" onDoubleClick={() => canvas.enter(id)}>
-        <CanvasNodeChrome title={frame.title} titleSlot={<FrameTitle frame={frame} />} selected={selected} flush>
-          <div ref={contentRef} className="h-full w-full overflow-hidden rounded-b-button">
+        <CanvasNodeChrome
+          title={frame.title}
+          titleSlot={<FrameTitle frame={frame} />}
+          selected={selected}
+          flush
+          toolbar={<FrameActions frame={frame} />}
+        >
+          <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
             {body}
+            {frame.guide ? <LayoutGuide guide={frame.guide} scale={1} /> : null}
           </div>
         </CanvasNodeChrome>
       </div>

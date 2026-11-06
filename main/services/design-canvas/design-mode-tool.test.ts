@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { designModeToolAllowed } from "./canvas-tools.js";
 import { createDesignModeTool, DesignModeConsent } from "./design-mode-tool.js";
@@ -33,7 +34,8 @@ function windowOwner(id = 7, documentId = "doc-a") {
 const last = <T,>(list: T[]): T | undefined => list[list.length - 1];
 const requestIdOf = (sent: Sent[]) => sent.find((entry) => entry.channel === "designCanvas:consent")!.payload.requestId as string;
 
-test("Enter on the card turns design mode on before Aiden hears entered, and closes the card", async () => {
+test("Enter on the card turns design mode on before Aiden hears entered, and closes the card", async (t) => {
+  const events = captureAnalyticsEvents(t);
   const consent = new DesignModeConsent();
   const window = windowOwner();
   const pending = consent.request({ chatId: "chat-1", reason: "Side by side is easier.", owner: window.owner });
@@ -48,9 +50,11 @@ test("Enter on the card turns design mode on before Aiden hears entered, and clo
   assert.equal(await pending, "entered");
   assert.deepEqual(order, ["entered chat-1", "tool heard"]);
   assert.deepEqual(last(window.sent), { channel: "designCanvas:consentClosed", payload: { requestId: requestIdOf(window.sent) } });
+  assert.deepEqual(events, [{ event: "design_mode_entered", props: { source: "aiden" } }], "counted once, as Aiden's ask");
 });
 
-test("Not now declines without touching design mode; another window cannot answer", async () => {
+test("Not now declines without touching design mode; another window cannot answer", async (t) => {
+  const events = captureAnalyticsEvents(t);
   const consent = new DesignModeConsent();
   const window = windowOwner();
   const pending = consent.request({ chatId: "chat-1", reason: "Compare three directions.", owner: window.owner });
@@ -66,6 +70,7 @@ test("Not now declines without touching design mode; another window cannot answe
   assert.equal(await pending, "declined");
   assert.equal(entered, false);
   assert.equal(await consent.answer(id, "enter", window.owner, enter), false, "a closed card takes no second answer");
+  assert.deepEqual(events, [{ event: "design_mode_declined", props: {} }], "refused answers count for nothing");
 });
 
 test("a card stops waiting when the reply stops, the window closes, or a newer card replaces it", async () => {
@@ -91,7 +96,8 @@ test("a card stops waiting when the reply stops, the window closes, or a newer c
   assert.equal(await newer, "declined");
 });
 
-test("a card nobody answers times out, and a failed enter tells Aiden it is unavailable", async () => {
+test("a card nobody answers times out, and a failed enter tells Aiden it is unavailable", async (t) => {
+  const events = captureAnalyticsEvents(t);
   const consent = new DesignModeConsent(10);
   const window = windowOwner();
   assert.equal(await consent.request({ chatId: "chat-1", reason: "Wait.", owner: window.owner }), "unavailable");
@@ -105,6 +111,7 @@ test("a card nobody answers times out, and a failed enter tells Aiden it is unav
     /project chat/u,
   );
   assert.equal(await again, "unavailable");
+  assert.deepEqual(events, [], "a timeout or a failed enter is neither an entry nor a decline");
 });
 
 test("no card is shown to a phone, a paired Mac or a background reply", async () => {

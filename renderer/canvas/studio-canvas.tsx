@@ -15,6 +15,7 @@ import { CanvasToolRail } from "./canvas-tool-rail";
 import { CanvasZoomControls } from "./canvas-zoom-controls";
 import { resolveCanvasKey, type CanvasKeyEvent, type CanvasTool } from "./canvas-keymap-core";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "./canvas-viewport-core";
+import { useTrailingWindowControlsClearance } from "../lib/window-chrome";
 
 export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> = Omit<
   ReactFlowProps<N, E>,
@@ -36,6 +37,15 @@ export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> = Om
    * toolbar, drawn at the top left.
    */
   toolbar?: React.ReactNode;
+  /** Controls drawn at the top right, after the toolbar. */
+  actions?: React.ReactNode;
+  /**
+   * Presenting: the view is the caller's alone. Nothing pans, zooms, drags or
+   * selects, and the toolbar, actions and zoom controls step aside for `overlay`.
+   */
+  presenting?: boolean;
+  /** Drawn over the canvas inside its keyboard region, such as presentation controls. */
+  overlay?: React.ReactNode;
 };
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -64,6 +74,9 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
   emptyState,
   resolveKey,
   toolbar,
+  actions,
+  presenting = false,
+  overlay,
   children,
   nodes,
   nodesDraggable,
@@ -73,6 +86,10 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
   const flow = useReactFlow<N, E>();
   const { zoom } = useViewport();
   const hand = tool === "hand";
+  // When the canvas reaches the window's top right corner, its top row stops
+  // short of Aiden's own window buttons (Linux without a desktop title bar).
+  const regionRef = React.useRef<HTMLDivElement>(null);
+  const trailingClearance = useTrailingWindowControlsClearance(regionRef);
 
   const zoomIn = () => void flow.zoomIn({ duration: 0 });
   const zoomOut = () => void flow.zoomOut({ duration: 0 });
@@ -110,6 +127,7 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
 
   return (
     <div
+      ref={regionRef}
       role="region"
       aria-label={label}
       tabIndex={0}
@@ -120,17 +138,19 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
       <ReactFlow<N, E>
         {...flowProps}
         nodes={nodes}
-        panOnDrag={hand ? true : [1, 2]}
-        selectionOnDrag={!hand}
-        panOnScroll
-        nodesDraggable={!hand && nodesDraggable !== false}
-        elementsSelectable={!hand && elementsSelectable !== false}
+        panOnDrag={presenting ? false : hand ? true : [1, 2]}
+        selectionOnDrag={!hand && !presenting}
+        panOnScroll={!presenting}
+        zoomOnScroll={!presenting}
+        zoomOnPinch={!presenting}
+        nodesDraggable={!hand && !presenting && nodesDraggable !== false}
+        elementsSelectable={!hand && !presenting && elementsSelectable !== false}
         minZoom={CANVAS_MIN_ZOOM}
         maxZoom={CANVAS_MAX_ZOOM}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} />
-        {minimap ? <MiniMap pannable zoomable ariaLabel="Canvas overview" /> : null}
+        {minimap && !presenting ? <MiniMap pannable zoomable ariaLabel="Canvas overview" /> : null}
         {children}
       </ReactFlow>
       {(nodes?.length ?? 0) === 0 && emptyState ? (
@@ -138,24 +158,33 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
           {emptyState}
         </div>
       ) : null}
-      {toolbar === undefined ? (
+      {presenting ? null : toolbar === undefined ? (
         <div className="absolute left-3 top-1/2 -translate-y-1/2">
           <CanvasToolRail tool={tool} onToolChange={onToolChange} />
         </div>
       ) : (
-        <div className="absolute left-3 top-3 max-w-[calc(100%-1.5rem)]">{toolbar}</div>
+        <div
+          className="@container pointer-events-none absolute inset-x-3 top-3 flex items-start gap-2"
+          style={trailingClearance ? { right: trailingClearance } : undefined}
+        >
+          <div className="pointer-events-auto min-w-0">{toolbar}</div>
+          {actions ? <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1">{actions}</div> : null}
+        </div>
       )}
-      <div className="absolute bottom-3 right-3">
-        <CanvasZoomControls
-          zoom={zoom}
-          minimapVisible={minimap}
-          onZoomIn={zoomIn}
-          onZoomOut={zoomOut}
-          onResetZoom={resetZoom}
-          onFitView={fitView}
-          onToggleMinimap={toggleMinimap}
-        />
-      </div>
+      {presenting ? null : (
+        <div className="absolute bottom-3 right-3">
+          <CanvasZoomControls
+            zoom={zoom}
+            minimapVisible={minimap}
+            onZoomIn={zoomIn}
+            onZoomOut={zoomOut}
+            onResetZoom={resetZoom}
+            onFitView={fitView}
+            onToggleMinimap={toggleMinimap}
+          />
+        </div>
+      )}
+      {overlay}
     </div>
   );
 }

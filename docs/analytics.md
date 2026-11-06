@@ -45,6 +45,10 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `terminal_opened` | A terminal started | none |
 | `git_commit` | A commit was made from Aiden | none |
 | `worktree_created` | A managed worktree was created and saved as a workspace | none |
+| `design_mode_entered` | A chat went into design mode | `source`: toggle (the Design button), shortcut (⇧⌘L), slash (`/design`) or aiden (Enter on Aiden's card) |
+| `design_mode_exited` | A chat left design mode from the Design button, ⇧⌘L or `/design off` | none |
+| `design_mode_declined` | Not now on Aiden's "Open design mode?" card. A card that times out or stops with the reply is not counted. | none |
+| `design_comments_sent` | A desktop message carried design-canvas comments for Aiden | `count_bucket`: how many comments. Their notes, pages, files and elements stay on your device. |
 
 How the values are limited:
 

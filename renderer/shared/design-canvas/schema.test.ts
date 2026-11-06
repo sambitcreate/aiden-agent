@@ -357,3 +357,49 @@ test("a note keeps its formatted words, size, text colour and note colour; a pag
   assert.deepEqual([note!.text, note!.size, note!.color, note!.fill], [words, "large", "purple", "yellow"]);
   assert.deepEqual([page!.size, page!.color, page!.fill], [undefined, undefined, undefined]);
 });
+
+test("the side panel's fields: an artboard keeps its background, radius and guide; hide and lock work on anything", () => {
+  const { doc } = parsed(
+    canvas({
+      frames: [
+        frame({ id: "board", kind: "frame", fill: "teal", radius: 12.4, guide: "columns-12", hidden: true }),
+        frame({ id: "rect", kind: "shape", shape: "rect", radius: 999, locked: true }),
+        frame({ id: "oval", kind: "shape", shape: "oval", radius: 8, guide: "grid-8" }),
+        frame({ id: "page", kind: "file", path: "a.html", guide: "grid-8", radius: 8, hidden: "yes" }),
+        frame({ id: "note", kind: "note", guide: "columns-4", locked: 1 }),
+        frame({ id: "odd", kind: "frame", guide: "columns-5", radius: -3 }),
+      ],
+    }),
+  );
+  const field = (id: string) => {
+    const entry = doc.frames.find((item) => item.id === id)!;
+    return { fill: entry.fill, radius: entry.radius, guide: entry.guide, hidden: entry.hidden, locked: entry.locked };
+  };
+  assert.deepEqual(field("board"), { fill: "teal", radius: 12, guide: "columns-12", hidden: true, locked: undefined });
+  assert.deepEqual(field("rect"), { fill: undefined, radius: 200, guide: undefined, hidden: undefined, locked: true });
+  assert.deepEqual(field("oval"), { fill: undefined, radius: undefined, guide: undefined, hidden: undefined, locked: undefined });
+  assert.deepEqual(field("page"), { fill: undefined, radius: undefined, guide: "grid-8", hidden: undefined, locked: undefined });
+  assert.deepEqual(field("note"), { fill: undefined, radius: undefined, guide: undefined, hidden: undefined, locked: undefined });
+  assert.deepEqual(field("odd"), { fill: undefined, radius: 0, guide: undefined, hidden: undefined, locked: undefined });
+});
+
+test("tweaks: pages and artifacts keep the Dark switch, and only pages keep tweak values, read safely", () => {
+  const { doc } = parsed(
+    canvas({
+      frames: [
+        frame({ id: "page", kind: "file", path: "a.html", dark: true, tweaks: { "--accent": "#ff0055", "data-x": "a;b", color: "red" } }),
+        frame({ id: "chart", kind: "artifact", mediaId: "media-1", dark: true, tweaks: { "--accent": "#ff0055" } }),
+        frame({ id: "note", kind: "note", dark: true }),
+        frame({ id: "plain", kind: "file", path: "b.html", dark: "yes", tweaks: { color: "red" } }),
+      ],
+    }),
+  );
+  const field = (id: string) => {
+    const entry = doc.frames.find((item) => item.id === id)!;
+    return { dark: entry.dark, tweaks: entry.tweaks };
+  };
+  assert.deepEqual(field("page"), { dark: true, tweaks: { "--accent": "#ff0055" } });
+  assert.deepEqual(field("chart"), { dark: true, tweaks: undefined });
+  assert.deepEqual(field("note"), { dark: undefined, tweaks: undefined });
+  assert.deepEqual(field("plain"), { dark: undefined, tweaks: undefined });
+});
