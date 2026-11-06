@@ -82,11 +82,11 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
   assert.deepEqual(parseSettingsSearch({ section: "unknown" }), {});
 });
 
-test("asking again for the open Settings section replaces its history entry", () => {
-  const onLinks = { pathname: "/settings", search: { section: "links" } };
+test("moving around Settings keeps one history entry so Back to app leaves it", () => {
+  const onLinks = { pathname: "/settings" };
   assert.equal(settingsLocation("links", onLinks).replace, true);
-  assert.equal(settingsLocation("providers", onLinks).replace, undefined);
-  assert.equal(settingsLocation("links", { pathname: "/chat", search: {} }).replace, undefined);
+  assert.equal(settingsLocation("providers", onLinks).replace, true);
+  assert.equal(settingsLocation("links", { pathname: "/chat" }).replace, undefined);
 });
 
 test("parses the Remote Access settings deep link", () => {

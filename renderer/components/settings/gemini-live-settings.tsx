@@ -1,6 +1,7 @@
 import * as React from "react";
 import { LiveAudioSettings } from "./live-audio-settings";
 import { useNavigate } from "@tanstack/react-router";
+import { settingsLocation } from "../../lib/settings-section";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -110,7 +111,7 @@ export function AidenLiveSettings(): React.ReactElement {
   }, []);
 
   const go = (section: "providers" | "computerUse" | "scheduledTasks" | "shortcut") =>
-    void navigate({ to: "/settings", search: { section } });
+    void navigate({ ...settingsLocation(section), replace: true });
   const liveReady = capabilities.geminiLive && live?.available === true;
   const shortcut = shortcuts.data?.global.find((item) => item.commandId === "assistant.open");
   const requestMicrophone = async () => {

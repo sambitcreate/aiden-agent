@@ -5,6 +5,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { settingsLocation } from "../../lib/settings-section";
 import {
   Badge,
   Button,
@@ -183,7 +184,7 @@ function DictationHotkey() {
           <Button
             size="small"
             variant="filled"
-            onClick={() => void navigate({ to: "/settings", search: { section: "shortcut" } })}
+            onClick={() => void navigate({ ...settingsLocation("shortcut"), replace: true })}
           >
             Manage shortcuts
           </Button>
@@ -230,7 +231,7 @@ function DictationHotkey() {
         <Button
           size="small"
           variant="filled"
-          onClick={() => void navigate({ to: "/settings", search: { section: "shortcut" } })}
+          onClick={() => void navigate({ ...settingsLocation("shortcut"), replace: true })}
         >
           Manage shortcuts
         </Button>

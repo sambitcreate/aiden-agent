@@ -1020,10 +1020,7 @@ export function AppCommandPalette({
                             if (!allowNavigation()) return;
                             rememberCommand("model.change");
                             close();
-                            void navigate({
-                              to: "/settings",
-                              search: { section: "providers" },
-                            });
+                            void navigate(settingsLocation("providers", router.state.location));
                           }}
                           className="min-h-11 px-3"
                         >
@@ -1083,10 +1080,7 @@ export function AppCommandPalette({
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
-                        void navigate({
-                          to: "/settings",
-                          search: { section: "providers" },
-                        });
+                        void navigate(settingsLocation("providers", router.state.location));
                       }}
                       className="min-h-11 px-3"
                     >

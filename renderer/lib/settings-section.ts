@@ -8,13 +8,13 @@ export * from "../shared/settings-section";
  */
 export function settingsLocation(
   section: SettingsSection,
-  from?: { pathname: string; search: { section?: unknown } },
+  from?: { pathname: string },
 ) {
   return {
     to: "/settings" as const,
     search: { section },
-    // Asking again for the page already open must not stack a history entry.
-    ...(from?.pathname === "/settings" && from.search.section === section ? { replace: true } : {}),
+    // Settings is one history entry, so Back to app leaves it from any page.
+    ...(from?.pathname === "/settings" ? { replace: true } : {}),
     ...(section === "links" ? { state: { aidenSettingsAnchor: Date.now() } } : {}),
   };
 }
