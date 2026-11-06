@@ -17,7 +17,7 @@ export interface LiveRendererToolContext {
   /**
    * Runs `listener` once this result has been handed to main, which passes it
    * straight on to Live. It does not run when the result never goes out (a
-   * cancel answered first, or a session that changed).
+   * cancel answered first, or a session that changed) or main refuses it.
    */
   afterReport?(listener: () => void): void;
 }
@@ -191,8 +191,11 @@ export class LiveSessionBus {
     if (entry.reported || (entry.abort.signal.aborted && !entry.committed)) return;
     if (request.sessionId !== this.sessionId) return;
     entry.reported = true;
-    await this.report(transport, request.sessionId, request.requestId, response);
-    // A failed hand-off may still have reached Live, so the listeners run either way.
+    // Main refusing the result (a stale or unknown request) means Live never
+    // got it. A hand-off that threw may still have reached Live, so its
+    // listeners run.
+    const accepted = await this.report(transport, request.sessionId, request.requestId, response);
+    if (!accepted) return;
     for (const listener of entry.afterReport) {
       try {
         listener();
@@ -226,11 +229,12 @@ export class LiveSessionBus {
     sessionId: string,
     requestId: string,
     response: LiveRendererToolResult,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
-      await transport.toolResult(sessionId, requestId, response);
+      return (await transport.toolResult(sessionId, requestId, response)) !== false;
     } catch {
-      // Main times the request out on its side.
+      // Main times the request out on its side; whether Live got it is unknown.
+      return true;
     }
   }
 }

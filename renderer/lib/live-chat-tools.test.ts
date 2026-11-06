@@ -429,6 +429,26 @@ test("speech that starts while a read is on its way to Live does not authorize a
   assert.deepEqual(open.sent, []);
 });
 
+test("a read result main refuses leaves speech begun while it was on its way eligible", async () => {
+  const bus = new LiveSessionBus();
+  let refuse!: () => void;
+  bus.setSession("s1", {
+    toolResult: () => new Promise<boolean>((resolve) => (refuse = () => resolve(false))),
+    note: async () => true,
+  });
+  const gate = new LiveChatRequestGate(bus);
+  const { handlers, registry } = harness({ requests: gate });
+  registry.register(Symbol(), controller());
+  bus.registerTool("read_open_chat", handlers.read_open_chat);
+  const reading = bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "read_open_chat", args: {} });
+  while (!refuse) await new Promise((resolve) => setImmediate(resolve));
+  bus.publishVoiceInput("Send it");
+  // Main no longer knows this request, so Live never saw the chat text.
+  refuse();
+  await reading;
+  assert.equal(gate.allows(), true, "a read Live never got does not move the fence");
+});
+
 test("a chat that opens after Live gave up on the call is still reported as opened", async () => {
   // Main's broker and registry wired to the window's session bus, as in the app.
   const bus = new LiveSessionBus();
