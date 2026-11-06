@@ -528,6 +528,23 @@ final class AidenComposerSurfaceTests: XCTestCase {
 
     /// Nothing has moved since the chat first laid out, so nothing has changed
     /// to report: the first measurement has to count.
+    /// The gate reads fit from the scroll geometry: held while the chat fits
+    /// between the insets, released the moment a taller dock makes it overflow.
+    func testAFollowWaitsUntilTheChatNoLongerFits() throws {
+        let probe = AidenFollowProbe()
+        let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 300, startsAtTop: true))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > 0 }, timeout: 2))
+        _ = runMainLoop(until: { false }, timeout: 0.2)
+
+        probe.followRequests += 1
+        _ = runMainLoop(until: { false }, timeout: 0.2)
+        XCTAssertEqual(probe.followRuns, 0, "A follow scrolled a chat that fits")
+
+        probe.composerHeight = 640
+        XCTAssertTrue(runMainLoop(until: { probe.followRuns > 0 }, timeout: 2), "The follow never saw the chat stop fitting")
+    }
+
     func testAFollowOnAChatThatNeverMovedLeavesAShortOneAtTheTop() throws {
         let probe = AidenFollowProbe()
         let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 300))
@@ -722,6 +739,8 @@ private struct AidenComposerInsetHost: View {
 private final class AidenFollowProbe {
     var composerHeight: CGFloat = 60
     var followRequests = 0
+    /// Follows that passed the gate and scrolled.
+    @ObservationIgnored var followRuns = 0
     var bottomInset: CGFloat = 0
     var scrolledFromTop: CGFloat = 0
     /// Negative while the content ends above the composer.
@@ -791,6 +810,7 @@ private struct AidenFollowingTranscriptHost: View {
 
     private func followLatest(_ proxy: ScrollViewProxy) {
         follow.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in
+            probe.followRuns += 1
             proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
         }
     }
