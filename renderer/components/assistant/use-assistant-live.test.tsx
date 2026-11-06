@@ -1646,7 +1646,7 @@ test("a microphone's reported input latency widens what counts as spoken before 
   const fixture = await mountHook({
     getUserMedia: async () => {
       const track = new FakeTrack();
-      track.latency = 0.6;
+      track.latency = 3;
       return { getTracks: () => [track] } as unknown as MediaStream;
     },
   });
@@ -1655,12 +1655,13 @@ test("a microphone's reported input latency widens what counts as spoken before 
   const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
   fixture.contexts[0]!.currentTime = 50;
   const fence = liveSessionBus.voiceInputFence();
-  // Rendered 0.8 s after the fence, but this headset delays sound by 0.6 s.
-  for (let index = 0; index < 15; index += 1) micPacket(fixture, 8_192, 50.8 + index * 0.01);
-  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0, 51 + index * 0.02);
+  // Rendered 3.2 s after the fence, but this headset delays sound by 3 s.
+  // A long reported delay is used in full, never cut short.
+  for (let index = 0; index < 15; index += 1) micPacket(fixture, 8_192, 53.2 + index * 0.01);
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0, 53.4 + index * 0.02);
   fixture.emit(hearUser("Yes do it", { finished: true }));
   // Well after that, a real answer.
-  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 53 + index * 0.02);
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 56 + index * 0.02);
   fixture.emit(hearUser("Yes do it", { finished: true }));
   unsubscribe();
   assert.ok(inputs[0]!.startedAt <= fence, "within the headset's latency of the fence");
