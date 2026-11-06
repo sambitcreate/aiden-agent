@@ -977,11 +977,23 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   await page.keyboard.type("Launch plan");
   await clickEmptyCanvas(page);
   const tools = canvas.getByRole("toolbar", { name: "Canvas tools" });
+  // Scroll the page up out of the way, so there is room below it however small the window is.
+  const pane = (await canvas.locator(".react-flow__pane").boundingBox())!;
+  const heroBottom = async () => {
+    const box = (await frame(page, "hero.html").boundingBox())!;
+    return box.y + box.height - pane.y;
+  };
+  const resting = await heroBottom();
+  // With the hand, from beside the page.
+  await tools.getByRole("button", { name: "Hand", exact: true }).click();
+  await dragOnCanvas(page, { x: 20, y: pane.height - 20 }, { x: 20, y: pane.height - 420 });
+  await expect.poll(heroBottom).toBeLessThan(resting - 300);
+  const top = Math.round(await heroBottom()) + 24;
+  expect(top + 170).toBeLessThan(pane.height);
   await tools.getByRole("button", { name: "Frame", exact: true }).click();
-  // Below the page, so nothing covers it.
-  await dragOnCanvas(page, { x: 60, y: 690 }, { x: 420, y: 850 });
+  await dragOnCanvas(page, { x: 60, y: top }, { x: 420, y: top + 160 });
   await page.keyboard.press("r");
-  await dragOnCanvas(page, { x: 100, y: 720 }, { x: 240, y: 800 });
+  await dragOnCanvas(page, { x: 100, y: top + 30 }, { x: 240, y: top + 110 });
   await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind)).toEqual([
     "file",
     "note",
