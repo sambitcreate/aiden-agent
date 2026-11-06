@@ -28,6 +28,14 @@ Audited by a read-only review. Except where marked, these are inspection results
 | `backend:M105` | `subagents/subagent-control-v2.ts` | Retain | Updates converge on `publish` and terminal cleanup. |
 | `backend:M106` | `subagents/background-subagent-coordinator-v2.ts` | Retain, four fixes | The durable lifecycle stays the authority. A launch registers itself before durable acceptance and holds requests until `active` has the child, so a Stop cannot be acknowledged as queued. A launch that fails before its child starts stops that child. A bulk invalidation stops an installing child itself before it returns, and one that beats acceptance leaves a failed run instead of a queued one. All were reproduced in `background-subagent-coordinator-v2.test.ts`. |
 
+## First send and terminal persistence
+
+| Inventory | Owner | Disposition | Why |
+|---|---|---|---|
+| `backend:M007` | `main/services/chat-first-message-commit.ts` | Retain | `committed` and `workSettled` are two locals in one function, and the turn lease already holds the state that outlives it. An owner lost during the durable write keeps the workspace operation until that write settles, and the sender's answer agrees with the disk. `chat-first-message-commit.test.ts` covers that order. The ranking also lists this under P3 for retry and idempotency; those stay with P3. |
+| `backend:M013`, `M173`, `M174`, `M175`, `M176` | Generation timeline and Pi journal child owners in `llm-client` and its helpers | Retain as child owners | P1 settles the generation terminal boundary around them and does not flatten them into the run phase. Their internals were not audited here. Durable reconciliation belongs to P4. |
+| `backend:M022`, `M159`, `M194` | Fork summary, Pi session compaction journal, subagent activation journal | Not changed | They do not cross the generation terminal boundary. Not audited here; they stay with P4. |
+
 ## Renderer adapters
 
 The P1b work changed no IPC, so these needed no adapter change.
