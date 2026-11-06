@@ -1,8 +1,10 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import test, { afterEach } from "node:test";
 import { cleanup, render, within } from "@testing-library/react";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery.js";
+import { visibleOnboardingFeatures } from "../lib/onboarding-provider.js";
+import { hostPlatformCapabilities } from "../../main/services/host-platform-capabilities.js";
 import { BotsArt } from "./onboarding-art/control-art.js";
 
 /** A stand-in for the browser's IntersectionObserver that the test scrolls by hand. */
@@ -27,6 +29,25 @@ class FakeIntersectionObserver {
 }
 (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIntersectionObserver;
 afterEach(cleanup);
+
+test("Mac and Linux tours show a Calendar watch example while unsupported Bots hosts withhold the tile", () => {
+  for (const platform of ["darwin", "linux", "win32"] as const) {
+    const host = hostPlatformCapabilities(platform, "x64");
+    const features = visibleOnboardingFeatures(onboardingFeatures, host);
+    const { container, unmount } = render(<OnboardingFeatureGallery features={features} platform={host.platform} />);
+    const tile = container.querySelector('[data-onboarding-feature="botWatches"]');
+    if (host.bots) {
+      assert.ok(tile, `${platform} explains its available connected-app watches`);
+      assert.ok(within(container).getByRole("article", { name: /^Connected-app watches\. Watch upcoming Calendar events on Mac or Linux/u }));
+      assert.ok(within(tile as HTMLElement).getByText("Calendar · Team events"));
+      assert.ok(within(tile as HTMLElement).getByText("Next 2 hours"));
+      assert.ok(within(tile as HTMLElement).getByText(/Calendar events on Mac or Linux, or a Mail mailbox on Mac/u));
+      assert.equal(tile.querySelectorAll("img").length, 0, "the Calendar example remains code-drawn");
+    } else assert.equal(tile, null);
+    unmount();
+  }
+  assert.equal(visibleOnboardingFeatures(onboardingFeatures, { ...hostPlatformCapabilities("linux"), bots: false }).some((feature) => feature.id === "botWatches"), false);
+});
 
 test("the existing Bots tile explains bounded plan approval alongside collaboration, routines, and hand-offs", () => {
   const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);

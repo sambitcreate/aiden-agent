@@ -84,6 +84,8 @@ export interface WorkbenchTabStripProps<T extends WorkbenchTab> {
   newTab?: { label: string; onOpen: () => void };
   /** The "Open tabs" list, for strips whose tabs can overflow. Defaults to shown. */
   tabMenu?: boolean;
+  /** False once the owning surface closes or is covered; its native Open tabs menu goes with it. */
+  presented?: boolean;
   closeLabel: string;
   /** Shown as `${closeTitle} (${shortcut})` with the `environment.toggle` binding. */
   closeTitle: string;
@@ -100,6 +102,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
   onCloseTab,
   newTab,
   tabMenu = true,
+  presented = true,
   closeLabel,
   closeTitle,
   onClose,
@@ -135,7 +138,7 @@ export function WorkbenchTabStrip<T extends WorkbenchTab>({
         })}
       </div>
       {newTab ? <Button variant="transparent" size="small" iconOnly className="no-drag" disabled={busy} aria-label={newTab.label} onClick={newTab.onOpen}><Plus /></Button> : null}
-      {tabMenu && selectedBrowser ? <BrowserMenuButton scope={selectedBrowser.id} iconOnly className="no-drag" aria-label="Open tabs"
+      {tabMenu && selectedBrowser ? <BrowserMenuButton scope={JSON.stringify([selectedBrowser.id, presented])} iconOnly className="no-drag" aria-label="Open tabs"
         options={tabs.map(entry => ({ label: entry.label, checked: entry.selected, disabled: busy, select: () => {
           onSelectTab(entry);
           requestAnimationFrame(() => activeTabRef.current?.focus());
@@ -344,6 +347,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
         onCloseTab={onCloseTab}
         newTab={newTab}
         tabMenu={tabMenu}
+        presented={presented}
         closeLabel={closeLabel}
         closeTitle={closeTitle}
         onClose={onClose}

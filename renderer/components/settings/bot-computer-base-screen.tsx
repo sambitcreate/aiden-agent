@@ -1,4 +1,4 @@
-// The base computer's live screen in Settings → Bot computers, while setup
+// The base computer's live screen in Settings → Computers & VMs → Bot computers, while setup
 // waits for the person to allow Accessibility and Screen Recording for
 // cua-driver inside it (plan §8.6). The same device stream as a Bot's
 // Computer tab, served by main's viewer hub; no Bot ever drives the base, so

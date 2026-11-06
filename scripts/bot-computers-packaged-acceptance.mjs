@@ -347,7 +347,7 @@ async function runAcceptance() {
 
     console.log(`\nPackaged Bot computers acceptance is running in ${temporary} (Aiden's log: ${log}).`);
     console.log("1. If onboarding opens, check that its feature tour shows Bot computers, then finish onboarding.");
-    console.log(`2. Settings → Bot computers → Set up${restoreImage ? " (the restore image is pre-seeded; Set up verifies it)" : " (downloads about 20 GB)"}. Wait for Ready.`);
+    console.log(`2. Settings → Computers & VMs → Bot computers → Set up${restoreImage ? " (the restore image is pre-seeded; Set up verifies it)" : " (downloads about 20 GB)"}. Wait for Ready.`);
     console.log(`3. Create a Bot with Full access whose AI model is ${ACCEPTANCE_PROVIDER_LABEL}.`);
     console.log("4. In the Bot's profile, give the Bot a computer.");
     console.log(`5. In the Bot's chat, send exactly: ${ACCEPTANCE_PROMPT}`);
@@ -380,7 +380,7 @@ async function runAcceptance() {
       STEP_TIMEOUT_MS,
     );
 
-    console.log("9. Deleted. Now choose Settings → Bot computers → Remove everything.");
+    console.log("9. Deleted. Now choose Settings → Computers & VMs → Bot computers → Remove everything.");
     timeline.removed = await waitUntil(
       () => observe(paths, lume),
       (now) => now.vms.length === 0 && !now.baseBuild,

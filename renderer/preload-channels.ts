@@ -90,10 +90,16 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:timeline",
   "chat:todo",
   "chat:tool",
+  /** Crash reporting started or stopped: `{sending}`. Raw error fields go to main only while it is on. */
+  "analytics:sending-changed",
   "bots:changed",
   "bots:memory:changed",
   /** A Bot's event routines changed, or a watch saved a check: `{botId}`. Its profile re-reads the list. */
   "bots:eventRoutines:changed",
+  "bots:connectorWatches:changed",
+  "bots:openWork:changed",
+  /** Pair decisions or exchange state changed: `{botId}`. Read current owner metadata. */
+  "bots:peers:changed",
   /** A paired phone asked to finish connecting an app for a Bot: `{botId, pluginId}`. */
   "bots:live:event",
   "bots:connections:setup",

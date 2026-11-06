@@ -205,7 +205,7 @@ test("with nothing set up, Automatic points at fixes on this page", async () => 
   await screen.findByText(
     "No voice provider yet. Download an on-device model below or add an OpenAI or Gemini key.",
   );
-  assert.equal(screen.queryByText(/in Settings → Voice/), null);
+  assert.equal(screen.queryByText(/in Settings → Voice & Speech/), null);
 });
 
 test("Gemini without a key collects one, then saves voice without needing a chat model", async () => {

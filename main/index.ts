@@ -95,7 +95,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
-import { analyticsService } from "./services/analytics/analytics-main.js";
+import { analyticsService, installAnalyticsCrashCapture } from "./services/analytics/analytics-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
@@ -196,6 +196,7 @@ import {
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import { backgroundJobs, reapFollowThroughProcesses, shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
@@ -1633,7 +1634,7 @@ async function createMainWindow(
       outcome: "failed",
       code: "renderer-crashed",
       fields: { reason: details.reason, exitCode: details.exitCode },
-    });
+    }, { duringShutdown: cleanupStarted || shutdownStarted });
     logger.error("renderer-lifecycle", "Main renderer process exited", {
       webContentsId: createdWebContentsId,
       reason: details.reason,
@@ -2147,6 +2148,8 @@ function setupApplicationMenu(
 if (!ownsSingleInstanceLock) {
   app.quit();
 } else {
+  // First, so a crash in the startup below is covered.
+  installAnalyticsCrashCapture();
   registerNativeHandlers();
   registerHandlers((event) => !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
   registerBrowserHandlers();
@@ -2161,7 +2164,7 @@ if (!ownsSingleInstanceLock) {
       outcome: "failed",
       code: "internal-error",
       fields: { processType: details.type, reason: details.reason, exitCode: details.exitCode },
-    });
+    }, { duringShutdown: cleanupStarted || shutdownStarted });
     logger.error(
       "electron-lifecycle",
       "Electron child process exited unexpectedly",
@@ -2294,6 +2297,7 @@ if (!ownsSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      installElectronConnectorWatchTransport(hostPlatformCapabilities().bots);
       const runtimeProfile = currentRuntimeProfile();
       writeDiagnosticEvent({
         level: "info",

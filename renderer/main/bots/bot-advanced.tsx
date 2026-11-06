@@ -418,7 +418,7 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
           <EmptyState
             placement="inline"
             title="No Telegram chats yet"
-            description="Set up Telegram in Settings → Telegram first."
+            description="Set up Telegram in Settings → Connections → Telegram first."
           />
         ) : (
           <Select value={target} onValueChange={setTarget}>

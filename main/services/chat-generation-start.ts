@@ -3,6 +3,8 @@ import type { ChatStartParams } from "./types.js";
 interface ChatGenerationStartDependencies {
   start(streamId: string, params: ChatStartParams): Promise<boolean>;
   startTitle(input: { chatId: string; providerId: string; model: string }): void;
+  /** Counts the send. A phone turn is counted where it was accepted, so it leaves this out. */
+  onStarted?(params: ChatStartParams): void;
 }
 
 /** Keep a stopped initialization from starting a second, background model request. */
@@ -21,6 +23,7 @@ export async function startGenerationAndMaybeTitle(
       providerId: params.providerId,
       model: params.model,
     });
+    dependencies.onStarted?.(params);
   }
   return started;
 }

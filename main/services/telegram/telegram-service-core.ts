@@ -381,6 +381,23 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     };
   }
 
+  /** A failure from a session that was already stopped must not touch the one that replaced it. */
+  function beginPolling(): void {
+    started = true;
+    lastError = undefined;
+    botUsername = undefined;
+    const controller = new AbortController();
+    abortController = controller;
+    void runPollLoop(controller.signal).catch((cause) => {
+      if (controller.signal.aborted) return;
+      lastError = cause instanceof Error ? cause.message : String(cause);
+      recordDiagnostic("error", lastError);
+      started = false;
+      deps.releaseOwnership?.();
+      deps.error("Telegram polling stopped unexpectedly.", cause);
+    });
+  }
+
   async function start(): Promise<void> {
     if (started) return;
     const snap = await deps.config.snapshot();
@@ -392,23 +409,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return;
     }
     if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
-    started = true;
-    lastError = undefined;
-    abortController = new AbortController();
-    void runPollLoop(abortController.signal).catch((cause) => {
-      if (abortController?.signal.aborted) return;
-      lastError = cause instanceof Error ? cause.message : String(cause);
-      recordDiagnostic("error", lastError);
-      started = false;
-      deps.releaseOwnership?.();
-      deps.error("Telegram polling stopped unexpectedly.", cause);
-    });
+    beginPolling();
     deps.info("Telegram bridge started.");
     recordDiagnostic("info", "Telegram polling started.");
   }
 
   function stop(): void {
     started = false;
+    lastError = undefined;
     abortController?.abort();
     abortController = undefined;
     queue.clear();
@@ -419,14 +427,18 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     // would allow a concurrent dispatch on the same chat.
   }
 
-  async function stopAndSettle(): Promise<void> {
+  /** Polling always stops. Resolves false when the running turn could not be ended. */
+  async function stopAndSettle(): Promise<boolean> {
     dispatchCancellation?.abort();
     const chatId = activeChatId;
     stop();
-    if (chatId && deps.abortChat) {
-      await deps.abortChat(chatId).catch((cause) => {
-        deps.warn(`Telegram active turn did not settle cleanly: ${cause instanceof Error ? cause.message : String(cause)}`);
-      });
+    if (!chatId || !deps.abortChat) return true;
+    try {
+      await deps.abortChat(chatId);
+      return true;
+    } catch (cause) {
+      deps.warn(`Telegram active turn did not settle cleanly: ${cause instanceof Error ? cause.message : String(cause)}`);
+      return false;
     }
   }
 
@@ -438,18 +450,31 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const ownership = deps.acquireOwnership?.();
     if (ownership && !ownership.acquired) throw new Error(`Telegram profile is already owned by process ${ownership.ownerPid ?? "unknown"}.`);
     if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
-    started = true;
-    lastError = undefined;
-    abortController = new AbortController();
-    void runPollLoop(abortController.signal).catch((cause) => {
-      if (abortController?.signal.aborted) return;
-      lastError = cause instanceof Error ? cause.message : String(cause);
-      recordDiagnostic("error", lastError);
-      started = false;
-      deps.releaseOwnership?.();
-      deps.error("Telegram polling stopped unexpectedly.", cause);
-    });
+    beginPolling();
     deps.info("Telegram bridge connected.");
+  }
+
+  /** The person's Connect or Disconnect. It fails when the bridge didn't end up as they asked. */
+  async function setEnabled(enabled: boolean): Promise<void> {
+    if (enabled) {
+      // connect() reports a polling conflict, which start() only records, so nothing is saved as on.
+      await connect();
+      try {
+        await deps.config.setSettings({ telegramEnabled: true });
+      } catch (cause) {
+        await stopAndSettle();
+        throw cause;
+      }
+      return;
+    }
+    let settled = false;
+    try {
+      await deps.config.setSettings({ telegramEnabled: false });
+    } finally {
+      // Turning the bridge off also ends the unattended turn it started, even if saving failed.
+      settled = await stopAndSettle();
+    }
+    if (!settled) throw new Error("Telegram is off, but its running turn did not stop in time.");
   }
 
   /** Disconnect and clear pairing (keeps the token). */
@@ -480,7 +505,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
   async function runPollLoop(signal: AbortSignal): Promise<void> {
     try {
-      const me = await deps.api.getMe();
+      const me = await deps.api.getMe(signal);
+      if (signal.aborted) return;
       botUsername = me.username;
       botTopicsEnabled = me.has_topics_enabled === true;
       deps.info(`Telegram bot connected as @${me.username}.`);
@@ -494,6 +520,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       }
       await refreshCommands();
     } catch (cause) {
+      if (signal.aborted) return;
       lastError = cause instanceof Error ? cause.message : String(cause);
       deps.error("Telegram getMe failed.", cause);
       started = false;
@@ -2096,6 +2123,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     stop,
     stopAndSettle,
     connect,
+    setEnabled,
     disconnect,
     resetPairing,
     refreshCommands,

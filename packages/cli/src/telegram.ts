@@ -40,7 +40,7 @@ export function createCliTelegram(agentDir: string, chats: ReturnType<typeof cre
     acquireOwnership: () => ownership.acquire(), releaseOwnership: () => ownership.release(),
     listWorkspaces: async () => (await workspaceStore(agentDir).load()).filter((item) => accessFor(agentDir, item.folderPath) === "full"),
     listModels: async () => (await createCliModelRuntime(agentDir)).getAvailableSnapshot().map((model) => ({ providerId: model.provider, providerLabel: model.provider, model: model.id, modelLabel: model.name, reasoning: model.reasoning })),
-    abortChat: (id) => chats.llmClient.cancelChat!(id),
+    abortChat: (id) => chats.llmClient.cancelChat(id, "user_stop"),
     turn: {
       chatStore: chats.chatStore, llmClient: chats.llmClient, broadcastMetadata: () => {},
       resolveThinkingLevel: async () => (await settings.load()).telegramThinkingLevel,

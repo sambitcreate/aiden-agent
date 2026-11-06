@@ -7,7 +7,7 @@ final class AidenBotPlanTests: XCTestCase {
     func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 57)
+        XCTAssertEqual(root["contractRevision"] as? Int, 59)
         return try XCTUnwrap(root["botPlans"] as? [String: Any])
     }
     func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
@@ -208,7 +208,7 @@ extension AidenBotPlanTests {
         }
     }
     func testLateFailureConflictOrSuccessCannotAlterReplacementOrClear() async throws {
-        for outcome in ["failure", "conflict", "success", "clear", "same-id-active", "generation"] {
+        for outcome in ["failure", "conflict", "success", "clear", "same-id-active", "generation", "release"] {
             let (model, transport) = try await loaded()
             let entered = expectation(description: "request entered")
             let barrier = PlanTestBarrier(entered: entered)
@@ -219,7 +219,8 @@ extension AidenBotPlanTests {
             await fulfillment(of: [entered], timeout: 3)
             let duplicate = await model.respondToPlan(.notNow)
             XCTAssertFalse(duplicate)
-            if outcome == "generation" { model.reopenFeed() }
+            if outcome == "release" { model.release() }
+            else if outcome == "generation" { model.reopenFeed() }
             else if outcome == "clear" { _ = await model.apply(try frame(NSNull())) }
             else if outcome == "same-id-active" { _ = await model.apply(try frame(section()["active"]!)) }
             else {

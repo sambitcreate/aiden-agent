@@ -1,8 +1,8 @@
 # Usage limits and spending limits
 
-Aiden handles two kinds of limits on the Mac and Linux desktop app: the ones a provider sets (rate limits and plan windows), and the dollar limits the owner sets. Both live in **Settings → Limits & spending**. Nothing about either leaves the computer. The two settings travel with Aiden's portable settings like other preferences; the saved waits and the spending ledger stay on this computer only.
+Aiden handles two kinds of limits on the Mac and Linux desktop app: the ones a provider sets (rate limits and plan windows), and the dollar limits the owner sets. Both live in **Settings → Context & Limits**. Nothing about either leaves the computer. The two settings travel with Aiden's portable settings like other preferences; the saved waits and the spending ledger stay on this computer only.
 
-The CLI does not wait for provider usage limits. Its Bot runner records paid response costs in the profile-local `spending.json` and enforces the monthly Bot and routine-run limits configured in the profile's `aiden.json`. It uses the same API-key versus subscription classification as desktop. The CLI has no Limits & spending editor or temporary spending-allowance controls.
+The CLI does not wait for provider usage limits. Its Bot runner records paid response costs in the profile-local `spending.json` and enforces the monthly Bot and routine-run limits configured in the profile's `aiden.json`. It uses the same API-key versus subscription classification as desktop. The CLI has no Context & Limits editor or temporary spending-allowance controls.
 
 ## Waiting out a provider's usage limit
 
@@ -53,15 +53,15 @@ Spending limits stop a chat, a Bot or a routine run once it has spent a set amou
 
 Only requests paid for with an **API key** count. A Claude or ChatGPT sign-in (a subscription), and models running on the computer, count as $0. A chat's helpers count toward that chat. Prices come from the model catalog Aiden ships; a model with no price counts as $0.
 
-Not counted yet: Bot conversation summaries made during compaction, the Bot memory review and chat titles.
+Bot conversation summaries and helpers run under the originating input’s Bot and routine budget scopes. The Bot memory review and chat titles remain outside this accounting.
 
 ### The three limits
 
 | Limit | Where it is set | What it covers |
 | --- | --- | --- |
-| **Each chat** | Settings → Limits & spending | The whole workspace chat, with the helpers it starts. |
+| **Each chat** | Settings → Context & Limits | The whole workspace chat, with the helpers it starts. |
 | **Each Bot, per month** | Settings (the default) and the Bot's Profile → Spending → Monthly limit | Everything the Bot spends in its month, routines included. A Bot can use the default, its own amount, or no limit. |
-| **Each routine run** | Settings → Limits & spending | One run of a routine. It also counts toward its Bot's month. |
+| **Each routine run** | Settings → Context & Limits | One run of a routine. It also counts toward its Bot's month. |
 
 Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set to no limit (the default for all three). **A Bot's month starts on** picks the day of the month a Bot's month starts over, from the 1st (the default) to the 28th, at local midnight.
 
@@ -72,7 +72,21 @@ Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set t
 - The reached notice offers **Allow $X more**, which adds the limit's amount again (a $5 limit becomes $10). A chat keeps its extra amount; a Bot's extra amount ends with its month. When a Bot's month starts over, an open Bot chat can send again without being reopened.
 - A **routine run** that reaches its limit stops: "This routine run reached its $X spending limit. The next run starts fresh." There is no Allow more for a run.
 
-The ledger is saved in `userData/spending.json` (chat ids, Bot ids, recent routine run ids and dollar amounts only), so a routine run resumed after a restart keeps what it already spent.
+The ledger is saved in `userData/spending.json`. It includes chat/Bot/routine scope identities, provider-dispatch receipts, amounts, receipt status and billing-period keys; it contains no prompts, replies or credentials. An accepted dispatch is saved before provider I/O, and a known response is charged once with its receipt. Late responses keep the billing periods selected at dispatch even if the timezone or month changes. A routine resumed after restart retains its spending. Receipt capacity is bounded; exhaustion refuses another request instead of forgetting unfinished or consumed identities.
+
+The durable dispatch ledger uses private format version 2. Earlier Aiden builds cannot read that format and may treat its balances as empty, so do not downgrade or alternate builds against a profile after this release writes it. Use the matching build and preserve the ledger when recovering a profile. The new protected routine authority state also requires the matching build; see [routine-model storage](bot-routine-models.md).
+
+### Unconfirmed Bot request costs
+
+If a metered provider request may have run but its cost was not durably confirmed, Aiden retains an unknown receipt and interrupts affected Bot work before another request. A transport error or aborted response with only placeholder zero usage does not prove the request was free. Successful reported zero-cost responses and unmetered local/subscription work can settle normally.
+
+Crash recovery settles a provider charge only against protected evidence for that exact dispatch. The protected record retains original ownership, scopes and response digest plus a bounded reported-cost amount when the provider supplied one. That amount can settle accounting even if a crash prevented saving the response body in the Bot’s private session. A missing or modified body still blocks replay of that observed dispatch: Resume makes no new provider call under its old identity. Dismiss it and send a new request to make another attempt. If no protected evidence was saved, the cost remains unconfirmed.
+
+Deleting a Bot removes its executable claims but retains minimal authenticated financial reservations for its original requests. A late observed charge, including one arriving during deletion or provider revocation, is recorded against those original scopes once. This financial evidence cannot recreate the Bot or authorize tools. When an approved peer recipient is deleted, the original initiating Bot can review its exact retired obligation from a new task, even after the earlier task was dismissed or its routine was removed. This requires that same Bot to remain live without deletion and recreation; the old request keeps its original budget scopes. It cannot acknowledge a different still-active Bot’s request. The actual owning Bot may review an old task’s original budget scopes without changing them to its current task.
+
+On desktop, iPhone or Android, **Resume** first reads the owning host’s status. When confirmation is required, it explains: “The cost of an earlier provider request is unconfirmed. Resuming may incur another charge. Known spending limits still apply.” Confirming is tied to that exact interrupted input and unknown provider request, and permits recovery, including a new request with a new durable dispatch identity when needed. A deferred request keeps its original handle and receipt. The old receipt retains an unknown cost until an authentic late provider response supplies the amount. The Bot, a routine, a background retry or Profile’s unpause control cannot grant this acknowledgement. Dismiss and Stop do not claim earlier effects or unknown charges were undone. Known spending caps still apply and use their existing Allow more controls.
+
+Unknown Resume requests keep the same UUID and body across page changes and restarts. An ordinary pending request cannot acquire cost consent on retry. The host consumes each Resume identity before effects and exact replays return current state without re-entry, and an opaque receipt precondition prevents an old, never-submitted dialog from acknowledging a later unknown charge on the same input. A new foreground confirmation follows only after the earlier request is settled.
 
 ### On a phone (Remote revision 47)
 
@@ -84,4 +98,4 @@ Aiden On The Go for iPhone and Android shows the same 80% line and reached notic
 - `main/services/provider-failure.ts`: the existing provider-failure classifier the wait builds on.
 - `main/services/spending-core.ts`, `spending-service.ts`, `spending-main.ts`: the ledger, the meter wrapped around each request, and its Electron binding. `aiden-remote-spending.ts` is the phone projection.
 - `renderer/shared/usage-limits.ts` and `renderer/shared/spending.ts`: settings, parsing and the words the app shows.
-- `renderer/components/settings/limits-settings.tsx`: Settings → Limits & spending. `renderer/components/spending/` and `renderer/main/bots/bot-spending-section.tsx`: the notices and the Bot Profile row.
+- `renderer/components/settings/limits-settings.tsx`: Settings → Context & Limits. `renderer/components/spending/` and `renderer/main/bots/bot-spending-section.tsx`: the notices and the Bot Profile row.

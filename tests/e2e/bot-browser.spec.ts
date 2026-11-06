@@ -41,9 +41,9 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
     const electron = createRequire(import.meta.url)("electron") as string;
     // As in browser-throttling.spec.ts: no GPU on hosted runners, and SIGKILL
     // on timeout so a hang shows its stderr instead of a clean exit.
+    // Keep exact pixel controls independent of the host display's color profile.
     // Chromium refuses to start as root (a container) unless its sandbox is off.
     const sandbox = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
-    // Compare the fixture's exact CSS red in sRGB, independently of the host display profile.
     const run = await promisify(execFile)(electron, ["--disable-gpu", "--force-color-profile=srgb", ...sandbox, entry], {
       timeout: 75_000,
       killSignal: "SIGKILL",
@@ -142,11 +142,22 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
     expect(seen.leaked, `${who}: the value stays out of the snapshot`).toBe(false);
   }
   expect(result.reveal.shownType, "the page did show the field as text").toBe("text");
+  expect(result.reveal.heldObservation).toEqual({ delayedRead: true, passwordObserved: true });
   expect(result.reveal.typingShownByBot).toBe(result.expected.typingRefusal);
   expect(result.reveal.pressingShownByPerson, "a printable key into the focused field").toBe(result.expected.typingRefusal);
   expect(result.reveal.typingShownByPerson).toBe(result.expected.typingRefusal);
   expect(result.reveal.probedShownByBot, "approvals and rules still read a password field").toBe("password");
   expect(result.reveal.probedType, "also after the person showed it").toBe("password");
+  // Each page the person opens on a held tab is read as it loads, however slow the read before it:
+  // one opened while the next timed read was seconds away, and one that loaded during a read.
+  for (const opened of ["openedDuringBackoff", "openedDuringRead"] as const) {
+    const seen = result.slowReads[opened];
+    expect(seen.shownType, `${opened}: the page did show the field as text`).toBe("text");
+    expect(painted(seen.field), `${opened}: the field is still covered`).toBe(true);
+    expect(seen.leaked, `${opened}: the value stays out of the snapshot`).toBe(false);
+  }
+  // A Bot's wait counts from after its read of the page, so a slow read can't use it up.
+  expect(result.slowReads.waitAfterSlowRead).toBe("ran");
   // A remembered field the person showed as plain text: a Bot's wait and
   // scroll can't tell its value apart through the row around it, and the
   // snapshot's locators don't quote it, each on a page nothing marked first.
@@ -160,6 +171,31 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.remembered.snapshot.leaked).toBe(false);
   expect(result.remembered.snapshot.found.length).toBeGreaterThan(0);
   expect(result.remembered.snapshot.found.every((found: string) => found === "ran"), JSON.stringify(result.remembered.snapshot.found)).toBe(true);
+
+  const unobserved = "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
+  expect(result.releaseBeforeRead.shownType).toBe("text");
+  expect(result.releaseBeforeRead.unknownRelease).toBe(result.expected.heldRefusal);
+  expect(result.releaseBeforeRead.beforeDrain).toEqual({ kind: "refused", message: unobserved });
+  expect(result.releaseBeforeRead.probeBeforeDrain).toBe(unobserved);
+  expect(result.releaseBeforeRead.afterDrain).toBe(unobserved);
+  expect(result.releaseBeforeRead.pressAfterDrain).toBe(unobserved);
+  expect(result.releaseBeforeRead.afterNavigation).toBe(unobserved);
+  const privateMetadata = result.releaseBeforeRead.metadata;
+  expect(privateMetadata.person.url).toContain("callback?code=held-metadata-code");
+  expect(privateMetadata.person.title).toBe("held-metadata-title");
+  expect(privateMetadata.person.heldForPerson).toBeUndefined();
+  expect(privateMetadata.gateway).toContain(privateMetadata.healthyTabId);
+  expect(privateMetadata.gateway).toContain("/whoami?healthy=1");
+  for (const output of [privateMetadata.gateway, privateMetadata.status]) {
+    expect(output).not.toContain("held-metadata-code");
+    expect(output).not.toContain("held-metadata-title");
+    expect(output).not.toContain("/callback");
+    expect(output).toContain("Password protection unavailable");
+  }
+  expect(painted(result.releaseRecovery.field)).toBe(true);
+  expect(result.releaseRecovery.leaked).toBe(false);
+  expect(result.releaseRecovery.control).toEqual(RED);
+  expect(result.releaseRecovery.botCookies).toEqual(["sid=bot"]);
 
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
   expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });

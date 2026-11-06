@@ -26,7 +26,7 @@ export function BotMessagingFields({ bot }: { bot: BotDefinition }) {
         const label =
           key === "acceptsBotMessages" ? `Other Bots can message ${bot.name}` : `${bot.name} can message other Bots`;
         return (
-          <Field key={key} label={label} description={!enabled ? "Turned off in Settings → Bots" : undefined}>
+          <Field key={key} label={label} description={!enabled ? "Turned off in Settings → Bots & Approvals" : undefined}>
             <Switch
               aria-label={label}
               checked={bot[key] !== false}

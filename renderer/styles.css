@@ -1627,11 +1627,19 @@ textarea {
   line-height: 1.5;
 }
 
-.settings-page .settings-group-title {
+.settings-page .settings-group-title,
+.settings-page .settings-group-header {
   margin: 0 4px 12px;
   padding: 0;
+}
+
+.settings-page .settings-group-title {
   font-size: var(--text-strong);
   font-weight: 600;
+}
+
+.settings-page .settings-group-header > .settings-group-title {
+  margin: 0;
 }
 
 .settings-page .settings-card,
@@ -1766,21 +1774,6 @@ textarea {
 @container composer (max-width: 380px) {
   .composer-footer-row {
     flex-wrap: wrap;
-  }
-}
-
-@container settings-content (max-width: 640px) {
-  .settings-computer-use-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.75rem;
-  }
-
-  .settings-computer-use-actions {
-    align-items: flex-start;
-  }
-
-  .settings-action-align {
-    justify-content: flex-start;
   }
 }
 
