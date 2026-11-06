@@ -1,3 +1,4 @@
+import { botMessageRowLabel, botMessageStatusLine } from "../../shared/bot-messages";
 // What a Bot chat shows, row by row, from the durable projection.
 //
 // A reply's turn starts at the person's message (or a routine, or their answer
@@ -26,10 +27,13 @@ export interface BotTranscriptRowOptions {
 }
 
 export type BotTranscriptRow =
+  | { kind: "bot_message"; id: string; label: string; botName: string; text: string }
+  | { kind: "bot_message_status"; id: string; label: string; text?: string }
   | { kind: "user"; id: string; text: string }
   /** The person's answer to a hand-off card, on their side: "You did this: …" with their note below. */
   | { kind: "handoff_result"; id: string; outcome: BotHandoffOutcome; signedIn: boolean; text: string; note?: string }
   | { kind: "routine"; id: string; label: string; text: string }
+  | { kind: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result" }
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
   /** One turn's steps; `live` while the turn runs (Detailed only). */
   | { kind: "recap"; id: string; steps: BotRecapStep[]; durationMs: number; live: boolean }
@@ -122,8 +126,17 @@ export function botTranscriptRows(
             ...(entry.note ? { note: entry.note } : {}),
           });
           break;
+        case "bot_message":
+          rows.push({kind: "bot_message", id: entry.id, label: botMessageRowLabel(entry.kind, entry.botName), botName: entry.botName, text: entry.text});
+          break;
+        case "bot_message_status":
+          rows.push({kind: "bot_message_status", id: entry.id, label: botMessageStatusLine(entry.data), ...(entry.data.outcome === "replied_while_paused" && entry.data.text ? {text: entry.data.text} : {})});
+          break;
         case "routine":
           rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
+          break;
+        case "peer":
+          rows.push({ kind: "peer", id: entry.id, exchangeId: entry.exchangeId, direction: entry.direction, peerName: entry.peerName, messageKind: entry.messageKind });
           break;
         case "assistant":
           if (entry.text.trim()) {

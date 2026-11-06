@@ -148,7 +148,7 @@ test("the profile lists a wake-up with its note and when, and Cancel removes it 
   assert.ok(within(list).getByText("Ask whether the flight got rebooked."));
   assert.ok(within(list).getByText(WHEN));
   assert.ok(
-    within(list).getByRole("button", { name: /Morning brief/u }),
+    within(list).getByRole("button", { name: /^Morning brief\b/u }),
     "an ordinary routine still opens its editor",
   );
 

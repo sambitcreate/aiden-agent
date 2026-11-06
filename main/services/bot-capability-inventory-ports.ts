@@ -21,6 +21,8 @@ import type {
 } from "./bot-capability-catalog-main.js";
 import type { SubagentMcpScopeV2 } from "./subagents/authority-v2.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import { isComposioServiceServer } from "./composio-service-tool.js";
+import { COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 
 export interface BotCapabilityInventoryPortDependencies {
   loadOpaqueSelectionKey(): Promise<Uint8Array>;
@@ -201,6 +203,7 @@ function connectionInventory(
     const scope = offered ? scopeByServer.get(server.id) : undefined;
     return {
       sourceId: server.id,
+      ...(isComposioServiceServer(server) ? { accessIdentity: COMPOSIO_SERVICE_ACCESS_IDENTITY } : {}),
       label: server.name,
       description: server.enabled
         ? !offered

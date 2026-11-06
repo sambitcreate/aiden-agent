@@ -1,5 +1,6 @@
 import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
@@ -123,6 +124,7 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 import {
   prepareSkillInvocationForAppend,
+  reportSkillUsed,
   requireSkillInvocationWorkspace,
   type PreparedSkillInvocation,
 } from "./skill-invocation-turn.js";
@@ -932,7 +934,7 @@ export function projectAidenRemoteChatMessagesWindow(
       chatId: chat.id,
       revision: chatRevision(chat),
       messages,
-      hasOlder: true,
+      hasOlder: first > 0,
       workspaceId: persistedChatWorkspaceId(chat.workspaceId),
       ...(chat.botId ? { botId: chat.botId } : {}),
       title: boundedUnicodeScalarPrefix(chat.title, 1_024),
@@ -944,16 +946,22 @@ export function projectAidenRemoteChatMessagesWindow(
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
       ...(forkedFrom ? { forkedFrom } : {}),
     };
-    const size = () => Buffer.byteLength(JSON.stringify(window), "utf8");
-    let bytes = size();
-    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages.length > 1) {
-      messages.shift();
-      first += 1;
-      bytes = size();
+    let bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
+    let dropped = 0;
+    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && dropped < messages.length - 1) {
+      // Each removed leading message also removes its following comma.
+      bytes -= Buffer.byteLength(JSON.stringify(messages[dropped]), "utf8") + 1;
+      if (dropped === 0 && !window.hasOlder) bytes -= 1; // false becomes true.
+      dropped += 1;
+    }
+    if (dropped) {
+      window.hasOlder = true;
+      messages.splice(0, dropped);
+      first += dropped;
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages[0]) {
       withoutReasoning(messages[0]);
-      bytes = size();
+      bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
       throw new AidenRemoteServiceError(
@@ -1460,6 +1468,10 @@ export class AidenRemoteChatService {
         target(workspaceId: string): Promise<string | WorkspaceChatAssignment>;
         release(workspaceId: string): Promise<void>;
       };
+      /** For usage data: a real workspace record, not a hidden folder or a default. */
+      isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
+      /** For usage data: this device is another paired Mac or Linux host, not a phone. */
+      deviceIsPeer?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -2931,6 +2943,7 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            if (preparedSkill) reportSkillUsed(preparedSkill.provenance);
             // The person wrote in it, so a snoozed chat is back. Never blocks
             // or fails the send; Pin and Done are left alone.
             void this.options.triage?.wake?.(chatId).catch(() => undefined);
@@ -2941,6 +2954,18 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
+            if (started) {
+              reportChatMessageSent({
+                providerId: selection.providerId,
+                model: selection.modelId,
+                thinkingLevel: parsed.thinkingLevel,
+                origin: authoritative.botId
+                  ? "bot"
+                  : async () => ((await this.options.deviceIsPeer?.(deviceId)) === true ? "peer" : "phone"),
+                inWorkspace: async () =>
+                  !authoritative.botId && (await this.options.isFolderWorkspace?.(workspaceId)) === true,
+              });
+            }
             if (!started && !accepted) {
               turn.release();
               this.options.streams.markStartError(

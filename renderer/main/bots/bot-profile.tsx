@@ -25,6 +25,9 @@ import { BotCharacterCard } from "./bot-character-card";
 import { BotComputerSection } from "./bot-computer-section";
 import { BotHealthSection } from "./bot-health-section";
 import { BotEventRoutines } from "./bot-event-routines";
+import { BotConnectorWatches } from "./bot-connector-watches";
+import { BotOpenWorkRow } from "./bot-open-work-page";
+import { BotPeersSection } from "./bot-peers";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -33,6 +36,7 @@ import { BotSpendingSection } from "./bot-spending-section";
 import { BotRules } from "./bot-rules";
 import { useBotLiveSummary } from "./bot-sidebar-rows";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
+import { useBotAllowed } from "./use-bot-allowed";
 
 /** The file's bytes as base64 (no data: prefix). */
 function readFileAsBase64(file: Blob): Promise<string> {
@@ -159,6 +163,8 @@ export function BotProfile({
   onOpenAdvanced,
   onOpenMemory,
   onOpenLearning,
+  onOpenWork,
+  onOpenAllowed,
   onDelete,
 }: {
   bot: BotDefinition;
@@ -168,9 +174,13 @@ export function BotProfile({
   onOpenAdvanced(): void;
   onOpenMemory(): void;
   onOpenLearning?(): void;
+  onOpenWork?(): void;
+  onOpenAllowed(): void;
   onDelete(): void;
 }) {
   const qc = useQueryClient();
+  const allowed = useBotAllowed(bot.id);
+  const allowedCountId = React.useId();
   const photoInput = React.useRef<HTMLInputElement | null>(null);
   const previewId = React.useId();
   const [photoBusy, setPhotoBusy] = React.useState(false);
@@ -314,6 +324,7 @@ export function BotProfile({
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
         <MemoryRow botId={bot.id} onOpen={onOpenMemory} />
+        {onOpenWork && <BotOpenWorkRow botId={bot.id} onOpen={onOpenWork} />}
         {onOpenLearning ? (
           <button type="button" aria-label="What I've learned" className={PROFILE_ROW_CLASS} onClick={onOpenLearning}>
             <span className="min-w-0 flex-1">
@@ -327,9 +338,22 @@ export function BotProfile({
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />
       <BotEventRoutines bot={bot} />
+      <BotConnectorWatches bot={bot} />
+      <BotPeersSection key={bot.id} botId={bot.id} botName={bot.name} />
       <BotHealthSection bot={bot} />
       <BotSpendingSection bot={bot} />
       <BotRules bot={bot} />
+      <FieldSet>
+        <button type="button" aria-label="Allowed without asking" aria-describedby={allowedCountId} className={PROFILE_ROW_CLASS} onClick={onOpenAllowed}>
+          <span className="min-w-0 flex-1">
+            <span className="block text-strong text-primary">Allowed without asking</span>
+            <span id={allowedCountId} className="mt-0.5 block text-small text-secondary">
+              {allowed.data === undefined ? allowed.isError ? "Couldn’t be read" : "Loading…" : allowed.data.length === 0 ? "Nothing yet" : allowed.data.length}
+            </span>
+          </span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+        </button>
+      </FieldSet>
       {/* Apple silicon only; renders nothing elsewhere. */}
       <BotComputerSection bot={bot} />
       <Text as="p" variant="small" color="tertiary" className="px-1 text-center">

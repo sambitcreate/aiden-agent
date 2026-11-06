@@ -1106,6 +1106,49 @@ test("a step folded out of a long run never comes back while the run goes on", (
   assert.ok(gone.size > 0);
 });
 
+test("folding keeps a later image row's first step after an earlier media boundary", () => {
+  const projector = new GenerationTimelineProjector("generation-images", () => {});
+  for (const [id, name] of [["first-image", "display_image"], ["lead", "read_file"], ["second-image", "share_image"]] as const) {
+    projector.toolStarted(id, name, {});
+    projector.toolFinished(id, "completed");
+  }
+  const rowForSecondImage = (value: GenerationTimeline) => assistantPresentationRows("", value)?.find(
+    (row) => row.kind === "activity" && row.steps.some((step) => isToolStep(step) && step.toolCallId === "call-3"),
+  );
+  const before = rowForSecondImage(projector.snapshot());
+  assert.ok(before);
+  for (let index = 0; index < 210; index += 1) {
+    projector.toolStarted(`read-${index}`, "read_file", { path: `file-${index}.ts` });
+    projector.toolFinished(`read-${index}`, "completed");
+  }
+  const final = projector.finish("completed");
+  assert.equal(final.steps.length, 200);
+  assert.equal(rowForSecondImage(final)?.key, before.key, "folding must not remount the later image's activity row");
+});
+
+test("careful folding keeps a closing media boundary ahead of a retained image row", () => {
+  const projector = new GenerationTimelineProjector("generation-images", () => {});
+  for (const [id, name] of [["lead-one", "read_file"], ["first-image", "display_image"], ["lead-two", "read_file"], ["second-image", "share_image"]] as const) {
+    projector.toolStarted(id, name, {});
+    projector.toolFinished(id, "completed");
+  }
+  const imageRow = (value: GenerationTimeline) => assistantPresentationRows("", value)?.find(
+    (row) => row.kind === "activity" && row.steps.some((step) => isToolStep(step) && step.toolCallId === "call-4"),
+  );
+  const before = imageRow(projector.snapshot());
+  assert.ok(before);
+  // Failed plain calls rank after media calls, but they can make room without
+  // merging rows. A closing image call must not be chosen merely by rank.
+  for (let index = 0; index < 210; index += 1) {
+    projector.toolStarted(`failed-${index}`, "run_command", {});
+    projector.toolFinished(`failed-${index}`, "failed");
+  }
+  const final = projector.finish("completed");
+  assert.equal(final.steps.length, 200);
+  assert.equal(imageRow(final)?.key, before.key);
+  assert.ok(toolSteps(final).some((step) => step.toolCallId === "call-2"), "the preceding boundary stays while less disruptive folds exist");
+});
+
 test("folding a long run never moves its reply text or an image's row", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   let content = "";

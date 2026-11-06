@@ -106,3 +106,7 @@ test("an argument of thousands of spaces is cut without stalling the main proces
   assert.match(padded, /^tofu/u);
   assert.ok(blank === undefined || [...blank].length <= BOT_STEP_DETAIL_CHARS);
 });
+
+test('message_bot shows the peer but never message contents',()=>{
+ assert.deepEqual(botStepDescriptor('message_bot',{bot:'COS',message:'private'}),{kind:'helper',label:'Messaged COS',app:'COS'});
+});

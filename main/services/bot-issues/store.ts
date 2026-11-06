@@ -17,13 +17,14 @@ export const BOT_ISSUES_FILE = "issues.json";
 
 /**
  * A stored row: the issue the rest of the app reads, plus the service's own
- * bookkeeping. Neither flag is part of the shared contract or the chat card;
- * they only say which side effects a raise has already finished, so a retry
+ * bookkeeping. These flags are not part of the shared contract or the chat card;
+ * they record which raise and settlement side effects finished, so a retry
  * can send what is still missing instead of repeating a whole raise.
  */
 export interface StoredBotIssue extends BotIssue {
   entryAppended?: boolean;
   delivered?: boolean;
+  statusAppended?: boolean;
 }
 
 export interface BotIssueChange<T> {
@@ -54,7 +55,9 @@ function retain(issues: readonly StoredBotIssue[]): StoredBotIssue[] {
       if (open >= BOT_ISSUE_LIMITS.openPerBot) continue;
       open += 1;
     } else {
-      if (settled >= BOT_ISSUE_LIMITS.retainedResolved) continue;
+      // A settlement whose transcript status has not landed is a pending
+      // obligation. Pruning it would leave its old card answerable forever.
+      if (settled >= BOT_ISSUE_LIMITS.retainedResolved && issue.statusAppended !== false) continue;
       settled += 1;
     }
     kept.push(issue);
@@ -71,6 +74,7 @@ function storedOf(row: unknown, botId: string): StoredBotIssue | null {
     ...issue,
     ...(typeof fields.entryAppended === "boolean" ? { entryAppended: fields.entryAppended } : {}),
     ...(typeof fields.delivered === "boolean" ? { delivered: fields.delivered } : {}),
+    ...(typeof fields.statusAppended === "boolean" ? { statusAppended: fields.statusAppended } : {}),
   };
 }
 

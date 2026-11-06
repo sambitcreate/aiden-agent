@@ -103,6 +103,8 @@ extension AidenBotIdentityPatch {
             && (instructions == nil || instructions == detail.instructions)
             && (avatar == nil || avatar == detail.avatar.semantic)
             && (chatActivity == nil || chatActivity == detail.chatActivity)
+            && (botMessaging?.receive == nil || botMessaging?.receive == detail.botMessaging?.receive)
+            && (botMessaging?.send == nil || botMessaging?.send == detail.botMessaging?.send)
     }
 }
 
@@ -151,6 +153,8 @@ struct AidenBotProfileView: View {
     @State private var isConfirmingPhotoRemoval = false
     @State private var isConfirmingDelete = false
     @State private var isShowingAdvanced = false
+    @State private var allowedModel: AidenBotAllowedModel?
+    @State private var isShowingAllowed = false
     @State private var memoryModel: AidenBotMemoryModel?
     @State private var isShowingMemory = false
     @State private var hasOpenedMemory = false
@@ -211,6 +215,9 @@ struct AidenBotProfileView: View {
                         onSaveFailed: { mutationError = $0 }
                     )
                 }
+                .navigationDestination(isPresented: $isShowingAllowed) {
+                    if let allowedModel { AidenBotAllowedView(model: allowedModel, botName: detail?.name ?? "Bot", canWrite: canWrite) }
+                }
                 .navigationDestination(isPresented: $isShowingMemory) {
                     if let memoryModel {
                         AidenBotMemoryView(model: memoryModel, canWrite: canWrite)
@@ -223,6 +230,14 @@ struct AidenBotProfileView: View {
             let expectedSession = sessionIdentity
             reset(for: expectedSession)
             await load(for: expectedSession)
+        }
+        .onChange(of: coordinator.installationStore.activeInstallation?.deviceCapabilities) { _, _ in
+            allowedModel?.invalidate(); allowedModel = nil; isShowingAllowed = false
+            Task { await load(for: sessionIdentity) }
+        }
+        .onChange(of: coordinator.installationStore.activeInstallation?.serverCapabilities) { _, _ in
+            allowedModel?.invalidate(); allowedModel = nil; isShowingAllowed = false
+            Task { await load(for: sessionIdentity) }
         }
         .onChange(of: coordinator.connectionState == .connected) { _, connected in
             guard connected, detail != nil else { return }
@@ -362,11 +377,89 @@ struct AidenBotProfileView: View {
 
                 instructionsRow(detail)
 
+                if let allowedModel, aidenBotAllowedSupported(coordinator.installationStore.activeInstallation) {
+                    Button { isShowingAllowed = true } label: {
+                        HStack { Text("Allowed without asking"); Spacer(); Text(allowedModel.countSummary ?? "").foregroundStyle(palette.secondary); Image(systemName: "chevron.right").foregroundStyle(palette.secondary) }
+                            .padding(16).background(palette.raised, in: RoundedRectangle(cornerRadius: 20))
+                    }.buttonStyle(.plain).padding(.top, 8)
+                }
                 if let memoryModel {
                     Button {
                         isShowingMemory = true
                     } label: {
                         AidenBotMemoryRow(summary: memoryModel.countSummary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                }
+
+                if coordinator.server?.supportsBotOpenWork == true {
+                    NavigationLink {
+                        AidenBotOpenWorkView(coordinator: coordinator, botID: detail.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "checklist").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Open work").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }
+                    .buttonStyle(.plain).padding(.top, 8)
+                }
+
+                if coordinator.server?.supportsBotPeers == true {
+                    NavigationLink {
+                        AidenBotPeersView(coordinator: coordinator, botID: detail.id, botName: detail.name)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Bot peers").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }.buttonStyle(.plain).padding(.top, 8)
+                }
+
+                if coordinator.server?.supportsBotRoutineModels == true {
+                    NavigationLink {
+                        AidenBotRoutineModelDirectoryView(coordinator: coordinator, botID: detail.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "slider.horizontal.3").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Routine models").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                }
+
+                if coordinator.server?.supportsBotWatches == true {
+                    NavigationLink {
+                        AidenBotWatchesView(coordinator: coordinator, botID: detail.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bell.badge").foregroundStyle(palette.secondary).accessibilityHidden(true)
+                            Text("Watches").foregroundStyle(palette.foreground)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                                .foregroundStyle(palette.secondary).accessibilityHidden(true)
+                        }
+                        .padding(16)
+                        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .accessibilityElement(children: .combine)
                     }
                     .buttonStyle(.plain)
                     .padding(.top, 8)
@@ -541,6 +634,9 @@ struct AidenBotProfileView: View {
         mutationError = nil
         saver = nil
         character = nil
+        allowedModel?.invalidate()
+        allowedModel = nil
+        isShowingAllowed = false
         memoryModel = nil
         isShowingMemory = false
         avatarModel?.clearForDismissal()
@@ -620,6 +716,16 @@ struct AidenBotProfileView: View {
                 hasOpenedAdvanced = true
                 isShowingAdvanced = true
             }
+            if aidenBotAllowedSupported(coordinator.installationStore.activeInstallation) {
+                if allowedModel == nil, let client = try? coordinator.remoteClient(for: context) {
+                    let grants = coordinator.installationStore.activeInstallation?.deviceCapabilities
+                    let offered = coordinator.installationStore.activeInstallation?.serverCapabilities
+                    allowedModel = AidenBotAllowedModel(botID: botID, transport: client, isCurrent: {
+                        coordinator.isCurrent(context) && aidenBotAllowedSupported(coordinator.installationStore.activeInstallation) && coordinator.installationStore.activeInstallation?.deviceCapabilities == grants && coordinator.installationStore.activeInstallation?.serverCapabilities == offered
+                    })
+                }
+                Task { await allowedModel?.load() }
+            } else { allowedModel?.invalidate(); allowedModel = nil; isShowingAllowed = false }
             if memoryModel == nil {
                 Task { await prepareMemory(context: context, botName: loaded.name) }
             } else {

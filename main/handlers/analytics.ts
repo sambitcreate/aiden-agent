@@ -36,16 +36,19 @@ export function analyticsRegistryView(): AnalyticsRegistryView {
 /** Usage-data consent: status, the Settings switch, the one-time notice and the event list. */
 export function registerAnalyticsHandlers<Event>(dependencies: {
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
+  owner(event: Event): { isDestroyed(): boolean };
   analytics: Pick<AnalyticsService, "status" | "setEnabled" | "markNoticeShown">;
 }): void {
   dependencies.handle("analytics:status", (): Promise<AnalyticsStatus> => dependencies.analytics.status());
-  dependencies.handle("analytics:setEnabled", (_event, enabled) => {
+  dependencies.handle("analytics:setEnabled", (event, enabled) => {
     if (typeof enabled !== "boolean") throw new Error("Invalid usage data setting.");
-    return dependencies.analytics.setEnabled(enabled);
+    const owner = dependencies.owner(event);
+    return dependencies.analytics.setEnabled(enabled, () => !owner.isDestroyed());
   });
-  dependencies.handle("analytics:markNoticeShown", (_event, choice) => {
+  dependencies.handle("analytics:markNoticeShown", (event, choice) => {
     if (choice !== "ok" && choice !== "turn-off") throw new Error("Invalid usage data notice choice.");
-    return dependencies.analytics.markNoticeShown(choice === "turn-off" ? { enabled: false } : undefined);
+    const owner = dependencies.owner(event);
+    return dependencies.analytics.markNoticeShown(choice === "turn-off" ? { enabled: false } : undefined, () => !owner.isDestroyed());
   });
   dependencies.handle("analytics:registry", () => analyticsRegistryView());
 }

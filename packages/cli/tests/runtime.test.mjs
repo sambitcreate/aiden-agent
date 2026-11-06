@@ -6,6 +6,9 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
+import { once } from "node:events";
 
 const pkgDir = path.dirname(fileURLToPath(import.meta.url)) + "/..";
 const cli = path.join(pkgDir, "dist", "app", "cli.js");
@@ -161,9 +164,10 @@ test("aiden help names Aiden's MCP commands and no native pi-mcp routing", () =>
 });
 
 test("foreground serve drains and removes its socket when its terminal hangs up", { skip: process.platform === "win32" }, async () => {
-  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-hup-"));
+  const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-hup-"));
+  const agentDir = path.join(home, "agent");
   const child = spawn(process.execPath, [cli, "serve"], {
-    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: home, PI_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"],
   });
   try {
     let stderr = "";
@@ -178,12 +182,13 @@ test("foreground serve drains and removes its socket when its terminal hangs up"
     child.kill("SIGHUP");
     assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
     assert.equal(existsSync(socket), false, "a hung-up daemon must still remove its control socket");
-  } finally { child.kill("SIGKILL"); rmSync(agentDir, { recursive: true, force: true }); }
+  } finally { child.kill("SIGKILL"); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("a background daemon records that it leads its own process group and stops on request", { skip: process.platform === "win32" }, async () => {
-  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-daemon-"));
-  const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" } };
+  const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-daemon-"));
+  const agentDir = path.join(home, "agent");
+  const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: home, PI_OFFLINE: "1" } };
   try {
     const started = runCli(["serve", "--daemon"], options);
     assert.equal(started.status, 0, started.stderr);
@@ -194,7 +199,7 @@ test("a background daemon records that it leads its own process group and stops 
     assert.equal(existsSync(path.join(agentDir, "serve.lock")), false);
   } finally {
     runCli(["serve", "stop"], options);
-    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -227,4 +232,56 @@ test("bundled ChatGPT OAuth module loads and rejects missing installation identi
     prompt: async () => { throw new Error("Unexpected prompt before identity validation"); },
     notify: () => { throw new Error("Unexpected network login before identity validation"); },
   }), /requires a device ID/);
+});
+
+
+test("built CLI transport rejects excessive encodings and remains usable", async (t) => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-http-security-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    if (request.url === "/excessive") {
+      response.writeHead(200, { "content-encoding": "gzip, gzip, gzip, gzip, gzip, gzip", "content-length": "1" });
+      response.end();
+    } else {
+      response.writeHead(200, { "content-encoding": "gzip", "content-type": "text/plain" });
+      response.end(gzipSync("transport remains usable"));
+    }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const endpoint = `http://127.0.0.1:${server.address().port}`;
+  const resultFile = path.join(agentDir, "transport-result.json");
+  // The serve-only CLI has no extension or RPC entry to run code in, so the
+  // probe is preloaded into the CLI process and fetches when the command
+  // exits, after the bundled runtime has loaded and could have replaced the
+  // global fetch or dispatcher.
+  const probe = path.join(agentDir, "transport-probe.mjs");
+  writeFileSync(probe, `import { writeFileSync } from "node:fs";
+const exit = process.exit.bind(process);
+let probing = false;
+process.exit = (code) => {
+  if (probing) return;
+  probing = true;
+  (async () => {
+    let refused = false;
+    try { await fetch(${JSON.stringify(endpoint + "/excessive")}); } catch { refused = true; }
+    const text = await (await fetch(${JSON.stringify(endpoint + "/healthy")})).text();
+    writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ refused, text }));
+  })().finally(() => exit(code));
+};`);
+  const child = spawn(process.execPath, ["--import", pathToFileURL(probe).href, cli, "app", "status"], {
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "", NO_PROXY: "*" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => { if (child.exitCode === null) child.kill("SIGKILL"); });
+  let stdout = ""; let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const [code] = await once(child, "close");
+  assert.equal(code, 0, stderr);
+  assert.ok(Array.isArray(JSON.parse(stdout)), stdout);
+  assert.deepEqual(JSON.parse(readFileSync(resultFile, "utf8")), { refused: true, text: "transport remains usable" });
+  assert.deepEqual(requests, ["/excessive", "/healthy"]);
 });

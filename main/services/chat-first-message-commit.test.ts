@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { parseChatFirstMessage } from "../handlers/chat-first-message-params.js";
 import { createChatStore, type ChatStoreDurability } from "./chat-store-core.js";
 import { createFirstMessageCommitter } from "./chat-first-message-commit.js";
@@ -55,7 +56,7 @@ async function fixture(t: test.TestContext, durability: ChatStoreDurability = {}
     markReconciliation: (ownerId) => turns.markAppendReconciliationRequired(ownerId),
     clearReconciliation: (ownerId) => turns.clearAppendReconciliationRequired(ownerId),
     admitWorkspace: (workspaceId, document) => admitOwnedWorkspaceOperation(workspaces, document, workspaceId),
-    workspaceExists: async () => true,
+    getWorkspace: async () => ({}),
     resolveSkill: async () => { throw new Error("Skill is unavailable"); },
   };
   return { directory, store, owner, turns, workspaces, deps };
@@ -199,7 +200,7 @@ test("missing workspace and skill rejection leave no chat or lease", async (t) =
     if (kind === "skill") parsed.skillReference = { version: 1, invocationId: "configured:test", displayName: "test", source: "configured" };
     const commit = createFirstMessageCommitter({
       ...f.deps,
-      workspaceExists: async () => kind !== "workspace",
+      getWorkspace: async () => (kind === "workspace" ? undefined : {}),
     });
     await assert.rejects(commit(parsed, f.owner));
     assert.equal(f.turns.owns(parsed.chatId, parsed.turnId, f.owner.documentId), false);
@@ -209,7 +210,7 @@ test("missing workspace and skill rejection leave no chat or lease", async (t) =
 
 test("owner invalidation before installation aborts without an empty chat", async (t) => {
   const f = await fixture(t);
-  const commit = createFirstMessageCommitter({ ...f.deps, workspaceExists: async () => { f.owner.invalidate(); return true; } });
+  const commit = createFirstMessageCommitter({ ...f.deps, getWorkspace: async () => { f.owner.invalidate(); return {}; } });
   await assert.rejects(commit(parseChatFirstMessage(request()), f.owner), /changed/u);
   assert.deepEqual(await f.store.list(), []);
 });
@@ -220,7 +221,7 @@ test("workspace cancellation drains first-message preparation before releasing i
   let validationStarted = () => {};
   const started = new Promise<void>((resolve) => { validationStarted = resolve; });
   const waiting = new Promise<void>((resolve) => { completeValidation = resolve; });
-  const commit = createFirstMessageCommitter({ ...f.deps, workspaceExists: async () => { validationStarted(); await waiting; return true; } });
+  const commit = createFirstMessageCommitter({ ...f.deps, getWorkspace: async () => { validationStarted(); await waiting; return {}; } });
   const writing = commit(parseChatFirstMessage(request()), f.owner);
   await started;
   let drained = false;
@@ -298,4 +299,19 @@ test("private first send keeps its selected skill authoritative through folder a
   assert.equal(replay.id, chat.id);
   assert.equal(replay.workspaceId, "private-1");
   assert.equal(allocated, 1, "a replay never allocates another folder");
+});
+
+test("a first message counts its new chat once, not on a replay and not when the workspace is gone", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const f = await fixture(t);
+  const commit = createFirstMessageCommitter({ ...f.deps, getWorkspace: async () => ({ scratch: true }) });
+  const parsed = parseChatFirstMessage(request());
+  await commit(parsed, f.owner);
+  assert.deepEqual(sent, [{ event: "chat_created", props: { workspace_kind: "scratch" } }]);
+  await commit(parsed, f.owner);
+  assert.equal(sent.length, 1, "a replay confirms delivery; it creates nothing");
+
+  const gone = createFirstMessageCommitter({ ...f.deps, getWorkspace: async () => undefined });
+  await assert.rejects(gone(parseChatFirstMessage(request()), f.owner));
+  assert.equal(sent.length, 1);
 });

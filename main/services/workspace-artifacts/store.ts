@@ -1,3 +1,4 @@
+import { isProtectedCredentialPath } from "../model-file-policy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -117,6 +118,8 @@ export interface WorkspaceArtifactStoreOptions {
   root?: () => string;
   now?: () => number;
   newId?: () => string;
+  /** Metadata-only canonical policy check. Transient IO failures retain an already validated cache. */
+  fileSourceAllowed?: (workspaceId: string, file: string) => Promise<boolean>;
 }
 
 function requireWorkspaceId(value: string): string {
@@ -140,7 +143,7 @@ export class WorkspaceArtifactStore {
   private readonly now: () => number;
   private readonly newId: () => string;
 
-  constructor(options: WorkspaceArtifactStoreOptions = {}) {
+  constructor(private readonly options: WorkspaceArtifactStoreOptions = {}) {
     this.root =
       options.root ??
       (() => {
@@ -183,10 +186,41 @@ export class WorkspaceArtifactStore {
   }
 
   async list(workspaceId: string): Promise<WorkspaceArtifactView[]> {
-    const [{ artifacts }, { snapshots }] = await Promise.all([
-      this.artifacts(workspaceId).load(),
-      this.snapshots(workspaceId).load(),
+    const [{ artifacts }, loaded] = await Promise.all([
+      this.artifacts(workspaceId).load(), this.snapshots(workspaceId).load(),
     ]);
+    const denied = new Map<string, Set<string>>();
+    for (const artifact of artifacts) {
+      const names = new Set<string>();
+      for (const source of artifact.sources) {
+        if (source.kind !== "file") continue;
+        let allowed = !isProtectedCredentialPath(source.file, "file");
+        if (allowed && this.options.fileSourceAllowed) {
+          try { allowed = await this.options.fileSourceAllowed(workspaceId, source.file); }
+          catch { /* Missing or temporarily inaccessible ordinary files retain their validated cache. */ }
+        }
+        const snapshot = loaded.snapshots[artifact.id];
+        const before = snapshot?.sources[source.name];
+        if (before && ((!allowed && (!before.policyDenied || before.dataJson !== undefined)) || snapshot?.filePolicyVersion !== 1)) names.add(source.name);
+      }
+      const declared = new Set(artifact.sources.map((source) => source.name));
+      for (const name of Object.keys(loaded.snapshots[artifact.id]?.sources ?? {})) if (!declared.has(name)) names.add(name);
+      if (names.size) denied.set(artifact.id, names);
+    }
+    const snapshots = denied.size ? await this.snapshots(workspaceId).update((draft) => {
+      for (const [id, names] of denied) {
+        const snapshot = draft.snapshots[id];
+        if (!snapshot) continue;
+        const declared = new Set(artifacts.find((artifact) => artifact.id === id)?.sources.map((source) => source.name));
+        for (const name of names) {
+          if (!declared.has(name)) { delete snapshot.sources[name]; continue; }
+          const before = snapshot.sources[name];
+          if (before) snapshot.sources[name] = { status: "blocked", at: before.at, policyDenied: true, error: "Cached file data must be refreshed under the credential policy." };
+        }
+        snapshot.filePolicyVersion = 1;
+      }
+      return structuredClone(draft.snapshots);
+    }) : loaded.snapshots;
     return artifacts.map((artifact) => {
       const snapshot = snapshots[artifact.id];
       const digest = workspaceArtifactDigest(artifact.sources, artifact.actions);
@@ -355,10 +389,11 @@ export class WorkspaceArtifactStore {
         }
         sources[source.name] = {
           ...result,
-          ...(before?.dataJson !== undefined && result.dataJson === undefined ? { dataJson: before.dataJson } : {}),
+          ...(before?.dataJson !== undefined && result.dataJson === undefined && !result.policyDenied ? { dataJson: before.dataJson } : {}),
         };
       }
-      const snapshot: WorkspaceArtifactSnapshotV1 = { revision: artifact.revision, refreshedAt: this.now(), sources };
+      const snapshot: WorkspaceArtifactSnapshotV1 = {
+        filePolicyVersion: 1, revision: artifact.revision, refreshedAt: this.now(), sources };
       draft.snapshots[id] = snapshot;
       return snapshot;
     });

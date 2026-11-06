@@ -180,7 +180,7 @@ function harness(checkRetrySafety?: (requestId: string) => Promise<boolean>) {
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims, deliveries, failDelivery, recovery };
+  return { store, scheduler, routines, executor, session, replies, sends, open, resolved, stalled, claims, deliveries, failDelivery, recovery };
 }
 
 const TIMEOUT: BotRoutineSubmissionOutcome = { kind: "failed", error: "model_error", reason: "model_error", detail: "503 Service Unavailable" };
@@ -443,4 +443,44 @@ test("a failed Run now is not retried", async () => {
   const task = (await h.store.get(routine.id))!;
   await h.executor.run(task, { trigger: { kind: "manual", key: "now-1" }, signal: new AbortController().signal });
   assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0);
+});
+
+test("pausing, editing and enabling a routine cannot resend its pending retry prompt", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({ botId: "bot-1", name: "Mail", schedule: { kind: "daily", time: "09:00" }, prompt: "Send yesterday's report." });
+  const failedRunId = `routine:${routine.id}:${Date.now() - 300_000}`;
+  await h.store.addRoutineRetry(routine.id, { failedRunId, attempt: 1, at: Date.now() - 1000, verifiedToolFree: true });
+  const paused = await h.routines.pause("bot-1", routine.id);
+  const edited = await h.routines.update({ botId: "bot-1", id: routine.id, expectedUpdatedAt: paused.updatedAt, prompt: "Draft tomorrow's report." });
+  await h.routines.update({ botId: "bot-1", id: routine.id, expectedUpdatedAt: edited.updatedAt, enabled: true });
+  await h.scheduler.start();
+  for (let i = 0; i < 100 && (await h.store.get(routine.id))?.pendingRoutineFires?.length; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(h.sends, []);
+  assert.equal((await h.scheduler.runNow(routine.id)).result, "success");
+});
+
+test("a retry whose stream failed recovers the admitted answer after restart", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({ botId: "bot-1", name: "Mail", schedule: { kind: "daily", time: "09:00" }, prompt: "Read my mail." });
+  const failedRunId = `routine:${routine.id}:${Date.now() - 300_000}`;
+  const requestId = `${failedRunId}:retry-1`;
+  await h.store.addRoutineRetry(routine.id, { failedRunId, attempt: 1, at: Date.now() - 1000, verifiedToolFree: true });
+  h.session.awaitReply = async () => { throw new Error("Stream closed."); };
+  const uncertain = await h.executor.run((await h.store.get(routine.id))!, {
+    runId: requestId, trigger: { kind: "retry", failedRunId, attempt: 1, requestId, verifiedToolFree: true },
+    signal: new AbortController().signal,
+  });
+  assert.equal(uncertain.result, "blocked");
+  h.session.awaitReply = async () => ({ kind: "completed", text: "Recovered the answer." });
+  await h.scheduler.start();
+  for (let i = 0; i < 100 && (await h.store.get(routine.id))?.pendingRoutineFires?.length; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal((await h.store.runById(routine.id, requestId))?.output, "Recovered the answer.");
+  assert.deepEqual(h.sends, [requestId]);
+  assert.deepEqual(h.deliveries, [requestId]);
 });

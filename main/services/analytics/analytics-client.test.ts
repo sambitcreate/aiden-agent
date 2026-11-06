@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { EventEmitter, once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +42,51 @@ function fakeFetch(status: number) {
   };
   return { fetch, requests };
 }
+
+test("an immediate crash send reports success, keeps its id and time, and never reports a failure as sent", async () => {
+  const id = "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const message = {
+    distinctId: INSTALL_ID,
+    event: "app_crashed",
+    properties: { kind: "unclean_exit", ...SUPER },
+    uuid: id,
+    timestamp: "2026-10-30T12:00:00.000Z",
+  };
+
+  const { fetch, requests } = fakeFetch(200);
+  const healthy = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never, retryDelayMs: 1 });
+  assert.equal(await healthy.captureNow(message), true);
+  assert.equal(requests[0]!.events[0]!.uuid, id);
+  assert.equal((requests[0]!.events[0] as unknown as { timestamp: string }).timestamp, message.timestamp);
+  await healthy.shutdown();
+
+  const rejected = fakeFetch(400);
+  const refusing = createPostHogTransport({ apiKey: "phc_test", fetch: rejected.fetch as never, retryDelayMs: 1 });
+  assert.equal(await refusing.captureNow(message), false);
+  await refusing.discard();
+
+  const offline = createPostHogTransport({
+    apiKey: "phc_test",
+    fetch: (async () => { throw new TypeError("fetch failed"); }) as never,
+    retryDelayMs: 1,
+  });
+  assert.equal(await offline.captureNow(message), false);
+  await offline.discard();
+
+  const stopped = fakeFetch(200);
+  const revoked = createPostHogTransport({ apiKey: "phc_test", fetch: stopped.fetch as never, retryDelayMs: 1 });
+  await revoked.shutdown();
+  assert.equal(await revoked.captureNow(message), false);
+  assert.equal(stopped.requests.length, 0);
+
+  // A revoked client resolves without a request, which must not count as sent.
+  const silenced = fakeFetch(200);
+  const optedOut = createPostHogTransport({ apiKey: "phc_test", fetch: silenced.fetch as never, retryDelayMs: 1 });
+  optedOut.revokeQueue();
+  assert.equal(await optedOut.captureNow(message), false);
+  assert.equal(silenced.requests.length, 0);
+  await optedOut.discard();
+});
 
 test("batched events reach the US host with person and undeclared data stripped", async () => {
   const { fetch, requests } = fakeFetch(200);
@@ -191,4 +238,39 @@ test("quitting while the opt-out response is pending never sends the old lifecyc
     [["analytics_disabled", previousId]]);
   assert.equal(optOutResponses, 1, "Opt-out was aborted before its response could complete.");
   assert.deepEqual(consentWhilePending, { enabled: false, installId: undefined });
+});
+
+test("HTTP redirects cannot forward normal batches or the final opt-out POST", async (t) => {
+  const leaked: Buffer[] = [];
+  const sink = createServer(async (req, res) => {
+    for await (const bytes of req) leaked.push(bytes);
+    res.end("{}");
+  }).listen(0, "127.0.0.1");
+  await once(sink, "listening");
+  t.after(() => sink.close());
+  const received: string[] = [];
+  for (const code of [307, 308]) {
+    const source = createServer((req, res) => {
+      received.push(req.method!);
+      req.resume();
+      res.writeHead(code, { Location: `http://127.0.0.1:${(sink.address() as AddressInfo).port}/sink` });
+      res.end();
+    }).listen(0, "127.0.0.1");
+    await once(source, "listening");
+    t.after(() => source.close());
+    const transport = createPostHogTransport({
+      apiKey: "phc_test", retryDelayMs: 1,
+      fetch: (url, options) => {
+        assert.equal(new URL(url).origin, ANALYTICS_HOST);
+        return fetch(`http://127.0.0.1:${(source.address() as AddressInfo).port}/`, options as RequestInit);
+      },
+    });
+    const message = { distinctId: INSTALL_ID, properties: SUPER };
+    transport.capture({ ...message, event: "terminal_opened" });
+    await transport.flush();
+    await transport.captureOptOut({ ...message, event: "analytics_disabled" });
+    await transport.discard();
+  }
+  assert.ok(received.length >= 4);
+  assert.equal(leaked.length, 0, "another origin received an analytics body");
 });

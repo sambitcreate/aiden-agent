@@ -820,6 +820,111 @@ test("a same-count rediscovery refreshes the Tools list while open and after reo
   assert.equal(channelCalls(calls, "mcp:toolList").length, 2);
 });
 
+test("Composio has one service switch; explicit allowance replaces old individual restrictions", async () => {
+  const preset = MCP_PRESETS.find((entry) => entry.id === "composio")!;
+  let server: McpServer = { ...serverFromPreset(preset), hiddenTools: ["COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_SEARCH_TOOLS"] };
+  const calls = mount({
+    "mcp:list": () => [server],
+    "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL" }],
+    "mcp:liveStatus": () => [{ serverId: server.id, state: "connected", toolCount: 1 }],
+    "mcp:save": (value) => { server = value as McpServer; return server; },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools · 1 hidden" }));
+  const list = await screen.findByRole("list", { name: "Composio tools" });
+  assert.equal(within(list).getAllByRole("switch").length, 1);
+  assert.equal(within(list).queryByText("COMPOSIO_SEARCH_TOOLS"), null);
+  const allow = within(list).getByRole("switch", { name: "Let the model use Composio" });
+  assert.equal(allow.getAttribute("aria-checked"), "false");
+  assert.ok(screen.getByText(/previous individual tool choices/u));
+  assert.equal(savedServers(calls).length, 0, "reading the list never broadens old access");
+  fireEvent.click(allow);
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.equal(server.hiddenTools, undefined);
+  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "Let the model use Composio" }).getAttribute("aria-checked"), "true"));
+  fireEvent.click(screen.getByRole("switch", { name: "Let the model use Composio" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 2));
+  assert.deepEqual(server.hiddenTools, ["composio"]);
+});
+
+test("Composio watch support inspection is explicit and never changes Bot or service access", async () => {
+  const server = serverFromPreset(MCP_PRESETS.find((entry) => entry.id === "composio")!);
+  const message = "Composio’s watch schemas were inspected. This metadata check does not verify account routing.";
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const calls = mount({
+    "mcp:list": () => [server],
+    "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }],
+    "mcp:composioWatch:inspect": async () => { await pending; return { available: false, checkedAt: 1, status: "inspected", code: "account_routing_unverified", message }; },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools" }));
+  const check = await screen.findByRole("button", { name: "Check watch support" });
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect").length, 0);
+  fireEvent.click(check);
+  assert.ok((screen.getByRole("button", { name: "Checking watch support…" }) as HTMLButtonElement).disabled);
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect").length, 1);
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect")[0]?.args.length, 0, "metadata inspection does not opt into Calendar reads");
+  assert.ok((screen.getByRole("button", { name: "Check Calendar reads" }) as HTMLButtonElement).disabled);
+  await act(async () => release());
+  await screen.findByText(message);
+  assert.equal(savedServers(calls).length, 0);
+  assert.ok(!calls.some((call) => call.channel.startsWith("bots:")));
+  assert.equal(screen.getByRole("switch", { name: "Let the model use Composio" }).getAttribute("aria-checked"), "true");
+});
+
+test("Calendar read checking is a separate explicit action with visible scope and no access mutation", async () => {
+  const server = serverFromPreset(MCP_PRESETS.find((entry) => entry.id === "composio")!);
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const calls = mount({
+    "mcp:list": () => [server], "mcp:toolList": () => [{ name: "COMPOSIO_SEARCH_TOOLS" }],
+    "mcp:composioWatch:inspect": async () => { await pending; return { message: "Calendar read check completed." }; },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools" }));
+  const check = await screen.findByRole("button", { name: "Check Calendar reads" });
+  assert.ok(screen.getByText(/read your Calendar list and preview up to one day of events/u));
+  assert.equal(channelCalls(calls, "mcp:composioWatch:inspect").length, 0);
+  fireEvent.click(check);
+  assert.deepEqual(channelCalls(calls, "mcp:composioWatch:inspect").map((call) => call.args), [[{ calendarRead: true }]]);
+  assert.ok((screen.getByRole("button", { name: "Checking Calendar reads…" }) as HTMLButtonElement).disabled);
+  assert.ok((screen.getByRole("button", { name: "Check watch support" }) as HTMLButtonElement).disabled);
+  await act(async () => release());
+  await screen.findByText("Calendar read check completed.");
+  assert.equal(savedServers(calls).length, 0);
+  assert.ok(!calls.some((call) => call.channel.startsWith("bots:")));
+  assert.equal(screen.getByRole("switch", { name: "Let the model use Composio" }).getAttribute("aria-checked"), "true");
+});
+
+test("changing Composio visibility preserves old restrictions until its service switch is allowed", async () => {
+  const preset = MCP_PRESETS.find((entry) => entry.id === "composio")!;
+  const legacy = ["COMPOSIO_REMOTE_BASH_TOOL"];
+  const server: McpServer = { ...serverFromPreset(preset), hiddenTools: legacy };
+  const calls = mount({ "mcp:list": () => [server], "mcp:save": (value) => value });
+  const access = await screen.findByRole("radiogroup", { name: "Model access for Composio" });
+  fireEvent.click(within(access).getByRole("radio", { name: "Always visible" }));
+  await waitFor(() => assert.equal(savedServers(calls).length, 1));
+  assert.deepEqual(savedServers(calls)[0]?.hiddenTools, legacy);
+  assert.equal(savedServers(calls)[0]?.exposure, "direct");
+});
+
+test("Composio keeps its one service allowance when its enabled operation inventory changes", async () => {
+  const preset = MCP_PRESETS.find((entry) => entry.id === "composio")!;
+  const server = serverFromPreset(preset);
+  let inventory = [{ name: "COMPOSIO_SEARCH_TOOLS" }];
+  const calls = mount({
+    "mcp:list": () => [server], "mcp:toolList": () => inventory,
+    "mcp:liveStatus": () => [{ serverId: server.id, state: "connected", toolCount: 1, toolsRevision: "before" }],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Tools" }));
+  await screen.findByRole("switch", { name: "Let the model use Composio" });
+  inventory = [{ name: "COMPOSIO_GET_TOOL_SCHEMAS" }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL" }];
+  act(() => emitBotTestNotification("mcp:statusChanged", { serverId: server.id, state: "connected", toolCount: 1, toolsRevision: "after" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:toolList").length, 2));
+  const list = await screen.findByRole("list", { name: "Composio tools" });
+  assert.equal(within(list).getAllByRole("switch").length, 1);
+  assert.equal(within(list).getByRole("switch").getAttribute("aria-checked"), "true");
+  assert.equal(savedServers(calls).length, 0);
+});
+
 test("before any discovery the Tools list can load tools with a connection test that saves nothing", async () => {
   const calls = mount({
     "mcp:toolList": () => null,
@@ -967,8 +1072,8 @@ test("a preset with a stored sign-in offers Sign out even when it is not flagged
   assert.ok(within(dialog).getByRole("button", { name: "Sign out" }));
 });
 
-test("a local server added outside Aiden shows exactly what it runs and is approved only from Settings", async () => {
-  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS", value: "--require /tmp/p.js" }, { name: "TOKEN" }, { name: "EXTRA", unavailable: true as const }] };
+test("a pending connector keeps values masked and requires the explicit launch review action", async () => {
+  const pending = { serverId: localServer.id, fingerprint: "d".repeat(64), command: "npx", args: localServer.args!, env: [{ name: "NODE_OPTIONS" }, { name: "TOKEN" }, { name: "EXTRA", unavailable: true as const }] };
   let approvals = [pending];
   const calls = mount({
     "mcp:launchApprovals": () => approvals,
@@ -978,9 +1083,9 @@ test("a local server added outside Aiden shows exactly what it runs and is appro
   const group = await screen.findByRole("group", { name: "Files needs approval" });
   assert.match(group.textContent ?? "", /Added outside Aiden — Approve to run/u);
   assert.match(group.textContent ?? "", /npx\s*-y\s*@modelcontextprotocol\/server-filesystem\s*\/Users\/me\/My Docs/u);
-  // The environment is shown with its values: they change what the command does.
+  // Generic previews mask values; the foreground action opens exact native review.
   const env = within(group).getByLabelText("Files environment");
-  assert.match(env.textContent ?? "", /NODE_OPTIONS=--require \/tmp\/p\.js/u);
+  assert.match(env.textContent ?? "", /NODE_OPTIONS=\(saved value, not shown\)/u);
   assert.match(env.textContent ?? "", /TOKEN=\(saved value, not shown\)/u);
   // A stored value moved under another name outside Aiden is not presented as saved.
   assert.match(env.textContent ?? "", /EXTRA=\(not available — enter it again in Edit\)/u);
@@ -991,7 +1096,7 @@ test("a local server added outside Aiden shows exactly what it runs and is appro
   await waitFor(() => assert.equal(savedServers(calls).length, 1));
   assert.equal(channelCalls(calls, "mcp:save")[0]!.args[1], undefined);
 
-  fireEvent.click(within(group).getByRole("button", { name: "Approve Files to run" }));
+  fireEvent.click(within(group).getByRole("button", { name: "Review and approve Files to run" }));
   await waitFor(() => assert.deepEqual(channelCalls(calls, "mcp:approveLaunch").map((call) => call.args), [["mcp-files", "d".repeat(64)]]));
   assert.ok(await screen.findByRole("radiogroup", { name: "Model access for Files" }));
 });

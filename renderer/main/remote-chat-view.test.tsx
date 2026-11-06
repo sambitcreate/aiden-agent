@@ -616,6 +616,16 @@ test("a finished run leaves no prompts behind", () => {
 
 test("the pane shows loading before the first window and the read failure when nothing loaded", () => {
   assert.match(render({ host: online, snapshot: null }).text, /Loading…/);
+  const replay = render({
+    host: online,
+    snapshot: snapshot(online, {
+      loaded: false,
+      loading: true,
+      transcript: { chatId: "chat-1", revision: null, messages: [], hasOlder: false },
+      run: run([event(90, "snapshot", { reason: "gap", state: "working", replyText: "Already built the level." })]),
+    }),
+  });
+  assert.match(replay.text, /Already built the level/);
   const failed = render({
     host: online,
     snapshot: snapshot(online, {
