@@ -160,10 +160,13 @@ Delete chat, Delete Bot, Remove workspace, Sign out), red menu rows, and MCP
 Sign out. `use_aiden` returns `waiting_for_user` at once and the pending OK is
 bound to that one element and action. The renderer publishes the confirm state
 for PR 1's ribbon, which shows Confirm (a tap works at once), and sends Live a
-note asking it to prompt the user. Speech counts only after that note was
-accepted: the next whole utterance must be a `confirm` phrase from
-`matchLiveVoicePhrase`, in any of the 11 languages. If the note is refused,
-the OK is tap-only. Cancel, a deny phrase, any other speech, Escape, 20 seconds
+note asking it to prompt the user. Speech counts only once that note was
+delivered to Live (`note(text, { awaitDelivery: true })`), and only speech
+begun after it (`input.startedAt > voiceInputFence()` taken on delivery): a
+whole utterance that is a `confirm` phrase from `matchLiveVoicePhrase`, in any
+of the 11 languages. Speech already under way at the fence, or with no
+provable onset, never says yes (a deny phrase there still refuses). If the
+note is held, refused or dropped, the OK is tap-only. Cancel, a deny phrase, any other speech, Escape, 20 seconds
 without an answer, a new look or any navigation refuse it. So does the user's
 own click, scroll, touch or key anywhere but the ribbon's Confirm and Cancel
 (marked `data-live-confirm-answer`), which also takes over until they speak
@@ -207,7 +210,8 @@ marked, content regions summarized, budget and priority), `provider.test.ts`
 (a happy-dom page behind a fake DevTools port and the real renderer
 controller: refs expire, the guard rules on the live page, content regions
 never read, external links refused, changed elements, confirm by voice, tap,
-Escape, other speech and timeout, one OK per guarded action, no other move
+Escape, other speech, the user's own click and timeout, an undelivered prompt
+left tap-only, speech begun before the prompt never confirming, one OK per guarded action, no other move
 between the OK and the confirmed action, the 30-action
 cap, take-over during and between steps, time limits, barge-in, DevTools,
 `open_in_aiden`, the 120-call budget, the switch turned off mid-session),

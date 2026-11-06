@@ -645,7 +645,8 @@ test("the user's input between Live's steps stops the next step until they speak
     let pressed = 0;
     h.document.getElementById("go")!.addEventListener("click", () => (pressed += 1));
     assert.equal((await h.call("use_aiden", { element: await h.ref("Next"), action: "press" })).ok, true);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Main ends its watch after the step; the outline clears once the renderer hears that.
+    for (let tries = 0; tries < 200 && h.controller.get().acting; tries += 1) await h.settle();
     assert.equal(h.controller.get().acting, false, "the outline is gone between steps");
     h.controller.userInput({ type: "keydown", key: "k", isTrusted: true });
     assert.equal(code(await h.call("use_aiden", { element: await h.ref("Next"), action: "press" })), "taken_over");
