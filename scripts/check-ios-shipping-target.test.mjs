@@ -94,8 +94,11 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatsView.swift",
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
+  "AidenOnTheGo/Features/Conversation/AidenChatDock.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
+  "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
+  "AidenOnTheGo/Features/Conversation/AidenTranscriptScaffold.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
@@ -189,8 +192,11 @@ const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatCards.swift",
   "AidenOnTheGo/Features/Chat/AidenChronologicalTranscript.swift",
   "AidenOnTheGo/Features/Chat/AidenChatComposer.swift",
+  "AidenOnTheGo/Features/Conversation/AidenChatDock.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
+  "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
+  "AidenOnTheGo/Features/Conversation/AidenTranscriptScaffold.swift",
   "AidenOnTheGo/Features/Chat/AidenReadAloud.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+ForeignRuns.swift",
 ];
@@ -245,6 +251,7 @@ const testSources = [
   "AidenBotPlanTests.swift",
   "AidenBotSessionTests.swift",
   "AidenActivityMarkTests.swift",
+  "AidenChatDockTests.swift",
   "AidenChatTests.swift",
   "AidenComposerSurfaceTests.swift",
   "AidenInboxTests.swift",
@@ -512,7 +519,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(chat, /Image\(systemName: AidenChromeSymbols\.overflowMenu\)/u);
   assert.match(chat, /buttonBorderShape\(\.circle\)/u);
   assert.ok(chat.includes('"Message Aiden"'));
-  assert.match(chat, /padding\(\.horizontal, 16\)[\s\S]*?padding\(\.bottom, 10\)/u);
+  assert.match(chat, /padding\(\.horizontal, AidenSpacing\.l\)[\s\S]*?padding\(\.vertical, AidenSpacing\.s\)/u);
   assert.match(chat, /\.padding\(\.horizontal, 12\)[\s\S]*?\.aidenComposerGlass\(\)/u);
   assert.doesNotMatch(chat, /private var botMessageControls|aidenBotComposerCapsule/u);
   assert.match(chat, /Path\(roundedRect: rect, cornerRadius: 18, style: \.continuous\)/u);
@@ -935,10 +942,9 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);
   assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
-  assert.match(
-    chat,
-    /safeAreaInset\(edge: \.bottom, spacing: 0\)[\s\S]*?composer[\s\S]*?AidenComposerView/u,
-  );
+  assert.match(chat, /safeAreaBar\(edge: \.bottom, spacing: 0\) \{ dock \}/u);
+  assert.match(chat, /AidenTranscriptScaffold\(dock: dock\)/u);
+  assert.match(chat, /private var dock: AidenChatDock \{[\s\S]*?composer: \{ config in[\s\S]*?AidenComposerView\(/u);
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(
     chat,

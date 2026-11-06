@@ -49,11 +49,19 @@ struct AidenBotSessionChatView: View {
     @State private var isFileImporterPresented = false
     @State private var attachButtonCenter: CGPoint?
     @Namespace private var attachmentMotionNamespace
+    @State private var showsSessionSheet = false
+    /// Runs once the sheet has closed, so what it opens has the screen to itself.
+    @State private var pendingSessionAction: AidenSessionAction?
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
+    /// The machine this chat belongs to. Before the chat starts, that's the selection.
+    private var ownerConnection: AidenHostConnection? {
+        coordinator.hosts.connection(for: model?.owner.instanceId ?? coordinator.activeInstanceId ?? "")
+    }
+
     private var canWrite: Bool {
-        coordinator.connectionState == .connected && canCompose
+        ownerConnection?.connectionState == .connected && canCompose
     }
 
     private var spendingTransport: AidenSpendingTransport? {
@@ -74,7 +82,8 @@ struct AidenBotSessionChatView: View {
     /// Messages are taken while the Mac is still connecting: they wait in the
     /// outbox and go out on connect (R14).
     private var canCompose: Bool {
-        coordinator.installationStore.activeInstallation?.canWriteBots == true
+        guard let ownerConnection, !ownerConnection.isRevoked else { return false }
+        return ownerConnection.installation.canWriteBots
     }
 
     /// Answering a Bot's tool approval needs `approval:respond` beside Bot write.
@@ -93,18 +102,7 @@ struct AidenBotSessionChatView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            transcript
-                // The composer floats on Liquid Glass and the transcript scrolls under it.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    // The composer is there at once; messages wait for the Mac (R14).
-                    if let model {
-                        footer(model)
-                    } else if startFailed {
-                        startFailureHint
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                    }
-                }
+            AidenTranscriptScaffold(dock: dock) { transcript }
             if let model, model.attachmentsSupported {
                 attachmentPickerOverlay(model)
             }
@@ -153,6 +151,12 @@ struct AidenBotSessionChatView: View {
                         }
                 }
             }
+        }
+        .sheet(isPresented: $showsSessionSheet, onDismiss: runPendingSessionAction) {
+            AidenSessionSheet(
+                config: sessionSheetConfig,
+                actions: AidenSessionActions { pendingSessionAction = $0 }
+            )
         }
         .sheet(isPresented: $isShowingProfile, onDismiss: { profileOpensMemory = false }) {
             if let bot {
@@ -210,6 +214,11 @@ struct AidenBotSessionChatView: View {
         .onChange(of: model?.isRunning == true) { _, running in
             busyMode = aidenBotBusyMode(busyMode, isRunning: running)
         }
+        .onChange(of: dockContent.keepsComposer) { _, keepsComposer in
+            guard !keepsComposer else { return }
+            composerFocused = false
+            attachmentPicker.dismiss()
+        }
         // The last-known capabilities stand in until the Mac answers (R21).
         .onChange(of: aidenBotActivitySupported(coordinator: coordinator)) { _, supported in
             model?.activitySupported = supported
@@ -263,46 +272,44 @@ struct AidenBotSessionChatView: View {
 
     /// Profile, Files, Memory, Advanced and Delete for this Bot.
     private var moreMenu: some View {
-        Menu {
-            Button {
-                isShowingProfile = true
-            } label: {
-                Label("Profile", systemImage: "person.crop.circle")
-            }
-            if let grant = filesGrant {
-                Button {
-                    presentedFilesGrant = grant
-                } label: {
-                    Label("Files", systemImage: "folder")
-                }
-            }
-            if AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator) {
-                Button {
-                    profileOpensMemory = true
-                    isShowingProfile = true
-                } label: {
-                    Label("Memory", systemImage: AidenBotMemorySymbol.name)
-                }
-            }
-            Button {
-                isShowingAdvanced = true
-            } label: {
-                Label("Advanced", systemImage: "slider.horizontal.3")
-            }
-            if AidenBotDeletion.isAvailable(coordinator: coordinator) {
-                Divider()
-                Button(role: .destructive) {
-                    isConfirmingDelete = true
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-                .disabled(isDeleting)
-            }
+        Button {
+            showsSessionSheet = true
         } label: {
             Image(systemName: "ellipsis")
         }
         .disabled(bot == nil)
         .accessibilityLabel("More for \(bot?.name ?? "this Bot")")
+    }
+
+    private var sessionSheetConfig: AidenSessionSheetConfig {
+        .bot(
+            title: bot?.name ?? "Bot",
+            hasFiles: filesGrant != nil,
+            hasMemory: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator),
+            canDelete: AidenBotDeletion.isAvailable(coordinator: coordinator),
+            isDeleting: isDeleting
+        )
+    }
+
+    private func runPendingSessionAction() {
+        guard let action = pendingSessionAction else { return }
+        pendingSessionAction = nil
+        switch action {
+        case .profile:
+            isShowingProfile = true
+        case .files:
+            presentedFilesGrant = filesGrant
+        case .memory:
+            profileOpensMemory = true
+            isShowingProfile = true
+        case .advanced:
+            isShowingAdvanced = true
+        case .delete:
+            isConfirmingDelete = true
+        case .rename, .fork, .readAloud:
+            // A durable Bot's chat has no rename, forks or read aloud today.
+            break
+        }
     }
 
     private func deleteBot() {
@@ -401,6 +408,9 @@ struct AidenBotSessionChatView: View {
                             )
                             .id("issue:\(issue.id)")
                         }
+                        if let approval = model.approval {
+                            approvalCard(approval, model: model)
+                        }
                         AidenBotStatusLineView(model: model)
                         Color.clear.frame(height: 1).id("bottom")
                     }
@@ -419,8 +429,12 @@ struct AidenBotSessionChatView: View {
                     for: .sizeChanges
                 )
                 .scrollDismissesKeyboard(.interactively)
-                .aidenComposerSoftScrollEdge()
                 .aidenOnComposerInsetChange { followIfAtEnd(proxy) }
+                .onChange(of: model.approval?.waitId) { _, waitId in
+                    guard waitId != nil else { return }
+                    composerFocused = false
+                    followIfAtEnd(proxy)
+                }
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.revealedPartial) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.queued.count) { _, _ in followIfAtEnd(proxy) }
@@ -688,127 +702,194 @@ struct AidenBotSessionChatView: View {
             .accessibilityHint(interrupted ? "This answer was cut off" : "")
     }
 
-    @ViewBuilder
-    private func footer(_ model: AidenBotSessionModel) -> some View {
-        VStack(spacing: 10) {
-            if let hint = aidenBotConnectionHint(for: model, nowMs: Int(Date().timeIntervalSince1970 * 1_000)) {
-                // It floats over the transcript too, so it sits on glass to stay readable.
-                connectionHint(hint, model: model)
-                    .padding(.horizontal, 14)
-                    .aidenChromeGlass(in: Capsule())
-            }
-            if let question = model.question, !model.needsModel {
-                // The Bot's A–E quick replies. A Bot question has no deadline.
-                AidenQuestionCard(
-                    prompt: AidenPendingQuestion(
-                        id: question.waitId,
-                        questions: question.questions,
-                        expiresAt: .distantFuture,
-                        canRespond: canWrite
-                    ),
-                    onSubmit: { request in Task { await model.answerQuestion(request) } }
-                )
-                .disabled(!canWrite || !model.canAnswerQuestion)
-                .id(question.waitId)
-            }
-            if let approval = model.approval {
-                if let count = approval.alwaysCount, model.allowedSupported {
-                    Text("You’ve allowed this \(count) times in the last 2 weeks.").font(.footnote).foregroundStyle(palette.secondary)
-                    Button("Always allow for \(bot?.name ?? "Bot")") { Task { await model.answerApproval(.allow, scope: .always) } }
-                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
-                        .disabled(!canRespondToApprovals || !model.canAnswerApproval)
-                }
-                // The workspace chat's approval card. Allow is hidden when the
-                // Mac says this tool can only be denied from a phone.
-                AidenApprovalCard(
-                    summary: approval.summary,
-                    toolName: approval.toolName,
-                    kind: .action,
-                    canRespond: canRespondToApprovals,
-                    hasRequiredWriteCapability: canRespondToApprovals,
-                    canAllow: approval.canAllow,
-                    scopes: [.once],
-                    onDeny: { Task { await model.answerApproval(.deny) } },
-                    onAllow: { _ in Task { await model.answerApproval(.allow) } }
-                )
-                .disabled(!canRespondToApprovals || !model.canAnswerApproval)
-                .id(approval.waitId)
-            }
-            if let notice = model.approvalSuccessNotice { Text(notice).font(.footnote).foregroundStyle(palette.secondary) }
-            if let plan = model.plan, model.plansSupported {
-                AidenBotPlanCard(plan: plan, botName: bot?.name ?? "Bot",
-                    canAnswer: canWrite && model.canRespondToPlan(plan), error: model.planError,
-                    onRespond: { decision in Task { await model.respondToPlan(decision) } })
-                    .id(plan.planId)
-            }
-            if let request = model.accessRequest,
-               coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true {
-                AidenBotAccessRequestCard(request: request, botName: bot?.name ?? "Bot",
-                    showsApprovalCount: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
-                    canAnswer: canWrite && model.canAnswerAccessRequest,
-                    onAnswer: { choice in Task { await model.answerAccessRequest(choice) } })
-                    .id(request.waitId)
-            }
-            if let notice = model.accessSuccessNotice {
-                Text(notice)
-                    .font(.footnote)
-                    .foregroundStyle(palette.success)
-                    .accessibilityIdentifier("bot_access_success_notice")
-            }
-            if let handoff = model.handoff {
-                // Revision 37: the step the Bot handed back. A sign-in is
-                // finished on the Mac; any other step is Done or Skip here.
-                AidenBotHandoffCard(
-                    handoff: handoff,
-                    canAnswer: canWrite && model.canAnswerHandoff,
-                    isFinishing: model.inFlight.contains(.openHandoffOnMac),
-                    macPrompt: model.handoffMacPrompt.flatMap { $0.waitId == handoff.waitId ? $0.text : nil },
-                    onDone: { Task { await model.answerHandoff(.done) } },
-                    onSkip: { Task { await model.answerHandoff(.skipped) } },
-                    onFinishOnMac: { Task { await model.finishHandoffOnMac() } }
-                )
-                .id(handoff.waitId)
-            }
-            if let current = spending.spending, !model.needsModel, !model.isPaused {
-                AidenSpendingNotice(
-                    spending: current,
-                    botName: bot?.name,
-                    isAllowing: spending.isAllowing,
-                    canAllow: canWrite,
-                    errorMessage: spending.errorMessage,
-                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
-                )
-            }
-            if model.needsModel {
-                AidenBotNeedsModelCard(
-                    botName: bot?.name ?? "this Bot",
-                    canSetUp: canWrite,
-                    onSetUp: { isShowingAdvanced = true }
-                )
-            } else if model.isPaused {
-                AidenBotPausedCard(
-                    botName: bot?.name ?? "This Bot",
-                    isBusy: model.inFlight.contains(.unpause),
-                    canAct: canWrite,
-                    onResume: { Task { await model.unpause() } }
-                )
-            } else if model.isInterrupted {
-                AidenBotInterruptedCard(
-                    isAccessBlocked: model.isAccessBlocked,
-                    isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss),
-                    canAct: canWrite,
-                    onResume: { Task { await model.resume() } },
-                    onDismiss: { Task { await model.dismiss() } },
-                    onOpenAdvanced: { isShowingAdvanced = true }
-                )
-            }
-            if !model.needsModel {
-                composer(model)
-            }
+    private var dockContent: AidenDockContent {
+        guard let model else { return .composer(busy: false) }
+        return .resolve(model.dockInput(
+            connection: ownerConnection,
+            hasSpendingNotice: spending.spending != nil && !model.needsModel && !model.isPaused
+        ))
+    }
+
+    /// The composer is there at once; messages wait for the Mac (R14).
+    private var dock: AidenChatDock {
+        var config = AidenComposerConfig.bot()
+        if let model {
+            config.placeholder = composerPlaceholder(model)
+            config.showsAttachments = model.attachmentsSupported
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        return AidenChatDock(
+            content: dockContent,
+            session: composerSession,
+            config: config,
+            actions: AidenDockActions(
+                onSend: { if let model { submit(model, whenBusy: nil) } },
+                stop: model.flatMap(dockStop)
+            ),
+            slots: AidenDockSlots(
+                above: {
+                    if let model {
+                        dockNotices(model)
+                    } else if startFailed {
+                        startFailureHint
+                    }
+                },
+                footer: {
+                    if let model { footerCards(model) }
+                },
+                question: { stop in
+                    if let model { questionCard(model, stop: stop) }
+                },
+                composer: { config in
+                    if let model { composer(model, config: config) }
+                }
+            )
+        )
+    }
+
+    private func dockStop(_ model: AidenBotSessionModel) -> AidenDockStop? {
+        guard model.isRunning else { return nil }
+        return AidenDockStop(
+            label: String(localized: "Stop"),
+            isEnabled: canWrite && !model.isStopping && !model.inFlight.contains(.stop),
+            action: { Task { await model.stop() } }
+        )
+    }
+
+    /// The Bot's A–E quick replies. A Bot question has no deadline.
+    @ViewBuilder
+    private func questionCard(_ model: AidenBotSessionModel, stop: AidenDockStop?) -> some View {
+        if let question = model.question, !model.needsModel {
+            AidenQuestionCard(
+                prompt: AidenPendingQuestion(
+                    id: question.waitId,
+                    questions: question.questions,
+                    expiresAt: .distantFuture,
+                    canRespond: canWrite
+                ),
+                stop: stop,
+                onSubmit: { request in Task { await model.answerQuestion(request) } }
+            )
+            .disabled(!canWrite || !model.canAnswerQuestion)
+            .id(question.waitId)
+        }
+    }
+
+    /// A tool approval sits in the transcript, as in a workspace chat, with the
+    /// composer in view.
+    @ViewBuilder
+    private func approvalCard(_ approval: AidenRemoteBotApproval, model: AidenBotSessionModel) -> some View {
+        VStack(spacing: 10) {
+            if let count = approval.alwaysCount, model.allowedSupported {
+                Text("You’ve allowed this \(count) times in the last 2 weeks.").font(.footnote).foregroundStyle(palette.secondary)
+                Button("Always allow for \(bot?.name ?? "Bot")") { Task { await model.answerApproval(.allow, scope: .always) } }
+                    .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                    .disabled(!canRespondToApprovals || !model.canAnswerApproval)
+            }
+            // The workspace chat's approval card. Allow is hidden when the
+            // Mac says this tool can only be denied from a phone.
+            AidenApprovalCard(
+                summary: approval.summary,
+                toolName: approval.toolName,
+                kind: .action,
+                canRespond: canRespondToApprovals,
+                hasRequiredWriteCapability: canRespondToApprovals,
+                canAllow: approval.canAllow,
+                scopes: [.once],
+                onDeny: { Task { await model.answerApproval(.deny) } },
+                onAllow: { _ in Task { await model.answerApproval(.allow) } }
+            )
+            .disabled(!canRespondToApprovals || !model.canAnswerApproval)
+        }
+        .id(approval.waitId)
+    }
+
+    /// What the Bot keeps above its footer cards, whatever holds the composer's place.
+    @ViewBuilder
+    private func dockNotices(_ model: AidenBotSessionModel) -> some View {
+        if let hint = aidenBotConnectionHint(for: model, nowMs: Int(Date().timeIntervalSince1970 * 1_000)) {
+            // It floats over the transcript too, so it sits on glass to stay readable.
+            connectionHint(hint, model: model)
+                .padding(.horizontal, 14)
+                .aidenChromeGlass(in: Capsule())
+        }
+        // An offline Bot keeps its composer for the outbox, so its question stays
+        // in view above it until the machine can take an answer.
+        if dockContent != .question {
+            questionCard(model, stop: nil)
+        }
+        if let notice = model.approvalSuccessNotice { Text(notice).font(.footnote).foregroundStyle(palette.secondary) }
+        if let plan = model.plan, model.plansSupported {
+            AidenBotPlanCard(plan: plan, botName: bot?.name ?? "Bot",
+                canAnswer: canWrite && model.canRespondToPlan(plan), error: model.planError,
+                onRespond: { decision in Task { await model.respondToPlan(decision) } })
+                .id(plan.planId)
+        }
+        if let request = model.accessRequest, ownerConnection?.installation.hasNegotiatedAccess(to: .botAccessRequests) == true {
+            AidenBotAccessRequestCard(request: request, botName: bot?.name ?? "Bot",
+                showsApprovalCount: ownerConnection?.installation.hasNegotiatedAccess(to: .botAllowed) == true,
+                canAnswer: canWrite && model.canAnswerAccessRequest,
+                onAnswer: { choice in Task { await model.answerAccessRequest(choice) } })
+                .id(request.waitId)
+        }
+        if let notice = model.accessSuccessNotice {
+            Text(notice)
+                .font(.footnote)
+                .foregroundStyle(palette.success)
+                .accessibilityIdentifier("bot_access_success_notice")
+        }
+    }
+
+    /// Hand-off, spending, needs a model, paused and interrupted. Each keeps its
+    /// own actions, and several can show at once.
+    @ViewBuilder
+    private func footerCards(_ model: AidenBotSessionModel) -> some View {
+        if let handoff = model.handoff {
+            // Revision 37: the step the Bot handed back. A sign-in is
+            // finished on the Mac; any other step is Done or Skip here.
+            AidenBotHandoffCard(
+                handoff: handoff,
+                canAnswer: canWrite && model.canAnswerHandoff,
+                isFinishing: model.inFlight.contains(.openHandoffOnMac),
+                macPrompt: model.handoffMacPrompt.flatMap { $0.waitId == handoff.waitId ? $0.text : nil },
+                onDone: { Task { await model.answerHandoff(.done) } },
+                onSkip: { Task { await model.answerHandoff(.skipped) } },
+                onFinishOnMac: { Task { await model.finishHandoffOnMac() } }
+            )
+            .id(handoff.waitId)
+        }
+        if let current = spending.spending, !model.needsModel, !model.isPaused {
+            AidenSpendingNotice(
+                spending: current,
+                botName: bot?.name,
+                isAllowing: spending.isAllowing,
+                canAllow: canWrite,
+                errorMessage: spending.errorMessage,
+                onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+            )
+        }
+        if model.needsModel {
+            AidenBotNeedsModelCard(
+                botName: bot?.name ?? "this Bot",
+                canSetUp: canWrite,
+                onSetUp: { isShowingAdvanced = true }
+            )
+        } else if model.isPaused {
+            AidenBotPausedCard(
+                botName: bot?.name ?? "This Bot",
+                isBusy: model.inFlight.contains(.unpause),
+                canAct: canWrite,
+                onResume: { Task { await model.unpause() } }
+            )
+        } else if model.isInterrupted {
+            AidenBotInterruptedCard(
+                isAccessBlocked: model.isAccessBlocked,
+                isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss),
+                canAct: canWrite,
+                onResume: { Task { await model.resume() } },
+                onDismiss: { Task { await model.dismiss() } },
+                onOpenAdvanced: { isShowingAdvanced = true }
+            )
+        }
     }
 
     /// A quiet line above the composer, never a blocking screen (R14).
@@ -894,11 +975,8 @@ struct AidenBotSessionChatView: View {
     }
 
     /// The shared surface: the +, the field and the send controls on one row.
-    private func composer(_ model: AidenBotSessionModel) -> some View {
-        var config = AidenComposerConfig.bot()
-        config.placeholder = composerPlaceholder(model)
-        config.showsAttachments = model.attachmentsSupported
-        return AidenComposerSurface(
+    private func composer(_ model: AidenBotSessionModel, config: AidenComposerConfig) -> some View {
+        AidenComposerSurface(
             session: composerSession,
             config: config,
             controls: AidenComposerControls(

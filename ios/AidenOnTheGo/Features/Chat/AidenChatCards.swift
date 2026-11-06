@@ -413,9 +413,12 @@ struct AidenQuestionCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
 
-    /// The workspace chat whose run the card can stop. Bot session questions have no run to stop.
+    /// The workspace chat whose run the card can stop.
     var model: AidenChatViewModel? = nil
     let prompt: AidenPendingQuestion
+    /// Stop for a conversation with no chat model behind the card, while it has
+    /// a run to stop.
+    var stop: AidenDockStop? = nil
     let onSubmit: (AidenQuestionRespondRequest) -> Void
 
     @State private var draft: AidenQuestionComposerDraft
@@ -423,10 +426,12 @@ struct AidenQuestionCard: View {
     init(
         model: AidenChatViewModel? = nil,
         prompt: AidenPendingQuestion,
+        stop: AidenDockStop? = nil,
         onSubmit: @escaping (AidenQuestionRespondRequest) -> Void
     ) {
         self.model = model
         self.prompt = prompt
+        self.stop = stop
         self.onSubmit = onSubmit
         // Callers key the card by prompt id, so a new prompt starts fresh.
         _draft = State(initialValue: AidenQuestionComposerDraft(questions: prompt.questions))
@@ -479,7 +484,14 @@ struct AidenQuestionCard: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
-                    if let stopButton { stopButton }
+                    if let stopButton {
+                        stopButton
+                    } else if let stop {
+                        // The card greys out while an answer is on its way. The run
+                        // can still be stopped, so Stop answers only to itself.
+                        AidenComposerStopButton(label: stop.label, isEnabled: stop.isEnabled, action: stop.action)
+                            .environment(\.isEnabled, true)
+                    }
                 }
 
                 ScrollView(.horizontal, showsIndicators: false) {

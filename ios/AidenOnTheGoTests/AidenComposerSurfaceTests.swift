@@ -258,6 +258,11 @@ final class AidenComposerSurfaceTests: XCTestCase {
         try await assertEveryChatControlFits(at: .accessibility5)
     }
 
+    /// Default text: the size most people read, with the narrowest row room to spare.
+    func testEveryControlFitsAtTheDefaultTextSize() async throws {
+        try await assertEveryChatControlFits(at: .large)
+    }
+
     /// The largest size that keeps one row of controls, and so the tightest row.
     func testEveryControlFitsAtTheLargestStandardTextSize() async throws {
         try await assertEveryChatControlFits(at: .xxxLarge)
@@ -610,17 +615,25 @@ private final class AidenComposerInsetProbe {
 private struct AidenComposerInsetHost: View {
     let probe: AidenComposerInsetProbe
     let contentHeight: CGFloat
+    @State private var session = AidenComposerSession(voice: AidenComposerFakeVoice())
 
     var body: some View {
-        ScrollView {
-            Color.clear.frame(height: contentHeight)
-        }
-        .aidenOnComposerInsetChange { probe.follows += 1 }
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, inset in
-            probe.bottomInset = inset
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Color.clear.frame(height: probe.composerHeight)
+        AidenTranscriptScaffold(dock: AidenChatDock(
+            content: .composer(busy: false),
+            session: session,
+            config: .chat(model: nil),
+            actions: AidenDockActions(),
+            slots: AidenDockSlots(composer: { _ in
+                Color.clear.frame(height: probe.composerHeight)
+            })
+        )) {
+            ScrollView {
+                Color.clear.frame(height: contentHeight)
+            }
+            .aidenOnComposerInsetChange { probe.follows += 1 }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, inset in
+                probe.bottomInset = inset
+            }
         }
     }
 }

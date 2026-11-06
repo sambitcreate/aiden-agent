@@ -207,6 +207,17 @@ final class AidenHostConnection {
         }
     }
 
+    /// Offline, or checking again after being offline. Each probe passes through
+    /// `.connecting`, and that isn't news of the machine coming back.
+    var isKnownOffline: Bool {
+        switch connectionState {
+        case .offline: true
+        case .connecting:
+            if case .offline = settledState?.connectionState { true } else { false }
+        default: false
+        }
+    }
+
     /// True while the newest attempt is running. `connectionState` can't say:
     /// it starts at `.connecting`, and `disconnect()` returns it there, with
     /// nothing in flight either time.

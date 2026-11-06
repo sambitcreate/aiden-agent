@@ -13,6 +13,12 @@ extension AidenChatViewModel {
         return AidenChatForkAvailability(supportsSummary: server.supportsChatForkSummary)
     }
 
+    /// The newest reply a plain fork can keep: what the session sheet forks from.
+    var latestForkableMessageID: String? {
+        let eligible = AidenChatForkEligibility.actions(for: chat.messages, supportsSummary: false)
+        return chat.messages.last { eligible[$0.id]?.contains(.forkHere) == true }?.id
+    }
+
     /// Forks this chat at a settled message and returns the new chat to open.
     /// Edit in fork seeds the fork's composer: the prompt text through the
     /// per-chat draft store, restaged attachments through the prefill handoff.

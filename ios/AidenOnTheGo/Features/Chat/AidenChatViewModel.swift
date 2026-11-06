@@ -354,6 +354,7 @@ final class AidenChatViewModel {
     }
     private var approvalSnapshotGeneration: UInt64 = 0
     private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
+    private(set) var isRenaming = false
     var pendingApproval: AidenPendingApproval?
     private var questionSnapshotGeneration: UInt64 = 0
     var pendingQuestion: AidenPendingQuestion?
@@ -763,6 +764,47 @@ final class AidenChatViewModel {
         guard let result = try? await coordinator.remoteClient(for: context).gitBranches(workspaceId: workspaceId),
               !isRemoved, coordinator.isLive(context), chat.workspaceId == workspaceId else { return }
         workspaceHasCommits = AidenNewWorktreeAvailability.hasCommits(result)
+    }
+
+    /// A workspace chat, connected, with nothing mid-flight to race the new title.
+    var canRename: Bool {
+        !isReadOnlyPresentation && !isRemoved && !chat.isBotChat && isConnected && coordinator.isLive(owner)
+            && !isRenaming && !isStarting && !isStreaming
+    }
+
+    /// Renames this chat on its own machine. The new title shows at once; a
+    /// refused rename puts the old one back.
+    func rename(to title: String) async {
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canRename, !cleaned.isEmpty, cleaned != chat.displayTitle, let context = liveOwner else { return }
+        isRenaming = true
+        defer { isRenaming = false }
+        let previousOverride = chat.localTitleOverride
+        chat.localTitleOverride = cleaned
+        do {
+            let origin = cache.reserveChatWrite()
+            let updated = try await coordinator.remoteClient(for: context).updateChat(
+                id: chat.id, revision: chat.revision, title: cleaned
+            )
+            guard !isRemoved, coordinator.isLive(context), updated.id == chat.id else { return }
+            let cutoff = cache.reserveChatWrite()
+            let admitted = await cache.acceptRename(updated, instanceId: instanceId, origin: origin, cutoff: cutoff)
+            guard !isRemoved, coordinator.isLive(context) else { return }
+            chat.title = updated.title
+            chat.revision = updated.revision
+            chat.localTitleOverride = admitted?.localTitleOverride
+            if ownerIsSelected { onChatUpdated(chat) }
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
+        } catch let error where aidenIsCancellation(error) {
+            guard !isRemoved, coordinator.isLive(context) else { return }
+            chat.localTitleOverride = previousOverride
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            guard !isRemoved, coordinator.isLive(context) else { return }
+            chat.localTitleOverride = previousOverride
+            presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
+        }
     }
 
     /// Stops waiting for the worktree. The message goes back to the composer.
@@ -1770,6 +1812,19 @@ final class AidenChatViewModel {
         let attempt = retryAttempt ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: request,
             key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments)
         let idempotencyKey = attempt.key
+        /// Takes the message back out of the chat. A Cancel can come long after
+        /// the send (New worktree waits on a fetch), so anything typed meanwhile
+        /// stays beside it.
+        func restoreFailedSend() {
+            chat.messages.removeAll { $0.id == optimisticID }
+            chat.updatedAt = previousUpdatedAt
+            draft = AidenDraftSendReconciliation.failedDraft(submitted: text, current: draft)
+            pendingAttachments = AidenDraftSendReconciliation.failedAttachments(
+                submitted: submittedAttachments,
+                current: pendingAttachments
+            )
+            streamState = nil
+        }
         do {
             if makesWorktree {
                 // Revision 53: the Mac makes the worktree and moves this empty
@@ -1934,30 +1989,23 @@ final class AidenChatViewModel {
             startStreaming(stream, context: context, feedbackPolicy: .localTurn)
         } catch let error where aidenIsCancellation(error) {
             guard !isRemoved, coordinator.isLive(context) else { return }
-            chat.messages.removeAll { $0.id == optimisticID }
-            chat.updatedAt = previousUpdatedAt
-            // A Cancel can come long after the send (New worktree waits on a
-            // fetch), so keep anything typed meanwhile beside the message.
-            draft = AidenDraftSendReconciliation.failedDraft(submitted: text, current: draft)
-            pendingAttachments = AidenDraftSendReconciliation.failedAttachments(
-                submitted: submittedAttachments,
-                current: pendingAttachments
-            )
-            streamState = nil
+            restoreFailedSend()
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            if await coordinator.handleCredentialRevocation(error, context: context) {
+                // The selected machine leaves with its chats. Another machine's
+                // record stays while this chat is on screen, so the person gets
+                // their words back. Nothing can retry over a revoked pairing.
+                guard !isRemoved, coordinator.isRetained(context) else { return }
+                restoreFailedSend()
+                if let session = draftSession { await draftStore.settlePendingSend(key: attempt.key, session: session) }
+                pendingSend = nil
+                isPendingSendRefusedBecauseBusy = false
+                presentedError = AidenDockCopy.machineRevoked
+                coordinator.haptics.play(.error, scope: hapticScope)
+                return
+            }
             guard !isRemoved, coordinator.isLive(context) else { return }
-            chat.messages.removeAll { $0.id == optimisticID }
-            chat.updatedAt = previousUpdatedAt
-            draft = AidenDraftSendReconciliation.failedDraft(
-                submitted: text,
-                current: draft
-            )
-            pendingAttachments = AidenDraftSendReconciliation.failedAttachments(
-                submitted: submittedAttachments,
-                current: pendingAttachments
-            )
-            streamState = nil
+            restoreFailedSend()
             if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
                let session = draftSession,
                await scheduleRateLimitedSendRetry(replacing: attempt, error: rateLimit, session: session, context: context) {

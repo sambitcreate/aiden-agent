@@ -65,6 +65,11 @@ struct AidenChatDetailView: View {
     @State private var spending = AidenSpendingNoticeModel()
     @State private var backgroundJobs = AidenBackgroundJobsModel()
     @State private var showsBackgroundJobs = false
+    @State private var showsSessionSheet = false
+    /// Runs once the sheet has closed, so what it opens has the screen to itself.
+    @State private var pendingSessionAction: AidenSessionAction?
+    @State private var isRenaming = false
+    @State private var renameTitle = ""
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -166,6 +171,11 @@ struct AidenChatDetailView: View {
             guard isStreaming else { return }
             attachmentPicker.dismiss()
         }
+        .onChange(of: dockContent.keepsComposer) { _, keepsComposer in
+            guard !keepsComposer else { return }
+            composerIsFocused = false
+            attachmentPicker.dismiss()
+        }
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
@@ -239,6 +249,17 @@ struct AidenChatDetailView: View {
             AidenForkSummarySheet { focus in
                 performFork(messageID: request.id, action: .forkWithSummary, focus: focus)
             }
+        }
+        .sheet(isPresented: $showsSessionSheet, onDismiss: runPendingSessionAction) {
+            AidenSessionSheet(
+                config: sessionSheetConfig,
+                actions: AidenSessionActions { pendingSessionAction = $0 }
+            )
+        }
+        .alert("Rename chat", isPresented: $isRenaming) {
+            TextField("Chat title", text: $renameTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { Task { await model.rename(to: renameTitle) } }
         }
         .task(id: simulatorRefreshKey) {
             // Once when the chat opens, again after each return to the
@@ -320,9 +341,7 @@ struct AidenChatDetailView: View {
 
     private var chatStack: some View {
         ZStack(alignment: .bottom) {
-            transcript
-                // The composer floats on Liquid Glass and the transcript scrolls under it.
-                .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+            AidenTranscriptScaffold(dock: dock) { transcript }
             AidenAttachmentPickerOverlay(
                 picker: attachmentPicker,
                 motionNamespace: attachmentMotionNamespace,
@@ -382,7 +401,6 @@ struct AidenChatDetailView: View {
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
-            .aidenComposerSoftScrollEdge()
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
@@ -554,101 +572,119 @@ struct AidenChatDetailView: View {
         ].joined(separator: "|")
     }
 
-    private var composer: some View {
-        VStack(spacing: 0) {
-            if let current = spending.spending, allowsMutations {
-                AidenSpendingNotice(
-                    spending: current,
-                    botName: nil,
-                    isAllowing: spending.isAllowing,
-                    canAllow: coordinator?.server?.capabilities.contains(model.chat.isBotChat ? .botWrite : .chatWrite) == true,
-                    errorMessage: spending.errorMessage,
-                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
-                )
-            }
-            if let message = model.sendRecoveryMessage {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(message).font(.footnote).accessibilityAddTraits(.updatesFrequently)
-                    HStack {
-                        Button("Retry message") { Task { await model.send(retry: true) } }.disabled(!model.canRetrySend)
-                        Button("I checked — dismiss") { Task { await model.discardPendingSend() } }
-                    }.font(.footnote)
-                }.padding(12).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16)).padding(.bottom, 8)
-            }
-            if model.isSettingUpWorktree {
-                AidenNewWorktreeSetupRow { model.cancelWorktreeSetup() }
-            }
-            if simulators.deviceCount > 0 || backgroundJobs.runningCount > 0 || showsNewWorktreeChip {
-                HStack(spacing: 8) {
-                    if simulators.deviceCount > 0 {
-                        AidenSimulatorDeviceButton(count: simulators.deviceCount) {
-                            simulatorViewer = simulators.makeViewer(coordinator: coordinator)
-                        }
+    private var dockContent: AidenDockContent { .resolve(model.dockInput) }
+
+    /// The chat's composer and question card each hold their own Stop.
+    private var dock: AidenChatDock {
+        AidenChatDock(
+            content: dockContent,
+            session: composerSession,
+            config: AidenComposerView.config(
+                for: model,
+                placeholder: botToolsModel?.bot.map { "Ask \($0.name)" } ?? "Message Aiden"
+            ),
+            actions: AidenDockActions(),
+            slots: AidenDockSlots(
+                above: {
+                    dockNotices.disabled(model.isReadOnlyPresentation)
+                },
+                question: { _ in
+                    if let question = model.pendingQuestion {
+                        AidenQuestionCard(
+                            model: model,
+                            prompt: question,
+                            onSubmit: { request in
+                                Task {
+                                    await model.respondToQuestion(
+                                        request,
+                                        promptID: question.id,
+                                        idempotencyKey: UUID()
+                                    )
+                                }
+                            }
+                        )
+                        .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToQuestion || model.isStopping)
+                        .id(question.id)
                     }
-                    AidenBackgroundJobsChip(running: backgroundJobs.runningCount) {
-                        showsBackgroundJobs = true
-                    }
-                    if showsNewWorktreeChip {
-                        AidenNewWorktreeChip(isOn: $model.startsInNewWorktree)
-                            .disabled(model.isStarting)
-                    }
-                    Spacer(minLength: 0)
+                },
+                composer: { config in
+                    AidenComposerView(
+                        model: model,
+                        session: composerSession,
+                        autoStartVoice: autoStartVoice,
+                        composerFocus: $composerIsFocused,
+                        attachmentPicker: attachmentPicker,
+                        motionNamespace: attachmentMotionNamespace,
+                        canToggleAttachments: canToggleAttachmentPicker,
+                        onToggleAttachmentPicker: toggleAttachmentPicker,
+                        placeholder: config.placeholder
+                    )
+                    .disabled(model.isReadOnlyPresentation)
                 }
-                .padding(.horizontal, simulators.deviceCount > 0 ? 0 : 4)
-                .padding(.bottom, 4)
-            }
-            AidenChatProgressControls(
-                taskProgress: model.taskProgress,
-                agentRoster: model.agentRoster,
-                canReadTasks: model.canReadTaskProgress,
-                canReadAgents: model.canReadAgentRoster,
-                taskIsStale: model.isTaskProgressStale,
-                agentIsStale: model.isAgentRosterStale,
-                openTasks: { progressSheet = .tasks },
-                openAgents: { progressSheet = .agents }
             )
-            if let notice = model.macOnlyAgentNotice {
-                Text(notice)
-                    .font(.footnote)
-                    .foregroundStyle(palette.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 6)
-            }
-            if let question = model.pendingQuestion {
-                AidenComposerListeningBar(session: composerSession)
-                AidenQuestionCard(
-                    model: model,
-                    prompt: question,
-                    onSubmit: { request in
-                        Task {
-                            await model.respondToQuestion(
-                                request,
-                                promptID: question.id,
-                                idempotencyKey: UUID()
-                            )
-                        }
-                    }
-                )
-                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToQuestion || model.isStopping)
-                .id(question.id)
-            } else {
-                AidenComposerView(
-                    model: model,
-                    session: composerSession,
-                    autoStartVoice: autoStartVoice,
-                    composerFocus: $composerIsFocused,
-                    attachmentPicker: attachmentPicker,
-                    motionNamespace: attachmentMotionNamespace,
-                    canToggleAttachments: canToggleAttachmentPicker,
-                    onToggleAttachmentPicker: toggleAttachmentPicker,
-                    placeholder: botToolsModel?.bot.map { "Ask \($0.name)" } ?? "Message Aiden"
-                )
-            }
+        )
+    }
+
+    /// What the chat keeps above the composer, whatever is in its place.
+    @ViewBuilder
+    private var dockNotices: some View {
+        if let current = spending.spending, allowsMutations {
+            AidenSpendingNotice(
+                spending: current,
+                botName: nil,
+                isAllowing: spending.isAllowing,
+                canAllow: model.ownerServer?.capabilities.contains(model.chat.isBotChat ? .botWrite : .chatWrite) == true,
+                errorMessage: spending.errorMessage,
+                onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+            )
         }
-        .disabled(model.isReadOnlyPresentation)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
+        if let message = model.sendRecoveryMessage {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(message).font(.footnote).accessibilityAddTraits(.updatesFrequently)
+                HStack {
+                    Button("Retry message") { Task { await model.send(retry: true) } }.disabled(!model.canRetrySend)
+                    Button("I checked — dismiss") { Task { await model.discardPendingSend() } }
+                }.font(.footnote)
+            }.padding(12).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
+        if model.isSettingUpWorktree {
+            AidenNewWorktreeSetupRow { model.cancelWorktreeSetup() }
+        }
+        if simulators.deviceCount > 0 || backgroundJobs.runningCount > 0 || showsNewWorktreeChip {
+            HStack(spacing: 8) {
+                if simulators.deviceCount > 0 {
+                    AidenSimulatorDeviceButton(count: simulators.deviceCount) {
+                        simulatorViewer = simulators.makeViewer(coordinator: coordinator)
+                    }
+                }
+                AidenBackgroundJobsChip(running: backgroundJobs.runningCount) {
+                    showsBackgroundJobs = true
+                }
+                if showsNewWorktreeChip {
+                    AidenNewWorktreeChip(isOn: $model.startsInNewWorktree)
+                        .disabled(model.isStarting)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, simulators.deviceCount > 0 ? 0 : 4)
+        }
+        AidenChatProgressControls(
+            taskProgress: model.taskProgress,
+            agentRoster: model.agentRoster,
+            canReadTasks: model.canReadTaskProgress,
+            canReadAgents: model.canReadAgentRoster,
+            taskIsStale: model.isTaskProgressStale,
+            agentIsStale: model.isAgentRosterStale,
+            openTasks: { progressSheet = .tasks },
+            openAgents: { progressSheet = .agents }
+        )
+        if let notice = model.macOnlyAgentNotice {
+            Text(notice)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+        }
     }
 
     private var attachmentCapacity: Int {
@@ -724,50 +760,77 @@ struct AidenChatDetailView: View {
             ToolbarItem(placement: .principal) {
                 botHeaderPill(coordinator: coordinator, model: botToolsModel)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        openBotProfile(coordinator: coordinator, model: botToolsModel)
-                    } label: {
-                        Label("Profile", systemImage: "person.crop.circle")
-                    }
+            ToolbarItem(placement: .topBarTrailing) { sessionSheetButton }
+        } else if model.chat.botId == nil, coordinator != nil {
+            ToolbarItem(placement: .topBarTrailing) { sessionSheetButton }
+        }
+    }
 
-                    if botToolsModel.fileGrant(
-                        coordinator: coordinator,
-                        hostAllowsMutations: effectiveAllowsMutations
-                    ) != nil {
-                        Button {
-                            openBotFiles(coordinator: coordinator, model: botToolsModel)
-                        } label: {
-                            Label("Files", systemImage: "folder")
-                        }
-                    }
+    private var sessionSheetButton: some View {
+        Button {
+            showsSessionSheet = true
+        } label: {
+            Image(systemName: AidenChromeSymbols.overflowMenu)
+                .font(.body.weight(.semibold))
+                .contentShape(Circle())
+        }
+        .buttonBorderShape(.circle)
+        .accessibilityLabel("More")
+    }
 
-                    if AidenBotDeletion.isAvailable(coordinator: coordinator), botToolsModel.bot != nil {
-                        Button(role: .destructive) {
-                            isConfirmingBotDelete = true
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                } label: {
-                    Image(systemName: AidenChromeSymbols.overflowMenu)
-                        .font(.body.weight(.semibold))
-                        .contentShape(Circle())
-                }
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("More")
+    private var sessionSheetConfig: AidenSessionSheetConfig {
+        let canReadAloud = model.readAloudCandidateID != nil
+        let isReadingAloud = model.readAloud.activeMessageID != nil
+        if let coordinator, let botToolsModel {
+            return .botChat(
+                title: botToolsModel.bot?.name ?? model.chat.title,
+                hasFiles: botToolsModel.fileGrant(coordinator: coordinator, hostAllowsMutations: effectiveAllowsMutations) != nil,
+                canDelete: AidenBotDeletion.isAvailable(coordinator: coordinator) && botToolsModel.bot != nil,
+                canReadAloud: canReadAloud,
+                isReadingAloud: isReadingAloud
+            )
+        }
+        return .chat(
+            title: model.chat.displayTitle,
+            canRename: model.canRename,
+            canFork: onOpenChat != nil && model.forkAvailability != nil && model.latestForkableMessageID != nil,
+            canReadAloud: canReadAloud,
+            isReadingAloud: isReadingAloud,
+            hasFiles: workspace?.hasFolder == true
+        )
+    }
+
+    private func runPendingSessionAction() {
+        guard let action = pendingSessionAction else { return }
+        pendingSessionAction = nil
+        switch action {
+        case .rename:
+            renameTitle = model.chat.displayTitle
+            isRenaming = true
+        case .fork:
+            if let messageID = model.latestForkableMessageID {
+                performFork(messageID: messageID, action: .forkHere)
             }
-        } else if model.chat.botId == nil,
-                  let coordinator, let workspace, workspace.hasFolder {
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace)
-                } label: {
-                    Label("Files", systemImage: "folder")
-                }
-                .accessibilityLabel("Workspace files")
+        case .readAloud:
+            if let messageID = model.readAloud.activeMessageID ?? model.readAloudCandidateID {
+                model.toggleReadAloud(messageID)
             }
+        case .files:
+            if let coordinator, let botToolsModel {
+                openBotFiles(coordinator: coordinator, model: botToolsModel)
+            } else {
+                workspaceFileReference = nil
+                showsWorkspaceFile = true
+            }
+        case .profile:
+            if let coordinator, let botToolsModel {
+                openBotProfile(coordinator: coordinator, model: botToolsModel)
+            }
+        case .delete:
+            isConfirmingBotDelete = true
+        case .memory, .advanced:
+            // A durable Bot's own sheet has these; this screen never lists them.
+            break
         }
     }
 

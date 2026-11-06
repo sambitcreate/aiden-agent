@@ -72,6 +72,10 @@ struct AidenComposerView: View {
     }
 
     private var config: AidenComposerConfig {
+        Self.config(for: model, placeholder: placeholder)
+    }
+
+    static func config(for model: AidenChatViewModel, placeholder: String) -> AidenComposerConfig {
         // Bot chats take their model from the Bot.
         var config = AidenComposerConfig.chat(
             model: model.showsComposerModelControl ? model.selectedModelDisplayLabel : nil
@@ -85,6 +89,8 @@ struct AidenComposerView: View {
             canSend: model.canSend,
             canStop: model.canControlCurrentRun && !model.isStopping,
             stopLabel: AidenChatStopButton.label(for: model),
+            // Its words stay in view, but they can't go anywhere.
+            fieldIsDisabled: model.isOwnerRevoked,
             // Dictation is off while a response streams, so the busy Steer/Queue
             // pill takes the mic's place (as on Android).
             offersMic: !(model.isStreaming && model.showsRunInputOptions),
