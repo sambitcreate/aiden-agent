@@ -141,7 +141,7 @@ final class AidenUnifiedInboxStore {
                 connection: connection,
                 machine: machine,
                 chats: machine?.model.chats ?? [],
-                workspaceNames: workspaces.isEmpty ? machine?.savedWorkspaceNames ?? [:] : Self.names(of: workspaces),
+                workspaceNames: isBlocked ? [:] : workspaces.isEmpty ? machine?.savedWorkspaceNames ?? [:] : Self.names(of: workspaces),
                 isConnected: connection.connectionState == .connected,
                 isOnline: connection.isKnownOnline,
                 isBlocked: isBlocked,
@@ -320,19 +320,52 @@ final class AidenUnifiedInboxStore {
         poller.startCycle(timing: timing, jitter: poller.jitter)
         let walkingPages = !poller.hasWalked
         let startedAt = now()
+        let connectBefore = connection.connectionGeneration
         let task = Task { [weak self] in
             // A poll that fails has only the saved rows to leave on screen.
             await machine.savedRows?.value
-            let result = await machine.model.pollChats(host: connection, walkingPages: walkingPages, now: startedAt)
-            await self?.finish(result, walkingPages: walkingPages, machine: machine, poller: poller, connection: connection)
+            var result = await machine.model.pollChats(host: connection, walkingPages: walkingPages, now: startedAt)
+            if case .loaded = result, let self { result = await self.learnWorkspaces(of: machine, over: connection) }
+            await self?.finish(
+                result,
+                walkingPages: walkingPages,
+                connectBefore: connectBefore,
+                machine: machine,
+                poller: poller,
+                connection: connection
+            )
         }
         fetches[instanceId] = task
         return task
     }
 
+    /// A chat shows only under a workspace its machine has named, and a poll
+    /// reads chats alone, so a chat from a workspace made since the last connect
+    /// asks for the list once. An id the list doesn't hold isn't asked about again.
+    private func learnWorkspaces(of machine: Machine, over connection: AidenHostConnection) async -> AidenHomePollResult {
+        let unknown = Set(machine.model.chats.map(\.workspaceId))
+            .subtracting(connection.workspaces.map(\.id))
+            .subtracting(machine.workspacesAskedAbout)
+        guard !unknown.isEmpty else { return .loaded }
+        do {
+            try await connection.refreshWorkspacesForPoll()
+        } catch let error where aidenIsCancellation(error) {
+            return .abandoned
+        } catch let error as AidenRemoteClientError where error.isCredentialRevoked {
+            return .failed(error)
+        } catch AidenRemoteClientError.server(_, _) {
+            // The machine is there and the rows are read, so this poll did its job.
+        } catch {
+            return .failed(error)
+        }
+        machine.workspacesAskedAbout.formUnion(unknown)
+        return .loaded
+    }
+
     private func finish(
         _ result: AidenHomePollResult,
         walkingPages: Bool,
+        connectBefore: Int,
         machine: Machine,
         poller: Poller,
         connection: AidenHostConnection
@@ -348,8 +381,7 @@ final class AidenUnifiedInboxStore {
         case .abandoned:
             break
         case .failed(let error):
-            poller.failures += 1
-            await connection.handlePollError(error)
+            if await connection.handlePollError(error, sinceConnect: connectBefore) { poller.failures += 1 }
         }
     }
 }
@@ -384,6 +416,7 @@ private final class Machine {
     var savedWorkspaceNames: [String: String] = [:]
     /// Reads back what this phone saved, once, when the machine is first seen.
     var savedRows: Task<Void, Never>?
+    var workspacesAskedAbout: Set<String> = []
 
     init(lease: Lease, model: AidenHomeModel) {
         self.lease = lease

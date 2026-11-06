@@ -62,8 +62,6 @@ private final class AidenInboxTestClock: Clock, @unchecked Sendable {
     }
 }
 
-/// The store over the demo machines, so every request is one the contract has,
-/// and over a clock the tests move, so nothing here waits for a poll to come due.
 /// Holds a cache write at its start until the test lets it go on.
 private actor AidenInboxSaveGate {
     private(set) var arrivals = 0
@@ -85,6 +83,8 @@ private actor AidenInboxSaveGate {
     }
 }
 
+/// The store over the demo machines, so every request is one the contract has,
+/// and over a clock the tests move, so nothing here waits for a poll to come due.
 @MainActor
 final class AidenUnifiedInboxStoreTests: XCTestCase {
     private let responder = AidenDemoResponder()
@@ -165,11 +165,17 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
     /// `age` is minutes before `now`, so a page's rows stay in canonical order
     /// when their ages rise.
-    private func row(_ id: String, age: Int, needsYou: Bool = false, inboxFields: Bool = true) -> [String: Any] {
+    private func row(
+        _ id: String,
+        age: Int,
+        needsYou: Bool = false,
+        inboxFields: Bool = true,
+        workspace: String = "workspace_app"
+    ) -> [String: Any] {
         let updated = timestamp(now.addingTimeInterval(-Double(age) * 60))
         var row: [String: Any] = [
             "id": id,
-            "workspaceId": "workspace_app",
+            "workspaceId": workspace,
             "title": id,
             "titlePending": false,
             "createdAt": updated,
@@ -232,6 +238,27 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         responder.requests(instanceId: instanceId).filter { $0 == "GET /chat-summaries" }.count
     }
 
+    private func workspaceReads(_ instanceId: String) -> Int {
+        responder.requests(instanceId: instanceId).filter { $0 == "GET /workspaces" }.count
+    }
+
+    /// The Mac's list once a workspace has been made on it.
+    private func serveWorkspaces(_ ids: String..., on instanceId: String) {
+        let workspaces = ids.map { id -> [String: Any] in
+            [
+                "id": id, "name": id, "permission": "ask", "memoryEnabled": true, "hasFolder": true,
+                "isManagedWorktree": false, "createdAt": "2026-11-05T09:00:00.000Z",
+                "updatedAt": "2026-11-05T09:00:00.000Z", "revision": "workspace_revision_7",
+            ]
+        }
+        responder.reply(
+            instanceId: instanceId,
+            path: "/workspaces",
+            status: 200,
+            json: try! JSONSerialization.data(withJSONObject: ["workspaces": workspaces])
+        )
+    }
+
     private func probes(_ instanceId: String) -> Int {
         responder.requests(instanceId: instanceId).filter { $0 == "GET /server" }.count
     }
@@ -270,6 +297,22 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
     /// Every poller is asleep on the clock, so none has a request still to send.
     private func untilAsleep(_ count: Int, file: StaticString = #filePath, line: UInt = #line) async {
         await waitUntil("\(count) pollers asleep", file: file, line: line) { clock.sleeperCount == count }
+    }
+
+    /// Moves the clock and lets whatever came due run, so a check that nothing
+    /// went out can fail. A poller that came due has left the clock by the time
+    /// `advance` returns, and is back once its poll is done. A connect it asked
+    /// for starts a turn or two of the main actor later.
+    private func advance(
+        by duration: Duration,
+        asleep: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        clock.advance(by: duration)
+        await Task.yield()
+        await untilAsleep(asleep, file: file, line: line)
+        for _ in 0..<10 { await Task.yield() }
     }
 
     /// Starts the store and returns once its first polls are in.
@@ -321,7 +364,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         store.setFocusedMachine("laptop")
         await startAndSettle(store, machines: 2)
 
-        clock.advance(by: .seconds(14))
+        await advance(by: .seconds(14), asleep: 2)
         XCTAssertEqual(polls("laptop"), 1)
         clock.advance(by: .seconds(1))
         await waitUntil("the focused machine's poll") { polls("laptop") == 2 }
@@ -354,7 +397,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         store.setFocusedMachine("laptop")
         await startAndSettle(store, machines: 2)
 
-        clock.advance(by: .seconds(59))
+        await advance(by: .seconds(59), asleep: 2)
         XCTAssertEqual(polls("studio"), 1)
         XCTAssertEqual(polls("laptop"), 1)
         clock.advance(by: .seconds(1))
@@ -368,7 +411,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await connectAll(coordinator)
         let store = makeStore(coordinator)
         await startAndSettle(store, machines: 2)
-        clock.advance(by: .seconds(40))
+        await advance(by: .seconds(40), asleep: 2)
         XCTAssertEqual(polls("studio"), 1)
 
         store.setInboxVisible(true)
@@ -499,7 +542,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
         await untilAsleep(0)
         XCTAssertNil(gone)
-        clock.advance(by: .seconds(3600))
+        await advance(by: .seconds(3600), asleep: 0)
         XCTAssertEqual(polls("studio"), 1)
     }
 
@@ -607,6 +650,80 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         store.stop()
     }
 
+    func testAColdWalkOverFullPagesKeepsEveryRow() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        func fullPage(from start: Int, next: String?) -> Data {
+            page((start..<start + AidenChatSummaryPage.defaultLimit).map { row("row\($0)", age: $0, needsYou: true) }, next: next)
+        }
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100", status: 200, json: fullPage(from: 1000, next: cursor("two")))
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(cursor("two"))", status: 200, json: fullPage(from: 1100, next: cursor("three")))
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(cursor("three"))", status: 200, json: fullPage(from: 1200, next: cursor("four")))
+        let store = makeStore(coordinator)
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertEqual(store.snapshots["studio"]?.chats.count, 3 * AidenChatSummaryPage.defaultLimit)
+        XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .connected)
+        store.stop()
+    }
+
+    func testAFailedColdWalkKeepsTheRowsPastThePageItRead() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serveThreeFullPages(on: "studio")
+        let store = makeStore(coordinator)
+        store.setInboxVisible(true)
+        await startAndSettle(store, machines: 1)
+        store.stop()
+        await untilAsleep(0)
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100", status: 200, json: page(
+            [row("new", age: 0, needsYou: true), row("a", age: 1, needsYou: true)], next: cursor("two")
+        ))
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(cursor("two"))", status: 500, json: serverErrorJSON)
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["new", "a", "b", "c"])
+        XCTAssertEqual(store.inbox.needsYouCount, 4)
+        let saved = await cache.loadChatSummaries(instanceId: "studio")
+        XCTAssertEqual(saved?.summaries.map(\.id), ["new", "a", "b", "c"])
+        store.stop()
+    }
+
+    func testAPageReadBeforeAColdWalkFailedIsKept() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serveThreeFullPages(on: "studio")
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(cursor("three"))", status: 500, json: serverErrorJSON)
+        let store = makeStore(coordinator)
+        store.setInboxVisible(true)
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["a", "b"])
+        store.stop()
+    }
+
+    func testACacheRefusalOnAWalkedPageLeavesTheMachineConnected() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        cache = AidenChatCache(root: root.appending(path: "full", directoryHint: .isDirectory), maxSummaryCacheFileBytes: 6_000)
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100", status: 200, json: page(
+            [row("a", age: 1, needsYou: true)], next: cursor("two")
+        ))
+        responder.reply(instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(cursor("two"))", status: 200, json: page(
+            (2..<60).map { row("row\($0)", age: $0) }
+        ))
+        let store = makeStore(coordinator)
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertEqual(polls("studio"), 2, "The walk reached the page the cache refuses")
+        XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .connected)
+        store.stop()
+    }
+
     func testAWalkThatFailsIsTriedAgain() async throws {
         let coordinator = coordinator("studio")
         await connectAll(coordinator)
@@ -691,6 +808,126 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
         XCTAssertEqual(polls("studio"), 1)
         XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .connected)
+        store.stop()
+    }
+
+    // MARK: What the connection has to know
+
+    func testAChatInANewWorkspaceIsFoundAndCountedByAPull() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("known", age: 2)], on: "studio")
+        let store = makeStore(coordinator)
+        store.setInboxVisible(true)
+        await startAndSettle(store, machines: 1)
+        let readsBefore = workspaceReads("studio")
+        serveWorkspaces("workspace_app", "workspace_new", on: "studio")
+        serve([row("fresh", age: 1, needsYou: true, workspace: "workspace_new"), row("known", age: 2)], on: "studio")
+
+        await store.refreshAll()
+
+        XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["fresh", "known"])
+        XCTAssertEqual(store.inbox.needsYouCount, 1)
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 1)
+        XCTAssertEqual(store.snapshots["studio"]?.workspaceNames["workspace_new"], "workspace_new")
+        store.stop()
+    }
+
+    func testAWorkspaceStillUnknownIsNotReadForAgainUntilAnotherTurnsUp() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("lost", age: 1, workspace: "workspace_gone"), row("known", age: 2)], on: "studio")
+        let store = makeStore(coordinator)
+        let readsBefore = workspaceReads("studio")
+
+        await startAndSettle(store, machines: 1)
+        await store.refreshAll()
+        await store.refreshAll()
+
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 1)
+        XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["known"])
+
+        serve([row("other", age: 0, workspace: "workspace_other"), row("known", age: 2)], on: "studio")
+        await store.refreshAll()
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 2)
+        store.stop()
+    }
+
+    func testAServerErrorOnTheWorkspaceListIsNotAFailedPoll() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("lost", age: 1, workspace: "workspace_gone"), row("known", age: 2)], on: "studio")
+        responder.reply(instanceId: "studio", path: "/workspaces", status: 500, json: serverErrorJSON)
+        let store = makeStore(coordinator)
+        store.setInboxVisible(true)
+        let readsBefore = workspaceReads("studio")
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 1)
+        XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .connected)
+        let pollsBefore = polls("studio")
+        clock.advance(by: .seconds(15))
+        await waitUntil("the next poll, on time") { polls("studio") == pollsBefore + 1 }
+        await untilAsleep(1)
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 1, "The machine answered, so it isn't asked again")
+        store.stop()
+    }
+
+    func testAWorkspaceReadThatFindsNoMachineIsAFailedPoll() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("lost", age: 1, workspace: "workspace_gone")], on: "studio")
+        responder.fail(instanceId: "studio", path: "/workspaces", code: .notConnectedToInternet)
+        let store = makeStore(coordinator)
+        let studio = try connection("studio", in: coordinator)
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertTrue(isOffline(studio))
+        store.stop()
+    }
+
+    func testAWorkspaceReadStoppedOnItsWayWritesNothing() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("known", age: 2)], on: "studio")
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        let readsBefore = workspaceReads("studio")
+        let release = responder.hold(instanceId: "studio", path: "/workspaces")
+        serveWorkspaces("workspace_app", "workspace_new", on: "studio")
+        serve([row("fresh", age: 1, workspace: "workspace_new"), row("known", age: 2)], on: "studio")
+        let refresh = Task { await store.refreshAll() }
+        await waitUntil("the read") { workspaceReads("studio") == readsBefore + 1 }
+
+        store.stop()
+        release()
+        await refresh.value
+
+        let studio = try connection("studio", in: coordinator)
+        XCTAssertFalse(studio.workspaces.contains { $0.id == "workspace_new" })
+    }
+
+    func testAMachineThatLosesChatReadLosesItsRows() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 2)
+        XCTAssertFalse(rowIDs(store.inbox, on: "laptop").isEmpty)
+        let laptop = try connection("laptop", in: coordinator)
+        let pollsBefore = polls("laptop")
+        var narrowed = AidenDemoHosts.installation(instanceId: "laptop", name: "laptop")
+        narrowed.deviceCapabilities.removeAll { $0 == .chatRead }
+        _ = AidenDemoHosts.coordinator(installations: [narrowed], responder: responder)
+
+        await laptop.connect(over: .probe)
+
+        await waitUntil("the rows to go") { rowIDs(store.inbox, on: "laptop").isEmpty }
+        await untilAsleep(2)
+        XCTAssertEqual(store.snapshots["laptop"]?.chats, [])
+        XCTAssertEqual(store.inbox.needsYou.filter { $0.id.instanceId == "laptop" }.count, 0)
+        XCTAssertEqual(polls("laptop"), pollsBefore, "Nothing reads what it may no longer read")
         store.stop()
     }
 
@@ -804,7 +1041,9 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         XCTAssertNil(coordinator.presentedError, "A poll has no app-wide error to show")
 
         // Failure 1 waits 30 seconds, and the next attempt is a connect.
-        clock.advance(by: .seconds(29))
+        let connectsBefore = laptop.connectionGeneration
+        await advance(by: .seconds(29), asleep: 2)
+        XCTAssertEqual(laptop.connectionGeneration, connectsBefore, "Failure 1 waits the whole 30 seconds")
         XCTAssertEqual(probes("laptop"), probesBefore)
         clock.advance(by: .seconds(1))
         await waitUntil("a connect through the scheduler") { self.probes("laptop") == probesBefore + 1 }
@@ -812,7 +1051,8 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await untilAsleep(2)
 
         // Failure 2 waits 60 seconds.
-        clock.advance(by: .seconds(59))
+        await advance(by: .seconds(59), asleep: 2)
+        XCTAssertEqual(laptop.connectionGeneration, connectsBefore + 1, "Failure 2 waits the whole 60 seconds")
         XCTAssertEqual(probes("laptop"), probesBefore + 1)
         clock.advance(by: .seconds(1))
         await waitUntil("the next connect") { self.probes("laptop") == probesBefore + 2 }
@@ -844,7 +1084,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await waitUntil("the poll after the connect") { polls("laptop") == pollsBefore + 1 }
         await waitUntil("the row to brighten") { store.snapshots["laptop"]?.isOnline == true }
         await untilAsleep(2)
-        clock.advance(by: .seconds(29))
+        await advance(by: .seconds(29), asleep: 2)
         XCTAssertEqual(polls("laptop"), pollsBefore + 1)
         clock.advance(by: .seconds(1))
         await waitUntil("the usual 30 seconds") { polls("laptop") == pollsBefore + 2 }
@@ -865,7 +1105,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await untilAsleep(1)
 
         XCTAssertEqual(studio.connectionState, .connected)
-        clock.advance(by: .seconds(29))
+        await advance(by: .seconds(29), asleep: 1)
         XCTAssertEqual(polls("studio"), 2, "Backoff is 30 seconds after one failure")
         clock.advance(by: .seconds(1))
         await waitUntil("the retry") { polls("studio") == 3 }
@@ -926,6 +1166,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         let snapshot = try XCTUnwrap(store.snapshots["laptop"], "The machine waits for its purge")
         XCTAssertTrue(snapshot.isBlocked)
         XCTAssertEqual(snapshot.chats, [])
+        XCTAssertEqual(snapshot.workspaceNames, [:])
         await untilAsleep(1)
 
         coordinator.setOnScreen(false, view: view, instanceId: "laptop")
@@ -1075,6 +1316,56 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
         XCTAssertEqual(store.snapshots["studio"]?.chats.map(\.id), ["before"])
         XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["before"])
+    }
+
+    func testAPollThatFailsAfterANewerConnectLeavesTheMachineConnected() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("rows", age: 1)], on: "studio")
+        let store = makeStore(coordinator)
+        store.setInboxVisible(true)
+        await startAndSettle(store, machines: 1)
+        let studio = try connection("studio", in: coordinator)
+        let release = responder.hold(instanceId: "studio", path: "/chat-summaries")
+        let refresh = Task { await store.refreshAll() }
+        await waitUntil("the poll") { polls("studio") == 2 }
+
+        await studio.connect(over: .probe)
+        responder.fail(instanceId: "studio", path: "/chat-summaries", code: .notConnectedToInternet)
+        release()
+        await refresh.value
+        await untilAsleep(1)
+
+        XCTAssertEqual(studio.connectionState, .connected)
+        serve([row("rows", age: 1)], on: "studio")
+        let pollsBefore = polls("studio")
+        clock.advance(by: .seconds(15))
+        await waitUntil("the next poll, with no backoff") { polls("studio") == pollsBefore + 1 }
+        store.stop()
+    }
+
+    func testAPollThatFailsDuringAConnectLeavesItToTheConnect() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        let studio = try connection("studio", in: coordinator)
+        let releasePoll = responder.hold(instanceId: "studio", path: "/chat-summaries")
+        let refresh = Task { await store.refreshAll() }
+        await waitUntil("the poll") { polls("studio") == 2 }
+        let releaseConnect = responder.hold(instanceId: "studio", path: "/server")
+        let check = Task { await studio.connect(over: .probe) }
+        await waitUntil("the connect") { studio.connectionState == .connecting }
+
+        responder.fail(instanceId: "studio", path: "/chat-summaries", code: .notConnectedToInternet)
+        releasePoll()
+        await refresh.value
+
+        XCTAssertEqual(studio.connectionState, .connecting)
+        releaseConnect()
+        await check.value
+        XCTAssertEqual(studio.connectionState, .connected)
+        store.stop()
     }
 
     func testAFailureAfterStopLeavesTheMachineAlone() async throws {

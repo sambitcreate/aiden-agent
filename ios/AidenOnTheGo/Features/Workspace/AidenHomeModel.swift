@@ -462,13 +462,7 @@ final class AidenHomeModel {
         if isConnected && plan.loadsChats { latestSummaryRequestToken = writeToken }
         let attempt = LoadAttempt(context: context)
         await enter(context, loadsChats: plan.loadsChats, host: host)
-        if !plan.loadsChats {
-            chats = []
-            nextChatCursor = nil
-            paginationState = .idle
-            modelCatalog = nil
-            chatListLoadState = .loaded
-        }
+        if !plan.loadsChats { clearChatList() }
         if !plan.loadsScheduledTasks { scheduledTasks = [] }
         if !plan.loadsUsage { usage = nil; usageLoadFailed = false }
         guard isConnected else { return }
@@ -514,7 +508,7 @@ final class AidenHomeModel {
                 if let loadedPage {
                     do {
                         guard try await admitFirstPage(
-                            loadedPage,
+                            AidenChatCache.SummarySnapshot(summaries: loadedPage.summaries, nextCursor: loadedPage.nextCursor),
                             context: context,
                             writeToken: writeToken,
                             requestEditGeneration: requestEditGeneration,
@@ -573,13 +567,15 @@ final class AidenHomeModel {
     /// One Inbox poll: the chat list and nothing else, over the client that gives
     /// up rather than waits, and quietly, so no spinner comes and goes with it.
     /// `walkingPages` is a cold start's read of up to
-    /// `AidenInboxPollPolicy.coldStartPageLimit` pages. Without it the rows a walk
-    /// found past the first page stay, because one page can't speak for them.
-    /// A cancelled poll writes nothing from then on.
+    /// `AidenInboxPollPolicy.coldStartPageLimit` pages, saved as one answer so a
+    /// walk that fails can't cost the rows past where it stopped. Without it the
+    /// rows a walk found past the first page stay, because one page can't speak
+    /// for them. A cancelled poll writes nothing from then on.
     func pollChats(host: AidenHostConnection, walkingPages: Bool, now: Date) async -> AidenHomePollResult {
         guard let context = try? host.homeContext() else { return .abandoned }
         guard AidenHomeLoadPlan.readsChatList(host.homeInstallation) else {
             await enter(context, loadsChats: false, host: host)
+            clearChatList()
             return .loaded
         }
         let requestEditGeneration = summaryCacheGeneration
@@ -600,13 +596,19 @@ final class AidenHomeModel {
         }
         do {
             let client = try host.probeClient()
-            let page = try await client.preferredChatSummaries(advertised: host.server?.supportsChatSummaries == true)
+            let first = try await client.preferredChatSummaries(advertised: host.server?.supportsChatSummaries == true)
+            var page = AidenChatCache.SummarySnapshot(summaries: first.summaries, nextCursor: first.nextCursor)
+            var walkFailure: Error?
+            if walkingPages {
+                (page, walkFailure) = await walkPages(after: first, client: client, now: now)
+                if let walkFailure, aidenIsCancellation(walkFailure) { return .abandoned }
+            }
             guard isWanted() else { return .abandoned }
             do {
                 guard try await admitFirstPage(
                     page,
                     context: context,
-                    keepingWalkedRows: !walkingPages,
+                    keepingWalkedRows: !walkingPages || walkFailure != nil,
                     writeToken: writeToken,
                     requestEditGeneration: requestEditGeneration,
                     isWanted: isWanted
@@ -614,13 +616,10 @@ final class AidenHomeModel {
             } catch {
                 // The machine answered. Failing to save that says nothing about it.
                 if chatListLoadState != .loaded { chatListLoadState = .failed(error.localizedDescription) }
-                return .abandoned
+                return walkFailure.map { .failed($0) } ?? .abandoned
             }
             chatListLoadState = .loaded
-            if walkingPages {
-                try await walkPages(after: page, client: client, context: context, now: now, isWanted: isWanted)
-            }
-            return .loaded
+            return walkFailure.map { .failed($0) } ?? .loaded
         } catch let error where aidenIsCancellation(error) {
             return .abandoned
         } catch {
@@ -630,34 +629,48 @@ final class AidenHomeModel {
         }
     }
 
-    /// Reads on from `first` while a page holds something that needs the person.
+    /// Reads on from `first` while a page holds something that needs the person,
+    /// and returns everything read together, which can be more rows than one
+    /// page may hold. A page that can't be read, or doesn't follow on, ends the
+    /// walk with what came before it.
     private func walkPages(
         after first: AidenChatSummaryPage,
         client: AidenRemoteClient,
-        context: AidenRemoteRequestContext,
-        now: Date,
-        isWanted: @MainActor () -> Bool
-    ) async throws {
+        now: Date
+    ) async -> (rows: AidenChatCache.SummarySnapshot, failure: Error?) {
         func needsThePerson(_ page: AidenChatSummaryPage) -> Bool {
             page.summaries.contains { AidenInbox.placement(for: $0, isOpen: false, now: now).section == .needsYou }
         }
-        var page = first
+        var walked = AidenChatCache.SummarySnapshot(summaries: first.summaries, nextCursor: first.nextCursor)
+        var latest = first
         var pagesRead = 1
-        while pagesRead < AidenInboxPollPolicy.coldStartPageLimit, needsThePerson(page), let cursor = nextChatCursor {
-            let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
-            latestSummaryRequestToken = writeToken
-            let next = try await client.chatSummaries(cursor: cursor)
-            guard isWanted() else { throw CancellationError() }
-            try await acceptChatSummaryContinuation(
-                next,
-                requestedCursor: cursor,
-                instanceId: context.instanceId,
-                writeToken: writeToken,
-                isCurrent: { isWanted() && self.latestSummaryRequestToken == writeToken }
-            )
-            page = next
-            pagesRead += 1
+        while pagesRead < AidenInboxPollPolicy.coldStartPageLimit, needsThePerson(latest), let cursor = latest.nextCursor {
+            do {
+                let next = try await client.chatSummaries(cursor: cursor)
+                walked = AidenChatCache.SummarySnapshot(
+                    summaries: try AidenChatSummaryPage.validatedContinuation(
+                        current: walked.summaries,
+                        requestedCursor: cursor,
+                        page: next
+                    ),
+                    nextCursor: next.nextCursor
+                )
+                latest = next
+                pagesRead += 1
+            } catch {
+                return (walked, error)
+            }
         }
+        return (walked, nil)
+    }
+
+    /// What a machine this device can't read the chats of shows.
+    private func clearChatList() {
+        chats = []
+        nextChatCursor = nil
+        paginationState = .idle
+        modelCatalog = nil
+        chatListLoadState = .loaded
     }
 
     /// Moves the model to `context`'s machine and shows what it last saved.
@@ -695,7 +708,7 @@ final class AidenHomeModel {
     /// Saves a first page and lays this model's own edits over it. False when
     /// the answer stopped counting on the way.
     private func admitFirstPage(
-        _ loadedPage: AidenChatSummaryPage,
+        _ loadedPage: AidenChatCache.SummarySnapshot,
         context: AidenRemoteRequestContext,
         keepingWalkedRows: Bool = false,
         writeToken: UInt64,
@@ -778,7 +791,7 @@ final class AidenHomeModel {
 
     /// Rows past the end of a first page. A row the page ran past and doesn't
     /// list has gone from the machine, so it isn't one of these.
-    private func rowsPast(_ page: AidenChatSummaryPage) -> [AidenChatSummary] {
+    private func rowsPast(_ page: AidenChatCache.SummarySnapshot) -> [AidenChatSummary] {
         guard page.nextCursor != nil, let end = page.summaries.last else { return [] }
         let listed = Set(page.summaries.map(\.id))
         return chats.filter { !listed.contains($0.id) && AidenChatSummaryPage.areInCanonicalOrder(end, $0) }
