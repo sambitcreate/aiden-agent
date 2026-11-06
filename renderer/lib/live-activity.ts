@@ -18,9 +18,10 @@ export type LiveActivity =
       title: string;
       /** The chat it is in. */
       chatTitle: string;
-      /** False when this approval can only be answered by tapping. */
+      /** True once Live has read the request out and is listening for the answer. */
       voice: boolean;
-      allow(): void;
+      /** Absent when the ribbon can only deny; allowing needs the chat itself. */
+      allow?: () => void;
       deny(): void;
     }
   | {

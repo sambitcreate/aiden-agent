@@ -34,6 +34,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
     name: "Configure LM Studio (local)",
   });
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog
     .getByRole("button", { name: "Model options", exact: true })
     .click();
@@ -74,6 +75,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog
     .getByRole("button", { name: "Model options", exact: true })
     .click();
@@ -128,6 +130,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog
     .getByRole("button", { name: "Model options", exact: true })
     .click();
@@ -151,6 +154,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog
     .getByRole("button", { name: "Model options", exact: true })
     .click();
@@ -165,6 +169,7 @@ test("custom model options survive save and rediscovery, and can be reset", asyn
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog
     .getByRole("button", { name: "Model options", exact: true })
     .click();
@@ -193,6 +198,7 @@ test("local classifier capability is off by default and survives provider save",
     .getByRole("button", { name: "Manage", exact: true });
   const dialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog.getByRole("button", { name: "Model options", exact: true }).click();
   const capability = dialog.getByRole("switch", { name: "Enable llama.cpp classification", exact: true });
   await expect(capability).toHaveAttribute("data-state", "unchecked");
@@ -200,9 +206,9 @@ test("local classifier capability is off by default and survives provider save",
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog.getByRole("button", { name: "Model options", exact: true }).click();
   await expect(capability).toHaveAttribute("data-state", "checked");
-  await dialog.locator("summary").filter({ hasText: "Connection options" }).click();
   await dialog.getByRole("combobox").filter({ hasText: "Local" }).click();
   await page.getByRole("option", { name: "Hosted", exact: true }).click();
   await expect(capability).toBeDisabled();
@@ -224,6 +230,7 @@ test("local classifier capability is off by default and survives provider save",
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toBeHidden();
   await configure.click();
+  await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await dialog.getByRole("button", { name: "Model options", exact: true }).click();
   await expect(capability).toHaveAttribute("data-state", "unchecked");
 });
@@ -240,6 +247,7 @@ test("custom GLM effort selector persists and sends every supported thinking mod
   const dialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
   const openOptions = async () => {
     await configure.click();
+    await dialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
     await dialog.getByRole("button", { name: "Model options", exact: true }).click();
     await dialog.locator("summary").filter({ hasText: E2E_MODEL_DISPLAY_NAME }).click();
   };
@@ -340,6 +348,7 @@ test("custom GLM effort selector persists and sends every supported thinking mod
     .locator("xpath=ancestor::div[.//button[normalize-space()='Manage']][1]")
     .getByRole("button", { name: "Manage", exact: true }).click();
   const resetDialog = page.getByRole("dialog", { name: "Configure LM Studio (local)" });
+  await resetDialog.locator("summary").filter({ hasText: /^Advanced/u }).click();
   await resetDialog.getByRole("button", { name: "Model options", exact: true }).click();
   await resetDialog.locator("summary").filter({ hasText: E2E_MODEL_DISPLAY_NAME }).click();
   await resetDialog.getByRole("button", { name: "Use detected capabilities", exact: true }).click();

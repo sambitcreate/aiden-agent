@@ -15,9 +15,16 @@ export function useLiveGuard(): LiveGuardValue | null {
   return React.useContext(LiveGuardContext);
 }
 
-/** Attributes for a portaled root inside a LiveGuard region. */
-export function useLiveGuardAttributes(): { [LIVE_GUARD_ATTRIBUTE]?: LiveGuardValue } {
-  const guard = useLiveGuard();
+/**
+ * Attributes for a portaled root inside a LiveGuard region. Spread them after
+ * the caller's props: the stronger of the region's guard and one the caller
+ * set directly wins, so neither can weaken the other.
+ */
+export function useLiveGuardAttributes(props?: object): { [LIVE_GUARD_ATTRIBUTE]?: LiveGuardValue } {
+  const inherited = useLiveGuard();
+  const explicit = props ? (props as Record<string, unknown>)[LIVE_GUARD_ATTRIBUTE] : undefined;
+  const own = explicit === "you" || explicit === "confirm" ? explicit : null;
+  const guard = inherited === "you" || own === "you" ? "you" : (inherited ?? own);
   return guard ? { [LIVE_GUARD_ATTRIBUTE]: guard } : {};
 }
 

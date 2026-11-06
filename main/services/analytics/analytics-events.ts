@@ -37,6 +37,8 @@ export const ANALYTICS_EVENTS = {
   onboarding_finished: { outcome: enumProp("completed", "deferred"), provider_id: optional(id) },
   app_updated: { from_version: version, to_version: version },
   analytics_disabled: {},
+  // The headless server came up, and how it was started.
+  server_started: { launch: enumProp("foreground", "daemon", "service") },
 
   // Core use
   chat_message_sent: {
@@ -87,9 +89,9 @@ export const ANALYTICS_EVENTS = {
 
 // Properties carried by every $exception event, next to $exception_list.
 export const EXCEPTION_PROPERTIES = {
-  source: enumProp("main", "renderer", "cli"),
+  source: enumProp("main", "renderer", "server"),
   level: enumProp("fatal", "error"),
-  process_type: optional(enumProp("browser", "renderer", "utility", "cli")),
+  process_type: optional(enumProp("browser", "renderer", "utility", "server")),
   origin: optional(enumProp("uncaught_exception", "unhandled_rejection", "window_error", "pending_crash")),
   uptime_bucket: optional(enumProp(...UPTIME_BUCKETS)),
 } as const satisfies PropsSpec;
@@ -100,7 +102,7 @@ export const SUPER_PROPERTIES = {
   platform: enumProp("darwin", "linux", "win32", "other"),
   arch: enumProp("arm64", "x64", "other"),
   os_major: { kind: "integer", min: 0, max: 999 },
-  surface: enumProp("desktop", "cli"),
+  surface: enumProp("desktop", "server"),
   channel: enumProp("release", "beta", "dev"),
 } as const satisfies PropsSpec;
 

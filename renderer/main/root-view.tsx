@@ -41,6 +41,7 @@ import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { useDesignModeBroadcasts } from "../lib/design-mode";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
@@ -90,6 +91,7 @@ function RootContent() {
   const { activeId, select: selectWorkspace } = useActiveWorkspace();
   const { palette } = useCommandSystem();
   const appendReconciliationRequired = useAppendReconciliationRequired();
+  useDesignModeBroadcasts();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
   const navigationBlockedReason = environmentPanel.gitOperationBusy
@@ -205,7 +207,7 @@ function RootContent() {
     void navigate({ to: "/settings" });
   });
   const openStudio = React.useCallback(
-    (to: "/design" | "/images") => {
+    (to: "/images") => {
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
@@ -214,7 +216,6 @@ function RootContent() {
     },
     [navigate, navigationBlockedReason],
   );
-  useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
   useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
   const goTo = React.useCallback(
     (to: "/bots" | "/scheduled" | "/profile") => {

@@ -123,6 +123,8 @@ export type GeminiLiveProtocolEvent =
       direction: "input" | "output";
       final: boolean;
       text: string;
+      /** Google marked this transcription finished, which ends the user's utterance. */
+      finished?: true;
     }
   | { type: "model_text"; text: string }
   | { type: "turn"; state: "generation_complete" | "turn_complete" | "waiting" }
@@ -208,6 +210,8 @@ export interface GeminiLiveProtocolOptions {
   tools?: LiveConnectConfig["tools"];
   /** Extra system-instruction lines from the session's Live tool providers. */
   instructions?: readonly string[];
+  /** Gemini's prebuilt voice for replies; omitted keeps the provider default. */
+  voice?: string;
 }
 
 const systemClock: GeminiLiveClock = {
@@ -492,6 +496,7 @@ function liveConnectConfig(
   handle?: string,
   tools?: LiveConnectConfig["tools"],
   instructions: readonly string[] = [],
+  voice?: string,
 ): GeminiLiveConnectConfig {
   const extra = instructions.filter((line) => line.trim().length > 0).join(" ");
   const withExtra = (base: string) => (extra ? `${base} ${extra}` : base);
@@ -513,6 +518,9 @@ function liveConnectConfig(
     responseModalities: [Modality.AUDIO],
     inputAudioTranscription: {},
     outputAudioTranscription: {},
+    ...(voice
+      ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } }
+      : {}),
     ...(model.endsWith("-extended-thinking")
       ? {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
@@ -838,6 +846,7 @@ export class GeminiLiveProtocol {
         handle,
         this.options.tools,
         this.options.instructions,
+        this.options.voice,
       ),
     };
     let timeoutTimer: unknown = null;
@@ -1336,6 +1345,7 @@ export class GeminiLiveProtocol {
         final:
           typeof value.finished === "boolean" ? value.finished : defaultFinal,
         text,
+        ...(value.finished === true ? { finished: true as const } : {}),
       });
     }
   }

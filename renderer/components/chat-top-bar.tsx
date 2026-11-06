@@ -15,6 +15,7 @@ import {
   GitBranch,
   MessageCircle,
   Pencil,
+  PencilRuler,
   Settings2,
   SquareTerminal,
   Users,
@@ -42,7 +43,11 @@ import {
   toast,
 } from "./ui";
 import { WORKSPACE_TOOLS } from "./workspace-tool-launcher";
-import { useCommandHandler } from "../lib/command-system";
+import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { useDesignModeControls } from "../lib/design-mode";
+import { useDesignPane, type DesignPane } from "../design/design-layout";
+import { Segmented } from "./ui-primitives";
+import { ariaKeyShortcut } from "../shared/keybindings";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
@@ -82,7 +87,8 @@ export function ChatTitleMenu({
   const [renameValue, setRenameValue] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
-  if (!persisted) return <span className="block truncate">{title}</span>;
+  // A narrow column truncates the title, so hovering shows it in full.
+  if (!persisted) return <span className="block truncate" title={title}>{title}</span>;
 
   const commitRename = async () => {
     const next = renameValue.trim();
@@ -110,7 +116,7 @@ export function ChatTitleMenu({
             style={INSET_FOCUS_RING}
             className="no-drag max-w-full min-w-0 shrink gap-1 px-1.5 text-strong text-primary"
           >
-            <span className="min-w-0 truncate">{title}</span>
+            <span className="min-w-0 truncate" title={title}>{title}</span>
             <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
           </Button>
         </DropdownMenuTrigger>
@@ -330,17 +336,33 @@ function toolDefinition(id: EnvironmentPanelTab) {
  * through the `chat-toolbar` container query, which also measures content.
  */
 const COMPACT_TOOLBAR_CONTENT_WIDTH = 680;
+/**
+ * Below this header content width (design mode's 360–560 chat column, or a
+ * very narrow window) Quick View and Terminal fold into the overflow menu too,
+ * so the actions and the design pane switch never overlap the title.
+ */
+const TIGHT_TOOLBAR_CONTENT_WIDTH = 480;
 
-function useToolbarCompact(anchor: React.RefObject<HTMLElement | null>): boolean {
-  const [compact, setCompact] = React.useState(false);
+type ToolbarDensity = "regular" | "compact" | "tight";
+
+function useToolbarDensity(anchor: React.RefObject<HTMLElement | null>): ToolbarDensity {
+  const [density, setDensity] = React.useState<ToolbarDensity>("regular");
   React.useLayoutEffect(() => {
     const toolbar = anchor.current?.closest<HTMLElement>("[data-toolbar]");
     if (!toolbar) return;
     const update = () => {
       const style = getComputedStyle(toolbar);
       const content =
-        toolbar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      setCompact(content < COMPACT_TOOLBAR_CONTENT_WIDTH);
+        toolbar.clientWidth -
+        (parseFloat(style.paddingLeft) || 0) -
+        (parseFloat(style.paddingRight) || 0);
+      setDensity(
+        content < TIGHT_TOOLBAR_CONTENT_WIDTH
+          ? "tight"
+          : content < COMPACT_TOOLBAR_CONTENT_WIDTH
+            ? "compact"
+            : "regular",
+      );
     };
     update();
     // The collapsed-sidebar inset animates padding, which changes the content box.
@@ -352,7 +374,7 @@ function useToolbarCompact(anchor: React.RefObject<HTMLElement | null>): boolean
       toolbar.removeEventListener("transitionend", update);
     };
   }, [anchor]);
-  return compact;
+  return density;
 }
 
 /**
@@ -450,12 +472,78 @@ function SubagentsRunningBadge({
 }
 
 /**
+ * Puts this chat into design mode, or takes it out. Shown only while the chat
+ * can use design mode; the layout follows at once and saves in the background.
+ */
+export function DesignModeToggle({ chatId }: { chatId: string | undefined }) {
+  const controls = useDesignModeControls(chatId);
+  const binding = useShortcutBinding("design.toggle");
+  const shortcut = useShortcutLabel("design.toggle");
+  if (!controls) return null;
+  return (
+    <Button
+      iconOnly
+      variant="bar"
+      size="small"
+      onClick={() => controls.set(!controls.on, "toggle")}
+      aria-label="Design mode"
+      aria-pressed={controls.on}
+      aria-keyshortcuts={ariaKeyShortcut(binding)}
+      title={binding ? `Design mode (${shortcut})` : "Design mode"}
+      data-design-mode-toggle
+    >
+      <PencilRuler />
+    </Button>
+  );
+}
+
+const DESIGN_PANE_OPTIONS = [
+  { value: "chat", label: "Chat" },
+  { value: "canvas", label: "Canvas" },
+] as const satisfies readonly { value: DesignPane; label: string }[];
+
+/**
+ * Chooses which half of design mode shows while the content is too narrow to
+ * split them. Absent otherwise.
+ */
+export function DesignPaneSwitch() {
+  const { stacked, pane, setPane } = useDesignPane();
+  if (!stacked) return null;
+  return (
+    <Segmented
+      aria-label="Design mode view"
+      value={pane}
+      onValueChange={setPane}
+      options={DESIGN_PANE_OPTIONS}
+      className="mx-1 shrink-0"
+    />
+  );
+}
+
+/** A header action that moves into the overflow menu when the header is tight. */
+export interface FoldableToolbarAction {
+  key: string;
+  /** Shown in the header while there is room. */
+  button: React.ReactNode;
+  /** The same action as an overflow menu row. */
+  label: string;
+  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
+  onSelect(): void;
+  disabled?: boolean;
+  active?: boolean;
+  /** Shown with the `leading` controls rather than with the tools. */
+  placement?: "leading" | "tools";
+}
+
+/**
  * One quiet button per workspace tool. Each opens the Environment panel on its
  * tab and shows as pressed while that tab is visible; pressing it again hides
  * the panel. Tools a workspace cannot use are left out rather than disabled:
  * Changes needs a Git repository, Files needs a folder, and a chat with no
  * workspace gets none. `leading` sits before the tools and `end` after the
  * overflow menu; both stay visible when the tools fold into that menu.
+ * `foldable` actions (Quick View, Terminal) sit at the start of the tools and
+ * fold into the menu as well once the header is tight in design mode.
  */
 export function WorkspaceToolButtons({
   chatId,
@@ -464,6 +552,7 @@ export function WorkspaceToolButtons({
   hasFolderAccess,
   isRepo,
   terminalButton,
+  foldable = [],
   leading,
   trailing,
   end,
@@ -474,14 +563,20 @@ export function WorkspaceToolButtons({
   hasFolder: boolean;
   hasFolderAccess: boolean;
   isRepo: boolean;
-  terminalButton: React.ReactNode;
+  terminalButton?: React.ReactNode;
+  foldable?: readonly FoldableToolbarAction[];
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
   end?: React.ReactNode;
 }) {
   const panel = useEnvironmentPanel();
   const anchorRef = React.useRef<HTMLDivElement>(null);
-  const compact = useToolbarCompact(anchorRef);
+  const density = useToolbarDensity(anchorRef);
+  const compact = density !== "regular";
+  // Only design mode's chat column folds Quick View and Terminal away; a
+  // narrow window outside design mode keeps both buttons, as it always has.
+  const designOn = useDesignModeControls(chatId)?.on === true;
+  const tight = density === "tight" && designOn;
   const available = (id: EnvironmentPanelTab): boolean => {
     if (!hasWorkspace) return false;
     if (id === "review") return hasFolder && isRepo;
@@ -515,15 +610,27 @@ export function WorkspaceToolButtons({
   const menuTools: EnvironmentPanelTab[] = hasWorkspace
     ? [...(compact ? buttons : []), "context", ...(available("subagents") ? (["subagents"] as const) : [])]
     : [];
+  const menuActions = tight ? foldable : [];
+  const shownActions = (placement: "leading" | "tools") =>
+    tight
+      ? null
+      : foldable
+          .filter((action) => (action.placement ?? "tools") === placement)
+          .map((action) => <React.Fragment key={action.key}>{action.button}</React.Fragment>);
 
   return (
     <div ref={anchorRef} className="flex items-center gap-0.5" data-workspace-tool-buttons>
-      {leading ? (
+      {leading || foldable.some((action) => action.placement === "leading") ? (
         <>
-          {leading}
-          <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator" />
+          {/* The separator goes when everything leading has folded away or renders nothing. */}
+          <span className="peer/leading flex items-center gap-0.5 empty:hidden">
+            {leading}
+            {shownActions("leading")}
+          </span>
+          <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator peer-empty/leading:hidden" />
         </>
       ) : null}
+      {shownActions("tools")}
       {terminalButton}
       {compact
         ? null
@@ -566,7 +673,7 @@ export function WorkspaceToolButtons({
           onActivate={() => activate("subagents")}
         />
       ) : null}
-      {menuTools.length > 0 ? (
+      {menuTools.length > 0 || menuActions.length > 0 ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -582,6 +689,22 @@ export function WorkspaceToolButtons({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-48">
+            {menuActions.map((action) => {
+              const ActionIcon = action.icon;
+              return (
+                <DropdownMenuItem
+                  key={action.key}
+                  disabled={action.disabled}
+                  className={cn(action.active && "text-primary")}
+                  data-folded-toolbar-action={action.key}
+                  onSelect={action.onSelect}
+                >
+                  <ActionIcon aria-hidden="true" className="size-4" />
+                  <span className="min-w-0 flex-1">{action.label}</span>
+                </DropdownMenuItem>
+              );
+            })}
+            {menuActions.length > 0 && menuTools.length > 0 ? <DropdownMenuSeparator /> : null}
             {menuTools.map((id) => {
               const tool = toolDefinition(id);
               if (!tool) return null;

@@ -5,11 +5,12 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const STUDIO_FLAGS = {
+  // Design Studio was removed; its old flag must change nothing.
   AIDEN_EXPERIMENTAL_DESIGN_STUDIO: "1",
   AIDEN_EXPERIMENTAL_CREATE_IMAGES: "1",
 };
-// Lazy studio chunks the Vite build emits for the placeholder routes and the shared canvas.
-const STUDIO_CHUNK = /\/assets\/(design-route|images-route|canvas)-[\w-]+\.(js|css)(\?|$)/u;
+// Lazy studio chunks the Vite build emits for the Images route and the shared canvas.
+const STUDIO_CHUNK = /\/assets\/(images-route|canvas)-[\w-]+\.(js|css)(\?|$)/u;
 
 interface RendererRouter {
   navigate(options: { to: string }): Promise<void>;
@@ -138,7 +139,7 @@ test.describe("Studio foundation with both flags off", () => {
 test.describe("Studio foundation with both flags on", () => {
   test.use({ workspaceSeed: true, appEnvironment: STUDIO_FLAGS });
 
-  test("Design and Images open empty canvases beside the sidebar", async ({ aiden }) => {
+  test("Images opens beside the sidebar, and Design Studio is gone", async ({ aiden }) => {
     let page = aiden.page;
     await finishLmStudioOnboarding(page);
     await page.mouse.move(1, 1); // keep the onboarding toast from pausing over the toolbar
@@ -163,8 +164,8 @@ test.describe("Studio foundation with both flags on", () => {
     await expect
       .poll(async () => (await readRowNames()).slice(0, 3))
       .toEqual(["New Agent", "New chat in…", "Scheduled"]);
-    await expect.poll(async () => (await readRowNames()).slice(-2)).toEqual(["Design", "Images"]);
-    const designRow = nav.getByRole("button", { name: "Design", exact: true });
+    await expect.poll(async () => (await readRowNames()).slice(-1)).toEqual(["Images"]);
+    await expect(nav.getByRole("button", { name: "Design", exact: true })).toHaveCount(0);
     const imagesRow = nav.getByRole("button", { name: "Images", exact: true });
     const workspaces = page.getByText("Workspaces", { exact: true }).first();
     const [navBox, imagesBox, workspacesBox] = await Promise.all([
@@ -175,124 +176,50 @@ test.describe("Studio foundation with both flags on", () => {
     expect(navBox!.y + navBox!.height).toBeLessThanOrEqual(workspacesBox!.y);
     expect(imagesBox!.y).toBeLessThan(workspacesBox!.y);
 
-    await designRow.click();
-    const canvas = page.getByRole("region", { name: "Design canvas" });
-    await expect(canvas).toBeVisible();
-    await expect.poll(() => currentPath(page)).toBe("/design");
-    await expect(designRow).toHaveAttribute("aria-current", "page");
+    await imagesRow.click();
+    await expect(page.getByText("No image workflows yet")).toBeVisible();
+    await expect.poll(() => currentPath(page)).toBe("/images");
+    await expect(imagesRow).toHaveAttribute("aria-current", "page");
     await expect(nav).toBeVisible(); // the sidebar stays
     await expect(tools).toBeHidden(); // the Environment workbench is suppressed, not closed
-    await expect(canvas.getByText("No design projects yet")).toBeVisible();
     expect(await studioChunkCount(page)).toBeGreaterThan(0); // the chunk check can see studio loads
-
-    // Keyboard tools and zoom act on the focused canvas only.
-    await canvas.focus();
-    const rail = canvas.getByRole("toolbar", { name: "Canvas tools" });
-    const zoom = canvas.getByRole("toolbar", { name: "Zoom" });
-    const select = rail.getByRole("button", { name: "Select" });
-    const hand = rail.getByRole("button", { name: "Hand" });
-    await expect(select).toHaveAttribute("aria-pressed", "true");
-    await page.keyboard.press("h");
-    await expect(hand).toHaveAttribute("aria-pressed", "true");
-    await expect(select).toHaveAttribute("aria-pressed", "false");
-    await page.keyboard.press("v");
-    await expect(select).toHaveAttribute("aria-pressed", "true");
-    await expect(hand).toHaveAttribute("aria-pressed", "false");
-    await page.keyboard.press("h");
-    await expect(hand).toHaveAttribute("aria-pressed", "true");
-
-    await expect(zoom.getByRole("button", { name: /^Zoom 100%/u })).toBeVisible();
-    await page.keyboard.press("=");
-    await expect(zoom.getByRole("button", { name: /^Zoom 120%/u })).toBeVisible();
-    await page.keyboard.press("-");
-    await expect(zoom.getByRole("button", { name: /^Zoom 100%/u })).toBeVisible();
-    await page.keyboard.press("=");
-    await expect(zoom.getByRole("button", { name: /^Zoom 120%/u })).toBeVisible();
-    await page.keyboard.press("Shift+0");
-    await expect(zoom.getByRole("button", { name: /^Zoom 100%/u })).toBeVisible();
-    await zoom.getByRole("button", { name: "Zoom in" }).click();
-    await expect(zoom.getByRole("button", { name: /^Zoom 120%/u })).toBeVisible();
-
-    // M toggles the overview map.
-    const minimap = zoom.getByRole("button", { name: "Overview map" });
-    await canvas.focus();
-    await expect(minimap).toHaveAttribute("aria-pressed", "false");
-    await expect(canvas.locator(".react-flow__minimap")).toHaveCount(0);
-    await page.keyboard.press("m");
-    await expect(minimap).toHaveAttribute("aria-pressed", "true");
-    await expect(canvas.locator(".react-flow__minimap")).toBeVisible();
-    await page.keyboard.press("m");
-    await expect(minimap).toHaveAttribute("aria-pressed", "false");
-    await expect(canvas.locator(".react-flow__minimap")).toHaveCount(0);
-
-    // The Hand tool pans the viewport.
-    const viewport = canvas.locator(".react-flow__viewport");
-    const before = await viewport.evaluate((element) => getComputedStyle(element).transform);
-    const box = (await canvas.boundingBox())!;
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 60, { steps: 6 });
-    await page.mouse.up();
-    await expect
-      .poll(() => viewport.evaluate((element) => getComputedStyle(element).transform))
-      .not.toBe(before);
-
-    // App shortcuts still work while the canvas has focus, and typing in the palette does not trigger canvas keys.
-    // Select is active and the overview map is off, so a leaked "h" or "m" would visibly flip one of them.
-    await canvas.focus();
-    await page.keyboard.press("v");
-    await expect(select).toHaveAttribute("aria-pressed", "true");
-    await expect(minimap).toHaveAttribute("aria-pressed", "false");
-    const search = await openCommandPalette(page);
-    await search.fill("hm");
-    await expect(search).toHaveValue("hm");
-    await closeCommandPalette(page); // the open palette hides the canvas from the accessibility tree
-    await expect(select).toHaveAttribute("aria-pressed", "true");
-    await expect(hand).toHaveAttribute("aria-pressed", "false");
-    await expect(minimap).toHaveAttribute("aria-pressed", "false");
-    await expect(canvas.locator(".react-flow__minimap")).toHaveCount(0);
 
     // Back in a chat, the Environment workbench returns exactly as it was.
     await nav.getByRole("button", { name: "New Agent", exact: true }).click();
     await expect(tools).toBeVisible();
-    await expect(page.getByRole("region", { name: "Design canvas" })).toHaveCount(0);
 
-    // The palette opens Design and Images.
-    let paletteSearch = await openCommandPalette(page);
+    // The palette opens Images and offers no Design Studio command.
+    const paletteSearch = await openCommandPalette(page);
     await paletteSearch.fill("Open Design Studio");
-    await page.getByRole("option", { name: /Open Design Studio/u }).click();
-    await expect(page.getByRole("region", { name: "Design canvas" })).toBeVisible();
-    await expect.poll(() => currentPath(page)).toBe("/design");
-
-    paletteSearch = await openCommandPalette(page);
+    await expect(page.getByRole("option", { name: /Open Design Studio/u })).toHaveCount(0);
     await paletteSearch.fill("Open Create Images");
     await page.getByRole("option", { name: /Open Create Images/u }).click();
     await expect(page.getByRole("button", { name: "New from Starter" }).first()).toBeVisible();
     await expect.poll(() => currentPath(page)).toBe("/images");
-    await expect(imagesRow).toHaveAttribute("aria-current", "page");
-    await expect(designRow).not.toHaveAttribute("aria-current", "page");
-    await expect(page.getByText("No image workflows yet")).toBeVisible();
 
-    // Detail routes mount the same canvases and keep their sidebar row selected.
-    await navigateTo(page, "/design/project-1");
-    await expect(page.getByRole("region", { name: "Design canvas" })).toBeVisible();
-    await expect.poll(() => currentPath(page)).toBe("/design/project-1");
-    await expect(designRow).toHaveAttribute("aria-current", "page");
+    // The detail route keeps its sidebar row selected.
     await navigateTo(page, "/images/workflow-1");
     await expect(page.getByText("This workflow could not be opened", { exact: true })).toBeVisible();
     await expect.poll(() => currentPath(page)).toBe("/images/workflow-1");
     await expect(imagesRow).toHaveAttribute("aria-current", "page");
+
+    // A stale Design Studio link, with or without a project id, lands on the home chat.
+    for (const stale of ["/design", "/design/project-1"]) {
+      await navigateTo(page, "/scheduled");
+      await expect.poll(() => currentPath(page)).toBe("/scheduled");
+      await navigateTo(page, stale);
+      await expectHomeChat(page);
+    }
 
     // Relaunching without the flags removes every trace.
     page = await aiden.relaunch(undefined, {});
     await expectHomeChat(page);
     const relaunchedNav = page.getByRole("navigation", { name: "Primary" });
     await expect(relaunchedNav.getByRole("button", { name: "Scheduled", exact: true })).toBeVisible();
-    await expect(relaunchedNav.getByRole("button", { name: "Design", exact: true })).toHaveCount(0);
     await expect(relaunchedNav.getByRole("button", { name: "Images", exact: true })).toHaveCount(0);
     const relaunchedSearch = await openCommandPalette(page);
-    await relaunchedSearch.fill("Open Design Studio");
-    await expect(page.getByRole("option", { name: /Open Design Studio/u })).toHaveCount(0);
+    await relaunchedSearch.fill("Open Create Images");
+    await expect(page.getByRole("option", { name: /Open Create Images/u })).toHaveCount(0);
     await closeCommandPalette(page);
   });
 });

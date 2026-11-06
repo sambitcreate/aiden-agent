@@ -1,5 +1,6 @@
 import type { AppSettings } from "../types.js";
 import type { LiveToolPrepareInput, LiveToolProvider } from "./live-tools.js";
+import { createEndSessionToolProvider } from "./end-session-tool.js";
 import { aidenAppControlToolFactory } from "./app-control/factory.js";
 
 /**
@@ -14,6 +15,8 @@ export type LiveToolProviderFactory = (
 
 /** Every Live tool group. Each feature adds one entry here. */
 export const LIVE_TOOL_PROVIDER_FACTORIES: readonly LiveToolProviderFactory[] = [
+  // Saying goodbye ends the session (always on while Live is on).
+  (input) => createEndSessionToolProvider(input),
   aidenAppControlToolFactory,
 ];
 

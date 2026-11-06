@@ -32,6 +32,38 @@ function fakeHost(t, platform, answers = {}) {
   return { host: { platform, home, uid: 501, user: "sam", run }, calls, home, local };
 }
 
+test("service install shows the usage-data notice before the service starts, and bad flags show none", async (t) => {
+  const { host, calls, home, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
+  const entry = join(home, "cli.js");
+  writeFileSync(entry, "");
+  const saved = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = entry;
+  t.after(() => { if (saved === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = saved; });
+  mkdirSync(local.agentDir, { recursive: true, mode: 0o700 });
+  const notices = [];
+  const analytics = {
+    agentDir: local.agentDir,
+    appDir: home,
+    env: {},
+    // A service install over SSH or from a script has no terminal, and still tells the person.
+    stderr: { isTTY: false, write: (text) => { notices.push({ text, serviceCalls: calls.length }); } },
+    createTransport: async () => { throw new Error("service install never sends"); },
+  };
+  const options = { ready: async () => true, remote: async () => ({}), pair: async () => undefined, tty: false, analytics };
+
+  await assert.rejects(api.serviceCommand(local.agentDir, ["install", "--bogus"], host, options));
+  assert.deepEqual(notices, []);
+
+  const write = process.stdout.write;
+  process.stdout.write = () => true;
+  try {
+    await api.serviceCommand(local.agentDir, ["install", "--network", "local", "--no-pair"], host, options);
+    await api.serviceCommand(local.agentDir, ["install", "--network", "local", "--no-pair"], host, options);
+  } finally { process.stdout.write = write; }
+  assert.deepEqual(notices.map((notice) => notice.text), [api.SERVER_ANALYTICS_NOTICE], "shown once");
+  assert.equal(notices[0].serviceCalls, 0, "before the service can start sending");
+});
+
 test("the systemd unit runs serve --no-pair with every value quoted and escaped for systemd", () => {
   const unit = api.systemdUnit(launch);
   const execStart = unit.split("\n").find((line) => line.startsWith("ExecStart="));

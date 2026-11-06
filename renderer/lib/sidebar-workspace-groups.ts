@@ -4,7 +4,7 @@ import {
   type SidebarChatSummary,
   type SidebarProjectSummary,
 } from "./sidebar-organization";
-import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL, noWorkspaceHome } from "./no-workspace";
+import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL, noWorkspaceHome, sidebarGroupWorkspaceId } from "./no-workspace";
 import type { ChatMeta, Workspace } from "./types";
 
 /**
@@ -72,4 +72,24 @@ export function localSidebarChats(
         ]
       : [],
   );
+}
+
+/**
+ * The one project a scoped sidebar shows (design mode scopes it to the open
+ * chat's project) and that project's chats. A No workspace folder scopes to
+ * the Chats group. Null when there is nothing to scope to: the project is no
+ * longer registered or has no chats left, so the sidebar shows every project.
+ */
+export function scopedLocalSidebar(
+  scopeWorkspaceId: string | null | undefined,
+  workspaces: readonly Workspace[],
+  projects: readonly LocalSidebarProject[],
+  chats: readonly LocalSidebarChat[],
+): { project: LocalSidebarProject; chats: LocalSidebarChat[] } | null {
+  if (!scopeWorkspaceId || !workspaces.some((workspace) => workspace.id === scopeWorkspaceId)) return null;
+  const key = localSidebarProjectKey(sidebarGroupWorkspaceId(scopeWorkspaceId, workspaces));
+  const project = projects.find((entry) => entry.key === key);
+  if (!project) return null;
+  const projectChats = chats.filter((entry) => entry.projectKey === key);
+  return projectChats.length > 0 ? { project, chats: projectChats } : null;
 }

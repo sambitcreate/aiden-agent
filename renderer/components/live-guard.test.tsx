@@ -1,9 +1,12 @@
 // Installs happy-dom; must stay the first import.
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
+import type * as React from "react";
 import { afterEach, test } from "node:test";
 import { cleanup, render } from "@testing-library/react";
 import { AIDEN_ELEMENT_FACTS_SOURCE, type AidenElementFacts } from "../../main/services/gemini-live/app-control/page-action";
+import { idleLiveController } from "./assistant/assistant-live-test-fixture";
+import { LiveRibbon } from "./assistant/live-ribbon";
 import { LiveGuard } from "./live-guard";
 import {
   AlertDialog,
@@ -89,4 +92,42 @@ test("an inner confirm region never weakens an outer you region", () => {
     </LiveGuard>,
   );
   assert.equal(facts(byText("Remove device"), "button", "Remove device")?.guard, "you");
+});
+
+test("a menu that marks itself the user's stays so inside a confirm region", () => {
+  render(
+    <LiveGuard guard="confirm">
+      <DropdownMenu open modal={false}>
+        <DropdownMenuTrigger>More</DropdownMenuTrigger>
+        <DropdownMenuContent data-live-guard="you">
+          <DropdownMenuItem>Voice</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </LiveGuard>,
+  );
+  assert.equal(facts(byText("Voice"), "menuitem", "Voice")?.guard, "you");
+});
+
+test("the Live ribbon's Take over, Confirm and Cancel are the user's alone by main's own rule", () => {
+  const live = { ...idleLiveController, active: true, state: "open" as const, microphoneActive: true };
+  const ribbon = (activity: React.ComponentProps<typeof LiveRibbon>["activity"]) => (
+    <LiveRibbon
+      live={live}
+      markState="listening"
+      activity={activity}
+      preferences={{ voice: "Puck", speed: 1, ribbonColors: "spectrum" }}
+      onPreferencesChange={() => undefined}
+    />
+  );
+  render(ribbon({ kind: "acting", label: "Pressing “Settings”", takeOver: () => undefined }));
+  const takeOver = Array.from(document.querySelectorAll("button")).find((button) => /Take over/u.test(button.textContent ?? ""));
+  assert.ok(takeOver, "Take over is shown");
+  assert.equal(facts(takeOver, "button", "Take over")?.guard, "you");
+  cleanup();
+  render(ribbon({ kind: "confirm", id: "c1", label: "Delete chat", confirm: () => undefined, cancel: () => undefined }));
+  for (const name of ["Confirm", "Cancel"]) {
+    const button = Array.from(document.querySelectorAll("button")).find((entry) => entry.textContent?.trim() === name);
+    assert.ok(button, `${name} is shown`);
+    assert.equal(facts(button, "button", name)?.guard, "you", name);
+  }
 });

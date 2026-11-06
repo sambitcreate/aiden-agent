@@ -488,7 +488,10 @@ export const FieldLabel = Label;
 
 const SplitContext = React.createContext<{
   collapsed: boolean;
+  /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
+  reservedWidth: number;
   toggle: () => void;
+  setCollapsed: (collapsed: boolean) => void;
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
 
@@ -505,6 +508,26 @@ export function useSplitViewCollapsedHeaderInset(): number | undefined {
 /** Whether the leading sidebar is collapsed, for full-height chrome that must clear the window controls. */
 export function useSplitViewCollapsed(): boolean {
   return React.useContext(SplitContext)?.collapsed === true;
+}
+
+/**
+ * The leading sidebar's collapsed state and a setter that persists like the
+ * toggle does, for layouts that collapse it for room. Null outside a SplitView.
+ */
+export function useSplitViewSidebar(): {
+  collapsed: boolean;
+  /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
+  reservedWidth: number;
+  setCollapsed: (collapsed: boolean) => void;
+} | null {
+  const context = React.useContext(SplitContext);
+  return React.useMemo(
+    () =>
+      context
+        ? { collapsed: context.collapsed, reservedWidth: context.reservedWidth, setCollapsed: context.setCollapsed }
+        : null,
+    [context],
+  );
 }
 
 type SplitViewProps = React.PropsWithChildren<{
@@ -564,6 +587,13 @@ function SplitViewRoot({
     localStorage.setItem(collapseKey, next ? "1" : "0");
     setCollapsed(next);
   }, [collapseKey, collapsed]);
+  const setPersistedCollapsed = React.useCallback(
+    (next: boolean) => {
+      localStorage.setItem(collapseKey, next ? "1" : "0");
+      setCollapsed(next);
+    },
+    [collapseKey],
+  );
   useCommandHandler("sidebar.toggle", toggle, !contentModalOpen);
 
   React.useEffect(() => {
@@ -691,8 +721,14 @@ function SplitViewRoot({
 
   const chrome = useWindowChrome();
   const splitContext = React.useMemo(
-    () => ({ collapsed, toggle, leadingAnchor }),
-    [collapsed, toggle, leadingAnchor],
+    () => ({
+      collapsed,
+      reservedWidth: reservedSidebarWidth,
+      toggle,
+      setCollapsed: setPersistedCollapsed,
+      leadingAnchor,
+    }),
+    [collapsed, reservedSidebarWidth, toggle, setPersistedCollapsed, leadingAnchor],
   );
 
   return (
@@ -1071,6 +1107,7 @@ export function ScrollArea({
   leading,
   actions,
   toolbar,
+  toolbarAccessory,
   footer,
   alignFooterToScrollContent = false,
   autoScrollToBottom,
@@ -1083,9 +1120,16 @@ export function ScrollArea({
   scrollRestorationId,
   focusRegion,
   overlay,
+  bodyHidden = false,
   className,
   children,
 }: React.PropsWithChildren<{
+  /**
+   * Hides everything below the toolbar from sight, focus and assistive tech
+   * while keeping it mounted (and its scroll position), such as design mode's
+   * stacked layout showing the canvas in the chat's place.
+   */
+  bodyHidden?: boolean;
   /**
    * Marks the scrollport as the conversation F6 moves to, so arrow keys and
    * Page Up/Down scroll it once it has focus.
@@ -1105,6 +1149,11 @@ export function ScrollArea({
   leading?: React.ReactNode;
   actions?: React.ReactNode;
   toolbar?: React.ReactNode;
+  /**
+   * Sits under the toolbar as part of it, such as a notice, so the scroll
+   * content starts below it instead of underneath it.
+   */
+  toolbarAccessory?: React.ReactNode;
   footer?: React.ReactNode;
   /** Keep the fixed footer aligned with the scrollport when classic scrollbars reserve width. */
   alignFooterToScrollContent?: boolean;
@@ -1443,7 +1492,7 @@ export function ScrollArea({
           </h1>
           {titleAccessory}
         </div>
-        <div className="no-drag flex items-center gap-2">{actions}</div>
+        <div className="no-drag flex shrink-0 items-center gap-2">{actions}</div>
       </header>
     ) : null);
 
@@ -1458,120 +1507,128 @@ export function ScrollArea({
       {resolvedToolbar ? (
         <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">
           {resolvedToolbar}
+          {toolbarAccessory}
         </div>
       ) : null}
+      {/* Always rendered so hiding the body never remounts (or rescrolls) the transcript. */}
       <div
-        ref={viewport}
-        data-scroll-restoration-id={scrollRestorationId}
-        data-scroll-top={atTop}
-        data-scroll-bottom={atScrollEnd}
-        data-follow={autoScrollToBottom ? following : undefined}
-        {...(focusRegion
-          ? {
-              "data-focus-region": focusRegion,
-              "data-focus-region-entry": "",
-              role: "region",
-              "aria-label": "Conversation",
-              tabIndex: -1,
-            }
-          : {})}
-        className={cn(
-          "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
-          focusRegion && "conversation-scrollport",
-        )}
-        style={{
-          paddingTop: toolbarHeight,
-          paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
-          // While following, the latch owns the bottom edge; browser scroll
-          // anchoring would fight it by holding a mid-transcript node still.
-          // A reader who has scrolled away keeps anchoring, so content changing
-          // above their place does not shift what they are reading.
-          overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
-        }}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
-          const previous = scrollSampleRef.current;
-          const clamped = previous !== null &&
-            (sample.height < previous.height || sample.viewport !== previous.viewport);
-          // Sandboxed frame input cannot reach our wheel/touch listeners. Its
-          // chained host scroll can still reveal the reader moving upward.
-          // Fractional upward movement adds up across events, including across
-          // a streaming snap; a downward move or a jump starts over.
-          if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
-            upwardDriftRef.current = 0;
-          } else {
-            upwardDriftRef.current += previous.top - sample.top;
-          }
-          const movedUp = upwardDriftRef.current > 1;
-          if (movedUp) upwardDriftRef.current = 0;
-          scrollSampleRef.current = sample;
-          if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
-            dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
-          }
-          dispatchFollow({
-            type: clamped ? "contentResize" : "settle",
-            distance: measureDistance(element),
-            scrollTop: element.scrollTop,
-          });
-        }}
+        className={bodyHidden ? "contents invisible" : "contents"}
+        inert={bodyHidden}
+        aria-hidden={bodyHidden || undefined}
       >
-        <div ref={content} data-scroll-content className="min-h-full">
-          {children}
-        </div>
-      </div>
-      {focusRegion ? (
-        // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
-        <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
-      ) : null}
-      {overlay ? (
         <div
-          className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
-          style={{ top: toolbarHeight + 8 }}
-        >
-          <div className="pointer-events-auto">{overlay}</div>
-        </div>
-      ) : null}
-      {showScrollToBottomButton && offerJump ? (
-        // The button floats over the scrollport like the footer, but is centred
-        // on the same chat column as the composer, so it follows the column
-        // when Quick View insets it (and through that transition) and when a
-        // classic scrollbar takes a gutter.
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
-          style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
-        >
-          <div className="aiden-dock-inset chat-content-column relative">
-            <Button
-              iconOnly
-              size="medium"
-              variant="filled"
-              onClick={() => scrollToBottom()}
-              aria-label="Scroll to bottom"
-              className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
-              style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
-            >
-              <ArrowDownToLine />
-            </Button>
-          </div>
-        </div>
-      ) : null}
-      {footer ? (
-        // Nothing scrolls the footer, so it never grows under the toolbar; a child
-        // that opts in with min-h-0 (a tall approval) shrinks to the room left.
-        // Anything still too tall overflows through the top, keeping the
-        // composer's input and actions at the bottom in view.
-        <div
-          ref={footerRef}
-          className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+          ref={viewport}
+          data-scroll-restoration-id={scrollRestorationId}
+          data-scroll-top={atTop}
+          data-scroll-bottom={atScrollEnd}
+          data-follow={autoScrollToBottom ? following : undefined}
+          {...(focusRegion
+            ? {
+                "data-focus-region": focusRegion,
+                "data-focus-region-entry": "",
+                role: "region",
+                "aria-label": "Conversation",
+                tabIndex: -1,
+              }
+            : {})}
+          className={cn(
+            "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
+            focusRegion && "conversation-scrollport",
+          )}
           style={{
-            maxHeight: `calc(100% - ${toolbarHeight}px)`,
-            ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+            paddingTop: toolbarHeight,
+            paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
+            // While following, the latch owns the bottom edge; browser scroll
+            // anchoring would fight it by holding a mid-transcript node still.
+            // A reader who has scrolled away keeps anchoring, so content changing
+            // above their place does not shift what they are reading.
+            overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
+          }}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+            const previous = scrollSampleRef.current;
+            const clamped = previous !== null &&
+              (sample.height < previous.height || sample.viewport !== previous.viewport);
+            // Sandboxed frame input cannot reach our wheel/touch listeners. Its
+            // chained host scroll can still reveal the reader moving upward.
+            // Fractional upward movement adds up across events, including across
+            // a streaming snap; a downward move or a jump starts over.
+            if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+              upwardDriftRef.current = 0;
+            } else {
+              upwardDriftRef.current += previous.top - sample.top;
+            }
+            const movedUp = upwardDriftRef.current > 1;
+            if (movedUp) upwardDriftRef.current = 0;
+            scrollSampleRef.current = sample;
+            if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
+              dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+            }
+            dispatchFollow({
+              type: clamped ? "contentResize" : "settle",
+              distance: measureDistance(element),
+              scrollTop: element.scrollTop,
+            });
           }}
         >
-          {footer}
+          <div ref={content} data-scroll-content className="min-h-full">
+            {children}
+          </div>
         </div>
-      ) : null}
+        {focusRegion ? (
+          // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
+          <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
+        ) : null}
+        {overlay ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
+            style={{ top: toolbarHeight + 8 }}
+          >
+            <div className="pointer-events-auto">{overlay}</div>
+          </div>
+        ) : null}
+        {showScrollToBottomButton && offerJump ? (
+          // The button floats over the scrollport like the footer, but is centred
+          // on the same chat column as the composer, so it follows the column
+          // when Quick View insets it (and through that transition) and when a
+          // classic scrollbar takes a gutter.
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+            style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
+          >
+            <div className="aiden-dock-inset chat-content-column relative">
+              <Button
+                iconOnly
+                size="medium"
+                variant="filled"
+                onClick={() => scrollToBottom()}
+                aria-label="Scroll to bottom"
+                className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
+                style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
+              >
+                <ArrowDownToLine />
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {footer ? (
+          // Nothing scrolls the footer, so it never grows under the toolbar; a child
+          // that opts in with min-h-0 (a tall approval) shrinks to the room left.
+          // Anything still too tall overflows through the top, keeping the
+          // composer's input and actions at the bottom in view.
+          <div
+            ref={footerRef}
+            className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+            style={{
+              maxHeight: `calc(100% - ${toolbarHeight}px)`,
+              ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+            }}
+          >
+            {footer}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1881,11 +1938,10 @@ export const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
 >(function Content({ className, sideOffset = 6, onCloseAutoFocus, ...props }, ref) {
-  const liveGuard = useLiveGuardAttributes();
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
-        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -1895,6 +1951,7 @@ export const DropdownMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
         onCloseAutoFocus={(event) => {
           onCloseAutoFocus?.(event);
           // An item that opened a dialog has already moved focus into it. Sending
@@ -1965,11 +2022,10 @@ export const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
 >(function SubContent({ className, sideOffset = 4, ...props }, ref) {
-  const liveGuard = useLiveGuardAttributes();
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.SubContent
-        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -1979,6 +2035,7 @@ export const DropdownMenuSubContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </DropdownMenuPrimitive.Portal>
   );
@@ -2041,11 +2098,10 @@ export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(function PopoverContent({ className, sideOffset = 6, ...props }, ref) {
-  const liveGuard = useLiveGuardAttributes();
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
-        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -2055,6 +2111,7 @@ export const PopoverContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </PopoverPrimitive.Portal>
   );
@@ -2066,11 +2123,10 @@ export const HoverCardContent = React.forwardRef<
   React.ElementRef<typeof HoverCardPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Content>
 >(function HoverCardContent({ className, sideOffset = 8, ...props }, ref) {
-  const liveGuard = useLiveGuardAttributes();
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
-        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -2080,6 +2136,7 @@ export const HoverCardContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </HoverCardPrimitive.Portal>
   );
@@ -2091,11 +2148,10 @@ export const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(function ContextContent({ className, ...props }, ref) {
-  const liveGuard = useLiveGuardAttributes();
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
-        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         className={cn(
@@ -2104,6 +2160,7 @@ export const ContextMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -2149,11 +2206,10 @@ export const ContextMenuSubContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
 >(function ContextSubContent({ className, sideOffset = 4, ...props }, ref) {
-  const liveGuard = useLiveGuardAttributes();
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.SubContent
-        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -2163,6 +2219,7 @@ export const ContextMenuSubContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -2206,11 +2263,10 @@ export const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(function SelectContent({ className, children, position = "popper", ...props }, ref) {
-  const liveGuard = useLiveGuardAttributes();
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
-        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         position={position}
@@ -2220,6 +2276,7 @@ export const SelectContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       >
         <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>
       </SelectPrimitive.Content>
