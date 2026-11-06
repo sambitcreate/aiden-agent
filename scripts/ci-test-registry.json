@@ -1027,6 +1027,7 @@
         "renderer/lib/live-activity.test.ts",
         "renderer/lib/live-chat-notes.test.ts",
         "renderer/lib/live-chat-tools.test.ts",
+        "renderer/lib/live-speech-onsets.test.ts",
         "renderer/lib/live-session-bus.test.ts",
         "renderer/lib/live-open-chat.test.ts",
         "renderer/lib/live-time-stretch.test.ts",

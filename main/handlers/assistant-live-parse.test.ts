@@ -134,5 +134,13 @@ test("Assistant Live notes need a session and 1 to 2,000 characters of text", ()
     { sessionId: "session-1", text: "x".repeat(2_001) },
     { sessionId: "session-1", text: 5 },
     { sessionId: "session-1" },
+    { sessionId: "session-1", text: "Run npm test?", awaitDelivery: false },
+    { sessionId: "session-1", text: "Run npm test?", awaitDelivery: "yes" },
+    { sessionId: "session-1", text: "Run npm test?", urgent: true },
   ]) assert.throws(() => parseAssistantLiveNoteIntent(value), /note/u);
+  assert.equal(parseAssistantLiveNoteIntent({ sessionId: "session-1", text: "Tests passed." }).awaitDelivery, undefined);
+  assert.equal(
+    parseAssistantLiveNoteIntent({ sessionId: "session-1", text: "Run npm test?", awaitDelivery: true }).awaitDelivery,
+    true,
+  );
 });
