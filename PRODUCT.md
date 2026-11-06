@@ -27,6 +27,7 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 - Supports local and hosted model providers without making one provider the product authority.
 - Reuses local skill folders and explicitly enabled installed plugin skills under the active workspace permission.
 - Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.
+- Aiden Live can move through Aiden's own window by reading its accessibility tree (on by default, **Let Live move through Aiden**). It never acts outside Aiden unless Computer Use is on, the user's own input takes over at once, destructive controls wait for a spoken or tapped OK, and approvals, the Usage data and Live switches, onboarding and key fields stay the user's alone.
 - Presents the built-in Composio connection as one tool and one service allowance. Enabled apps and operations are managed in Composio; Aiden still applies its action approvals and Bot rules. Existing partial access requires an explicit service selection.
 - Treats the desktop host as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
 - Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
