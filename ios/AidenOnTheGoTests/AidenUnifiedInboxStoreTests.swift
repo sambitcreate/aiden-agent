@@ -64,6 +64,27 @@ private final class AidenInboxTestClock: Clock, @unchecked Sendable {
 
 /// The store over the demo machines, so every request is one the contract has,
 /// and over a clock the tests move, so nothing here waits for a poll to come due.
+/// Holds a cache write at its start until the test lets it go on.
+private actor AidenInboxSaveGate {
+    private(set) var arrivals = 0
+    private var isClosed = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func close() { isClosed = true }
+
+    func open() {
+        isClosed = false
+        waiting.forEach { $0.resume() }
+        waiting = []
+    }
+
+    func pass() async {
+        guard isClosed else { return }
+        arrivals += 1
+        await withCheckedContinuation { waiting.append($0) }
+    }
+}
+
 @MainActor
 final class AidenUnifiedInboxStoreTests: XCTestCase {
     private let responder = AidenDemoResponder()
@@ -1025,6 +1046,35 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["before"])
         let saved = await cache.loadChatSummaries(instanceId: "studio")
         XCTAssertEqual(saved?.summaries.map(\.id), ["before"])
+    }
+
+    /// A save under way can't be cancelled, so the answer is stopped after it.
+    func testAPollStoppedWhileItsPageSavesWritesNoSnapshot() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("before", age: 1)], on: "studio")
+        let gate = AidenInboxSaveGate()
+        cache = AidenChatCache(
+            root: root.appending(path: "gated", directoryHint: .isDirectory),
+            beforeMetadataWrite: { await gate.pass() }
+        )
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        await gate.close()
+        serve([row("late", age: 0)], on: "studio")
+        let refresh = Task { await store.refreshAll() }
+        let deadline = Date().addingTimeInterval(60)
+        while await gate.arrivals == 0, Date() < deadline {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        store.stop()
+        await gate.open()
+        await refresh.value
+
+        XCTAssertEqual(store.snapshots["studio"]?.chats.map(\.id), ["before"])
+        XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["before"])
     }
 
     func testAFailureAfterStopLeavesTheMachineAlone() async throws {
