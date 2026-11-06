@@ -991,6 +991,117 @@ test("local microphone activity keeps decaying while four audio sends are backpr
   await fixture.unmount();
 });
 
+test("a muted microphone sends Live silence and shows no level until unmuted, and a new session starts unmuted", async () => {
+  let snapshot: AssistantLiveSnapshot = { available: true, reason: "available", model: "gemini-live-test", state: "idle" };
+  const sent: Uint8Array[] = [];
+  let starts = 0;
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      start: async () => {
+        snapshot = { ...snapshot, sessionId: `mute-${++starts}`, state: "open" };
+        return snapshot;
+      },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async (_session, pcm) => {
+        sent.push(Uint8Array.from(pcm));
+        return true;
+      },
+      onEvent: () => () => undefined,
+    },
+  });
+  await fixture.controller().start();
+  const loud = () => {
+    const data = new ArrayBuffer(640);
+    const view = new DataView(data);
+    for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, 8_192, true);
+    return data;
+  };
+  fixture.controller().setMicrophoneMuted(true);
+  await settle();
+  assert.equal(fixture.controller().microphoneMuted, true);
+  fixture.worklets[0]?.emit({ type: "pcm", data: loud() });
+  await settle();
+  assert.equal(sent.length, 1, "Live keeps receiving audio so it hears the user stop");
+  assert.ok(sent[0]!.every((byte) => byte === 0), "muted audio is silence");
+  assert.equal(fixture.controller().microphoneLevel, 0);
+
+  fixture.controller().setMicrophoneMuted(false);
+  await settle();
+  // The level is published every fourth frame.
+  for (let frame = 0; frame < 3; frame += 1) fixture.worklets[0]?.emit({ type: "pcm", data: loud() });
+  await settle();
+  assert.ok(sent[1]!.some((byte) => byte !== 0));
+  assert.ok(fixture.controller().microphoneLevel > 0.7);
+
+  fixture.controller().setMicrophoneMuted(true);
+  await fixture.controller().stop();
+  await fixture.controller().start();
+  assert.equal(fixture.controller().microphoneMuted, false);
+  await fixture.unmount();
+});
+
+test("a faster speaking speed shortens what plays without dropping the barge-in flush", async () => {
+  const played: number[] = [];
+  let ended: (() => void) | null = null;
+  let stops = 0;
+  const context = {
+    state: "running",
+    currentTime: 2,
+    destination: {},
+    resume: async () => undefined,
+    close: async () => undefined,
+    createBuffer: (_channels: number, length: number) => {
+      played.push(length);
+      return { copyToChannel: () => undefined };
+    },
+    createBufferSource: () => {
+      const source = {
+        buffer: null,
+        connect: () => undefined,
+        disconnect: () => undefined,
+        onended: null as (() => void) | null,
+        start: () => {
+          ended = () => source.onended?.();
+        },
+        stop: () => {
+          stops += 1;
+        },
+      };
+      return source;
+    },
+  } as unknown as AudioContext;
+  const tone = (samples: number) => {
+    const pcm = new Uint8Array(samples * 2);
+    const view = new DataView(pcm.buffer);
+    for (let n = 0; n < samples; n += 1) view.setInt16(n * 2, Math.round(8_000 * Math.sin((2 * Math.PI * 220 * n) / 24_000)), true);
+    return pcm;
+  };
+  const player = new PcmPlayer(() => context);
+  player.setSpeed(2);
+  for (let index = 0; index < 4; index += 1) player.enqueue(tone(4_800));
+  for (let guard = 0; guard < 20 && !player.idle; guard += 1) {
+    await settle();
+    const finish = ended as (() => void) | null;
+    ended = null;
+    finish?.();
+  }
+  const total = played.reduce((sum, length) => sum + length, 0);
+  // About half the input; the last few milliseconds the stretcher held back play as they are.
+  assert.ok(total > 9_000 && total < 9_600 + 1_000, `played ${total} of 19200 samples at 2×`);
+
+  player.enqueue(tone(4_800));
+  player.enqueue(tone(4_800));
+  await settle();
+  player.flush();
+  assert.equal(stops, 1, "the playing reply stops at once");
+  assert.equal(player.idle, true, "nothing queued or held back survives the flush");
+  await player.close();
+});
+
 test("provider turn boundaries seal same-speaker transcript turns exactly once", async () => {
   const fixture = await mountHook();
   await fixture.controller().start();

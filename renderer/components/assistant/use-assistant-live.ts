@@ -24,6 +24,7 @@ import type {
 } from "../../shared/assistant-live";
 import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 import { liveSessionBus } from "../../lib/live-session-bus";
+import { LiveTimeStretcher } from "../../lib/live-time-stretch";
 
 export interface AssistantLiveCaption {
   id: number;
@@ -48,6 +49,8 @@ export interface AssistantLiveController {
   microphone: boolean;
   microphoneActive: boolean;
   microphoneLevel: number;
+  /** The user muted the microphone during the session; Live hears silence. */
+  microphoneMuted: boolean;
   microphonePermission: AssistantLiveMicrophonePermission;
   microphonePermissionReady: boolean;
   microphonePermissionDetail: string;
@@ -75,6 +78,13 @@ export interface AssistantLiveController {
   setupComplete: boolean;
   setSetupOpen(open: boolean): void;
   setMicrophone(enabled: boolean): void;
+  setMicrophoneMuted(muted: boolean): void;
+  /** Loudness of Live's voice playing now, 0 to 1. Read it per frame. */
+  outputLevel(): number;
+  /** Whether replies are still queued or playing, and how often playback was cut off. */
+  playbackState(): { idle: boolean; flushes: number };
+  /** Pitch-preserving speaking speed for Live's replies. */
+  setPlaybackSpeed(speed: number): void;
   setComputerUse(enabled: boolean): Promise<void>;
   requestMicrophonePermission(): Promise<boolean>;
   prepareComputerUse(): Promise<void>;
@@ -183,11 +193,16 @@ function stopSource(source: AudioBufferSourceNode | null): void {
 /** Generation-fenced 24 kHz player. Every asynchronous continuation rechecks its epoch. */
 export class PcmPlayer {
   private context: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null;
+  private levelSamples: Float32Array<ArrayBuffer> | null = null;
   private source: AudioBufferSourceNode | null = null;
   private starting = false;
   private paused = false;
   private epoch = 0;
+  private flushes = 0;
   private readonly queue = new GeminiLivePcmPlaybackQueue();
+  /** Pitch-preserving speed change; idle at 1×. */
+  private readonly stretcher = new LiveTimeStretcher();
 
   constructor(private readonly createContext = () => new AudioContext({ sampleRate: 24_000 })) {}
 
@@ -206,6 +221,32 @@ export class PcmPlayer {
       await context.close().catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Speaking speed for replies; applies from the next audio played. */
+  setSpeed(speed: number): void {
+    this.stretcher.setSpeed(speed);
+  }
+
+  /** True when nothing is queued, held back or playing. */
+  get idle(): boolean {
+    return !this.source && !this.starting && this.queue.queuedChunks === 0 && !this.stretcher.pending;
+  }
+
+  /** Counts flushes, so a waiter can tell that the user talked over a reply. */
+  get flushCount(): number {
+    return this.flushes;
+  }
+
+  /** Loudness of what is playing now, 0 to 1. */
+  level(): number {
+    const analyser = this.analyser;
+    if (!analyser || !this.source) return 0;
+    const samples = (this.levelSamples ??= new Float32Array(analyser.fftSize));
+    analyser.getFloatTimeDomainData(samples);
+    let squareSum = 0;
+    for (const sample of samples) squareSum += sample * sample;
+    return Math.min(1, Math.sqrt(squareSum / samples.length) * 4);
   }
 
   enqueue(pcm: Uint8Array): void {
@@ -241,22 +282,52 @@ export class PcmPlayer {
     this.flushInternal();
     const context = this.context;
     this.context = null;
+    this.analyser = null;
     if (context) await context.close().catch(() => undefined);
   }
 
   private flushInternal(): void {
     this.epoch += 1;
+    this.flushes += 1;
     this.queue.flush();
+    this.stretcher.reset();
     const source = this.source;
     this.source = null;
     this.starting = false;
     stopSource(source);
   }
 
+  /** The next stretch of audio to play, joining chunks until some is ready. */
+  private nextSamples(): Float32Array<ArrayBuffer> | null {
+    for (;;) {
+      const pcm = this.queue.dequeue();
+      if (!pcm) {
+        // The reply has caught up: release anything the stretcher held back.
+        return this.stretcher.pending ? this.stretcher.drain() : null;
+      }
+      const decoded = new Float32Array(pcm.byteLength / 2);
+      const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+      for (let index = 0; index < decoded.length; index += 1) {
+        decoded[index] = view.getInt16(index * 2, true) / 32_768;
+      }
+      const samples = this.stretcher.process(decoded);
+      if (samples.length > 0) return samples;
+    }
+  }
+
+  private destinationFor(context: AudioContext): AudioNode {
+    if (this.analyser) return this.analyser;
+    if (typeof context.createAnalyser !== "function") return context.destination;
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.connect(context.destination);
+    this.analyser = analyser;
+    return analyser;
+  }
+
   private async playNext(): Promise<void> {
     if (this.paused || this.source || this.starting) return;
-    const pcm = this.queue.dequeue();
-    if (!pcm) return;
+    if (this.queue.queuedChunks === 0 && !this.stretcher.pending) return;
     const epoch = this.epoch;
     this.starting = true;
     const context = (this.context ??= this.createContext());
@@ -267,12 +338,8 @@ export class PcmPlayer {
         return;
       }
     }
-    const samples = new Float32Array(pcm.byteLength / 2);
-    const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-    for (let index = 0; index < samples.length; index += 1) {
-      samples[index] = view.getInt16(index * 2, true) / 32_768;
-    }
-    if (epoch !== this.epoch || this.paused || context !== this.context) {
+    const samples = this.nextSamples();
+    if (!samples || samples.length === 0 || epoch !== this.epoch || this.paused || context !== this.context) {
       this.starting = false;
       return;
     }
@@ -280,7 +347,7 @@ export class PcmPlayer {
     buffer.copyToChannel(samples, 0);
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(this.destinationFor(context));
     source.onended = () => {
       if (epoch !== this.epoch) return;
       if (this.source === source) this.source = null;
@@ -539,6 +606,20 @@ export function useAssistantLiveWithDependencies(
   const [microphone, setMicrophone] = React.useState(true);
   const [microphoneActive, setMicrophoneActive] = React.useState(false);
   const [microphoneLevel, setMicrophoneLevel] = React.useState(0);
+  const [microphoneMuted, setMicrophoneMutedState] = React.useState(false);
+  const microphoneMutedRef = React.useRef(false);
+  const setMicrophoneMuted = React.useCallback((muted: boolean) => {
+    microphoneMutedRef.current = muted;
+    setMicrophoneMutedState(muted);
+  }, []);
+  const outputLevel = React.useCallback(() => playerRef.current?.level() ?? 0, []);
+  const playbackState = React.useCallback(() => {
+    const player = playerRef.current;
+    return { idle: player?.idle ?? true, flushes: player?.flushCount ?? 0 };
+  }, []);
+  const setPlaybackSpeed = React.useCallback((speed: number) => {
+    playerRef.current?.setSpeed(speed);
+  }, []);
   const [microphonePermission, setMicrophonePermission] =
     React.useState<AssistantLiveMicrophonePermission>("checking");
   const [busy, setBusy] = React.useState(false);
@@ -1112,6 +1193,9 @@ export function useAssistantLiveWithDependencies(
             loggedInput = true;
             console.info("[aiden-live] input-first-packet");
           }
+          // Muted: Live keeps getting silence, so it hears the user stop
+          // rather than a cut-off stream.
+          if (microphoneMutedRef.current) pcm.fill(0);
           const measured = measureGeminiLivePcmLevel(pcm);
           const previous = microphoneLevelRef.current;
           const smoothed =
@@ -1188,6 +1272,7 @@ export function useAssistantLiveWithDependencies(
     setCaptions([]);
     setVoiceApprovalReceipts([]);
     setComputerUseActing(false);
+    setMicrophoneMuted(false);
     try {
       await dependencies.prepareAudioSession?.(setupAbort.signal);
       if (setupAbort.signal.aborted || !mounted.current || operationGeneration.current !== generation) return;
@@ -1255,6 +1340,7 @@ export function useAssistantLiveWithDependencies(
     busy,
     screenBusy,
     computerUseEnabled,
+    setMicrophoneMuted,
     dependencies,
     microphone,
     microphonePermission,
@@ -1369,6 +1455,7 @@ export function useAssistantLiveWithDependencies(
     microphone,
     microphoneActive,
     microphoneLevel,
+    microphoneMuted,
     microphonePermission,
     microphonePermissionReady,
     microphonePermissionDetail,
@@ -1402,6 +1489,10 @@ export function useAssistantLiveWithDependencies(
     setupComplete,
     setSetupOpen,
     setMicrophone,
+    setMicrophoneMuted,
+    outputLevel,
+    playbackState,
+    setPlaybackSpeed,
     setComputerUse,
     requestMicrophonePermission,
     prepareComputerUse,
