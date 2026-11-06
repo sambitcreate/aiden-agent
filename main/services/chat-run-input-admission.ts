@@ -74,6 +74,12 @@ export interface ChatRunInputAdmissionDeps {
     },
   ): Promise<Chat>;
   readChat(chatId: string): Promise<Chat | null>;
+  /**
+   * The person's steer or follow-up is in the transcript (not a main-owned
+   * notice). The Inbox ends the chat's snooze here, as it does for a message
+   * the person sends. Not awaited; a throw is the caller's to log.
+   */
+  onPersonWrote?(chatId: string): void;
   now?(): number;
   newMessageId?(): string;
 }
@@ -204,6 +210,13 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     }
     if (hookBlocked) {
       return { admitted: false, reason: "invalid", committed: true, messageId };
+    }
+    if (!input.notice) {
+      try {
+        deps.onPersonWrote?.(generation.chatId);
+      } catch {
+        // The input is committed either way; the snooze ends with the next wake.
+      }
     }
     if (deps.active.get(input.streamId) !== generation) {
       return { admitted: false, reason: "run_not_active", committed: true, messageId };

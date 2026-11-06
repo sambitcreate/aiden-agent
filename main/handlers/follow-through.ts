@@ -6,6 +6,7 @@ import { chatPullRequestService } from "../services/chat-pull-request-service-ma
 import {
   chatFollowThrough,
   clearDoneWhenCheck,
+  followChatPullRequest,
   pullRequestFollows,
   readJobOutput,
   resolvePullRequestTarget,
@@ -49,8 +50,7 @@ export function registerFollowThroughHandlers(): void {
   ipcMain.handle("chats:followThroughFollowPullRequest", async (event, input: unknown) => {
     activeDocument(event);
     const id = chatId(record(input).chatId);
-    const target = await resolvePullRequestTarget(id, undefined, (chat) => chatPullRequestService.current(chat));
-    pullRequestFollows.follow({ chatId: id, ...target, startedBy: "person" });
+    await followChatPullRequest(id, () => resolvePullRequestTarget(id, undefined, (chat) => chatPullRequestService.current(chat)));
   });
 
   ipcMain.handle("chats:followThroughStopFollow", (event, input: unknown) => {
@@ -72,6 +72,6 @@ export function registerFollowThroughHandlers(): void {
 
   ipcMain.handle("chats:followThroughClearCheck", (event, input: unknown) => {
     activeDocument(event);
-    clearDoneWhenCheck(chatId(record(input).chatId));
+    return clearDoneWhenCheck(chatId(record(input).chatId));
   });
 }

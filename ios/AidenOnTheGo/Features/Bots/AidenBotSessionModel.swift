@@ -46,8 +46,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
-/// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`,
-/// `bot:handoff-on-mac` and `bot:images` the pairing holds.
+/// The audience-shaping Bot session grants the pairing currently holds.
 /// The Mac shapes a Bot session feed by these (its cards, Chat activity,
 /// hand-offs and the paused state) when the feed opens, and keeps that shape
 /// for the feed's life. A Bot chat can open from the pairing's saved features
@@ -55,7 +54,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers, .botIssues, .botAccessRequests, .botPlans, .botAllowed].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -102,7 +101,7 @@ protocol AidenBotSessionTransport: Sendable {
         idempotencyKey: UUID
     ) async throws -> AidenBotQuestionAnswerReceipt
     /// The generic `POST /approvals/{id}/respond`; a Bot approval is answered
-    /// by its `waitId` with no scope.
+    /// by its `waitId`; Remote 57 adds `always` only for a host offer and held grant.
     func respondToApproval(
         id: String,
         decision: AidenApprovalDecision,
@@ -122,8 +121,18 @@ protocol AidenBotSessionTransport: Sendable {
     ) async throws -> AidenBotRoutineProposalRespondResult
     /// Revision 33 (`bot-attachments-v1`): stage one upload for the next message.
     func uploadBotAttachment(botId: String, upload: AidenAttachmentUpload) async throws -> AidenAttachmentReference
+    /// Revision 50: a picture as its own bytes while the phone holds
+    /// `attachments:raw`, and how much of the upload has gone (0 to 1).
+    func uploadBotAttachment(
+        botId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference
     func removeBotAttachment(botId: String, attachmentId: String) async throws
-    /// Revision 37 (`bot:handoffs`): Done or Skip for the waiting hand-off.
+    /// Revision 56: answer a plan with no private proposal fields.
+    func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt
+    func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt
     func answerBotHandoff(
         botId: String,
         waitId: String,
@@ -153,9 +162,25 @@ extension AidenBotSessionTransport {
         throw AidenRemoteClientError.invalidResponse
     }
 
+    /// A transport without raw uploads or progress sends the JSON envelope.
+    func uploadBotAttachment(
+        botId: String,
+        upload: AidenAttachmentUpload,
+        rawImages: Bool,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> AidenAttachmentReference {
+        try await uploadBotAttachment(botId: botId, upload: upload)
+    }
+
     func removeBotAttachment(botId: String, attachmentId: String) async throws {}
 
-    /// A transport without hand-offs refuses them, as a Mac without `bot:handoffs` does.
+    /// A transport without plans never sends a plan answer.
+    func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
+    func answerBotAccessRequest(botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID) async throws -> AidenBotAccessAnswerReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
     func answerBotHandoff(
         botId: String,
         waitId: String,
@@ -1068,13 +1093,17 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
     }
 
     func cancel() {
-        let tasks = lock.withLock { () -> (Task<Void, Never>?, Task<Void, Never>?) in
+        let (waiting, work, timer) = lock.withLock { () -> (CheckedContinuation<T, Error>?, Task<Void, Never>?, Task<Void, Never>?) in
             cancelled = true
-            return (work, timer)
+            let waiting = continuation
+            continuation = nil
+            return (waiting, self.work, self.timer)
         }
-        tasks.0?.cancel()
-        tasks.1?.cancel()
-        finish(.failure(CancellationError()))
+        // Claim the result before cancelling work, which may return a receipt
+        // as it handles cancellation.
+        waiting?.resume(throwing: CancellationError())
+        work?.cancel()
+        timer?.cancel()
     }
 
     private func finish(_ result: Result<T, Error>) {
@@ -1145,12 +1174,25 @@ final class AidenBotSessionModel {
         case send, resume, dismiss, stop, answerQuestion, answerApproval, retry
         /// Revision 37 (`bot:handoffs`). Pausing is the Bot profile's own
         /// call, made without showing a pause the Mac hasn't confirmed.
-        case answerHandoff, openHandoffOnMac, unpause
+        case answerHandoff, answerAccessRequest, openHandoffOnMac, unpause
         /// Revision 42 (`bot:issues`): one action a "Needs you" card offers.
         case actIssue
     }
 
     let botID: String
+    var resumeModel: AidenBotResumeModel? {
+        didSet { resumeModel?.setForegroundVisit(active: resumeVisitIsActive) }
+    }
+    private var resumeVisitIsActive = true
+    private var resumeVisitGeneration: UInt = 0
+    func setResumeForegroundVisit(active: Bool) {
+        if resumeVisitIsActive != active { resumeVisitGeneration &+= 1 }
+        resumeVisitIsActive = active
+        resumeModel?.setForegroundVisit(active: active)
+    }
+    var routineModelsSupported: @MainActor () -> Bool = { false }
+    var canResumeExecution: Bool { resumeVisitIsActive && isInterrupted && !isAccessBlocked && !released }
+    var resumeConfirmationVersion: String { "\(stateWrites)|\(entries.last?.id ?? "")" }
     private let transport: any AidenBotSessionTransport
 
     private(set) var entries: [AidenBotSessionEntry] = []
@@ -1174,6 +1216,17 @@ final class AidenBotSessionModel {
     private(set) var approval: AidenRemoteBotApproval?
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot is waiting on, or nil.
     private(set) var handoff: AidenRemoteBotHandoff?
+    private(set) var accessRequest: AidenRemoteBotAccessRequest?
+    private(set) var plan: AidenRemoteBotPlan?
+    private(set) var planError: String?
+    private(set) var respondingPlanIds: Set<String> = []
+    var plansSupported = false {
+        didSet { if plansSupported != oldValue { invalidatePlanResponses(); if !plansSupported { adoptPlan(nil) } } }
+    }
+    @ObservationIgnored private var planGeneration = 0
+    @ObservationIgnored private var planWrites = 0
+    @ObservationIgnored private var planKeys: [String: UUID] = [:]
+    @ObservationIgnored private var planTokens: [String: UUID] = [:]
     /// Revision 42 (`bot:issues`): the Bot's "Needs you" cards, oldest first.
     private(set) var issues: [AidenRemoteBotIssue] = []
     /// The card an action is on its way for, so its buttons wait.
@@ -1195,6 +1248,12 @@ final class AidenBotSessionModel {
     private(set) var pendingAttachments: [AidenAttachmentReference] = []
     /// Attachments are being prepared or uploaded; the + and Send wait for them.
     private(set) var isAttaching = false
+    /// Revision 50: the phone holds `attachments:raw`, so pictures go as their own bytes.
+    var rawImageUploads = false
+    /// How far the attachments being uploaded have got; nil while none are.
+    private(set) var uploadProgress: AidenUploadProgress?
+    @ObservationIgnored private var uploadProgressID: UUID?
+    @ObservationIgnored private var attachTask: Task<Int, Never>?
     /// The bytes of each staged photo, for its thumbnail; never written to disk.
     @ObservationIgnored private var attachmentImages: [String: Data] = [:]
     /// Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk.
@@ -1222,14 +1281,21 @@ final class AidenBotSessionModel {
     var errorMessage: String?
     /// Unsent messages a previous launch left couldn't be read back. Shown until dismissed.
     var restoreNotice: String?
+    private(set) var accessSuccessNotice: String?
 
     @ObservationIgnored private var retainedKeys: [Action: UUID] = [:]
+    @ObservationIgnored private var retainedKeyDates: [Action: Date] = [:]
     @ObservationIgnored private let cache: AidenBotSessionCache
     @ObservationIgnored private let cacheKey: AidenBotSessionKey?
     @ObservationIgnored private let outboxStore: AidenBotOutboxStore?
     @ObservationIgnored private let retryDelays: [Duration]
     @ObservationIgnored private var retainedQuestion: (waitId: String, request: AidenQuestionRespondRequest, key: UUID)?
-    @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
+    var allowedSupported = false
+    var approvalSuccessNotice: String?
+    @ObservationIgnored private var approvalGeneration = 0
+    @ObservationIgnored private var retainedApprovalKeys: [String: UUID] = [:]
+    @ObservationIgnored private var retainedAccessAnswers: [String: UUID] = [:]
+    @ObservationIgnored private var accessRequestWrites = 0
     @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
     @ObservationIgnored private var retainedHandoffOpen: (waitId: String, key: UUID)?
     /// Revision 42: the request UUID of a card action, kept per card and action
@@ -1282,6 +1348,8 @@ final class AidenBotSessionModel {
         botID: String,
         transport: any AidenBotSessionTransport,
         cacheKey: AidenBotSessionKey? = nil,
+        allowedSupported: Bool = false,
+        plansSupported: Bool = false,
         cache: AidenBotSessionCache = .shared,
         outboxStore: AidenBotOutboxStore? = .shared,
         retryDelays: [Duration] = [.seconds(1), .seconds(4)],
@@ -1290,6 +1358,8 @@ final class AidenBotSessionModel {
         now: @escaping () -> Date = { Date() }
     ) {
         self.botID = botID
+        self.allowedSupported = allowedSupported
+        self.plansSupported = plansSupported
         self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
         self.transport = transport
         self.cacheKey = cacheKey
@@ -1329,6 +1399,13 @@ final class AidenBotSessionModel {
     /// the latest outbox.
     func release() {
         released = true
+        setResumeForegroundVisit(active: false)
+
+        approvalGeneration += 1
+        inFlight.remove(.answerApproval)
+        approvalSuccessNotice = nil
+        invalidatePlanResponses()
+        attachTask?.cancel()
         backoffTask?.cancel()
         flushTask?.cancel()
         sharedImages.removeAll()
@@ -1496,6 +1573,10 @@ final class AidenBotSessionModel {
     /// as they are. Between connections it does nothing: the next one opens
     /// with the grants held then.
     func reopenFeed() {
+        approvalGeneration += 1
+        inFlight.remove(.answerApproval)
+        approvalSuccessNotice = nil
+        invalidatePlanResponses()
         guard let end = endFeedConnection else { return }
         feedReopenRequested = true
         end()
@@ -1575,6 +1656,8 @@ final class AidenBotSessionModel {
             question = next
             questionWrites += 1
         case let .approval(next):
+            retainedApprovalKeys = retainedApprovalKeys.filter { next != nil && $0.key.hasPrefix("\(next!.waitId):") }
+            approvalSuccessNotice = nil
             approval = next
             approvalWrites += 1
         case let .activity(next):
@@ -1595,6 +1678,11 @@ final class AidenBotSessionModel {
             handoffWrites += 1
             if next?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
             if let next, next.waitId != previous { onHandoffArrived?(next) }
+        case let .plan(next):
+            adoptPlan(plansSupported ? next : nil)
+        case let .accessRequest(next):
+            accessRequest = next
+            accessRequestWrites += 1
         case let .issues(next):
             issues = next
             issueWrites += 1
@@ -1665,7 +1753,7 @@ final class AidenBotSessionModel {
     /// A stream snapshot is authoritative. A `GET /session` response is not:
     /// one that arrives after newer frames of the same epoch is dropped so it
     /// cannot roll the transcript back.
-    private func apply(snapshot session: AidenBotSession, authoritative: Bool = false) {
+    private func apply(snapshot session: AidenBotSession, authoritative: Bool = false, wakesOutbox: Bool = true) {
         guard session.botId == botID else { return }
         if !authoritative, session.epoch == epoch, session.seq < seq { return }
         epoch = session.epoch
@@ -1676,8 +1764,13 @@ final class AidenBotSessionModel {
         revealPartialNow()
         setStateView(session.stateView)
         question = session.question
+        retainedApprovalKeys = retainedApprovalKeys.filter { session.approval != nil && $0.key.hasPrefix("\(session.approval!.waitId):") }
+        approvalSuccessNotice = nil
         approval = session.approval
         handoff = session.handoff
+        adoptPlan(plansSupported ? session.plan : nil)
+        accessRequest = session.accessRequest
+        accessRequestWrites += 1
         issues = session.issues
         questionWrites += 1
         approvalWrites += 1
@@ -1689,8 +1782,8 @@ final class AidenBotSessionModel {
         hasLoaded = true
         if let cacheKey { cache.store(entries, for: cacheKey) }
         reconcileOutbox(snapshot: true)
-        // A snapshot is a connection: what waits in the outbox goes out now.
-        wakeOutbox()
+        // A passive control reconciliation does not flush pending messages.
+        if wakesOutbox { wakeOutbox() }
     }
 
     /// A turn that is no longer running takes its Stop and Resume with it, so the
@@ -2042,6 +2135,11 @@ final class AidenBotSessionModel {
         let hadUnsent = outbox.contains { $0.submissionId == nil }
         backoffTask?.cancel()
         purgeGeneration += 1
+        approvalGeneration += 1
+        inFlight.remove(.answerApproval)
+        approvalSuccessNotice = nil
+        invalidatePlanResponses()
+        adoptPlan(nil)
         restoreTask?.cancel()
         outbox = []
         if let cacheKey {
@@ -2096,38 +2194,38 @@ final class AidenBotSessionModel {
         hasLoaded && approval != nil && !inFlight.contains(.answerApproval)
     }
 
-    /// Allows or denies the waiting tool call, once. The card goes at once and
+    /// Answers the waiting call, with Always only when the host offered it. The card goes at once and
     /// comes back with an error if the decision didn't reach the Mac (R18).
     /// Allow is refused when the Mac says the phone may only deny it. The
     /// request UUID survives an ambiguous failure so retrying the same decision
     /// replays the Mac's receipt; another decision is a new request. When nothing
     /// is waiting any more (expired or already answered), the card stays gone.
-    func answerApproval(_ decision: AidenApprovalDecision) async {
-        guard canAnswerApproval, let current = approval else { return }
+    func answerApproval(_ decision: AidenApprovalDecision, scope: AidenApprovalScope? = nil) async {
+        guard canAnswerApproval, !released, let current = approval else { return }
         if decision == .allow && !current.canAllow { return }
-        let waitId = current.waitId
-        let key: UUID
-        if let retainedApproval, retainedApproval.waitId == waitId, retainedApproval.decision == decision {
-            key = retainedApproval.key
-        } else {
-            key = UUID()
-            retainedApproval = (waitId, decision, key)
-        }
+        let chosenScope: AidenApprovalScope? = scope == .always ? .always : nil
+        guard scope == nil || scope == .once || (decision == .allow && allowedSupported && current.alwaysCount != nil && scope == .always) else { return }
+        let action = "\(current.waitId):\(decision.rawValue):\(chosenScope?.rawValue ?? "once")"
+        let key = retainedApprovalKeys[action] ?? UUID()
+        retainedApprovalKeys[action] = key
         let mark = approvalWrites
+        let generation = approvalGeneration
+        approvalSuccessNotice = nil
         approval = nil
         inFlight.insert(.answerApproval)
-        defer { inFlight.remove(.answerApproval) }
+        defer { if generation == approvalGeneration { inFlight.remove(.answerApproval) } }
         do {
             _ = try await aidenBotWithin(requestLimit) { [transport] in
-                try await transport.respondToApproval(id: waitId, decision: decision, scope: nil, idempotencyKey: key)
+                try await transport.respondToApproval(id: current.waitId, decision: decision, scope: chosenScope, idempotencyKey: key)
             }
-            retainedApproval = nil
+            guard generation == approvalGeneration, !released else { return }
+            retainedApprovalKeys[action] = nil
+            if chosenScope == .always, approvalWrites == mark { approvalSuccessNotice = "Always allow requested." }
         } catch {
-            if !aidenBotSessionFailureIsAmbiguous(error) { retainedApproval = nil }
+            guard generation == approvalGeneration, !released else { return }
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedApprovalKeys[action] = nil }
             if case let AidenRemoteClientError.server(_, body) = error,
-               ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) {
-                return
-            }
+               ["approval_expired", "approval_already_resolved"].contains(body.code.rawValue) { return }
             if approvalWrites == mark { approval = current }
             if error is CancellationError { return }
             errorMessage = "That answer wasn’t sent. Please try again."
@@ -2151,6 +2249,8 @@ final class AidenBotSessionModel {
         case .resumeRoutine: AidenBotSessionCopy.issueResumeRoutine
         case .stopRun: AidenBotSessionCopy.issueStop
         case .keepWaiting: AidenBotSessionCopy.issueKeepWaiting
+        case .allowFolder: "Allow this folder"
+        case .dismissAccess: "Not now"
         }
     }
 
@@ -2219,6 +2319,104 @@ final class AidenBotSessionModel {
             restore()
             if error is CancellationError { return false }
             errorMessage = AidenBotSessionCopy.issueNotSent
+            return false
+        }
+    }
+
+    var composerHeldForPlan: Bool { plansSupported && plan?.status == .pending }
+    func canRespondToPlan(_ shown: AidenRemoteBotPlan) -> Bool {
+        plansSupported && isConnected && !released && plan == shown && !respondingPlanIds.contains(shown.planId)
+    }
+    private func invalidatePlanResponses() {
+        planGeneration += 1
+        planTokens.removeAll()
+        respondingPlanIds.removeAll()
+        planError = nil
+    }
+    private func adoptPlan(_ next: AidenRemoteBotPlan?) {
+        guard next != plan else { return }
+        if next?.planId != plan?.planId || next?.status != plan?.status {
+            planKeys.removeAll()
+            planError = nil
+        }
+        plan = next
+        planWrites += 1
+    }
+    /// Keys belong to one plan and decision. No response writes an optimistic plan status.
+    func respondToPlan(_ decision: AidenBotPlanDecision) async -> Bool {
+        guard let shown = plan, canRespondToPlan(shown), shown.allows(decision) else { return false }
+        let action = "\(shown.planId):\(decision.rawValue)"
+        let key = planKeys[action] ?? UUID()
+        planKeys[action] = key
+        let token = UUID()
+        planTokens[shown.planId] = token
+        respondingPlanIds.insert(shown.planId)
+        planError = nil
+        let generation = planGeneration
+        let mark = planWrites
+        defer {
+            if planTokens[shown.planId] == token {
+                planTokens[shown.planId] = nil
+                respondingPlanIds.remove(shown.planId)
+            }
+        }
+        do {
+            let request = AidenBotPlanRespondRequest(decision: decision)
+            let receipt = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.respondBotPlan(botId: botID, planId: shown.planId, request: request, idempotencyKey: key)
+            }
+            guard generation == planGeneration, !released else { return false }
+            guard receipt.planId == shown.planId, receipt.status != .pending else { throw AidenRemoteClientError.invalidResponse }
+            if planWrites == mark { planKeys[action] = nil }
+            return true
+        } catch {
+            guard generation == planGeneration, !released, planWrites == mark, plan == shown else { return false }
+            if case let AidenRemoteClientError.server(status, body) = error, status == 409 && body.code.rawValue == "plan_expired" {
+                adoptPlan(nil)
+                return false
+            }
+            // A received refusal is final for this attempt. Network/5xx/invalid receipts keep the key.
+            if case let AidenRemoteClientError.server(status, _) = error, status < 500 { planKeys[action] = nil }
+            planError = "That answer wasn't sent. Please try again."
+            return false
+        }
+    }
+
+    var canAnswerAccessRequest: Bool {
+        hasLoaded && accessRequest != nil && !inFlight.contains(.answerAccessRequest)
+    }
+
+    /// An uncertain retry reuses its key only for the same wait and choice.
+    func answerAccessRequest(_ choice: AidenBotAccessChoice) async -> Bool {
+        guard canAnswerAccessRequest, let shown = accessRequest, shown.choices.contains(choice) else { return false }
+        let action = "\(shown.waitId):\(choice.rawValue)"
+        retainedAccessAnswers = retainedAccessAnswers.filter { $0.key.hasPrefix("\(shown.waitId):") }
+        let request = AidenBotAccessAnswerRequest(choice: choice)
+        let key = retainedAccessAnswers[action] ?? UUID()
+        retainedAccessAnswers[action] = key
+        errorMessage = nil
+        accessSuccessNotice = nil
+        let mark = accessRequestWrites
+        accessRequest = nil
+        inFlight.insert(.answerAccessRequest)
+        defer { inFlight.remove(.answerAccessRequest) }
+        do {
+            let receipt = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.answerBotAccessRequest(botId: botID, waitId: shown.waitId, request: request, idempotencyKey: key)
+            }
+            retainedAccessAnswers.removeAll()
+            if accessRequest?.waitId == shown.waitId { accessRequest = nil }
+            if receipt.savedForFuture == true { accessSuccessNotice = "Folder approval recorded." }
+            return true
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedAccessAnswers[action] = nil }
+            if case let AidenRemoteClientError.server(_, body) = error, body.code.rawValue == "access_request_expired" {
+                if accessRequest?.waitId == shown.waitId { accessRequest = nil }
+                errorMessage = "That card was already answered or closed."
+                return false
+            }
+            if accessRequestWrites == mark { accessRequest = shown }
+            errorMessage = "That answer wasn't sent. Please try again."
             return false
         }
     }
@@ -2364,7 +2562,7 @@ final class AidenBotSessionModel {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         // The staged photos and files go with it, and only with it.
         let attachments = pendingAttachments
-        guard canSend, !isAttaching,
+        guard canSend, !composerHeldForPlan, !isAttaching,
               (try? AidenBotMessageRequest(text: text, attachmentIds: attachments.map(\.id))) != nil,
               enqueue(text, mode: offersBusyModes ? mode ?? .queue : nil, retryOf: nil, attachments: attachments) else { return false }
         pendingAttachments = []
@@ -2389,15 +2587,62 @@ final class AidenBotSessionModel {
     func attach(_ items: [@MainActor () async throws -> AidenAttachmentUpload]) async -> Int {
         guard canAttach, !items.isEmpty else { return items.count }
         isAttaching = true
-        defer { isAttaching = false }
+        let task = Task { await performAttach(items) }
+        attachTask = task
+        let failures = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        attachTask = nil
+        isAttaching = false
+        return failures
+    }
+
+    /// Stop on the progress bar: the upload in flight is dropped; what already
+    /// reached the Mac stays ready to send.
+    func cancelUploads() {
+        attachTask?.cancel()
+    }
+
+    /// A late report from an earlier upload or batch never moves the bar back.
+    private func recordUploadProgress(_ fraction: Double, index: Int, id: UUID) {
+        guard uploadProgressID == id, let current = uploadProgress, current.index == index,
+              let next = current.advanced(to: fraction) else { return }
+        uploadProgress = next
+    }
+
+    private func performAttach(_ items: [@MainActor () async throws -> AidenAttachmentUpload]) async -> Int {
+        let progressID = UUID()
+        uploadProgressID = progressID
+        defer {
+            if uploadProgressID == progressID {
+                uploadProgressID = nil
+                uploadProgress = nil
+            }
+        }
+        let batch = Array(items.prefix(attachmentCapacity))
+        let rawImages = rawImageUploads
         var failures = max(0, items.count - attachmentCapacity)
-        for prepare in items.prefix(attachmentCapacity) {
+        for (index, prepare) in batch.enumerated() {
             if Task.isCancelled || released { return items.count }
             do {
                 let upload = try await prepare()
+                if Task.isCancelled || released { return items.count }
+                uploadProgress = AidenUploadProgress(index: index, count: batch.count, fraction: 0)
+                let progress: @Sendable (Double) -> Void = { [weak self] fraction in
+                    Task { @MainActor in
+                        self?.recordUploadProgress(fraction, index: index, id: progressID)
+                    }
+                }
                 // A photo can take longer than a message on a slow connection.
                 let reference = try await aidenBotWithin(max(requestLimit, .seconds(60))) { [transport, botID] in
-                    try await transport.uploadBotAttachment(botId: botID, upload: upload)
+                    try await transport.uploadBotAttachment(
+                        botId: botID,
+                        upload: upload,
+                        rawImages: rawImages,
+                        progress: progress
+                    )
                 }
                 guard reference.isValid(now: now()) else { throw AidenRemoteClientError.invalidResponse }
                 if case let .image(_, _, data) = upload { attachmentImages[reference.id] = data }
@@ -2547,16 +2792,70 @@ final class AidenBotSessionModel {
     /// Resume shows "Picking up where it left off" at once and goes back if the
     /// Mac didn't take it (R18).
     func resume() async {
-        guard isInterrupted, !isAccessBlocked, !inFlight.contains(.resume) else { return }
-        resumeIntent = .requested
-        let resumed = await perform(.resume, optimistic: try? AidenBotSessionStateView(state: .running)) { [transport, botID] key in
+        guard canResumeExecution, !inFlight.contains(.resume) else { return }
+        let modelsSupported = routineModelsSupported()
+        if !modelsSupported, resumeModel?.preventsLegacyResume == true {
+            errorMessage = "The earlier Resume request is kept. Restore routine model access before retrying it."
+            return
+        }
+        if modelsSupported {
+            guard let resumeModel else { return }
+            if let key = retainedKeys[.resume] { resumeModel.adoptOrdinaryPending(key: key, createdAt: retainedKeyDates[.resume] ?? .distantPast) }
+            let replayingUnknown = resumeModel.pending != nil
+            let writes = stateWrites
+            if let view = await resumeModel.request() {
+                retainedKeys[.resume] = nil
+                retainedKeyDates[.resume] = nil
+                if replayingUnknown { await reconcileResumeReplay() }
+                else if stateWrites == writes { setStateView(view); resumeIntent = .acknowledged }
+            }
+            if let message = resumeModel.message { errorMessage = message; resumeModel.message = nil }
+            return
+        }
+        let replayingUnknown = retainedKeys[.resume] != nil
+        resumeIntent = replayingUnknown ? .none : .requested
+        let resumed = await perform(.resume,
+            optimistic: replayingUnknown ? nil : (try? AidenBotSessionStateView(state: .running)),
+            appliesReply: !replayingUnknown) { [transport, botID] key in
             try await transport.resumeBotSession(botId: botID, idempotencyKey: key)
         }
-        if !resumed {
-            resumeIntent = .none
-        } else if resumeIntent == .requested {
-            resumeIntent = .acknowledged
+        if resumed, replayingUnknown { await reconcileResumeReplay() }
+        else if !resumed { resumeIntent = .none }
+        else if resumeIntent == .requested { resumeIntent = .acknowledged }
+    }
+
+    /// A replay proves the original action settled, but its cached state can
+    /// predate later work. Read current state without issuing another control
+    /// or waking the outbox, and keep the normal epoch/sequence fences.
+    private func reconcileResumeReplay() async {
+        guard resumeVisitIsActive, !released else { return }
+        inFlight.insert(.resume)
+        defer { inFlight.remove(.resume) }
+        let visit = resumeVisitGeneration
+        let purge = purgeGeneration
+        do {
+            let session = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.botSession(botId: botID)
+            }
+            guard resumeVisitIsActive, !released, resumeVisitGeneration == visit, purgeGeneration == purge else { return }
+            guard session.botId == botID else { throw AidenRemoteClientError.invalidResponse }
+            errorMessage = nil
+            apply(snapshot: session, wakesOutbox: false)
+        } catch {
+            guard resumeVisitIsActive, !released, resumeVisitGeneration == visit, purgeGeneration == purge else { return }
+            if Self.isAccessLoss(error) { purgeForAccessLoss(); return }
+            errorMessage = "The earlier Resume was confirmed, but the current chat state couldn’t be refreshed."
         }
+    }
+
+    func confirmUnknownCostResume() async {
+        guard canResumeExecution, routineModelsSupported(), !inFlight.contains(.resume), let resumeModel else {
+            resumeModel?.cancelConsent()
+            return
+        }
+        let writes = stateWrites
+        if let view = await resumeModel.confirm(), stateWrites == writes { setStateView(view); resumeIntent = .acknowledged }
+        if let message = resumeModel.message { errorMessage = message; resumeModel.message = nil }
     }
 
     /// Dismiss clears the paused card at once and brings it back if the Mac didn't take it (R18).
@@ -2590,11 +2889,14 @@ final class AidenBotSessionModel {
     private func perform(
         _ action: Action,
         optimistic: AidenBotSessionStateView? = nil,
+        appliesReply: Bool = true,
         _ request: @escaping @Sendable (UUID) async throws -> AidenBotSessionStateView
     ) async -> Bool {
         guard !inFlight.contains(action) else { return false }
+        let replayingUnknown = retainedKeys[action] != nil
         let key = retainedKeys[action] ?? UUID()
         retainedKeys[action] = key
+        if retainedKeyDates[action] == nil { retainedKeyDates[action] = now() }
         let previous = stateView
         let writes = stateWrites
         if let optimistic { stateView = optimistic }
@@ -2603,14 +2905,19 @@ final class AidenBotSessionModel {
         do {
             let view = try await aidenBotWithin(requestLimit) { try await request(key) }
             // The Mac's answer stands unless it has written the state again since.
-            if stateWrites == writes { setStateView(view) }
+            if appliesReply, stateWrites == writes { setStateView(view) }
             retainedKeys[action] = nil
+            retainedKeyDates[action] = nil
             return true
         } catch {
             // Only what the Mac hasn't written since the tap goes back.
             if optimistic != nil, stateWrites == writes { stateView = previous }
             if error is CancellationError { return false }
-            if !aidenBotSessionFailureIsAmbiguous(error) { retainedKeys[action] = nil }
+            let ambiguous = action == .resume ? aidenBotResumeFailureIsAmbiguous(error) : aidenBotSessionFailureIsAmbiguous(error)
+            if !ambiguous, !(action == .resume && replayingUnknown) {
+                retainedKeys[action] = nil
+                retainedKeyDates[action] = nil
+            }
             errorMessage = "That didn’t work. Please try again."
             return false
         }

@@ -1,6 +1,6 @@
 # Hybrid new chat and composer context — 2026-10-15
 
-Phases 1–4 implemented (3b UI included); Phase 5 (paired Macs, phones) open. Plan: `docs/plans/hybrid-new-chat-workspace-plan.md`. Prototype: `docs/plans/assets/hybrid-new-chat-prototype.html`.
+Phases 1–4 implemented (3b UI included). Phase 5: phones done (New worktree chip, `POST /chats/{chatId}/worktree`, `chat:new-worktree`, PR #648); paired Macs still open. Plan: `docs/plans/hybrid-new-chat-workspace-plan.md`. Prototype: `docs/plans/assets/hybrid-new-chat-prototype.html`.
 
 ## Decisions (owner-approved direction)
 - The owner chose the "Hybrid" option over a Codex-style chip bar and a T3-style "ask first" picker. ⌘N stays an instant draft in the workspace being viewed. Choosing or adding a workspace happens inside the draft: from the headline name, the composer chip, or ⌘⇧N "New chat in…".
@@ -15,7 +15,7 @@ Phases 1–4 implemented (3b UI included); Phase 5 (paired Macs, phones) open. P
 - `ChatPullRequestsChip` renders unconditionally in the composer context bar. It reads "Pull Requests" even on drafts and plain folders.
 - The whole bar is hidden after the first message (`autoHideComposerContext`).
 - ⌘O is already `workspace.openPreferredEditor`, so Open folder uses ⌘⇧O. ⌘⇧N is free.
-- Remote worktree creation (`aiden-remote-git`) is used by the phones. Creating worktrees on send for remote targets needs a Remote revision plus iOS and Android work (plan Phase 5).
+- Remote worktree creation (`aiden-remote-git`) is used by the phones. Phones make a worktree for an empty chat's first message through `POST /chats/{chatId}/worktree`, which shares the desktop's first-message coordinator (`first-message-worktree-main.ts`, key `phone-chat:<chatId>`). Paired Macs still need their own step (plan Phase 5).
 
 ## Phase 2 main process (implemented 2026-10-15)
 - `main/services/workspace-intake.ts` (pure `parseWorkspacePathInput`, inspect/open/previewClone/clone service), `main/services/git-clone-runner.ts` (spawned `git clone`), `main/handlers/workspace-intake.ts` (DI handler registration, wired from `registerWorkspaceHandlers`), shared contract and `parseCloneUrl` in `renderer/shared/workspace-intake.ts`.
@@ -70,3 +70,7 @@ Phases 1–4 implemented (3b UI included); Phase 5 (paired Macs, phones) open. P
 ## Sidebar draft E2E focus correction (2026-10-15)
 - The workspace plus added in PR #491 uses `group-focus-within/workspace:opacity-100`, so focus on the row's expand button reveals the plus after the pointer leaves. `draft-agent-chats.spec.ts` had clicked expand and then expected the plus to hide without moving focus. The failure reproduced on `origin/main` at `6bc994a5` and matches PR #500 run 38829367039 and PR #501 run 38825795960.
 - The test now checks the focused-row state, focuses the composer before checking the hidden state, then focuses and activates the plus. No renderer behavior changed. All 8 draft-chat E2E tests, both type checks, scoped ESLint, and 21 sidebar component tests passed locally. The two `chat-top-bar.spec.ts` worktree-send tests that passed on CI retry in #501 each passed twice locally; their missing failure-panel symptom is separate from the sidebar focus assertion. Exact-head hosted CI remains pending.
+
+## Desktop chat identity and recovery (2026-11-02)
+
+The first message keeps the draft UUID as the stored chat ID. An exact desktop read can reopen an older UUID even when a segment resembles encoded private text. The response and any provisional reconciliation marker must belong to the requested chat. Activity can use such a UUID when the local chat index, opened chat or a retained stream independently identifies it. An unlisted, filtered Bot UUID is omitted without suppressing other chats’ approvals. Detached terminal snapshots must match the retained stream, chat and workspace. New draft, Bot chat and fork UUIDs are screened before use so child snapshots can keep their strict privacy checks.

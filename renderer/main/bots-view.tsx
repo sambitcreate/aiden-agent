@@ -2,7 +2,7 @@ import * as React from "react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { Plus, RotateCcw } from "lucide-react";
 import { Button, Callout, EmptyState, ScrollArea, Text } from "../components/ui";
-import { botChatPath } from "../lib/bot-routes";
+import { botAllowedLocation, botChatPath, botListLocation } from "../lib/bot-routes";
 import { lastViewedBotId } from "../lib/bot-sidebar-preferences";
 import { useBot } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
@@ -15,6 +15,8 @@ import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
 import { useBotRows } from "./bots/bot-sidebar-rows";
 import { BotMemoryPage } from "./bots/bot-memory-page";
+import { BotOpenWorkPage } from "./bots/bot-open-work-page";
+import { BotAllowedPage } from "./bots/bot-allowed-page";
 import { BotPageShell, BotPageSkeleton } from "./bots/bot-page-shell";
 import { parseBotPageSearch, type BotSubpage } from "./bots/bot-page-search";
 import { BotProfile } from "./bots/bot-profile";
@@ -119,7 +121,7 @@ function BotPage({ botId }: { botId: string }) {
   const [deleting, setDeleting] = React.useState(false);
   React.useEffect(() => setPage(initialPage), [botId, initialPage]);
   const openPage = setPage;
-  const allBots = () => void navigate({ to: "/bots" });
+  const allBots = () => void navigate(botListLocation());
 
   if (bot.isLoading) {
     return (
@@ -144,7 +146,10 @@ function BotPage({ botId }: { botId: string }) {
     );
   }
   const current = bot.data;
-  const back = () => openPage(null);
+  const back = () => {
+    if (initialPage === "allowed") void navigate({ to: "/bots/$botId", params: { botId }, search: {} });
+    openPage(null);
+  };
   return (
     <>
       {page === "instructions" ? (
@@ -161,10 +166,14 @@ function BotPage({ botId }: { botId: string }) {
         <BotInterruptionsPage key={`${current.id}:interruptions`} bot={current} onClose={() => openPage("advanced")} />
       ) : page === "chat-activity" ? (
         <BotChatActivityPage key={`${current.id}:chat-activity`} bot={current} onClose={() => openPage("advanced")} />
+      ) : page === "open-work" ? (
+        <BotOpenWorkPage key={current.id + ":open-work"} bot={current} onClose={back} />
       ) : page === "learning" ? (
         <BotLearningPage key={`${current.id}:learning`} bot={current} onClose={back} />
       ) : page === "memory" ? (
         <BotMemoryPage key={`${current.id}:memory`} bot={current} onClose={back} />
+      ) : page === "allowed" ? (
+        <BotAllowedPage key={`${current.id}:allowed`} bot={current} onClose={back} />
       ) : (
         <BotProfile
           bot={current}
@@ -174,6 +183,8 @@ function BotPage({ botId }: { botId: string }) {
           onOpenAdvanced={() => openPage("advanced")}
           onOpenMemory={() => openPage("memory")}
           onOpenLearning={() => openPage("learning")}
+          onOpenWork={() => openPage("open-work")}
+          onOpenAllowed={() => void navigate(botAllowedLocation(current.id))}
           onDelete={() => setDeleting(true)}
         />
       )}

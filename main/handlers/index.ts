@@ -24,6 +24,8 @@ import { workspaceEnvironmentApplicationService } from "../services/workspace-en
 import type { IpcMainInvokeEvent } from "electron";
 import { registerAttachmentHandlers } from "./attachments.js";
 import { registerChatImageActionHandlers } from "./chat-image-actions.js";
+import { registerTranscriptImageHandlers } from "./transcript-images.js";
+import { fetchTranscriptImage } from "../services/transcript-image-fetch.js";
 import { registerPhase2Handlers } from "./phase2.js";
 import { registerLocalVoiceHandlers } from "./local-voice.js";
 import { registerTerminalHandlers } from "./terminal.js";
@@ -53,6 +55,7 @@ import { registerAssistantLiveHandlers } from "./assistant-live.js";
 import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerLocalRunIpc } from "./local-runs-main.js";
+import { registerChatPendingAttentionIpc } from "./chat-pending-attention-main.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerBotComputerHandlers } from "./bot-computers.js";
@@ -73,7 +76,7 @@ import { spending } from "../services/spending-main.js";
 
 import { ipcMain, logger } from "../platform.js";
 
-export function registerHandlers(): void {
+export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => boolean): void {
   logger.info("handlers", "Registering IPC handlers...");
 
   // Register app handlers using ipcMain API
@@ -90,6 +93,7 @@ export function registerHandlers(): void {
   registerAppControlHandlers();
   registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
+  registerChatPendingAttentionIpc();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
   registerPullRequestHandlers();
@@ -108,6 +112,11 @@ export function registerHandlers(): void {
   });
   registerAttachmentHandlers();
   registerChatImageActionHandlers();
+  registerTranscriptImageHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Image loading requires the active application window.")),
+    fetch: fetchTranscriptImage,
+  });
   registerPhase2Handlers();
   registerLocalVoiceHandlers();
   registerTerminalHandlers();
@@ -139,10 +148,17 @@ export function registerHandlers(): void {
       ),
     broadcast: (change) => ipcMain.broadcast(HOOKS_CHANGED_CHANNEL, change),
     requireSender: (event) => {
-      rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Hooks settings need the active window."));
+      const inactive = () => new Error("Hooks settings need the active window.");
+      if (!isMainWindow(event as IpcMainInvokeEvent)) throw inactive();
+      rendererDocumentOwner(event as IpcMainInvokeEvent, inactive);
     },
   });
-  registerAnalyticsHandlers({
+  registerAnalyticsHandlers<IpcMainInvokeEvent>({
+    owner: (event) => {
+      const inactive = () => new Error("Usage data changes require the active application document.");
+      if (!isMainWindow(event)) throw inactive();
+      return rendererDocumentOwner(event, inactive);
+    },
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     analytics: analyticsService(),
   });

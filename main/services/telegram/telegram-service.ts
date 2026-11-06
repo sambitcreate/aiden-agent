@@ -370,15 +370,17 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
               .botSessionRuntime()
               .then((runtime) => runtime.awaitReply(botId, submissionId, signal)),
         },
-        deliver: async ({ chatId, threadId, text }) => {
+        deliver: async ({ chatId, threadId, text,botId,botIncarnation }) => {
           for (const chunk of chunkForTelegram(markdownToTelegramHtml(text))) {
+            if(botIncarnation){if(!botId || String((await botStore.get(botId))?.createdAt)!==botIncarnation || await (await import("../bot-runtime/bot-session-service.js")).botSessionDeletionPending(app.getPath("userData"),botId))throw new Error("This Telegram result belongs to a retired Bot.");}
             await api.sendMessage({ chatId, threadId, text: chunk, parseMode: "HTML", disablePreview: true });
           }
         },
         // A routine result goes out only while the Bot is still bound, on, to that chat.
-        routineTargetEnabled: async ({ botId, chatId, threadId }) => {
+        routineTargetEnabled: async ({ botId, chatId, threadId,botIncarnation }) => {
           const binding = await telegramBotBindings.get(botId);
           return (
+            (!botIncarnation || String((await botStore.get(botId))?.createdAt)===botIncarnation && !await (await import("../bot-runtime/bot-session-service.js")).botSessionDeletionPending(app.getPath("userData"),botId)) &&
             binding !== undefined &&
             binding !== null &&
             binding.enabled &&
@@ -507,7 +509,8 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     listModels: listTelegramModels,
     abortChat: async (chatId) => {
       lifecycle.cancelChat(chatId);
-      await llmClient.cancelChat(chatId);
+      // The chat stays, so this is a Stop, not the deletion cleanup behind llmClient.cancelChat.
+      if (!(await llmClient.stopChatWork(chatId))) throw new Error("The running turn did not stop in time.");
     },
     admitRunInput: async (input) => {
       const result = await llmClient.admitChatRunInput(input);
@@ -1026,13 +1029,9 @@ export function createTelegramProfileManager() {
       else await secrets.deleteKey(key);
     },
     async setEnabled(enabled: boolean): Promise<void> {
-      await setProfileSettings(activeProfile, { telegramEnabled: enabled });
-      if (enabled) {
-        await telegramBotBindings.assertHealthy();
-        await serviceFor(activeProfile).start();
-      } else {
-        serviceFor(activeProfile).stop();
-      }
+      // Check first: a failed Connect must not leave the bridge saved as on.
+      if (enabled) await telegramBotBindings.assertHealthy();
+      await serviceFor(activeProfile).setEnabled(enabled);
     },
     connect: () => serviceFor(activeProfile).connect(),
     disconnect: () => serviceFor(activeProfile).disconnect(),
@@ -1049,9 +1048,11 @@ export function createTelegramProfileManager() {
      * Telegram chat. Nothing is queued when the Bot has no enabled binding;
      * the binding is checked again right before the send.
      */
-    async deliverBotRoutineResult(input: { botId: string; requestId: string; routineName: string; text: string }): Promise<void> {
+    async deliverBotRoutineResult(input: { botId: string; requestId: string; routineName: string; text: string;botIncarnation?:string;publication?:{assertCurrent():Promise<void>} }): Promise<void> {
+      await input.publication?.assertCurrent();
       const binding = await telegramBotBindings.get(input.botId);
       if (!binding?.enabled) return;
+      await input.publication?.assertCurrent();
       await serviceFor(binding.profile).enqueueBotRoutineDelivery({
         ...input,
         chatId: binding.chatId,

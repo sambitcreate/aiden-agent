@@ -13,7 +13,7 @@ const { expect, test } =
 // A standalone native guest, as in bot-browser.spec.ts: the real browser
 // service, sign_in tool, hand-off cards and card opener, without starting
 // unrelated application services.
-test("a Bot's sign-in opens in a held tab of its own browser that it can't read until the person is signed in", async () => {
+async function runNative(scenario: "sign-in" | "rule") {
   const testInfo = test.info();
   const root = testInfo.outputPath("native");
   await mkdir(path.resolve("build"), { recursive: true });
@@ -42,6 +42,7 @@ test("a Bot's sign-in opens in a held tab of its own browser that it can't read 
       env: {
         PATH: process.env.PATH,
         AIDEN_BOT_SIGN_IN_ROOT: root,
+        AIDEN_HANDOFF_TEST_SCENARIO: scenario,
         AIDEN_CONFIG_DIR: path.join(root, "config"),
         ...(process.platform === "linux"
           ? Object.fromEntries(
@@ -60,7 +61,19 @@ test("a Bot's sign-in opens in a held tab of its own browser that it can't read 
     if (error.code !== "ENOENT") throw error;
     throw new Error(`The Bot sign-in fixture exited without a result:\n${output}`);
   });
-  const result = JSON.parse(raw);
+  return JSON.parse(raw);
+}
+
+test("Open reveals the bound browser tab for a rule handoff", async () => {
+  const result = await runNative("rule");
+  expect(result.selectedBefore).toBe(result.firstTab);
+  expect(result.targetTab).not.toBe(result.firstTab);
+  expect(result.selectedAfter).toBe(result.targetTab);
+  expect(result.revealed).toEqual([result.targetTab]);
+});
+
+test("a Bot's sign-in opens in a held tab of its own browser that it can't read until the person is signed in", async () => {
+  const result = await runNative("sign-in");
 
   // The card names the site's origin, not the page the Bot asked for.
   expect(result.card).toEqual({

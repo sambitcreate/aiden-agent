@@ -12,6 +12,8 @@ export interface AppCapabilities {
   /** Settings → Hooks (macOS and Linux). */
   hooks: boolean;
   dockIcon: boolean;
+  /** A Needs you count on the app icon (Dock on macOS, launcher on Linux). */
+  badgeCount: boolean;
   accessibilityPaste: boolean;
   dictationHoldToTalk: boolean;
   dictationHoldSetup: boolean;
@@ -35,6 +37,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   botComputers: false,
   hooks: false,
   dockIcon: false,
+  badgeCount: false,
   accessibilityPaste: false,
   dictationHoldToTalk: false,
   dictationHoldSetup: false,
@@ -63,6 +66,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     botComputers: record.botComputers === true,
     hooks: record.hooks === true,
     dockIcon: record.dockIcon === true,
+    badgeCount: record.badgeCount === true,
     accessibilityPaste: record.accessibilityPaste === true,
     dictationHoldToTalk: record.dictationHoldToTalk === true,
     dictationHoldSetup: record.dictationHoldSetup === true,

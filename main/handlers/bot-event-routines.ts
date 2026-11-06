@@ -9,6 +9,7 @@
 
 import type { BotEventRoutineStore, BotEventRoutineView } from "../services/bot-routine-events/store.js";
 import { viewOf } from "../services/bot-routine-events/store.js";
+import { parseBotRoutineTrigger } from "../../renderer/shared/bot-routine-trigger.js";
 import { parseBotId } from "./bot-params.js";
 
 export const BOT_EVENT_ROUTINE_CHANNELS = {
@@ -54,6 +55,8 @@ export function registerBotEventRoutineHandlers<Event = unknown>(dependencies: B
   dependencies.handle(BOT_EVENT_ROUTINE_CHANNELS.create, async (_event, input) => {
     const record = fields(input, ["botId", "name", "prompt", "trigger"]);
     const botId = parseBotId(record.botId);
+    const trigger = parseBotRoutineTrigger(record.trigger);
+    if (trigger.kind === "watch" && trigger.source.type === "connector") throw new Error("Create a connector watch through its approved source controls.");
     const { routine, token } = await dependencies.store.create(botId, {
       name: text(record.name),
       prompt: text(record.prompt),
@@ -66,6 +69,7 @@ export function registerBotEventRoutineHandlers<Event = unknown>(dependencies: B
     const record = fields(input, ["botId", "id", "name", "prompt", "trigger", "enabled"]);
     const botId = parseBotId(record.botId);
     if (record.enabled !== undefined && typeof record.enabled !== "boolean") throw new Error("Invalid event routine request.");
+    if (record.trigger !== undefined) { const trigger = parseBotRoutineTrigger(record.trigger); if (trigger.kind === "watch" && trigger.source.type === "connector") throw new Error("Edit a connector watch through its approved source controls."); }
     const routine = await dependencies.store.update(botId, routineId(record.id), {
       ...(record.name !== undefined ? { name: text(record.name) } : {}),
       ...(record.prompt !== undefined ? { prompt: text(record.prompt) } : {}),

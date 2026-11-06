@@ -49,6 +49,13 @@ single `Tab` stop: `Tab` reaches the open chat (and its `•••`), then leave
 list. ⌘K also has **Focus sidebar**, **Focus conversation** and **Focus side
 panel**, which can be given their own keys in Settings.
 
+Saved shortcuts take priority over the built-in focus keys (`⇧F6` and
+`⌥↑` / `⌥↓`) when their command can run. Disabling or changing the saved
+shortcut gives the key back to focus navigation. `F6` / `⇧F6` also work from
+simulator screens, Bot computers, the terminal and inline device-tab names;
+the focused control receives the key only when no area move or saved command
+claims it.
+
 The chat keys (`⌘1`–`⌘9`, `⇧⌘[` / `⇧⌘]`) also work while typing in the
 message box.
 
@@ -71,7 +78,8 @@ work while Aiden is in the background.
 `↑` works like **Edit in fork**: it forks the chat just before your last
 message and puts that message back in the box, so the original chat stays as
 it was. It needs that message to have a finished reply, and does nothing while
-a reply is coming, in a Bot chat, or when the box holds anything. `⌥↑` works
+a reply is coming, in a Bot chat, when the box holds anything, or while voice
+input is recording or waiting for its final transcript. `⌥↑` works
 from the conversation or an empty message box; `⌥↓` past the latest reply
 returns to the message box. Find in chat searches the conversation on screen,
 ignoring case, and keeps counting as replies stream in. A word split by
@@ -103,7 +111,10 @@ Profile), **Chat** (model, attach, find, stop and the open chat's actions) and
 its current key, and items that can't run right now (no chat open, nothing to
 stop) are greyed out. These items only show their key: the key itself still
 follows the rules on this page (for example, it doesn't act while you type in
-the terminal). On Linux, `Alt` opens the menu bar.
+the terminal). On Linux with Aiden's own title bar there is no menu bar: the
+main menu button (☰) at the left of the top bar opens the same menus, and their
+keys keep working. With **Settings → Appearance → Window → Use system title
+bar** on, the menu bar comes back and `Alt` opens it.
 
 When first-run setup finishes, the message box has focus, so you can start
 typing straight away.
@@ -114,7 +125,9 @@ Besides the keyed commands above, the palette lists commands with no default
 key. You can give any of them one in Settings.
 
 - **Places:** Go to Bots, Open a Bot… (searches Bots by name), Go to Scheduled,
-  Go to Profile, Open Design Studio, Open Create Images.
+  Go to Profile. Open Design Studio and Open Create Images appear in the
+  palette only while their experimental feature is turned on, and can't be
+  given a key.
 - **Workspace tools:** Open Changes, Files, Browser, Device, Context,
   Subagents and Artifacts.
 - **Chat actions:** Rename chat…, Duplicate chat, Delete chat…, Export chat,
@@ -125,7 +138,41 @@ key. You can give any of them one in Settings.
 ## Menus on rows and messages
 
 `⇧F10` (or the Menu key) opens the right-click menu of the focused sidebar
-chat, Bot row or message. Sidebar chats and Bots also have a `•••` button that
+chat, Bot row or message (including Bot messages). Sidebar chats and Bots also have a `•••` button that
 appears on hover or focus and is reachable with `Tab`. A chat's menu has
 Rename, Rename with Apple (where available) and Delete; `/delete` and ⌘K →
 Delete chat… ask the same question for the open chat.
+
+## Create Images library
+
+On the Images home, **All Images** lists every generated image by day. The
+thumbnail grid is a single `Tab` stop: `←` / `→` step through the images in
+order, `↑` / `↓` move to the row above or below (into the next or previous
+day), `Home` / `End` jump to the first or last image, and `↩` or `Space` opens
+the viewer. `⇧F10` (or the Menu key) opens a thumbnail's menu: Save…, Copy
+Image, Show in Finder (Show in folder on Linux) and Open Workflow. `Esc` in the
+search field clears it. These keys can't be changed in Settings and are not
+listed under **Built-in keys** while Create Images is experimental.
+
+## Create Images image viewer
+
+Create Images is experimental (`AIDEN_EXPERIMENTAL_CREATE_IMAGES=1`). In a
+workflow, a thumbnail on an Output node or in the **History** tab opens the
+image viewer; thumbnails are buttons, so `Tab` reaches them and `↩` or `Space`
+opens one. `⇧F10` (or the Menu key) on an Output thumbnail opens its menu:
+Save…, Copy Image and Show in Finder (Show in folder on Linux).
+
+| Key | Does |
+| --- | --- |
+| `←` / `→` | Previous / next image (stops at the first and last) |
+| `Home` / `End` | First / last image |
+| `Esc` | Close the viewer |
+
+These keys act only inside the viewer, can't be changed in Settings, and are
+not listed under **Built-in keys** while Create Images is experimental. They
+do nothing while focus is in a text field. The thumbnail strip under the image is one `Tab` stop that
+follows the arrow keys. Clicking the image switches between fitting the window
+and actual size (never larger than the image's own size), and an actual-size
+image pans by dragging; **Actual Size** / **Fit to Window** under the image
+does the same from the keyboard. At fit, dragging the image out of the window
+drops the image file wherever you release it.

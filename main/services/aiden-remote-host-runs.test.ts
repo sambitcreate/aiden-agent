@@ -189,9 +189,10 @@ function open(
   device: ReturnType<typeof controller> | ReturnType<typeof phone>,
   runId: string,
   after = 0,
+  checkpoint = false,
 ) {
   const response = new RecordingResponse();
-  service.openRunEvents(device, runId, after, response.asServerResponse());
+  service.openRunEvents(device, runId, after, response.asServerResponse(), undefined, checkpoint);
   return response;
 }
 
@@ -661,4 +662,45 @@ test("a run stream refused at admission writes nothing and never follows the run
   const keptFrames = kept.frames();
   assert.equal(keptFrames[keptFrames.length - 1]!.event, "text_delta");
   assert.equal(registry.summary("run-1")!.state, "working");
+});
+
+test("a late reader joins a long active run in one frame and the next token advances its cursor", () => {
+  const { registry, service } = harness();
+  registry.publish("run-1", "chat:timeline", { timeline: {
+    version: 3, generationId: "run-1", startedAt: 1000, status: "running", steps: [],
+  } });
+  for (let i = 0; i < 70; i++) registry.publish("run-1", "chat:status", {});
+  registry.publish("run-1", "chat:approval", approval("approval-1"));
+  registry.publish("run-1", "chat:delta", { delta: "Before attach" });
+  const stream = open(service, phone("phone"), "run-1", 0, true);
+  const frames = stream.frames();
+  assert.equal(frames.length, 1);
+  const { sequence, payload } = frames[0]!.data;
+  assert.equal(payload.replyText, "Before attach");
+  assert.equal(payload.nextSequence, sequence + 1);
+  const [prompt] = payload.approvals as Array<Record<string, unknown>>;
+  assert.equal(prompt?.canAllow, true);
+  assert.equal(prompt?.details, undefined);
+  registry.publish("run-1", "chat:delta", { delta: " and after" });
+  assert.deepEqual(stream.frames().slice(1).map(({ event, data }) => [event, data.sequence, data.payload.text]),
+    [["text_delta", sequence + 1, " and after"]]);
+  const resumed = open(service, phone("another"), "run-1", sequence, true);
+  assert.deepEqual(resumed.frames().map(({ event }) => event), ["text_delta"]);
+});
+
+test("a capped channel preserves the other live content and a provider reset starts both over", () => {
+  const { registry, service } = harness({ maxEventsPerRun: 2, deltaCoalesceMs: 0 });
+  registry.publish("run-1", "chat:reasoning-delta", { delta: "x".repeat(32_769) });
+  registry.publish("run-1", "chat:delta", { delta: "Visible answer" });
+  const gap = open(service, observer("new"), "run-1", 0, true).frames()[0]!.data.payload;
+  assert.equal(gap.replyReasoning, undefined);
+  assert.equal(gap.replyText, "Visible answer");
+  const legacy = open(service, observer("old"), "run-1").frames();
+  assert.equal(legacy[0]!.data.payload.replyText, undefined);
+  assert.deepEqual(legacy.slice(1).map(({ event }) => event), ["reasoning_delta", "text_delta"]);
+  registry.publish("run-1", "chat:delta", { reset: true });
+  registry.publish("run-1", "chat:reasoning-delta", { delta: "Retrying" });
+  const retry = open(service, observer("retry"), "run-1", 0, true).frames()[0]!.data.payload;
+  assert.equal(retry.replyText, "");
+  assert.equal(retry.replyReasoning, "Retrying");
 });

@@ -23,6 +23,7 @@ import {
   createGenerationContextTransform,
 } from "../generation-context.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import type { SubagentRuntimeTransform } from "./subagent-runtime-authority.js";
 import { isLocalProviderDeployment } from "../../../renderer/shared/provider-deployment.js";
 import { SubagentConcurrencyGate, type SubagentDeployment } from "./concurrency-gate.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
@@ -56,6 +57,8 @@ export interface SubagentChildSpec {
   groupId: string;
   childId?: string;
   runtime: ResolvedModelRuntime;
+  /** Retains parent task accounting after the isolated provider wrapper. */
+  transformRuntime?: SubagentRuntimeTransform;
   thinkingLevel: ThinkingLevel;
   systemPrompt: string;
   tools: AgentTool[];
@@ -205,26 +208,37 @@ export class SubagentRuntimeRegistry {
   private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
     const options = buildAgentRuntimeOptions(sessionId, childRuntime);
     if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
+    const owner = { kind: "chat", id: spec.authority.chatId } as const;
+    // A task-owned transform records this request under its frozen Bot/root
+    // scopes; the ordinary foreground-chat meter would count it a second time.
+    const spending = spec.transformRuntime ? undefined : this.spending;
+    const spendingMeter = spending ? createSpendingMeter({
+      spending,
+      owner,
+      refuse: true,
+      counts: () => spendCounts({
+        local: isLocalProviderDeployment(spec.runtime.provider),
+        provider: spec.runtime.provider,
+        models: spec.runtime.models,
+      }),
+    }) : undefined;
     let streamFn = options.streamFn;
     if (this.usageLimits) {
-      const limits = this.usageLimits({ kind: "chat", id: spec.authority.chatId }, spec.runtime.provider.label, {
+      const limits = this.usageLimits(owner, spec.runtime.provider.label, {
         observeFetch: childRuntime === spec.runtime,
       });
-      streamFn = withUsageLimitWait(streamFn, limits);
+      streamFn = withUsageLimitWait(streamFn, spending && spendingMeter ? {
+        ...limits,
+        beforeSendRefusal: async () => {
+          // The cap or shared chat spending can change while this request waits.
+          await spendingMeter.settled();
+          return (await limits.beforeSendRefusal?.()) ?? spending.refusal(owner);
+        },
+      } : limits);
     }
-    if (this.spending) {
-      // A helper's spending is its chat's. Over the limit, its next request is
-      // refused, so the helper stops and the chat ends after that step.
-      streamFn = createSpendingMeter({
-        spending: this.spending,
-        owner: { kind: "chat", id: spec.authority.chatId },
-        refuse: true,
-        counts: () => spendCounts({
-          local: isLocalProviderDeployment(spec.runtime.provider),
-          provider: spec.runtime.provider,
-          models: spec.runtime.models,
-        }),
-      }).wrap(streamFn);
+    if (spendingMeter) {
+      // A helper's spending is its chat's, including requests after a provider wait.
+      streamFn = spendingMeter.wrap(streamFn);
     }
     return { ...options, streamFn };
   }
@@ -256,32 +270,34 @@ export class SubagentRuntimeRegistry {
     const { childId, sessionId } = childIdentity(spec.groupId, spec.childId);
     if (this.children.has(childId)) throw new Error("Subagent child identity was reused.");
     let entry!: RegisteredSubagentChild;
-    const budget = resolveCompactionModelBudget(spec.compactionModelOverrides, spec.runtime.model, spec.compactionEngine);
-    const inputReserveTokens = configuredCompactionReserveTokens(spec.compactionModelOverrides, spec.runtime.model, spec.compactionEngine);
-    const contextOptions = {
-      compactionReserveTokens: inputReserveTokens,
-      contextWindow: spec.runtime.model.contextWindow,
-      systemPrompt: spec.systemPrompt,
-      tools: spec.tools,
-      supportsImages: spec.runtime.model.input.includes("image"),
-      providerId: spec.runtime.model.provider,
-      modelId: spec.runtime.model.id,
-    };
-    const sessionPromise = createInMemoryPiSession(sessionId);
-    const cancellation = new AbortController();
-    const childRuntime =
+    const isolatedRuntime =
       this.inferenceIsolation?.wrap(spec.runtime, {
         runId: spec.runId ?? childId,
         generationId: spec.authority.generationId,
         childId,
       }) ?? spec.runtime;
+    const childRuntime = spec.transformRuntime?.(isolatedRuntime, { childId, runId: spec.runId ?? childId }) ?? isolatedRuntime;
+    if (childRuntime.provider.id !== spec.runtime.provider.id || childRuntime.model.provider !== spec.runtime.model.provider || childRuntime.model.id !== spec.runtime.model.id) throw new Error("A child runtime transform cannot switch its admitted model.");
+    const budget = resolveCompactionModelBudget(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
+    const inputReserveTokens = configuredCompactionReserveTokens(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
+    const contextOptions = {
+      compactionReserveTokens: inputReserveTokens,
+      contextWindow: childRuntime.model.contextWindow,
+      systemPrompt: spec.systemPrompt,
+      tools: spec.tools,
+      supportsImages: childRuntime.model.input.includes("image"),
+      providerId: childRuntime.model.provider,
+      modelId: childRuntime.model.id,
+    };
+    const sessionPromise = createInMemoryPiSession(sessionId);
+    const cancellation = new AbortController();
     const compactionOptions = {
       engine: spec.compactionEngine,
       settings: budget,
       models: createPiCompactionModels(childRuntime, (message) =>
         this.recordCompactionUsage?.(message, spec.runtime),
       ),
-      model: spec.runtime.model,
+      model: childRuntime.model,
       thinkingLevel: spec.thinkingLevel,
       signal: cancellation.signal,
       consumeHostFailure: childRuntime.consumeIsolatedHostFailure,
@@ -331,7 +347,7 @@ export class SubagentRuntimeRegistry {
       finishTurn: spec.finishTurn,
       initialState: {
         systemPrompt: spec.systemPrompt,
-        model: spec.runtime.model,
+        model: childRuntime.model,
         thinkingLevel: spec.thinkingLevel,
         tools: childTools,
         messages: spec.initialMessages ?? [],

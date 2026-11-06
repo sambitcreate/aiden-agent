@@ -2,6 +2,7 @@ import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { WorktreeCapacityUnavailableError, WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Workspace } from "./types.js";
 import { createWorkspaceWorktreeApplicationService, type WorkspaceWorktreeApplicationDependencies } from "./workspace-worktree-application-service.js";
 import { runWorktreeSetupHooks } from "./agent-surface-hooks.js";
@@ -12,7 +13,9 @@ const owner = {
   onInvalidated: () => () => undefined,
 };
 
-test("shared managed-worktree workflow preserves creation rollback gates and destructive deletion ordering", async () => {
+test("shared managed-worktree workflow preserves creation rollback gates and destructive deletion ordering", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  let failProvisioning = false;
   const events: string[] = [];
   const createAdmissions: Array<[string, number]> = [];
   const allocations: Array<[string, string, number]> = [];
@@ -26,6 +29,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   };
   let managed: Workspace | undefined;
   let releaseTerminals: () => void = () => undefined;
+  let jobsStillRunning = false;
   let terminalDrain: Promise<void> = Promise.resolve();
   let failGitDeletion = false;
   const signal = new AbortController().signal;
@@ -51,7 +55,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     checkCreateCapacity: async (root, bytes) => { createAdmissions.push([root, bytes]); },
     checkWorktreeAllocation: async (root, common, bytes) => { allocations.push([root, common, bytes]); },
     checkSnapshotCapacity: async () => undefined,
-    provisionIncludedFiles: async () => [],
+    provisionIncludedFiles: async () => {
+      if (failProvisioning) throw new Error("provisioning failed");
+      return [];
+    },
     repositoryPaths: async (folderPath) => ({
       topLevel: folderPath,
       commonDir: `${folderPath}/.git`,
@@ -126,6 +133,10 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     },
     closeWorkspaceGitWatcher: (id) => { events.push(`close-git-watcher:${id}`); },
     cancelWorkspaceGeneration: async () => { events.push("cancel-generation"); },
+    closeWorkspaceFollowThrough: async () => {
+      events.push("stop-jobs");
+      if (jobsStillRunning) throw new Error("A job is still running");
+    },
     cancelWorkspaceSchedules: async () => { events.push("cancel-schedules"); },
     resumeWorkspaceSchedules: async () => { events.push("resume-schedules"); },
     createWorkspaceId: () => "workspace-managed",
@@ -135,6 +146,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   });
 
   const created = await service.create(owner, source.id, "feature/mobile", "Mobile Workspace");
+  assert.deepEqual(sent, [{ event: "worktree_created", props: {} }]);
   assert.equal(created.id, "workspace-managed");
   assert.equal(created.name, "Mobile Workspace");
   assert.equal(created.permission, source.permission);
@@ -165,6 +177,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     "cancel-operations",
     "close-terminals",
     "cancel-generation",
+    "stop-jobs",
     "cancel-schedules",
     "delete-git",
     "remove:workspace-managed",
@@ -179,10 +192,19 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   // A deletion that fails still closes the watcher; the next read re-observes.
   const again = await service.create(owner, source.id, "feature/retry", "Retry Workspace");
   events.length = 0;
+  jobsStillRunning = true;
+  await assert.rejects(service.remove(owner, again.id), /job is still running/u);
+  assert.equal(events.includes("delete-git"), false, "a live job keeps its checkout");
+  jobsStillRunning = false;
   failGitDeletion = true;
   await assert.rejects(service.remove(owner, again.id), /git worktree remove failed/u);
   assert.equal(events.includes(`remove:${again.id}`), false, "the record stays when Git deletion fails");
   assert.equal(events[events.length - 1], `close-git-watcher:${again.id}`);
+
+  sent.length = 0;
+  failProvisioning = true;
+  await assert.rejects(service.create(owner, source.id, "feature/rolled-back"), /provisioning failed/u);
+  assert.deepEqual(sent, [], "a rolled-back checkout was never created");
 });
 
 
@@ -799,4 +821,81 @@ test("a WorktreeSetup hook that fails never rolls back the new worktree", async 
   const created = await service.create(owner, hookSource.id, "feature/mobile", "Mobile Workspace");
   assert.equal(created.id, "workspace-managed");
   assert.deepEqual(events, ["save", "notify", "log:hooks"]);
+});
+
+test("restoring a deleted worktree on a nearly full disk brings the checkout back without the .worktreeinclude copies", async () => {
+  const worktreePath = "/aiden/worktrees/fix";
+  const workspace: Workspace = {
+    id: "workspace-fix",
+    name: "Fix",
+    folderPath: worktreePath,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 2,
+    managedWorktree: {
+      repositoryPath: "/canonical/source",
+      worktreePath,
+      branch: "aiden/fix",
+      worktreeGitDir: "/canonical/source/.git/worktrees/fix",
+      ownershipToken: "a".repeat(64),
+      worktreeDevice: 1,
+      worktreeInode: 2,
+      createdFromHead: "b".repeat(40),
+    } as NonNullable<Workspace["managedWorktree"]>,
+  };
+  const admissions: Array<[string, number]> = [];
+  let provisioned = 0;
+  const logged: string[] = [];
+  let saved: Workspace | undefined;
+  const service = createWorkspaceWorktreeApplicationService({
+    environment: {
+      runRecord: async (_owner: unknown, _id: string, operation: (record: Workspace, signal: AbortSignal) => Promise<Workspace>) =>
+        operation(workspace, new AbortController().signal),
+    },
+    beginWorkspaceMutation: () => () => undefined,
+    workspacePathExists: async () => false,
+    ensureWorktreeRoot: async () => "/aiden/worktrees",
+    restoreDeletedCheckout: async (_managed: unknown, _root: string, _subpath: string, commit: (restored: unknown) => Promise<void>) => {
+      const restored = {
+        path: worktreePath,
+        workspacePath: worktreePath,
+        repositoryPath: "/canonical/source",
+        worktreeGitDir: "/canonical/source/.git/worktrees/fix",
+        ownershipToken: "c".repeat(64),
+        worktreeDevice: 3,
+        worktreeInode: 4,
+        createdFromHead: "b".repeat(40),
+        head: "b".repeat(40),
+        branch: "aiden/fix",
+        bare: false,
+        detached: false,
+        current: false,
+      };
+      await commit(restored);
+      return restored;
+    },
+    saveWorkspace: async (record: Workspace) => {
+      saved = record;
+      return record;
+    },
+    checkCreateCapacity: async (root: string, bytes: number) => {
+      admissions.push([root, bytes]);
+      throw new WorktreeCapacityUnavailableError();
+    },
+    provisionIncludedFiles: async () => {
+      provisioned += 1;
+      return [];
+    },
+    repositoryPaths: async (folderPath: string) => ({ topLevel: folderPath, commonDir: `${folderPath}/.git` }),
+    logError: (_scope: string, message: string) => { logged.push(message); },
+    now: () => 5,
+    notifyChanged: () => undefined,
+  } as unknown as Parameters<typeof createWorkspaceWorktreeApplicationService>[0]);
+
+  const restored = await service.restoreDeleted(owner, workspace.id);
+  assert.equal(restored.managedWorktree?.ownershipToken, "c".repeat(64), "the checkout is back under its new identity");
+  assert.equal(saved?.managedWorktree?.ownershipToken, "c".repeat(64));
+  assert.deepEqual(admissions, [[worktreePath, process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0]]);
+  assert.equal(provisioned, 0, "nothing is copied without room for it");
+  assert.equal(logged.length, 1, "the skipped copies are logged");
 });

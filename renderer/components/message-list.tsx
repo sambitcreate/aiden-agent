@@ -6,6 +6,9 @@ import { Button, Callout, Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
+import { useAppearancePreference } from "../lib/use-appearance-preference";
+import { latestWorkDetailsStart } from "../lib/work-details";
+import type { WorkDetailsMode } from "../shared/appearance";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
 import { AgentNoticeCard } from "./agent-notice-card";
@@ -89,6 +92,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
+  replayedTextLength?: number;
   /** Reasoning explicitly emitted by the current supported provider. */
   streamingReasoning: string | null;
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
@@ -151,7 +155,11 @@ interface MessageListProps {
 }
 
 interface AssistantResponseProps {
+  imageScope?: string;
+  workDetails?: WorkDetailsMode;
+  retainWorkDetails?: boolean;
   content: string;
+  replayedTextLength?: number;
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
   attachments?: readonly Attachment[];
@@ -215,7 +223,11 @@ type RenderVisual = (
 ) => React.ReactNode;
 
 function AssistantResponse({
+  imageScope,
+  workDetails = "standard",
+  retainWorkDetails = false,
   content,
+  replayedTextLength = 0,
   timeline,
   reasoning,
   attachments,
@@ -327,7 +339,7 @@ function AssistantResponse({
       <>
         {null /* the chronological layout's leading subagent slot */}
         {[
-          <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
+          <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} mode={workDetails} retainDetails={retainWorkDetails || (streaming && !streamComplete)} />,
           ...(timeline?.steps.filter(isExtractionStep).map((step) => (
             <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
           )) ?? []),
@@ -350,8 +362,10 @@ function AssistantResponse({
           content ? (
             <SafeMessageBubble
               key="text-0"
+              imageScope={imageScope}
               role="assistant"
               content={content}
+              replayedTextLength={replayedTextLength}
               streaming={streaming}
               streamComplete={streamComplete}
               onStreamHandoffComplete={onStreamHandoffComplete}
@@ -408,6 +422,8 @@ function AssistantResponse({
               <ActivityFeed
                 timeline={activityTimelineFragment(timeline, row.steps)}
                 animate={streaming}
+                mode={workDetails}
+                retainDetails={retainWorkDetails || (streaming && !streamComplete)}
               />
               {visualNodes(slots.byRowKey.get(row.key))}
               {draftNodes(slots.draftsByRowKey.get(row.key))}
@@ -424,8 +440,10 @@ function AssistantResponse({
         return (
           <SafeMessageBubble
             key={row.key}
+            imageScope={imageScope}
             role="assistant"
             content={row.content}
+            replayedTextLength={Math.max(0, replayedTextLength - row.startOffset)}
             // Every text row of a running turn stays on the gated reveal path,
             // so text a tool step closed keeps its release slot after newer
             // prose takes over the last row.
@@ -457,6 +475,9 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 }
 
 interface SettledMessageRowProps {
+  imageScope: string;
+  workDetails?: WorkDetailsMode;
+  retainWorkDetails?: boolean;
   chatId: string;
   deferOffscreenLayout?: boolean;
   /** Absent only for the in-flight reply, which passes `live` instead. */
@@ -494,6 +515,9 @@ interface SettledMessageRowProps {
  * only the live row, do not re-render or re-derive settled history.
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
+  imageScope,
+  workDetails,
+  retainWorkDetails,
   chatId,
   deferOffscreenLayout,
   message,
@@ -563,10 +587,13 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
     >
       {live ? (
-        <AssistantResponse {...live} streaming />
+        <AssistantResponse {...live} imageScope={imageScope} workDetails={workDetails} retainWorkDetails={retainWorkDetails} streaming />
       ) : !message ? null : message.role === "assistant" ? (
         <>
           <AssistantResponse
+            imageScope={imageScope}
+            workDetails={workDetails}
+            retainWorkDetails={retainWorkDetails}
             content={message.content}
             timeline={message.timeline}
             reasoning={message.reasoning}
@@ -595,10 +622,11 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
           ) : null}
         </>
       ) : message.notice ? (
-        <AgentNoticeCard notice={message.notice} content={message.content} />
+        <AgentNoticeCard notice={message.notice} content={message.content} imageScope={imageScope} />
       ) : (
         <>
           <SafeMessageBubble
+            imageScope={imageScope}
             role={message.role}
             content={message.content}
             attachments={message.attachments}
@@ -662,9 +690,9 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
       {actions.approvalSummaries?.length ? (
         <>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Aiden closed while waiting for your approval, so this didn’t run:
+            Aiden saved an approval request before it closed.
           </Text>
-          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Waiting for approval">
+          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Saved approval requests">
             {actions.approvalSummaries.map((summary, index) => (
               <li key={index} className="break-words text-small text-primary">
                 {summary}
@@ -672,7 +700,7 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
             ))}
           </ul>
           <Text variant="small" color="secondary" className="mt-1 block">
-            Resume to pick up where it stopped.
+            Check whether the action ran before trying it again.
           </Text>
         </>
       ) : (
@@ -772,6 +800,7 @@ export function MessageList({
   chatId,
   messages,
   streamingText,
+  replayedTextLength,
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
@@ -802,6 +831,9 @@ export function MessageList({
   forkBeforeFirstPrompt = true,
   storedImageActions = true,
 }: MessageListProps) {
+  const workDetails = useAppearancePreference("workDetails");
+  const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
+  const latestExchangeStart = React.useMemo(() => latestWorkDetailsStart(messages), [messages]);
   const onForkRef = React.useRef(onFork);
   const onForkWithSummaryRef = React.useRef(onForkWithSummary);
   React.useLayoutEffect(() => {
@@ -1092,8 +1124,12 @@ export function MessageList({
   const liveRow = streamingRowVisible ? (
     <SettledMessageRow
       key={liveKey}
+      imageScope={`${chatId}:${liveKey}`}
+      workDetails={workDetails}
+      retainWorkDetails={collapseTiming === "next-input" && (settlingIndex < 0 || settlingIndex >= latestExchangeStart)}
       live={{
         content: streamingText ?? "",
+        replayedTextLength,
         timeline,
         reasoning: streamingReasoning,
         attachments: liveAttachments,
@@ -1127,6 +1163,9 @@ export function MessageList({
     transcriptRows.push(
       <SettledMessageRow
         key={settledRowKeys.get(message.id)}
+        imageScope={`${chatId}:${settledRowKeys.get(message.id)}`}
+        workDetails={workDetails}
+        retainWorkDetails={collapseTiming === "next-input" && messageIndex >= latestExchangeStart}
         chatId={chatId}
         deferOffscreenLayout={messageIndex < messages.length - 32}
         message={message}

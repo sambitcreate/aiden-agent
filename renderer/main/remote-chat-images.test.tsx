@@ -12,6 +12,7 @@ import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { ChatMessage } from "../lib/types";
 import type { PeerAttachmentContent } from "../shared/peer-operation";
 import { RemoteChatPane } from "./remote-chat-view";
+import { mapRemoteMessage } from "../lib/hosts/remote-chat-mapper";
 
 afterEach(() => cleanup());
 
@@ -159,6 +160,22 @@ test("an image the other Mac cannot hand over, or hands over changed, stays a na
   assert.ok(screen.getByText("cleaner.png"));
   assert.ok(!screen.queryByRole("img", { name: "mockup.png" }), "no picture for an unreadable image");
   assert.ok(!screen.queryByRole("img", { name: "cleaner.png" }), "no picture for bytes that differ from the listing");
+});
+
+test("a paired Mac's generated image appears beneath its step and before the explanation", async () => {
+  const message = mapRemoteMessage({
+    id: "generated-reply", role: "assistant", text: "Explanation after the generated image.", createdAt: "2026-11-02T00:00:00Z",
+    attachments: [{ id: "generated-photo", name: "Generated.png", mimeType: "image/png", kind: "image", size: PIXEL.length, toolCallId: "call-1" }],
+    timeline: {
+      version: 3, generationId: "generation-image", status: "completed", startedAt: 1, finishedAt: 2,
+      steps: [{ id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "generate_image", label: "Generate image", status: "completed", startedAt: 1, updatedAt: 2, finishedAt: 2, contentOffset: 0 }],
+    },
+  });
+  assert.ok(message);
+  await mount(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } }), [message]);
+  const photo = await screen.findByRole("img", { name: "Generated.png" });
+  const explanation = screen.getByText("Explanation after the generated image.");
+  assert.ok(photo.compareDocumentPosition(explanation) & Node.DOCUMENT_POSITION_FOLLOWING, "the generated image precedes the prose written after its call");
 });
 
 test("a chat full of pictures reads them from the other Mac a few at a time, so the host never refuses one", async () => {

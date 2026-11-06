@@ -14,6 +14,20 @@ import {
 export const APPEARANCE_STORAGE_KEY = "aiden-agent.appearance-v1";
 export const APPEARANCE_CHANGE_EVENT = "aiden:appearance-changed";
 export const APPEARANCE_INTENT_FAILED_EVENT = "aiden:appearance-intent-failed";
+let appliedConfig: AppearanceConfig | null = null;
+let appliedCacheValue: string | null | undefined;
+
+/** The accepted window preview survives route remounts even if browser storage cannot save it. */
+export function readCurrentAppearance(): AppearanceConfig | null {
+  if (appliedConfig) {
+    try {
+      if (appliedCacheValue === undefined || localStorage.getItem(APPEARANCE_STORAGE_KEY) === appliedCacheValue) return appliedConfig;
+    } catch {
+      return appliedConfig;
+    }
+  }
+  return readCachedAppearance();
+}
 
 export interface AppliedAppearance {
   config: AppearanceConfig;
@@ -247,6 +261,12 @@ export function applyAppearanceConfig(
   metaThemeColor.content = themeColor;
 
   cacheAppearance(config);
+  appliedConfig = config;
+  try {
+    appliedCacheValue = localStorage.getItem(APPEARANCE_STORAGE_KEY);
+  } catch {
+    appliedCacheValue = undefined;
+  }
   const detail: AppliedAppearance = { config, scheme, systemHighContrast };
   queueMicrotask(() => {
     window.dispatchEvent(new CustomEvent<AppliedAppearance>(APPEARANCE_CHANGE_EVENT, { detail }));

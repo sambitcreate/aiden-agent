@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import { Ellipsis } from "lucide-react";
+import { openContextMenuFromKeyboard } from "../../lib/keyboard-context-menu";
 import {
   Button,
   ContextMenu,
@@ -47,7 +48,7 @@ export function BotMessageActions({
 }) {
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
+      <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
         <div
           className={`group relative flex min-w-0 items-start gap-1 ${align === "end" ? "flex-row-reverse" : ""}`}
           data-bot-message

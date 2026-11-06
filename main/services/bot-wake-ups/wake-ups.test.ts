@@ -54,7 +54,7 @@ function harness(options: { routineDeleted?: (botId: string, routineId: string) 
     store,
     routines,
     timezone: () => "UTC",
-    enabled: async (botId) => switches.get(botId) ?? true,
+    generation: async (botId) => switches.get(botId) === false ? null : "",
   });
   return { store, scheduler, routines, switches, wakeUps };
 }
@@ -211,7 +211,7 @@ test("turning the switch off still cancels the rest when the person removed one 
     store: { list: async () => (reads++ === 0 ? before : h.store.list()) },
     routines: h.routines,
     timezone: () => "UTC",
-    enabled: async () => false,
+    generation: async () => null,
   });
 
   assert.equal(await wakeUps.cancelAll("bot-chef"), 1);

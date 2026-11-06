@@ -29,6 +29,14 @@ export interface BackgroundJobView {
   signal?: string;
   endReason?: BackgroundJobEndReason;
   outputBytes: number;
+  /**
+   * `command`: processes a `run_command` call left running (a server started
+   * with a trailing `&`). Aiden tracks and stops them but has no exit code or
+   * output for them.
+   */
+  origin?: "command";
+  /** TCP ports the job's processes listen on, lowest first, while it runs. */
+  ports?: number[];
 }
 
 export interface BackgroundJobOutput {
@@ -39,6 +47,14 @@ export interface BackgroundJobOutput {
 }
 
 const JOB_ID = /^job_[0-9a-f]{8}$/u;
+
+/** Most ports a job lists. */
+export const MAX_BACKGROUND_JOB_PORTS = 5;
+
+/** The address a person opens for a port a job listens on. */
+export function backgroundJobPortUrl(port: number): string {
+  return `http://localhost:${port}`;
+}
 
 export function isBackgroundJobId(value: unknown): value is string {
   return typeof value === "string" && JOB_ID.test(value);

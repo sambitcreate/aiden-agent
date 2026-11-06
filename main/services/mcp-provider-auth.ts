@@ -78,10 +78,10 @@ export async function setMcpProviderAuthGrant(server: McpServer, allowed: boolea
   await secrets.setInternalKey(mcpProviderGrantKey(server.id), binding, 1024, isCurrent);
 }
 
-export function mcpProviderAuthenticatedFetch(server: McpServer, isCurrent: () => boolean): typeof fetch {
+export function mcpProviderAuthenticatedFetch(server: McpServer, isCurrent: () => boolean, fetch: typeof globalThis.fetch): typeof fetch {
   const expected = mcpRuntimeConnectionSnapshot(server);
   return createMcpProviderAuthenticatedFetch({
-    server,
+    server, fetch,
     assertCurrent() { if (!isCurrent()) throw new Error("This MCP connection is no longer current."); },
     async readGrant() {
       const current = (await configStore.listMcpServers()).find((item) => item.id === server.id);

@@ -69,7 +69,7 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "edit-last",
     title: "Fix and resend your last message",
-    description: "In an empty message box, once it has a finished reply.",
+    description: "In an empty message box after a finished reply; pauses during dictation.",
     keys: ["Up"],
     section: "In a chat",
   },

@@ -147,6 +147,8 @@ export interface PiAgentRuntimeExtension {
  * host to `AIDEN_PI_CLIENT_IDENTITY`; `identity` here is the runtime identity.
  */
 export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution" | "identity"> {
+  /** A settled spending stop ends both Pi tool turns and managed provider recovery. */
+  spendingLimitReached?: () => Promise<boolean>;
   extensions?: readonly PiAgentRuntimeExtension[];
   /** Fully resolved immutable contributions for one foreground operation. */
   contributions?: PiRuntimeContributionSnapshot;
@@ -924,6 +926,7 @@ export class PiAgentRuntimeHarness {
   private cancelledQueuedProjectionSettlements: Array<Promise<void>> = [];
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
+  private stoppedAtSpendingLimit = false;
   private activeEffectOperation:
     | {
         operationId: string;
@@ -974,6 +977,7 @@ export class PiAgentRuntimeHarness {
       resources: requestedResources = {},
       identity,
       onContextProjection,
+      spendingLimitReached,
       contextPromptSections,
       ...agentOptions
     } = options;
@@ -1243,7 +1247,13 @@ export class PiAgentRuntimeHarness {
         };
       },
       identity: AIDEN_PI_CLIENT_IDENTITY,
-      finishTurn,
+      finishTurn: spendingLimitReached
+        ? async (turn, signal) => {
+            const decision = await finishTurn?.(turn, signal);
+            this.stoppedAtSpendingLimit = await spendingLimitReached();
+            return this.stoppedAtSpendingLimit ? { action: "end" } : decision ?? undefined;
+          }
+        : finishTurn,
       transformContext:
         options.transformContext || extensions.some((extension) => extension.transformContext)
           ? async (messages, signal) => {
@@ -2160,6 +2170,39 @@ export class PiAgentRuntimeHarness {
       }
       if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
 
+      // Settles a pending emergency checkpoint; a result means the run ended there.
+      const recoverCheckpoint = async (
+        assistant: AssistantMessage,
+        alreadyCompacted: boolean,
+      ): Promise<PiRuntimeTerminalOutcome | undefined> => {
+        if (this.pendingEmergencyCheckpoint && !alreadyCompacted) {
+          const recoveryOperation = coordinator.compact({ localOnly: this.stoppedAtSpendingLimit });
+          const recovery = await waitForManagedPromise(recoveryOperation, abortController.signal);
+          if (recovery.kind === "cancelled") {
+            this.trackDetachedDurability(recoveryOperation);
+            return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
+          }
+          if (
+            recovery.kind === "failed" ||
+            recovery.value.errorMessage ||
+            !recovery.value.compacted
+          ) {
+            return await finish({
+              kind: "host_failed",
+              faultKind: "compaction",
+              finalMessage: assistant,
+              attempts,
+            });
+          }
+          if (recovery.value.messages) this.installCompactedMessages(recovery.value.messages);
+          this.pendingEmergencyCheckpoint = false;
+        }
+        return undefined;
+      };
+      const complete = async (assistant: AssistantMessage, alreadyCompacted: boolean) =>
+        (await recoverCheckpoint(assistant, alreadyCompacted)) ??
+        (await finish({ kind: "completed", finalMessage: assistant, attempts }));
+
       try {
         const repairOperation = coordinator.prepareForPrompt();
         const repaired = await waitForManagedPromise(repairOperation, abortController.signal);
@@ -2295,6 +2338,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         attempts += 1;
+        this.stoppedAtSpendingLimit = false;
         this.runtimeEvents?.setAttempt(attempts);
         this.lastAssistantMessage = undefined;
         try {
@@ -2372,6 +2416,24 @@ export class PiAgentRuntimeHarness {
               ? { kind: "app_cancelled", attempts }
               : { kind: "host_failed", faultKind: "invariant", attempts },
           );
+        }
+
+        // Pi has ended this step because the owner reached its spending cap.
+        // Its outer recovery loop must not start another request or paid summary.
+        if (this.stoppedAtSpendingLimit) {
+          if (cancelled()) return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
+          if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
+            return await finish({
+              kind: "provider_failed",
+              reason: assistant.stopReason === "aborted" ? "interrupted" : "request-failed",
+              finalMessage: assistant,
+              attempts,
+            });
+          }
+          if (assistant.stopReason === "length" && !keptCutOffReply(assistant, "output-limit")) {
+            return await finish({ kind: "provider_failed", reason: "output-limit", finalMessage: assistant, attempts });
+          }
+          return await complete(assistant, false);
         }
 
         let compactionResult: PiCompactionCheckResult;
@@ -2584,28 +2646,8 @@ export class PiAgentRuntimeHarness {
             attempts,
           });
         }
-        if (this.pendingEmergencyCheckpoint && !compactionResult.compacted) {
-          const recoveryOperation = coordinator.compact();
-          const recovery = await waitForManagedPromise(recoveryOperation, abortController.signal);
-          if (recovery.kind === "cancelled") {
-            this.trackDetachedDurability(recoveryOperation);
-            return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
-          }
-          if (
-            recovery.kind === "failed" ||
-            recovery.value.errorMessage ||
-            !recovery.value.compacted
-          ) {
-            return await finish({
-              kind: "host_failed",
-              faultKind: "compaction",
-              finalMessage: assistant,
-              attempts,
-            });
-          }
-          if (recovery.value.messages) this.installCompactedMessages(recovery.value.messages);
-          this.pendingEmergencyCheckpoint = false;
-        }
+        const recovered = await recoverCheckpoint(assistant, compactionResult.compacted);
+        if (recovered) return recovered;
         if (assistant.stopReason === "stop") {
           const afterStop = await continueAfterStop(assistant);
           if (afterStop === "continue") continue;

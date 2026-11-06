@@ -1,3 +1,5 @@
+import "../main/bots/test-dom";
+import { assertBotCanSavePendingChanges } from "./bot-local-pending";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/react-query";
@@ -25,13 +27,33 @@ test("a routine change re-reads that Bot's Routines panel only", async () => {
 
 test("a change naming no Bot re-reads every Routines panel", async () => {
   const queryClient = seeded();
+  queryClient.setQueryData(queryKeys.settings, {botMessaging: true});
   await invalidateForBotsChanged(queryClient, {});
   assert.equal(stale(queryClient, "bot-a"), true);
   assert.equal(stale(queryClient, "bot-b"), true);
+  assert.equal(queryClient.getQueryState(queryKeys.settings)?.isInvalidated, true, "a phone's global switch change re-reads settings");
 });
 
 test("a session state change leaves routines alone", async () => {
   const queryClient = seeded();
+  queryClient.setQueryData(queryKeys.settings, {botMessaging: true});
   await invalidateForBotsChanged(queryClient, { botId: "bot-a", session: { state: "working" } });
   assert.equal(stale(queryClient, "bot-a"), false);
+  assert.equal(queryClient.getQueryState(queryKeys.settings)?.isInvalidated, false);
+});
+
+test("only an explicit host deletion receipt erases that Bot's pending changes and fences late callbacks", async () => {
+  localStorage.clear();
+  const own = ["aiden:open-work:pending:bot-a:nonce", "aiden:pending-connector-watch:bot-a", "aiden:routine-model:pending:bot-a:routine:nonce", "aiden:bot-resume:pending:bot-a:nonce"];
+  const other = "aiden:open-work:pending:bot-b:nonce";
+  for (const name of [...own, other]) localStorage.setItem(name, "saved data");
+  const client = seeded();
+  await invalidateForBotsChanged(client, { botId: "bot-a" });
+  assert.ok(own.every((name) => localStorage.getItem(name) === "saved data"));
+  await invalidateForBotsChanged(client, { botId: "bot-a", deleted: true });
+  assert.ok(own.every((name) => localStorage.getItem(name) === null));
+  assert.equal(localStorage.getItem(other), "saved data");
+  assert.throws(() => assertBotCanSavePendingChanges("bot-a"), /deleted/u);
+  assert.doesNotThrow(() => assertBotCanSavePendingChanges("bot-b"));
+  localStorage.clear(); client.clear();
 });

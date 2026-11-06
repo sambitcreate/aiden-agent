@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { EventEmitter, once } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AnalyticsState } from "./analytics-consent.js";
+import { createAnalyticsService } from "./analytics-service.js";
 import { gunzipSync } from "node:zlib";
 
 import { ANALYTICS_HOST, createPostHogTransport } from "./analytics-client.js";
 
 const INSTALL_ID = "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b";
-const SUPER = { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "release" };
+const SUPER = { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "release" } as const;
 
 interface Recorded {
   readonly url: string;
@@ -34,6 +42,51 @@ function fakeFetch(status: number) {
   };
   return { fetch, requests };
 }
+
+test("an immediate crash send reports success, keeps its id and time, and never reports a failure as sent", async () => {
+  const id = "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const message = {
+    distinctId: INSTALL_ID,
+    event: "app_crashed",
+    properties: { kind: "unclean_exit", ...SUPER },
+    uuid: id,
+    timestamp: "2026-10-30T12:00:00.000Z",
+  };
+
+  const { fetch, requests } = fakeFetch(200);
+  const healthy = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never, retryDelayMs: 1 });
+  assert.equal(await healthy.captureNow(message), true);
+  assert.equal(requests[0]!.events[0]!.uuid, id);
+  assert.equal((requests[0]!.events[0] as unknown as { timestamp: string }).timestamp, message.timestamp);
+  await healthy.shutdown();
+
+  const rejected = fakeFetch(400);
+  const refusing = createPostHogTransport({ apiKey: "phc_test", fetch: rejected.fetch as never, retryDelayMs: 1 });
+  assert.equal(await refusing.captureNow(message), false);
+  await refusing.discard();
+
+  const offline = createPostHogTransport({
+    apiKey: "phc_test",
+    fetch: (async () => { throw new TypeError("fetch failed"); }) as never,
+    retryDelayMs: 1,
+  });
+  assert.equal(await offline.captureNow(message), false);
+  await offline.discard();
+
+  const stopped = fakeFetch(200);
+  const revoked = createPostHogTransport({ apiKey: "phc_test", fetch: stopped.fetch as never, retryDelayMs: 1 });
+  await revoked.shutdown();
+  assert.equal(await revoked.captureNow(message), false);
+  assert.equal(stopped.requests.length, 0);
+
+  // A revoked client resolves without a request, which must not count as sent.
+  const silenced = fakeFetch(200);
+  const optedOut = createPostHogTransport({ apiKey: "phc_test", fetch: silenced.fetch as never, retryDelayMs: 1 });
+  optedOut.revokeQueue();
+  assert.equal(await optedOut.captureNow(message), false);
+  assert.equal(silenced.requests.length, 0);
+  await optedOut.discard();
+});
 
 test("batched events reach the US host with person and undeclared data stripped", async () => {
   const { fetch, requests } = fakeFetch(200);
@@ -134,8 +187,90 @@ test("an immediate send goes out on its own", async () => {
   const { fetch, requests } = fakeFetch(200);
   const transport = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never });
 
-  await transport.captureNow({ distinctId: INSTALL_ID, event: "analytics_disabled", properties: { ...SUPER } });
+  await transport.captureOptOut({ distinctId: INSTALL_ID, event: "analytics_disabled", properties: { ...SUPER } });
 
   assert.deepEqual(requests.flatMap((request) => request.events).map((event) => event.event), ["analytics_disabled"]);
   await transport.discard();
+});
+
+test("quitting while the opt-out response is pending never sends the old lifecycle batch", { timeout: 5000 }, async (t) => {
+  const runDirectory = mkdtempSync(join(tmpdir(), "analytics-quit-"));
+  t.after(() => rmSync(runDirectory, { recursive: true, force: true }));
+  let received!: () => void;
+  const started = new Promise<void>(resolve => { received = resolve; });
+  const responseGate = new EventEmitter();
+  let optOutResponses = 0;
+  const { fetch: record, requests } = fakeFetch(200);
+  const transport = createPostHogTransport({
+    apiKey: "phc_test",
+    fetch: async (url, init) => {
+      const response = await record(url, init);
+      if (requests[requests.length - 1]?.events.some(({ event }) => event === "analytics_disabled")) {
+        received();
+        assert.ok(init.signal);
+        await once(responseGate, "release", { signal: init.signal });
+        optOutResponses++;
+      }
+      return response;
+    },
+  });
+  let state: AnalyticsState = { enabled: true, noticeShownAt: new Date().toISOString() };
+  const service = createAnalyticsService({
+    runDirectory, env: {}, appRoots: [], isBuiltinProvider: () => false,
+    superProperties: SUPER,
+    store: { read: async () => state, update: async (mutate) => (state = mutate(state)) },
+    createTransport: async () => transport,
+  });
+  await service.start();
+  const previousId = state.installId;
+  assert.ok(previousId);
+  const off = service.setEnabled(false);
+  await Promise.race([started, off.then(() => assert.fail("Opt-out ended before the request reached fetch."))]);
+  const quit = service.shutdown();
+  const consentWhilePending = { enabled: state.enabled, installId: state.installId };
+  try {
+    await transport.flush(); // Exercise the SDK queue while the final request is held.
+  } finally {
+    responseGate.emit("release");
+    await Promise.all([off, quit]);
+  }
+  assert.deepEqual(requests.flatMap(r => r.events.map(e => [e.event, e.distinct_id])),
+    [["analytics_disabled", previousId]]);
+  assert.equal(optOutResponses, 1, "Opt-out was aborted before its response could complete.");
+  assert.deepEqual(consentWhilePending, { enabled: false, installId: undefined });
+});
+
+test("HTTP redirects cannot forward normal batches or the final opt-out POST", async (t) => {
+  const leaked: Buffer[] = [];
+  const sink = createServer(async (req, res) => {
+    for await (const bytes of req) leaked.push(bytes);
+    res.end("{}");
+  }).listen(0, "127.0.0.1");
+  await once(sink, "listening");
+  t.after(() => sink.close());
+  const received: string[] = [];
+  for (const code of [307, 308]) {
+    const source = createServer((req, res) => {
+      received.push(req.method!);
+      req.resume();
+      res.writeHead(code, { Location: `http://127.0.0.1:${(sink.address() as AddressInfo).port}/sink` });
+      res.end();
+    }).listen(0, "127.0.0.1");
+    await once(source, "listening");
+    t.after(() => source.close());
+    const transport = createPostHogTransport({
+      apiKey: "phc_test", retryDelayMs: 1,
+      fetch: (url, options) => {
+        assert.equal(new URL(url).origin, ANALYTICS_HOST);
+        return fetch(`http://127.0.0.1:${(source.address() as AddressInfo).port}/`, options as RequestInit);
+      },
+    });
+    const message = { distinctId: INSTALL_ID, properties: SUPER };
+    transport.capture({ ...message, event: "terminal_opened" });
+    await transport.flush();
+    await transport.captureOptOut({ ...message, event: "analytics_disabled" });
+    await transport.discard();
+  }
+  assert.ok(received.length >= 4);
+  assert.equal(leaked.length, 0, "another origin received an analytics body");
 });

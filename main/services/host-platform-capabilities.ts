@@ -8,6 +8,11 @@ export interface HostPlatformCapabilities {
   accessibilityPaste: boolean;
   dictationHoldToTalk: boolean;
   dockIcon: boolean;
+  /**
+   * A count on the app icon: the Dock tile on macOS, the launcher entry on
+   * Linux (shown only by launchers that support Unity counts).
+   */
+  badgeCount: boolean;
   nativeShare: boolean;
   /** Connectors served by a separate Mac app, such as iMCP (`renderer/shared/connector-catalog.ts`). */
   macAppConnectors: boolean;
@@ -35,6 +40,7 @@ export function hostPlatformCapabilities(
     accessibilityPaste: darwin,
     dictationHoldToTalk: darwin,
     dockIcon: darwin,
+    badgeCount: darwin || platform === "linux",
     nativeShare: darwin,
     macAppConnectors: darwin,
     backgroundJobs: darwin || platform === "linux",

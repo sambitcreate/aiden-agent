@@ -28,7 +28,7 @@ function macWithImcp(opened: string[]): McpMacAppProbe {
   return {
     platform: "darwin",
     homedir: "/Users/me",
-    isExecutable: async (file) => file === "/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    isTrustedServer: async (file) => file === "/Applications/iMCP.app/Contents/MacOS/imcp-server",
     bundleInfo: async (bundle, key) => (bundle === "/Applications/iMCP.app" && key === "CFBundleIdentifier" ? "co.dododo.iMCP" : undefined),
     isRunning: async () => false,
     open: async (bundle) => { opened.push(bundle); },
@@ -91,7 +91,7 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
     approveLaunch: (server, fingerprint) => approvals.approveShown(server, fingerprint),
     launchApproved: (server) => approvals.isApproved(server),
     macAppStatus: (preset) => mcpMacAppStatus(preset, macWithImcp(opened)),
-    openMacApp: (preset) => openMcpMacApp(preset, macWithImcp(opened)),
+    openMacApp: (preset, isCurrent) => openMcpMacApp(preset, macWithImcp(opened), isCurrent),
   };
   registerMcpControlHandlers(deps);
   const invoke = (channel: string, event: string, ...args: unknown[]) =>
@@ -313,4 +313,13 @@ test("Mac app status and Open serve only a Mac app connector, from the live docu
   ipc.destroy();
   await assert.rejects(ipc.invoke("mcp:openMacApp", "settings", "imcp"), /active application document/u);
   assert.deepEqual(ipc.opened, ["/Applications/iMCP.app"], "nothing else was opened");
+});
+
+test("losing Settings authority during the installed-app probe prevents the OS open", async () => {
+  const ipc = setup();
+  const opening = ipc.invoke("mcp:openMacApp", "settings", "imcp");
+  await Promise.resolve();
+  ipc.invalidate();
+  await assert.rejects(opening, /active application document/u);
+  assert.deepEqual(ipc.opened, []);
 });

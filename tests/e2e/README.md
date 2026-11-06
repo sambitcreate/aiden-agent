@@ -6,16 +6,32 @@ a test-owned LM Studio-compatible server bound to a random loopback port. It
 does not read or contact a developer's Aiden profile, credentials, or LM Studio
 server.
 
-Run the complete deterministic suite locally with:
+On a Mac, run it in a local Cua Spaces Linux sandbox so test windows stay off your
+display (needs the `cua` CLI; see `scripts/cua-space-e2e.sh`):
 
 ```sh
-npm run test:e2e
+npm run test:e2e:space                                   # full suite
+npm run test:e2e:space -- tests/e2e/<spec>.spec.ts       # any Playwright args
+npm run test:e2e:space -- --run <command> [args]         # other window-opening commands
 ```
 
-Hosted CI splits deterministic spec files across three isolated macOS runners, each with
-one Playwright worker. `scripts/ci-e2e-shards.mjs` balances files using recorded hosted
-durations and automatically assigns newly added specs. After `npm run build`, reproduce
-one shard with `node scripts/ci-e2e-shards.mjs 1/3`; append `--list` to inspect its files.
+The sync preserves symlinks and skips files beneath symlinked directories. If the Space
+cannot clear its previous checkout, the run stops before extracting or running anything.
+The Space reuses installed dependencies only when `package.json`, `package-lock.json`,
+the Node version, and the architecture match the previous install.
+
+The Space is Linux, so specs take their non-darwin branches there. Changes to a spec's
+darwin branch or to macOS-only behavior still need `npm run test:e2e` on the host (or
+the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `sudo sysctl -w kernel.core_pattern=core`, `ulimit -c 0`, then
+`xvfb-run --auto-servernum npm run test:e2e`.
+
+Hosted CI splits deterministic spec files across four isolated macOS runners (`e2e`)
+and three Ubuntu runners (`linux-e2e`), each with one Playwright worker. macOS shards reuse the
+`build` job's output; each Ubuntu shard builds the app itself and runs under `xvfb-run`.
+`scripts/ci-e2e-shards.mjs` balances files using recorded macOS durations and automatically
+assigns newly added specs. After `npm run build`, reproduce one shard with
+`node scripts/ci-e2e-shards.mjs 1/4` for macOS or `1/3` for Linux; append `--list` to inspect its files.
 Never run these shards concurrently against the same checkout or desktop session.
 
 The production-profile diagnostics spec runs separately after the desktop build job's
@@ -60,3 +76,5 @@ an explicitly chosen compatible server with `AIDEN_E2E_LMSTUDIO_BASE_URL`.
 Local artifacts are written to `test-results/e2e` for traces and failure screenshots,
 and `playwright-report/e2e` for the HTML report. Hosted jobs upload only the sanitized
 failure receipt, under a shard-specific name with seven-day retention.
+
+When a journey leaves a chat through a lazy route and returns to trigger its mount-time reads, wait for the destination’s visible content before returning. A click starts navigation; the previous chat stays mounted until the lazy route commits. The phone-owned-question scheduling journey waits for the Scheduled searchbox and verifies the original chat and host responder.

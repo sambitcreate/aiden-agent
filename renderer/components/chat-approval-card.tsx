@@ -267,7 +267,7 @@ function rememberScopeHint(
           ? `any write to ${file}`
           : "this exact action";
   return scope === "always"
-    ? `Won't ask again for ${target} here. Undo in Settings → Tool approvals.`
+    ? `Won't ask again for ${target} here. Undo in Settings → Bots & Approvals → Tool approvals.`
     : `Won't ask again for ${target} until Aiden quits.`;
 }
 

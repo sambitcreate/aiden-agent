@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -201,6 +201,23 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.equal((await api.scheduleCommand(dir, ["preview", "0 9 * * *", "UTC"])).length, 5);
   await api.scheduleCommand(dir, ["remove", task.id]);
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
+});
+
+test("daemon lifecycle and control refuse unsafe existing directories before touching their contents", { skip: process.platform === "win32" }, async (t) => {
+  const base = temporary(t), unsafe = join(base, "shared"); mkdirSync(unsafe, { mode: 0o777 }); chmodSync(unsafe, 0o777);
+  const marker = join(unsafe, "serve.sock"); writeFileSync(marker, "preserve existing object");
+  assert.throws(() => api.daemonStatus(unsafe), /storage must be a private/u);
+  assert.throws(() => api.recoverStaleServeLease(unsafe), /storage must be a private/u);
+  await assert.rejects(api.remoteDaemonCommand(unsafe, "workspace", ["list"]), /storage must be a private/u);
+  await assert.rejects(api.serve(unsafe, new AbortController().signal), /storage must be a private/u);
+  await assert.rejects(api.startDaemon(unsafe), /storage must be a private/u);
+  await assert.rejects(api.stopDaemon(unsafe), /storage must be a private/u);
+  assert.equal(readFileSync(marker, "utf8"), "preserve existing object");
+  assert.equal(statSync(unsafe).mode & 0o777, 0o777, "unsafe configured roots require deliberate repair");
+  const alias = join(base, "alias"); symlinkSync(unsafe, alias);
+  await assert.rejects(api.serve(alias, new AbortController().signal), /storage must be a private/u);
+  const missing = join(base, "new-private"); assert.equal(api.daemonStatus(missing).running, false);
+  assert.equal(statSync(missing).mode & 0o777, 0o700);
 });
 
 test("serve routes concurrent CLI commands and releases its lease on shutdown", async (t) => {
@@ -411,14 +428,16 @@ async function stuckServe(t, { detached }) {
   // The lease directory exists before the daemon records its MCP groups in it, as acquireLease leaves it.
   mkdirSync(join(dir, "serve.lock"), { recursive: true });
   const stubborn = "process.on('SIGTERM', () => {}); process.stdin.resume(); process.stdin.on('end', () => {}); setInterval(() => {}, 1e9);";
-  writeFileSync(fixture, `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";
+  writeFileSync(fixture, `import { spawn } from "node:child_process"; import { renameSync, writeFileSync } from "node:fs";
 import * as api from ${JSON.stringify(join(pkg, "dist/parity-test-api.js"))};
 process.on("SIGTERM", () => {});
 const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
 api.recordServeMcpGroups(${JSON.stringify(dir)});
 const transport = api.createMcpStdioTransport({ command: process.execPath, args: ["-e", ${JSON.stringify(stubborn)}], stderr: "pipe" });
 await transport.start();
-writeFileSync(${JSON.stringify(pids)}, JSON.stringify({ helper: helper.pid, mcp: transport.pid }));
+// Written aside and renamed in, so the test never reads a half-written file.
+writeFileSync(${JSON.stringify(pids + ".tmp")}, JSON.stringify({ helper: helper.pid, mcp: transport.pid }));
+renameSync(${JSON.stringify(pids + ".tmp")}, ${JSON.stringify(pids)});
 setInterval(() => {}, 1e9);`);
   // Its own group either way, so the test can clean up; only owner.json says whether startDaemon spawned it.
   const child = spawn(process.execPath, [fixture, "serve"], { stdio: "ignore", detached: true });
@@ -485,6 +504,42 @@ test("MCP validates transports and redacts configured secrets from listing", asy
   await api.mcpCommand(dir, ["remove", "local"]); assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
 });
 
+test("CLI Composio offers one service and follows vendor operations while revoked keys fence old tools", async (t) => {
+  const dir = temporary(t);
+  const server = { id: "preset-composio", presetId: "composio", name: "Composio", transport: "http", url: "https://connect.composio.dev/mcp", enabled: true, headers: { "x-consumer-api-key": "synthetic-consumer-key" } };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const raw = (name, field) => ({ name, inputSchema: { type: "object", properties: { [field]: { type: "string" } }, required: [field], additionalProperties: false } });
+  let tools = [raw("COMPOSIO_SEARCH_TOOLS", "query")];
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    assert.equal(request.url, server.url, "this synthetic transport never reaches another endpoint");
+    if (request.method !== "POST") return new Response(null, { status: 405 });
+    const message = await request.json();
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    let result;
+    if (message.method === "initialize") result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "Synthetic Composio", version: "1" } };
+    else if (message.method === "tools/list") result = { tools };
+    else if (message.method === "tools/call") { calls.push(message.params.name); result = { content: [{ type: "text", text: `Answer ${Object.values(message.params.arguments)[0]}` }] }; }
+    else throw new Error(`Unexpected synthetic method ${message.method}`);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }), { headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const inventory = await pool.inspectTools(server);
+  assert.deepEqual(inventory.map((tool) => tool.name), ["composio"]);
+  const offered = await pool.agentTools(server);
+  assert.equal(offered.length, 1); assert.equal(offered[0].name, "composio");
+  assert.match(JSON.stringify(await offered[0].execute("first", { action: "call", tool: "COMPOSIO_SEARCH_TOOLS", arguments: { query: "mail" } })), /Answer mail/);
+  tools = [raw("COMPOSIO_GET_TOOL_SCHEMAS", "slug")];
+  await assert.rejects(offered[0].execute("removed", { action: "call", tool: "COMPOSIO_SEARCH_TOOLS", arguments: { query: "mail" } }), /no longer enabled/);
+  assert.match(JSON.stringify(await offered[0].execute("current", { action: "call", tool: "COMPOSIO_GET_TOOL_SCHEMAS", arguments: { slug: "calendar" } })), /Answer calendar/);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...server, headers: { "x-consumer-api-key": "rotated-synthetic-consumer-key" } }]);
+  await assert.rejects(offered[0].execute("revoked", { action: "describe" }), /changed or was disabled/);
+  assert.deepEqual(calls, ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS"]);
+});
+
 test("MCP presets leave out Mac app connectors, which the desktop app sets up", async (t) => {
   const dir = temporary(t);
   const presets = await api.mcpCommand(dir, ["presets"]);
@@ -492,7 +547,20 @@ test("MCP presets leave out Mac app connectors, which the desktop app sets up", 
   assert.ok(presets.every((preset) => preset.transport === "http"));
   assert.ok(!presets.some((preset) => preset.id === "imcp"));
   await assert.rejects(api.mcpCommand(dir, ["preset", "imcp"]), /Aiden desktop app on your Mac/);
+  const record = { id: "preset-imcp", name: "iMCP", presetId: "imcp", enabled: true, transport: "stdio",
+    command: "/Applications/iMCP.app/Contents/MacOS/imcp-server" };
+  const file = join(dir, "import.json");
+  writeFileSync(file, JSON.stringify(record));
+  await assert.rejects(api.mcpCommand(dir, ["add", file]), /desktop app on your Mac|works only on a Mac/);
   assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+  // A previous CLI could persist the raw preset. It stays removable and cannot be connected.
+  writeFileSync(join(dir, "aiden-mcp.json"), JSON.stringify([record]));
+  const pool = api.createCliMcpPool(dir);
+  try {
+    assert.deepEqual(await pool.listServers(), []);
+    await assert.rejects(pool.connection(record), /disabled/);
+  } finally { await pool.close(); }
+  assert.deepEqual(await api.mcpCommand(dir, ["remove", record.id]), { removed: record.id });
 });
 
 test("provider import rejects invalid configuration without replacing the previous file", async (t) => {
@@ -695,7 +763,7 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   });
   await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
   t.after(() => { provider.closeAllConnections(); provider.close(); });
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text", "image"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
   const workspace = await api.workspaceCommand(dir, ["add", dir]);
   const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
@@ -723,10 +791,18 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const created = await request("/chats", "POST", { workspaceId: workspace.id, providerId: "cli-test", modelId: "test" }, "create-cli-test-0001");
   assert.equal(created.status, 201, JSON.stringify(created));
   const path = `/chats/${created.data.id}/turns`;
-  const turn = await request(path, "POST", { text: "Hello remote" }, "turn-cli-test-000001");
+  // The photo is kept as its own file beside the chat; the model still receives it.
+  const photo = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const uploaded = await request(`/chats/${created.data.id}/attachments`, "POST", { name: "photo.png", mimeType: "image/png", kind: "image", data: photo });
+  assert.equal(uploaded.status, 201, JSON.stringify(uploaded));
+  const turn = await request(path, "POST", { text: "Hello remote", attachmentIds: [uploaded.data.id] }, "turn-cli-test-000001");
   assert.equal(turn.status, 202, JSON.stringify(turn));
   await daemon.llmClient.waitForChatIdle(created.data.id);
-  const repeated = await request(path, "POST", { text: "Hello remote" }, "turn-cli-test-000001");
+  // The photo reaches pi as an image (pi may replace it with its own "omitted" note when it can't resize it).
+  const carriesPhoto = (body) => /image\/png;base64|\[Image omitted/u.test(JSON.stringify(body.messages.filter((message) => message.role === "user")));
+  assert.ok(carriesPhoto(requests[0]), JSON.stringify(generationEvents));
+  assert.ok(!readFileSync(join(dir, "daemon-chats", `${created.data.id}.json`), "utf8").includes(photo));
+  const repeated = await request(path, "POST", { text: "Hello remote", attachmentIds: [uploaded.data.id] }, "turn-cli-test-000001");
   assert.deepEqual(repeated, turn); assert.equal(requests.length, 1, JSON.stringify(generationEvents));
   const chat = await request(`/chats/${created.data.id}`); assert.equal(chat.data.messages.at(-1).text, "Remote succeeded");
   const events = await request(`/streams/${turn.data.streamId}/events`);
@@ -752,6 +828,8 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   assert.equal(followUp.status, 202, JSON.stringify(followUp));
   await daemon.llmClient.waitForChatIdle(forked.data.chat.id);
   assert.equal(requests.length, 2, JSON.stringify(generationEvents));
+  // The fork's journal is seeded from the copied history, photo included.
+  assert.ok(carriesPhoto(requests[1]));
   assert.deepEqual(requests[1].messages.filter((message) => message.role !== "system").map((message) => [message.role, JSON.stringify(message.content)]).map(([role, content]) => [role, ["Hello remote", "Remote succeeded", "Continue in the fork"].find((text) => content.includes(text))]),
     [["user", "Hello remote"], ["assistant", "Remote succeeded"], ["user", "Continue in the fork"]]);
   assert.equal((await request(`/chats/${created.data.id}`)).data.messages.length, 2);
@@ -860,10 +938,12 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
 
 test("a paused Bot stops its running turn, refuses new ones and runs again once unpaused", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir), requests = [];
-  let holdFirst = true, held;
+  let holdFirst = true, held, observedFirstRequest;
+  const firstRequest = new Promise((resolve) => { observedFirstRequest = resolve; });
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     requests.push(JSON.parse(body));
+    observedFirstRequest();
     response.writeHead(200, { "content-type": "text/event-stream" });
     const chunk = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: "bot", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     chunk({ role: "assistant", content: "Working" });
@@ -895,7 +975,7 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
 
   // Pausing while a reply streams stops it where it is.
   const running = await runTurn("before-pause");
-  for (let tries = 0; requests.length === 0 && tries < 200; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  await firstRequest;
   assert.equal(requests.length, 1);
   const paused = await runtime.command(["pause", bot.id]);
   assert.deepEqual(Object.keys(paused).sort(), ["botId", "paused", "since"]);
@@ -2065,6 +2145,194 @@ test("daemon releases sessions and authority when extension binding fails or is 
   }
 });
 
+test("CLI Bot spending stays with the runner, persists limits and refuses unreadable state", async (t) => {
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "aiden.json"), { spendingLimits: { botMonthUsd: 1 } });
+  const spend = api.createCliBotSpending(dir);
+  const paid = { local: false, provider: { id: "api" }, models: { checkAuth: async () => ({ type: "api_key" }) } };
+  spend.register("runner", paid);
+  await spend.record("runner", ["person-send"], { usage: { cost: { total: 0.75 } } });
+  await spend.record("runner", ["bot:peer:1:10000000-0000-4000-8000-000000000001"], { usage: { cost: { total: 0.5 } } });
+  const saved = JSON.parse(readFileSync(join(dir, "spending.json")));
+  assert.equal(saved.bots.runner.spentUsd, 1.25);
+  assert.equal(saved.bots.peer, undefined);
+  assert.match(await api.createCliBotSpending(dir).refusal("runner", "Runner"), /Runner reached its \$1.00 spending limit/u);
+  assert.equal(await spend.refusal("peer"), undefined);
+  spend.register("signed-in", { local: false, provider: { id: "signed-in" }, models: { checkAuth: async () => ({ type: "oauth" }) } });
+  await spend.record("signed-in", [undefined], { usage: { cost: { total: 2 } } });
+  assert.equal(JSON.parse(readFileSync(join(dir, "spending.json"))).bots["signed-in"], undefined);
+  writeFileSync(join(dir, "spending.json"), "broken");
+  await assert.rejects(spend.refusal("runner"), /Cannot read/u);
+  assert.equal(readFileSync(join(dir, "spending.json"), "utf8"), "broken");
+});
+
+test("durable CLI Bots can message each other", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-cli-messaging-")), daemon = api.createDaemonChats(dir), requests = [];
+  let preparingReply = false, unrelatedAvailabilityReads = 0;
+  const original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body); requests.push(parsed);
+    const last = parsed.messages.at(-1), content = JSON.stringify(last.content);
+    const call = last.role === "user" && content.includes("Ask Beta for Ping")
+      ? { id: "message-beta", name: "message_bot", arguments: { bot: "Beta", message: "Ping" } } : undefined;
+    const text = content.includes("<bot_message") ? "Pong" : content.includes("<bot_reply") ? "Beta says Pong" : "Sent";
+    if (content.includes("<bot_message")) preparingReply = true;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: text }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "messaging", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  let host = await api.createCliBots(dir, daemon);
+  t.after(async () => { await host.stop(); await daemon.stop(); });
+  daemon.setBots(host);
+  const audienceId = "cli:local", notice = await host.application.noticeStatus(audienceId);
+  await host.application.acknowledgeNotice(audienceId, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const bots = [];
+  for (const name of ["Alpha", "Beta", "Gamma"]) {
+    const catalog = await host.application.capabilityCatalog(audienceId), provider = catalog.providers.find((item) => item.label === "cli-test");
+    bots.push(await host.application.createBot({ audienceId, bot: { name, instructions: "Reply briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom: { providerId: provider.id, modelId: provider.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } }));
+  }
+  await host.command(["enable-durable"]); await host.stop();
+  host = await api.createCliBots(dir, daemon); daemon.setBots(host);
+  const readModelAuthority = host.capabilities.getBotModelAuthority.bind(host.capabilities);
+  host.capabilities.getBotModelAuthority = async (botId) => {
+    if (preparingReply && botId === bots[2].id) unrelatedAvailabilityReads++;
+    return readModelAuthority(botId);
+  };
+  const sent = await host.durable.runtime.send(bots[0].id, { text: "Ask Beta for Ping", requestId: "ask-beta" });
+  assert.equal((await host.durable.runtime.awaitReply(bots[0].id, sent.submissionId, AbortSignal.timeout(20_000))).kind, "completed");
+  const entries = async (id) => api.projectBotTranscript((await (await host.durable.runtime.conversation(id)).context(api.BACKGROUND_CONTEXT)).entries);
+  const deadline = Date.now() + 10_000;
+  while (!(await entries(bots[0].id)).some((entry) => entry.type === "assistant" && entry.text === "Beta says Pong")) {
+    if (Date.now() > deadline) assert.fail(`Bot reply did not arrive: ${JSON.stringify({entries: await entries(bots[0].id), state: await host.durable.runtime.state(bots[0].id), requests: requests.map((request) => request.messages.at(-1)), ledger: JSON.parse(readFileSync(join(dir, "bots/bot-messages.json")))})}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  preparingReply = false;
+  assert.equal(unrelatedAvailabilityReads, 0, "reply preparation must not inspect an unrelated Bot's availability");
+  const incoming = (await entries(bots[1].id)).find((entry) => entry.type === "bot_message");
+  assert.equal(incoming.text, "Ping");
+  assert.equal(incoming.botId, bots[0].id);
+  const reply = (await entries(bots[0].id)).find((entry) => entry.type === "bot_message" && entry.kind === "reply");
+  assert.equal(reply.text, "Pong");
+  assert.ok(requests[0].tools.some((tool) => tool.function.name === "message_bot"));
+  assert.ok(requests.find((request) => JSON.stringify(request.messages.at(-1).content).includes("<bot_reply")).tools.every((tool) => tool.function.name !== "message_bot"));
+  const offeredNames = new Set(requests.flatMap((request) => request.tools.map((tool) => tool.function.name)));
+  assert.equal(offeredNames.has("request_access"), false, "CLI has no temporary-access cards");
+  assert.equal(offeredNames.has("propose_plan"), false, "CLI does not host plan approvals");
+  assert.equal(offeredNames.has("plan_step"), false, "CLI does not install plan tools");
+  assert.equal(statSync(join(dir, "bots/bot-messages.json")).mode & 0o777, 0o600);
+
+  // Once accepted, an absent identity must fail before opening its session.
+  // Keep list() unchanged so the full posting roster still sees both Bots.
+  const absentId = "10000000-0000-4000-8000-000000000008";
+  const accepted = await host.durable.messages.post({ fromBotId: bots[0].id, target: bots[1].id,
+    message: "Ping", deliveryId: absentId, runRequestIds: [undefined] });
+  assert.equal(accepted.status, "sent");
+  const getBot = host.botStore.get;
+  const state = host.durable.runtime.state;
+  const beforeAbsent = requests.length;
+  let absentSessionReads = 0;
+  host.botStore.get = async id => id === bots[1].id ? null : getBot(id);
+  host.durable.runtime.state = async id => {
+    if (id === bots[1].id) absentSessionReads++;
+    return state(id);
+  };
+  try {
+    const missingDeadline = Date.now() + 10_000;
+    const missingRow = () => JSON.parse(readFileSync(join(dir, "bots/bot-messages.json"))).rows.find(row => row.id === absentId);
+    while (missingRow()?.status !== "failed") {
+      if (Date.now() > missingDeadline) assert.fail("Missing Bot identity did not settle its accepted delivery");
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(absentSessionReads, 0, "the real CLI existence port refuses an absent Bot before session inspection");
+    assert.equal(requests.length, beforeAbsent, "no model call starts for the absent identity");
+  } finally {
+    host.botStore.get = getBot;
+    host.durable.runtime.state = state;
+  }
+
+  // Exercise the actual CLI HTTPS adapter, including an older paired device.
+  const scheduler = api.createCliScheduler(dir);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: host, discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); rmSync(dir, { recursive: true, force: true }); });
+  await remote.start();
+  const { lanPort } = await remote.service.status(), ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+  const modern = await remote.state.issueDevice({ name: "Messaging phone", type: "iphone", clientVersion: "test", capabilities: ["server:read", "chat:read", "bot:read", "bot:write", "bot:messaging"], acceptsBotCapabilities: true });
+  const older = await remote.state.issueDevice({ name: "Older phone", type: "iphone", clientVersion: "test", capabilities: ["server:read", "chat:read", "bot:read", "bot:write"], acceptsBotCapabilities: true });
+  const request = (device, path, method = "GET", body, headers = {}) => new Promise((resolve, reject) => {
+    const req = httpsRequest({ hostname: "127.0.0.1", port: lanPort, ca, path: `/api/aiden/v1${path}`, method,
+      headers: { authorization: `Bearer ${device.credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...headers } }, (response) => {
+      let data = ""; response.on("data", (chunk) => { data += chunk; }); response.on("end", () => resolve({ status: response.statusCode, data: JSON.parse(data) }));
+    });
+    req.setTimeout(15_000, () => req.destroy(new Error(`Messaging request timed out: ${path}`)));
+    req.on("error", reject); req.end(body ? JSON.stringify(body) : undefined);
+  });
+  const capabilities = await request(modern, "/server");
+  assert.equal(capabilities.status, 200);
+  assert.equal(capabilities.data.serverCapabilities.includes("bot:allowed"), false, "CLI never advertises desktop remembered approvals");
+  assert.equal((await request(modern, `/bots/${bots[0].id}/allowed`)).status, 404, "CLI supplies no remembered-approval endpoint");
+  const list = await request(modern, "/bots");
+  assert.equal(list.status, 200); assert.deepEqual(list.data.messaging, { enabled: true });
+  assert.equal((await request(older, "/bots")).data.messaging, undefined);
+  const detail = await request(modern, `/bots/${bots[0].id}`);
+  assert.deepEqual(detail.data.botMessaging, { receive: true, send: true });
+  assert.equal((await request(older, `/bots/${bots[0].id}`)).data.botMessaging, undefined);
+  assert.equal((await request(older, "/bots/messaging", "PUT", { enabled: false })).status, 403);
+  assert.equal((await request(modern, "/bots/messaging", "PUT", { enabled: "false" })).status, 400);
+  assert.deepEqual((await request(modern, "/bots/messaging", "PUT", { enabled: false })).data, { enabled: false });
+  assert.equal(JSON.parse(readFileSync(join(dir, "aiden.json"))).botMessaging, false);
+  const post = (deliveryId) => host.durable.messages.post({ fromBotId: bots[0].id, target: bots[1].id, message: "Ping", deliveryId, runRequestIds: [undefined] });
+  assert.equal((await post("10000000-0000-4000-8000-000000000001")).code, "switched_off");
+  assert.deepEqual((await request(modern, "/bots/messaging", "PUT", { enabled: true })).data, { enabled: true });
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(dir, "aiden.json"))), "botMessaging"), false);
+  const patched = await request(modern, `/bots/${bots[0].id}`, "PATCH", { botMessaging: { send: false } }, { "if-match": detail.data.revision });
+  assert.equal(patched.status, 200, JSON.stringify(patched));
+  assert.deepEqual(patched.data.botMessaging, { receive: true, send: false });
+  assert.equal((await post("10000000-0000-4000-8000-000000000002")).code, "switched_off");
+  const restored = await request(modern, `/bots/${bots[0].id}`, "PATCH", { botMessaging: { send: true } }, { "if-match": patched.data.revision });
+  assert.equal(restored.status, 200, JSON.stringify(restored));
+  assert.equal((await host.botStore.get(bots[0].id)).messagesOtherBots, undefined, "on is represented by absence");
+
+  const receiveDetail = await request(modern, `/bots/${bots[1].id}`);
+  const receiveOff = await request(modern, `/bots/${bots[1].id}`, "PATCH", { botMessaging: { receive: false } }, { "if-match": receiveDetail.data.revision });
+  assert.equal(receiveOff.status, 200, JSON.stringify(receiveOff));
+  assert.deepEqual(receiveOff.data.botMessaging, { receive: false, send: true });
+  assert.equal((await post("10000000-0000-4000-8000-000000000003")).code, "switched_off");
+  const receiveOn = await request(modern, `/bots/${bots[1].id}`, "PATCH", { botMessaging: { receive: true } }, { "if-match": receiveOff.data.revision });
+  assert.equal(receiveOn.status, 200, JSON.stringify(receiveOn));
+  const beforeChecks = requests.length;
+  await host.command(["pause", bots[1].id]);
+  assert.equal((await post("10000000-0000-4000-8000-000000000004")).code, "bot_paused");
+  await host.command(["unpause", bots[1].id]);
+  api.atomicJson(join(dir, "aiden.json"), { spendingLimits: { botMonthUsd: 1 } });
+  const spending = api.createCliBotSpending(dir);
+  spending.register(bots[1].id, { local: false, provider: { id: "cli-test" }, models: { checkAuth: async () => ({ type: "api_key" }) } });
+  await spending.record(bots[1].id, [undefined], { usage: { cost: { total: 1.25 } } });
+  assert.equal((await post("10000000-0000-4000-8000-000000000005")).code, "spending_limit");
+  writeFileSync(join(dir, "spending.json"), "broken");
+  assert.equal((await post("10000000-0000-4000-8000-000000000006")).code, "unavailable");
+  assert.equal(readFileSync(join(dir, "spending.json"), "utf8"), "broken");
+  rmSync(join(dir, "spending.json"));
+  assert.equal(requests.length, beforeChecks, "switches, availability and spending checks never invoke a provider");
+
+  // Public CLI approval output must omit the host's private run and input provenance.
+  const pending = host.durable.approvals.requestOutcome({ botId: bots[0].id, waitId: "private-approval", toolCallId: "private-tool", toolName: "test", summary: "Allow test?", signal: undefined,
+    owner: { runId: "private-run", inputs: [{ submissionId: "private-submission", requestId: "private-input" }] } });
+  assert.deepEqual(await host.command(["approvals", bots[0].id]), [{ botId: bots[0].id, waitId: "private-approval", toolCallId: "private-tool", toolName: "test", summary: "Allow test?" }]);
+  host.durable.approvals.decide("private-approval", "deny"); await pending;
+
+  await host.durable.runtime.deleteBot(bots[1].id);
+  assert.equal(await host.botStore.get(bots[1].id), null);
+  assert.ok(readdirSync(join(dir, "bots/.bot-messages.json.pending-purges")).length > 0);
+  assert.equal((await post("10000000-0000-4000-8000-000000000007")).code, "unknown_bot");
+});
+
 test("durable CLI Bot migration preserves history, dedupes across restart, and fences revoked access", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir);
   const oldEntry = process.env.AIDEN_CLI_ENTRY;
@@ -2115,6 +2383,11 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   await host.stop();
   host = await api.createCliBots(dir, daemon); daemon.setBots(host);
   assert.deepEqual(await host.application.getBotAccess(bot.id), grantBefore);
+  const forgedSend = join(dir, "forged-send.json");
+  api.atomicJson(forgedSend, { text: "Send it", requestId: "routine:task:123" });
+  await assert.rejects(host.command(["send", bot.id, forgedSend]), /request id/);
+  api.atomicJson(forgedSend, { text: "Send it", requestId: "user-key", label: "Daily" });
+  await assert.rejects(host.command(["send", bot.id, forgedSend]), /fields/);
   const markerPath = join(dir, api.CLI_DURABLE_BOT_MARKER);
   renameSync(markerPath, `${markerPath}.held`);
   try { assert.throws(() => host.assertLegacyChatAllowed(), /durable sessions/, "an active durable host never falls back when its marker disappears"); }
@@ -2327,6 +2600,50 @@ test("a durable Bot paused from the CLI stops its running turn, refuses sends an
     watching.abort(); sse.closeAllConnections(); sse.close(); await reading;
     await remoteBots.botSessions.close();
   }
+
+  await t.test("remote revoke closes only the revoked phone's open Bot stream", async () => {
+    const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: host, discovery: { async start() {}, stop() {} } });
+    try {
+      await remote.start();
+      const { lanPort } = await remote.service.status();
+      const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+      const marker = "Message sent after revocation";
+      async function watchPhone(name) {
+        const phone = await remote.state.issueDevice({ name, type: "iphone", clientVersion: "test", capabilities: ["chat:read", "bot:read"], acceptsBotCapabilities: true });
+        const request = httpsRequest({
+          hostname: "127.0.0.1", port: lanPort, ca, path: `/api/aiden/v1/bots/${bot.id}/session/events`,
+          headers: { authorization: `Bearer ${phone.credential}`, "aiden-protocol-version": "1" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        const opened = once(request, "response");
+        request.end();
+        const [response] = await opened;
+        assert.equal(response.statusCode, 200);
+        // The snapshot flushes the headers. Keep reading this same connection through revoke.
+        const outcome = (async () => {
+          let body = "";
+          try {
+            for await (const chunk of response.setEncoding("utf8")) {
+              body += chunk;
+              if (body.includes(marker)) return "received message";
+            }
+          } catch (error) {
+            if (error.code !== "ECONNRESET") throw error;
+          }
+          assert.match(body, /event: snapshot/u);
+          return "closed";
+        })();
+        return { id: phone.device.id, outcome };
+      }
+      const revoked = await watchPhone("First phone");
+      const retained = await watchPhone("Second phone");
+      assert.deepEqual(await remote.command(["revoke", revoked.id]), { revoked: true });
+      await host.durable.runtime.send(bot.id, { text: marker, requestId: "send-after-device-revoke" });
+      assert.deepEqual(await Promise.all([revoked.outcome, retained.outcome]), ["closed", "received message"]);
+    } finally {
+      await remote.stop();
+    }
+  });
 
   // Deleting the Bot forgets its pause.
   await host.command(["pause", bot.id]);

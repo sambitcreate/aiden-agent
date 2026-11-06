@@ -46,6 +46,7 @@ export const appHandlers = {
         botComputers: host.botComputers,
         hooks: host.hooks,
         dockIcon: host.dockIcon,
+        badgeCount: host.badgeCount,
         accessibilityPaste: host.accessibilityPaste,
         dictationHoldToTalk: host.dictationHoldToTalk || activeLinuxDictationHoldShortcut(),
         dictationHoldSetup: linuxDictationHoldSetupAvailable(),

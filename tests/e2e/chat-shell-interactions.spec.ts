@@ -436,13 +436,13 @@ test.describe("with a workspace", () => {
     }
   });
 
-  test("needs attention view orders chats by what is waiting on the user", async ({ aiden }) => {
+  test("Inbox view orders chats by what is waiting on the user", async ({ aiden }) => {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
     expect(workspaceId).toBeTruthy();
     await app.evaluate(({ ipcMain }, workspaceId) => {
-      // Newest first by activity, so the attention order differs from recency.
+      // Newest first by activity, so the Inbox order differs from recency.
       const chats = [
         ["attention-idle", "Idle chat", 1_800_000_400_000],
         ["attention-working", "Working chat", 1_800_000_300_000],
@@ -463,8 +463,17 @@ test.describe("with a workspace", () => {
     await expect(page.locator("textarea")).toBeVisible();
 
     await page.getByRole("button", { name: "Organize sidebar" }).click();
-    await page.getByRole("menuitemradio", { name: "Needs attention" }).click();
+    await page.getByRole("menuitemradio", { name: "Inbox (Beta)" }).click();
     await expect(page.getByRole("menu")).toBeHidden();
+    const sidebar = page.locator("[data-sidebar]");
+    const earlier = sidebar.getByRole("group", { name: "Earlier" });
+    await expect(earlier.getByText("Approval chat")).toBeVisible();
+    // The pointer over the list freezes it. Hover needs the window focused.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
+    await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+    const inboxView = sidebar.locator("[data-inbox-view]");
+    await inboxView.hover();
+    await expect(inboxView).toHaveAttribute("data-inbox-frozen", "true");
 
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.webContents.send("chats:activity-changed", {
@@ -475,16 +484,25 @@ test.describe("with a workspace", () => {
       });
     });
 
-    const sidebar = page.locator("[data-sidebar]");
+    // While frozen, rows show their new status but hold their places.
+    await expect(earlier.locator("[data-inbox-status]", { hasText: /^Approval/u })).toBeVisible();
+    await expect(sidebar.getByRole("group", { name: "Needs you" })).toHaveCount(0);
+
+    // Released, they move: approvals before questions in Needs you, then
+    // Earlier, then the Working shelf.
+    const pane = await page.getByRole("main").first().boundingBox();
+    await page.mouse.move(pane!.x + pane!.width / 2, pane!.y + pane!.height / 2);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    const needsYou = sidebar.getByRole("group", { name: "Needs you" });
+    await expect(needsYou.locator("[data-inbox-status]")).toHaveText(["Approval", "Question"].map((label) => new RegExp(`^${label}`, "u")));
     const expected = [
-      "Needs approval",
+      "Needs you",
       "Approval chat",
-      "Needs input",
       "Input chat",
+      "Earlier",
+      "Idle chat",
       "Working",
       "Working chat",
-      "Other chats",
-      "Idle chat",
     ];
     await expect
       .poll(async () => {
@@ -494,11 +512,45 @@ test.describe("with a workspace", () => {
       })
       .toBe(true);
 
+    // The Working shelf's header toggle and first row leave room for the 2px +
+    // 2px focus ring inside whatever clips them, and a blurred window dims the
+    // shelf exactly as much as the list.
+    const shelf = sidebar.getByRole("group", { name: "Working" });
+    const shelfGeometry = await shelf.evaluate((section) => {
+      const ringRoom = (element: Element) => {
+        const box = element.getBoundingClientRect();
+        let clip = element.parentElement;
+        while (clip && getComputedStyle(clip).overflowY === "visible" && getComputedStyle(clip).overflowX === "visible") {
+          clip = clip.parentElement;
+        }
+        const bounds = clip!.getBoundingClientRect();
+        return Math.min(box.top - bounds.top, bounds.bottom - box.bottom, box.left - bounds.left, bounds.right - box.right);
+      };
+      const opacity = (element: Element) => {
+        let product = 1;
+        for (let node: Element | null = element; node; node = node.parentElement) {
+          product *= Number(getComputedStyle(node).opacity);
+        }
+        return product;
+      };
+      const toggle = section.querySelector("button[aria-expanded]")!;
+      const firstRow = section.querySelector("[data-inbox-row] [data-roving-item]")!;
+      const listRow = document.querySelector("[data-inbox-view] [data-inbox-row] [data-roving-item]")!;
+      document.documentElement.classList.add("window-blurred");
+      const blurred = { shelf: opacity(firstRow), list: opacity(listRow) };
+      document.documentElement.classList.remove("window-blurred");
+      return { toggle: ringRoom(toggle), firstRow: ringRoom(firstRow), blurred };
+    });
+    expect(shelfGeometry.toggle).toBeGreaterThanOrEqual(4);
+    expect(shelfGeometry.firstRow).toBeGreaterThanOrEqual(4);
+    expect(shelfGeometry.blurred.shelf).toBeLessThan(1);
+    expect(shelfGeometry.blurred.shelf).toBeCloseTo(shelfGeometry.blurred.list, 3);
+
     // The view is a local preference and survives a reload.
     await page.reload();
     await expect(page.locator("textarea")).toBeVisible();
     await page.getByRole("button", { name: "Organize sidebar" }).click();
-    await expect(page.getByRole("menuitemradio", { name: "Needs attention" })).toHaveAttribute(
+    await expect(page.getByRole("menuitemradio", { name: "Inbox (Beta)" })).toHaveAttribute(
       "aria-checked",
       "true",
     );
@@ -981,7 +1033,14 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(second).toBeVisible();
 
   await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
-  await palette.getByRole("combobox").fill("Go to Scheduled");
+  await palette.getByRole("combobox").fill("Search settings");
+  await palette.getByRole("combobox").press("Enter");
+  const settingsSearch = palette.getByRole("combobox", { name: "Search settings" });
+  await settingsSearch.fill("Control this device");
+  await expect(palette.getByRole("option").filter({ hasText: "Control this device" })).toContainText("Connections");
+  await settingsSearch.fill("");
+  await settingsSearch.press("Backspace");
+  await palette.getByRole("combobox", { name: "Search commands" }).fill("Go to Scheduled");
   await palette.getByRole("combobox").press("Enter");
   await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
   await expect(second).toBeHidden();
@@ -1036,6 +1095,34 @@ test("F6 moves between areas, arrows move through the chat list, and Command+F f
   await page.keyboard.press("Escape");
   await expect(find).toBeHidden();
   await expect(message).toBeFocused();
+});
+
+test("saved focus-navigation shortcuts take priority and disabling restores the built-in key", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(page.getByText("Opened palette-chat-first", { exact: true })).toBeVisible();
+  const message = page.locator('[data-focus-region="composer"] textarea');
+  const palette = page.locator("[data-command-palette-content]");
+  for (const [binding, key] of [["Alt+Up", "Alt+ArrowUp"], ["Shift+F6", "Shift+F6"]]) {
+    await page.evaluate(async (binding) => {
+      await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", binding });
+    }, binding);
+    await message.focus();
+    await page.keyboard.press(key);
+    await expect(palette.getByRole("combobox", { name: "Search Models" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(palette).toBeHidden();
+  }
+  await page.evaluate(async () => {
+    await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", disabled: true });
+  });
+  await message.focus();
+  await page.keyboard.press("Shift+F6");
+  await expect(page.getByRole("region", { name: "Conversation" })).toBeFocused();
+  await expect(palette).toBeHidden();
 });
 
 test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show keys and grey out what can't run", async ({ aiden }) => {

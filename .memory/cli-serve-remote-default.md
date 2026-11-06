@@ -1,5 +1,7 @@
 # `aiden serve` Remote on by default (2026-10-30)
 
+**2026-11-02.** CLI device revocation closes the device's durable Bot session subscriptions before waiting for in-flight mutations. The CLI parity test watches one Bot from two phones and sends a message after revoking one of them.
+
 - `aiden serve` starts Remote unless `--no-remote`; `--remote` is still accepted as a no-op. `serve --daemon` spawns the child with `--no-remote` when chosen and always with `--no-pair`. Flag parsing and the foreground/daemon flow live in `packages/cli/src/serve-command.ts`.
 - A foreground `serve` with stdout on a TTY opens one LAN pairing window after startup (`--pair tailscale` picks Tailscale, `--no-pair` skips it) through the daemon's own `remote pair` control-socket path, renders it with `pairing-display.ts`, polls `remote pair-status`, and prints one line when the 5-minute window expires or a device pairs. Non-TTY output (Docker logs, systemd, `--daemon`) never mints or shows a pairing secret.
 - `serve status` adds `remote: { on, connectionMode, lanPort, lanEndpoint, tailscaleEndpoint?, tailscaleConnected, pairedDeviceCount }`, read from a `serve status` control-socket command (`{ on: false }` when off or not running).
@@ -20,3 +22,7 @@
 - `service uninstall` stops and removes the unit first (`uninstallService`; a failed stop throws and leaves the route alone), then calls `releaseTailscaleRoute`: daemon `remote tailscale-disconnect` when the server answers; when it is stopped or does not answer (`unanswered`), it reads `tailscaleOwnership` from `<agentDir>/remote.json` and disconnects through `AidenRemoteTailscaleController` directly (ownership-checked, clears the saved ownership), skipping when a `tailscalePendingOutcome` is saved.
 - `cli-runtime.ts` now exits with `process.exitCode` after a dispatched command.
 - Tests: `packages/cli/tests/reachability.test.mjs`. In the cloud container, `remote check` correctly reports a cloud server.
+
+## Service profile identity
+
+The login service is per OS user, not per AIDEN_CODING_AGENT_DIR profile. Service mutation is serialized at the account's service boundary. Before uninstall, the manager's loaded profile is identified and rechecked; cleanup uses that installed profile, and unknown or ambiguous identity leaves the service and route alone. Linux rejects unresolved environment files/unsets and checks the running process against the loaded profile; macOS uses the loaded launchd job's environment. A confirmed absent manager job may use a recognizable installed service file. Uninstall stops before attempting route release.

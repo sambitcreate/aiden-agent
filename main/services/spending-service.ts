@@ -11,26 +11,43 @@ import {
   type SpendingStatusView,
 } from "../../renderer/shared/spending.js";
 import {
-  parseSpendingDocument,
   SpendingLedger,
   spendingBlockMessage,
+  spendingMonth,
   type SpendingBlock,
   type SpendingDocument,
   type SpendingOwner,
 } from "./spending-core.js";
+import {
+  assertSpendingCapacity,
+  normalizeSpendingDispatch,
+  normalizeSpendingOwner,
+  inspectSpendingUnknownAcknowledgement,
+  parseDurableSpendingDocument,
+  pendingSpendingDispatch,
+  sameSpendingDispatch,
+  SPENDING_DISPATCH_LIMITS,
+  SpendingDispatchError,
+  type SpendingDispatchInput,
+  type SpendingDispatchReceipt,
+  type SpendingUnknownAcknowledgement,
+} from "./spending-dispatch-ledger.js";
 import { terminalMessage, terminalStream } from "./usage-limit-stream.js";
+export { SpendingDispatchError, issueSpendingUnknownAcknowledgement, type SpendingDispatchInput, type SpendingUnknownAcknowledgement } from "./spending-dispatch-ledger.js";
 
 export const SPENDING_FILE = "spending.json";
-const SAVE_DEBOUNCE_MS = 500;
+export const SPENDING_UNKNOWN_RESUME_MESSAGE = "The prior provider request may have incurred charges, but its cost is unknown. Resume acknowledges that uncertainty and may incur charges again.";
 
 export interface SpendingPersistence {
   load(): Promise<unknown>;
+  /** Fresh disk/cache reconciliation after a publication rejected ambiguously. */
+  reload?(): Promise<unknown>;
   save(document: SpendingDocument): Promise<void>;
 }
 
 export interface SpendingServiceDependencies {
   persistence: SpendingPersistence;
-  /** Settings → Limits & spending, read at every check. */
+  /** Settings → Context & Limits, read at every check. */
   settings(): Promise<unknown>;
   broadcast(event: SpendingChangedEvent): void;
   now?(): number;
@@ -61,150 +78,236 @@ export function responseCostUsd(message: { usage?: { cost?: { total?: number } }
 export class SpendingService {
   private readonly ledger = new SpendingLedger();
   private loading: Promise<void> | undefined;
-  private saveTimer: ReturnType<typeof setTimeout> | undefined;
-  private saving: Promise<void> = Promise.resolve();
+  private tail: Promise<void> = Promise.resolve();
+  private reconcile = false;
 
   constructor(private readonly dependencies: SpendingServiceDependencies) {}
 
-  private now(): number {
-    return this.dependencies.now?.() ?? Date.now();
-  }
+  private now(): number { return this.dependencies.now?.() ?? Date.now(); }
 
-  /** Load what an earlier run saved. Never fails: a bad file starts from nothing spent. */
+  /** Unreadable money is never silently replaced by a zero balance. */
   ready(): Promise<void> {
     this.loading ??= (async () => {
-      try {
-        this.ledger.load(parseSpendingDocument(await this.dependencies.persistence.load()));
-      } catch (error) {
-        this.dependencies.onError?.(error);
-      }
+      this.ledger.load(parseDurableSpendingDocument(await this.dependencies.persistence.load()));
     })();
     return this.loading;
   }
 
-  async settings(): Promise<SpendingLimitsSettings> {
+  private serial<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(async () => {
+      await this.ready();
+      if (this.reconcile) {
+        const load = this.dependencies.persistence.reload ?? this.dependencies.persistence.load;
+        this.ledger.load(parseDurableSpendingDocument(await load.call(this.dependencies.persistence)));
+        this.reconcile = false;
+      }
+      return operation();
+    });
+    this.tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private async publish(next: SpendingDocument): Promise<void> {
+    assertSpendingCapacity(next);
+    parseDurableSpendingDocument(next);
     try {
-      const value = await this.dependencies.settings();
-      return value === undefined ? {} : (parseSpendingLimitsSettings(value) ?? {});
+      await this.dependencies.persistence.save(next);
+      this.ledger.load(next);
     } catch (error) {
+      // A failed directory fsync may follow a committed rename. Do not retry
+      // against an assumed predecessor, or acknowledge an undurable charge.
+      this.reconcile = true;
       this.dependencies.onError?.(error);
-      return {};
+      throw new SpendingDispatchError("storage", "Spending could not be saved. The request outcome must be reconciled before sending more requests.");
     }
   }
 
-  /** The limit the next request would break, if any. */
-  async block(owner: SpendingOwner): Promise<SpendingBlock | undefined> {
-    await this.ready();
-    return this.ledger.block(owner, await this.settings(), this.now());
+  async settings(): Promise<SpendingLimitsSettings> {
+    const value = await this.dependencies.settings();
+    if (value === undefined) return {};
+    const parsed = parseSpendingLimitsSettings(value);
+    if (parsed === undefined) throw new SpendingDispatchError("storage", "Spending limits could not be read safely.");
+    return parsed;
   }
 
-  /** The refusal text for the owner's next request, if it is over a limit. */
+  async block(owner: SpendingOwner): Promise<SpendingBlock | undefined> {
+    return this.serial(async () => {
+      const parsed = normalizeSpendingOwner(owner);
+      if (pendingSpendingDispatch(this.ledger.snapshot(), parsed)) throw new SpendingDispatchError("uncertain", SPENDING_UNKNOWN_RESUME_MESSAGE);
+      return this.ledger.block(parsed, await this.settings(), this.now());
+    });
+  }
+
   async refusal(owner: SpendingOwner, botName?: string): Promise<string | undefined> {
     const block = await this.block(owner);
     return block ? spendingBlockMessage(block, botName) : undefined;
   }
 
+  /** Private execution recovery lookup; never projected to clients or models. */
+  async pendingDispatch(owner: SpendingOwner): Promise<SpendingDispatchInput | undefined> {
+    return this.serial(async () => {
+      const pending = pendingSpendingDispatch(this.ledger.snapshot(), normalizeSpendingOwner(owner));
+      return pending ? normalizeSpendingDispatch({ dispatchId: pending.dispatchId, owner: pending.owner, providerId: pending.providerId, modelId: pending.modelId, counts: pending.counts }) : undefined;
+    });
+  }
+
+  /** Exact private recovery proof; a caller cannot edit the live ledger through it. */
+  async dispatchReceipt(dispatchId: string): Promise<SpendingDispatchReceipt | undefined> {
+    if (!/^[A-Za-z0-9._:-]{1,160}$/u.test(dispatchId)) throw new SpendingDispatchError("invalid", "Invalid provider receipt identity.");
+    return this.serial(async () => { const receipt = this.ledger.snapshot().dispatches?.[dispatchId]; return receipt ? structuredClone(receipt) : undefined; });
+  }
+
+  /** Person-only acknowledgement keeps unknown cost and its consumed identity. */
+  async acknowledgeUncertain(token: SpendingUnknownAcknowledgement): Promise<void> {
+    const proof = inspectSpendingUnknownAcknowledgement(token);
+    await this.serial(async () => {
+      const document = this.ledger.snapshot();
+      const prior = document.dispatches?.[proof.dispatchId];
+      if (!prior || JSON.stringify(prior.owner) !== JSON.stringify(proof.owner)) throw new SpendingDispatchError("conflict", "This uncertain request belongs to different work or root budgets.");
+      if (prior.state !== "pending") return;
+      prior.state = "acknowledged_unknown";
+      prior.acknowledgedAt = this.now();
+      await this.publish(document);
+      this.changed(prior.owner);
+    });
+  }
+
+  /** Durable intent and current overlapping budget gates precede provider I/O. */
+  async beforeDispatch(value: SpendingDispatchInput): Promise<{ state: "admitted" } | { state: "recorded"; costUsd: number }> {
+    const input = normalizeSpendingDispatch(value);
+    return this.serial(async () => {
+      const document = this.ledger.snapshot();
+      const prior = document.dispatches?.[input.dispatchId];
+      if (prior) {
+        if (!sameSpendingDispatch(prior, input)) throw new SpendingDispatchError("conflict", "This provider dispatch identity belongs to different work.");
+        if (prior.state === "recorded") return { state: "recorded", costUsd: prior.costUsd! };
+        throw new SpendingDispatchError("uncertain", prior.state === "acknowledged_unknown" ? "This acknowledged request remains consumed and its cost is unknown. Only a new, person-authorized attempt may be sent." : SPENDING_UNKNOWN_RESUME_MESSAGE);
+      }
+      if (pendingSpendingDispatch(document, input.owner)) throw new SpendingDispatchError("uncertain", SPENDING_UNKNOWN_RESUME_MESSAGE);
+      const settings = await this.settings();
+      const block = this.ledger.block(input.owner, settings, this.now());
+      if (block) throw new SpendingDispatchError("limit", spendingBlockMessage(block));
+      if (Object.keys(document.dispatches ?? {}).length >= SPENDING_DISPATCH_LIMITS.receipts) throw new SpendingDispatchError("capacity", "The saved spending journal is full. Preserve it and contact support before sending more requests.");
+      document.version = 2;
+      document.dispatches ??= {};
+      const startedAt = this.now();
+      const period = spendingMonth(startedAt, settings.monthStartDay).key;
+      const billingPeriods = Object.fromEntries([input.owner, ...(input.owner.budgetScopes ?? [])].filter(scope => scope.kind === "bot").map(scope => [scope.id, period]));
+      document.dispatches[input.dispatchId] = { ...input, startedAt, monthStartDay: settings.monthStartDay ?? 1, billingPeriods, state: "pending" };
+      await this.publish(document);
+      return { state: "admitted" };
+    });
+  }
+
+  /** Response checkpoint must be durable before this call; it is safe to replay. */
+  async afterDispatch(value: SpendingDispatchInput, message: { usage?: { cost?: { total?: number } } } | undefined): Promise<void> {
+    const input = normalizeSpendingDispatch(value);
+    const amount = input.counts ? message?.usage?.cost?.total : 0;
+    if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0 || amount > 1e9) throw new SpendingDispatchError("uncertain", SPENDING_UNKNOWN_RESUME_MESSAGE);
+    await this.serial(async () => {
+      const document = this.ledger.snapshot();
+      const prior = document.dispatches?.[input.dispatchId];
+      if (!prior || !sameSpendingDispatch(prior, input)) throw new SpendingDispatchError("conflict", "The provider result has no matching saved dispatch.");
+      if (prior.state === "recorded") {
+        if (prior.costUsd !== amount) throw new SpendingDispatchError("conflict", "This provider result disagrees with its saved charge.");
+        return;
+      }
+      if (amount > 0 && [input.owner, ...(input.owner.budgetScopes ?? [])].some(scope => scope.kind === "bot") && !prior.billingPeriods) throw new SpendingDispatchError("uncertain", "The prior provider request has no saved billing period. Its charge cannot be assigned reliably. Resume acknowledges that uncertainty and may incur charges again.");
+      const ledger = new SpendingLedger(document);
+      const settings = { ...await this.settings(), monthStartDay: prior.monthStartDay };
+      ledger.record(input.owner, amount, settings, prior.startedAt, prior.billingPeriods);
+      prior.state = "recorded";
+      prior.costUsd = amount;
+      prior.finishedAt = this.now();
+      await this.publish(ledger.snapshot());
+      this.changed(input.owner);
+    });
+  }
+
+  /** Legacy callers have no replay identity; their aggregate is still durable. */
   async record(owner: SpendingOwner, usd: number): Promise<void> {
-    await this.ready();
-    if (!this.ledger.record(owner, usd, await this.settings(), this.now())) return;
-    this.changed(owner.kind, owner.id);
+    await this.serial(async () => {
+      const parsed = normalizeSpendingOwner(owner);
+      const document = this.ledger.snapshot();
+      document.version = 2;
+      document.dispatches ??= {};
+      const next = new SpendingLedger(document);
+      if (!next.record(parsed, usd, await this.settings(), this.now())) return;
+      await this.publish(next.snapshot());
+      this.changed(parsed);
+    });
   }
 
   async status(kind: "chat" | "bot", id: string): Promise<SpendingStatusView | undefined> {
-    await this.ready();
-    return this.ledger.status(kind, id, await this.settings(), this.now());
+    return this.serial(async () => this.ledger.status(kind, id, await this.settings(), this.now()));
   }
 
   async allowMore(kind: "chat" | "bot", id: string): Promise<SpendingStatusView | undefined> {
     return (await this.allowMoreIf(kind, id, () => true)).view;
   }
 
-  /**
-   * Allow more only while `current` accepts what the owner sees now, checked
-   * in the same step as the change, so two taps on one notice add once.
-   */
-  async allowMoreIf(
-    kind: "chat" | "bot",
-    id: string,
-    current: (view: SpendingStatusView) => boolean,
-  ): Promise<{ view: SpendingStatusView | undefined; accepted: boolean }> {
-    await this.ready();
-    const settings = await this.settings();
-    const now = this.now();
-    const before = this.ledger.status(kind, id, settings, now);
-    if (before === undefined) return { view: undefined, accepted: true };
-    if (!current(before)) return { view: before, accepted: false };
-    const after = this.ledger.allowMore(kind, id, settings, now);
-    if (after && after.extraUsd !== before.extraUsd) this.changed(kind, id);
-    return { view: after, accepted: true };
+  async allowMoreIf(kind: "chat" | "bot", id: string, current: (view: SpendingStatusView) => boolean): Promise<{ view: SpendingStatusView | undefined; accepted: boolean }> {
+    return this.serial(async () => {
+      const settings = await this.settings();
+      const now = this.now();
+      const before = this.ledger.status(kind, id, settings, now);
+      if (before === undefined) return { view: undefined, accepted: true };
+      if (!current(before)) return { view: before, accepted: false };
+      const next = new SpendingLedger(this.ledger.snapshot());
+      const after = next.allowMore(kind, id, settings, now);
+      if (after && after.extraUsd !== before.extraUsd) {
+        await this.publish(next.snapshot());
+        this.changed({ kind, id });
+      }
+      return { view: after, accepted: true };
+    });
   }
 
-  /** The Bot's own monthly limit: an amount, null for none, undefined for the default. */
   async ownBotLimit(botId: string): Promise<number | null | undefined> {
-    await this.ready();
-    return this.ledger.ownBotLimit(botId);
+    return this.serial(async () => this.ledger.ownBotLimit(botId));
   }
 
   async setBotLimit(botId: string, limit: number | null | undefined): Promise<SpendingStatusView | undefined> {
-    await this.ready();
-    this.ledger.setBotLimit(botId, limit);
-    this.changed("bot", botId);
-    return this.ledger.status("bot", botId, await this.settings(), this.now());
+    return this.serial(async () => {
+      const next = new SpendingLedger(this.ledger.snapshot());
+      next.setBotLimit(botId, limit);
+      const settings = await this.settings();
+      await this.publish(next.snapshot());
+      this.changed({ kind: "bot", id: botId });
+      return next.status("bot", botId, settings, this.now());
+    });
   }
 
   async forgetChat(id: string): Promise<void> {
-    await this.ready();
-    if (this.ledger.forgetChat(id)) this.scheduleSave();
+    await this.serial(async () => {
+      const next = new SpendingLedger(this.ledger.snapshot());
+      if (next.forgetChat(id)) await this.publish(next.snapshot());
+    });
   }
 
   async forgetBot(id: string): Promise<void> {
-    await this.ready();
-    if (this.ledger.forgetBot(id)) this.scheduleSave();
+    await this.serial(async () => {
+      const next = new SpendingLedger(this.ledger.snapshot());
+      if (next.forgetBot(id)) await this.publish(next.snapshot());
+    });
   }
 
-  /** The settings changed: every open chat and Bot re-reads its limit. */
   settingsChanged(): void {
-    try {
-      this.dependencies.broadcast({ ownerKind: "chat", ownerId: "*" });
-      this.dependencies.broadcast({ ownerKind: "bot", ownerId: "*" });
-    } catch (error) {
-      this.dependencies.onError?.(error);
+    this.changed({ kind: "chat", id: "*", budgetScopes: [{ kind: "bot", id: "*" }] });
+  }
+
+  /** Every mutation is already durable; quit only drains in-flight work. */
+  async flush(): Promise<void> { await this.tail; }
+
+  private changed(owner: SpendingOwner): void {
+    const seen = new Set<string>();
+    for (const scope of [owner, ...(owner.budgetScopes ?? [])]) {
+      const key = `${scope.kind}:${scope.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try { this.dependencies.broadcast({ ownerKind: scope.kind, ownerId: scope.id }); }
+      catch (error) { this.dependencies.onError?.(error); }
     }
-  }
-
-  /** Write pending changes now, for quit. */
-  async flush(): Promise<void> {
-    if (this.saveTimer !== undefined) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = undefined;
-      this.save();
-    }
-    await this.saving;
-  }
-
-  private changed(kind: "chat" | "bot", id: string): void {
-    this.scheduleSave();
-    try {
-      this.dependencies.broadcast({ ownerKind: kind, ownerId: id });
-    } catch (error) {
-      this.dependencies.onError?.(error);
-    }
-  }
-
-  private scheduleSave(): void {
-    if (this.saveTimer !== undefined) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = undefined;
-      this.save();
-    }, SAVE_DEBOUNCE_MS);
-    this.saveTimer.unref?.();
-  }
-
-  private save(): void {
-    const document = this.ledger.snapshot();
-    this.saving = this.saving
-      .then(() => this.dependencies.persistence.save(document))
-      .catch((error: unknown) => this.dependencies.onError?.(error));
   }
 }
 
@@ -213,10 +316,7 @@ export interface SpendingMeterOptions {
   owner: SpendingOwner;
   /** Whether this runtime's requests cost money; read once. */
   counts(): Promise<boolean>;
-  /**
-   * Refuse a request over the limit with an error. Chats leave this off: they
-   * end the run after the step instead, so the chat shows no failure.
-   */
+  /** Check the owner's current limit immediately before dispatching a request. */
   refuse?: boolean;
 }
 
@@ -231,9 +331,10 @@ export interface SpendingMeter {
 
 export function createSpendingMeter(options: SpendingMeterOptions): SpendingMeter {
   let counts: Promise<boolean> | undefined;
+  let failure: unknown;
   const pending = new Set<Promise<void>>();
   const track = (work: Promise<void>) => {
-    const tracked = work.catch(() => undefined).finally(() => pending.delete(tracked));
+    const tracked = work.catch((error: unknown) => { failure ??= error; }).finally(() => pending.delete(tracked));
     pending.add(tracked);
   };
   const count = (message: { usage?: { cost?: { total?: number } } } | undefined) => {
@@ -244,8 +345,10 @@ export function createSpendingMeter(options: SpendingMeterOptions): SpendingMete
   };
   return {
     wrap: (streamFn) => async (model: Model<Api>, context, streamOptions) => {
+      while (pending.size > 0) await Promise.all([...pending]);
+      if (failure !== undefined) throw failure;
       if (options.refuse) {
-        const refusal = await options.spending.refusal(options.owner).catch(() => undefined);
+        const refusal = await options.spending.refusal(options.owner);
         if (refusal) return terminalStream(terminalMessage(model, "error", refusal));
       }
       const stream = await streamFn(model, context, streamOptions);
@@ -255,6 +358,7 @@ export function createSpendingMeter(options: SpendingMeterOptions): SpendingMete
     count,
     settled: async () => {
       while (pending.size > 0) await Promise.all([...pending]);
+      if (failure !== undefined) throw failure;
     },
   };
 }

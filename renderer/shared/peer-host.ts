@@ -70,6 +70,11 @@ export interface PeerRunState {
   runId: string;
   state: string;
   unread: boolean;
+  /**
+   * Revision 50, for a waiting run on a host that serves `runs:observe`: the
+   * approval summary or question text, one line, at most 200 characters.
+   */
+  attentionSummary?: string;
 }
 
 /** Credential-free repository identity (contract revision 19); equal keys mean the same repository. */

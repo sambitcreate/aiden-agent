@@ -28,6 +28,8 @@ interface FixtureOptions {
   beforeDelete?: () => Promise<void>;
   /** Wraps the real ledger, e.g. to make one write fail. */
   wrapLedger?: (ledger: ImageRunLedger) => ImageRunLedger;
+  models?: NonNullable<Parameters<typeof fakeImageModels>[0]>["models"];
+  shutdownSettleMs?: number;
 }
 
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
@@ -37,7 +39,10 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   await assets.initialize();
   const workflows = new ImageWorkflowStore({ root: () => path.join(root, "create-images"), assets });
   await workflows.initialize();
-  const fake = fakeImageModels(options.reply ? { reply: (_call, index) => options.reply!(index) } : {});
+  const fake = fakeImageModels({
+    ...(options.reply ? { reply: (_call, index) => options.reply!(index) } : {}),
+    ...(options.models ? { models: options.models } : {}),
+  });
   const snapshots: RunSnapshot[] = [];
   const issues: string[] = [];
   const realLedger = ImageRunLedger.open({ directory: path.join(root, "create-images") });
@@ -66,6 +71,7 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     ...(options.now ? { now: options.now } : {}),
     ...(options.maxRequestsPerRun !== undefined ? { maxRequestsPerRun: options.maxRequestsPerRun } : {}),
     ...(options.retainRuns !== undefined ? { retainRuns: options.retainRuns } : {}),
+    ...(options.shutdownSettleMs !== undefined ? { shutdownSettleMs: options.shutdownSettleMs } : {}),
   });
   t.after(async () => {
     fake.release();
@@ -92,7 +98,11 @@ test("prepare sends nothing; start sends exactly the consented requests", async 
   assert.equal(plan.expiresAt - plan.createdAt, 300_000);
   assert.deepEqual(
     plan.requests.map((request) => [request.providerLabel, request.modelLabel, request.referenceCount]),
-    [["OpenRouter", "Google: Nano Banana 2 (Gemini 3.1 Flash Image)", 0], ["OpenRouter", "Google: Nano Banana 2 (Gemini 3.1 Flash Image)", 0]],
+    // The catalog name is provider-supplied, so the consent also names the exact model id.
+    [
+      ["OpenRouter", "Google: Nano Banana 2 (Gemini 3.1 Flash Image) (google/gemini-3.1-flash-image)", 0],
+      ["OpenRouter", "Google: Nano Banana 2 (Gemini 3.1 Flash Image) (google/gemini-3.1-flash-image)", 0],
+    ],
   );
   const started = await env.coordinator.start(OWNER, plan.consentId);
   assert.ok("runId" in started);
@@ -138,6 +148,67 @@ test("the owner cap holds: a fifth Generate node is refused before any consent e
   const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
   assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], ["request_cap"]);
   assert.equal(env.fake.calls.length, 0);
+});
+
+test("references wired into a text-only model are plan issues on that node, and no consent is issued", async (t) => {
+  const env = await fixture(t, { models: [{ id: "flux", name: "FLUX", input: ["text"] }] });
+  const image = await env.assets.put({ bytes: pngBytes(12, 12, 40) });
+  const doc = await saveWorkflow(env.workflows, (draft) => {
+    draft.nodes = [
+      { id: "p", type: "prompt", position: { x: 0, y: 0 }, data: { text: "A lighthouse" } },
+      { id: "i", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: image.assetId } },
+      { id: "g", type: "generate-image", position: { x: 0, y: 0 }, data: { model: { provider: "openrouter", id: "flux" }, count: 1 } },
+    ];
+    draft.edges = [
+      { id: "p-g", source: "p", sourcePort: "text", target: "g", targetPort: "prompt" },
+      { id: "i-g", source: "i", sourcePort: "image", target: "g", targetPort: "references" },
+    ];
+    return draft;
+  });
+  const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+  assert.deepEqual("issues" in result ? result.issues.map((issue) => [issue.code, issue.nodeId]) : result, [["references_unsupported", "g"]]);
+  assert.equal(env.fake.calls.length, 0);
+});
+
+test("at most four runs are active across all workflows; a fifth prepare or start is refused", async (t) => {
+  const env = await fixture(t, { reply: () => ({ kind: "hold" }) });
+  const docs = [];
+  for (let index = 0; index < 5; index += 1) docs.push(await saveWorkflow(env.workflows, generateChains(1)));
+  const plans = [];
+  for (const doc of docs) plans.push(await prepared(env, doc));
+  for (const plan of plans.slice(0, 4)) assert.ok("runId" in (await env.coordinator.start(OWNER, plan.consentId)));
+  assert.deepEqual(await env.coordinator.start(OWNER, plans[4]!.consentId), { error: "too-many-runs" });
+  const fifth = await env.coordinator.prepare(OWNER, { workflowId: docs[4]!.id, revision: docs[4]!.revision, scope: { kind: "all" } });
+  assert.deepEqual("issues" in fifth ? fifth.issues.map((issue) => issue.code) : fifth, ["too_many_runs"]);
+  await until(() => env.fake.calls.length === 4, "four requests");
+  env.fake.release();
+  await env.coordinator.whenIdle();
+  assert.equal(env.fake.calls.length, 4);
+  assert.ok("plan" in (await env.coordinator.prepare(OWNER, { workflowId: docs[4]!.id, revision: docs[4]!.revision, scope: { kind: "all" } })));
+});
+
+test("quit waits, within its budget, for in-flight requests to send their provider-side cancel", async (t) => {
+  let cancelled = 0;
+  const env = await fixture(t, { reply: () => ({ kind: "hold", cancelMs: 20, onCancelled: () => (cancelled += 1) }), shutdownSettleMs: 1_000 });
+  const doc = await saveWorkflow(env.workflows, generateChains(1));
+  const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
+  assert.ok("runId" in started);
+  await onTheWire(env);
+  const before = env.ledger.snapshot(started.runId)!;
+  assert.equal(before.run.state, "running");
+  await env.coordinator.shutdown("app-quit");
+  assert.equal(cancelled, 1, "the provider cancel went out before the ledger closed");
+
+  // A provider slower than the budget does not hold quit open.
+  let slow = 0;
+  const late = await fixture(t, { reply: () => ({ kind: "hold", cancelMs: 500, onCancelled: () => (slow += 1) }), shutdownSettleMs: 20 });
+  const lateDoc = await saveWorkflow(late.workflows, generateChains(1));
+  assert.ok("runId" in (await late.coordinator.start(OWNER, (await prepared(late, lateDoc)).consentId)));
+  await onTheWire(late);
+  const began = Date.now();
+  await late.coordinator.shutdown("app-quit");
+  assert.ok(Date.now() - began < 400, "quit returned within its budget");
+  assert.equal(slow, 0);
 });
 
 test("a failed request is never retried without a fresh consent", async (t) => {

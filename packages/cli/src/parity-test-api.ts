@@ -62,3 +62,7 @@ export { chooseNetwork, installService, launchdPlist, parseInstallFlags, reachab
 export { formatChecklist, looksLikeCloudServer, networkQuestion, probeAidenHealth, readSystemTailscaleFacts, readTailscaleFacts, recommendNetwork, remoteCheckCommand, serverChecklist, tailscaleChecklist, tailscaleReady, waitForTailscaleAddress } from "./reachability.ts";
 export { hooksCommand, hooksAdminCommand, startCliHooks, stopCliHooks } from "./hooks.ts";
 export { createCliChatForks } from "./daemon-forks.ts";
+export { AIDEN_REMOTE_LEGACY_CAPABILITIES, AIDEN_REMOTE_HOST_CAPABILITIES } from "../../../main/services/aiden-remote-protocol.js";
+
+export { projectBotTranscript } from "../../../main/services/bot-runtime/live-projection.js";
+export { createCliBotSpending } from "./bot-spending.ts";

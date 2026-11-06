@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -37,6 +38,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
@@ -58,6 +60,9 @@ import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 
+/** Cancel on the Setting up worktree row: the message goes back to the composer, unsent. */
+private class AidenNewWorktreeCanceled : Exception("Worktree setup canceled.")
+
 @OptIn(FlowPreview::class)
 class AidenChatViewModel(
     val chatId: String,
@@ -70,7 +75,8 @@ class AidenChatViewModel(
     private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     private val visualSnapshotRefresh: AidenVisualSnapshotRefreshPolicy = AidenVisualSnapshotRefreshPolicy(),
     private val clock: () -> Instant = Instant::now,
-    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy()
+    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy(),
+    private val recoveryClock: () -> Long = SystemClock::elapsedRealtime
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -161,6 +167,14 @@ class AidenChatViewModel(
     private val _isUploadingAttachment = MutableStateFlow(false)
     val isUploadingAttachment: StateFlow<Boolean> = _isUploadingAttachment.asStateFlow()
 
+    /** How far the attachments being uploaded have got; null while none are. */
+    private val _uploadProgress = MutableStateFlow<AidenUploadProgress?>(null)
+    val uploadProgress: StateFlow<AidenUploadProgress?> = _uploadProgress.asStateFlow()
+    /** Every picked batch sending or waiting its turn, so Stop ends them all. */
+    private val attachmentBatchJobs = mutableSetOf<Job>()
+    /** The position of the picture [prepareAndUpload] is sending in its batch, and the batch size. */
+    private var attachmentBatch: Pair<Int, Int>? = null
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -169,6 +183,30 @@ class AidenChatViewModel(
 
     private val _presentedError = MutableStateFlow<String?>(null)
     val presentedError: StateFlow<String?> = _presentedError.asStateFlow()
+
+    // --- New worktree (contract revision 53) ---
+
+    /** The first message starts this chat in a new worktree on the Mac. */
+    private val _startsInNewWorktree = MutableStateFlow(false)
+    val startsInNewWorktree: StateFlow<Boolean> = _startsInNewWorktree.asStateFlow()
+
+    /** The Mac is making the worktree; the message waits above a Cancel. */
+    private val _isSettingUpWorktree = MutableStateFlow(false)
+    val isSettingUpWorktree: StateFlow<Boolean> = _isSettingUpWorktree.asStateFlow()
+
+    /** What a `git:read` branch list showed for this chat's workspace, if read. */
+    private val _workspaceHasCommits = MutableStateFlow<Boolean?>(null)
+    val workspaceHasCommits: StateFlow<Boolean?> = _workspaceHasCommits.asStateFlow()
+
+    private var worktreeSetup: Deferred<AidenChatNewWorktree>? = null
+    /** Cancel was chosen for the current setup, even one whose answer had already arrived. */
+    private var worktreeSetupCanceled = false
+
+    /**
+     * One key per chat and message, so a retry after a lost reply finds the worktree the Mac
+     * already made instead of failing on the moved chat.
+     */
+    private var worktreeAttempt: Pair<String, UUID>? = null
 
     /** The Mac holds visible messages older than the transcript on screen (`chat-messages-window-v1`). */
     private val _hasOlderMessages = MutableStateFlow(false)
@@ -393,6 +431,52 @@ class AidenChatViewModel(
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 !isHeldByForkSummary &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
+
+    fun setStartsInNewWorktree(on: Boolean) {
+        _startsInNewWorktree.value = on
+    }
+
+    val offersNewWorktree: Boolean
+        get() = !isReadOnlyPresentation && AidenNewWorktreeAvailability.isOffered(
+            chat = _chat.value,
+            workspace = coordinator.workspaces.value.firstOrNull { it.id == _chat.value?.workspaceId },
+            server = coordinator.serverInfo.value,
+            hasCommits = _workspaceHasCommits.value
+        )
+
+    /**
+     * Reads the workspace's branches when this phone holds `git:read`, so New worktree is hidden
+     * for a folder that is not a repository or has no commits. Without the grant, or when the
+     * read fails, the Mac decides.
+     */
+    suspend fun refreshNewWorktreeRepository() {
+        val currentChat = _chat.value ?: return
+        val server = coordinator.serverInfo.value ?: return
+        if (isReadOnlyPresentation || currentChat.isBotChat || currentChat.messages.isNotEmpty() ||
+            !server.supportsNewWorktrees || !server.capabilities.contains(AidenRemoteCapability.GIT_READ)
+        ) return
+        val client = activeClient() ?: return
+        val workspaceId = currentChat.workspaceId
+        val result = try {
+            client.gitBranches(workspaceId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return
+        }
+        if (activeClient() !== client || _chat.value?.workspaceId != workspaceId) return
+        _workspaceHasCommits.value = AidenNewWorktreeAvailability.hasCommits(result)
+    }
+
+    /**
+     * Stops waiting for the worktree. The message goes back to the composer. If the Mac finishes
+     * anyway, the chat is in the worktree next time it loads, still empty.
+     */
+    fun cancelWorktreeSetup() {
+        val setup = worktreeSetup ?: return
+        worktreeSetupCanceled = true
+        setup.cancel()
+    }
 
     // --- Fork (contract revision 21) ---
 
@@ -763,7 +847,7 @@ class AidenChatViewModel(
     }
 
     private suspend fun observeProgressUntilBackground(observationToken: Long) {
-        val recovery = AidenStreamNetworkRecovery(networkAvailability)
+        val recovery = AidenStreamNetworkRecovery(networkAvailability, nowMilliseconds = recoveryClock)
         var cursor = 0
         var cursorEpoch: String? = null
         while (progressForeground && progressObservationToken == observationToken && coroutineContext.isActive) {
@@ -1446,7 +1530,8 @@ class AidenChatViewModel(
             selectedModelId = _selectedModelId.value,
             selectedThinkingLevel = _selectedThinkingLevel.value,
             remembered = if (hasExplicitModelSelection || instanceId.isEmpty()) null
-            else modelPreferenceStore.selection(instanceId)
+            else modelPreferenceStore.selection(instanceId),
+            hasExplicitSelection = hasExplicitModelSelection
         )
         _selectedProviderId.value = selection.providerId
         _selectedModelId.value = selection.modelId
@@ -1531,6 +1616,14 @@ class AidenChatViewModel(
         val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
 
+        // The chat stopped qualifying while the chip was on: keep the message rather than send it
+        // to the main checkout.
+        if (retryAttempt == null && _startsInNewWorktree.value && !offersNewWorktree) {
+            _startsInNewWorktree.value = false
+            _presentedError.value = AidenNewWorktreeCopy.NO_LONGER_OFFERED
+            return
+        }
+
         val text = retryAttempt?.request?.text ?: _draft.value.trim()
         val submittedAttachments = retryAttempt?.attachments ?: _pendingAttachments.value
         val turnModel = AidenChatModelAuthority.turnSelection(
@@ -1548,6 +1641,7 @@ class AidenChatViewModel(
             skill = _selectedSkill.value
         )
 
+        val makesWorktree = retryAttempt == null && _startsInNewWorktree.value && offersNewWorktree
         val previousUpdatedAt = currentChat.updatedAt
         val optimisticId = "local-${UUID.randomUUID().toString().lowercase()}"
         val now = Instant.now()
@@ -1587,8 +1681,45 @@ class AidenChatViewModel(
         val requestToken = chatCache.reserveChatWrite()
         val pairingCreatedAt = pairingCreatedAt()
 
+        // The chat as sent: in the new worktree's workspace once the Mac has moved it.
+        var sentChat = updatedChat
         viewModelScope.launch {
             try {
+                if (makesWorktree) {
+                    // Revision 53: the Mac makes the worktree and moves this empty chat into it
+                    // before the message is sent there.
+                    val key = worktreeAttempt?.takeIf { it.first == text }?.second ?: UUID.randomUUID()
+                    worktreeAttempt = text to key
+                    // Its own job, so Cancel stops only the wait and a refusal stays this send's.
+                    val setup = viewModelScope.async {
+                        client.moveChatToNewWorktree(chatId, currentChat.revision, text, key)
+                    }
+                    worktreeSetupCanceled = false
+                    worktreeSetup = setup
+                    _isSettingUpWorktree.value = true
+                    val moved = try {
+                        setup.await()
+                    } catch (cancelled: CancellationException) {
+                        if (setup.isCancelled && isActive) throw AidenNewWorktreeCanceled() else throw cancelled
+                    } catch (e: Exception) {
+                        if (AidenNewWorktreeRetry.spendsKey(e)) worktreeAttempt = null
+                        throw e
+                    } finally {
+                        _isSettingUpWorktree.value = false
+                        worktreeSetup = null
+                    }
+                    // Cancel can land after the answer arrived but before this resumed: cancelling
+                    // a finished job does nothing, so the choice is read from the flag.
+                    val canceledAsItArrived = worktreeSetupCanceled
+                    if (activeClient() !== client) throw AidenNewWorktreeCanceled()
+                    _chat.value = _chat.value?.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
+                    sentChat = sentChat.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
+                    _startsInNewWorktree.value = false
+                    worktreeAttempt = null
+                    coordinator.refreshWorkspaces()
+                    // Canceled as the worktree arrived: the chat stays there, unsent (as on iOS).
+                    if (canceledAsItArrived) throw AidenNewWorktreeCanceled()
+                }
                 val session = draftSession ?: error("The chat draft is not ready.")
                 withContext(ioDispatcher) { draftStore.savePendingSend(attempt, session) }
                 _pendingSend.value = attempt
@@ -1620,7 +1751,7 @@ class AidenChatViewModel(
                     return@launch
                 }
                 withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) }
-                val candidate = updatedChat.copy(messages = updatedChat.messages.filter { it.id != optimisticId })
+                val candidate = sentChat.copy(messages = sentChat.messages.filter { it.id != optimisticId })
                 val accepted = withContext(ioDispatcher) {
                     chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
                 }
@@ -1670,7 +1801,7 @@ class AidenChatViewModel(
                             turnAttempts.reset()
                             rateLimitedSendRetries = 0
                         }
-                        if (_pendingSend.value == null) _presentedError.value = e.localizedMessage
+                        if (_pendingSend.value == null && e !is AidenNewWorktreeCanceled) _presentedError.value = e.localizedMessage
                     }
                 }
             } finally {
@@ -1686,16 +1817,26 @@ class AidenChatViewModel(
     suspend fun <T> prepareAndUpload(items: List<T>, prepare: suspend (T) -> AidenAttachmentUpload?) {
         val client = activeClient() ?: return
         _preparingAttachmentBatches.value++
+        val batchJob = coroutineContext[Job]
+        batchJob?.let { attachmentBatchJobs += it }
+        var ran = false
         try {
             preparationMutex.withLock {
-                for (item in items.take((10 - _pendingAttachments.value.size).coerceAtLeast(0))) {
+                ran = true
+                val batch = items.take((10 - _pendingAttachments.value.size).coerceAtLeast(0))
+                for ((index, item) in batch.withIndex()) {
                     coroutineContext.ensureActive()
                     if (activeClient() !== client) return
                     try {
                         val upload = AidenAttachmentPreparation.onWorker { prepare(item) } ?: continue
                         coroutineContext.ensureActive()
                         if (activeClient() !== client) return
-                        upload(listOf(upload))
+                        attachmentBatch = index to batch.size
+                        try {
+                            upload(listOf(upload))
+                        } finally {
+                            attachmentBatch = null
+                        }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -1704,8 +1845,19 @@ class AidenChatViewModel(
                 }
             }
         } finally {
+            batchJob?.let { attachmentBatchJobs -= it }
+            // A batch still waiting its turn leaves the running batch's bar alone.
+            if (ran) _uploadProgress.value = null
             _preparingAttachmentBatches.value--
         }
+    }
+
+    /**
+     * Stop on the progress bar: the upload in flight and any batch waiting its turn are dropped;
+     * what already reached the Mac stays.
+     */
+    fun cancelUploads() {
+        attachmentBatchJobs.toList().forEach { it.cancel() }
     }
 
     suspend fun upload(uploads: List<AidenAttachmentUpload>): Int {
@@ -1721,16 +1873,35 @@ class AidenChatViewModel(
         var failedCount = 0
         val acceptedReferences = mutableListOf<AidenAttachmentReference>()
 
+        // Revision 50: a Mac that granted `attachments:raw` takes a picture as its own bytes.
+        val rawImages = coordinator.serverInfo.value?.supportsRawUploads == true
+        val batch = uploads.take(10 - _pendingAttachments.value.size)
         try {
-            val availableSlots = 10 - _pendingAttachments.value.size
-            for (upload in uploads.take(availableSlots)) {
+            for ((offset, upload) in batch.withIndex()) {
                 try {
                     val rawImageBytes = if (upload is AidenAttachmentUpload.Image) {
                         withContext(kotlinx.coroutines.Dispatchers.IO) { Base64.getDecoder().decode(upload.data) }
                     } else null
                     if (activeClient() !== client) return uploads.size
-                    val reference = client.uploadAttachment(chatId, upload)
-                    coroutineContext.ensureActive()
+                    val (index, count) = attachmentBatch ?: (offset to batch.size)
+                    val started = AidenUploadProgress(index, count, 0f)
+                    _uploadProgress.value = started
+                    val reference = client.uploadAttachment(chatId, upload, rawImages) { fraction ->
+                        // A late report from an earlier upload never moves the bar back.
+                        _uploadProgress.update { current ->
+                            if (current?.index == index && current.count == count) current.advancedTo(fraction) ?: current else current
+                        }
+                    }
+                    if (!coroutineContext.isActive) {
+                        // Stopped after the Mac staged it: take it off the Mac again, so it does
+                        // not count against the chat's upload limit until it expires.
+                        if (reference.isValid()) {
+                            viewModelScope.launch {
+                                try { client.removeAttachment(chatId, reference.id) } catch (_: Exception) {}
+                            }
+                        }
+                        coroutineContext.ensureActive()
+                    }
                     if (activeClient() !== client) return uploads.size
                     if (!reference.isValid()) {
                         failedCount++
@@ -1761,6 +1932,8 @@ class AidenChatViewModel(
             }
         } finally {
             _isUploadingAttachment.value = false
+            // Within a picked batch the bar stays up between pictures; the batch clears it.
+            if (attachmentBatch == null) _uploadProgress.value = null
         }
         return failedCount
     }
@@ -1852,7 +2025,7 @@ class AidenChatViewModel(
         streamJob = viewModelScope.launch {
             var stream = originalStream
             val terminalReplayGate = AidenTerminalReplayGate()
-            val recovery = AidenStreamNetworkRecovery(networkAvailability)
+            val recovery = AidenStreamNetworkRecovery(networkAvailability, nowMilliseconds = recoveryClock)
             val onWaiting: (Boolean) -> Unit = { waiting -> setWaitingForNetwork(waiting, stream.streamId) }
 
             while (activeStreamId == stream.streamId) {
@@ -2749,8 +2922,12 @@ class AidenChatViewModel(
                             is AidenForeignRunProjection.Effect.ReasoningAppended -> buffer.appendReasoning(outputDelta.text)
                             else -> {
                                 // Controls and terminal state see every accepted byte first.
-                                if (AidenForeignRunProjection.Effect.Reconcile in effects) buffer.reset()
-                                else buffer.flush()
+                                if (event.kind is AidenRemoteRunEvent.Kind.Snapshot) {
+                                    buffer.reset()
+                                    buffer.appendText(event.kind.snapshot.replyText.orEmpty())
+                                    buffer.appendReasoning(event.kind.snapshot.replyReasoning.orEmpty())
+                                }
+                                buffer.flush()
                                 if (foreignProjection === current) liveReveal.flush()
                             }
                         }

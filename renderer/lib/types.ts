@@ -554,6 +554,13 @@ export interface Attachment {
   size: number;
   /** base64 (no data: prefix) for image attachments. */
   data?: string;
+  /** SHA-256 of a stored image's bytes; the window loads it through `url` instead of `data`. */
+  sha256?: string;
+  /** Pixel size of a stored image, so its box is reserved before the bytes load. */
+  width?: number;
+  height?: number;
+  /** Private `aiden-attachment:` link to a stored image's bytes. */
+  url?: string;
   /** UTF-8 contents for text/code attachments (truncated). */
   text?: string;
 }
@@ -675,6 +682,7 @@ export interface ChatMeta {
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
+  lastAssistantMessageId?: string;
   /** The message at `lastAssistantAt` is a failed turn; the sidebar says Failed while it is unread. */
   lastAssistantFailed?: boolean;
   /** Set when this chat was created by Fork. */
@@ -932,12 +940,13 @@ export interface AppSettings {
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../shared/usage-limits").UsageLimitWaitHours;
   /**
-   * Settings → Bots: routine runs go ahead with Ask first steps and connected-app
+   * Settings → Bots & Approvals: routine runs go ahead with Ask first steps and connected-app
    * changes instead of waiting for the person. Never lowers Hand off to me rules,
    * the password and money rules, or chat turns. Absent means off.
    */
   botRoutinesGoAhead?: boolean;
-  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  botMessaging?: boolean;
+  /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;

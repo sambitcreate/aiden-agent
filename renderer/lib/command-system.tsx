@@ -14,6 +14,7 @@ import {
 } from "./command-system-core";
 import { toast } from "../components/ui";
 import { useAppCapabilities } from "./app-capabilities";
+import { handleAreaFocusKey } from "./focus-regions";
 
 export type CommandPaletteMode =
   | "root"
@@ -195,25 +196,40 @@ export function CommandSystemProvider({
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
-      const commandId = resolveCommandForKeyEvent(event, bindings, {
-        editable: isEditable(target),
-        fileEditor: Boolean(target?.closest("[data-command-scope='fileEditor']")),
-        terminal: Boolean(target?.closest("[data-command-scope='terminal'], .ghostty-screen")),
-        modal:
-          applicationModal ||
-          Boolean(document.querySelector('[data-slot="dialog-content"][data-state="open"]')),
+      // The page checks are getters, read only once a key matches a binding:
+      // ordinary typing never searches the page.
+      const context = {
+        get editable() {
+          return isEditable(target);
+        },
+        get fileEditor() {
+          return Boolean(target?.closest("[data-command-scope='fileEditor']"));
+        },
+        get terminal() {
+          return Boolean(target?.closest("[data-command-scope='terminal'], .ghostty-screen"));
+        },
+        get modal() {
+          return (
+            applicationModal ||
+            Boolean(document.querySelector('[data-slot="dialog-content"][data-state="open"]'))
+          );
+        },
         paletteOpen,
         composing: event.isComposing || event.key === "Dead",
         repeat: event.repeat,
         defaultPrevented: event.defaultPrevented,
         recording: Boolean(target?.closest("[data-shortcut-recorder='true']")),
-      }, capabilities.platform);
-      if (!commandId) return;
-      if (commandId === "commandPalette.toggle" || handlers.current.has(commandId)) {
+      };
+      const commandId = resolveCommandForKeyEvent(event, bindings, context, capabilities.platform);
+      if (commandId && (commandId === "commandPalette.toggle" || handlers.current.has(commandId))) {
         event.preventDefault();
         event.stopPropagation();
         execute(commandId);
+        return;
       }
+      // F6 must precede device/terminal input handlers that consume bubbling
+      // keys, while runnable saved shortcuts above always get first refusal.
+      if (!applicationModal && !context.recording && !context.composing) handleAreaFocusKey(event);
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);

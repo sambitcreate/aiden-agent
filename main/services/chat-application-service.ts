@@ -1,4 +1,6 @@
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -52,7 +54,7 @@ export interface ChatApplicationDependencies {
     | "setChatModelSelection"
     | "moveEmptyChatToWorkspace"
     | "remove"
-  > & Partial<Pick<typeof chatStore, "listSummaryMetadata">>;
+  > & Partial<Pick<typeof chatStore, "listSummaryMetadata" | "getWithImageReferences">>;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
     typeof llmClient,
@@ -87,6 +89,7 @@ export interface ChatApplicationDependencies {
   visualSnapshots?: { cancelChat(chatId: string): void };
   /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
   followThrough?: {
+    beginMove?(chatId: string): Promise<() => void> | (() => void);
     deleteChat(chatId: string): Promise<void>;
     /** The delete rolled back before its durable boundary: the retained chat's answers count again. */
     restoreChat?(chatId: string): void;
@@ -97,9 +100,43 @@ export interface ChatApplicationDependencies {
   releaseChatContext?: (chatId: string) => void;
   /** Remove per-chat scratch state once the chat is gone. Best effort; never throws. */
   forgetDeletedChat?: (chatId: string) => Promise<void>;
+  /**
+   * The Inbox stores whose entry for a deleted chat (its read marker and its
+   * triage) is dropped once the chat is gone. Every delete runs through here
+   * (desktop, Remote and Bot chat deletes), so no surface leaves that state
+   * behind. Best effort: it never delays or fails the delete.
+   */
+  inboxState?: ChatInboxStateStores;
   /** After a deletion commits: lets a No workspace chat's hidden folder go with it. */
   afterChatRemoved?: (workspaceId: string) => Promise<void>;
   logError(area: string, message: string, error: unknown): void;
+}
+
+/** The Inbox stores holding a chat's read marker and its triage. */
+export interface ChatInboxStateStores {
+  readMarkers?: { remove(chatId: string): Promise<unknown> };
+  triage?: { remove(chatId: string): Promise<unknown> };
+}
+
+/**
+ * Drop a deleted chat's Inbox state: its read marker and its triage. Shared by
+ * the live delete and the startup roll-forward of a delete a crash cut short,
+ * so neither leaves a snooze or pin behind for a chat that no longer exists.
+ * Best effort: each store is cleared on its own, a failure is logged, and the
+ * returned promise never rejects.
+ */
+export async function forgetChatInboxState(
+  stores: ChatInboxStateStores | undefined,
+  chatId: string,
+  logError: (area: string, message: string, error: unknown) => void,
+): Promise<void> {
+  await Promise.all(
+    [stores?.readMarkers, stores?.triage].map((store) =>
+      store?.remove(chatId).catch((error: unknown) =>
+        logError("chats", "Could not clear the deleted chat's Inbox state.", error),
+      ),
+    ),
+  );
 }
 
 export function createChatApplicationService(deps: ChatApplicationDependencies) {
@@ -137,7 +174,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       const imageArtifactRecoveryUnavailable =
         !imageArtifactAvailability.available || !htmlArtifactAvailability.available;
       const [chat, stagedImageArtifact, stagedHtmlArtifact] = await Promise.all([
-        deps.chatStore.get(chatId),
+        // The window loads stored images itself, so their bytes are not read here.
+        deps.chatStore.getWithImageReferences
+          ? deps.chatStore.getWithImageReferences(chatId)
+          : deps.chatStore.get(chatId),
         !imageArtifactAvailability.available
           ? Promise.resolve(false)
           : deps.displayImageArtifactStore.hasPending(chatId),
@@ -189,7 +229,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           owner,
           input.workspaceId,
         );
-        if (!(await deps.configStore.getWorkspace(input.workspaceId))) {
+        const workspace = await deps.configStore.getWorkspace(input.workspaceId);
+        if (!workspace) {
           throw new Error("The selected workspace is no longer available.");
         }
         const assertCurrent = () => {
@@ -204,7 +245,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           }
         };
         try {
-          return chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
+          const chat = chatForRenderer(await deps.chatStore.create({ ...input, assertCurrent }));
+          reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+          return chat;
         } catch (error) {
           if (isChatCreateReconciliationRequiredError(error)) {
             return markReconciliationRequired(owner);
@@ -257,7 +300,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       if (!finishMove) {
         throw new Error("Finish or stop the current response before changing workspaces.");
       }
+      let finishFollowThroughMove: (() => void) | undefined;
       try {
+        finishFollowThroughMove = await deps.followThrough?.beginMove?.(chatId);
         const current = await deps.chatStore.get(chatId);
         if (!current) throw new Error(`Chat ${chatId} not found`);
         if (current.botId) {
@@ -279,6 +324,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           ),
         );
       } finally {
+        finishFollowThroughMove?.();
         finishMove();
       }
     },
@@ -380,6 +426,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           await options.assertCurrent?.(chat);
         });
         chatRemoved = true;
+        void forgetChatInboxState(deps.inboxState, chatId, deps.logError);
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
         // Scratch cleanup is best effort and must not delay the delete reply.
@@ -401,7 +448,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             );
           }
         }
-        deps.releaseChatContext?.(chatId);
+        // A delete that rolled back keeps the chat, so it keeps its context
+        // (interrupted waits, Unavailable prompts, spending) too.
+        const rolledBack = releaseAdmission && !chatRemoved;
+        if (!rolledBack) deps.releaseChatContext?.(chatId);
         if (releaseAdmission) {
           // Admission reopening without a removed chat means the delete rolled back
           // before any durable tombstone, so the chat stays in use.

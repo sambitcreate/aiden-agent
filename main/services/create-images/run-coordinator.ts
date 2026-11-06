@@ -1,7 +1,7 @@
 // The consent-gated front of Create Images runs. Provider-agnostic: it sees
 // ImageGenerationPort, the ledger, the studio assets and the workflow store.
 import { randomUUID } from "node:crypto";
-import type { ImageGenerationPort, ImageModelOption } from "../../../renderer/shared/images/port.js";
+import { imageModelConsentLabel, type ImageGenerationPort, type ImageModelOption } from "../../../renderer/shared/images/port.js";
 import type {
   ImageRunConsentPlan,
   OutputRef,
@@ -13,26 +13,37 @@ import { IMAGE_WORKFLOW_LIMITS, type WorkflowDocV1 } from "../../../renderer/sha
 import { createThrottledTrigger } from "../portable-config-watch-core.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { RunConsentStore } from "./consent-core.js";
+import type { CreateImagesExports } from "./image-export.js";
 import { executeRun } from "./run-executor.js";
-import { RUN_RETENTION, type ImageRunLedger } from "./run-ledger.js";
+import { RUN_RETENTION, type GeneratedAttempt, type ImageRunLedger } from "./run-ledger.js";
 import { clampRunConcurrency, planDigest, planRun, staleNodeIds, type PlanIssue, type RunPlan } from "./scheduler-core.js";
 import type { ImageWorkflowStore } from "./workflow-store.js";
 
 export type PrepareRunResult = { plan: ImageRunConsentPlan } | { issues: PlanIssue[] };
-export type StartRunResult = { runId: string } | { error: "expired" | "stale" | "model-unavailable" };
+export type StartRunResult = { runId: string } | { error: "expired" | "stale" | "model-unavailable" | "too-many-runs" };
 
 export interface RunCoordinatorDependencies {
   ledger: ImageRunLedger;
   port: ImageGenerationPort;
-  assets: Pick<StudioAssetStore, "get" | "read" | "put" | "retain" | "releaseAllForHolder">;
+  /** `usage` and `release` are optional: without them the executor skips its storage headroom check and its release-on-fault. */
+  assets: Pick<StudioAssetStore, "get" | "read" | "put" | "retain" | "releaseAllForHolder"> &
+    Partial<Pick<StudioAssetStore, "usage" | "release">>;
   workflows: Pick<ImageWorkflowStore, "get" | "delete" | "imageInputAssets">;
   notify(snapshot: RunSnapshot): void;
+  /** Auto-saves each stored Generate output, in the background. Without it nothing is saved to a folder. */
+  exports?: Pick<CreateImagesExports, "autoSave" | "whenIdle">;
   /** Receives failures that have no caller to throw to: a run that crashed, a ledger that would not close. */
   reportIssue?(message: string, error: unknown): void;
   now?: () => number;
   newId?: () => string;
   throttleMs?: number;
   maxRequestsPerRun?: number;
+  /** Lowers the global cap on concurrently active runs (tests); never above MAX_ACTIVE_RUNS. */
+  maxActiveRuns?: number;
+  /** How long quit waits for in-flight requests to settle, so provider-side cancels can go out. */
+  shutdownSettleMs?: number;
+  /** How long quit waits for background auto-saves to finish and be recorded before the ledger closes. */
+  shutdownSaveWaitMs?: number;
   retainRuns?: number;
 }
 
@@ -44,12 +55,39 @@ interface ActiveRun {
   done: Promise<void>;
 }
 
+/** Waits for the tasks, but not past `ms`. */
+async function settleWithin(tasks: readonly Promise<unknown>[], ms: number): Promise<void> {
+  if (tasks.length === 0) return;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  try {
+    await Promise.race([Promise.allSettled(tasks), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function findModel(models: readonly ImageModelOption[], provider: string, model: string) {
   return models.find((option) => option.provider === provider && option.model === model);
 }
 
 /** The owner caps are enforced here whatever the caller or a stored document asks for. */
 const MAX_REQUESTS = IMAGE_WORKFLOW_LIMITS.maxRequestsPerRun;
+/**
+ * Runs active at once across every workflow. Defense in depth against a misbehaving renderer:
+ * each run is already capped at 4 requests and one per workflow, and this bounds the total.
+ */
+export const MAX_ACTIVE_RUNS = 4;
+/** Inside main/index.ts's 5 s image-runs quit budget, with the auto-save wait below. */
+const DEFAULT_SHUTDOWN_SETTLE_MS = 1_500;
+/**
+ * Quit waits this long for pending auto-saves. Main's "Image runs" shutdown budget covers the
+ * settle wait plus this one, so the asset store never closes under a save still reading it.
+ */
+const DEFAULT_SHUTDOWN_SAVE_WAIT_MS = 3_000;
+const TOO_MANY_RUNS = `Aiden is already running ${MAX_ACTIVE_RUNS} image runs. Wait for one to finish or stop one, then try again.`;
 
 function refused(code: string, message: string): PrepareRunResult {
   return { issues: [{ code, message }] };
@@ -92,9 +130,10 @@ export class ImageRunCoordinator {
     if (doc.revision !== request.revision) return refused("stale_revision", "Aiden is still saving this workflow. Try again.");
     if (this.deleting.has(doc.id)) return refused("workflow_deleting", "This workflow is being deleted.");
     if (this.hasActiveRun(doc.id)) return refused("run_in_progress", "A run is already in progress for this workflow.");
-    const planned = this.plan(doc, request.scope);
-    if (!planned.ok) return { issues: planned.issues };
+    if (this.atRunCapacity()) return refused("too_many_runs", TOO_MANY_RUNS);
     const models = await this.deps.port.listModels();
+    const planned = this.plan(doc, request.scope, models);
+    if (!planned.ok) return { issues: planned.issues };
     const missing = planned.plan.requests.filter((item) => !findModel(models, item.provider, item.model));
     if (missing.length > 0) {
       return {
@@ -119,10 +158,11 @@ export class ImageRunCoordinator {
             provider: item.provider,
             providerLabel: option.providerLabel,
             model: item.model,
-            modelLabel: option.label,
+            modelLabel: imageModelConsentLabel(option),
             referenceCount: item.referenceCount,
             referenceBytes: item.knownReferences.reduce((sum, ref) => sum + (this.deps.assets.get(ref.assetId)?.bytes ?? 0), 0),
             pendingReferenceCount: item.pendingReferenceCount,
+            pendingReferenceSteps: item.pendingReferenceSteps,
           };
         }),
         totalRequests: planned.plan.requests.length,
@@ -139,13 +179,14 @@ export class ImageRunCoordinator {
     if (!consent.ok) return { error: "expired" };
     const workflowId = consent.plan.workflowId;
     if (this.deleting.has(workflowId) || this.hasActiveRun(workflowId)) return { error: "stale" };
+    if (this.atRunCapacity()) return { error: "too-many-runs" };
     this.starting.add(workflowId);
     try {
       const doc = await this.deps.workflows.get(workflowId);
       if (!doc || doc.revision !== consent.plan.workflowRevision) return { error: "stale" };
-      const planned = this.plan(doc, consent.plan.scope);
-      if (!planned.ok || planDigest(planned.plan) !== consent.internal.digest) return { error: "stale" };
       const models = await this.deps.port.listModels();
+      const planned = this.plan(doc, consent.plan.scope, models);
+      if (!planned.ok || planDigest(planned.plan) !== consent.internal.digest) return { error: "stale" };
       if (planned.plan.requests.some((item) => !findModel(models, item.provider, item.model))) {
         return { error: "model-unavailable" };
       }
@@ -185,6 +226,21 @@ export class ImageRunCoordinator {
 
   latestOutputs(workflowId: string): Record<string, OutputRef[]> {
     return this.deps.ledger.latestOutputs(workflowId);
+  }
+
+  /** Succeeded Generate attempts, newest first, for the gallery. */
+  generatedAttempts(workflowId: string | undefined, limit: number): GeneratedAttempt[] {
+    return this.deps.ledger.generatedAttempts(workflowId, limit);
+  }
+
+  /** The newest Generate attempt that produced this asset, or undefined if the ledger never generated it. */
+  generatedAsset(assetId: string): { attempt: GeneratedAttempt; ref: OutputRef } | undefined {
+    return this.deps.ledger.generatedAsset(assetId);
+  }
+
+  /** `generatedAsset` for many assets in one pass; assets the ledger never generated are absent. */
+  generatedAssets(assetIds: Iterable<string>): Map<string, { attempt: GeneratedAttempt; ref: OutputRef }> {
+    return this.deps.ledger.generatedAssets(assetIds);
   }
 
   /** Nodes whose output is older than a newer upstream Generate result, e.g. after a node-only run. */
@@ -238,14 +294,27 @@ export class ImageRunCoordinator {
     }
   }
 
-  /** Quit: abort everything and record the end now; requests already sent may still be billed. */
+  /**
+   * Quit: abort everything, give in-flight requests a bounded moment to settle (fal and Replicate
+   * send their provider-side cancel while settling), then record the end of whatever is still
+   * running. Requests already sent may still be billed. Then wait, bounded, for the auto-saves
+   * those runs started, so each file is finished and recorded before the ledger (and after it the
+   * asset store) closes; one still running past the wait finds the ledger closed and records nothing.
+   */
   async shutdown(reason = "app-quit"): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     try {
-      for (const run of this.active.values()) {
+      const runs = [...this.active.values()];
+      for (const run of runs) {
         run.trigger.dispose();
         run.controller.abort(reason);
+      }
+      await settleWithin(
+        runs.map((run) => run.done),
+        this.deps.shutdownSettleMs ?? DEFAULT_SHUTDOWN_SETTLE_MS,
+      );
+      for (const run of runs) {
         try {
           this.deps.ledger.terminateRun(run.runId, "cancelled", reason);
         } catch (error) {
@@ -253,14 +322,16 @@ export class ImageRunCoordinator {
         }
       }
       this.active.clear();
+      await this.deps.exports?.whenIdle(this.deps.shutdownSaveWaitMs ?? DEFAULT_SHUTDOWN_SAVE_WAIT_MS);
     } finally {
       this.deps.ledger.close();
     }
   }
 
-  /** Resolves once every active run has settled. Used by tests and by the perf lane. */
+  /** Resolves once every active run, and every auto-save it started, has settled. Used by tests and by the perf lane. */
   async whenIdle(): Promise<void> {
     while (this.active.size > 0) await Promise.all([...this.active.values()].map((run) => run.done));
+    await this.deps.exports?.whenIdle();
   }
 
   private launch(doc: WorkflowDocV1, plan: RunPlan, requestLimit: number): string {
@@ -296,6 +367,7 @@ export class ImageRunCoordinator {
           this.inFlight -= 1;
         },
         ...(this.deps.reportIssue ? { reportIssue: (error: unknown) => this.deps.reportIssue!("An image run hit a secondary failure.", error) } : {}),
+        ...(this.deps.exports ? { onImagesStored: (_step: unknown, output: readonly OutputRef[]) => this.deps.exports!.autoSave(output, doc.title) } : {}),
       },
       { runId, plan, concurrency: clampRunConcurrency(doc.settings.concurrency), signal: controller.signal },
     )
@@ -337,7 +409,12 @@ export class ImageRunCoordinator {
     }
   }
 
-  private plan(doc: WorkflowDocV1, scope: RunScope) {
+  private atRunCapacity(): boolean {
+    const cap = Math.min(this.deps.maxActiveRuns ?? MAX_ACTIVE_RUNS, MAX_ACTIVE_RUNS);
+    return this.active.size + this.starting.size >= cap;
+  }
+
+  private plan(doc: WorkflowDocV1, scope: RunScope, models: readonly ImageModelOption[]) {
     return planRun(doc, scope, {
       priorOutputs: this.deps.ledger.latestOutputs(doc.id),
       asset: (assetId) => {
@@ -345,6 +422,13 @@ export class ImageRunCoordinator {
         return record ? { assetId, width: record.width, height: record.height, mediaType: record.mediaType } : undefined;
       },
       maxRequests: Math.min(this.deps.maxRequestsPerRun ?? MAX_REQUESTS, MAX_REQUESTS),
+      model: (provider, model) => {
+        const option = findModel(models, provider, model);
+        return option
+          ? { acceptsReferences: option.acceptsReferences, ...(option.maxReferences !== undefined ? { maxReferences: option.maxReferences } : {}) }
+          : undefined;
+      },
+      assetBytes: (assetId) => this.deps.assets.get(assetId)?.bytes,
     });
   }
 

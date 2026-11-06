@@ -9,11 +9,13 @@ final class AidenRemoteClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.hold = nil
         AidenRemoteMockURLProtocol.epoch = UUID().uuidString
     }
 
     override func tearDown() {
         AidenRemoteMockURLProtocol.handler = nil
+        AidenRemoteMockURLProtocol.hold = nil
         super.tearDown()
     }
 
@@ -580,10 +582,11 @@ final class AidenRemoteClientTests: XCTestCase {
             AidenBotHostFeature.memory,
             AidenBotHostFeature.proactive,
             AidenServer.speechRequestGzipFeature,
-            "chat-ui-panels-v1",
+            AidenServer.chatTriageFeature,
         ])
         XCTAssertTrue(server.supportsChatAgentInterrupt)
         XCTAssertTrue(server.supportsChatReadState)
+        XCTAssertTrue(server.supportsChatTriage)
 
         let page = fixture.chatSummaries
         XCTAssertEqual(page.summaries.map(\.id), [
@@ -624,6 +627,114 @@ final class AidenRemoteClientTests: XCTestCase {
         failed.unread = false
         XCTAssertTrue(failed.lastRunFailed)
         XCTAssertFalse(failed.showsFailed)
+    }
+
+    func testChatSummaryInboxSignalsDecodeAndAMalformedOrUnknownBucketFallsBackToLocalPlacement() throws {
+        // Revision 50 summaries carry the host's Inbox placement and triage.
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["chatSummaries"])) as? [String: Any]
+        )
+        let withSignals = try XCTUnwrap(object["summaries"] as? [[String: Any]])
+        let decode = { (summaries: [[String: Any]]) throws -> [AidenChatSummary] in
+            object["summaries"] = summaries
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            return try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: data).summaries
+        }
+        func timestamp(_ value: Any?) throws -> Date {
+            try Self.remoteDate(XCTUnwrap(value as? String))
+        }
+
+        let current = try decode(withSignals)
+        let approval = try XCTUnwrap(current.first { $0.id == "chat_fixture_summary_02" })
+        let failed = try XCTUnwrap(current.first { $0.id == "chat_fixture_summary_01" })
+        let approvalJSON = try XCTUnwrap(withSignals.first { $0["id"] as? String == "chat_fixture_summary_02" })
+        let failedJSON = try XCTUnwrap(withSignals.first { $0["id"] as? String == "chat_fixture_summary_01" })
+        XCTAssertEqual(approval.inbox.bucket, .needsYou)
+        XCTAssertEqual(approval.inbox.sortAt, try timestamp(approvalJSON["inboxSortAt"]))
+        XCTAssertEqual(approval.inbox.attentionSince, try timestamp(approvalJSON["attentionSince"]))
+        XCTAssertEqual(failed.inbox.bucket, .needsYou)
+        XCTAssertEqual(failed.inbox.pinnedAt, try timestamp(failedJSON["pinnedAt"]))
+        XCTAssertEqual(failed.inbox.snoozedUntil, try timestamp(failedJSON["snoozedUntil"]))
+        XCTAssertEqual(failed.inbox.triageRevision, failedJSON["triageRevision"] as? Int)
+
+        // A bucket this build does not know, or a broken field from a buggy
+        // host, leaves the row without host placement but still decodes.
+        var malformed = withSignals
+        let approvalIndex = try XCTUnwrap(malformed.firstIndex { $0["id"] as? String == "chat_fixture_summary_02" })
+        let failedIndex = try XCTUnwrap(malformed.firstIndex { $0["id"] as? String == "chat_fixture_summary_01" })
+        malformed[approvalIndex]["inboxBucket"] = "later_maybe"
+        malformed[approvalIndex]["attentionSince"] = 7
+        malformed[failedIndex]["inboxSortAt"] = false
+        malformed[failedIndex]["triageRevision"] = "three"
+        let degraded = try decode(malformed)
+        let unknown = try XCTUnwrap(degraded.first { $0.id == "chat_fixture_summary_02" })
+        let unsorted = try XCTUnwrap(degraded.first { $0.id == "chat_fixture_summary_01" })
+        XCTAssertNil(unknown.inbox.bucket)
+        XCTAssertNil(unknown.inbox.sortAt)
+        XCTAssertNil(unknown.inbox.attentionSince)
+        XCTAssertNil(unsorted.inbox.bucket, "A bucket without its sort time is not used.")
+        XCTAssertNil(unsorted.inbox.triageRevision)
+        XCTAssertEqual(unsorted.inbox.pinnedAt, failed.inbox.pinnedAt)
+        XCTAssertEqual(degraded.map(\.displayRowState), current.map(\.displayRowState))
+
+        // With no host bucket the phone places the row itself; with one it
+        // agrees with the host for a closed chat.
+        let now = try timestamp(failedJSON["updatedAt"]).addingTimeInterval(60)
+        XCTAssertEqual(AidenInbox.placement(for: unknown, isOpen: false, now: now).section, .needsYou)
+        XCTAssertEqual(AidenInbox.placement(for: approval, isOpen: false, now: now).section, .needsYou)
+    }
+
+    func testChatSummaryInboxSignalsSurviveTheSummaryCacheAndADetailReconcile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-inbox-cache-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let page = try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: botFixtureData(at: ["chatSummaries"])
+        )
+        var summaries = page.summaries
+        // The host sends milliseconds; the cache keeps them, so a cached
+        // snooze wakes and a cached pin orders exactly as the Mac's do.
+        // `.002` is stored as a double just under it, which a truncating
+        // formatter would write back as `.001`.
+        let snoozed = try Self.remoteDate("2026-09-10T09:00:00.002Z")
+        let pinned = try Self.remoteDate("2026-09-10T09:00:00.123Z")
+        summaries[0].inbox.snoozedUntil = snoozed
+        summaries[0].inbox.pinnedAt = pinned
+        try await cache.saveChatSummaries(
+            .init(summaries: summaries, nextCursor: nil),
+            instanceId: "inbox", writeToken: cache.reserveChatWrite()
+        )
+        let restored = await cache.loadChatSummaries(instanceId: "inbox")
+        XCTAssertEqual(restored?.summaries.map(\.inbox), summaries.map(\.inbox))
+        XCTAssertEqual(restored?.summaries.first?.inbox.snoozedUntil, snoozed)
+        XCTAssertEqual(restored?.summaries.first?.inbox.pinnedAt, pinned)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = AidenChatCacheDates.encoding
+        XCTAssertEqual(
+            String(decoding: try encoder.encode([snoozed, pinned]), as: UTF8.self),
+            #"["2026-09-10T09:00:00.002Z","2026-09-10T09:00:00.123Z"]"#
+        )
+
+        // Files written by earlier builds kept whole seconds and still load.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = AidenChatCacheDates.decoding
+        let legacy = try decoder.decode([Date].self, from: Data(#"["2026-09-10T09:00:00Z","2026-09-10T09:00:00.250Z"]"#.utf8))
+        XCTAssertEqual(legacy.map(\.timeIntervalSince1970), [1_789_030_800, 1_789_030_800.25])
+
+        // A detail update rebuilds the row from the chat; its triage stays,
+        // and the host placement it no longer describes is dropped.
+        let failed = try XCTUnwrap(summaries.first { $0.id == "chat_fixture_summary_01" })
+        var detail = sampleChatForInbox(id: failed.id, workspaceId: failed.workspaceId)
+        detail.updatedAt = failed.updatedAt.addingTimeInterval(5)
+        try await cache.reconcileChatSummary(detail, instanceId: "inbox", writeToken: cache.reserveChatWrite())
+        let reloaded = await cache.loadChatSummaries(instanceId: "inbox")
+        let reconciled = try XCTUnwrap(reloaded?.summaries.first { $0.id == failed.id })
+        XCTAssertEqual(reconciled.inbox.pinnedAt, failed.inbox.pinnedAt)
+        XCTAssertEqual(reconciled.inbox.snoozedUntil, failed.inbox.snoozedUntil)
+        XCTAssertEqual(reconciled.inbox.triageRevision, 3)
+        XCTAssertNil(reconciled.inbox.bucket)
     }
 
     func testChatSummaryRowStateIsAdditiveAndLocalActivityOutranksAStaleServerState() throws {
@@ -683,6 +794,107 @@ final class AidenRemoteClientTests: XCTestCase {
         try await client.markChatRead(id: "chat_fixture_summary_01")
         try await client.markChatRead(id: "chat_fixture_summary_01", throughMessageId: "message-7")
         XCTAssertEqual(bodies, ["{}", #"{"throughMessageId":"message-7"}"#])
+    }
+
+    func testLegacyInboxReadUsesBoundedWindowAndRejectsChangedSummary() async throws {
+        let client = makeClient()
+        let page = try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: botFixtureData(at: ["chatSummaries"]))
+        var row = try XCTUnwrap(page.summaries.first)
+        row.inbox.lastAssistantMessageId = nil
+        var changed = false
+        var reads: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/messages") {
+                XCTAssertEqual(request.url?.query, "limit=1")
+                let json = """
+                {"chatId":"\(row.id)","revision":"\(row.revision)",
+                "messages":[{"id":"last-shown","role":"assistant","text":"reply","createdAt":"2026-08-18T19:01:00.000Z"}],"hasOlder":true}
+                """
+                return Self.response(for: request, status: 200, json: json)
+            }
+            if path.hasSuffix("/chat-summaries") {
+                var object = try! JSONSerialization.jsonObject(with: self.botFixtureData(at: ["chatSummaries"])) as! [String: Any]
+                var rows = object["summaries"] as! [[String: Any]]
+                if changed { rows[0]["revision"] = "rev_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }
+                object["summaries"] = rows
+                return Self.response(for: request, status: 200, data: try! JSONSerialization.data(withJSONObject: object))
+            }
+            if path.hasSuffix("/read") {
+                reads.append((try? Self.jsonBody(request))?["throughMessageId"] as? String ?? "")
+                return Self.response(for: request, status: 204, data: Data())
+            }
+            XCTFail("A full transcript was requested: \(path)")
+            return Self.response(for: request, status: 413, data: Data())
+        }
+        try await client.markInboxRead(through: row, supportsMessagesWindow: true)
+        XCTAssertEqual(reads, ["last-shown"])
+        changed = true
+        do {
+            try await client.markInboxRead(through: row, supportsMessagesWindow: true)
+            XCTFail("A changed row must not be marked read")
+        } catch { }
+        XCTAssertEqual(reads, ["last-shown"])
+    }
+
+    func testSetChatTriageSendsOnlyTheChangedFieldsWithAnIdempotencyKeyAndReadsAConflict() async throws {
+        let client = makeClient()
+        var bodies: [[String: Any]] = []
+        var keys: [String] = []
+        var conflict = false
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_summary_01/triage")
+            keys.append(request.value(forHTTPHeaderField: "Idempotency-Key") ?? "")
+            let body = (try? Self.bodyData(request)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            bodies.append(body as? [String: Any] ?? [:])
+            if conflict {
+                return Self.response(for: request, status: 409, json: #"{"error":{"code":"revision_conflict","message":"Triage changed.","requestId":"r1","retryable":false,"details":{"currentRevision":"5"}}}"#)
+            }
+            return Self.response(for: request, status: 200, json: #"{"chatId":"chat_fixture_summary_01","revision":4,"updatedAt":"2026-08-18T19:05:00.000Z","doneAt":"2026-08-18T19:05:00.000Z","snoozedUntil":"2026-08-19T09:00:00.000Z"}"#)
+        }
+
+        let done = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .done(true), ifRevision: 3)
+        XCTAssertEqual(done.revision, 4)
+        XCTAssertEqual(done.doneAt, try Self.remoteDate("2026-08-18T19:05:00.000Z"))
+        XCTAssertNil(done.pinnedAt)
+        let until = try Self.remoteDate("2026-08-19T09:00:00.000Z")
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .snooze(until: until), ifRevision: nil)
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .wake, ifRevision: 0)
+
+        XCTAssertEqual(bodies[0] as NSDictionary, ["done": true, "ifRevision": 3])
+        XCTAssertEqual(bodies[1] as NSDictionary, ["snoozeUntil": "2026-08-19T09:00:00.000Z"])
+        XCTAssertEqual(bodies[2] as NSDictionary, ["snoozeUntil": NSNull(), "ifRevision": 0])
+        let historicalDone = try Self.remoteDate("2026-08-18T18:00:00.000Z")
+        _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: AidenChatTriageChange(done: true, restoreDoneAt: historicalDone), ifRevision: 4)
+        XCTAssertEqual(bodies[3] as NSDictionary, ["done": true, "restoreDoneAt": "2026-08-18T18:00:00.000Z", "ifRevision": 4])
+        // Each write is its own idempotent request, in the host's key alphabet.
+        XCTAssertEqual(Set(keys).count, 4)
+        for key in keys {
+            XCTAssertNotNil(key.range(of: #"^[\x21-\x7e]{16,128}$"#, options: .regularExpression))
+        }
+
+        conflict = true
+        do {
+            _ = try await client.setChatTriage(chatId: "chat_fixture_summary_01", change: .done(true), ifRevision: 3)
+            XCTFail("A stale revision must throw.")
+        } catch let error as AidenRemoteClientError {
+            XCTAssertTrue(error.isRevisionConflict)
+        }
+    }
+
+    func testATriageAnswerBelowRevisionOneIsRefused() throws {
+        // A write always leaves revision 1 or later, so an answer at 0 is not
+        // one the phone can base its next ifRevision or Undo on.
+        func decode(_ revision: Int) throws -> AidenChatTriageResult {
+            try AidenRemoteJSONDecoder.decode(
+                AidenChatTriageResult.self,
+                from: Data(#"{"chatId":"chat_fixture_summary_01","revision":\#(revision),"updatedAt":"2026-08-18T19:05:00.000Z"}"#.utf8)
+            )
+        }
+        XCTAssertEqual(try decode(1).revision, 1)
+        XCTAssertThrowsError(try decode(0))
+        XCTAssertThrowsError(try decode(-2))
     }
 
     func testChatSummaryDecoderToleratesAdditiveFieldsButRejectsMissingRequiredFields() throws {
@@ -1113,6 +1325,115 @@ final class AidenRemoteClientTests: XCTestCase {
         )
     }
 
+    func testBackgroundJobRoutesReadTheChatsJobsAndStopOneWithAnEmptyBody() async throws {
+        let client = makeClient()
+        let list = try botFixtureData(at: ["backgroundJobs", "list"])
+        let stopped = try botFixtureData(at: ["backgroundJobs", "stop", "response"])
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            if step == 1 {
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/jobs")
+                return Self.response(for: request, status: 200, data: list)
+            }
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/jobs/job_1a2b3c4d/stop")
+            XCTAssertEqual(try Self.jsonBody(request).count, 0)
+            return Self.response(for: request, status: 200, data: stopped)
+        }
+
+        let read = try await client.backgroundJobs(chatId: "chat_fixture_01")
+        XCTAssertEqual(read.jobs.map(\.state), [.running, .running, .failed])
+        XCTAssertEqual(read.jobs[0].ports, [5173])
+        XCTAssertTrue(read.jobs[1].fromCommand)
+        XCTAssertEqual(read.jobs[2].exitCode, 1)
+        let after = try await client.stopBackgroundJob(chatId: "chat_fixture_01", jobId: "job_1a2b3c4d")
+        let job = try XCTUnwrap(after.jobs.first { $0.id == "job_1a2b3c4d" })
+        XCTAssertEqual(job.state, .stopped)
+        XCTAssertEqual(job.endReason, "person")
+        XCTAssertEqual(step, 2)
+        await assertInvalidResponse { try await client.stopBackgroundJob(chatId: "chat_fixture_01", jobId: "../server") }
+    }
+
+    func testBackgroundJobsRefuseWhatAPhoneCannotShow() throws {
+        let raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["backgroundJobs", "list"])) as? [String: Any]
+        )
+        let jobs = try XCTUnwrap(raw["jobs"] as? [[String: Any]])
+        func refuses(_ change: (inout [String: Any]) -> Void, _ why: String) {
+            var job = jobs[0]
+            change(&job)
+            let data = try? JSONSerialization.data(withJSONObject: ["jobs": [job]])
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: data ?? Data()), why)
+        }
+        refuses({ $0["endedAt"] = "2026-10-29T09:05:00.000Z" }, "a running job has no end time")
+        refuses({ $0["ports"] = [70_000] }, "ports are TCP ports")
+        refuses({ $0["exitCode"] = 0 }, "a running job has no exit code")
+        refuses({ $0["command"] = "npm run dev" }, "no unknown fields")
+        refuses({ $0["id"] = "job_1" }, "ids are job ids")
+        let twice = try JSONSerialization.data(withJSONObject: ["jobs": [jobs[0], jobs[0]]])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: twice))
+    }
+
+    /// Revision 53: New worktree posts the first message's text with the chat's
+    /// revision and a key, and accepts only the still-empty chat it asked about.
+    func testNewWorktreeMovesTheEmptyChatAndRefusesAnythingElse() async throws {
+        let client = makeClient()
+        let moved = try botFixtureData(at: ["chatNewWorktree", "response"])
+        let failed = try botFixtureData(at: ["chatNewWorktree", "failed"])
+        var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: moved) as? [String: Any])
+        var replies: [(Int, Data)] = [(200, moved), (409, failed)]
+        var withMessage = raw
+        var chat = try XCTUnwrap(raw["chat"] as? [String: Any])
+        // A message the phone reads anywhere else, so only "not empty" is wrong here.
+        let fixtureChat = try XCTUnwrap(JSONSerialization.jsonObject(with: botFixtureData(at: ["chat"])) as? [String: Any])
+        chat["messages"] = try XCTUnwrap(fixtureChat["messages"] as? [[String: Any]]).prefix(1).map { $0 }
+        withMessage["chat"] = chat
+        replies.append((200, try JSONSerialization.data(withJSONObject: withMessage)))
+        raw["path"] = "/Users/sam/.aiden/worktrees/site"
+        replies.append((200, try JSONSerialization.data(withJSONObject: raw)))
+        let key = UUID()
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            defer { requests += 1 }
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_new_worktree/worktree")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "chat_revision_new_worktree_1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, ["text": "Fix the login bug"])
+            let (status, data) = replies[requests]
+            return Self.response(for: request, status: status, data: data)
+        }
+        func move() async throws -> AidenChatNewWorktree {
+            try await client.moveChatToNewWorktree(
+                id: "chat_fixture_new_worktree",
+                revision: "chat_revision_new_worktree_1",
+                text: "Fix the login bug",
+                idempotencyKey: key
+            )
+        }
+
+        let result = try await move()
+        XCTAssertEqual(result.chat.workspaceId, "workspace_fixture_worktree")
+        XCTAssertEqual(result.chat.revision, "chat_revision_new_worktree_2")
+        XCTAssertEqual(result.branch, "aiden/fix-the-login-bug")
+        do {
+            _ = try await move()
+            XCTFail("A refusal must reach the phone.")
+        } catch AidenRemoteClientError.server(let status, let body) {
+            XCTAssertEqual(status, 409)
+            XCTAssertEqual(body.code.rawValue, "git_capability_denied")
+            XCTAssertTrue(
+                AidenRemoteClientError.server(statusCode: status, body: body).localizedDescription.contains("couldn't fetch main"),
+                "the Mac's own sentence is what the phone shows"
+            )
+        }
+        await assertInvalidResponse { try await move() }
+        await assertInvalidResponse { try await move() }
+        XCTAssertEqual(requests, 4)
+    }
+
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"
@@ -1432,6 +1753,27 @@ final class AidenRemoteClientTests: XCTestCase {
     /// Contract revision 37: a hand-off answer, open-on-Mac, pause and resume
     /// each use their own route under the request key, with the fixture's
     /// bodies, and a receipt for another wait is refused.
+    func testBotAccessAnswerUsesOfferedChoiceRouteAndKey() async throws {
+        for (choice, expected) in [(AidenBotAccessChoice.notNow, "not_now"), (.always, "always"), (.once, "once")] {
+            let key = UUID()
+            let waitID = "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e"
+            let response = choice == .always
+                ? String(decoding: try botFixtureData(at: ["botAccessRequests", "answer", "response"]), as: UTF8.self)
+                : #"{"answered":true}"#
+            AidenRemoteMockURLProtocol.handler = { request in
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/bot_fixture_01/access-requests/\(waitID)/answer")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key")?.lowercased(), key.uuidString.lowercased())
+                XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, ["choice": expected] as NSDictionary)
+                return Self.response(for: request, status: 200, json: response)
+            }
+            let receipt = try await makeClient().answerBotAccessRequest(botId: "bot_fixture_01", waitId: waitID,
+                request: AidenBotAccessAnswerRequest(choice: choice), idempotencyKey: key)
+            XCTAssertTrue(receipt.answered)
+            XCTAssertEqual(receipt.savedForFuture, choice == .always ? true : nil)
+        }
+    }
+
     func testBotHandoffAndPauseRoutesUseTheirOwnPathsAndKeys() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"
@@ -2442,6 +2784,18 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    func testAChatStartedUnderChatsAsksTheMacForAFolderOfItsOwn() async throws {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats")
+            XCTAssertEqual(try Self.jsonBody(request)["workspaceId"] as? String, "default")
+            XCTAssertEqual(try Self.jsonBody(request)["noWorkspace"] as? Bool, true)
+            return Self.chatResponse(for: request, status: 201, revision: "revision-1")
+        }
+        _ = try await client.createChat(workspaceId: "default", noWorkspace: true)
+    }
+
     func testChatCRUDModelsTurnCancelAndApprovalUseCanonicalRoutes() async throws {
         let client = makeClient()
         var step = 0
@@ -2458,6 +2812,8 @@ final class AidenRemoteClientTests: XCTestCase {
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertNotNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
                 XCTAssertEqual(try Self.jsonBody(request)["workspaceId"] as? String, "workspace-1")
+                // An ordinary create never asks the Mac for a No workspace folder (revision 51).
+                XCTAssertNil(try Self.jsonBody(request)["noWorkspace"])
                 return Self.chatResponse(for: request, status: 201, revision: "revision-1")
             case 3:
                 XCTAssertEqual(request.httpMethod, "PATCH")
@@ -2653,6 +3009,142 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(turn.message.attachments?.first?.size, 7)
         try await client.removeAttachment(chatId: "chat-1", attachmentId: attachmentID)
         XCTAssertEqual(step, 3)
+    }
+
+    /// Contract revision 50: with `attachments:raw` a PNG or JPEG goes to the
+    /// chat and Bot upload routes as its own bytes, its name percent-encoded;
+    /// text, and every upload without the grant, keep the JSON envelope.
+    func testRawPictureUploadsSendTheBytesAndOtherUploadsKeepJSON() async throws {
+        let client = makeClient()
+        let attachmentID = "att_\(String(repeating: "R", count: 43))"
+        let imageData = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).pngData { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        var seen: [(path: String?, contentType: String?, name: String?, body: Data)] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            seen.append((
+                request.url?.path,
+                request.value(forHTTPHeaderField: "Content-Type"),
+                request.value(forHTTPHeaderField: "Aiden-Attachment-Name"),
+                try Self.bodyData(request)
+            ))
+            return Self.response(
+                for: request,
+                status: 201,
+                json: """
+                {"id":"\(attachmentID)","name":"Café photo.png","mimeType":"image/png",
+                "kind":"image","size":\(imageData.count),"expiresAt":"2026-11-02T07:10:00.000Z"}
+                """
+            )
+        }
+        let picture = AidenAttachmentUpload.image(name: "Café photo.png", mimeType: "image/png", data: imageData)
+
+        let chatReference = try await client.uploadAttachment(chatId: "chat-1", upload: picture, rawImages: true, progress: nil)
+        _ = try await client.uploadBotAttachment(botId: "bot-1", upload: picture, rawImages: true, progress: nil)
+        _ = try await client.uploadAttachment(chatId: "chat-1", upload: picture, rawImages: false, progress: nil)
+        _ = try await client.uploadAttachment(
+            chatId: "chat-1",
+            upload: .text(name: "notes.md", mimeType: "text/markdown", text: "# Notes"),
+            rawImages: true,
+            progress: nil
+        )
+
+        XCTAssertEqual(chatReference.id, attachmentID)
+        XCTAssertEqual(seen.map(\.path), [
+            "/api/aiden/v1/chats/chat-1/attachments",
+            "/api/aiden/v1/bots/bot-1/attachments",
+            "/api/aiden/v1/chats/chat-1/attachments",
+            "/api/aiden/v1/chats/chat-1/attachments",
+        ])
+        for raw in seen.prefix(2) {
+            XCTAssertEqual(raw.contentType, "image/png")
+            XCTAssertEqual(raw.name, "Caf%C3%A9%20photo.png")
+            XCTAssertEqual(raw.name?.removingPercentEncoding, "Café photo.png")
+            XCTAssertEqual(raw.body, imageData)
+        }
+        XCTAssertEqual(seen[2].contentType, "application/json")
+        XCTAssertNil(seen[2].name)
+        let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: seen[2].body) as? [String: Any])
+        XCTAssertEqual(envelope["data"] as? String, imageData.base64EncodedString())
+        XCTAssertEqual(envelope["kind"] as? String, "image")
+        XCTAssertEqual(seen[3].contentType, "application/json")
+        XCTAssertNil(seen[3].name)
+    }
+
+    /// A picture the raw route would refuse (a GIF, or over 8 MiB) keeps the
+    /// JSON envelope, so the Mac answers it as it always has.
+    func testRawPictureUploadLeavesOutWhatTheRouteRefuses() {
+        let png = Data([0x89, 0x50, 0x4e, 0x47])
+        XCTAssertNotNil(AidenRawAttachmentUpload(.image(name: "a.png", mimeType: "image/png", data: png)))
+        XCTAssertNotNil(AidenRawAttachmentUpload(.image(name: "a.jpg", mimeType: "image/jpeg", data: png)))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(name: "a.gif", mimeType: "image/gif", data: png)))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(name: "a.png", mimeType: "image/png", data: Data())))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(
+            name: "big.png",
+            mimeType: "image/png",
+            data: Data(count: AidenRawAttachmentUpload.maxBytes + 1)
+        )))
+        XCTAssertNil(AidenRawAttachmentUpload(.text(name: "a.txt", mimeType: "text/plain", text: "a")))
+        XCTAssertNil(AidenRawAttachmentUpload(.image(
+            name: String(repeating: "é", count: 400),
+            mimeType: "image/png",
+            data: png
+        )), "a name longer than 2,048 encoded characters")
+    }
+
+    /// The shared revision 50 fixture: the iPhone spells a name exactly as the
+    /// Mac and Android do, and sends the fixture's bytes as they are.
+    func testRawPictureUploadMatchesTheSharedFixture() throws {
+        let request = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["rawUploads", "request"])) as? [String: Any]
+        )
+        let name = try XCTUnwrap(request["name"] as? String)
+        let contentType = try XCTUnwrap(request["contentType"] as? String)
+        let body = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(request["bodyBase64"] as? String)))
+        let raw = try XCTUnwrap(AidenRawAttachmentUpload(.image(name: name, mimeType: contentType, data: body)))
+        XCTAssertEqual(raw.encodedName, request["encodedName"] as? String)
+        XCTAssertEqual(raw.mimeType, contentType)
+        XCTAssertEqual(raw.data.count, request["contentLength"] as? Int)
+        XCTAssertEqual(AidenRawAttachmentUpload.nameHeader, request["nameHeader"] as? String)
+        // Only RFC 3986 unreserved characters stay as they are, as on the Mac.
+        let quoted = try XCTUnwrap(AidenRawAttachmentUpload(.image(name: "it's (1)*!.png", mimeType: "image/png", data: body)))
+        XCTAssertEqual(quoted.encodedName, "it%27s%20%281%29%2A%21.png")
+    }
+
+    /// The upload delegate reports the share of the body sent, and nothing
+    /// while the size is unknown.
+    func testUploadProgressDelegateReportsTheShareOfTheBodySent() {
+        final class Heard: @unchecked Sendable {
+            let lock = NSLock()
+            var values: [Double] = []
+        }
+        let heard = Heard()
+        let delegate = AidenUploadProgressDelegate { fraction in
+            heard.lock.lock(); heard.values.append(fraction); heard.lock.unlock()
+        }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URL(string: "https://aiden.test/")!)
+        delegate.urlSession(session, task: task, didSendBodyData: 64, totalBytesSent: 64, totalBytesExpectedToSend: 256)
+        delegate.urlSession(session, task: task, didSendBodyData: 192, totalBytesSent: 256, totalBytesExpectedToSend: 256)
+        delegate.urlSession(session, task: task, didSendBodyData: 10, totalBytesSent: 10, totalBytesExpectedToSend: NSURLSessionTransferSizeUnknown)
+        XCTAssertEqual(heard.values, [0.25, 1])
+    }
+
+    /// The bar covers the whole batch and moves only forward, a whole percent at a time.
+    func testUploadProgressCoversTheBatch() throws {
+        let start = AidenUploadProgress(index: 1, count: 4, fraction: 0)
+        XCTAssertEqual(start.percent, 25)
+        XCTAssertEqual(start.title, "Sending 2 of 4")
+        XCTAssertNil(start.advanced(to: 0.02), "half a percent of the batch does not redraw")
+        let half = try XCTUnwrap(start.advanced(to: 0.5))
+        XCTAssertEqual(half.percent, 37)
+        XCTAssertNil(half.advanced(to: 0.4), "a late report never moves the bar back")
+        XCTAssertEqual(try XCTUnwrap(half.advanced(to: 1)).percent, 50)
+        XCTAssertEqual(AidenUploadProgress(index: 0, count: 1, fraction: 0).title, "Sending")
+        XCTAssertEqual(AidenUploadProgress(index: 0, count: 1, fraction: 3).overall, 1)
     }
 
     func testAttachmentContentUsesAuthenticatedBoundedRawImageRoute() async throws {
@@ -2883,6 +3375,28 @@ final class AidenRemoteClientTests: XCTestCase {
         } catch {
             let loser = try XCTUnwrap(AidenForeignRunResolution.loser(from: error))
             XCTAssertEqual(loser.notice, "Answered on Mac: allowed")
+        }
+    }
+
+    func testBothRunFeedsRequestCheckpointWithoutChangingTheirCursorOrIdentity() async throws {
+        let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
+        let wire = try JSONSerialization.data(withJSONObject: XCTUnwrap(root["runCheckpoint"]))
+        for knownRun in [false, true] {
+            AidenRemoteMockURLProtocol.handler = { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Aiden-Run-Checkpoint"), "1")
+                XCTAssertEqual(request.url?.path, knownRun ? "/api/aiden/v1/runs/run-1/events" : "/api/aiden/v1/chats/chat-1/runs/current/events")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Last-Event-ID"), knownRun ? "89" : nil)
+                let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!
+                return (response, Data("id: 90\nevent: snapshot\ndata: ".utf8) + wire + Data("\n\n".utf8))
+            }
+            let client = makeClient()
+            let stream = knownRun ? client.runEvents(runId: "run-1", after: 89) : client.currentRunEvents(chatId: "chat-1")
+            var events: [AidenRemoteRunEvent] = []
+            for try await event in stream { events.append(event) }
+            XCTAssertEqual(events.map(\.runId), ["run-1"])
+            guard case let .snapshot(snapshot) = events.first?.kind else { return XCTFail("Expected the bounded checkpoint") }
+            XCTAssertEqual(snapshot.replyText, "Checked the build.")
         }
     }
 
@@ -4727,6 +5241,221 @@ final class AidenRemoteClientTests: XCTestCase {
     /// and once that Mac updates, the device asks for the notes alone.
     /// Revision 43's `bot:handoff-on-mac` rides the same way.
     @MainActor
+    func testCoordinatorAsksForBotAccessRequestsInACallOfItsOwnAfterTheProgressBatch() async throws {
+        for status in [200, 400, 404] {
+            let refused = status != 200
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-access", deviceId: "device-access", credential: "credential-access"),
+                trust: makeSystemTrust(),
+                name: "Hand-off Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-access",
+                        "name": "Hand-off Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read", "bot:access-requests"],
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-20T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    if refused, asked.contains("bot:access-requests") {
+                        return Self.response(
+                            for: request,
+                            status: status,
+                            json: #"{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"request-handoffs","retryable":false}}"#
+                        )
+                    }
+                    granted += asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected, "refused: \(refused)")
+            XCTAssertEqual(accepts, [["tasks:read"], ["bot:access-requests"]], "the batch first, then access requests alone")
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .botAccessRequests), !refused)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.botAccessRequests), !refused)
+        }
+    }
+
+    @MainActor
+    func testCoordinatorNegotiatesPlansAloneAndPreservesOtherGrantsOnOldHosts() async throws {
+        for status in [200, 400, 404, 0] {
+            let refused = status != 200
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-access", deviceId: "device-access", credential: "credential-access"),
+                trust: makeSystemTrust(),
+                name: "Hand-off Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-access",
+                        "name": "Hand-off Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"] + (status == 0 ? [] : ["bot:plans"]),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-20T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    if refused, asked.contains("bot:plans") {
+                        return Self.response(
+                            for: request,
+                            status: status,
+                            json: #"{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"request-handoffs","retryable":false}}"#
+                        )
+                    }
+                    granted += asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected, "refused: \(refused)")
+            XCTAssertEqual(accepts, status == 0 ? [["tasks:read"]] : [["tasks:read"], ["bot:plans"]], "the batch first, then access requests alone")
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .botPlans), !refused)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.botPlans), !refused)
+        }
+    }
+
+    @MainActor
+    func testCoordinatorNegotiatesMessagingAccessPlansAllowedAndContinuityAloneWithoutLosingEarlierGrants() async throws {
+        for status in [200, 400, 404, 0] {
+            let refused = status != 200
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-access", deviceId: "device-access", credential: "credential-access"),
+                trust: makeSystemTrust(),
+                name: "Hand-off Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            let mergedTokens = ["bot:watches", "bot:open-work", "bot:routine-models", "bot:peers", "bot:messaging", "bot:access-requests", "bot:plans"]
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-access",
+                        "name": "Hand-off Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"] + mergedTokens + (status == 0 ? [] : ["bot:allowed"]),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-20T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    if refused, asked.contains("bot:allowed") {
+                        return Self.response(
+                            for: request,
+                            status: status,
+                            json: #"{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"request-handoffs","retryable":false}}"#
+                        )
+                    }
+                    granted += asked
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+
+            XCTAssertEqual(coordinator.connectionState, .connected, "refused: \(refused)")
+            XCTAssertEqual(accepts.first, ["tasks:read"])
+            XCTAssertTrue(accepts.dropFirst().allSatisfy { $0.count == 1 }, "Feature tokens are never combined")
+            XCTAssertEqual(Set(accepts.dropFirst().flatMap { $0 }), Set(mergedTokens + (status == 0 ? [] : ["bot:allowed"])))
+            for token in mergedTokens {
+                XCTAssertTrue(granted.contains(token), "A later refusal must retain \(token)")
+                XCTAssertTrue(coordinator.server?.capabilities.contains(AidenRemoteCapability(rawValue: token)) == true)
+            }
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertTrue(installation.hasNegotiatedAccess(to: .tasksRead), "a refusal keeps the batch's grants")
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .botAllowed), !refused)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.botAllowed), !refused)
+        }
+    }
+
+    /// Contract revision 40: a Mac that offers `bot:handoff-notes` is asked
+    /// for it with `bot:handoffs`; a Mac on revision 37 is never asked for it,
+    /// and once that Mac updates, the device asks for the notes alone.
+    /// Revision 43's `bot:handoff-on-mac` rides the same way.
+    @MainActor
     func testCoordinatorAsksForHandoffNotesOnlyFromAMacThatOffersThem() async throws {
         for macUpdates in [false, true] {
             let keychain = AidenRemoteMemoryKeychain()
@@ -4863,6 +5592,128 @@ final class AidenRemoteClientTests: XCTestCase {
             let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
             XCTAssertEqual(installation.hasNegotiatedAccess(to: .botImages), offered)
             XCTAssertEqual(aidenBotSessionFeedGrants(installation).contains(.botImages), offered)
+        }
+    }
+
+    /// Contract revision 49: `chat:jobs` is asked for alone, after the other
+    /// opt-ins, only from a Mac that offers it, and the phone keeps the grant.
+    @MainActor
+    func testCoordinatorAsksForChatJobsAloneFromAMacThatOffersThem() async throws {
+        for offered in [false, true] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-jobs", deviceId: "device-jobs", credential: "credential-jobs"),
+                trust: makeSystemTrust(),
+                name: "Jobs Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-jobs",
+                        "name": "Jobs Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"]
+                            + (offered ? ["chat:jobs"] : []),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-27T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    granted += asked.filter { !granted.contains($0) }
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+            XCTAssertEqual(coordinator.connectionState, .connected, "offered: \(offered)")
+            XCTAssertEqual(accepts, offered ? [["tasks:read"], ["chat:jobs"]] : [["tasks:read"]])
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .chatJobs), offered)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.chatJobs), offered)
+        }
+    }
+
+    /// Contract revision 50: `attachments:raw` is asked for alone, after the other
+    /// opt-ins, only from a Mac that offers it, and the phone keeps the grant.
+    @MainActor
+    func testCoordinatorAsksForRawUploadsAloneFromAMacThatOffersThem() async throws {
+        for offered in [false, true] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-raw", deviceId: "device-raw", credential: "credential-raw"),
+                trust: makeSystemTrust(),
+                name: "Raw Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-raw",
+                        "name": "Raw Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"]
+                            + (offered ? ["attachments:raw"] : []),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-27T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    granted += asked.filter { !granted.contains($0) }
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+            XCTAssertEqual(coordinator.connectionState, .connected, "offered: \(offered)")
+            XCTAssertEqual(accepts, offered ? [["tasks:read"], ["attachments:raw"]] : [["tasks:read"]])
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .attachmentsRaw), offered)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.attachmentsRaw), offered)
         }
     }
 
@@ -5963,6 +6814,418 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(receipt.models, ["fixture-vision"])
     }
 
+    func testWatchRoutesCarryOpaqueChoicesRevisionAndStableMutationBody() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-watches", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let watch = try AidenRemoteJSONDecoder.decode(AidenBotWatch.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["watch"])))
+        let sources = try AidenRemoteJSONDecoder.decode(AidenBotWatchSources.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["sources"])))
+        let choice = try XCTUnwrap(sources.choices.first)
+        let mutation = try XCTUnwrap(UUID(uuidString: watch.id))
+        let save = AidenBotWatchSaveRequest(name: watch.name, prompt: watch.prompt, condition: watch.condition,
+            everyMinutes: watch.everyMinutes, sourceChoiceId: choice.id, expectedRevision: nil, mutationId: mutation)
+        var paths: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            let path = request.url!.path
+            paths.append(path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertNil(request.url?.query)
+            let data = request.httpBody ?? self.readBodyStream(request.httpBodyStream)
+            let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            XCTAssertNil(body?["botId"]); XCTAssertNil(body?["toolArguments"])
+            let root: String
+            if path.hasSuffix("/sources") {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(body?.count, 0)
+                root = "sources"
+            } else if path.hasSuffix("/test") {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertNil(body?["mutationId"])
+                XCTAssertEqual(body?["id"] as? String, watch.id)
+                XCTAssertEqual(body?["expectedRevision"] as? String, watch.revision)
+                root = "test"
+            } else if path.hasSuffix("/enabled") {
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(body?["enabled"] as? Bool, false)
+                XCTAssertEqual(body?["expectedRevision"] as? String, watch.revision)
+                XCTAssertNotNil(UUID(uuidString: body?["mutationId"] as? String ?? ""))
+                root = "watch"
+            } else if path.hasSuffix("/run") || request.httpMethod == "DELETE" {
+                XCTAssertEqual(body?["expectedRevision"] as? String, watch.revision)
+                XCTAssertEqual(Set(body?.keys.map { $0 } ?? []), ["expectedRevision", "mutationId"])
+                root = path.hasSuffix("/run") ? "run" : "removal"
+            } else if request.httpMethod == "GET" {
+                XCTAssertNil(data)
+                root = "list"
+            } else {
+                XCTAssertEqual(body?["sourceChoiceId"] as? String, choice.id)
+                XCTAssertEqual(body?["mutationId"] as? String, mutation.uuidString)
+                XCTAssertEqual(body?["expectedRevision"] as? String, request.httpMethod == "PATCH" ? watch.revision : nil)
+                root = "watch"
+            }
+            let response = try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture[root]))
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, response)
+        }
+        let client = makeClient()
+        _ = try await client.botWatches(botId: watch.botId)
+        _ = try await client.discoverBotWatchSources(botId: watch.botId)
+        _ = try await client.saveBotWatch(botId: watch.botId, id: nil, request: save)
+        _ = try await client.saveBotWatch(botId: watch.botId, id: watch.id, request: .init(name: watch.name, prompt: watch.prompt,
+            condition: watch.condition, everyMinutes: watch.everyMinutes, sourceChoiceId: choice.id,
+            expectedRevision: watch.revision, mutationId: mutation))
+        _ = try await client.setBotWatchEnabled(botId: watch.botId, id: watch.id,
+            request: .init(expectedRevision: watch.revision, mutationId: mutation, enabled: false))
+        _ = try await client.testBotWatch(botId: watch.botId, request: .saved(id: watch.id, expectedRevision: watch.revision))
+        _ = try await client.runBotWatch(botId: watch.botId, id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: mutation))
+        _ = try await client.removeBotWatch(botId: watch.botId, id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: mutation))
+        XCTAssertEqual(paths.count, 8)
+        XCTAssertTrue(paths.allSatisfy { $0.hasPrefix("/api/aiden/v1/bots/\(watch.botId)/watches") })
+    }
+
+    func testWatchReadRejectsCrossBotOwnershipAndNegotiatesOnlyAdvertisedCapability() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-watches", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        AidenRemoteMockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["list"])))
+        }
+        do { _ = try await makeClient().botWatches(botId: "other-bot"); XCTFail("Cross-Bot views must fail closed") }
+        catch { if case AidenRemoteClientError.invalidResponse = error {} else { XCTFail("Unexpected failure: \(error)") } }
+        AidenRemoteMockURLProtocol.handler = { request in
+            let data = request.httpBody ?? self.readBodyStream(request.httpBodyStream)
+            let body = try JSONSerialization.jsonObject(with: XCTUnwrap(data)) as? [String: Any]
+            XCTAssertEqual(body?["accepts"] as? [String], ["bot:watches"])
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"capabilities":["server:read","bot:read","bot:write","bot:watches"]}"#.utf8))
+        }
+        let granted = try await makeClient().updateDeviceCapabilities(accepts: [.botWatches])
+        XCTAssertTrue(granted.contains(.botWatches))
+    }
+
+    private func readBodyStream(_ stream: InputStream?) -> Data? {
+        guard let stream else { return nil }
+        stream.open(); defer { stream.close() }
+        var result = Data()
+        var bytes = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            guard count > 0 else { break }
+            result.append(contentsOf: bytes.prefix(count))
+        }
+        return result
+    }
+
+    func testOpenWorkRoutesUseBareBodiesAndPreserveTypedBusinessRefusals() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-open-work", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let snapshot = try AidenRemoteJSONDecoder.decode(AidenOpenWorkSnapshot.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["snapshot"])))
+        let item = try XCTUnwrap(snapshot.items.first)
+        let mutations = try XCTUnwrap(fixture["mutations"] as? [String: Any])
+        let mutation = try AidenRemoteJSONDecoder.decode(AidenOpenWorkMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(mutations["add"])))
+        var posts = 0
+        var routes: [String] = []
+        AidenRemoteMockURLProtocol.handler = { request in
+            routes.append(request.url!.path)
+            XCTAssertNil(request.url?.query)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            let key: String
+            if request.httpMethod == "POST" {
+                posts += 1
+                let bytes = try XCTUnwrap(request.httpBody ?? self.readBodyStream(request.httpBodyStream))
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+                XCTAssertEqual(Set(body.keys), ["action", "mutationId", "expectedRevision", "title", "note"])
+                XCTAssertEqual(body["mutationId"] as? String, mutation.mutationId.uuidString)
+                XCTAssertEqual(body["expectedRevision"] as? String, mutation.expectedRevision)
+                XCTAssertNil(request.value(forHTTPHeaderField: "If-Match"))
+                key = posts == 1 ? "result" : "stale"
+            } else if request.url!.path.hasSuffix("/evidence/source") { key = "evidenceSource" }
+            else if request.url!.path.hasSuffix("/evidence/result") { key = "evidenceResult" }
+            else { key = "snapshot" }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture[key])))
+        }
+        let client = makeClient()
+        let loaded = try await client.botOpenWork(botId: snapshot.botId)
+        XCTAssertEqual(loaded.items.first?.id, item.id)
+        guard case let .accepted(accepted) = try await client.mutateBotOpenWork(botId: snapshot.botId, mutation: mutation) else { return XCTFail("Accepted bare result") }
+        XCTAssertEqual(accepted.mutationId, mutation.mutationId)
+        guard case let .rejected(rejected) = try await client.mutateBotOpenWork(botId: snapshot.botId, mutation: mutation) else { return XCTFail("HTTP200 typed business refusal") }
+        XCTAssertEqual(rejected.code, .stale)
+        let source = try await client.botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source)
+        let result = try await client.botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .result)
+        XCTAssertEqual(source.text, "Review the project brief and note any open questions.")
+        XCTAssertEqual(result.kind, .result)
+        XCTAssertEqual(routes, ["/api/aiden/v1/bots/\(snapshot.botId)/open-work", "/api/aiden/v1/bots/\(snapshot.botId)/open-work",
+            "/api/aiden/v1/bots/\(snapshot.botId)/open-work", "/api/aiden/v1/bots/\(snapshot.botId)/open-work/\(item.id)/evidence/source",
+            "/api/aiden/v1/bots/\(snapshot.botId)/open-work/\(item.id)/evidence/result"])
+    }
+
+    func testOpenWorkClientRejectsCrossBotReceiptsAndCrossItemEvidence() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-open-work", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let snapshot = try AidenRemoteJSONDecoder.decode(AidenOpenWorkSnapshot.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["snapshot"])))
+        let item = try XCTUnwrap(snapshot.items.first)
+        let mutation = try AidenOpenWorkMutation(action: .add, expectedRevision: snapshot.revision, title: "Metadata only")
+        var body = try XCTUnwrap(fixture["snapshot"] as? [String: Any])
+        body["botId"] = "other-bot"
+        AidenRemoteMockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: body))
+        }
+        do { _ = try await makeClient().botOpenWork(botId: snapshot.botId); XCTFail("Cross-Bot snapshot") } catch {}
+        body = try XCTUnwrap(fixture["result"] as? [String: Any])
+        do { _ = try await makeClient().mutateBotOpenWork(botId: snapshot.botId, mutation: mutation); XCTFail("Wrong mutation receipt") } catch {}
+        body = try XCTUnwrap(fixture["evidenceSource"] as? [String: Any])
+        body["itemId"] = "other-item"
+        do { _ = try await makeClient().botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source); XCTFail("Cross-item evidence") } catch {}
+        body["itemId"] = item.id
+        body["text"] = String(repeating: "a", count: 32769)
+        do { _ = try await makeClient().botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source); XCTFail("Oversized retained text") } catch {}
+        body = try XCTUnwrap(fixture["evidenceSource"] as? [String: Any])
+        body["safeFutureMetadata"] = String(repeating: "a", count: 256 * 1024)
+        do { _ = try await makeClient().botOpenWorkEvidence(botId: snapshot.botId, itemId: item.id, kind: .source); XCTFail("Evidence aggregate budget") } catch {}
+        body = try XCTUnwrap(fixture["snapshot"] as? [String: Any])
+        body["safeFutureMetadata"] = String(repeating: "a", count: 900 * 1024)
+        do { _ = try await makeClient().botOpenWork(botId: snapshot.botId); XCTFail("Snapshot aggregate budget") } catch {}
+    }
+
+    func testOpenWorkCapabilityIsNegotiatedAlone() async throws {
+        AidenRemoteMockURLProtocol.handler = { request in
+            let data = try XCTUnwrap(request.httpBody ?? self.readBodyStream(request.httpBodyStream))
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(body["accepts"] as? [String], ["bot:open-work"])
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"capabilities":["server:read","chat:read","bot:read","bot:write","bot:open-work"]}"#.utf8))
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.botOpenWork])
+        XCTAssertTrue(grants.contains(.botOpenWork))
+    }
+
+    func testRoutineModelRoutesCarryFullCASBodyAndTypedHTTP200Conflict() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-routine-models", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let request = try AidenRemoteJSONDecoder.decode(AidenRoutineModelSave.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["save"])))
+        var paths: [String] = []; var saves = 0
+        AidenRemoteMockURLProtocol.handler = { wire in
+            paths.append(wire.url!.path)
+            XCTAssertNil(wire.url?.query)
+            let key: String
+            if wire.httpMethod == "POST" {
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(wire)) as? [String: Any])
+                XCTAssertEqual(Set(object.keys), ["botId", "routineId", "mutationId", "expectedRevision", "catalogRevision", "selection"])
+                XCTAssertEqual(object["botId"] as? String, "bot_model")
+                XCTAssertEqual(object["routineId"] as? String, "routine_model")
+                XCTAssertEqual(object["catalogRevision"] as? String, "catalog_1")
+                XCTAssertEqual(object["expectedRevision"] as? String, "model_settings_1")
+                saves += 1; key = saves == 1 ? "result" : "conflict"
+            } else if wire.url!.path.hasSuffix("/catalog") { key = "catalog" }
+            else if wire.url!.path.hasSuffix("/runs") { key = "runs" }
+            else { key = "settings" }
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: XCTUnwrap(fixture[key])))
+        }
+        let client = makeClient()
+        let settings = try await client.routineModelSettings(botId: "bot_model", routineId: "routine_model")
+        XCTAssertEqual(settings.selection.primary?.thinkingLevel, .high)
+        let catalog = try await client.routineModelCatalog(botId: "bot_model", routineId: "routine_model")
+        XCTAssertEqual(catalog.providers.count, 2)
+        let runs = try await client.routineModelRuns(botId: "bot_model", routineId: "routine_model")
+        XCTAssertEqual(runs.first?.submissionId, "9007199254740993")
+        guard case .accepted = try await client.saveRoutineModel(request) else { return XCTFail("Accepted bare result") }
+        guard case .rejected(.conflict, _) = try await client.saveRoutineModel(request) else { return XCTFail("Business conflict remains HTTP200") }
+        XCTAssertEqual(paths, ["/api/aiden/v1/bots/bot_model/routine-models/routine_model", "/api/aiden/v1/bots/bot_model/routine-models/routine_model/catalog", "/api/aiden/v1/bots/bot_model/routine-models/routine_model/runs", "/api/aiden/v1/bots/bot_model/routine-models/routine_model", "/api/aiden/v1/bots/bot_model/routine-models/routine_model"])
+    }
+
+    func testRoutineModelRejectsCrossRoutineReceiptAndAggregateOverflow() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-routine-models", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var object = try XCTUnwrap(fixture["settings"] as? [String: Any]); object["routineId"] = "other"
+        var body = try JSONSerialization.data(withJSONObject: object)
+        AidenRemoteMockURLProtocol.handler = { wire in (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, body) }
+        do { _ = try await makeClient().routineModelSettings(botId: "bot_model", routineId: "routine_model"); XCTFail("Wrong routine") } catch {}
+        object = try XCTUnwrap(fixture["settings"] as? [String: Any]); object["safeFuture"] = String(repeating: "x", count: 900 * 1024)
+        body = try JSONSerialization.data(withJSONObject: object)
+        do { _ = try await makeClient().routineModelSettings(botId: "bot_model", routineId: "routine_model"); XCTFail("Budget") } catch {}
+        let request = try AidenRemoteJSONDecoder.decode(AidenRoutineModelSave.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fixture["save"])))
+        var result = try XCTUnwrap(fixture["result"] as? [String: Any]); result["mutationId"] = UUID().uuidString
+        body = try JSONSerialization.data(withJSONObject: result)
+        do { _ = try await makeClient().saveRoutineModel(request); XCTFail("Wrong nonce") } catch {}
+    }
+
+    func testResumeStatusAndExplicitAcknowledgementUseExactBodyAndStableKey() async throws {
+        let key = UUID(); var bodies: [[String: Any]] = []
+        AidenRemoteMockURLProtocol.handler = { wire in
+            if wire.httpMethod == "GET" {
+                XCTAssertEqual(wire.url!.path, "/api/aiden/v1/bots/bot_model/routine-resume-status")
+                return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"requiresUnknownCostAcknowledgement":true,"interruptedSubmissionId":"9007199254740993","costReceiptId":"cost_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.utf8))
+            }
+            XCTAssertEqual(wire.url!.path, "/api/aiden/v1/bots/bot_model/resume")
+            XCTAssertEqual(wire.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            bodies.append(try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(wire)) as? [String: Any]))
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"state":"running","interrupted":false}"#.utf8))
+        }
+        let client = makeClient(); let status = try await client.botRoutineResumeStatus(botId: "bot_model")
+        XCTAssertTrue(status.requiresUnknownCostAcknowledgement)
+        _ = try await client.resumeBotSession(botId: "bot_model", idempotencyKey: key, acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993", expectedCostReceiptId: "cost_" + String(repeating: "a", count: 64))
+        _ = try await client.resumeBotSession(botId: "bot_model", idempotencyKey: key, acknowledgeUnknownCost: false)
+        XCTAssertEqual(bodies[0].count, 3); XCTAssertEqual(bodies[0]["expectedCostReceiptId"] as? String, "cost_" + String(repeating: "a", count: 64)); XCTAssertEqual(bodies[0]["expectedSubmissionId"] as? String, "9007199254740993"); XCTAssertEqual(bodies[0]["acknowledgeUnknownCost"] as? Bool, true)
+        XCTAssertTrue(bodies[1].isEmpty)
+        do {
+            _ = try await client.resumeBotSession(botId: "bot_model", idempotencyKey: UUID(), acknowledgeUnknownCost: true, expectedSubmissionId: "9007199254740993")
+            XCTFail("A missing receipt must fail before transmission")
+        } catch {}
+        XCTAssertEqual(bodies.count, 2)
+    }
+
+    func testRoutineModelDirectoryIsPassiveAndRejectsCrossBotOwnership() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-routine-models", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var directory = try XCTUnwrap(fixture["directory"] as? [String: Any])
+        AidenRemoteMockURLProtocol.handler = { wire in
+            XCTAssertEqual(wire.httpMethod, "GET"); XCTAssertNil(wire.httpBody)
+            XCTAssertEqual(wire.url!.path, "/api/aiden/v1/bots/bot_model/routine-models")
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: directory))
+        }
+        let listed = try await makeClient().routineModelDirectory(botId: "bot_model")
+        XCTAssertEqual(listed.routines.map(\.kind), [.scheduled, .event, .watch])
+        directory["botId"] = "other"
+        do { _ = try await makeClient().routineModelDirectory(botId: "bot_model"); XCTFail("Other Bot’s directory") } catch {}
+    }
+
+    func testRoutineModelCapabilityIsNegotiatedAlone() async throws {
+        AidenRemoteMockURLProtocol.handler = { request in
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any])
+            XCTAssertEqual(body["accepts"] as? [String], ["bot:routine-models"])
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"capabilities":["server:read","chat:read","bot:read","bot:write","bot:routine-models"]}"#.utf8))
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.botRoutineModels]); XCTAssertTrue(grants.contains(.botRoutineModels))
+    }
+
+    func testPeerRoutesUseBoundedBareDTOsExactFlatBodiesAndStableMutationIDs() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-peers", withExtension: "json"))
+        let f = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let approve = try AidenRemoteJSONDecoder.decode(AidenPeerMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(f["approve"])))
+        let stop = try AidenRemoteJSONDecoder.decode(AidenPeerStopMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(f["stop"])))
+        var paths: [String] = []; var writes = 0
+        AidenRemoteMockURLProtocol.handler = { wire in
+            let path = wire.url!.path; paths.append(path); XCTAssertNil(wire.url?.query)
+            let key: String
+            if wire.httpMethod == "POST" {
+                writes += 1
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(wire)) as? [String: Any])
+                XCTAssertEqual(body["botId"] as? String, "bot_planner")
+                if path.hasSuffix("/stop") {
+                    key = "stopAccepted"; XCTAssertEqual(Set(body.keys), ["botId", "exchangeId", "mutationId", "expectedRevision"])
+                    XCTAssertEqual(body["mutationId"] as? String, stop.mutationId.uuidString); XCTAssertEqual(body["exchangeId"] as? String, "exchange_one")
+                } else {
+                    key = "accepted"; XCTAssertEqual(Set(body.keys), ["action", "botId", "mutationId", "expectedRevision", "catalogRevision", "peerBotId"])
+                    XCTAssertEqual(body["mutationId"] as? String, approve.mutationId.uuidString); XCTAssertEqual(body["peerBotId"] as? String, "bot_researcher")
+                }
+            } else {
+                XCTAssertEqual(wire.httpMethod, "GET"); XCTAssertNil(wire.httpBody); XCTAssertNil(wire.httpBodyStream)
+                if path.hasSuffix("/catalog") { key = "catalog" }
+                else if path.hasSuffix("/evidence/source") { key = "evidence" }
+                else if path.hasSuffix("/exchange_one") { key = "detail" }
+                else if path.hasSuffix("/peer-exchanges") { key = "exchanges" }
+                else { key = "settings" }
+            }
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: XCTUnwrap(f[key])))
+        }
+        let c = makeClient()
+        _ = try await c.botPeerSettings(botId: "bot_planner"); _ = try await c.botPeerCatalog(botId: "bot_planner")
+        _ = try await c.mutateBotPeers(approve); _ = try await c.mutateBotPeers(approve)
+        _ = try await c.botPeerExchanges(botId: "bot_planner"); _ = try await c.botPeerExchange(botId: "bot_planner", exchangeId: "exchange_one")
+        _ = try await c.stopBotPeerExchange(stop); let evidence = try await c.botPeerEvidence(botId: "bot_planner", exchangeId: "exchange_one", kind: .source)
+        XCTAssertEqual(evidence.entryId, "9007199254740995"); XCTAssertEqual(writes, 3)
+        XCTAssertEqual(paths, ["peers", "peers/catalog", "peers", "peers", "peer-exchanges", "peer-exchanges/exchange_one", "peer-exchanges/exchange_one/stop", "peer-exchanges/exchange_one/evidence/source"].map { "/api/aiden/v1/bots/bot_planner/" + $0 })
+    }
+
+    func testPeerWireRejectsCrossBotExchangeNonceAndResponseBudgets() async throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "bot-peers", withExtension: "json"))
+        let f = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var response = f["settings"] as! [String: Any]; response["botId"] = "unrelated"
+        AidenRemoteMockURLProtocol.handler = { wire in (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, try JSONSerialization.data(withJSONObject: response)) }
+        do { _ = try await makeClient().botPeerSettings(botId: "bot_planner"); XCTFail("Cross Bot") } catch {}
+        response = f["detail"] as! [String: Any]; response["id"] = "another_exchange"
+        do { _ = try await makeClient().botPeerExchange(botId: "bot_planner", exchangeId: "exchange_one"); XCTFail("Cross exchange") } catch {}
+        response = f["accepted"] as! [String: Any]; response["mutationId"] = UUID().uuidString
+        let approve = try AidenRemoteJSONDecoder.decode(AidenPeerMutation.self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(f["approve"])))
+        do { _ = try await makeClient().mutateBotPeers(approve); XCTFail("Cross nonce") } catch {}
+        response = f["settings"] as! [String: Any]; response["routingDescription"] = String(repeating: "x", count: 900 * 1024)
+        do { _ = try await makeClient().botPeerSettings(botId: "bot_planner"); XCTFail("Response budget") } catch {}
+        response = f["evidence"] as! [String: Any]; response["kind"] = "result"
+        do { _ = try await makeClient().botPeerEvidence(botId: "bot_planner", exchangeId: "exchange_one", kind: .source); XCTFail("Cross evidence kind") } catch {}
+    }
+
+    func testPeerMalformedPathAndMutationFailBeforeNetworkAndBusinessConflictStaysTyped() async throws {
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { wire in
+            requests += 1
+            return (HTTPURLResponse(url: wire.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"ok":false,"code":"conflict","error":"Review current pair settings"}"#.utf8))
+        }
+        let c = makeClient()
+        do { _ = try await c.botPeerExchange(botId: "bot_planner", exchangeId: "../all"); XCTFail() } catch {}
+        do { _ = try await c.mutateBotPeers(.init(action: .approve, botId: "bot_planner", expectedRevision: "r", peerBotId: "peer")); XCTFail() } catch {}
+        XCTAssertEqual(requests, 0)
+        let reply = try await c.mutateBotPeers(.init(action: .describe, botId: "bot_planner", expectedRevision: "r", routingDescription: "A helpful reviewer"))
+        guard case .rejected(.conflict, _, nil) = reply else { return XCTFail("HTTP200 business conflict") }; XCTAssertEqual(requests, 1)
+    }
+
+    func testPeerCapabilityNegotiatedAloneAndPeerNotificationUsesExistingFeed() async throws {
+        AidenRemoteMockURLProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any]); XCTAssertEqual(body["accepts"] as? [String], ["bot:peers"])
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"capabilities":["bot:read","chat:read","bot:peers"]}"#.utf8))
+            }
+            XCTAssertEqual(request.url!.path, "/api/aiden/v1/bots/routine-notifications"); XCTAssertEqual(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.name, "since")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(#"{"notifications":[{"id":"peer_final_one","kind":"peer","botId":"bot_planner","botName":"Planner","routineName":"Review complete","finishedAt":"2026-11-03T12:00:00.000Z","preview":"Researcher supplied a result."}],"now":"2026-11-03T12:00:01.000Z"}"#.utf8))
+        }
+        let c = makeClient(); let grants = try await c.updateDeviceCapabilities(accepts: [.botPeers]); XCTAssertTrue(grants.contains(.botPeers))
+        let feed = try await c.botRoutineNotifications(since: "2026-11-03T11:00:00.000Z"); XCTAssertEqual(feed.notifications.first?.kind, .peer); XCTAssertNil(feed.notifications.first?.routineId)
+    }
+
+    func testBotPlanResponseRouteBodyHeaderAndStrictReceiptIdentity() async throws {
+        let botId = "bot:00000000-0000-4000-8000-000000000056"
+        for (decision, body) in [(AidenBotPlanDecision.approve, "approve"), (.notNow, "not_now"), (.stop, "stop")] {
+            let key = UUID()
+            AidenRemoteMockURLProtocol.handler = { request in
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/\(botId)/plans/plan-fixture-56/respond")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+                XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, ["decision": body] as NSDictionary)
+                return Self.response(for: request, status: 200, json: "{\"planId\":\"plan-fixture-56\",\"status\":\"stopped\"}")
+            }
+            let receipt = try await makeClient().respondBotPlan(botId: botId, planId: "plan-fixture-56", request: AidenBotPlanRespondRequest(decision: decision), idempotencyKey: key)
+            XCTAssertEqual(receipt.status, .stopped)
+        }
+        for receipt in ["{\"planId\":\"wrong-plan\",\"status\":\"active\"}", "{\"planId\":\"plan-fixture-56\",\"status\":\"pending\"}", "{\"planId\":\"plan-fixture-56\",\"status\":\"active\",\"revision\":1}"] {
+            AidenRemoteMockURLProtocol.handler = { request in Self.response(for: request, status: 200, json: receipt) }
+            do {
+                _ = try await makeClient().respondBotPlan(botId: botId, planId: "plan-fixture-56", request: .init(decision: .approve), idempotencyKey: UUID())
+                XCTFail("An invalid plan receipt was accepted")
+            } catch {}
+        }
+    }
+
+    func testAllowedClientRoutesCursorRemoveAndRejectsForeignBot() async throws {
+        let botId = "bot:00000000-0000-4000-8000-000000000057"
+        let cursor = "cur_" + String(repeating:"A",count:43)
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod,"GET")
+            XCTAssertEqual(request.url?.path,"/api/aiden/v1/bots/\(botId)/allowed")
+            XCTAssertEqual(URLComponents(url:request.url!,resolvingAgainstBaseURL:false)?.queryItems,[URLQueryItem(name:"cursor",value:cursor)])
+            return Self.response(for:request,status:200,json:"{\"botId\":\"\(botId)\",\"entries\":[]}")
+        }
+        let page = try await makeClient().botAllowed(botId:botId,cursor:cursor)
+        XCTAssertTrue(page.entries.isEmpty)
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod,"POST")
+            XCTAssertEqual(request.url?.path,"/api/aiden/v1/bots/\(botId)/allowed/allowed-rule-01/remove")
+            XCTAssertTrue(try Self.jsonBody(request).isEmpty)
+            return Self.response(for:request,status:200,json:"{\"botId\":\"\(botId)\",\"entries\":[]}")
+        }
+        _ = try await makeClient().removeBotAllowed(botId:botId,entryId:"allowed-rule-01")
+        AidenRemoteMockURLProtocol.handler = { request in Self.response(for:request,status:200,json:"{\"botId\":\"bot:00000000-0000-4000-8000-000000000058\",\"entries\":[]}") }
+        do { _ = try await makeClient().botAllowed(botId:botId); XCTFail("Foreign Bot accepted") } catch {}
+    }
+
     private func makeClient() -> AidenRemoteClient {
         AidenRemoteClient(
             endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,
@@ -5976,6 +7239,24 @@ final class AidenRemoteClientTests: XCTestCase {
         configuration.protocolClasses = [AidenRemoteMockURLProtocol.self]
         configuration.httpAdditionalHeaders = [AidenRemoteMockURLProtocol.epochHeader: AidenRemoteMockURLProtocol.epoch]
         return URLSession(configuration: configuration)
+    }
+
+    private static func remoteDate(_ text: String) throws -> Date {
+        try AidenRemoteJSONDecoder.decode(AidenRemoteTimestamp.self, from: Data("\"\(text)\"".utf8)).date
+    }
+
+    private func sampleChatForInbox(id: String, workspaceId: String) -> AidenChat {
+        AidenChat(
+            id: id,
+            workspaceId: workspaceId,
+            title: "Idle fixture chat",
+            providerId: "openai",
+            modelId: "gpt-5.6",
+            messages: [],
+            createdAt: Date(timeIntervalSince1970: 1_787_078_000),
+            updatedAt: Date(timeIntervalSince1970: 1_787_079_000),
+            revision: "revision-inbox"
+        )
     }
 
     private func botFixtureData(at keyPath: [String]) throws -> Data {
@@ -6296,6 +7577,10 @@ private actor AidenInstallationDataRaceProbe {
 
 private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// A request this returns a semaphore for is answered off the loading
+    /// thread once the semaphore is signalled, so the session's other
+    /// requests keep being answered while it is held.
+    static var hold: ((URLRequest) -> DispatchSemaphore?)?
     /// Sessions carry the epoch of the test that made them. A request an
     /// earlier test left behind (a cancelled `async let` can still reach
     /// `startLoading`) fails instead of answering from a later test's handler.
@@ -6314,6 +7599,23 @@ private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
+        if let gate = Self.hold?(request) {
+            let request = request
+            DispatchQueue.global().async {
+                // A gate never opened is a test that went wrong: fail the
+                // request rather than answer as if it had been let go.
+                guard gate.wait(timeout: .now() + 5) == .success else {
+                    self.client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+                    return
+                }
+                self.answer(request, with: handler)
+            }
+            return
+        }
+        answer(request, with: handler)
+    }
+
+    private func answer(_ request: URLRequest, with handler: (URLRequest) throws -> (HTTPURLResponse, Data)) {
         do {
             let (response, data) = try handler(request)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -6356,5 +7658,691 @@ private final class AidenRemoteMemoryKeychain: KeychainStoring {
     func delete(_ key: KeychainStore.Key, scope: String) throws {
         if failingScopedDeleteScopes.contains(scope) { throw CocoaError(.fileWriteUnknown) }
         scoped[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
+
+// MARK: Inbox swipe writes (AidenHomeModel)
+
+extension AidenRemoteClientTests {
+    private struct InboxHome {
+        let home: AidenHomeModel
+        let coordinator: AidenRemoteCoordinator
+        let cache: AidenChatCache
+        let root: URL
+    }
+
+    private static let otherMacID = "instance-inbox-other"
+
+    private static let inboxChatID = "chat_inbox_triage_01"
+
+    /// One idle row on a connected Mac, loaded through the real Home load.
+    /// `triage` answers each `POST …/triage` (its body and Idempotency-Key);
+    /// `markRead` answers each `POST …/read`. With `otherMac` a second,
+    /// empty Mac is paired too, to switch to.
+    @MainActor
+    private func makeInboxHome(
+        features: [String] = [AidenServer.chatTriageFeature, AidenServer.chatReadStateFeature],
+        failed: Bool = false,
+        otherMac: Bool = false,
+        triage: @escaping (URLRequest, [String: Any]) -> (Int, String),
+        markRead: @escaping () -> Int = { 204 },
+        summaryReads: @escaping () -> Void = {},
+        summaryOverride: @escaping () -> String? = { nil }
+    ) async throws -> InboxHome {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-inbox-home-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let cache = AidenChatCache(root: root)
+        let store = AidenInstallationStore(keychain: AidenRemoteMemoryKeychain())
+        let otherCredential = String(repeating: "O", count: 43)
+        if otherMac {
+            _ = try store.savePairing(makeExchange(
+                instanceId: Self.otherMacID,
+                deviceId: "device-inbox-other",
+                credential: otherCredential,
+                capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite]
+            ), trust: makeSystemTrust(), name: "Other Mac")
+        }
+        let exchange = makeExchange(
+            instanceId: "instance-inbox",
+            deviceId: "device-inbox",
+            credential: String(repeating: "I", count: 43),
+            capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite]
+        )
+        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Inbox Mac")
+        let session = makeSession()
+        let featureList = (features + [AidenServer.chatSummariesFeature]).map { "\"\($0)\"" }.joined(separator: ",")
+        let row = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"2026-08-18T19:01:00.000Z",
+        "revision":"rev_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","activity":"idle","rowState":"idle",
+        "unread":true,"lastRunFailed":\(failed),"lastAssistantMessageId":"shown-reply","lastAssistantAt":"2026-08-18T19:01:00.000Z",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","triageRevision":3,
+        "inboxBucket":"\(failed ? "needs_you" : "pinned")","inboxSortAt":"2026-08-18T19:01:00.000Z"}]}
+        """
+        AidenRemoteMockURLProtocol.handler = { request in
+            if request.value(forHTTPHeaderField: "Authorization")?.contains(otherCredential) == true {
+                switch (request.httpMethod, request.url?.path ?? "") {
+                case ("GET", "/api/aiden/v1/server"):
+                    return Self.response(for: request, status: 200, json: """
+                    {"protocolVersion":1,"instanceId":"\(Self.otherMacID)","name":"Other Mac","appVersion":"1.0.0",
+                    "capabilities":["server:read","workspace:read","chat:read","chat:write"],
+                    "serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],
+                    "features":[\(featureList)],"connectionMode":"lan","serverTime":"2026-08-18T19:05:00.000Z"}
+                    """)
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: #"{"workspaces":[]}"#)
+                case ("GET", "/api/aiden/v1/chat-summaries"):
+                    return Self.response(for: request, status: 200, json: #"{"summaries":[]}"#)
+                default:
+                    return Self.response(for: request, status: 404, json: Self.inboxError("not_found"))
+                }
+            }
+            switch (request.httpMethod, request.url?.path ?? "") {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"instance-inbox","name":"Inbox Mac","appVersion":"1.0.0",
+                "capabilities":["server:read","workspace:read","chat:read","chat:write"],
+                "serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],
+                "features":[\(featureList)],"connectionMode":"lan","serverTime":"2026-08-18T19:05:00.000Z"}
+                """)
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return Self.response(for: request, status: 200, json: #"{"workspaces":[]}"#)
+            case ("GET", "/api/aiden/v1/chat-summaries"):
+                summaryReads()
+                return Self.response(for: request, status: 200, json: summaryOverride() ?? row)
+            case ("POST", "/api/aiden/v1/chats/\(Self.inboxChatID)/triage"):
+                let (status, json) = triage(request, (try? Self.jsonBody(request)) ?? [:])
+                return Self.response(for: request, status: status, json: json)
+            case ("POST", "/api/aiden/v1/chats/\(Self.inboxChatID)/read"):
+                XCTAssertEqual((try? Self.jsonBody(request))?["throughMessageId"] as? String, "shown-reply")
+                let status = markRead()
+                return Self.response(for: request, status: status, json: status < 300 ? "{}" : Self.inboxError("internal_error", retryable: true))
+            default:
+                return Self.response(for: request, status: 404, json: Self.inboxError("not_found"))
+            }
+        }
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        let home = AidenHomeModel(chatCache: cache)
+        await home.load(coordinator: coordinator)
+        XCTAssertEqual(home.chats.map(\.id), [Self.inboxChatID])
+        return InboxHome(home: home, coordinator: coordinator, cache: cache, root: root)
+    }
+
+    private static func inboxError(_ code: String, retryable: Bool = false, currentRevision: String? = nil) -> String {
+        let details = currentRevision.map { #","details":{"currentRevision":"\#($0)"}"# } ?? ""
+        return #"{"error":{"code":"\#(code)","message":"No.","requestId":"r1","retryable":\#(retryable)\#(details)}}"#
+    }
+
+    private static func triageResult(revision: Int, doneAt: String? = nil) -> String {
+        let done = doneAt.map { #","doneAt":"\#($0)""# } ?? ""
+        return #"{"chatId":"\#(inboxChatID)","revision":\#(revision),"updatedAt":"2026-08-18T19:06:00.000Z","pinnedAt":"2026-08-18T18:45:00.000Z"\#(done)}"#
+    }
+
+    @MainActor
+    func testInboxDoneLandsWithTheHostsTriageAndItsUndoSendsTheBumpedRevision() async throws {
+        var bodies: [[String: Any]] = []
+        let inbox = try await makeInboxHome(triage: { _, body in
+            bodies.append(body)
+            return body["done"] as? Bool == true
+                ? (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                : (200, Self.triageResult(revision: 5))
+        })
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let home = inbox.home
+        XCTAssertEqual(home.chats[0].inbox.bucket, .pinned)
+
+        let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertTrue(landed)
+        XCTAssertEqual(bodies.first as NSDictionary?, ["done": true, "ifRevision": 3])
+        XCTAssertEqual(home.chats[0].inbox.triageRevision, 4)
+        XCTAssertEqual(home.chats[0].inbox.doneAt, try Self.remoteDate("2026-08-18T19:06:00.000Z"))
+        // The host's Pinned bucket predates the write, so the phone places the row itself.
+        XCTAssertNil(home.chats[0].inbox.bucket)
+        XCTAssertNil(home.chats[0].inbox.sortAt)
+        XCTAssertNil(AidenInbox.placement(for: home.chats[0], isOpen: false, now: Date()).section, "Done hides the row.")
+        let notice = try XCTUnwrap(home.inboxNotice)
+        XCTAssertEqual(notice.undo, .done(false))
+
+        XCTAssertEqual(notice.revision, 4, "The banner keeps the revision its swipe left.")
+        let undone = await home.setTriage(
+            try XCTUnwrap(notice.undo), chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: notice.revision
+        )
+
+        XCTAssertTrue(undone)
+        XCTAssertEqual(bodies.last as NSDictionary?, ["done": false, "ifRevision": 4], "Undo writes from the revision the first write returned.")
+        XCTAssertNil(home.chats[0].inbox.doneAt)
+        XCTAssertEqual(home.chats[0].inbox.triageRevision, 5)
+        XCTAssertEqual(AidenInbox.placement(for: home.chats[0], isOpen: false, now: Date()).section, .pinned)
+    }
+
+    @MainActor
+    func testInboxUndoThatConflictsIsNeverRetriedAndLeavesTheChatAsItIs() async throws {
+        var bodies: [[String: Any]] = []
+        var summaryReads = 0
+        let inbox = try await makeInboxHome(
+            triage: { _, body in
+                bodies.append(body)
+                if body["done"] as? Bool == true {
+                    return (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                }
+                // Another device changed the chat after the Done landed.
+                return (409, Self.inboxError("revision_conflict", currentRevision: "6"))
+            },
+            summaryReads: { summaryReads += 1 }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let home = inbox.home
+        let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(landed)
+        let undo = try XCTUnwrap(home.inboxNotice?.undo)
+        let revision = home.inboxNotice?.revision
+        let readsBeforeUndo = summaryReads
+        bodies = []
+
+        let undone = await home.setTriage(undo, chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: revision)
+
+        XCTAssertFalse(undone)
+        XCTAssertEqual(bodies.count, 1, "Retrying from the host's revision would write over the other device's change.")
+        XCTAssertEqual(bodies.first as NSDictionary?, ["done": false, "ifRevision": 4])
+        XCTAssertEqual(home.inboxNotice?.message, "That chat changed since, so Undo left it as it is.")
+        XCTAssertNil(home.inboxNotice?.undo)
+        XCTAssertGreaterThan(summaryReads, readsBeforeUndo, "The Inbox reloads to show what the other device wrote.")
+    }
+
+    @MainActor
+    func testInboxUndoIsSentAgainstTheSwipesRevisionNotOneAReloadBroughtIn() async throws {
+        var bodies: [[String: Any]] = []
+        var reloaded: String?
+        let inbox = try await makeInboxHome(
+            triage: { _, body in
+                bodies.append(body)
+                if body["done"] as? Bool == true {
+                    return (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                }
+                // The host is at revision 5 now, so an Undo from 4 is refused.
+                return body["ifRevision"] as? Int == 5
+                    ? (200, Self.triageResult(revision: 6))
+                    : (409, Self.inboxError("revision_conflict", currentRevision: "5"))
+            },
+            summaryOverride: { reloaded }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let home = inbox.home
+        let landed = await home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(landed)
+        let notice = try XCTUnwrap(home.inboxNotice)
+
+        // Another device snoozed the chat after the Done; a reload brings
+        // the row in at revision 5 while the banner is still up.
+        reloaded = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"2026-08-18T19:07:00.000Z",
+        "revision":"rev_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","activity":"idle","rowState":"idle",
+        "unread":false,"lastRunFailed":false,"lastAssistantAt":"2026-08-18T19:01:00.000Z",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","snoozedUntil":"2099-01-01T09:00:00.000Z","triageRevision":5}]}
+        """
+        await home.load(coordinator: inbox.coordinator)
+        XCTAssertEqual(home.chats.first?.inbox.triageRevision, 5)
+        bodies = []
+
+        let undone = await home.setTriage(
+            try XCTUnwrap(notice.undo), chatID: Self.inboxChatID, coordinator: inbox.coordinator, undoRevision: notice.revision
+        )
+
+        XCTAssertFalse(undone)
+        XCTAssertEqual(bodies.map { $0 as NSDictionary }, [["done": false, "ifRevision": 4] as NSDictionary], "Sent once, at the swipe's revision.")
+        XCTAssertEqual(home.inboxNotice?.message, "That chat changed since, so Undo left it as it is.")
+        XCTAssertEqual(home.chats.first?.inbox.triageRevision, 5, "The other device's write stands.")
+        XCTAssertEqual(home.chats.first?.inbox.snoozedUntil, try Self.remoteDate("2099-01-01T09:00:00.000Z"))
+    }
+
+    @MainActor
+    func testInboxTriageConflictIsSentOnceMoreFromTheHostsRevisionWithANewKey() async throws {
+        var bodies: [[String: Any]] = []
+        var keys: [String] = []
+        var conflicts = 1
+        var summaryReads = 0
+        let inbox = try await makeInboxHome(
+            triage: { request, body in
+                bodies.append(body)
+                keys.append(request.value(forHTTPHeaderField: "Idempotency-Key") ?? "")
+                if conflicts > 0 {
+                    conflicts -= 1
+                    return (409, Self.inboxError("revision_conflict", currentRevision: "7"))
+                }
+                return (200, Self.triageResult(revision: 8, doneAt: "2026-08-18T19:06:00.000Z"))
+            },
+            summaryReads: { summaryReads += 1 }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let readsAfterLoad = summaryReads
+
+        let landed = await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertTrue(landed)
+        XCTAssertEqual(bodies.map { $0["ifRevision"] as? Int }, [3, 7])
+        XCTAssertEqual(Set(keys).count, 2, "The retry is a new request, not a replay of the refused one.")
+        XCTAssertEqual(inbox.home.chats[0].inbox.triageRevision, 8)
+        XCTAssertNil(inbox.home.inboxNotice, "The retry wrote over another device's change; Undo could put back a state the Mac no longer had.")
+        XCTAssertEqual(summaryReads, readsAfterLoad, "A retry that lands needs no reload.")
+
+        // A second conflict in a row is a refusal: one retry only, the row
+        // goes back, and the Inbox reloads from the Mac.
+        conflicts = 2
+        bodies = []
+        let refused = await inbox.home.setTriage(.wake, chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(bodies.count, 2)
+        XCTAssertNil(inbox.home.inboxNotice?.undo)
+        XCTAssertGreaterThan(summaryReads, readsAfterLoad)
+    }
+
+    @MainActor
+    func testInboxTriageRefusalPutsBackOnlyWhatTheWriteChanged() async throws {
+        var home: AidenHomeModel?
+        let newerReply = Date(timeIntervalSince1970: 1_787_100_500)
+        let inbox = try await makeInboxHome(failed: true, triage: { _, _ in
+            // Newer output arrives while the write is in flight.
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    home?.chats[0].inbox.lastAssistantAt = newerReply
+                    home?.chats[0].inbox.attentionSince = newerReply
+                }
+            }
+            return (500, Self.inboxError("internal_error", retryable: true))
+        })
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        home = inbox.home
+        let before = inbox.home.chats[0]
+        XCTAssertTrue(before.showsFailed)
+
+        let landed = await inbox.home.setTriage(.snooze(until: Date().addingTimeInterval(3600)), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertFalse(landed)
+        let row = inbox.home.chats[0]
+        XCTAssertNil(row.inbox.snoozedUntil)
+        XCTAssertTrue(row.unread, "Snooze on unseen failed output read it; the refusal unreads it again.")
+        XCTAssertEqual(row.inbox.pinnedAt, before.inbox.pinnedAt)
+        XCTAssertEqual(row.inbox.lastAssistantAt, newerReply, "Output that arrived meanwhile stays.")
+        XCTAssertEqual(row.inbox.attentionSince, newerReply)
+        XCTAssertNil(row.inbox.bucket, "The old host bucket isn't put back over newer signals.")
+        XCTAssertNotNil(inbox.home.inboxNotice)
+        XCTAssertNil(inbox.home.inboxNotice?.undo)
+    }
+
+    @MainActor
+    func testInboxDoneOnUnseenFailedOutputNeedsTheMacsReadMarkers() async throws {
+        var triageWrites = 0
+        let inbox = try await makeInboxHome(
+            features: [AidenServer.chatTriageFeature],
+            failed: true,
+            triage: { _, _ in
+                triageWrites += 1
+                return (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        let before = inbox.home.chats[0]
+
+        let landed = await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+
+        XCTAssertFalse(landed)
+        XCTAssertEqual(triageWrites, 0, "Done would hide unseen failed output the Mac can't mark read.")
+        XCTAssertEqual(inbox.home.chats[0], before)
+    }
+
+    @MainActor
+    func testInboxChatViewedWhileItsWriteWasOutStaysReadWhenTheMacRefuses() async throws {
+        var home: AidenHomeModel?
+        var viewsDuringWrite = true
+        let viewDuringWrite = {
+            guard viewsDuringWrite else { return }
+            DispatchQueue.main.sync { MainActor.assumeIsolated { home?.markViewed(chatID: Self.inboxChatID) } }
+        }
+        let readStatus = 500
+        let inbox = try await makeInboxHome(
+            failed: true,
+            triage: { _, body in
+                viewDuringWrite()
+                return body["snoozeUntil"] != nil
+                    ? (500, Self.inboxError("internal_error", retryable: true))
+                    : (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+            },
+            markRead: { viewDuringWrite(); return readStatus }
+        )
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        home = inbox.home
+        func unread() { inbox.home.chats[0].unread = true }
+
+        // A refused Mark read.
+        await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(inbox.home.chats[0].unread, "The chat was opened meanwhile, so it has been read.")
+        XCTAssertNotNil(inbox.home.inboxNotice)
+
+        // A refused Snooze that also read unseen failed output.
+        unread()
+        let snoozed = await inbox.home.setTriage(.snooze(until: Date().addingTimeInterval(3600)), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertFalse(snoozed)
+        XCTAssertNil(inbox.home.chats[0].inbox.snoozedUntil)
+        XCTAssertFalse(inbox.home.chats[0].unread)
+
+        // Done landed but its read marker was refused.
+        unread()
+        let done = await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(done)
+        XCTAssertFalse(inbox.home.chats[0].unread)
+
+        // Unviewed, the same refusal brings the dot back.
+        viewsDuringWrite = false
+        unread()
+        await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+        XCTAssertTrue(inbox.home.chats[0].unread)
+    }
+
+    @MainActor
+    func testInboxMarkReadStaysReadWhenARefreshRequestedWhileItWasOutLandsAfterIt() async throws {
+        let inbox = try await makeInboxHome(triage: { _, _ in (500, Self.inboxError("internal_error")) })
+        defer { try? FileManager.default.removeItem(at: inbox.root) }
+        XCTAssertTrue(inbox.home.chats[0].unread)
+        let readArrived = expectation(description: "read sent")
+        let refreshArrived = expectation(description: "refresh asked")
+        let releaseRead = DispatchSemaphore(value: 0)
+        let releaseRefresh = DispatchSemaphore(value: 0)
+        AidenRemoteMockURLProtocol.hold = { request in
+            switch request.url?.path ?? "" {
+            case "/api/aiden/v1/chats/\(Self.inboxChatID)/read":
+                readArrived.fulfill()
+                return releaseRead
+            case "/api/aiden/v1/chat-summaries":
+                refreshArrived.fulfill()
+                return releaseRefresh
+            default:
+                return nil
+            }
+        }
+        defer { AidenRemoteMockURLProtocol.hold = nil }
+
+        let read = Task { await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+        await fulfillment(of: [readArrived], timeout: 5)
+        // A refresh asked for while the read is out: the Mac answers it as
+        // it stood then, still unread, after the read has landed.
+        let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+        await fulfillment(of: [refreshArrived], timeout: 5)
+        releaseRead.signal()
+        await read.value
+        XCTAssertFalse(inbox.home.chats[0].unread)
+        releaseRefresh.signal()
+        await refresh.value
+
+        XCTAssertFalse(inbox.home.chats[0].unread, "A page asked for before the Mac took the read doesn't bring the dot back.")
+        XCTAssertNil(inbox.home.inboxNotice)
+        // The read is saved in the background once the page is reconciled.
+        var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        for _ in 0..<100 where saved?.unread != false {
+            try await Task.sleep(for: .milliseconds(20))
+            saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+        }
+        XCTAssertEqual(saved?.unread, false, "The saved list keeps the read too.")
+    }
+
+    @MainActor
+    func testInboxMarkReadKeepsAReplyNewerThanTheReadFromARefreshInEitherOrder() async throws {
+        try await checkNewerInboxReply(alsoDone: false)
+        try await checkNewerInboxReply(alsoDone: true)
+    }
+
+    @MainActor
+    private func checkNewerInboxReply(alsoDone: Bool) async throws {
+        let newerReply = "2026-08-18T19:04:00.000Z"
+        let newerPage = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"Reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"\(newerReply)",
+        "revision":"rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF","activity":"idle","rowState":"idle",
+        "unread":true,"lastRunFailed":false,"lastAssistantAt":"\(newerReply)",
+        "pinnedAt":"2026-08-18T18:45:00.000Z","triageRevision":3,
+        "inboxBucket":"pinned","inboxSortAt":"\(newerReply)"}]}
+        """
+        for readLandsFirst in [true, false] {
+            var answerNewer = false
+            let inbox = try await makeInboxHome(
+                failed: alsoDone,
+                triage: { _, _ in (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:02:00.000Z")) },
+                summaryOverride: { answerNewer ? newerPage : nil }
+            )
+            defer { try? FileManager.default.removeItem(at: inbox.root) }
+            XCTAssertTrue(inbox.home.chats[0].unread)
+            let readArrived = expectation(description: "read sent")
+            let refreshArrived = expectation(description: "refresh asked")
+            let releaseRead = DispatchSemaphore(value: 0)
+            let releaseRefresh = DispatchSemaphore(value: 0)
+            AidenRemoteMockURLProtocol.hold = { request in
+                switch request.url?.path ?? "" {
+                case "/api/aiden/v1/chats/\(Self.inboxChatID)/read":
+                    readArrived.fulfill()
+                    return releaseRead
+                case "/api/aiden/v1/chat-summaries":
+                    refreshArrived.fulfill()
+                    return releaseRefresh
+                default:
+                    return nil
+                }
+            }
+            defer { AidenRemoteMockURLProtocol.hold = nil }
+
+            let read = Task {
+                if alsoDone {
+                    await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+                } else {
+                    await inbox.home.markRead(chatID: Self.inboxChatID, coordinator: inbox.coordinator)
+                }
+            }
+            await fulfillment(of: [readArrived], timeout: 5)
+            // A reply the person hasn't seen arrives while the read is out,
+            // and a refresh asked for then carries it.
+            answerNewer = true
+            let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+            await fulfillment(of: [refreshArrived], timeout: 5)
+            if readLandsFirst {
+                releaseRead.signal()
+                await read.value
+                XCTAssertFalse(inbox.home.chats[0].unread)
+                releaseRefresh.signal()
+                await refresh.value
+            } else {
+                releaseRefresh.signal()
+                await refresh.value
+                releaseRead.signal()
+                await read.value
+            }
+
+            let order = readLandsFirst ? "read first" : "page first"
+            let row = try XCTUnwrap(inbox.home.chats.first)
+            XCTAssertTrue(row.unread, "The read didn't cover the newer reply (\(order)).")
+            XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply), order)
+            if alsoDone { XCTAssertEqual(row.inbox.triageRevision, 4, order) }
+            // The row is saved in the background once the page is reconciled.
+            var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            for _ in 0..<100 where saved?.unread != true {
+                try await Task.sleep(for: .milliseconds(20))
+                saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            }
+            XCTAssertEqual(saved?.unread, true, "The saved list keeps the newer reply's dot (\(order)).")
+            XCTAssertEqual(saved?.inbox.lastAssistantAt, try Self.remoteDate(newerReply), order)
+        }
+    }
+
+    @MainActor
+    func testInboxPlainTriagePreservesNewReplyFromAnInflightRefresh() async throws {
+        try await checkInboxTriageRefresh(.newPage)
+    }
+
+    @MainActor
+    func testInboxDetailViewedBeforeTriageSurvivesAnInflightStaleRefresh() async throws {
+        try await checkInboxTriageRefresh(.stalePageAfterDetail)
+    }
+
+    @MainActor
+    func testInboxDistinctEqualTimeReplySurvivesDetailAdmissionAndTriage() async throws {
+        try await checkInboxTriageRefresh(.equalTimePageAfterDetail)
+    }
+
+    @MainActor
+    func testInboxNewerPageReplySurvivesDetailAdmissionAndTriage() async throws {
+        try await checkInboxTriageRefresh(.newerPageAfterDetail)
+    }
+
+    private enum InboxTriageRefreshScenario {
+        case newPage, stalePageAfterDetail, equalTimePageAfterDetail, newerPageAfterDetail
+    }
+
+    @MainActor
+    private func checkInboxTriageRefresh(_ scenario: InboxTriageRefreshScenario) async throws {
+        let admitDetail = scenario != .newPage
+        let admissionWins = scenario == .stalePageAfterDetail
+        let newerReply = "2026-08-18T19:10:00.000Z"
+        let detailReply = scenario == .newerPageAfterDetail ? "2026-08-18T19:09:00.000Z" : newerReply
+        let expectedID = admissionWins ? "viewed-reply" : "new-reply"
+        let expectedTitle = admissionWins ? "Viewed reply" : "New reply"
+        let snoozeUntil = try Self.remoteDate("2099-01-01T09:00:00.000Z")
+        let page = """
+        {"summaries":[{"id":"\(Self.inboxChatID)","workspaceId":"alpha","title":"New reply","titlePending":false,
+        "createdAt":"2026-08-18T18:30:00.000Z","updatedAt":"\(newerReply)",
+        "revision":"rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF","activity":"idle","rowState":"idle",
+        "unread":true,"lastAssistantMessageId":"new-reply","lastAssistantAt":"\(newerReply)",
+        "triageRevision":3,"pinnedAt":"2026-08-18T18:45:00.000Z"}]}
+        """
+        for done in [true, false] {
+            for writeFirst in [true, false] {
+                var answerNewer = false
+                let inbox = try await makeInboxHome(
+                    failed: false,
+                    triage: { _, _ in
+                        (200, done ? Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z") :
+                            """
+                            {"chatId":"\(Self.inboxChatID)","revision":4,"updatedAt":"2026-08-18T19:06:00.000Z","snoozedUntil":"2099-01-01T09:00:00.000Z"}
+                            """)
+                    },
+                    summaryOverride: { answerNewer ? page : nil }
+                )
+                defer { try? FileManager.default.removeItem(at: inbox.root) }
+                let refreshArrived = expectation(description: "refresh")
+                let writeArrived = expectation(description: "triage")
+                let releaseRefresh = DispatchSemaphore(value: 0)
+                let releaseWrite = DispatchSemaphore(value: 0)
+                AidenRemoteMockURLProtocol.hold = { request in
+                    if request.url?.path.hasSuffix("/chat-summaries") == true { refreshArrived.fulfill(); return releaseRefresh }
+                    if request.url?.path.hasSuffix("/triage") == true { writeArrived.fulfill(); return releaseWrite }
+                    return nil
+                }
+                defer { AidenRemoteMockURLProtocol.hold = nil }
+                answerNewer = !admissionWins
+                let refresh = Task { await inbox.home.load(coordinator: inbox.coordinator) }
+                await fulfillment(of: [refreshArrived], timeout: 5)
+                if admitDetail {
+                    let date = try Self.remoteDate(detailReply)
+                    inbox.home.accept(AidenChat(
+                        id: Self.inboxChatID, workspaceId: "alpha", title: "Viewed reply", providerId: "p", modelId: "m",
+                        messages: [AidenChatMessage(id: "viewed-reply", role: .assistant, text: "Finished", createdAt: date)],
+                        createdAt: date.addingTimeInterval(-3600), updatedAt: date,
+                        revision: "rev_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                    ))
+                    inbox.home.markViewed(chatID: Self.inboxChatID)
+                }
+                let write = Task { await inbox.home.setTriage(
+                    done ? .done(true) : .snooze(until: snoozeUntil),
+                    chatID: Self.inboxChatID, coordinator: inbox.coordinator
+                ) }
+                await fulfillment(of: [writeArrived], timeout: 5)
+                if writeFirst {
+                    releaseWrite.signal()
+                    _ = await write.value
+                    releaseRefresh.signal()
+                    await refresh.value
+                } else {
+                    releaseRefresh.signal()
+                    await refresh.value
+                    releaseWrite.signal()
+                    _ = await write.value
+                }
+                let row = try XCTUnwrap(inbox.home.chats.first)
+                XCTAssertEqual(row.title, expectedTitle)
+                XCTAssertEqual(row.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
+                XCTAssertEqual(row.inbox.lastAssistantMessageId, expectedID)
+                XCTAssertEqual(row.unread, !admissionWins)
+                XCTAssertEqual(row.inbox.triageRevision, 4)
+                XCTAssertEqual(row.inbox.doneAt != nil, done)
+                XCTAssertEqual(row.inbox.snoozedUntil != nil, !done)
+                var saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+                for _ in 0..<100 where saved?.inbox.lastAssistantMessageId != expectedID || saved?.inbox.triageRevision != 4 || saved?.unread != !admissionWins || saved?.title != expectedTitle {
+                    try await Task.sleep(for: .milliseconds(20))
+                    saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+                }
+                XCTAssertEqual(saved?.title, expectedTitle)
+                XCTAssertEqual(saved?.inbox.lastAssistantAt, try Self.remoteDate(newerReply))
+                XCTAssertEqual(saved?.inbox.lastAssistantMessageId, expectedID)
+                XCTAssertEqual(saved?.inbox.triageRevision, 4)
+                XCTAssertEqual(saved?.unread, !admissionWins)
+            }
+        }
+    }
+
+    @MainActor
+    func testInboxWriteOutDuringASwitchToAnotherMacSettlesOnTheMacItWasSentTo() async throws {
+        for (refused, readRefused) in [(true, false), (false, false), (false, true)] {
+            let arrived = expectation(description: "triage sent")
+            let release = DispatchSemaphore(value: 0)
+            var readMarks = 0
+            let inbox = try await makeInboxHome(
+                failed: true,
+                otherMac: true,
+                triage: { _, _ in
+                    refused
+                        ? (500, Self.inboxError("internal_error", retryable: true))
+                        : (200, Self.triageResult(revision: 4, doneAt: "2026-08-18T19:06:00.000Z"))
+                },
+                markRead: { readMarks += 1; return readRefused ? 500 : 204 }
+            )
+            defer { try? FileManager.default.removeItem(at: inbox.root) }
+            XCTAssertEqual(inbox.coordinator.activeInstanceId, "instance-inbox")
+            AidenRemoteMockURLProtocol.hold = { request in
+                guard request.url?.path.hasSuffix("/triage") == true else { return nil }
+                arrived.fulfill()
+                return release
+            }
+            defer { AidenRemoteMockURLProtocol.hold = nil }
+
+            let write = Task { await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
+            await fulfillment(of: [arrived], timeout: 5)
+            await inbox.coordinator.switchInstallation(to: Self.otherMacID)
+            XCTAssertEqual(inbox.coordinator.activeInstanceId, Self.otherMacID)
+            let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            XCTAssertNotNil(saved?.inbox.doneAt, "The optimistic Done was saved for the first Mac.")
+            release.signal()
+            let landed = await write.value
+
+            XCTAssertEqual(landed, !refused)
+            XCTAssertNil(inbox.home.inboxNotice, "A late answer shows nothing over the other Mac.")
+            let settled = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
+            let row = try XCTUnwrap(settled)
+            if refused {
+                XCTAssertNil(row.inbox.doneAt, "The first Mac's saved row is put back.")
+                XCTAssertTrue(row.unread)
+                XCTAssertEqual(readMarks, 0)
+            } else {
+                XCTAssertEqual(readMarks, 1, "The Mac that took Done is still sent the read marker.")
+                XCTAssertEqual(row.inbox.triageRevision, 4, "The first Mac's saved row takes its answer.")
+                XCTAssertEqual(row.inbox.doneAt, try Self.remoteDate("2026-08-18T19:06:00.000Z"))
+                XCTAssertEqual(row.inbox.pinnedAt, try Self.remoteDate("2026-08-18T18:45:00.000Z"))
+                XCTAssertEqual(row.unread, readRefused, "A refused read marker brings the saved dot back.")
+            }
+        }
     }
 }

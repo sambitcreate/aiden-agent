@@ -82,6 +82,10 @@ struct AidenOnTheGoApp: App {
     @State private var appearance = AidenAppearanceStore()
 
     init() {
+        AidenBotWatchDraftStore.shared.prepareExistingStorage()
+        AidenBotOpenWorkDraftStore.shared.prepareExistingStorage()
+        AidenBotRoutineControlStore.shared.prepareExistingStorage()
+        AidenBotPeerControlStore.shared.prepareExistingStorage()
         aidenBotImagePlaygroundCleanupAfterProcessLaunch()
         AidenMetricDiagnosticSubscriber.shared.start()
         AidenScheduledRunNotifier.installPresentationDelegate()
@@ -95,7 +99,15 @@ struct AidenOnTheGoApp: App {
         WindowGroup {
             Group {
                 AidenAppearanceRoot(appearance: appearance) {
+#if DEBUG
+                    if AidenInboxFixtureView.isRequested {
+                        AidenInboxFixtureView()
+                    } else {
+                        ContentView(coordinator: remoteCoordinator)
+                    }
+#else
                     ContentView(coordinator: remoteCoordinator)
+#endif
                 }
                 .environment(appearance)
             }

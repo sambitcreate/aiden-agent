@@ -1,3 +1,4 @@
+import { assertArtifactFilePath, WorkspaceArtifactFileDeniedError } from "./file-policy.js";
 import * as fs from "node:fs/promises";
 import {
   parseWorkspaceArtifactOutput,
@@ -144,13 +145,14 @@ export function createWorkspaceArtifactRunner(dependencies: WorkspaceArtifactRun
     try {
       if (source.kind === "file") {
         try {
+          assertArtifactFilePath(source.file);
           text = await withDeadline(
             dependencies.readFile(root, source.file, signal),
             WORKSPACE_ARTIFACT_LIMITS.sourceTimeoutMs,
             `Reading ${source.file} timed out.`,
           );
         } catch (error) {
-          return { status: "error", at, error: clip(fileError(source.file, error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
+          return { status: "error", at, ...(error instanceof WorkspaceArtifactFileDeniedError ? { policyDenied: true as const } : {}), error: clip(fileError(source.file, error), WORKSPACE_ARTIFACT_LIMITS.errorChars) };
         }
         if (Buffer.byteLength(text, "utf8") > WORKSPACE_ARTIFACT_LIMITS.sourceOutputBytes) {
           return { status: "error", at, error: `${source.file} is larger than an artifact can read.` };

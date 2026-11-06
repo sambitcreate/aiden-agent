@@ -98,6 +98,7 @@ function fixture(
     updateBotAccessError?: unknown;
     createBotError?: unknown;
     chatActivity?: boolean;
+    messaging?: AidenRemoteBotServiceOptions["messaging"];
     sessionStates?: AidenRemoteBotServiceOptions["sessionStates"];
     issues?: AidenRemoteBotServiceOptions["issues"];
     capabilityCatalog?: (
@@ -154,6 +155,8 @@ function fixture(
         description: input.description,
         // Like the real store, an absent choice keeps the saved one.
         chatActivity: input.chatActivity ?? existing.chatActivity,
+        acceptsBotMessages: input.acceptsBotMessages ?? existing.acceptsBotMessages,
+        messagesOtherBots: input.messagesOtherBots ?? existing.messagesOtherBots,
         revision: `${existing.revision}_next`,
         createdAt: existing.createdAt,
         updatedAt: existing.updatedAt + 1,
@@ -881,4 +884,26 @@ test("a Bot the person paused reads paused, with its flag, on every Bot read; ot
   assert.deepEqual([paused.sessionState, paused.paused], ["paused", true]);
   assert.equal("paused" in (await host.service.get("bot_2")), false);
   assert.equal((await host.service.summaryOf("bot_1")).paused, true, "the preset and host-feed rows too");
+});
+
+
+test("a messaging patch changes only its selected switch and global setting writes once", async () => {
+  let enabled = true; const writes: boolean[] = [];
+  const h = fixture([bot("bot_1", {messagesOtherBots: false})], {messaging: {
+    enabled: async () => enabled,
+    setEnabled: async value => {writes.push(value); return enabled = value;},
+  }});
+  const before = await h.service.get("bot_1");
+  assert.deepEqual(before.botMessaging, {receive: true, send: false});
+  const updated = await h.service.updateIdentity("bot_1", before.revision, {botMessaging: {receive: false}});
+  assert.deepEqual(updated.botMessaging, {receive: false, send: false});
+  assert.equal(updated.name, before.name); assert.equal(updated.instructions, before.instructions);
+  assert.equal(h.bots()[0]?.acceptsBotMessages, false);
+  assert.deepEqual((await h.service.list()).messaging, {enabled: true});
+  assert.deepEqual(await h.service.updateMessaging({enabled: false}), {enabled: false});
+  assert.deepEqual(writes, [false]);
+  assert.deepEqual((await h.service.list()).messaging, {enabled: false});
+  await assert.rejects(h.service.updateMessaging({enabled: "false"}));
+  assert.deepEqual(writes, [false]);
+  await assert.rejects(fixture().service.updateIdentity("bot_1", "bot_revision_bot_1", {botMessaging: {send: false}}));
 });

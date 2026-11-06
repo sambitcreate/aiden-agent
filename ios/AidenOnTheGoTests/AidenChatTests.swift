@@ -455,6 +455,139 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(turns.lock.withLock { turns.count }, 2)
     }
 
+    @MainActor
+    func testTheFirstMessageMovesTheChatIntoItsNewWorktreeThenSendsThere() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root.appending(path: "cache"))
+        let mac = AidenNewWorktreeMacFixture()
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: cache,
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.gitWrite, .chatNewWorktree]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+        XCTAssertTrue(model.offersNewWorktree)
+
+        model.draft = "Fix the header"
+        model.startsInNewWorktree = true
+        await model.send()
+
+        XCTAssertNil(model.presentedError)
+        XCTAssertEqual(
+            AidenChatProgressLifecycleURLProtocol.postPaths.filter { $0.contains("/chats/") },
+            ["/api/aiden/v1/chats/chat-progress-lifecycle/worktree", "/api/aiden/v1/chats/chat-progress-lifecycle/turns"],
+            "the worktree first, then the turn"
+        )
+        XCTAssertEqual(model.chat.workspaceId, AidenNewWorktreeMacFixture.worktreeWorkspaceId)
+        let saved = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: model.chat.id)
+        XCTAssertEqual(saved?.workspaceId, AidenNewWorktreeMacFixture.worktreeWorkspaceId, "the saved chat stays in the worktree too")
+        XCTAssertFalse(model.startsInNewWorktree, "the next message is an ordinary one")
+        XCTAssertEqual(model.draft, "")
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testAChatThatStoppedQualifyingForNewWorktreeKeepsItsMessageInsteadOfSendingToTheMainCheckout() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenNewWorktreeMacFixture()
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.gitWrite, .chatNewWorktree]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+        XCTAssertTrue(model.offersNewWorktree)
+        model.draft = "Fix the header"
+        model.startsInNewWorktree = true
+
+        // Another device moves the still-empty chat into a worktree while the chip is on.
+        mac.moveElsewhere()
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.workspaceId, AidenNewWorktreeMacFixture.worktreeWorkspaceId)
+        XCTAssertFalse(model.offersNewWorktree)
+
+        await model.send()
+        XCTAssertEqual(model.presentedError, AidenNewWorktreeCopy.noLongerOffered)
+        XCTAssertEqual(model.draft, "Fix the header", "the message stays in the composer")
+        XCTAssertFalse(model.startsInNewWorktree, "the chip is off, so sending again uses the chat's own folder")
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertFalse(
+            AidenChatProgressLifecycleURLProtocol.postPaths.contains { $0.contains("/chats/") },
+            "nothing was sent to the Mac"
+        )
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testANewWorktreeRefusalShowsTheMacsSentenceAndCancelPutsTheMessageBackUnsent() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenNewWorktreeMacFixture()
+        mac.setup = .refuses
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 },
+            responseOverride: { mac.response($0) },
+            extraCapabilities: [.gitWrite, .chatNewWorktree]
+        )
+        await coordinator.refreshWorkspaces()
+        await model.load(observeProgress: false)
+
+        model.draft = "Fix the header"
+        model.startsInNewWorktree = true
+        await model.send()
+        XCTAssertEqual(model.presentedError, AidenNewWorktreeMacFixture.refusal)
+        XCTAssertEqual(model.draft, "Fix the header", "the message is back in the composer")
+        XCTAssertTrue(model.chat.messages.isEmpty)
+        XCTAssertEqual(model.chat.workspaceId, "workspace-1")
+        XCTAssertTrue(model.startsInNewWorktree, "sending again tries the worktree again")
+
+        // Twice: the Mac never answers, and the person cancels the wait.
+        mac.setup = .neverAnswers
+        for attempt in 2...3 {
+            let held = expectation(description: "worktree request \(attempt) held")
+            AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/worktree") { held.fulfill() }
+            let sending = Task { await model.send() }
+            await fulfillment(of: [held], timeout: 3)
+            XCTAssertTrue(model.isSettingUpWorktree)
+            // The second time, the person types more while the Mac works.
+            if attempt == 3 { model.draft = "And the footer" }
+            model.cancelWorktreeSetup()
+            await sending.value
+            _ = AidenChatProgressLifecycleURLProtocol.takeHeldRequest()
+            XCTAssertFalse(model.isSettingUpWorktree)
+            XCTAssertNil(model.presentedError, "Cancel is not an error")
+            XCTAssertEqual(
+                model.draft,
+                attempt == 3 ? "Fix the header\n\nAnd the footer" : "Fix the header",
+                "the canceled message comes back, ahead of anything typed meanwhile"
+            )
+            XCTAssertTrue(model.chat.messages.isEmpty)
+        }
+
+        let keys = mac.worktreeKeys
+        XCTAssertEqual(keys.count, 3)
+        XCTAssertNotEqual(keys[0], keys[1], "the Mac answered the refusal, so the next request has a new key")
+        XCTAssertEqual(keys[1], keys[2], "a canceled wait got no answer, so the retry keeps its key")
+        XCTAssertFalse(AidenChatProgressLifecycleURLProtocol.postPaths.contains { $0.hasSuffix("/turns") }, "no message was sent")
+        model.stopProgressObservation()
+    }
+
     func testOnlyAMissingFolderConflictCountsAsARefusedSend() {
         let missing = AidenRemoteErrorCode(rawValue: "workspace_unavailable")
         let conflict = AidenRemoteErrorCode(rawValue: "revision_conflict")
@@ -1505,7 +1638,7 @@ final class AidenChatTests: XCTestCase {
     func testChatOpenFetchesTheProgressSnapshotOnceAndReloadsDoNotDuplicateIt() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-progress-once-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = try await makeProgressLifecycleModel(mode: .finite, cache: AidenChatCache(root: root))
+        let model = try await makeProgressLifecycleModel(mode: .open, cache: AidenChatCache(root: root))
         defer {
             model.stopProgressObservation()
             AidenChatProgressLifecycleURLProtocol.reset()
@@ -1522,9 +1655,8 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
 
         // A pull-to-refresh while the observer owns progress reloads the
-        // transcript but leaves progress to that single owner. The finite
-        // channel's reconnect waits at least half a second, so no retry
-        // snapshot can land inside this window.
+        // transcript but leaves progress to that single owner. Keep the live
+        // channel open so a legitimate reconnect cannot race these assertions.
         await model.load()
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.agentRequestCount, 1)
         XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.progressRequestCount, 1)
@@ -2699,6 +2831,39 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshingCachedChatAdoptsDesktopModelWithoutARememberedPhoneDefault() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-model-authority-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cachedJSON = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Cached","providerId":"openai","modelId":"old-model","messages":[{"id":"u1","role":"user","text":"Hello","createdAt":"2026-09-14T12:00:00Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"cached"}"#
+        let catalogJSON = #"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"old-model","label":"Old"}]},{"id":"google","label":"Google","models":[{"id":"desktop-model","label":"Desktop pick"}]}],"defaults":{"providerId":"openai","modelId":"old-model"}}"#
+        let cached = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(cachedJSON.utf8))
+        var refreshed = cached
+        refreshed.providerId = "google"
+        refreshed.modelId = "desktop-model"
+        let host = AidenStreamRecoveryFixture(chat: refreshed)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied, cache: AidenChatCache(root: root), initialChat: cached,
+            responseOverride: { request in
+                if request.url?.path.hasSuffix("/models") == true {
+                    return (200, "application/json", Data(catalogJSON.utf8))
+                }
+                return host.response(request)
+            }
+        )
+        XCTAssertNil(testModelPreferences.selection(for: "instance-progress-lifecycle"))
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.chat.modelId, "desktop-model")
+        XCTAssertEqual(model.selectedProviderId, "google")
+        XCTAssertEqual(model.selectedModelId, "desktop-model")
+        // An intentional unsent choice still wins over subsequent host refreshes.
+        model.selectModel(providerId: "openai", modelId: "old-model", thinkingLevel: nil)
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.selectedModelId, "old-model")
+        XCTAssertEqual(testModelPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: cached.id)?.modelId, "old-model")
+        XCTAssertNil(testModelPreferences.selection(for: "instance-progress-lifecycle"))
+    }
+
+    @MainActor
     func testTranscriptPublishesWhileCatalogIsHeldIncludingCatalogFailure() async throws {
         for fails in [false, true] {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-catalog-delay-\(UUID())")
@@ -2929,6 +3094,116 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testARequestFromThePreviousFixtureEpochCannotConsumeTheNextRosterHold() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        AidenChatProgressLifecycleURLProtocol.reset()
+        let previousEpoch = AidenChatProgressLifecycleURLProtocol.epoch
+        let previousConfiguration = URLSessionConfiguration.ephemeral
+        previousConfiguration.protocolClasses = [AidenChatProgressLifecycleURLProtocol.self]
+        previousConfiguration.httpAdditionalHeaders = [AidenChatProgressLifecycleURLProtocol.epochHeader: previousEpoch]
+        let previousSession = URLSession(configuration: previousConfiguration)
+        defer { previousSession.invalidateAndCancel() }
+        let previousResponse = expectation(description: "previous epoch roster response is being prepared")
+        let releasePrevious = DispatchSemaphore(value: 0)
+        defer { releasePrevious.signal() }
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.url?.path.hasSuffix("/agents") == true else { return nil }
+            previousResponse.fulfill()
+            releasePrevious.wait()
+            return (200, "application/json", Data("{}".utf8))
+        }
+        let url = URL(string: "https://aiden.test/api/aiden/v1/chats/chat-progress-lifecycle/agents")!
+        let previous = Task { () -> Bool in
+            do { _ = try await previousSession.data(from: url); return false }
+            catch { return aidenIsCancellation(error) }
+        }
+        await fulfillment(of: [previousResponse], timeout: 3)
+
+        // The old request passed its entry check, but is still constructing its
+        // response when the next test installs a fresh epoch and roster hold.
+        AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+        AidenChatProgressLifecycleURLProtocol.reset()
+        let currentEpoch = AidenChatProgressLifecycleURLProtocol.epoch
+        let rosterHeld = expectation(description: "only the current epoch consumes the roster hold")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") {
+            rosterHeld.fulfill()
+            AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        }
+        releasePrevious.signal()
+        let previousWasCancelled = await previous.value
+
+        let currentConfiguration = URLSessionConfiguration.ephemeral
+        currentConfiguration.protocolClasses = [AidenChatProgressLifecycleURLProtocol.self]
+        currentConfiguration.httpAdditionalHeaders = [AidenChatProgressLifecycleURLProtocol.epochHeader: currentEpoch]
+        let currentSession = URLSession(configuration: currentConfiguration)
+        defer { currentSession.invalidateAndCancel() }
+        _ = try await currentSession.data(from: url)
+        await fulfillment(of: [rosterHeld], timeout: 3)
+        XCTAssertTrue(previousWasCancelled, "An earlier epoch cannot deliver after the fixture changes.")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs, [currentEpoch], "The opening lookup test must hold its own first roster, not an earlier observer's response.")
+    }
+
+    func testEpochRotationFromAResponseCallbackStopsFiniteAndHeldReplies() {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        for held in [false, true] {
+            AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+            AidenChatProgressLifecycleURLProtocol.reset()
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { _ in
+                (200, "application/json", Data("old payload".utf8))
+            }
+            let client = AidenEpochRotationURLProtocolClient { event in
+                guard event == .response else { return }
+                // Client callbacks may synchronously retire their observer.
+                AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+                AidenChatProgressLifecycleURLProtocol.reset()
+            }
+            let fixture = progressFixture(client: client)
+            if held { AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/epoch-probe") {} }
+            fixture.startLoading()
+            if held {
+                XCTAssertEqual(client.events, [])
+                AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+            }
+            XCTAssertEqual(client.events, [.response, .cancelled], "The retired \(held ? "held" : "finite") reply must not send data or finish in the next epoch.")
+        }
+    }
+
+    func testEpochRotationFromAPayloadCallbackStopsTheOldReplyFromFinishing() {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        AidenChatProgressLifecycleURLProtocol.reset()
+        let payload = Data("last current-epoch payload".utf8)
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { _ in (200, "application/json", payload) }
+        let client = AidenEpochRotationURLProtocolClient { event in
+            guard case .data = event else { return }
+            AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        progressFixture(client: client).startLoading()
+        XCTAssertEqual(client.events, [.response, .data(payload), .cancelled])
+    }
+
+    func testEpochRotationFromAStreamResponseDropsInitialAndLaterFrames() {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        AidenChatProgressLifecycleURLProtocol.reset()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { _ in
+            (AidenChatProgressLifecycleURLProtocol.openEventStreamStatus, "text/event-stream", Data("initial frame".utf8))
+        }
+        let client = AidenEpochRotationURLProtocolClient { event in
+            guard event == .response else { return }
+            AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+        }
+        progressFixture(client: client).startLoading()
+        AidenChatProgressLifecycleURLProtocol.pushEvent("late old-epoch frame")
+        XCTAssertEqual(client.events, [.response, .cancelled])
+    }
+
+    private func progressFixture(client: URLProtocolClient) -> AidenChatProgressLifecycleURLProtocol {
+        var request = URLRequest(url: URL(string: "https://aiden.test/epoch-probe")!)
+        request.setValue(AidenChatProgressLifecycleURLProtocol.epoch, forHTTPHeaderField: AidenChatProgressLifecycleURLProtocol.epochHeader)
+        return AidenChatProgressLifecycleURLProtocol(request: request, cachedResponse: nil, client: client)
+    }
+
+    @MainActor
     func testARunRegisteredAfterTheOpeningLookupIsAttachedWhenTheFirstRosterArrives() async throws {
         defer { AidenChatProgressLifecycleURLProtocol.reset() }
         let fixture = AidenAnnouncedRunFixture(scenario: .live)
@@ -2937,18 +3212,21 @@ final class AidenChatTests: XCTestCase {
             responseOverride: { fixture.response($0) },
             extraCapabilities: [.runsObserve, .runsControl]
         )
-        let rosterHeld = expectation(description: "first roster read held")
-        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
-        let loading = Task { await model.load(observeProgress: true) }
-        await fulfillment(of: [rosterHeld], timeout: 3)
-        // The opening lookup is answered before the run registers on the Mac,
-        // and the run registers before the first roster arrives.
+        // Complete transcript, draft and catalog I/O before timing only the
+        // held roster request. The opening lookup still sees no registered run.
+        await model.load(observeProgress: false)
         try await waitForCondition("opening lookup answered") {
             fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
         }
+        defer { model.stopProgressObservation() }
+        let rosterHeld = expectation(description: "first roster read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
+        model.startProgressObservation()
+        await fulfillment(of: [rosterHeld], timeout: 3)
+        // The opening lookup is answered before the run registers on the Mac,
+        // and the run registers before the first roster arrives.
         fixture.startRun()
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
-        await loading.value
 
         try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
         XCTAssertTrue(model.isObservingForeignRun)
@@ -2965,18 +3243,21 @@ final class AidenChatTests: XCTestCase {
             responseOverride: { fixture.response($0) },
             extraCapabilities: [.runsObserve, .runsControl]
         )
-        let rosterHeld = expectation(description: "first roster read held")
-        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
-        let loading = Task { await model.load(observeProgress: true) }
-        await fulfillment(of: [rosterHeld], timeout: 3)
+        // Complete transcript, draft and catalog I/O before timing only the
+        // held roster request. The opening lookup still sees no registered run.
+        await model.load(observeProgress: false)
         try await waitForCondition("opening lookup answered") {
             fixture.currentRunRequests == 1 && !model.isLookingForForeignRun
         }
+        defer { model.stopProgressObservation() }
+        let rosterHeld = expectation(description: "first roster read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/agents") { rosterHeld.fulfill() }
+        model.startProgressObservation()
+        await fulfillment(of: [rosterHeld], timeout: 3)
         // A run starts and finishes on the Mac after the load read the
-        // transcript, and before the first roster arrives.
+        // transcript, and before the held roster response is delivered.
         fixture.startRun()
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
-        await loading.value
 
         try await waitForCondition("reply in transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
         XCTAssertEqual(fixture.chatReads, 2, "The finished run's reply is read once.")
@@ -5466,6 +5747,51 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testStopDropsTheUploadInFlightButKeepsWhatAlreadyReachedTheMac() async throws {
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        await model.load(observeProgress: false)
+        let secondArrived = expectation(description: "the second upload reached the Mac")
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            guard request.httpMethod == "POST", request.url?.path.hasSuffix("/attachments") == true else { return nil }
+            let count = AidenChatProgressLifecycleURLProtocol.uploadRequestCount
+            // The first upload is staged; the second waits on the Mac until Stop.
+            if count == 2 {
+                AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/attachments") { secondArrived.fulfill() }
+            }
+            return (201, "application/json", try! JSONSerialization.data(withJSONObject: [
+                "id": "att_" + String(repeating: count == 1 ? "a" : "b", count: 43),
+                "name": "file-\(count).txt", "mimeType": "text/plain", "kind": "text", "size": 1,
+                "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+            ]))
+        }
+        defer { AidenChatProgressLifecycleURLProtocol.releaseHeldRequest() }
+
+        let uploading = Task {
+            await model.upload([
+                .text(name: "file-1.txt", mimeType: "text/plain", text: "1"),
+                .text(name: "file-2.txt", mimeType: "text/plain", text: "2"),
+                .text(name: "file-3.txt", mimeType: "text/plain", text: "3"),
+            ])
+        }
+        await fulfillment(of: [secondArrived], timeout: 5)
+        XCTAssertEqual(model.uploadProgress?.title, "Sending 2 of 3")
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"])
+
+        model.cancelUploads()
+        _ = await uploading.value
+
+        XCTAssertEqual(model.pendingAttachments.map(\.name), ["file-1.txt"], "what reached the Mac stays ready to send")
+        XCTAssertNil(model.uploadProgress, "the bar goes away")
+        XCTAssertFalse(model.isUploadingAttachment)
+        XCTAssertNil(model.presentedError, "Stop is not a failure")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.uploadRequestCount, 2, "the third file never left the phone")
+        XCTAssertEqual(AidenChatProgressLifecycleURLProtocol.attachmentDeleteCount, 0, "Stop doesn't take the staged file off the Mac")
+        XCTAssertTrue(model.canSend, "the staged file can still be sent")
+        model.setAllowsMutations(false)
+    }
+
+    @MainActor
     func testRemovalCancelsOwnedUploadAndRejectsHeldImageCompletion() async throws {
         try await assertRemovalJoinsUploadCleanup()
     }
@@ -6334,6 +6660,34 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(committed.map(describe), ["text:Before.", "tool:call-1", "images:generated", "tool:call-2", "text:Here it is."])
     }
 
+    func testAdjacentRecordingAndImageKeepCallOrder() throws {
+        for imageFirst in [false, true] {
+            let imageCall = imageFirst ? 1 : 2
+            let recordingCall = imageFirst ? 2 : 1
+            let imageStep = """
+            {"id":"tool-\(imageCall)","order":\(imageCall - 1),"kind":"tool","toolCallId":"call-\(imageCall)","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0}
+            """
+            let recordingStep = """
+            {"id":"tool-\(recordingCall)","order":\(recordingCall - 1),"kind":"tool","toolCallId":"call-\(recordingCall)","toolName":"browser_recording_stop","label":"Stop recording","status":"completed","startedAt":1000,"updatedAt":2000,"finishedAt":2000,"contentOffset":0,"recording":{"id":"recording-0f1e2d3c-4b5a-4678-9abc-def012345678","mimeType":"video/mp4","sizeBytes":100,"durationMs":2000}}
+            """
+            let steps = imageFirst ? [imageStep, recordingStep] : [recordingStep, imageStep]
+            let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data("""
+            {"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\(steps.joined(separator: ","))]}
+            """.utf8))
+            let photo = AidenMessageAttachment(id: "photo", name: "Photo.png", mimeType: "image/png", kind: .image, size: 10, toolCallId: "call-\(imageCall)")
+            let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "After.", reasoning: "", timeline: timeline, images: [photo]))
+            let media = rows.compactMap { row -> String? in
+                switch row.kind {
+                case .images: return "photo"
+                case .recording: return "recording"
+                default: return nil
+                }
+            }
+            XCTAssertEqual(media, imageFirst ? ["photo", "recording"] : ["recording", "photo"])
+            XCTAssertEqual(AidenChronologicalProjection.placedImageIDs(in: rows), ["photo"])
+        }
+    }
+
     func testMalformedVisualIsDroppedWhileItsMessageAndChatSurvive() throws {
         func editVisual(at index: Int, _ edit: @escaping (inout [String: Any]) -> Void) -> (inout [String: Any]) -> Void {
             { message in
@@ -7112,13 +7466,14 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertEqual(hidden, AidenChatModelSelection(providerId: "openai", modelId: "gpt-hidden", thinkingLevel: nil))
 
-        // A pick in this chat (no remembered value passed) still wins.
+        // A pick explicitly made in this chat still wins.
         let picked = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,
             selectedProviderId: "openai",
             selectedModelId: "gpt-5.6",
-            selectedThinkingLevel: "low"
+            selectedThinkingLevel: "low",
+            hasExplicitSelection: true
         )
         XCTAssertEqual(picked, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "low"))
 
@@ -7134,6 +7489,28 @@ final class AidenChatTests: XCTestCase {
         )
         XCTAssertEqual(bot.providerId, "google")
         XCTAssertEqual(bot.modelId, "gemini-flash")
+    }
+
+    func testRefreshedChatModelDoesNotDependOnRememberedDefaultOrCatalog() throws {
+        let catalog = try JSONDecoder().decode(AidenModelCatalog.self, from: Data(
+            #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"},{"id":"gpt-hidden","label":"Hidden","hidden":true}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+        ))
+        for modelID in ["gpt-5.6", "gpt-hidden"] {
+            var chat = sampleChat()
+            chat.botId = nil
+            chat.providerId = "openai"
+            chat.modelId = modelID
+            for inventory in [catalog, nil] as [AidenModelCatalog?] {
+                let resolved = AidenChatModelAuthority.resolvedSelection(
+                    chat: chat, catalog: inventory,
+                    selectedProviderId: "google", selectedModelId: "gemini-flash",
+                    selectedThinkingLevel: "high"
+                )
+                XCTAssertEqual(resolved.providerId, "openai")
+                XCTAssertEqual(resolved.modelId, modelID)
+                XCTAssertNil(resolved.thinkingLevel, "the cached model's level cannot leak to the desktop's pick")
+            }
+        }
     }
 
     func testMissingOrHiddenRememberedModelFallsBackToChatPairThenHostDefaults() throws {
@@ -7399,20 +7776,145 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenRelativeTimestamp.text(for: now.addingTimeInterval(30), now: now), "just now")
     }
 
-    func testNewAgentPopoverKeepsTheThreeReviewedWorkspaceChoices() {
+    func testNewAgentPopoverOffersNoWorkspaceOnlyWhenTheMacHasAChatsHome() {
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases,
+            AidenNewAgentChoice.available(noWorkspace: false),
             [.existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.title),
-            ["Existing Workspace", "New Workspace", "Managed Scratch Workspace"]
-        )
-        XCTAssertEqual(
-            AidenNewAgentChoice.allCases.map(\.symbol),
-            ["folder", "folder.badge.plus", "hammer.fill"]
+            AidenNewAgentChoice.available(noWorkspace: true),
+            [.noWorkspace, .existingWorkspace, .newWorkspace, .scratchWorkspace]
         )
         XCTAssertTrue(AidenNewAgentChoice.allCases.allSatisfy { !$0.detail.isEmpty })
+    }
+
+    func testChatsWithoutAWorkspaceShareOneChatsSectionOnTheirHome() throws {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func record(_ id: String, created: TimeInterval, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base.addingTimeInterval(created),
+                updatedAt: base.addingTimeInterval(created),
+                revision: "\(id)-r1"
+            )
+        }
+        func chat(_ id: String, in workspaceId: String, updated: TimeInterval) -> AidenChat {
+            AidenChat(
+                id: id,
+                workspaceId: workspaceId,
+                title: id,
+                providerId: nil,
+                modelId: nil,
+                messages: [],
+                createdAt: base,
+                updatedAt: base.addingTimeInterval(updated),
+                revision: "\(id)-r1"
+            )
+        }
+        let workspaces = [
+            record("project", created: 0),
+            record("hidden-later", created: 30, noWorkspace: true),
+            record("hidden-first", created: 10, noWorkspace: true),
+        ]
+        XCTAssertEqual(AidenNoWorkspace.home(in: workspaces)?.id, "hidden-first", "the oldest stands for the group")
+        XCTAssertEqual(
+            AidenNoWorkspace.home(in: workspaces + [record("default", created: 50, noWorkspace: true)])?.id,
+            "default",
+            "the long-lived default home wins"
+        )
+        XCTAssertEqual(AidenNoWorkspace.choices(workspaces).map(\.id), ["project"])
+        // A scheduled task that already runs in a hidden folder keeps it as a choice while edited.
+        XCTAssertEqual(
+            AidenNoWorkspace.choices(workspaces, keeping: "hidden-later").map(\.id),
+            ["project", "hidden-later"]
+        )
+
+        let projection = AidenWorkspaceSidebarProjection.make(
+            workspaces: workspaces,
+            chats: [
+                chat("soup", in: "hidden-later", updated: 40),
+                chat("trip", in: "hidden-first", updated: 20),
+                chat("fix", in: "project", updated: 5),
+            ],
+            searchText: ""
+        )
+        XCTAssertEqual(projection.sections.map(\.workspace.id), ["hidden-first", "project"])
+        XCTAssertEqual(projection.sections[0].workspace.name, "Chats")
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["soup", "trip"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["fix"])
+
+        // A Mac before revision 51 marks nothing: every workspace stays its own section.
+        XCTAssertNil(AidenNoWorkspace.home(in: [record("project", created: 0)]))
+
+        // An older build could archive a "No workspace" record; the Chats group has no Unarchive,
+        // so that flag is ignored and its chats stay listed. Archived projects stay archived.
+        XCTAssertEqual(
+            AidenNoWorkspace.unarchived(workspaces, archivedIDs: ["hidden-first", "project"]).map(\.id),
+            ["hidden-later", "hidden-first"]
+        )
+
+        // A link or Shortcut that remembers a hidden folder on a Mac that isn't the active one
+        // finds the Chats entry through the catalog; other ids are left as they are.
+        let catalog = [
+            AidenIntentWorkspaceRecord(id: "hidden-first", instanceId: "other", name: "Chats",
+                                       groupedIDs: ["hidden-first", "hidden-later"]),
+            AidenIntentWorkspaceRecord(id: "project", instanceId: "other", name: "Project"),
+        ]
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "hidden-later", in: catalog), "hidden-first")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "project", in: catalog), "project")
+        XCTAssertEqual(AidenIntentWorkspaceRecord.listedID(for: "gone", in: catalog), "gone")
+        // A catalog saved by an older build has no grouped ids and still decodes.
+        let older = try JSONDecoder().decode(
+            AidenIntentWorkspaceRecord.self,
+            from: Data(#"{"id":"default","instanceId":"other","name":"No workspace"}"#.utf8)
+        )
+        XCTAssertNil(older.groupedIDs)
+
+        // Recents search matches the label a hidden chat shows ("Chats"), not the record's name.
+        let hiddenChats = [chat("soup", in: "hidden-later", updated: 40), chat("fix", in: "project", updated: 5)]
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "chats").recents.map(\.id),
+            ["soup"]
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: hiddenChats, searchText: "No workspace").recents.map(\.id),
+            []
+        )
+
+        // A chat another device started in a fresh hidden record is left out until the phone
+        // re-reads its workspaces, and it asks once per such record.
+        let elsewhere = chat("elsewhere", in: "hidden-new", updated: 60)
+        XCTAssertFalse(
+            AidenWorkspaceSidebarProjection.make(workspaces: workspaces, chats: [elsewhere], searchText: "")
+                .recents.contains { $0.id == "elsewhere" }
+        )
+        let chatWorkspaceIDs = ["hidden-later", "project", "hidden-new"]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: []),
+            ["hidden-new"]
+        )
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: workspaces, alreadyReRead: ["hidden-new"]),
+            []
+        )
+        let reRead = workspaces + [record("hidden-new", created: 60, noWorkspace: true)]
+        XCTAssertEqual(
+            AidenNoWorkspace.unlistedWorkspaceIDs(chatWorkspaceIDs: chatWorkspaceIDs, in: reRead, alreadyReRead: []),
+            []
+        )
+        XCTAssertEqual(
+            AidenWorkspaceSidebarProjection.make(workspaces: reRead, chats: [elsewhere], searchText: "")
+                .sections.first?.chats.map(\.id),
+            ["elsewhere"]
+        )
     }
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
@@ -10423,10 +10925,33 @@ private final class AidenChatProgressMemoryKeychain: KeychainStoring {
     }
 }
 
+private final class AidenEpochRotationURLProtocolClient: NSObject, URLProtocolClient, @unchecked Sendable {
+    enum Event: Equatable, Sendable { case response, data(Data), finished, cancelled, failed }
+    private let lock = NSLock()
+    private var recorded: [Event] = []
+    private let onEvent: @Sendable (Event) -> Void
+
+    init(onEvent: @escaping @Sendable (Event) -> Void) { self.onEvent = onEvent }
+    var events: [Event] { lock.withLock { recorded } }
+    private func record(_ event: Event) {
+        lock.withLock { recorded.append(event) }
+        onEvent(event)
+    }
+    func urlProtocol(_ protocol: URLProtocol, wasRedirectedTo request: URLRequest, redirectResponse: URLResponse) {}
+    func urlProtocol(_ protocol: URLProtocol, cachedResponseIsValid cachedResponse: CachedURLResponse) {}
+    func urlProtocol(_ protocol: URLProtocol, didReceive response: URLResponse, cacheStoragePolicy policy: URLCache.StoragePolicy) { record(.response) }
+    func urlProtocol(_ protocol: URLProtocol, didLoad data: Data) { record(.data(data)) }
+    func urlProtocolDidFinishLoading(_ protocol: URLProtocol) { record(.finished) }
+    func urlProtocol(_ protocol: URLProtocol, didFailWithError error: Error) { record(aidenIsCancellation(error) ? .cancelled : .failed) }
+    func urlProtocol(_ protocol: URLProtocol, didReceive challenge: URLAuthenticationChallenge) {}
+    func urlProtocol(_ protocol: URLProtocol, didCancel challenge: URLAuthenticationChallenge) {}
+}
+
 private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @unchecked Sendable {
     enum Mode: Sendable, Equatable {
         case denied
         case finite
+        case open
         case rosterFailsAfterFirst
         case rosterEpochRotates
         case controls
@@ -10455,6 +10980,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     }
 
     private static let lock = NSLock()
+    nonisolated(unsafe) private static let deliveryQueueKey = DispatchSpecificKey<Bool>()
+    private static let deliveryQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "AidenChatTests.fixture-delivery")
+        queue.setSpecific(key: deliveryQueueKey, value: true)
+        return queue
+    }()
+
+    /// Epoch changes and individual client callbacks share one order. Client
+    /// code runs without `lock` and can synchronously rotate the epoch; the
+    /// next callback will then fail its own check rather than continuing.
+    private static func serializeDelivery<T>(_ operation: () -> T) -> T {
+        let queue = deliveryQueue
+        if DispatchQueue.getSpecific(key: deliveryQueueKey) == true { return operation() }
+        return queue.sync(execute: operation)
+    }
     nonisolated(unsafe) private static var _controlWriteCount = 0
     nonisolated(unsafe) private static var approvalID = "approval-current"
     nonisolated(unsafe) private static var approvalReadFails = false
@@ -10483,9 +11023,11 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var _epoch = UUID().uuidString
     static var epoch: String { lock.withLock { _epoch } }
     static func beginTestEpoch() {
-        lock.withLock {
-            _epoch = UUID().uuidString
-            countWaiters = []
+        serializeDelivery {
+            lock.withLock {
+                _epoch = UUID().uuidString
+                countWaiters = []
+            }
         }
     }
 
@@ -10534,6 +11076,8 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var heldPathSuffix: String?
     nonisolated(unsafe) private static var onHeldRequest: (@Sendable () -> Void)?
     nonisolated(unsafe) private static var heldCompletion: (@Sendable () -> Void)?
+    nonisolated(unsafe) private static var _heldRequestEpochs: [String] = []
+    static var heldRequestEpochs: [String] { lock.withLock { _heldRequestEpochs } }
 
     static func holdNextRequest(endingIn suffix: String, onRequest: @escaping @Sendable () -> Void) {
         lock.withLock {
@@ -10584,6 +11128,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         _attachmentDeleteCount = 0
         heldPathSuffix = nil
         onHeldRequest = nil
+        _heldRequestEpochs = []
         lock.unlock()
     }
 
@@ -10591,28 +11136,60 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
-    override func startLoading() {
-        guard request.value(forHTTPHeaderField: Self.epochHeader) == Self.epoch else {
-            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
-            return
+    /// A response can suspend in its override after passing the entry check.
+    /// Bind every shared-fixture effect to that request's epoch under the lock.
+    private func inCurrentEpoch<T>(_ operation: () -> T) -> T? {
+        Self.lock.withLock {
+            guard request.value(forHTTPHeaderField: Self.epochHeader) == Self._epoch else { return nil }
+            return operation()
         }
+    }
+
+    private func cancelStaleRequest() {
+        Self.serializeDelivery { client?.urlProtocol(self, didFailWithError: URLError(.cancelled)) }
+    }
+
+    @discardableResult
+    private func deliverIfCurrent(_ callback: () -> Void) -> Bool {
+        Self.serializeDelivery {
+            guard inCurrentEpoch({ true }) == true else { return false }
+            callback()
+            return true
+        }
+    }
+
+    private func failCurrentRequest(_ error: Error) {
+        if !deliverIfCurrent({ client?.urlProtocol(self, didFailWithError: error) }) { cancelStaleRequest() }
+    }
+
+    private func installEventSink() -> Bool {
+        inCurrentEpoch {
+            Self.eventSink = { [self] data in
+                deliverIfCurrent { client?.urlProtocol(self, didLoad: data) }
+            }
+            return true
+        } == true
+    }
+
+    override func startLoading() {
         let path = request.url?.path ?? ""
-        if request.httpMethod == "POST" { Self.lock.withLock { Self._postPaths.append(path) } }
-        if path.contains("/attachments/"), request.httpMethod == "DELETE" { Self.lock.withLock { Self._attachmentDeleteCount += 1 } }
-        if path.hasSuffix("/attachments"), request.httpMethod == "POST" { Self.lock.withLock { Self._uploadRequestCount += 1 } }
-        if path.hasSuffix("/turns") { Self.lock.withLock { Self._turnRequestCount += 1 } }
+        guard let handlers = inCurrentEpoch({
+            if request.httpMethod == "POST" { Self._postPaths.append(path) }
+            if path.contains("/attachments/"), request.httpMethod == "DELETE" { Self._attachmentDeleteCount += 1 }
+            if path.hasSuffix("/attachments"), request.httpMethod == "POST" { Self._uploadRequestCount += 1 }
+            if path.hasSuffix("/turns") { Self._turnRequestCount += 1 }
+            return Self.responseOverride
+        }) else { cancelStaleRequest(); return }
         let result: (HTTPURLResponse, Data)
         var shouldFinish = true
-        if let custom = Self.lock.withLock({ Self.responseOverride })?(request) {
+        if let custom = handlers?(request) {
             if custom.0 == Self.connectionLostStatus {
-                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                failCurrentRequest(URLError(.networkConnectionLost))
                 return
             }
             if custom.0 == Self.openEventStreamStatus {
                 shouldFinish = false
-                Self.lock.withLock {
-                    Self.eventSink = { [self] data in client?.urlProtocol(self, didLoad: data) }
-                }
+                guard installEventSink() else { cancelStaleRequest(); return }
                 result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: custom.2)
             } else {
                 result = Self.response(for: request, status: custom.0, contentType: custom.1, data: custom.2)
@@ -10648,9 +11225,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         case "/api/aiden/v1/streams/stream-control/events":
             shouldFinish = false
             if Self.lock.withLock({ Self.mode == .questions }) {
-                Self.lock.withLock {
-                    Self.eventSink = { [self] data in client?.urlProtocol(self, didLoad: data) }
-                }
+                guard installEventSink() else { cancelStaleRequest(); return }
             }
             result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
         case "/api/aiden/v1/streams/stream-control/question" where Self.lock.withLock({ Self.mode == .questions }):
@@ -10658,9 +11233,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 {"question":{"promptId":"question-current","streamId":"stream-control","chatId":"chat-progress-lifecycle","toolCallId":"tool-question","questions":\(Self.questionList),"expiresAt":"2099-01-01T00:00:00Z"}}
                 """.utf8))
         case "/api/aiden/v1/streams/stream-control/approval":
-            Self.lock.withLock { Self._approvalReadCount += 1 }
+            guard inCurrentEpoch({ Self._approvalReadCount += 1; return true }) == true else { cancelStaleRequest(); return }
             if Self.lock.withLock({ Self.approvalReadFails }) {
-                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+                failCurrentRequest(URLError(.networkConnectionLost))
                 return
             }
             let id = Self.lock.withLock { Self.approvalID }
@@ -10672,7 +11247,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 {"approval":{"approvalId":"\(id)","streamId":"stream-control","chatId":"chat-progress-lifecycle","summary":"Review action","toolCallId":"tool-control","toolName":"read_file","expiresAt":"2099-01-01T00:00:00Z","canAllow":true}}
                 """.utf8))
         case "/api/aiden/v1/approvals/approval-current/respond", "/api/aiden/v1/streams/stream-control/cancel":
-            Self.lock.withLock { Self._controlWriteCount += 1 }
+            guard inCurrentEpoch({ Self._controlWriteCount += 1; return true }) == true else { cancelStaleRequest(); return }
             if Self.lock.withLock({ Self.mode == .questions }), path.hasSuffix("/cancel") {
                 result = Self.response(for: request, status: 202, contentType: "application/json", data: Data(#"{"streamId":"stream-control","chatId":"chat-progress-lifecycle","turnId":"turn-control","state":"cancelled","lastSequence":1,"updatedAt":"2026-09-22T12:00:01Z"}"#.utf8))
             } else if Self.lock.withLock({ Self.mode == .mismatchedApproval }) {
@@ -10697,7 +11272,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 data: Self.taskSnapshot
             )
         case "/api/aiden/v1/chats/chat-progress-lifecycle/agents/agent-live/interrupt":
-            Self.lock.withLock { Self._agentInterruptPaths.append("\(request.httpMethod ?? "?") \(path)") }
+            guard inCurrentEpoch({ Self._agentInterruptPaths.append("\(request.httpMethod ?? "?") \(path)"); return true }) == true else { cancelStaleRequest(); return }
             result = Self.response(
                 for: request,
                 status: 200,
@@ -10706,7 +11281,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             )
         case "/api/aiden/v1/chats/chat-progress-lifecycle/agents"
             where Self.lock.withLock({ Self.mode == .agentInterrupt }):
-            Self.lock.withLock { Self._agentRequestCount += 1 }
+            guard inCurrentEpoch({ Self._agentRequestCount += 1; return true }) == true else { cancelStaleRequest(); return }
             Self.notifyCountWaiters()
             result = Self.response(
                 for: request,
@@ -10719,13 +11294,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 url: request.url!,
                 resolvingAgainstBaseURL: false
             )?.queryItems?.first(where: { $0.name == "turnId" })?.value
-            let currentMode: Mode
-            let requestCount: Int
-            Self.lock.lock()
-            Self._agentRequestCount += 1
-            requestCount = Self._agentRequestCount
-            currentMode = Self.mode
-            Self.lock.unlock()
+            guard let snapshot = inCurrentEpoch({ Self._agentRequestCount += 1; return (count: Self._agentRequestCount, mode: Self.mode) }) else { cancelStaleRequest(); return }
+            let requestCount = snapshot.count
+            let currentMode = snapshot.mode
             Self.notifyCountWaiters()
             if currentMode == .rosterEpochRotates, requestedTurn == "turn-old" {
                 result = Self.response(
@@ -10764,12 +11335,9 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 )
             }
         case "/api/aiden/v1/chats/chat-progress-lifecycle/progress/events":
-            let currentMode: Mode
-            Self.lock.lock()
-            Self._progressRequestCount += 1
-            let requestCount = Self._progressRequestCount
-            currentMode = Self.mode
-            Self.lock.unlock()
+            guard let snapshot = inCurrentEpoch({ Self._progressRequestCount += 1; return (count: Self._progressRequestCount, mode: Self.mode) }) else { cancelStaleRequest(); return }
+            let requestCount = snapshot.count
+            let currentMode = snapshot.mode
             Self.notifyCountWaiters()
             if currentMode == .denied {
                 result = Self.response(
@@ -10782,7 +11350,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
                 )
             } else {
                 let payload = String(decoding: Self.taskSnapshot, as: UTF8.self)
-                shouldFinish = currentMode != .rosterFailsAfterFirst || requestCount < 2
+                shouldFinish = currentMode != .open && (currentMode != .rosterFailsAfterFirst || requestCount < 2)
                 if currentMode == .rosterEpochRotates {
                     shouldFinish = requestCount < 3
                 }
@@ -10815,32 +11383,34 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
 
         }
         let finishes = shouldFinish
-        let onHold = Self.lock.withLock { () -> (@Sendable () -> Void)? in
-            guard let suffix = Self.heldPathSuffix, path.hasSuffix(suffix) else { return nil }
+        guard let hold = inCurrentEpoch({ () -> (callback: (@Sendable () -> Void)?, held: Bool) in
+            guard let suffix = Self.heldPathSuffix, path.hasSuffix(suffix) else { return (nil, false) }
+            Self._heldRequestEpochs.append(request.value(forHTTPHeaderField: Self.epochHeader) ?? "")
             Self.heldPathSuffix = nil
             let onHold = Self.onHeldRequest
             Self.onHeldRequest = nil
             Self.heldCompletion = { [self] in complete(result, shouldFinish: finishes) }
-            return onHold
-        }
-        if let onHold {
-            onHold()
+            return (onHold, true)
+        }) else { cancelStaleRequest(); return }
+        if hold.held {
+            hold.callback?()
             return
         }
         complete(result, shouldFinish: shouldFinish)
     }
 
     private func complete(_ result: (HTTPURLResponse, Data), shouldFinish: Bool) {
+        guard let mode = inCurrentEpoch({ Self.mode }) else { cancelStaleRequest(); return }
         let path = request.url?.path ?? ""
-        if Self.lock.withLock({ Self.mode == .cancelledControls }),
+        if mode == .cancelledControls,
            path.hasSuffix("/respond") || path.hasSuffix("/cancel") {
-            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            failCurrentRequest(URLError(.cancelled))
             return
         }
-        client?.urlProtocol(self, didReceive: result.0, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: result.1)
+        guard deliverIfCurrent({ client?.urlProtocol(self, didReceive: result.0, cacheStoragePolicy: .notAllowed) }) else { cancelStaleRequest(); return }
+        guard deliverIfCurrent({ client?.urlProtocol(self, didLoad: result.1) }) else { cancelStaleRequest(); return }
         if shouldFinish {
-            client?.urlProtocolDidFinishLoading(self)
+            if !deliverIfCurrent({ client?.urlProtocolDidFinishLoading(self) }) { cancelStaleRequest() }
         }
     }
 
@@ -11845,70 +12415,7 @@ final class AidenAppearanceTests: XCTestCase {
         )
     }
 
-    func testNeedsAttentionChatsSortAboveNewerWorkingAndIdleChats() {
-        let newestFirst = [
-            attentionSummary("idle-newest", updated: 50),
-            attentionSummary("running", updated: 40, active: true, rowState: .working),
-            attentionSummary("idle-middle", updated: 30),
-            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
-            attentionSummary("approval", updated: 10, active: true, rowState: .needsApproval),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["approval", "question", "running", "idle-newest", "idle-middle"]
-        )
-    }
-
-    func testNeedsAttentionOrderingKeepsIncomingOrderWithinATier() {
-        // Older Macs send no row state; an active chat still counts as working.
-        let newestFirst = [
-            attentionSummary("idle-c", updated: 30),
-            attentionSummary("run-b", updated: 25, active: true),
-            attentionSummary("idle-b", updated: 20),
-            attentionSummary("run-a", updated: 15, active: true, rowState: .working),
-            attentionSummary("idle-a", updated: 10),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["run-b", "run-a", "idle-c", "idle-b", "idle-a"]
-        )
-    }
-
-    func testUnseenFailuresSortBetweenChatsNeedingTheUserAndWorkingChats() {
-        var seenFailure = attentionSummary("seen-failure", updated: 40)
-        seenFailure.lastRunFailed = true
-        var unseenFailure = attentionSummary("unseen-failure", updated: 30)
-        unseenFailure.unread = true
-        unseenFailure.lastRunFailed = true
-        var unreadReply = attentionSummary("unread-reply", updated: 25)
-        unreadReply.unread = true
-        let newestFirst = [
-            attentionSummary("idle-newest", updated: 60),
-            attentionSummary("running", updated: 50, active: true, rowState: .working),
-            seenFailure,
-            unseenFailure,
-            unreadReply,
-            attentionSummary("question", updated: 20, active: true, rowState: .needsInput),
-        ]
-
-        XCTAssertEqual(
-            aidenNeedsAttentionFirst(newestFirst).map(\.id),
-            ["question", "unseen-failure", "running", "idle-newest", "seen-failure", "unread-reply"]
-        )
-    }
-
-    func testStaleAttentionStateOnIdleChatDoesNotJumpTheQueue() {
-        let newestFirst = [
-            attentionSummary("newer", updated: 20),
-            attentionSummary("stale-approval", updated: 10, active: false, rowState: .needsApproval),
-        ]
-
-        XCTAssertEqual(aidenNeedsAttentionFirst(newestFirst).map(\.id), ["newer", "stale-approval"])
-    }
-
-    func testWorkspaceSidebarSurfacesAttentionFirstWithoutReorderingWorkspaces() {
+    func testWorkspaceAndRecentSidebarsSortPlainlyByRecencyAsOnTheDesktop() {
         let base = Date(timeIntervalSince1970: 1_000)
         let workspaces = ["alpha", "beta"].map { id in
             AidenWorkspace(
@@ -11938,14 +12445,15 @@ final class AidenAppearanceTests: XCTestCase {
             searchText: ""
         )
 
-        // Workspaces stay ordered by their newest activity, not by attention.
+        // Attention ordering belongs to the Inbox; By workspace and Recent
+        // keep newest first, and workspaces follow their newest activity.
         XCTAssertEqual(projection.sections.map(\.workspace.id), ["alpha", "beta"])
         XCTAssertEqual(projection.sections[0].newestActivityAt, base.addingTimeInterval(100))
-        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-approval", "alpha-newest"])
-        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["beta-working", "beta-idle"])
+        XCTAssertEqual(projection.sections[0].chats.map(\.id), ["alpha-newest", "alpha-approval"])
+        XCTAssertEqual(projection.sections[1].chats.map(\.id), ["beta-idle", "beta-working"])
         XCTAssertEqual(
             projection.recents.map(\.id),
-            ["alpha-approval", "beta-working", "alpha-newest", "beta-idle"]
+            ["alpha-newest", "beta-idle", "beta-working", "alpha-approval"]
         )
     }
 
@@ -11960,10 +12468,21 @@ final class AidenAppearanceTests: XCTestCase {
         store.setWorkspaceSidebarOrganization(.recent, for: "mac-one")
         store.toggleExpandedSidebarWorkspace("alpha", for: "mac-one")
         store.toggleExpandedSidebarWorkspace("beta", for: "mac-two")
+        store.setWorkspaceSidebarOrganization(.inbox, for: "mac-three")
 
         let restored = AidenProductNavigationStore(defaults: defaults)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .recent)
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-three"), .inbox)
+        // Each Mac's sidebar header names the organization it restored; only Inbox is Beta.
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).title },
+            ["Recents", "Workspaces", "Inbox"]
+        )
+        XCTAssertEqual(
+            ["mac-one", "mac-two", "mac-three"].map { restored.workspaceSidebarOrganization(for: $0).isBeta },
+            [false, false, true]
+        )
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
 
@@ -11975,6 +12494,28 @@ final class AidenAppearanceTests: XCTestCase {
         XCTAssertEqual(restored.workspaceSidebarOrganization(for: "mac-one"), .workspace)
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-one"), [])
         XCTAssertEqual(restored.expandedSidebarWorkspaceIDs(for: "mac-two"), ["beta"])
+    }
+
+    @MainActor
+    func testASidebarViewThisBuildDoesNotKnowDropsOnlyThatMacsChoice() throws {
+        let suiteName = "AidenWorkspaceSidebarTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        // As a newer build might save it: one Mac on a view this build lacks.
+        let saved = #"""
+        {"areasByInstance":{"mac-one":"workspaces"},"selectedWorkspaceByInstance":{"mac-one":"alpha"},
+         "compactWorkspacePathByInstance":{},"compactBotPathByInstance":{},
+         "workspaceSidebarOrganizationsByInstance":{"mac-one":"recent","mac-two":"kanban"},
+         "expandedSidebarWorkspaceIDsByInstance":{"mac-one":["alpha"]}}
+        """#
+        defaults.set(Data(saved.utf8), forKey: "aiden.product-navigation.v1")
+
+        let store = AidenProductNavigationStore(defaults: defaults)
+
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-one"), .recent)
+        XCTAssertEqual(store.workspaceSidebarOrganization(for: "mac-two"), .workspace)
+        XCTAssertEqual(store.expandedSidebarWorkspaceIDs(for: "mac-one"), ["alpha"])
+        XCTAssertEqual(store.selectedWorkspace(for: "mac-one"), "alpha", "The rest of the snapshot survives.")
     }
 
     func testWorkspaceSelectionSurvivesAdaptiveLayoutChangesAndReconcilesCRUD() {
@@ -11994,6 +12535,40 @@ final class AidenAppearanceTests: XCTestCase {
             "Removing the selected workspace should converge on an available detail"
         )
         XCTAssertNil(AidenWorkspaceNavigation.reconciledSelection(current: selected, workspaceIDs: []))
+    }
+
+    func testSplitViewSelectsTheChatsHomeOnlyWhileOneOfItsChatsIsOpen() {
+        let base = Date(timeIntervalSince1970: 1_000)
+        func workspace(_ id: String, noWorkspace: Bool = false) -> AidenWorkspace {
+            AidenWorkspace(
+                id: id,
+                name: noWorkspace ? "No workspace" : id.capitalized,
+                permission: .ask,
+                hasFolder: true,
+                isManagedWorktree: false,
+                noWorkspace: noWorkspace,
+                branchName: nil,
+                repositoryName: nil,
+                git: nil,
+                createdAt: base,
+                updatedAt: base,
+                revision: "\(id)-r1"
+            )
+        }
+        // The Mac lists its seeded hidden home first.
+        let workspaces = [workspace("default", noWorkspace: true), workspace("hidden-2", noWorkspace: true), workspace("project")]
+
+        let idle = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: nil)
+        XCTAssertEqual(idle, ["project"])
+        XCTAssertEqual(
+            AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: idle),
+            "project",
+            "with no Chats chat open, a hidden selection falls to a workspace that has a page"
+        )
+
+        let chatOpen = AidenWorkspaceNavigation.selectableIDs(workspaces, openChatWorkspaceID: "hidden-2")
+        XCTAssertEqual(chatOpen, ["default", "project"], "an open chat in any hidden folder keeps the Chats home")
+        XCTAssertEqual(AidenWorkspaceNavigation.reconciledSelection(current: "default", workspaceIDs: chatOpen), "default")
     }
 
     func testCompactWorkspacePathPreservesOnlyAnAvailableDestination() {
@@ -13152,6 +13727,87 @@ private final class AidenStreamRecoveryFixture: @unchecked Sendable {
 
     private func event(_ sequence: Int, _ type: String, _ payload: String, terminal: Bool = false) -> String {
         "id: \(sequence)\nevent: \(type)\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-recovery\",\"sequence\":\(sequence),\"timestamp\":\"2026-09-22T00:00:00Z\",\"type\":\"\(type)\",\"terminal\":\(terminal),\"payload\":\(payload)}\n\n"
+    }
+}
+
+/// A Mac that offers New worktree (revision 53) for the empty chat in
+/// workspace-1, and answers the worktree request as the test chooses.
+private final class AidenNewWorktreeMacFixture: @unchecked Sendable {
+    enum Setup: Sendable { case moves, refuses, neverAnswers }
+    static let worktreeWorkspaceId = "workspace-worktree"
+    static let refusal = "Aiden couldn't fetch main from origin."
+    private let lock = NSLock()
+    private var setupMode: Setup = .moves
+    private var moved = false
+    private var sent = false
+    private var keys: [String?] = []
+    var setup: Setup {
+        get { lock.withLock { setupMode } }
+        set { lock.withLock { setupMode = newValue } }
+    }
+    var worktreeKeys: [String?] { lock.withLock { keys } }
+    /// Another device moves the still-empty chat into the worktree workspace.
+    func moveElsewhere() { lock.withLock { moved = true } }
+
+    func response(_ request: URLRequest) -> (Int, String, Data)? {
+        switch request.url!.path {
+        case "/api/aiden/v1/server":
+            let grants = #"["server:read","workspace:read","chat:read","chat:write","git:write","chat:new-worktree"]"#
+            return (200, "application/json", Data("""
+            {"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\(grants),"serverCapabilities":\(grants),"features":[],"connectionMode":"lan","serverTime":"2026-10-31T09:00:00Z"}
+            """.utf8))
+        case "/api/aiden/v1/workspaces":
+            let workspaces = [Self.workspace(id: "workspace-1", worktree: false), Self.workspace(id: Self.worktreeWorkspaceId, worktree: true)]
+                .joined(separator: ",")
+            return (200, "application/json", Data(#"{"workspaces":[\#(workspaces)]}"#.utf8))
+        case "/api/aiden/v1/models":
+            return (200, "application/json", Data(#"{"providers":[{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT"}]}],"defaults":{"providerId":"openai","modelId":"gpt-5.6"}}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle":
+            let state = lock.withLock { (moved, sent) }
+            return (200, "application/json", Data(Self.chat(moved: state.0, sent: state.1).utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/worktree":
+            let mode = lock.withLock { () -> Setup in
+                keys.append(request.value(forHTTPHeaderField: "Idempotency-Key"))
+                if setupMode == .moves { moved = true }
+                return setupMode
+            }
+            if mode == .refuses {
+                return (409, "application/json", Data("""
+                {"error":{"code":"git_capability_denied","message":"\(Self.refusal)","requestId":"worktree-1","retryable":false}}
+                """.utf8))
+            }
+            // A request the test holds is never delivered.
+            return (200, "application/json", Data(#"{"chat":\#(Self.chat(moved: true, sent: false)),"branch":"aiden/fix-the-header"}"#.utf8))
+        case "/api/aiden/v1/chats/chat-progress-lifecycle/turns":
+            lock.withLock { sent = true }
+            return (202, "application/json", Data(#"{"turnId":"turn-worktree","streamId":"stream-worktree","status":"queued","message":\#(Self.question)}"#.utf8))
+        case "/api/aiden/v1/streams/stream-worktree":
+            return (200, "application/json", Data(#"{"streamId":"stream-worktree","chatId":"chat-progress-lifecycle","turnId":"turn-worktree","state":"done","lastSequence":1,"updatedAt":"2026-10-31T09:00:00Z"}"#.utf8))
+        case "/api/aiden/v1/streams/stream-worktree/events":
+            return (200, "text/event-stream", Data(
+                "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-worktree\",\"sequence\":1,\"timestamp\":\"2026-10-31T09:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"accepted-message\"}}\n\n".utf8
+            ))
+        default:
+            return nil
+        }
+    }
+
+    private static let question = #"{"id":"accepted-message","role":"user","text":"Fix the header","createdAt":"2026-10-31T09:00:00Z"}"#
+
+    private static func chat(moved: Bool, sent: Bool) -> String {
+        let workspaceId = moved ? worktreeWorkspaceId : "workspace-1"
+        let messages = sent ? question : ""
+        let revision = moved ? "revision-2" : "revision-1"
+        return """
+        {"id":"chat-progress-lifecycle","workspaceId":"\(workspaceId)","title":"Progress lifecycle","messages":[\(messages)],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"\(revision)"}
+        """
+    }
+
+    private static func workspace(id: String, worktree: Bool) -> String {
+        let branch = worktree ? #""branchName":"aiden/fix-the-header","# : ""
+        return """
+        {"id":"\(id)","name":"Site","permission":"ask","hasFolder":true,"isManagedWorktree":\(worktree),\(branch)"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:00Z","revision":"workspace-revision-1"}
+        """
     }
 }
 

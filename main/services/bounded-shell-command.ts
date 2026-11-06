@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import { createProcessGroupTerminator, decodeCappedUtf8, waitForChildExit } from "../shared/process-group.js";
+import { createProcessGroupTerminator, decodeCappedUtf8, processGroupExists, waitForChildExit } from "../shared/process-group.js";
 
 export interface BoundedShellCommandOptions {
   command: string;
@@ -12,6 +12,17 @@ export interface BoundedShellCommandOptions {
   signal?: AbortSignal;
   /** Written to the command's stdin, which is then closed. Without it stdin is ignored. */
   input?: string;
+  /**
+   * When the shell has exited but processes it started still hold its output
+   * open (`npm run dev &`), return this long after the exit with
+   * `leftoverProcessGroup` and the open streams, and leave them running for the
+   * caller to take over. Without it they are stopped after a short drain
+   * (`backgroundStopped`).
+   */
+  releaseLeftoversAfterMs?: number;
+  /** Hold a check behind stdin until its group is durably recorded. On completion
+   * terminate leftovers and release the record after group cleanup. */
+  recordGroup?: (pid: number) => Promise<() => Promise<void>>;
 }
 
 export interface BoundedShellCommandResult {
@@ -26,6 +37,18 @@ export interface BoundedShellCommandResult {
    * pipe after the drain window, so that process group was stopped.
    */
   backgroundStopped: boolean;
+  /**
+   * The shell exited on its own but processes it started are still in its
+   * process group (a server started with a trailing `&`). Nothing stops them;
+   * the caller decides whether to track them.
+   */
+  leftoverProcessGroup?: number;
+  /**
+   * With `releaseLeftoversAfterMs`: the output the leftovers still write to.
+   * Both are paused so nothing is lost before the caller attaches; it must
+   * read and resume both (or just resume them), or the leftovers block.
+   */
+  leftoverOutput?: { stdout: Readable; stderr: Readable };
 }
 
 // SIGTERM first; anything still in the group a second later gets SIGKILL.
@@ -40,7 +63,8 @@ const PIPE_DRAIN_MS = 1_000;
  * first, SIGKILL a second later for anything still running. The result waits
  * for that cleanup. When the shell exits but a background job still holds its
  * output pipe, the command settles after a short drain and the group is
- * stopped, instead of waiting for the job or the timeout. Used by
+ * stopped, instead of waiting for the job or the timeout, unless
+ * `releaseLeftoversAfterMs` hands the job to the caller. Used by
  * `run_command`, hooks, and workspace artifact sources and buttons.
  */
 export async function runBoundedShellCommand(options: BoundedShellCommandOptions): Promise<BoundedShellCommandResult> {
@@ -49,15 +73,20 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
     // Cancelled before it started: nothing runs.
     return { stdout: "", stderr: "", exitCode: null, timedOut: false, outputLimitExceeded: false, aborted: true, backgroundStopped: false };
   }
-  const child = spawn(options.command, {
+  const { recordGroup } = options;
+  const spawnOptions = {
     cwd: options.cwd,
     detached: process.platform !== "win32",
     env: options.env,
-    shell: true,
+  };
+  // On a host crash the pipe closes. An unrecorded shell then exits without
+  // evaluating the person's command. Pass the command as an argument verbatim.
+  const child = (recordGroup
+    ? spawn("/bin/sh", ["-c", 'IFS= read -r ready && exec /bin/sh -c "$1" </dev/null', "aiden-check", options.command],
+        { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] })
     // stdout and stderr are always pipes; stdin is a pipe only when there is input.
-    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-  }) as ChildProcessByStdio<Writable | null, Readable, Readable>;
-  if (options.input !== undefined && child.stdin) {
+    : spawn(options.command, { ...spawnOptions, shell: true, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] })) as ChildProcessByStdio<Writable | null, Readable, Readable>;
+  if (options.input !== undefined && !recordGroup && child.stdin) {
     // A command may exit without reading its input; a broken pipe is not an error.
     child.stdin.on("error", () => undefined);
     child.stdin.end(options.input);
@@ -80,8 +109,10 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       terminator.terminate();
     }
   };
-  child.stdout.on("data", capture(stdout));
-  child.stderr.on("data", capture(stderr));
+  const captureStdout = capture(stdout);
+  const captureStderr = capture(stderr);
+  child.stdout.on("data", captureStdout);
+  child.stderr.on("data", captureStderr);
   const abort = () => {
     aborted = true;
     terminator.terminate();
@@ -93,26 +124,103 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
   }, options.timeoutMs);
   timeout.unref?.();
 
+  const result = (exitCode: number | null, extra: Partial<BoundedShellCommandResult>): BoundedShellCommandResult => ({
+    stdout: decodeCappedUtf8(Buffer.concat(stdout), outputLimitExceeded),
+    stderr: decodeCappedUtf8(Buffer.concat(stderr), outputLimitExceeded),
+    exitCode,
+    timedOut,
+    outputLimitExceeded,
+    aborted,
+    backgroundStopped: false,
+    ...extra,
+  });
+
+  let releaseRecord: (() => Promise<void>) | undefined;
+  let admissionError: unknown;
+  child.stdin?.on("error", () => { /* The check was stopped before admission. */ });
+  const admission = recordGroup && child.pid
+    ? recordGroup(child.pid).then((release) => {
+        releaseRecord = release;
+        child.stdin?.end(terminator.requested ? undefined : "run\n");
+      }).catch((error: unknown) => {
+        admissionError = error;
+        child.stdin?.end();
+      })
+    : undefined;
   try {
+    const releaseAfter = recordGroup || process.platform === "win32" ? undefined : options.releaseLeftoversAfterMs;
+    if (releaseAfter !== undefined) {
+      const released = await waitOrRelease(child, releaseAfter, () => !terminator.requested && processGroupExists(child.pid));
+      if (released.kind === "released") {
+        child.stdout.off("data", captureStdout);
+        child.stderr.off("data", captureStderr);
+        // Held until whoever takes the leftovers reads or drains them.
+        child.stdout.pause();
+        child.stderr.pause();
+        return result(released.code, {
+          leftoverProcessGroup: child.pid,
+          leftoverOutput: { stdout: child.stdout, stderr: child.stderr },
+        });
+      }
+      if (released.kind === "closed") return result(released.code, leftovers(child.pid, terminator.requested));
+      // Nothing left in the group to hand over (or a timeout, the cap or an
+      // abort is already stopping it): stop it as without a caller.
+      terminator.terminate();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      return result(released.code, { backgroundStopped: !timedOut && !outputLimitExceeded && !aborted });
+    }
     const { code, pipesHeld } = await waitForChildExit(child, {
       drainMs: PIPE_DRAIN_MS,
       onPipesHeld: () => terminator.terminate(),
     });
-    return {
-      stdout: decodeCappedUtf8(Buffer.concat(stdout), outputLimitExceeded),
-      stderr: decodeCappedUtf8(Buffer.concat(stderr), outputLimitExceeded),
-      exitCode: code,
-      timedOut,
-      outputLimitExceeded,
-      aborted,
+    if (recordGroup) {
+      await admission;
+      if (admissionError) throw admissionError;
+      if (processGroupExists(child.pid)) terminator.terminate();
+    }
+    return result(code, {
+      ...(pipesHeld ? {} : leftovers(child.pid, terminator.requested)),
       // Only a group stopped because of the drain counts; a timeout, the cap or
       // an abort already explains itself.
       backgroundStopped: pipesHeld && !timedOut && !outputLimitExceeded && !aborted,
-    };
+    });
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abort);
     // The shell can close before its descendants leave the process group.
     await terminator.finished();
+    await admission;
+    await releaseRecord?.();
   }
+}
+
+/** Processes still in the group after the shell closed its output on its own. */
+function leftovers(pid: number | undefined, terminationRequested: boolean): Partial<BoundedShellCommandResult> {
+  return !terminationRequested && pid && processGroupExists(pid) ? { leftoverProcessGroup: pid } : {};
+}
+
+type ReleaseOutcome = { kind: "closed" | "held" | "released"; code: number | null };
+
+/**
+ * Like `waitForChildExit`, but when the pipes are still held `releaseAfterMs`
+ * after the shell exits and `canRelease()` agrees, settles as "released" and
+ * leaves the pipes open for the caller.
+ */
+function waitOrRelease(child: ReturnType<typeof spawn>, releaseAfterMs: number, canRelease: () => boolean): Promise<ReleaseOutcome> {
+  return new Promise<ReleaseOutcome>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      finish();
+    };
+    child.once("error", (error) => settle(() => reject(error)));
+    child.once("exit", (code) => {
+      timer = setTimeout(() => settle(() => resolve({ kind: canRelease() ? "released" : "held", code })), releaseAfterMs);
+    });
+    child.once("close", (code) => settle(() => resolve({ kind: "closed", code })));
+  });
 }

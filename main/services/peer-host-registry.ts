@@ -13,6 +13,7 @@ import {
   peerText,
   type PeerPairing,
 } from "./peer-pairing.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type https from "node:https";
 import { isIPv4 } from "node:net";
 import {
@@ -121,7 +122,7 @@ export interface PeerClient {
  * sends a Bot's shared images as entries whose bytes this Mac reads on demand,
  * instead of the line that tells the person to open the chat on the host.
  */
-const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string, call?: "own_call"]> = [
+const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string | null, call?: "own_call"]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
   ["agents:read", AIDEN_REMOTE_CHAT_AGENTS_FEATURE],
   ["questions:respond", AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE],
@@ -134,6 +135,8 @@ const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string,
   ["bot:handoff-notes", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   ["bot:handoff-on-mac", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   ["bot:images", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
+  // Revision 50: no feature token; the host's own list is the whole signal.
+  ["attachments:raw", null, "own_call"],
 ];
 
 /** Unary requests and streams (feed plus live runs) have separate budgets. */
@@ -489,7 +492,7 @@ export class PeerHostRegistry {
     const wanted = NEGOTIATED_GRANTS.filter(
       ([grant, feature, call]) =>
         !capabilities.includes(grant) &&
-        features.includes(feature) &&
+        (feature === null || features.includes(feature)) &&
         // A grant asked for alone has no feature token: only the host's own list names it.
         (call === "own_call"
           ? advertised?.includes(grant) === true
@@ -721,6 +724,16 @@ export class PeerHostRegistry {
     signal?: AbortSignal,
     options: PeerPairingOptions = {},
   ): Promise<PeerHostView> {
+    const host = await this.exchangePairing(pairing, signal, options);
+    reportAnalyticsEvent("peer_mac_paired", { method: "link" });
+    return host;
+  }
+
+  private async exchangePairing(
+    pairing: PeerPairing,
+    signal: AbortSignal | undefined,
+    options: PeerPairingOptions,
+  ): Promise<PeerHostView> {
     const attempt = this.attempt(signal);
     let reserved = false;
     try {
@@ -787,7 +800,7 @@ export class PeerHostRegistry {
       const instanceId = hostIdentifier(target.instanceId);
       await this.reserve(instanceId, attempt, options);
       reserved = true;
-      return await requestPeerPairing({
+      const host = await requestPeerPairing({
         session: this.bootstrap({
           endpoint: target.endpoint,
           mode: target.route === "tailscale" ? "webpki" : "unverified",
@@ -827,6 +840,8 @@ export class PeerHostRegistry {
           );
         },
       });
+      reportAnalyticsEvent("peer_mac_paired", { method: "discovery" });
+      return host;
     } catch (error) {
       if (!attempt.current())
         throw new PeerPairingOutcomeError({ status: "cancelled" });
@@ -887,7 +902,9 @@ export class PeerHostRegistry {
       // found at. The exchange still verifies the sealed name, CA and key.
       const address = input.instanceId === undefined ? undefined : endpointIPv4(input.endpoint);
       if (address) this.lanAddresses.remember(pairing.instanceId, address);
-      return await this.pair(pairing, signal, options);
+      const host = await this.exchangePairing(pairing, signal, options);
+      reportAnalyticsEvent("peer_mac_paired", { method: "code" });
+      return host;
     } catch (error) {
       if (signal?.aborted || this.closed)
         throw new PeerPairingOutcomeError({ status: "cancelled" });

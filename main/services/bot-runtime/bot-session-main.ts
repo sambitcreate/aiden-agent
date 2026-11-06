@@ -1,3 +1,8 @@
+import { botMessages, disposeBotMessages } from "../bot-messages/messages-main.js";
+import { botMessageTurnOf } from "../../../renderer/shared/bot-messages.js";
+import { botPlans, configureBotPlanAuthority } from "../bot-plans/plans-main.js";
+import { createBotPlanAuthority } from "../bot-plans/authority.js";
+import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
 // Production wiring of the durable Bot runtime.
 //
 // One `BotSessionRuntime` per process, created after Bot storage and the
@@ -24,10 +29,11 @@
 // schedules the background review, and compaction flushes memory and steers
 // its summary.
 
-import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
-import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
+import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
+import os from "node:os";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { usageLimits } from "../usage-limit-main.js";
 import { spending } from "../spending-main.js";
@@ -36,21 +42,14 @@ import type { SpendingOwner } from "../spending-core.js";
 import { botRoutineTaskIdOf } from "../scheduled-bot-routines.js";
 import { isLocalModelProvider } from "../usage-accounting.js";
 import { aidenConfigDir } from "../aiden-config-dir.js";
-import { IMAGE_GENERATION_SETTINGS_FILE } from "../image-generation/settings-store.js";
-import {
-  LOCAL_CONFIG_FILENAME,
-  PORTABLE_CONFIG_FILENAME,
-  PROVIDER_MODEL_CACHE_FILENAME,
-  SETTINGS_FILENAME,
-} from "../portable-config-core.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
 import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
-import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
-import { botServiceProtectedRoot } from "../bot-protected-settings.js";
+import { botCapabilityCatalog, botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
+import { desktopBotProtectedRoots } from "../bot-desktop-protected-settings.js";
 import { configStore } from "../config-store.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { botPauses, isBotPaused } from "../bot-pause-main.js";
@@ -61,13 +60,28 @@ import {
   resolveBotRuntimeApprovedRoots,
 } from "../bot-runtime-authority-main.js";
 import type { BotRuntimeAuthorityAdmission } from "../bot-runtime-authority.js";
+import { admitWithBotConnectorInventoryScope, botConnectorInventoryServer } from "../bot-connector-inventory-scope.js";
+import { botExecutionScope, createBotBackgroundExecutionModels, withoutBotExecutionScope, type BotExecutionPort, type BotExecutionRuntime } from "./bot-execution.js";
+import { botRoutineModels } from "../bot-routine-models-main.js";
+import { botRoutineModelThinkingLevels, inspectBotRoutineModelGrant, type BotExecutionClaim } from "../bot-routine-models.js";
+import { assertBotExecutionConnectorSource } from "./bot-execution-source.js";
+import { randomUUID } from "node:crypto";
+import { createBotDispatchCoordinator } from "./bot-dispatch-coordinator.js";
+import { createBotExecutionIssues } from "./bot-execution-issues.js";
+import { assertBoundBotProviderModelCurrent } from "../bot-capability-bindings.js";
+import type { BotRoutineThinkingLevel } from "../../../renderer/shared/bot-routine-models.js";
+import { acknowledgeBotExecutionUnknown, botExecutionAccountableResponse, botExecutionInputSpendingRefusal, botExecutionSpendingOwner, botExecutionUnknownCostReceipt, isBotExecutionDispatchSettled, recordKnownBotExecutionResponse, recordKnownBotExecutionCost } from "./bot-execution-spending.js";
 import { botStore } from "../bot-store.js";
 import { botRoutineGuidance, withBotManagedWorkspace, withBotPersona, type BotWorkspacePromptAuthority } from "../bot-system-prompt.js";
 import { buildSystemPrompt } from "../chat-system-prompt.js";
 import { runtimeSupportsImages } from "../generation-runtime.js";
-import { resolveBotModelRuntime } from "../model-runtime.js";
+import { resolveBotModelRuntime, type ResolvedModelRuntime } from "../model-runtime.js";
+import { registerSubagentProviderAuthority } from "../subagents/subagent-runtime-authority.js";
 import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/telegram-bot-bindings.js";
-import { botApprovals } from "./bot-approvals-main.js";
+import { botApprovals, configureBotApprovalDecisionLookup } from "./bot-approvals-main.js";
+import { createBotApprovalTallies } from "./bot-approval-tallies.js";
+import { createBotAllowList, reconcileBotAllowListHistory } from "./bot-allow-list.js";
+import { toolApprovalRules } from "../tool-approval-rules-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
@@ -83,13 +97,15 @@ import {
   recordMemoryChange,
 } from "../bot-learning/learning-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
+import { botAccessRequests } from "./bot-access-requests-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
 import { recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
-import { createBotHandoffNotifier, watchBotHandoffs } from "./bot-handoff-notifications.js";
+import { createBotHandoffNotifier, watchBotAccessRequests, watchBotHandoffs } from "./bot-handoff-notifications.js";
 import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
+import { renderBotOpenWork } from "../bot-open-work/prompt.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -99,7 +115,8 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
+import { botRunAccess, botFileLocations, createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
+import { botRunEnded } from "./bot-run-access.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -122,18 +139,9 @@ const profileDir = () => app.getPath("userData");
 // Aiden's settings files and Bot storage (definitions, access state, pauses;
 // not the Bots' own homes) are fenced the same way, so a Bot cannot change app
 // settings or its own access by editing them.
-setBotFileToolProtectedRoots(() => [
-  path.join(profileDir(), "bots"),
-  path.join(profileDir(), "bots.json"),
-  botServiceProtectedRoot(botServiceRoot()),
-  path.join(aidenConfigDir(), PORTABLE_CONFIG_FILENAME),
-  path.join(profileDir(), SETTINGS_FILENAME),
-  path.join(profileDir(), LOCAL_CONFIG_FILENAME),
-  path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
-  path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
-  // The person's hooks and their approvals: a Bot must never add or approve one.
-  path.join(profileDir(), "hooks"),
-]);
+setBotFileToolProtectedRoots(() => desktopBotProtectedRoots(profileDir(), aidenConfigDir(), botServiceRoot()));
+// Temporary Home/whole-Mac access must not expose any app-private store.
+setBotFileToolTemporaryPrivateRoots(() => botAccessPrivateRoots(profileDir(), aidenConfigDir()));
 // A Bot's replies and routines wait out provider usage limits like a chat's.
 const runtimeModels = createBotRuntimeModels({
   usageLimits: (botId, runtime) =>
@@ -161,7 +169,11 @@ async function canonicalChatId(botId: string): Promise<string> {
 
 async function admit(botId: string): Promise<BotRuntimeAuthorityAdmission> {
   const chatId = await canonicalChatId(botId);
-  return botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId });
+  const execution = botExecutionScope(botId);
+  const routineModelGrant = execution ? await botRoutineModels.grant(botId, execution.claim.id, execution.claim.requestId) : undefined;
+  const operation = () => botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId, ...(routineModelGrant ? { routineModelGrant } : {}) });
+  const selected = botConnectorInventoryServer();
+  return selected ? admitWithBotConnectorInventoryScope(selected, operation) : operation();
 }
 
 /**
@@ -175,6 +187,9 @@ export async function probeBotAdmission(botId: string): Promise<{ providerId: st
     modelId: admission.authority.provider.sourceModelId,
   }));
 }
+
+/** Host-owned connector read admission; this does not run a turn or grant new access. */
+export function admitBotConnectorWork(botId: string): Promise<BotRuntimeAuthorityAdmission> { return admit(botId); }
 
 /**
  * Shell access for one host process started outside a turn (a watch script):
@@ -219,6 +234,7 @@ async function loadBot(botId: string): Promise<BotDefinition> {
 
 /** Whether the Bot's resolved model takes images; false while it has none. */
 async function imageInput(botId: string): Promise<boolean> {
+  const current = botExecutionScope(botId); if (current) return current.runtime.imageInput;
   const cached = resolvedModels.get(botId);
   if (cached) return cached.imageInput;
   try {
@@ -229,21 +245,89 @@ async function imageInput(botId: string): Promise<boolean> {
   return resolvedModels.get(botId)?.imageInput ?? false;
 }
 
+export const botAllowList = createBotAllowList({
+  rules: toolApprovalRules,
+  tallies: createBotApprovalTallies({ profileDir }),
+  approvals: botApprovals,
+  botName: async botId => (await botStore.get(botId))?.name,
+  connectionName: async serverId => (await configStore.listMcpServers()).find(server => server.id === serverId)?.name,
+  folderEntries: botId => botApplicationService.botFolderEntries(botId),
+  revokeFolder: (botId, sourceId) => botApplicationService.revokeBotFolder({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, sourceId }),
+  log: (message, error) => logger.warn("bots", message, error),
+});
+configureBotApprovalDecisionLookup((...args) => botAllowList.decision(...args));
+botApplicationService.onAccessChange(botId => botAllowList.changed(botId));
+
+/** Called after the application journal recovered and before runtime initialization.
+ * Only known committed history is reconciled; this never publishes new access. */
+export async function reconcileBotAllowList(): Promise<void> {
+  const [bots, receipts] = await Promise.all([botStore.list(), botApplicationService.botFolderApprovalReceipts()]);
+  await reconcileBotAllowListHistory(botAllowList, bots.map(bot => bot.id), receipts,
+    (_botId, error) => logger.warn("bots", "A Bot's approval history could not be reconciled.", error));
+}
+
 const toolSources = createBotToolSources({
+  policyRevision: async (botId) => (await botCapabilityStore.getBotPolicy(botId)).revision,
+  folderOffer: (botId, folder) => botAllowList.folderOffer(botId, folder),
   canonicalChatId,
   imageInput,
   admit,
   dismissals,
   botLacksConnection: (botId, sourceId) => botApplicationService.botLacksConnection(botId, sourceId),
   botName: async (botId) => (await botStore.get(botId))?.name,
+  planTools: {
+    plans: botPlans,
+    validate: (botId, input, call) => planAuthority.validate(botId, input, call),
+    access: {
+      scopeOf: (...args) => planAuthority.access.scopeOf(...args),
+      allowOnce: (...args) => planAuthority.access.allowOnce(...args),
+      revokePlan: (...args) => planAuthority.access.revokePlan(...args),
+    },
+    botName: async (botId) => (await botStore.get(botId))?.name,
+    botTurns: {
+      originOf: (ids) => {
+        for (const id of ids) {
+          const turn = botMessageTurnOf(id);
+          if (turn.kind === "message") return { originBotId: turn.fromBotId };
+        }
+        return undefined;
+      },
+      announceWaiting: async (...args) => {
+        try { return await botMessages().announceWaiting(...args); }
+        catch (error) {
+          logger.warn("bots", "The Bot plan's message delivery is unavailable.", error);
+          return undefined;
+        }
+      },
+    },
+  },
 });
 
+// Closures above are invoked only for a live tool call, after this wiring is
+// complete. Keep the process-wide plan bridge free of session import cycles.
+const planAuthority = createBotPlanAuthority({
+  admit,
+  facts: (botId, admission) => toolSources.facts(botId, admission),
+  rules: (botId) => botRules.rules(botId),
+  locations: botFileLocations,
+  resolveTarget: (requested) => resolveBotAccessTarget(requested, {
+    homeDirectory: os.homedir,
+    privateRoots: () => botAccessPrivateRoots(profileDir(), aidenConfigDir()),
+    approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state
+      .snapshot().then((state) => state.approvedRoots),
+  }),
+  runAccess: botRunAccess,
+});
+configureBotPlanAuthority({ revalidate: planAuthority.revalidate, revokeAccess: planAuthority.revokeAccess });
+
 const tools = createBotToolAssembly({
+  allowList: botAllowList,
   admit,
   sources: toolSources,
   rules: (botId) => botRules.rules(botId),
   botName: async (botId) => (await botStore.get(botId))?.name,
   routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
+  plans: botPlans,
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
@@ -265,30 +349,21 @@ async function promptRules(botId: string) {
  */
 /** Admission for background learning work (memory review, reflection, tidying). */
 export async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
-  if ((await botCapabilityStore.getBotModelAuthority(botId)) === undefined) return { ok: false, reason: "no_model" };
-  if (!(await botStore.get(botId))) return { ok: false, reason: "not_admitted" };
-  let admission: BotRuntimeAuthorityAdmission | undefined;
+  const current = botExecutionScope(botId);
+  if (current) {
+    await current.runtime.revalidate();
+    const selected = current.claim.actual === "fallback" ? current.claim.fallback! : current.claim.primary;
+    const model = current.runtime.models.getModel(current.runtime.model.provider, current.runtime.model.id);
+    if (!model || !botRoutineModelThinkingLevels(model).includes(selected.thinkingLevel)) return { ok: false, reason: "no_model" };
+    return { ok: true, model: { models: current.runtime.models, model }, lease: { signal: current.runtime.signal ?? new AbortController().signal, revalidate: () => current.runtime.revalidate(), release: () => {} } };
+  }
   try {
-    admission = await admit(botId);
-    await admission.revalidateBeforeEffect();
-    const { sourceProviderId, sourceModelId } = admission.authority.provider;
-    const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
-    runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
-    // Memory tidy-up is a background chore: at a usage limit it fails and runs another time.
-    const models = runtimeModels.backgroundModelsFor(botId);
-    const model = models.getModel(runtime.model.provider, runtime.model.id);
-    if (model === undefined) {
-      admission.release();
-      return { ok: false, reason: "no_model" };
-    }
-    const held = admission;
-    return {
-      ok: true,
-      model: { models, model },
-      lease: { signal: held.signal, revalidate: () => held.revalidateBeforeEffect(), release: () => held.release() },
-    };
+    const claim = await botRoutineModels.claim(botId, { requestId: `memory:${randomUUID()}` });
+    const runtime = await execution.resolve(botId, claim, new AbortController().signal);
+    try { await runtime.revalidate(); }
+    catch (error) { runtime.release(); throw error; }
+    return { ok: true, model: { models: createBotBackgroundExecutionModels(claim, runtime), model: runtime.model }, lease: { signal: runtime.signal ?? new AbortController().signal, revalidate: () => runtime.revalidate(), release: () => runtime.release() } };
   } catch (error) {
-    admission?.release();
     logger.warn("bots", `Bot ${botId} memory work was not admitted.`, error);
     return { ok: false, reason: "not_admitted" };
   }
@@ -344,6 +419,7 @@ const botSpending: NonNullable<BotExtensionDeps["spending"]> = {
     return refusal;
   },
   async record(botId, requestIds, message) {
+    if (botExecutionScope(botId)) return; // Invocation-owned dispatch accounting includes compaction too.
     const cost = responseCostUsd(message);
     const runtime = spendRuntimes.get(botId);
     if (cost <= 0 || runtime === undefined) return;
@@ -352,6 +428,172 @@ const botSpending: NonNullable<BotExtensionDeps["spending"]> = {
       .catch((error: unknown) => logger.warn("bots", `Bot ${botId} spending could not be counted.`, error));
   },
 };
+
+const dispatchCoordinator = createBotDispatchCoordinator();
+const executionIssues = createBotExecutionIssues(botIssues, spending);
+async function buildBotExecutionRuntime(botId: string, claim: BotExecutionClaim, runtime: ResolvedModelRuntime, signal: AbortSignal, revalidate: () => Promise<void>, release: () => void, thinkingLevel?: BotRoutineThinkingLevel): Promise<BotExecutionRuntime> {
+  const invocation = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: claim.root.botId }, runtime.provider.label) });
+  invocation.register(botId, runtime as unknown as BotModelRuntime);
+  const models = invocation.modelsFor(botId), counts = await spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models });
+  const owner = botExecutionSpendingOwner(claim);
+  const dispatch = (dispatchId: string) => ({ dispatchId, owner, providerId: runtime.provider.id, modelId: runtime.model.id, counts });
+  const held = new Map<string, () => void>();
+  const releaseDispatch = (id: string) => { held.get(id)?.(); held.delete(id); };
+  return {
+    model: runtime.model, models, providerRuntime: runtime, thinkingLevel, imageInput: runtimeSupportsImages(runtime.model), signal, revalidate,
+    release: () => { for (const id of held.keys()) releaseDispatch(id); release(); },
+    beforeDispatch: async (id) => {
+      await reconcileBotPendingKnownCost(claim);
+      const scopes = [`bot:${botId}`, ...(owner.budgetScopes ?? []).map((scope) => `${scope.kind}:${scope.id}`)];
+      held.set(id, await dispatchCoordinator.acquire(id, scopes, signal));
+      try { const prior = await spending.beforeDispatch(dispatch(id)); if (prior.state === "recorded") throw new Error("This request was accounted for but its saved response is unavailable. Review this run before retrying."); }
+      catch (error) { releaseDispatch(id); throw error; }
+    },
+    afterDispatch: async (id, message) => { try { await spending.afterDispatch(dispatch(id), botExecutionAccountableResponse(message)); await executionIssues.settled(botId, claim); } finally { releaseDispatch(id); } },
+    sealResponse: (facts,cost) => botRoutineModels.recordResponseEvidence(facts, dispatch(facts.dispatchId), cost),
+    reserveResponse: (slot) => botRoutineModels.reserveResponseEvidence(slot, dispatch(slot.dispatchId)),
+    isDispatchSettled: (id) => isBotExecutionDispatchSettled(spending, dispatch(id)),
+    started: () => botRoutineModels.started(botId, claim.id),
+  };
+}
+async function reconcileBotPendingKnownCost(claim: BotExecutionClaim):Promise<void> {
+  const pending=await spending.pendingDispatch(botExecutionSpendingOwner(claim));
+  if(!pending)return;
+  const proof=await botRoutineModels.responseCostForDispatch(claim,pending);
+  if(proof)await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd);
+}
+const execution: BotExecutionPort = {
+  async reconcileResponseCosts(botId,taskId,scopeId) { for(const proof of await botRoutineModels.responseCosts(botId,taskId,scopeId)) await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd); },
+  verifyResponse: async (facts) => Boolean(await botRoutineModels.responseEvidence(facts)),
+  async recordKnownResponse(facts, message) { const dispatch = await botRoutineModels.responseEvidence(facts); if (dispatch) await recordKnownBotExecutionResponse(spending, facts.botId, dispatch.dispatchId, message, dispatch, facts.responseDigest); },
+  claim: (botId, input) => botRoutineModels.claim(botId, input),
+  getClaim: (botId, id, requestId) => botRoutineModels.getClaim(botId, id, requestId),
+  selectFallback: (botId, id, reason) => botRoutineModels.selectFallback(botId, id, reason),
+  recordSubmission: (botId, id, submissionId) => botRoutineModels.recordSubmission(botId, id, submissionId),
+  async hasUnknown(_botId, claim) { await reconcileBotPendingKnownCost(claim); return Boolean(await spending.pendingDispatch(botExecutionSpendingOwner(claim))); },
+  async unknownDispatch(_botId, claim) { await reconcileBotPendingKnownCost(claim); return (await spending.pendingDispatch(botExecutionSpendingOwner(claim)))?.dispatchId; },
+  unknownCostReceipt: async (botId, claim, submissionId, scopeId) => {await reconcileBotPendingKnownCost(claim);return botExecutionUnknownCostReceipt(spending, botId, claim, submissionId, scopeId, botRoutineModels);},
+  async approveCost(facts) {
+    const source = await botRoutineModels.getClaim(facts.botId, facts.sourceClaimId, facts.sourceRequestId);await reconcileBotPendingKnownCost(source);const receipt = await botExecutionUnknownCostReceipt(spending, facts.botId, source, facts.submissionId, facts.scopeId, botRoutineModels);
+    if (receipt?.costReceiptId !== facts.costReceiptId || receipt.dispatchId !== facts.dispatchId) throw new Error("The provider cost changed before approval could be saved.");
+    return botRoutineModels.approveCost(facts);
+  },
+  verifyCostApproval: (id, facts) => botRoutineModels.verifyCostApproval(id, facts),
+  async acknowledgeUnknown(botId, claim, expectedDispatchId) {
+    await reconcileBotPendingKnownCost(claim);
+    const pendingId = await acknowledgeBotExecutionUnknown(spending, botId, claim, expectedDispatchId, botRoutineModels);
+    if (pendingId) await executionIssues.acknowledged(botId, pendingId);
+    return pendingId && (await spending.dispatchReceipt(pendingId))?.state === "recorded" ? "recorded" : pendingId !== undefined;
+  },
+  dismissed: (botId, claim) => executionIssues.dismissed(botId, claim),
+  async resolve(botId, claim, signal): Promise<BotExecutionRuntime> {
+    const grant = await botRoutineModels.grant(botId, claim.id, claim.requestId);
+    const proof = inspectBotRoutineModelGrant(grant);
+    const chatId = await canonicalChatId(botId);
+    const peerLease = claim.peer ? await (await import("../bot-peers/host-main.js")).botPeerHost.executionLease(claim.peer) : undefined;
+    let admission: BotRuntimeAuthorityAdmission;
+    try {
+      const sourceSignal=AbortSignal.any([signal,...(peerLease?[peerLease.signal]:[])]);sourceSignal.throwIfAborted();await peerLease?.revalidate();
+    if (claim.connectorRestriction?.binding.adapter === "composio-calendar-v1") {
+      const restriction = claim.connectorRestriction, binding = claim.connectorRestriction.binding, owner = claim.peer?.watch?.botId ?? botId;
+      const fresh = (await (await import("../bot-routine-events/sources-main.js")).botEventRoutines.list(owner)).find(row => row.id === restriction.routineId);
+      assertBotExecutionConnectorSource(owner, restriction, fresh, restriction.binding.connection);
+      const host = await import("../bot-routine-events/connector-host-main.js");
+      await host.validateCalendarConnectorExecution(owner, binding, undefined, sourceSignal);
+      if (owner !== botId) await host.validateCalendarConnectorExecution(botId, binding, undefined, sourceSignal);
+    }
+      await peerLease?.revalidate();sourceSignal.throwIfAborted();
+      admission = await botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId, routineModelGrant: grant });
+    }
+    catch(error) { peerLease?.release(); throw error; }
+    try {
+      const boundSignal = AbortSignal.any([signal, admission.signal, ...(peerLease ? [peerLease.signal] : [])]); boundSignal.throwIfAborted();
+      const sourceCurrent = async () => {
+        if (!claim.connectorRestriction) { if (claim.connectorServerId) throw new Error("The accepted watch source binding is missing."); return; }
+        const restriction = claim.connectorRestriction;
+        const watchOwner = claim.peer?.watch?.botId ?? botId;
+        const fresh = (await (await import("../bot-routine-events/sources-main.js")).botEventRoutines.list(watchOwner)).find((row) => row.id === restriction.routineId);
+        const current = admission.authority.connections.find((row) => row.sourceId === restriction.binding.serverId);
+        if (watchOwner === botId) {assertBotExecutionConnectorSource(botId, restriction, fresh, current);if(restriction.binding.adapter==="composio-calendar-v1")await (await import("../bot-routine-events/connector-host-main.js")).validateCalendarConnectorExecution(botId,restriction.binding,admission);}
+        else {
+          // The originating source keeps its account/credential binding; this
+          // recipient must independently grant that exact connection and reads.
+          const originClaim = await botRoutineModels.claimByRequest(watchOwner,claim.root.requestId);
+          if (!originClaim || !originClaim.connectorRestriction) throw new Error("The original watch admission is unavailable.");
+          const origin = await botRuntimeAuthority.admit({audienceId:BOT_DESKTOP_AUDIENCE_ID,botId:watchOwner,chatId:await canonicalChatId(watchOwner),routineModelGrant:await botRoutineModels.grant(watchOwner,originClaim.id,originClaim.requestId)});
+          try { await origin.revalidateBeforeEffect(); assertBotExecutionConnectorSource(watchOwner,restriction,fresh,origin.authority.connections.find(row=>row.sourceId===restriction.binding.serverId));if(restriction.binding.adapter==="composio-calendar-v1")await (await import("../bot-routine-events/connector-host-main.js")).validateCalendarConnectorExecution(watchOwner,restriction.binding,origin); }
+          finally {origin.release();}
+          if (!current || current.connectionFingerprint !== restriction.binding.connection.connectionFingerprint || restriction.binding.tools.some(tool=>!current.tools.some(granted=>granted.exactFingerprint===tool.exactFingerprint))) throw new Error("The receiving Bot does not allow the original watch account and read tools.");
+          if(restriction.binding.adapter==="composio-calendar-v1")await (await import("../bot-routine-events/connector-host-main.js")).validateCalendarConnectorExecution(botId,restriction.binding,admission);
+        }
+      };
+      await sourceCurrent();
+      const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary;
+      const runtime = await resolveBotModelRuntime(proof.binding.sourceProviderId, proof.binding.sourceModelId, boundSignal, botId);
+      if (!botRoutineModelThinkingLevels(runtime.model).includes(selected.thinkingLevel)) throw new Error("This routine's model no longer supports its selected thinking level.");
+      return await buildBotExecutionRuntime(botId, claim, runtime, boundSignal,
+        async () => { boundSignal.throwIfAborted(); await peerLease?.revalidate(); await proof.assertCurrent(); await sourceCurrent(); await admission.revalidateBeforeEffect(); boundSignal.throwIfAborted(); },
+        () => {admission.release();peerLease?.release();}, selected.thinkingLevel);
+
+    } catch (error) { admission.release(); peerLease?.release(); throw error; }
+  },
+};
+
+const helperRuntimeBindings = new WeakMap<ResolvedModelRuntime, { owner: NonNullable<ReturnType<typeof botExecutionScope>>; execution: BotExecutionRuntime }>();
+
+/** Parent-owned helper admission. No helper may choose a model from a string. */
+export async function resolveBotExecutionHelperRuntime(botId: string, role: "primary" | "vision", providerId: string, modelId: string, signal?: AbortSignal): Promise<ResolvedModelRuntime> {
+  const owner = botExecutionScope(botId);
+  if (!owner?.bindHelperRuntime || !owner.runtime.providerRuntime) throw new Error("This helper has no active originating task.");
+  await owner.runtime.revalidate();
+  let helper: BotExecutionRuntime;
+  let source: ResolvedModelRuntime;
+  if (role === "primary") {
+    const selected = owner.claim.actual === "fallback" ? owner.claim.fallback! : owner.claim.primary;
+    if (providerId !== selected.binding.sourceProviderId || modelId !== selected.binding.sourceModelId) throw new Error("The helper model differs from its originating task.");
+    source = owner.runtime.providerRuntime;
+    helper = { ...owner.runtime, models: source.models, release() {} };
+  } else {
+    const vision = owner.claim.vision;
+    if (!vision || providerId !== vision.sourceProviderId || modelId !== vision.sourceModelId) throw new Error("This task did not admit that image model.");
+    const admission = await admit(botId);
+    try {
+      const current = admission.authority.visionProvider;
+      if (!current || current.sourceProviderId !== vision.sourceProviderId || current.sourceModelId !== vision.sourceModelId || current.connectionFingerprint !== vision.connectionFingerprint || current.providerExactFingerprint !== vision.providerExactFingerprint || current.modelExactFingerprint !== vision.modelExactFingerprint) throw new Error("This task's image model or credentials changed.");
+      const effectSignal = AbortSignal.any([admission.signal, ...(owner.runtime.signal ? [owner.runtime.signal] : []), ...(signal ? [signal] : [])]);
+      const revalidate = async () => { effectSignal.throwIfAborted(); await owner.runtime.revalidate(); await admission.revalidateBeforeEffect(); assertBoundBotProviderModelCurrent(vision, await botCapabilityCatalog.snapshotModelsForRuntime({ retainedProviders: [{ sourceProviderId: vision.sourceProviderId, sourceModelId: vision.sourceModelId }], signal: effectSignal })); effectSignal.throwIfAborted(); };
+      await revalidate(); source = await resolveBotModelRuntime(providerId, modelId, effectSignal, botId); await revalidate();
+      if (!runtimeSupportsImages(source.model)) throw new Error("This task's saved image model no longer supports images.");
+      const levels = botRoutineModelThinkingLevels(source.model), thinking = levels.includes("off") ? "off" : levels[0];
+      helper = await buildBotExecutionRuntime(botId, owner.claim, source, effectSignal, revalidate, () => admission.release(), thinking);
+    } catch (error) { admission.release(); throw error; }
+  }
+  const bound: ResolvedModelRuntime = { ...source };
+  bound.models = new Proxy(source.models, { get(target, property) {
+    if (property === "getAuth") return (async (...args: Parameters<Models["getAuth"]>) => {
+      await helper.revalidate(); const auth = await target.getAuth(...args); await helper.revalidate(); return auth;
+    }) as Models["getAuth"];
+    const value = Reflect.get(target, property, target) as unknown; return typeof value === "function" ? value.bind(target) : value;
+  } });
+  if (source.prepareIsolatedStream) bound.prepareIsolatedStream = async (model, options) => {
+    await helper.revalidate(); const prepared = await source.prepareIsolatedStream!(model, options); await helper.revalidate();
+    return { ...prepared, signal: AbortSignal.any([prepared.signal, ...(helper.signal ? [helper.signal] : [])]) };
+  };
+  registerSubagentProviderAuthority(bound, { signal: helper.signal, revalidate: () => helper.revalidate() });
+  helperRuntimeBindings.set(bound, { owner, execution: helper }); return bound;
+}
+
+/** Apply after isolated transport wrapping, so helper effects cannot bypass source accounting. */
+export function bindBotExecutionHelperRuntime(botId: string, kind: string, runtime: ResolvedModelRuntime, sourceRuntime: ResolvedModelRuntime = runtime): ResolvedModelRuntime {
+  const binding = helperRuntimeBindings.get(sourceRuntime), owner = botExecutionScope(botId);
+  if (!binding || binding.owner !== owner || !owner?.bindHelperRuntime || runtime.model.provider !== binding.execution.model.provider || runtime.model.id !== binding.execution.model.id) throw new Error("This helper runtime does not belong to the active task.");
+  // Resolved runtimes own the stream transport. Their Models collection may
+  // still own other providers, so dispatch through streams after isolation.
+  const transport = createBotRuntimeModels({ usageLimits: () => usageLimits.streamOptions({ kind: "bot", id: owner.claim.root.botId }, runtime.provider.label) });
+  transport.register(botId, runtime as unknown as BotModelRuntime);
+  const models = owner.bindHelperRuntime(kind, { ...binding.execution, models: transport.modelsFor(botId) });
+  return { ...runtime, models, streams: { streamSimple: models.streamSimple.bind(models) } };
+}
 
 /** Why a spending limit stopped the run serving `requestId`, for its routine. */
 export function botSpendingStop(requestId: string): string | undefined {
@@ -381,6 +623,11 @@ const extension: BotExtensionDeps = {
         tools.skillSnapshot(bot.id),
         toolNames,
       );
+      let openWorkSummary = "";
+      if (toolNames.has("open_work")) {
+        try { openWorkSummary = renderBotOpenWork(await (await import("../bot-open-work/service-main.js")).botOpenWork.toolSnapshot(bot.id)); }
+        catch { openWorkSummary = "Open work could not be read. Keep its existing records intact and report that the list is unavailable."; }
+      }
       return [
         base,
         withBotPersona("", bot).trim(),
@@ -389,6 +636,7 @@ const extension: BotExtensionDeps = {
           .join("\n\n"),
         [
           botRoutineGuidance(toolNames),
+          openWorkSummary,
           tools.guidance(bot.id, offered.toolNames),
           // How-to lessons from the person's corrections: below authority, as data.
           renderBotLessons(await botLessons.list(bot.id, { scope: { kind: "bot" }, status: "active" })),
@@ -411,9 +659,15 @@ const extension: BotExtensionDeps = {
   // Per run: the self-intro uses no tools; routine and Telegram turns get no
   // question card; routine and self-intro turns never save memory.
   turnAllows: withBotMemoryIngress(botIngressAllowsTool),
-  afterReply: (botId) => memoryReview.afterReply(botId),
+  peerReply: async (botId,message,taskId) => (await import("../bot-peers/host-main.js")).observeBotPeerReply(botId,message,taskId),
+  afterReply: (botId) => withoutBotExecutionScope(() => memoryReview.afterReply(botId)),
   beforeCompact: compactionSteering,
-  requestApproval: (request) => botApprovals.request(request),
+  settleApproval: (input, context) => botAllowList.settle(input, context),
+  requestApproval: async (request) => {
+    const window = await botMessages().announceWaiting(request.botId, request.owner?.inputs.map(i => i.requestId) ?? [], request.summary, request.waitId);
+    if (window?.expired) return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer: "deny", source: "expiry" };
+    return botApprovals.request(request);
+  },
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
   requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request, ruleHandoffTarget(request.toolName))),
   // Into the stopped call's own conversation, never through the harness host,
@@ -544,6 +798,7 @@ async function forgetDeliveries(botId: string): Promise<void> {
 /** Photo, managed home, access, chat rows, then the Bot record last. */
 async function eraseBotData(botId: string): Promise<void> {
   await botApplicationService.deleteBot({ botId });
+  ipcMain.broadcast("bots:changed", { botId, deleted: true });
 }
 
 async function unbindTelegram(botId: string): Promise<void> {
@@ -593,6 +848,23 @@ botHandoffs.onChange((botId) => {
   );
 });
 
+const stopAccessRequestProjection = botAccessRequests.onChange((botId) => {
+  void liveProjection?.refreshAccessRequest(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} access request view report.`, error),
+  );
+});
+
+const stopPlanProjection = botPlans.onChange((botId) => {
+  void liveProjection?.refreshPlan(botId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} plan view report.`, error),
+  );
+});
+
+const planLifecycle = createBotPlanLifecycle({
+  plans: botPlans,
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} plan lifecycle report.`, error),
+});
+
 // A card that opens while no Aiden window is focused also says so in a Mac
 // notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
 const handoffNotifier = createBotHandoffNotifier({
@@ -612,6 +884,21 @@ const handoffNotifier = createBotHandoffNotifier({
 });
 watchBotHandoffs(botHandoffs, handoffNotifier);
 
+const accessRequestNotifier = createBotHandoffNotifier({
+  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  show: ({ title, body, onClick }) => {
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({ title, body });
+    notification.on("click", onClick);
+    notification.show();
+  },
+  botName: async (botId) => (await botStore.get(botId))?.name,
+  onClick: async (botId) => { await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`); },
+  isPending: (botId, waitId) => botAccessRequests.get(botId, waitId) !== undefined,
+  onError: (stage) => logger.warn("bots", `Access request notification ${stage} failed.`),
+});
+const stopAccessRequestNotifications = watchBotAccessRequests(botAccessRequests, accessRequestNotifier);
+
 // An approval appearing or settling changes the line to and from "Waiting for you".
 botApprovals.onChange((botId) => {
   void liveProjection?.refreshActivity(botId).catch((error: unknown) =>
@@ -622,10 +909,12 @@ botApprovals.onChange((botId) => {
 // "Needs you" in the Bots sidebar follows questions, approvals, hand-offs and
 // host-raised issues as they appear and settle; the renderer re-reads that
 // Bot's summary, whose open-issue check is the same file the card comes from.
-wireBotAttention({
+const stopBotAttention = wireBotAttention({
   questions: botQuestions,
   approvals: botApprovals,
   handoffs: botHandoffs,
+  accessRequests: botAccessRequests,
+  plans: botPlans,
   issues: botIssues,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
@@ -700,6 +989,7 @@ const runWatchdog = createBotRunWatchdog({
   },
   isWaitingOnPerson: (botId) =>
     botHandoffs.pending(botId).length > 0 ||
+    botAccessRequests.pending(botId).length > 0 ||
     botApprovals.pending(botId).length > 0 ||
     botQuestions.pending(botId).length > 0,
   // Held back only: a test request already sent can still hang, and the watchdog catches it.
@@ -761,11 +1051,16 @@ export function botLiveProjection(): BotLiveProjection {
     quietInputs: async (botId, ids) => (await botSessionRuntime()).quietInputs(botId, ids),
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
+    accessRequest: (botId) => botAccessRequests.pending(botId)[0] ?? null,
+    plan: (botId) => botPlans.current(botId),
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
     issuePending: async (botId) => (await botIssues.list(botId, { open: true })).length > 0,
     connectCardStatus,
     runStarts: botRunStarts,
-    onRunSettled: broadcastState,
+    onRunSettled: (botId, state) => {
+      planLifecycle.settled(botId, state);
+      broadcastState(botId, state);
+    },
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
   });
   return liveProjection;
@@ -794,6 +1089,8 @@ export async function dismissBotConnection(botId: string, pluginId: string): Pro
 /** The process-wide Bot runtime. Created on first use; `initializeBotSessionRuntime` also scans. */
 export function botSessionRuntime(): Promise<BotSessionRuntime> {
   runtime ??= createBotSessionService({
+    execution,
+    executionBlocked: (botId, claim, message, kind) => executionIssues.blocked(botId, claim, message, kind),
     profileDir: profileDir(),
     models: runtimeModels.modelsFor,
     extension,
@@ -803,11 +1100,18 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     onSessionOpen: (botId) => memory.beginSession(botId),
     compactionInstructions: BOT_COMPACTION_FOCUS,
     pauses: botPauses,
-    spendingRefusal: async (botId) => spending.refusal({ kind: "bot", id: botId }, (await botStore.get(botId))?.name),
+    spendingRefusal: async (botId) => botExecutionInputSpendingRefusal(spending, botId, (await botStore.get(botId))?.name),
     // No memory review runs or writes its marker while the Bot is paused.
-    onPaused: (botId) => memoryReview.cancel(botId),
+    onPaused: async (botId) => {
+      (await import("../bot-peers/host-main.js")).botPeerHost.abortBotLeases(botId);
+      memoryReview.cancel(botId);
+      (await import("../bot-routine-events/sources-main.js")).botConnectorWatches.pauseBot(botId);
+    },
     afterPaused: afterBotPaused,
     onUnpaused: afterBotUnpaused,
+    hasPeerSource: async (botId,requestIds)=>(await import("../bot-peers/host-main.js")).botPeerHost.hasSource(botId,requestIds),
+    onSourceStop: async (botId, requestIds) => { const peers = await import("../bot-peers/host-main.js"); const owned = await peers.botPeerHost.stopSource(botId,requestIds); peers.wakeBotPeers(); return owned; },
+    beforeDelete: async (botId) => { await (await import("../bot-peers/host-main.js")).botPeerHost.forgetBot(botId); await botRoutineModels.forgetBot(botId); await (await import("../bot-open-work/service-main.js")).botOpenWork.forgetBot(botId); },
     deleteEffects: [
       // Open chats of the deleted Bot stop receiving its live view.
       async (botId) => liveProjection?.close(botId),
@@ -826,9 +1130,12 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       },
       deleteRoutines,
       forgetDeliveries,
+      (botId) => botMessages().forgetBot(botId),
+      (botId) => { planLifecycle.forget(botId); return botPlans.forgetBot(botId); },
       (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
+      (botId) => botAllowList.forgetBot(botId),
       (botId) => botRules.forgetBot(botId),
       // Its computer stops and its VM is deleted before its home (the shared folder) goes.
       async (botId) => (await import("../bot-computers/bot-computers-main.js")).deleteBotComputer(botId),
@@ -838,7 +1145,11 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     ],
     // Announced only here, after the session resumed, never by a route ahead of `resume`.
     onResumed: (botId) => botTurnIntents.announce(botId, "resuming"),
+    onStopped: (botId) => planLifecycle.stopped(botId),
     onStateChange: (botId, state) => {
+      void import("../bot-peers/host-main.js").then(({wakeBotPeers})=>wakeBotPeers());
+      if (botRunEnded(state)) botRunAccess.clearBot(botId);
+      planLifecycle.stateChanged(botId, state);
       broadcastState(botId, state);
       botLiveProjection().notifyState(botId, state);
       for (const listener of stateListeners) {
@@ -867,6 +1178,8 @@ export function initializeBotSessionRuntime(): Promise<void> {
   initialized ??= botSessionRuntime()
     .then(async (service) => {
       const { removedOrphans, interrupted } = await service.initialize();
+      (await import("../bot-peers/host-main.js")).startBotPeers();
+      await botMessages().start();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
       if (!watchingResume) {
@@ -886,7 +1199,15 @@ export function initializeBotSessionRuntime(): Promise<void> {
 }
 
 export async function shutdownBotSessionRuntime(): Promise<void> {
+  (await import("../bot-peers/host-main.js")).stopBotPeers();
+  stopPlanProjection();
+  planLifecycle.clear();
+  stopAccessRequestProjection();
+  stopAccessRequestNotifications();
+  stopBotAttention();
+  botRunAccess.clearAll();
   if (runtime === undefined) return;
+  await disposeBotMessages();
   const service = await runtime.catch(() => undefined);
   runtime = undefined;
   initialized = undefined;

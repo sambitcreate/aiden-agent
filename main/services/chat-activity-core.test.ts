@@ -104,3 +104,13 @@ test("prompts from streams the registry does not own are ignored", () => {
   assert.deepEqual(snapshots, []);
   assert.deepEqual(registry.snapshot(), { revision: 0, activeChatIds: [] });
 });
+
+test("touch publishes a new revision with the same chats, so listeners reread", () => {
+  const snapshots: ReturnType<ChatActivityRegistry["snapshot"]>[] = [];
+  const registry = new ChatActivityRegistry((snapshot) => snapshots.push(snapshot));
+  registry.begin("stream-a", "chat-a");
+  registry.touch();
+  assert.equal(snapshots.length, 2);
+  assert.equal(snapshots[1]!.revision, snapshots[0]!.revision + 1);
+  assert.deepEqual(snapshots[1]!.activeChatIds, ["chat-a"]);
+});

@@ -353,8 +353,11 @@ export class TelegramBotApi {
     ).then((r) => unwrap<TelegramUpdate[]>(r));
   }
 
-  async getMe(): Promise<TelegramUser> {
-    return unwrap<TelegramUser>(await this.transport("getMe", {}));
+  async getMe(signal?: AbortSignal): Promise<TelegramUser> {
+    return callWithAbort(
+      (requestSignal) => this.transport("getMe", {}, requestSignal ? { signal: requestSignal } : undefined),
+      signal,
+    ).then((r) => unwrap<TelegramUser>(r));
   }
 
   async createForumTopic(chatId: number, name: string): Promise<TelegramForumTopic> {

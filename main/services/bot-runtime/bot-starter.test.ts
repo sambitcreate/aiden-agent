@@ -119,6 +119,27 @@ test("Start Chat twice on one starter Bot makes one Bot and one self-intro", asy
   }
 });
 
+test("a starter Bot reaches its creator with the preset it came from", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const presets: string[] = [];
+  const session = await sessionFor(profile, createFauxModels([fauxAssistantMessage("Hi.")]));
+  try {
+    const starter = createBotStarter({
+      ...directory.deps,
+      session,
+      createBot: (input, _access, botId, presetId) => {
+        presets.push(presetId);
+        return directory.make(input, botId);
+      },
+    });
+    await starter.startFromPreset("meal-planner");
+    assert.deepEqual(presets, ["meal-planner"]);
+  } finally {
+    await session.shutdown();
+  }
+});
+
 test("the self-intro is not sent again when the Bot is reopened after a restart", async () => {
   const profile = tempDir();
   const directory = botDirectory(profile);

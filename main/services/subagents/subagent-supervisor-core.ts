@@ -1,11 +1,13 @@
 import { parseCompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import type { SubagentRuntimeTransform } from "./subagent-runtime-authority.js";
 import type { WorkspacePermission } from "../types.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import {
   MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
   MAX_SUBAGENT_REQUESTED_TURNS,
@@ -119,6 +121,8 @@ export interface SubagentSupervisorInput {
   chatId: string;
   workspaceId: string;
   runtime: ResolvedModelRuntime;
+  /** Parent-owned binding applied after isolated transport construction. */
+  transformRuntime?: SubagentRuntimeTransform;
   thinkingLevel: ThinkingLevel;
   workspaceRoot: string;
   permission: WorkspacePermission;
@@ -742,6 +746,7 @@ export class SubagentSupervisor {
                   childId: identity.childId,
                   groupId,
                   runtime: childModels[index]?.runtime ?? this.input.runtime,
+                  transformRuntime: this.input.transformRuntime,
                   thinkingLevel: authority.thinkingLevel,
                   compactionEngine: this.input.compactionEngine,
                   compactionModelOverrides: this.input.compactionModelOverrides,
@@ -1296,6 +1301,7 @@ export class SubagentSupervisor {
       // same cancellation immediately after the initial write settles.
       await this.input.projector?.flush();
       childrenLaunched = true;
+      for (const task of request.tasks) reportAnalyticsEvent("subagent_launched", { role: task.role });
       this.liveBatchStops.add(stopLiveForGuidance);
       if (this.pendingUserGuidance?.()) {
         stopLiveForGuidance(new SubagentUserGuidanceStop());
@@ -1343,6 +1349,7 @@ export class SubagentSupervisor {
               childId: identity.childId,
               groupId,
               runtime: childModels[index]?.runtime ?? this.input.runtime,
+              transformRuntime: this.input.transformRuntime,
               thinkingLevel:
                 childModels[index]?.selection.effort ?? this.input.thinkingLevel,
               compactionEngine: this.input.compactionEngine,

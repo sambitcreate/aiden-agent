@@ -416,12 +416,12 @@ test("uninstall stops the service before it touches the route, and leaves the ro
     run: (command, args) => {
       const line = [command, ...args].join(" ");
       timeline.push(line);
-      return line.startsWith("systemctl --user disable") && stopFails ? { status: 1, stdout: "", stderr: "Failed to connect to bus" } : { status: 0, stdout: "", stderr: "" };
+      if (line.startsWith("systemctl --user show")) return { status: 0, stdout: "not-found\n", stderr: "" };
+      return line.startsWith("systemctl --user stop") && stopFails ? { status: 1, stdout: "", stderr: "Failed to connect to bus" } : { status: 0, stdout: "", stderr: "" };
     },
   };
   const unit = api.serviceFile(host);
   mkdirSync(dirname(unit), { recursive: true });
-  writeFileSync(unit, "[Unit]\n");
   let connected = true;
   const daemon = await fakeDaemon((command, args) => {
     timeline.push(`daemon ${args[0]}`);
@@ -429,6 +429,7 @@ test("uninstall stops the service before it touches the route, and leaves the ro
     if (args[0] === "tailscale-disconnect") { connected = false; return { tailscaleConnected: false }; }
     return new Error("unexpected");
   });
+  writeFileSync(unit, api.systemdUnit({ node: "/usr/bin/node", entry: "/aiden/cli.js", agentDir: daemon.dir, path: "/usr/bin" }));
   const write = process.stdout.write;
   let output = "";
   process.stdout.write = (chunk) => { output += chunk; return true; };
@@ -439,7 +440,7 @@ test("uninstall stops the service before it touches the route, and leaves the ro
     stopFails = false;
     timeline.length = 0;
     await api.serviceCommand(daemon.dir, ["uninstall"], host);
-    const stop = timeline.findIndex((line) => line.startsWith("systemctl --user disable"));
+    const stop = timeline.findIndex((line) => line.startsWith("systemctl --user stop"));
     const disconnect = timeline.indexOf("daemon tailscale-disconnect");
     assert.ok(stop >= 0 && disconnect > stop, `the service is stopped first, then the route is removed (${timeline.join(", ")})`);
     assert.match(output, /Removed the Aiden service\.[\s\S]*Removed Aiden's Tailscale route/);

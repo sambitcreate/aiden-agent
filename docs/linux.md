@@ -110,7 +110,16 @@ artifacts, coding follow-through (background jobs, followed pull requests and
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-specific integrations include:
 
-- native distro window chrome and conventional File/Edit/View/Window/Help menus;
+- Aiden's own title bar: no separate desktop title bar or menu bar strip.
+  Minimize, maximize/restore and close sit at the right end of Aiden's top bar,
+  the main menu button (☰) at the left opens the File, Edit, View, Go, Chat,
+  Window and Help menus, their keyboard shortcuts keep working, and dragging or
+  double-clicking empty top-bar space moves or maximizes the window. Turn on
+  **Settings → Appearance → Window → Use system title bar** to get the
+  desktop's own title bar and the classic menu bar back after a restart. Tiling
+  window managers (sway, Hyprland, i3, niri and similar) use the system title
+  bar unless you turn that switch off. Aiden's buttons always sit on the right
+  and do not follow the desktop's button-layout setting;
 - Ctrl-based app and global shortcuts, including the Wayland Global Shortcuts
   portal on desktops that implement it;
 - Vulkan disabled on Wayland sessions to avoid Chromium's Ozone incompatibility
@@ -120,7 +129,11 @@ native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-sp
 - opening folders with the default desktop file manager;
 - profile snapshot export through a Save dialog;
 - bundled Node mDNS publication for nearby Aiden On The Go discovery, without
-  requiring Apple's `dns-sd` utility.
+  requiring Apple's `dns-sd` utility;
+- the Inbox (Beta) sidebar's Needs you count on the app icon through
+  `app.setBadgeCount`, shown by launchers that read the Unity launcher API
+  (for example Ubuntu's Dock or KDE's task manager) and ignored elsewhere. Settings →
+  Appearance → Sidebar names it **Show Needs you count on the app icon**.
 
 Bots use the same roster, definitions, access controls, conversations, schedules,
 and Telegram bindings as macOS. Their native authority helper requires an
@@ -131,17 +144,21 @@ never fall back to files or plaintext. If the helper or keyring is unavailable,
 Bot operations fail closed while ordinary workspace chat remains available;
 unlock or configure the keyring and restart Aiden to restore Bot access.
 
+[Open work](bot-open-work.md) is available on the Linux desktop and its paired phones, with the same records, Undo and linked Stop controls as macOS. [Connected-app watches](bot-routines.md#connected-app-watches) and their tour tile are also available wherever Linux Bots are supported. Choose an existing Google Calendar account through Composio and an explicit calendar; desktop and paired phones can preview, save, edit, pause/resume, run or remove the watch. Connect Composio in the foreground first and grant this Bot Schedules and its Composio service allowance. Checks reuse that approved live connection and never sign in or reconnect in the background. iMCP Mail remains Mac-only, and the standalone CLI does not advertise watch management.
+
+[Routine models](bot-routine-models.md), thinking and explicitly chosen fallback are also available wherever Linux Bots are enabled. The owning host binds each accepted run’s selection across queues and recovery; phones manage choices through the negotiated `bot:routine-models` surface. Unconfirmed provider cost requires the same explicit Resume confirmation as on macOS.
+
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with
-Apple silicon, so on Linux the Settings → Bot computers page, the Bot
+Apple silicon, so on Linux the Settings → Computers & VMs → Bot computers page, the Bot
 profile's Computer section, the Bot panel's Computer tab and the onboarding
 tour's Bot computers tile do not appear, and no Lume code runs. Connectors
 served by a Mac app (iMCP) are not offered: Settings → Connectors leaves out
 their cards, and a saved one carried over from a Mac never runs. Global dictation remains available when the desktop can register its
 shortcut, but the transcript is copied to the clipboard instead of using the
 macOS Accessibility auto-paste transaction. To use hold-to-dictate, choose Hold
-in Settings → Voice and assign a shortcut in your desktop’s Global Shortcuts
+in Settings → Voice & Speech and assign a shortcut in your desktop’s Global Shortcuts
 portal. Hold setup requires the package's desktop entry to be installed under a
 system or user applications directory; development runs and non-integrated
 AppImages retain toggle dictation. Setup is explicit for each app session; startup never opens a permission

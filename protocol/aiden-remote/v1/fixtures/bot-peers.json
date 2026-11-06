@@ -1,0 +1,314 @@
+{
+  "contractRevision": 59,
+  "capability": "bot:peers",
+  "settings": {
+    "botId": "bot_planner",
+    "revision": "peers_v2",
+    "routingDescription": "Ask me to coordinate reviews and prepare the final update.",
+    "pairs": [
+      {
+        "id": "pair_one",
+        "revision": "pair_v1",
+        "peer": {
+          "botId": "bot_researcher",
+          "name": "Researcher"
+        },
+        "approvedAt": 1000
+      }
+    ],
+    "updatedAt": 1000,
+    "lastMutationId": "11111111-1111-4111-8111-111111111111"
+  },
+  "catalog": {
+    "botId": "bot_planner",
+    "revision": "catalog_v1",
+    "bots": [
+      {
+        "botId": "bot_researcher",
+        "name": "Researcher",
+        "available": true
+      }
+    ]
+  },
+  "approve": {
+    "action": "approve",
+    "botId": "bot_planner",
+    "mutationId": "11111111-1111-4111-8111-111111111111",
+    "expectedRevision": "peers_v1",
+    "catalogRevision": "catalog_v1",
+    "peerBotId": "bot_researcher"
+  },
+  "describe": {
+    "action": "describe",
+    "botId": "bot_planner",
+    "mutationId": "33333333-3333-4333-8333-333333333333",
+    "expectedRevision": "peers_v2",
+    "routingDescription": "Coordinate reviews and prepare the final update."
+  },
+  "revoke": {
+    "action": "revoke",
+    "botId": "bot_planner",
+    "mutationId": "44444444-4444-4444-8444-444444444444",
+    "expectedRevision": "peers_v2",
+    "pairId": "pair_one",
+    "pairRevision": "pair_v1"
+  },
+  "accepted": {
+    "ok": true,
+    "mutationId": "11111111-1111-4111-8111-111111111111",
+    "replayed": false,
+    "snapshot": {
+      "botId": "bot_planner",
+      "revision": "peers_v2",
+      "routingDescription": "Ask me to coordinate reviews and prepare the final update.",
+      "pairs": [
+        {
+          "id": "pair_one",
+          "revision": "pair_v1",
+          "peer": {
+            "botId": "bot_researcher",
+            "name": "Researcher"
+          },
+          "approvedAt": 1000
+        }
+      ],
+      "updatedAt": 1000,
+      "lastMutationId": "11111111-1111-4111-8111-111111111111"
+    }
+  },
+  "conflict": {
+    "ok": false,
+    "code": "conflict",
+    "error": "Pair settings changed. Review the current settings.",
+    "snapshot": {
+      "botId": "bot_planner",
+      "revision": "peers_v2",
+      "routingDescription": "Ask me to coordinate reviews and prepare the final update.",
+      "pairs": [
+        {
+          "id": "pair_one",
+          "revision": "pair_v1",
+          "peer": {
+            "botId": "bot_researcher",
+            "name": "Researcher"
+          },
+          "approvedAt": 1000
+        }
+      ],
+      "updatedAt": 1000,
+      "lastMutationId": "11111111-1111-4111-8111-111111111111"
+    }
+  },
+  "exchanges": {
+    "botId": "bot_planner",
+    "revision": "exchanges_v1",
+    "exchanges": [
+      {
+        "id": "exchange_one",
+        "revision": "exchange_v3",
+        "pairId": "pair_one",
+        "sender": {
+          "botId": "bot_planner",
+          "name": "Planner"
+        },
+        "recipient": {
+          "botId": "bot_researcher",
+          "name": "Researcher"
+        },
+        "direction": "sent",
+        "kind": "request",
+        "title": "Research the calendar changes",
+        "state": "completed",
+        "createdAt": 1000,
+        "updatedAt": 3000,
+        "expiresAt": 86401000,
+        "canStop": false,
+        "returnState": "delivered"
+      }
+    ]
+  },
+  "detail": {
+    "id": "exchange_one",
+    "revision": "exchange_v3",
+    "pairId": "pair_one",
+    "sender": {
+      "botId": "bot_planner",
+      "name": "Planner"
+    },
+    "recipient": {
+      "botId": "bot_researcher",
+      "name": "Researcher"
+    },
+    "direction": "sent",
+    "kind": "request",
+    "title": "Research the calendar changes",
+    "state": "completed",
+    "createdAt": 1000,
+    "updatedAt": 3000,
+    "expiresAt": 86401000,
+    "canStop": false,
+    "returnState": "delivered",
+    "request": {
+      "text": "Summarize the changed meetings and identify scheduling conflicts."
+    },
+    "result": {
+      "outcome": "completed",
+      "text": "The review moved to 10 AM; it overlaps the planning meeting by 30 minutes.",
+      "truncated": false,
+      "createdAt": 2500
+    }
+  },
+  "waiting": {
+    "id": "exchange_one",
+    "revision": "exchange_v2",
+    "pairId": "pair_one",
+    "sender": {
+      "botId": "bot_planner",
+      "name": "Planner"
+    },
+    "recipient": {
+      "botId": "bot_researcher",
+      "name": "Researcher"
+    },
+    "direction": "sent",
+    "kind": "request",
+    "title": "Research the calendar changes",
+    "state": "stopping",
+    "createdAt": 1000,
+    "updatedAt": 3000,
+    "expiresAt": 86401000,
+    "canStop": true,
+    "returnState": "reserved",
+    "lastStop": {
+      "mutationId": "22222222-2222-4222-8222-222222222222",
+      "state": "requested",
+      "at": 2000
+    },
+    "request": {
+      "text": "Summarize the changed meetings and identify scheduling conflicts."
+    }
+  },
+  "stop": {
+    "botId": "bot_planner",
+    "exchangeId": "exchange_one",
+    "mutationId": "22222222-2222-4222-8222-222222222222",
+    "expectedRevision": "exchange_v1"
+  },
+  "stopAccepted": {
+    "ok": true,
+    "mutationId": "22222222-2222-4222-8222-222222222222",
+    "replayed": false,
+    "exchange": {
+      "id": "exchange_one",
+      "revision": "exchange_v2",
+      "pairId": "pair_one",
+      "sender": {
+        "botId": "bot_planner",
+        "name": "Planner"
+      },
+      "recipient": {
+        "botId": "bot_researcher",
+        "name": "Researcher"
+      },
+      "direction": "sent",
+      "kind": "request",
+      "title": "Research the calendar changes",
+      "state": "stopping",
+      "createdAt": 1000,
+      "updatedAt": 3000,
+      "expiresAt": 86401000,
+      "canStop": true,
+      "returnState": "reserved",
+      "lastStop": {
+        "mutationId": "22222222-2222-4222-8222-222222222222",
+        "state": "requested",
+        "at": 2000
+      },
+      "request": {
+        "text": "Summarize the changed meetings and identify scheduling conflicts."
+      }
+    }
+  },
+  "stopped": {
+    "ok": true,
+    "mutationId": "22222222-2222-4222-8222-222222222222",
+    "replayed": true,
+    "exchange": {
+      "id": "exchange_one",
+      "revision": "exchange_v4",
+      "pairId": "pair_one",
+      "sender": {
+        "botId": "bot_planner",
+        "name": "Planner"
+      },
+      "recipient": {
+        "botId": "bot_researcher",
+        "name": "Researcher"
+      },
+      "direction": "sent",
+      "kind": "request",
+      "title": "Research the calendar changes",
+      "state": "cancelled",
+      "createdAt": 1000,
+      "updatedAt": 3000,
+      "expiresAt": 86401000,
+      "canStop": false,
+      "returnState": "delivered",
+      "request": {
+        "text": "Summarize the changed meetings and identify scheduling conflicts."
+      },
+      "result": {
+        "outcome": "cancelled",
+        "text": "The recipient acknowledged Stop. Earlier effects may remain.",
+        "truncated": false,
+        "createdAt": 3000
+      },
+      "lastStop": {
+        "mutationId": "22222222-2222-4222-8222-222222222222",
+        "state": "stopped",
+        "at": 2000
+      }
+    }
+  },
+  "evidence": {
+    "exchangeId": "exchange_one",
+    "kind": "source",
+    "botId": "bot_planner",
+    "submissionId": "9007199254740993",
+    "entryId": "9007199254740995",
+    "title": "Original request",
+    "text": "Summarize the changed meetings and identify scheduling conflicts.",
+    "truncated": false,
+    "createdAt": 1000
+  },
+  "peerEntry": {
+    "id": "peer_entry_one",
+    "type": "peer",
+    "exchangeId": "exchange_one",
+    "direction": "sent",
+    "peerBotId": "bot_researcher",
+    "peerName": "Researcher",
+    "messageKind": "request",
+    "createdAt": "2026-11-03T12:00:00.000Z"
+  },
+  "peerFinalEntry": {
+    "id": "peer_entry_final",
+    "type": "peer",
+    "exchangeId": "exchange_one",
+    "direction": "received",
+    "peerBotId": "bot_researcher",
+    "peerName": "Researcher",
+    "messageKind": "result",
+    "createdAt": "2026-11-03T12:01:00.000Z",
+    "final": true
+  },
+  "peerNotification": {
+    "id": "peer_root_one",
+    "kind": "peer",
+    "botId": "bot_planner",
+    "botName": "Planner",
+    "routineName": "Calendar review complete",
+    "finishedAt": "2026-11-03T12:01:00.000Z",
+    "preview": "The review moved to 10 AM and overlaps the planning meeting."
+  }
+}

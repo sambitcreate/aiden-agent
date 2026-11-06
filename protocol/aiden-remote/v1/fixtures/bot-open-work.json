@@ -1,0 +1,226 @@
+{
+  "contractRevision": 59,
+  "capability": "bot:open-work",
+  "snapshot": {
+    "botId": "bot_fixture",
+    "revision": "snapshot-2",
+    "items": [
+      {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "revision": "item-2",
+        "title": "Review the project brief",
+        "note": "Check the assumptions and note open questions.",
+        "state": "open",
+        "createdAt": 1793718000000,
+        "updatedAt": 1793718060000,
+        "source": {
+          "kind": "person",
+          "submissionId": "10",
+          "entryId": "11"
+        },
+        "links": [
+          {
+            "kind": "source",
+            "submissionId": "10",
+            "entryId": "11"
+          }
+        ],
+        "execution": {
+          "state": "running",
+          "canStop": true
+        }
+      }
+    ],
+    "undo": [
+      {
+        "mutationId": "22222222-2222-4222-8222-222222222222",
+        "itemId": "11111111-1111-4111-8111-111111111111",
+        "expectedRevision": "item-2",
+        "expiresAt": 1793804460000
+      }
+    ]
+  },
+  "item": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "revision": "item-2",
+    "title": "Review the project brief",
+    "note": "Check the assumptions and note open questions.",
+    "state": "open",
+    "createdAt": 1793718000000,
+    "updatedAt": 1793718060000,
+    "source": {
+      "kind": "person",
+      "submissionId": "10",
+      "entryId": "11"
+    },
+    "links": [
+      {
+        "kind": "source",
+        "submissionId": "10",
+        "entryId": "11"
+      }
+    ],
+    "execution": {
+      "state": "running",
+      "canStop": true
+    }
+  },
+  "undo": {
+    "mutationId": "22222222-2222-4222-8222-222222222222",
+    "itemId": "11111111-1111-4111-8111-111111111111",
+    "expectedRevision": "item-2",
+    "expiresAt": 1793804460000
+  },
+  "stop": {
+    "mutationId": "33333333-3333-4333-8333-333333333333",
+    "state": "stopped",
+    "requestedAt": 1793718060000,
+    "finishedAt": 1793718061000
+  },
+  "result": {
+    "ok": true,
+    "mutationId": "22222222-2222-4222-8222-222222222222",
+    "replayed": false,
+    "itemId": "11111111-1111-4111-8111-111111111111",
+    "snapshot": {
+      "botId": "bot_fixture",
+      "revision": "snapshot-2",
+      "items": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "revision": "item-2",
+          "title": "Review the project brief",
+          "note": "Check the assumptions and note open questions.",
+          "state": "open",
+          "createdAt": 1793718000000,
+          "updatedAt": 1793718060000,
+          "source": {
+            "kind": "person",
+            "submissionId": "10",
+            "entryId": "11"
+          },
+          "links": [
+            {
+              "kind": "source",
+              "submissionId": "10",
+              "entryId": "11"
+            }
+          ],
+          "execution": {
+            "state": "running",
+            "canStop": true
+          }
+        }
+      ],
+      "undo": [
+        {
+          "mutationId": "22222222-2222-4222-8222-222222222222",
+          "itemId": "11111111-1111-4111-8111-111111111111",
+          "expectedRevision": "item-2",
+          "expiresAt": 1793804460000
+        }
+      ]
+    },
+    "undo": {
+      "mutationId": "22222222-2222-4222-8222-222222222222",
+      "itemId": "11111111-1111-4111-8111-111111111111",
+      "expectedRevision": "item-2",
+      "expiresAt": 1793804460000
+    }
+  },
+  "stale": {
+    "ok": false,
+    "code": "stale",
+    "error": "This work item changed. Review its current state before saving.",
+    "snapshot": {
+      "botId": "bot_fixture",
+      "revision": "snapshot-2",
+      "items": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "revision": "item-2",
+          "title": "Review the project brief",
+          "note": "Check the assumptions and note open questions.",
+          "state": "open",
+          "createdAt": 1793718000000,
+          "updatedAt": 1793718060000,
+          "source": {
+            "kind": "person",
+            "submissionId": "10",
+            "entryId": "11"
+          },
+          "links": [
+            {
+              "kind": "source",
+              "submissionId": "10",
+              "entryId": "11"
+            }
+          ],
+          "execution": {
+            "state": "running",
+            "canStop": true
+          }
+        }
+      ],
+      "undo": [
+        {
+          "mutationId": "22222222-2222-4222-8222-222222222222",
+          "itemId": "11111111-1111-4111-8111-111111111111",
+          "expectedRevision": "item-2",
+          "expiresAt": 1793804460000
+        }
+      ]
+    }
+  },
+  "evidenceSource": {
+    "itemId": "11111111-1111-4111-8111-111111111111",
+    "kind": "source",
+    "submissionId": "10",
+    "entryId": "11",
+    "title": "Source request",
+    "text": "Review the project brief and note any open questions.",
+    "truncated": false,
+    "createdAt": 1793718000000
+  },
+  "evidenceResult": {
+    "itemId": "11111111-1111-4111-8111-111111111111",
+    "kind": "result",
+    "submissionId": "10",
+    "entryId": "12",
+    "title": "Result",
+    "text": "The brief is reviewed. Two assumptions need follow-up.",
+    "truncated": false,
+    "createdAt": 1793718000000
+  },
+  "mutations": {
+    "add": {
+      "action": "add",
+      "mutationId": "22222222-2222-4222-8222-222222222222",
+      "expectedRevision": "snapshot-1",
+      "title": "Review the project brief",
+      "note": "Check the assumptions."
+    },
+    "edit": {
+      "action": "edit",
+      "mutationId": "44444444-4444-4444-8444-444444444444",
+      "id": "11111111-1111-4111-8111-111111111111",
+      "expectedRevision": "item-2",
+      "patch": {
+        "state": "waiting",
+        "waitingReason": "Waiting for the updated brief"
+      }
+    },
+    "undo": {
+      "action": "undo",
+      "mutationId": "55555555-5555-4555-8555-555555555555",
+      "undoOf": "22222222-2222-4222-8222-222222222222",
+      "expectedRevision": "item-2"
+    },
+    "stop": {
+      "action": "stop",
+      "mutationId": "33333333-3333-4333-8333-333333333333",
+      "id": "11111111-1111-4111-8111-111111111111",
+      "expectedRevision": "item-2"
+    }
+  }
+}
