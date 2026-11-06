@@ -324,10 +324,9 @@ export function createDaemonChats(agentDir: string) {
       }
   }
   return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
-    /** Every activity change (a run began or ended, an approval was raised or settled). */
-    /** Finishes deletions a crash interrupted. Repeatable: a failure leaves its tombstone and its chat closed. */
     /** Unlike a deletion that fails to finish, a lost record cannot be scoped to its chats. */
     assertChatDeletionsReadable() { if (deletionRecordFailure) throw deletionRecordFailure; },
+    /** Finishes deletions a crash interrupted. Repeatable: a failure leaves its tombstone and its chat closed. */
     async recoverChatDeletions() {
       if (deletionRecordFailure) throw deletionRecordFailure;
       for (const [id, reopen] of [...interrupted]) {
@@ -338,6 +337,7 @@ export function createDaemonChats(agentDir: string) {
         interrupted.delete(id); reopen();
       }
     },
+    /** Every activity change (a run began or ended, an approval was raised or settled). */
     onActivityChange(listener: (snapshot: ChatActivitySnapshot) => void) { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; },
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
     /** Closes intake before its first await, so no ingress stopping alongside it can begin a turn. */
