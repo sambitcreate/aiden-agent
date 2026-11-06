@@ -1,6 +1,7 @@
 // The chat currently on screen in the main window, as Aiden Live sees it.
-// ChatPane publishes it; Live's chat tools and voice approvals read it. Only
-// one chat pane publishes at a time, and the last mount wins.
+// ChatPane publishes it; Live's chat tools and voice approvals read it. Panes
+// stack in mount order: the newest pane is the one on screen, and when it
+// unmounts the snapshot falls back to the newest pane still mounted.
 
 export interface LiveOpenChatSnapshot {
   chatId: string;
@@ -16,32 +17,39 @@ type Listener = () => void;
 
 export class LiveOpenChatStore {
   private snapshot: LiveOpenChatSnapshot | null = null;
-  private owner: symbol | null = null;
+  /** Each mounted pane's latest snapshot, oldest first. */
+  private readonly panes = new Map<symbol, LiveOpenChatSnapshot>();
   private readonly listeners = new Set<Listener>();
 
-  /** Publishes for one pane; returns a function that clears it only if still owned. */
+  /** Publishes for one pane. A pane's first publish puts it on top. */
   publish(owner: symbol, snapshot: LiveOpenChatSnapshot): void {
+    this.panes.set(owner, { ...snapshot });
+    this.refresh();
+  }
+
+  /** Forgets one pane; the newest pane still mounted takes over. */
+  clear(owner: symbol): void {
+    if (!this.panes.delete(owner)) return;
+    this.refresh();
+  }
+
+  private refresh(): void {
+    let top: LiveOpenChatSnapshot | null = null;
+    for (const snapshot of this.panes.values()) top = snapshot;
     const previous = this.snapshot;
-    this.owner = owner;
     if (
-      previous &&
-      previous.chatId === snapshot.chatId &&
-      previous.title === snapshot.title &&
-      previous.workspaceId === snapshot.workspaceId &&
-      previous.busy === snapshot.busy &&
-      previous.streamId === snapshot.streamId
+      previous === top ||
+      (previous &&
+        top &&
+        previous.chatId === top.chatId &&
+        previous.title === top.title &&
+        previous.workspaceId === top.workspaceId &&
+        previous.busy === top.busy &&
+        previous.streamId === top.streamId)
     ) {
       return;
     }
-    this.snapshot = { ...snapshot };
-    this.emit();
-  }
-
-  clear(owner: symbol): void {
-    if (this.owner !== owner) return;
-    this.owner = null;
-    if (this.snapshot === null) return;
-    this.snapshot = null;
+    this.snapshot = top ? { ...top } : null;
     this.emit();
   }
 
