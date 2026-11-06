@@ -161,11 +161,13 @@ export class LiveAppControlController {
   private confirm(label: string, signal: AbortSignal): Promise<LiveRendererToolResult> {
     this.confirmation?.finish(false, "cancelled");
     this.setActing(null);
-    const promptVoiceId = this.deps.bus.latestVoiceInputId();
     const id = `confirm-${++this.confirmSequence}`;
+    const shownLabel = label || "Use this control";
     return new Promise((resolve) => {
       let settled = false;
+      let stopVoice: () => void = () => undefined;
       const finish = (confirmed: boolean, reason: string) => {
+        // One answer per prompt: a second tap or phrase can never act again.
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -176,25 +178,38 @@ export class LiveAppControlController {
         resolve({ ok: true, confirmed, reason });
       };
       const aborted = () => finish(false, "cancelled");
-      // Only the user's own finalized speech after the prompt answers it, and
-      // only when the whole utterance is a fixed confirm phrase; anything else refuses.
-      const stopVoice = this.deps.bus.onVoiceInput((input) => {
-        if (input.id <= promptVoiceId) return;
-        const phrase = matchLiveVoicePhrase(input.text);
-        if (phrase?.kind === "confirm") finish(true, "confirmed");
-        else finish(false, phrase?.kind === "deny" ? "cancelled" : "other_speech");
-      });
       const timer = setTimeout(() => finish(false, "timeout"), this.deps.confirmTimeoutMs ?? LIVE_APP_CONTROL_CONFIRM_TIMEOUT_MS);
       this.confirmation = { id, finish };
+      // Tapping Confirm works at once. Its callbacks only ever answer this one
+      // guarded action, which main has bound to one element and one action.
       this.deps.activity.set(LIVE_APP_CONTROL_ACTIVITY_SOURCE, {
         kind: "confirm",
         id,
-        label: label || "Use this control",
+        label: shownLabel,
         confirm: () => finish(true, "confirmed"),
         cancel: () => finish(false, "cancelled"),
       });
-      if (signal.aborted) aborted();
-      else signal.addEventListener("abort", aborted, { once: true });
+      if (signal.aborted) {
+        aborted();
+        return;
+      }
+      signal.addEventListener("abort", aborted, { once: true });
+      // Live asks the user aloud. Speech counts only after that prompt was
+      // accepted, and only a whole utterance that is a fixed confirm phrase
+      // answers yes; anything else refuses. A refused prompt leaves tap only.
+      void this.deps.bus
+        .note(`Ask the user to say confirm or tap Confirm to allow: ${shownLabel}. Nothing happens until they do.`)
+        .catch(() => false)
+        .then((sent) => {
+          if (settled || !sent) return;
+          const promptVoiceId = this.deps.bus.latestVoiceInputId();
+          stopVoice = this.deps.bus.onVoiceInput((input) => {
+            if (input.id <= promptVoiceId) return;
+            const phrase = matchLiveVoicePhrase(input.text);
+            if (phrase?.kind === "confirm") finish(true, "confirmed");
+            else finish(false, phrase?.kind === "deny" ? "cancelled" : "other_speech");
+          });
+        });
     });
   }
 

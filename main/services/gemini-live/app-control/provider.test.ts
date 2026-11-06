@@ -166,7 +166,12 @@ class FakeWindowPort implements AidenWindowPort {
   }
 }
 
-function harness(html: string, options: { confirmTimeoutMs?: number; maxActions?: number; sessionCalls?: number } = {}) {
+const PROMPT = /^Ask the user to say confirm or tap Confirm/u;
+
+function harness(
+  html: string,
+  options: { confirmTimeoutMs?: number; maxActions?: number; sessionCalls?: number; refusePrompts?: boolean } = {},
+) {
   const port = new FakeWindowPort(html);
   const bus = new LiveSessionBus();
   const notes: string[] = [];
@@ -178,6 +183,8 @@ function harness(html: string, options: { confirmTimeoutMs?: number; maxActions?
   bus.setSession("s1", {
     toolResult: async (_sessionId, requestId, response) => broker.resolve(requestId, response),
     note: async (_sessionId, text) => {
+      // Live's note queue can refuse a note; a refused prompt leaves tap only.
+      if (options.refusePrompts && PROMPT.test(text)) return false;
       notes.push(text);
       for (const waiter of noteWaiters.splice(0)) waiter();
       return true;
@@ -217,14 +224,22 @@ function harness(html: string, options: { confirmTimeoutMs?: number; maxActions?
     assert.ok(line, `${text} is listed`);
     return Number(line.split(" ")[0]);
   };
-  const nextNote = () => new Promise<void>((resolve) => noteWaiters.push(resolve));
+  /** Resolves with the first note (already sent or still to come) after `from` that matches. */
+  const noteMatching = async (pattern: RegExp, from = 0): Promise<string> => {
+    for (;;) {
+      const found = notes.slice(from).find((text) => pattern.test(text));
+      if (found) return found;
+      await new Promise<void>((resolve) => noteWaiters.push(resolve));
+    }
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
   const say = (text: string) => bus.publishVoiceInput(text);
   const dispose = () => {
     provider.close();
     broker.close();
     controller.dispose();
   };
-  return { port, document: port.document, activity, controller, provider, opened, notes, call, look, ref, nextNote, say, dispose };
+  return { port, document: port.document, activity, controller, provider, opened, notes, call, look, ref, noteMatching, settle, say, dispose };
 }
 
 function code(response: LiveToolResponse): unknown {
@@ -297,7 +312,7 @@ test("controls only the user may use are refused with a fixed error, even when t
   }
 });
 
-test("a guarded control waits for the user's own spoken confirm, then acts and tells Live", async () => {
+test("a guarded control waits for the user's own spoken confirm after the prompt, acts once and tells Live", async () => {
   const h = harness(`<div role="alertdialog" aria-label="Delete chat?"><button id="delete" data-live-guard="confirm">Delete</button></div>`);
   try {
     let deleted = 0;
@@ -309,13 +324,17 @@ test("a guarded control waits for the user's own spoken confirm, then acts and t
     const shown = h.activity.get();
     assert.equal(shown?.kind, "confirm");
     assert.equal(shown?.kind === "confirm" ? shown.label : "", "Delete chat? — “Delete”");
+    assert.match(await h.noteMatching(PROMPT), /Delete chat\? — “Delete”/u, "Live is told to ask");
     assert.equal(code(await h.call("use_aiden", { element: 1, action: "press" })), "waiting_for_user");
-    const noted = h.nextNote();
     h.say("Yes, do it!");
-    await noted;
+    assert.match(await h.noteMatching(/^The user confirmed/u), /^The user confirmed\. Pressed “Delete”\./u);
     assert.equal(deleted, 1);
-    assert.match(h.notes[h.notes.length - 1]!, /^The user confirmed\. Pressed “Delete”\./u);
     assert.equal(h.activity.get()?.kind === "confirm", false, "the confirm prompt is gone");
+    // The OK was used up: a second confirm phrase or a late tap acts on nothing.
+    h.say("confirm");
+    if (shown?.kind === "confirm") shown.confirm();
+    await h.settle();
+    assert.equal(deleted, 1);
   } finally {
     h.dispose();
   }
@@ -323,23 +342,53 @@ test("a guarded control waits for the user's own spoken confirm, then acts and t
 
 test("a guarded control is refused on Cancel, on other speech, on Escape and when nobody answers", async () => {
   for (const answer of ["tap cancel", "other speech", "escape", "timeout"] as const) {
-    const h = harness(`<button id="out" data-live-guard="confirm">Sign out</button>`, { confirmTimeoutMs: 20 });
+    const h = harness(`<button id="out" data-live-guard="confirm">Sign out</button>`, { confirmTimeoutMs: 40 });
     try {
       let pressed = 0;
       h.document.getElementById("out")!.addEventListener("click", () => (pressed += 1));
       assert.equal((await h.call("use_aiden", { element: await h.ref("Sign out"), action: "press" })).status, "waiting_for_user");
-      const noted = h.nextNote();
+      await h.noteMatching(PROMPT);
       const shown = h.activity.get();
       if (answer === "tap cancel" && shown?.kind === "confirm") shown.cancel();
       if (answer === "other speech") h.say("Actually what's the weather like?");
       if (answer === "escape") h.controller.userInput({ type: "keydown", key: "Escape", isTrusted: true });
-      await noted;
+      const outcome = await h.noteMatching(/was not used/u);
       assert.equal(pressed, 0, answer);
-      assert.match(h.notes[h.notes.length - 1]!, answer === "timeout" ? /didn't answer in time/u : /didn't confirm/u, answer);
+      assert.match(outcome, answer === "timeout" ? /didn't answer in time/u : /didn't confirm/u, answer);
       assert.equal(h.activity.get(), null, answer);
     } finally {
       h.dispose();
     }
+  }
+});
+
+test("a refused prompt leaves Confirm by tap only, and a page change drops the pending OK", async () => {
+  const h = harness(`<button id="out" data-live-guard="confirm">Sign out</button>`, { refusePrompts: true });
+  try {
+    let pressed = 0;
+    h.document.getElementById("out")!.addEventListener("click", () => (pressed += 1));
+    assert.equal((await h.call("use_aiden", { element: await h.ref("Sign out"), action: "press" })).status, "waiting_for_user");
+    await h.settle();
+    h.say("confirm");
+    await h.settle();
+    assert.equal(pressed, 0, "speech can't answer a prompt Live never got");
+    const shown = h.activity.get();
+    assert.equal(shown?.kind, "confirm");
+    if (shown?.kind === "confirm") shown.confirm();
+    await h.noteMatching(/^The user confirmed/u);
+    assert.equal(pressed, 1);
+
+    const before = h.notes.length;
+    assert.equal((await h.call("use_aiden", { element: await h.ref("Sign out"), action: "press" })).status, "waiting_for_user");
+    const second = h.activity.get();
+    h.port.navigate();
+    assert.match(await h.noteMatching(/was not used/u, before), /^The page changed before the user answered/u);
+    assert.equal(h.activity.get(), null);
+    if (second?.kind === "confirm") second.confirm();
+    await h.settle();
+    assert.equal(pressed, 1, "nothing acts after the page changed");
+  } finally {
+    h.dispose();
   }
 });
 

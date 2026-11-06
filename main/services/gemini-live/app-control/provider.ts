@@ -81,6 +81,7 @@ const FRESH_LOOK_LIMITS: AidenScreenLimits = { elements: 120, characters: 8_000 
 const DEFAULT_SESSION_CALLS = 150;
 const STOPPED_BY_USER = "taken_over";
 const STOPPED_BY_INTERRUPT = "interrupted";
+const CONFIRM_PAGE_CHANGED = "page_changed";
 
 const PLACE_LABELS: Record<AidenAppPlace, string> = {
   appearance: "Appearance settings",
@@ -172,7 +173,7 @@ export const AIDEN_APP_CONTROL_DECLARATIONS: readonly FunctionDeclaration[] = [
 export const AIDEN_APP_CONTROL_INSTRUCTIONS: readonly string[] = [
   "You can look at and move through Aiden's own window with look_at_aiden, use_aiden and open_in_aiden, but nothing outside Aiden.",
   "Look before acting and use numbers only from the latest look; use_aiden already returns a fresh look, so don't look again right after it.",
-  "Never try anything marked (only you can use this); ask the user to do it. When use_aiden says it is waiting for the user's OK, tell the user to say confirm or tap Confirm, and don't repeat the call; Aiden tells you when it is done.",
+  "Never try anything marked (only you can use this); ask the user to do it. When use_aiden says it is waiting for the user's OK, don't repeat the call; Aiden tells you how to ask and what happened.",
   `Take at most ${LIVE_APP_CONTROL_MAX_ACTIONS} actions per request, stop when the user takes over, and never say something happened before the tool result says so.`,
 ];
 
@@ -287,6 +288,8 @@ export class AidenAppControlProvider implements LiveToolProvider {
   private watch: AbortController | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private confirmGraceUntil = 0;
+  /** The pending OK, bound to one element and one action; aborted when the page or look changes. */
+  private pendingConfirm: AbortController | null = null;
   private calls = 0;
   private closed = false;
   private readonly lifetime = new AbortController();
@@ -296,6 +299,8 @@ export class AidenAppControlProvider implements LiveToolProvider {
     // In-app route changes count: a number from before them could point anywhere.
     this.stopNavigation = options.port.onNavigate(() => {
       this.refs = new Map();
+      this.confirmGraceUntil = 0;
+      this.pendingConfirm?.abort(CONFIRM_PAGE_CHANGED);
     });
   }
 
@@ -378,6 +383,9 @@ export class AidenAppControlProvider implements LiveToolProvider {
   private async handleLook(args: Record<string, unknown>, signal: AbortSignal): Promise<LiveToolResponse> {
     const focus = args.focus;
     if (focus !== undefined && (typeof focus !== "string" || focus.length > 80)) return AIDEN_APP_CONTROL_ERRORS.invalid;
+    // A new look moves on: a pending OK and a follow-up grace no longer apply.
+    this.confirmGraceUntil = 0;
+    this.pendingConfirm?.abort(CONFIRM_PAGE_CHANGED);
     try {
       const screen = await this.look(focus, AIDEN_SCREEN_LIMITS, false);
       if (signal.aborted) return liveToolError("cancelled", "The request was cancelled.");
@@ -505,6 +513,9 @@ export class AidenAppControlProvider implements LiveToolProvider {
     const element = this.refs.get(parsed.element);
     if (!element) return AIDEN_APP_CONTROL_ERRORS.stale;
     if (element.guard === "you") return AIDEN_APP_CONTROL_ERRORS.userOnly;
+    // A follow-up grace covers only the very next action.
+    const graceUntil = this.confirmGraceUntil;
+    this.confirmGraceUntil = 0;
     const abort = this.beginAction(signal);
     try {
       const refused = await this.admit(actingLabel(parsed.request.action, element), abort.signal);
@@ -512,9 +523,8 @@ export class AidenAppControlProvider implements LiveToolProvider {
       if (abort.signal.aborted) return stopped(abort);
       this.startActing();
       let result = await this.runPageAction(element, parsed.request, abort.signal);
-      if (result.status === "confirm" && result.inDialog && this.now() < this.confirmGraceUntil) {
+      if (result.status === "confirm" && result.inDialog && this.now() < graceUntil) {
         // The user already said yes to this; the dialog's own button follows it.
-        this.confirmGraceUntil = 0;
         result = await this.runPageAction(element, { ...parsed.request, confirmed: true }, abort.signal);
       }
       if (result.status === "confirm") {
@@ -523,7 +533,7 @@ export class AidenAppControlProvider implements LiveToolProvider {
           ok: true,
           status: "waiting_for_user",
           message:
-            "Waiting for the user's OK. Ask them to say confirm or tap Confirm; Aiden acts and tells you once they answer.",
+            "Waiting for the user's OK. Aiden tells you how to ask and what happened; don't repeat this call.",
         };
       }
       if (abort.signal.aborted) return stopped(abort);
@@ -550,26 +560,37 @@ export class AidenAppControlProvider implements LiveToolProvider {
   private async confirmThenAct(element: AidenScreenElement, request: AidenPageActionRequest): Promise<void> {
     this.confirming = true;
     this.endActing();
+    const pending = new AbortController();
+    const endWithSession = () => pending.abort();
+    this.lifetime.signal.addEventListener("abort", endWithSession, { once: true });
+    this.pendingConfirm = pending;
     let answer: Record<string, unknown>;
     try {
       answer = record(
         await this.options.renderer.request(
           LIVE_APP_CONTROL_RENDERER_TOOL,
           { op: "confirm", label: confirmLabel(element) },
-          this.lifetime.signal,
+          pending.signal,
         ),
       );
     } catch {
       answer = {};
     } finally {
       this.confirming = false;
+      if (this.pendingConfirm === pending) this.pendingConfirm = null;
+      this.lifetime.signal.removeEventListener("abort", endWithSession);
     }
     if (this.closed) return;
     // Whatever happens next, the page is about to change under the old numbers.
     this.refs = new Map();
-    if (answer.ok !== true || answer.confirmed !== true) {
-      const reason = answer.reason === "timeout" ? "didn't answer in time" : "didn't confirm";
-      await this.note(`The user ${reason}, so ${quoted(element.name, element.role)} was not used. Nothing changed.`);
+    if (pending.signal.aborted || answer.ok !== true || answer.confirmed !== true) {
+      const reason =
+        pending.signal.reason === CONFIRM_PAGE_CHANGED
+          ? "The page changed before the user answered"
+          : answer.reason === "timeout"
+            ? "The user didn't answer in time"
+            : "The user didn't confirm";
+      await this.note(`${reason}, so ${quoted(element.name, element.role)} was not used. Nothing changed.`);
       return;
     }
     const abort = this.beginAction(this.lifetime.signal);
@@ -609,6 +630,7 @@ export class AidenAppControlProvider implements LiveToolProvider {
     }
     if (this.confirming) return AIDEN_APP_CONTROL_ERRORS.waiting;
     if (this.busy) return AIDEN_APP_CONTROL_ERRORS.busy;
+    this.confirmGraceUntil = 0;
     const target = place as AidenAppPlace;
     const abort = this.beginAction(signal);
     try {
