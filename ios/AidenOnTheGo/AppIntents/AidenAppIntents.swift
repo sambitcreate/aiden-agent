@@ -173,7 +173,9 @@ struct AidenWorkspaceIntentQuery: EntityQuery {
 }
 
 /// In-process delivery survives a cold foreground launch before ContentView mounts.
-/// Nothing in a URL, App Group, saved state, or notification can claim this provenance.
+/// An `Action` only comes from an App Intent: nothing in a URL, App Group, saved state,
+/// or notification can claim that provenance. A route only says where to go, and a
+/// notification tap can queue one too.
 @MainActor @Observable
 final class AidenForegroundIntentRouter {
     struct Action: Equatable {
@@ -185,10 +187,12 @@ final class AidenForegroundIntentRouter {
     }
 
     /// A place waiting for the tab shell. `startsVoice` rides beside the route,
-    /// because routes are saved between launches and this must never be.
+    /// because routes are saved between launches and this must never be. Queued,
+    /// it's only a request: `takeRoutes` decides whether it still stands.
     struct QueuedRoute: Equatable {
         let route: AidenAppRoute
         let startsVoice: Bool
+        let requestedAt: Date
     }
 
     static let shared = AidenForegroundIntentRouter()
@@ -215,7 +219,7 @@ final class AidenForegroundIntentRouter {
     func take(now: Date = Date()) -> Action? {
         guard !actions.isEmpty else { return nil }
         let action = actions.removeFirst()
-        return Self.isFresh(action, now: now) ? action : nil
+        return Self.isFresh(action.createdAt, now: now) ? action : nil
     }
 
     /// For what ends an intent's claim on the foreground. Routes stay: they only
@@ -224,15 +228,35 @@ final class AidenForegroundIntentRouter {
         actions = []
     }
 
-    func submit(route: AidenAppRoute, startsVoice: Bool = false) {
-        routes.append(QueuedRoute(route: route, startsVoice: startsVoice))
+    /// The tab shell keeps an intent that hasn't started: its minute still runs
+    /// out, and nothing is created until the app is back in front of the person.
+    /// With the flag off, going to the background ends it as it always has.
+    func handleSuspend() {
+        if !queuesActions { discardActions() }
+    }
+
+    func submit(route: AidenAppRoute, startsVoice: Bool = false, requestedAt: Date = Date()) {
+        routes.append(QueuedRoute(route: route, startsVoice: startsVoice, requestedAt: requestedAt))
     }
 
     /// Empties the queue, so each route reaches exactly one shell. A route whose
-    /// machine left or was revoked while it waited is dropped here.
-    func takeRoutes(openableOn coordinator: AidenRemoteCoordinator) -> [QueuedRoute] {
+    /// machine left or was revoked while it waited is dropped here. The microphone
+    /// only opens in front of the person, within the minute of them asking; a route
+    /// that misses either still opens its chat, silently.
+    func takeRoutes(
+        openableOn coordinator: AidenRemoteCoordinator,
+        isForeground: @MainActor () -> Bool = { AidenRunAlertNotifier.currentAppState() == .active },
+        now: Date = Date()
+    ) -> [QueuedRoute] {
         defer { routes = [] }
-        return routes.filter { coordinator.canOpen($0.route) }
+        let isInFront = isForeground()
+        return routes.filter { coordinator.canOpen($0.route) }.map { queued in
+            QueuedRoute(
+                route: queued.route,
+                startsVoice: queued.startsVoice && isInFront && Self.isFresh(queued.requestedAt, now: now),
+                requestedAt: queued.requestedAt
+            )
+        }
     }
 
     /// Leaves nothing behind for a machine that's gone.
@@ -254,7 +278,7 @@ final class AidenForegroundIntentRouter {
         isOpeningChats = true
         defer { isOpeningChats = false }
         while isForeground(), let (action, connection) = nextReadyAction(on: coordinator, now: now()) {
-            await openChat(for: action, on: connection, coordinator: coordinator, isForeground: isForeground)
+            await openChat(for: action, on: connection, coordinator: coordinator)
         }
     }
 
@@ -262,7 +286,7 @@ final class AidenForegroundIntentRouter {
         on coordinator: AidenRemoteCoordinator,
         now: Date
     ) -> (Action, AidenHostConnection)? {
-        actions.removeAll { !Self.isFresh($0, now: now) || machine(for: $0, on: coordinator) == nil }
+        actions.removeAll { !Self.isFresh($0.createdAt, now: now) || machine(for: $0, on: coordinator) == nil }
         for (index, action) in actions.enumerated() {
             if let connection = machine(for: action, on: coordinator), connection.connectionState == .connected {
                 actions.remove(at: index)
@@ -283,8 +307,7 @@ final class AidenForegroundIntentRouter {
     private func openChat(
         for action: Action,
         on connection: AidenHostConnection,
-        coordinator: AidenRemoteCoordinator,
-        isForeground: @MainActor () -> Bool
+        coordinator: AidenRemoteCoordinator
     ) async {
         guard connection.installation.hasNegotiatedAccess(to: .chatWrite),
               let owner = try? coordinator.ownerContext(for: connection.instanceId) else { return }
@@ -293,14 +316,23 @@ final class AidenForegroundIntentRouter {
             return
         }
         do {
-            let chat = try await coordinator.remoteClient(for: owner)
-                .createChat(workspaceId: workspace.id, noWorkspace: workspace.noWorkspace)
+            let client = try coordinator.remoteClient(for: owner)
+            let chat = try await client.createChat(workspaceId: workspace.id, noWorkspace: workspace.noWorkspace)
             guard coordinator.isLive(owner), !chat.isBotChat,
                   chat.workspaceId == workspace.id || workspace.noWorkspace else { return }
-            // The chat exists either way, but the microphone only opens in front of the person.
+            // A No workspace chat can land in a fresh hidden workspace the phone hasn't listed yet.
+            if !connection.workspaces.contains(where: { $0.id == chat.workspaceId }) {
+                await refreshWorkspaces(of: connection, client: client, owner: owner, coordinator: coordinator)
+                guard coordinator.isLive(owner) else { return }
+                guard connection.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
+                    coordinator.presentedError = AidenNoWorkspace.startedButUnlistedMessage
+                    return
+                }
+            }
             submit(
                 route: .chat(AidenHostObjectID(instanceId: owner.instanceId, deviceId: owner.deviceId, objectId: chat.id)),
-                startsVoice: action.startsVoice && isForeground()
+                startsVoice: action.startsVoice,
+                requestedAt: action.createdAt
             )
         } catch where aidenIsCancellation(error) {
             return
@@ -308,6 +340,23 @@ final class AidenForegroundIntentRouter {
             if await coordinator.handleCredentialRevocation(error, context: owner) { return }
             // A mutation is never retried after an uncertain result.
             if coordinator.isLive(owner) { coordinator.presentedError = error.localizedDescription }
+        }
+    }
+
+    /// Reads the list of the machine that holds the chat, selected or not. The chat
+    /// already exists, so a failed read leaves it to the caller to say so.
+    private func refreshWorkspaces(
+        of connection: AidenHostConnection,
+        client: AidenRemoteClient,
+        owner: AidenRemoteRequestContext,
+        coordinator: AidenRemoteCoordinator
+    ) async {
+        do {
+            let listed = try await client.workspaces()
+            guard coordinator.isLive(owner) else { return }
+            connection.applyWorkspaceSnapshot(listed)
+        } catch {
+            _ = await coordinator.handleCredentialRevocation(error, context: owner)
         }
     }
 
@@ -327,8 +376,8 @@ final class AidenForegroundIntentRouter {
             ?? (action.workspaceID == nil ? available.first : nil)
     }
 
-    private static func isFresh(_ action: Action, now: Date) -> Bool {
-        (0..<60).contains(now.timeIntervalSince(action.createdAt))
+    private static func isFresh(_ requestedAt: Date, now: Date) -> Bool {
+        (0..<60).contains(now.timeIntervalSince(requestedAt))
     }
 }
 

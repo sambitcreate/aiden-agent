@@ -258,7 +258,7 @@ struct ContentView: View {
                 externalNewChats.invalidate()
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
-                foregroundIntents.discardActions()
+                foregroundIntents.handleSuspend()
                 Task { await AidenRemoteLiveActivityManager.shared.markAllStale() }
             case .resume, .none:
                 if phase == .active {
@@ -305,14 +305,17 @@ struct ContentView: View {
 
     @MainActor
     private func consumeForegroundIntentIfReady() async {
-        guard scenePhase == .active, !sceneConnectionRefreshInProgress else { return }
+        guard scenePhase == .active else { return }
         if AppConfig.tabShellEnabled {
+            // Each intent waits on its own machine, so the selected machine's
+            // reconnect holds up nobody else.
             // Its own task: taking an action restarts the `.task(id:)` this may be
             // running in, and a chat being created must not be cancelled with it.
             Task { await foregroundIntents.openWaitingChats(coordinator: coordinator) }
             return
         }
-        guard coordinator.connectionState == .connected, let action = foregroundIntents.take() else { return }
+        guard !sceneConnectionRefreshInProgress, coordinator.connectionState == .connected,
+              let action = foregroundIntents.take() else { return }
         prepareNewChat(AidenNavigationRequest(destination: .newChat, instanceId: action.instanceID,
             workspaceId: action.workspaceID, startsVoice: false), startsVoice: action.startsVoice, requiresConfirmation: false)
     }

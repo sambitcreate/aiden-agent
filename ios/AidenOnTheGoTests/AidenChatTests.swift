@@ -1,3 +1,4 @@
+import ActivityKit
 import AVFoundation
 import Foundation
 import Photos
@@ -2243,6 +2244,7 @@ final class AidenChatTests: XCTestCase {
         networkPath: AidenNetworkPathSource? = nil,
         streamingRevealTick: (@Sendable () async throws -> Void)? = nil,
         expectsConnection: Bool = true,
+        liveActivities: AidenRemoteLiveActivityManager? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) async throws -> AidenChatViewModel {
         let cache = cache ?? testCache!
@@ -2314,6 +2316,7 @@ final class AidenChatTests: XCTestCase {
             modelPreferenceStore: modelPreferenceStore,
             visualDocumentCache: visualDocumentCache
                 ?? AidenVisualDocumentCache(root: storageRoot.appending(path: "visual-documents")),
+            liveActivities: liveActivities,
             networkPath: networkPath ?? AidenNetworkAvailability(),
             streamingRevealTick: streamingRevealTick ?? { try await Task.sleep(for: AidenStreamingRevealGate.tick) },
             onChatUpdated: onChatUpdated
@@ -2958,6 +2961,39 @@ final class AidenChatTests: XCTestCase {
         fixture.allowReads = true
         try await waitUntil("recovered transcript") { model.chat.messages.contains { $0.id == "reply-mac" } }
         try await waitUntil("cleared live output") { model.liveText.isEmpty }
+    }
+
+    @MainActor
+    func testAForeignRunsLiveActivityNamesItsPairing() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled here.")
+        }
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-foreign-run-activity-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let manager = AidenRemoteLiveActivityManager(defaults: UserDefaults(suiteName: "foreign-run-\(UUID())")!)
+        let fixture = AidenForeignRunRecoveryFixture()
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            responseOverride: { fixture.response($0) },
+            extraCapabilities: [.runsObserve, .runsControl],
+            liveActivities: manager
+        )
+        await model.load(observeProgress: false)
+
+        func runActivity() -> Activity<AgentRunActivityAttributes>? {
+            Activity<AgentRunActivityAttributes>.activities.first {
+                $0.attributes.instanceID == "instance-progress-lifecycle" && $0.attributes.streamID == "run-mac"
+            }
+        }
+        for _ in 0..<500 where runActivity() == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let deviceID = runActivity()?.attributes.deviceID
+        await manager.endAll(forInstanceID: "instance-progress-lifecycle")
+
+        XCTAssertEqual(deviceID, "device-progress-lifecycle")
     }
 
     @MainActor

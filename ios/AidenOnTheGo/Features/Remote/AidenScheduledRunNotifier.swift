@@ -107,6 +107,19 @@ extension UNUserNotificationCenter: AidenNotificationInventory {
     }
 }
 
+/// `<prefix><instanceId>.<id>`, for notifications two machines could both post.
+/// The instance's `%` and `.` are escaped so the first dot always ends it: otherwise
+/// `a.b` + `c` and `a` + `b.c` would be one notification. Real instance IDs hold
+/// neither, so they read exactly as written.
+enum AidenMachineNotificationIdentifier {
+    static func make(prefix: String, instanceId: String, id: String) -> String {
+        let instance = instanceId
+            .replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: ".", with: "%2E")
+        return "\(prefix)\(instance).\(id)"
+    }
+}
+
 /// Scheduled-run and Bot routine identifiers used to name only the run, so two
 /// machines with one run ID replaced each other's notification. Whatever an older
 /// build left behind is cancelled on the first launch of this one. Old and new are
@@ -120,9 +133,15 @@ enum AidenNotificationIdentifierMigration {
         defaults: UserDefaults = .standard
     ) async {
         guard !defaults.bool(forKey: completedKey) else { return }
-        let old = await center.postedRequests().filter(isFromAnOlderBuild).map(\.identifier)
-        center.removeNotifications(withIdentifiers: old)
+        center.removeNotifications(withIdentifiers: await oldIdentifiers(on: center))
+        // A removal reports nothing back, so only a second read says it worked.
+        // Anything left waits for the next launch; new notifications are never touched.
+        guard await oldIdentifiers(on: center).isEmpty else { return }
         defaults.set(true, forKey: completedKey)
+    }
+
+    private static func oldIdentifiers(on center: any AidenNotificationInventory) async -> [String] {
+        await center.postedRequests().filter(isFromAnOlderBuild).map(\.identifier)
     }
 
     private static func isFromAnOlderBuild(_ request: UNNotificationRequest) -> Bool {
@@ -227,7 +246,9 @@ final class AidenScheduledRunNotifier {
                 }
                 content.userInfo = [AidenRunAlertNotifier.instanceUserInfoKey: instanceId]
                 let request = UNNotificationRequest(
-                    identifier: "\(Self.identifierPrefix)\(instanceId).\(item.id)",
+                    identifier: AidenMachineNotificationIdentifier.make(
+                        prefix: Self.identifierPrefix, instanceId: instanceId, id: item.id
+                    ),
                     content: content,
                     trigger: nil
                 )
@@ -388,7 +409,9 @@ final class AidenBotRoutineNotifier {
             content.userInfo[AidenRunAlertNotifier.deepLinkUserInfoKey] = url.absoluteString
         }
         return UNNotificationRequest(
-            identifier: "\(identifierPrefix)\(instanceId).\(item.id)",
+            identifier: AidenMachineNotificationIdentifier.make(
+                prefix: identifierPrefix, instanceId: instanceId, id: item.id
+            ),
             content: content,
             trigger: nil
         )
