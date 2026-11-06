@@ -1,6 +1,6 @@
 # Settings reorganization plan
 
-Implementation branch `feature/settings-reorg` (plan and prototype came from `reorganize_settings_ui`). Plan: `docs/plans/settings-reorg-and-info-hints-plan.md`. Prototype: `docs/plans/assets/settings-reorg-prototype.html`. Phases land on the implementation branch; the plan holds status. This answers the deferred UI-55 "needs a prototype first" in `ux-settings-sidebar-devices.md`.
+Implementation branch `feature/settings-reorg` (plan and prototype came from `reorganize_settings_ui`). Plan: `docs/plans/completed/settings-reorg-and-info-hints-plan.md`. Prototype: `docs/plans/assets/settings-reorg-prototype.html`. Phases land on the implementation branch; the plan holds status. This answers the deferred UI-55 "needs a prototype first" in `ux-settings-sidebar-devices.md`.
 
 ## Decisions (2026-11-05 revision)
 - 23 destinations become 17 pages in 5 groups; 19 if `storage` (#731, #773) and `hooks` (#687) land.
@@ -27,3 +27,11 @@ Implementation branch `feature/settings-reorg` (plan and prototype came from `re
 - Web Page Extract shows a short row until `configured` (account ID, a key, or Extract on). **Set up Cloudflare…** opens the form; "What leaves this device" shows with the form, following the prototype note.
 - Compaction engine stays radio cards rather than the prototype's Select: the plan table does not require it and `limits-settings.test.tsx` expects a radiogroup.
 - Dictation shortcut is a Select or a plain row; Simulator Helper tools fold with a badge while Remove stays outside.
+
+## Final review fixes (2026-11-05)
+
+- `SettingsDisclosure` needs `[--keyboard-focus-offset:-2px]`: the card's `overflow-hidden` clips the global focus ring, which sits outside by default.
+- `InfoHint` ignores blur into its own content, so pressing a pinned hint's text keeps it open.
+- Connect checks bot store health before saving `telegramEnabled`, so a failed Connect stays off.
+- Left alone on purpose: a prompt caught mid-batch by Disconnect can run on the next Connect. Telegram redelivers unconfirmed updates then anyway, so a queue guard would change nothing for the person.
+- Re-pair links go to Control other devices (`peerHosts`); the phone connection popover stays on `remoteAccess`.

@@ -1,8 +1,8 @@
 # Settings reorganization and InfoHint plan
 
-Status: In progress on `feature/settings-reorg`, revised 2026-11-05 after a code review of the first draft.
+Status: Complete (2026-11-05). All five phases shipped together from `feature/settings-reorg` as one PR rather than one PR per phase. Revised 2026-11-05 after a code review of the first draft.
 
-Prototype: [`assets/settings-reorg-prototype.html`](assets/settings-reorg-prototype.html). It's a static mock that runs in a browser, with no app code behind it.
+Prototype: [`../assets/settings-reorg-prototype.html`](../assets/settings-reorg-prototype.html). It's a static mock that runs in a browser, with no app code behind it.
 
 ## Summary
 
@@ -257,7 +257,7 @@ Each phase is one PR that leaves Settings shippable. Run `npm run test:settings-
 1. **Navigation.** Everything in [Navigation contract](#navigation-contract): `SETTINGS_PAGES`, the new groups, all four tabbed pages, `peerHosts` and `appControls`, the `links` anchor, gating, search, palette, model-visible text, onboarding copy and the docs sweep. Page contents otherwise stay the same. The first draft split navigation across two phases; one change avoids shipping a half-migrated sidebar.
 2. **Compaction move.** Context & Limits and the cleaned-up Memory page, with the `limits` destination in `aiden_open`.
 3. **Telegram fix.** The Disconnect gate first, then removing the switch. Small, and it follows the decision below.
-4. **Hints and cards.** Footers, cards, the bespoke buttons and the `InfoHint` rules in `docs/settings-design-system.md`. Implemented on `feature/settings-reorg` (2026-11-05); Playwright verification still to run.
+4. **Hints and cards.** Footers, cards, the bespoke buttons and the `InfoHint` rules in `docs/settings-design-system.md`. Implemented and verified in Playwright on `feature/settings-reorg` (2026-11-05).
 5. **Progressive disclosure.** The table above, one page at a time.
 
 ## Tests
