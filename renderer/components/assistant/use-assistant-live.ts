@@ -82,7 +82,7 @@ export interface AssistantLiveController {
   /** Loudness of Live's voice playing now, 0 to 1. Read it per frame. */
   outputLevel(): number;
   /** Whether replies are still queued or playing, and how often playback was cut off. */
-  playbackState(): { idle: boolean; flushes: number };
+  playbackState(): { idle: boolean; bargeIns: number };
   /** Pitch-preserving speaking speed for Live's replies. */
   setPlaybackSpeed(speed: number): void;
   setComputerUse(enabled: boolean): Promise<void>;
@@ -191,6 +191,9 @@ function stopSource(source: AudioBufferSourceNode | null): void {
 }
 
 /** Generation-fenced 24 kHz player. Every asynchronous continuation rechecks its epoch. */
+/** How long arriving audio may pause before the stretcher's held tail plays. */
+export const PCM_STARVATION_MS = 250;
+
 export class PcmPlayer {
   private context: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -200,6 +203,10 @@ export class PcmPlayer {
   private paused = false;
   private epoch = 0;
   private flushes = 0;
+  private bargeIns = 0;
+  /** Set once the reply has ended, or audio has not arrived for a while: play the held tail. */
+  private releaseHeld = false;
+  private starvationTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly queue = new GeminiLivePcmPlaybackQueue();
   /** Pitch-preserving speed change; idle at 1×. */
   private readonly stretcher = new LiveTimeStretcher();
@@ -233,9 +240,27 @@ export class PcmPlayer {
     return !this.source && !this.starting && this.queue.queuedChunks === 0 && !this.stretcher.pending;
   }
 
-  /** Counts flushes, so a waiter can tell that the user talked over a reply. */
+  /** Counts every flush, including a resumption's. */
   get flushCount(): number {
     return this.flushes;
+  }
+
+  /** Counts only flushes because the user talked over a reply. */
+  get bargeInCount(): number {
+    return this.bargeIns;
+  }
+
+  /**
+   * Live finished generating this reply: play what the stretcher still holds.
+   * Until then, a short gap in arriving audio keeps the stretcher's state, so
+   * a reply that streams in small pieces keeps its speed.
+   */
+  endOfReply(): void {
+    if (!this.stretcher.pending) return;
+    this.releaseHeld = true;
+    void this.playNext().catch(() => {
+      this.starting = false;
+    });
   }
 
   /** Loudness of what is playing now, 0 to 1. */
@@ -251,6 +276,7 @@ export class PcmPlayer {
 
   enqueue(pcm: Uint8Array): void {
     if (this.paused) return;
+    this.clearStarvation();
     this.queue.enqueue(pcm);
     void this.playNext().catch(() => {
       console.info("[aiden-live] playback-failed");
@@ -273,7 +299,9 @@ export class PcmPlayer {
     });
   }
 
+  /** The user talked over the reply. */
   flush(): void {
+    this.bargeIns += 1;
     this.flushInternal();
   }
 
@@ -289,6 +317,8 @@ export class PcmPlayer {
   private flushInternal(): void {
     this.epoch += 1;
     this.flushes += 1;
+    this.clearStarvation();
+    this.releaseHeld = false;
     this.queue.flush();
     this.stretcher.reset();
     const source = this.source;
@@ -302,8 +332,11 @@ export class PcmPlayer {
     for (;;) {
       const pcm = this.queue.dequeue();
       if (!pcm) {
-        // The reply has caught up: release anything the stretcher held back.
-        return this.stretcher.pending ? this.stretcher.drain() : null;
+        // Caught up with the reply. Keep what the stretcher holds unless the
+        // reply has ended or audio stopped arriving (see endOfReply).
+        if (!this.releaseHeld || !this.stretcher.pending) return null;
+        this.releaseHeld = false;
+        return this.stretcher.drain();
       }
       const decoded = new Float32Array(pcm.byteLength / 2);
       const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
@@ -313,6 +346,20 @@ export class PcmPlayer {
       const samples = this.stretcher.process(decoded);
       if (samples.length > 0) return samples;
     }
+  }
+
+  private clearStarvation(): void {
+    if (this.starvationTimer !== null) clearTimeout(this.starvationTimer);
+    this.starvationTimer = null;
+  }
+
+  /** Audio that stops arriving for a while is treated as the end of the reply. */
+  private armStarvation(): void {
+    this.clearStarvation();
+    this.starvationTimer = setTimeout(() => {
+      this.starvationTimer = null;
+      this.endOfReply();
+    }, PCM_STARVATION_MS);
   }
 
   private destinationFor(context: AudioContext): AudioNode {
@@ -341,6 +388,7 @@ export class PcmPlayer {
     const samples = this.nextSamples();
     if (!samples || samples.length === 0 || epoch !== this.epoch || this.paused || context !== this.context) {
       this.starting = false;
+      if (!samples && epoch === this.epoch && this.stretcher.pending) this.armStarvation();
       return;
     }
     const buffer = context.createBuffer(1, samples.length, 24_000);
@@ -590,7 +638,14 @@ export function useAssistantLiveWithDependencies(
   // ends, so a fixed phrase is matched against everything that was said. The
   // receipt id is taken at the first piece, so an approval shown mid-sentence
   // still fences words that started before it.
-  const pendingUtterance = React.useRef<{ receiptId: number; text: string } | null>(null);
+  //
+  // Live's output ends the user's turn only when Live was quiet as the user
+  // began. Speech that talks over a reply is followed by that reply's
+  // leftovers (a late caption, a last chunk, its turn end), so such an
+  // utterance ends only on Google's finished mark or the quiet timer.
+  const pendingUtterance = React.useRef<{ receiptId: number; text: string; overReply: boolean } | null>(null);
+  /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
+  const liveReplyOpen = React.useRef(false);
   const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestVoiceApprovalReceiptId = React.useCallback(
     () => voiceApprovalReceiptId.current,
@@ -630,7 +685,7 @@ export function useAssistantLiveWithDependencies(
   const outputLevel = React.useCallback(() => playerRef.current?.level() ?? 0, []);
   const playbackState = React.useCallback(() => {
     const player = playerRef.current;
-    return { idle: player?.idle ?? true, flushes: player?.flushCount ?? 0 };
+    return { idle: player?.idle ?? true, bargeIns: player?.bargeInCount ?? 0 };
   }, []);
   const setPlaybackSpeed = React.useCallback((speed: number) => {
     playerRef.current?.setSpeed(speed);
@@ -769,6 +824,7 @@ export function useAssistantLiveWithDependencies(
       pendingUtterance.current = {
         receiptId: pending?.receiptId ?? ++voiceApprovalReceiptId.current,
         text,
+        overReply: pending ? pending.overReply : liveReplyOpen.current,
       };
       if (utteranceQuietTimer.current !== null) clearTimeout(utteranceQuietTimer.current);
       utteranceQuietTimer.current = setTimeout(
@@ -790,6 +846,7 @@ export function useAssistantLiveWithDependencies(
         if (["closed", "failed", "disconnected"].includes(event.snapshot.state)) {
           sessionRef.current = null;
           discardUtterance();
+          liveReplyOpen.current = false;
           setCaptions([]);
           setVoiceApprovalReceipts([]);
           setComputerUseActing(false);
@@ -802,15 +859,20 @@ export function useAssistantLiveWithDependencies(
         return;
       }
       if (event.sessionId !== sessionRef.current) return;
-      // Anything Live says or does next means the user's turn is over.
-      if (
+      const liveOutput =
         event.type === "audio" ||
         event.type === "model_text" ||
         event.type === "tool_request" ||
-        event.type === "turn" ||
-        (event.type === "caption" && event.direction === "output")
-      ) {
+        (event.type === "caption" && event.direction === "output");
+      // Anything Live says or does next means the user's turn is over, unless
+      // the user was talking over a reply whose leftovers may still arrive.
+      if ((liveOutput || event.type === "turn") && pendingUtterance.current?.overReply === false) {
         endUtterance();
+      }
+      if (liveOutput) liveReplyOpen.current = true;
+      else if (event.type === "turn" && event.state === "turn_complete") liveReplyOpen.current = false;
+      else if (event.type === "playback_flush" && pendingUtterance.current) {
+        pendingUtterance.current.overReply = true;
       }
       if (event.type === "tool_request") {
         void liveSessionBus.runToolRequest(event);
@@ -841,6 +903,8 @@ export function useAssistantLiveWithDependencies(
           reconcileAssistantLiveCaption(current, event, () => ++captionId.current),
         );
       } else if (event.type === "turn") {
+        // The reply is fully generated: play what the speed stretcher holds.
+        if (event.state !== "waiting") playerRef.current?.endOfReply();
         setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "computer_use_state") {
         setComputerUseActing(event.active);
@@ -1332,6 +1396,7 @@ export function useAssistantLiveWithDependencies(
     setReconnectRequired(false);
     setCaptions([]);
     pendingUtterance.current = null;
+    liveReplyOpen.current = false;
     setVoiceApprovalReceipts([]);
     setComputerUseActing(false);
     setMicrophoneMuted(false);

@@ -1085,6 +1085,7 @@ test("a faster speaking speed shortens what plays without dropping the barge-in 
   const player = new PcmPlayer(() => context);
   player.setSpeed(2);
   for (let index = 0; index < 4; index += 1) player.enqueue(tone(4_800));
+  player.endOfReply();
   for (let guard = 0; guard < 20 && !player.idle; guard += 1) {
     await settle();
     const finish = ended as (() => void) | null;
@@ -1101,6 +1102,96 @@ test("a faster speaking speed shortens what plays without dropping the barge-in 
   player.flush();
   assert.equal(stops, 1, "the playing reply stops at once");
   assert.equal(player.idle, true, "nothing queued or held back survives the flush");
+  assert.equal(player.bargeInCount, 1);
+  player.pauseAndFlush();
+  assert.equal(player.bargeInCount, 1, "a resumption's flush is not the user talking over Live");
+  await player.close();
+});
+
+function fakePlaybackContext() {
+  const played: number[] = [];
+  let ended: (() => void) | null = null;
+  const context = {
+    state: "running",
+    currentTime: 2,
+    destination: {},
+    resume: async () => undefined,
+    close: async () => undefined,
+    createBuffer: (_channels: number, length: number) => {
+      played.push(length);
+      return { copyToChannel: () => undefined };
+    },
+    createBufferSource: () => {
+      const source = {
+        buffer: null,
+        connect: () => undefined,
+        disconnect: () => undefined,
+        onended: null as (() => void) | null,
+        start: () => {
+          ended = () => source.onended?.();
+        },
+        stop: () => undefined,
+      };
+      return source;
+    },
+  } as unknown as AudioContext;
+  return {
+    context,
+    played,
+    total: () => played.reduce((sum, length) => sum + length, 0),
+    /** Lets whatever is playing finish. */
+    finishPlaying() {
+      const finish = ended as (() => void) | null;
+      ended = null;
+      finish?.();
+    },
+  };
+}
+
+function speechTone(samples: number, offset = 0) {
+  const pcm = new Uint8Array(samples * 2);
+  const view = new DataView(pcm.buffer);
+  for (let n = 0; n < samples; n += 1) {
+    view.setInt16(n * 2, Math.round(8_000 * Math.sin((2 * Math.PI * 220 * (n + offset)) / 24_000)), true);
+  }
+  return pcm;
+}
+
+test("a reply that streams in small pieces with gaps keeps its speaking speed", async () => {
+  const audio = fakePlaybackContext();
+  const player = new PcmPlayer(() => audio.context);
+  player.setSpeed(1.5);
+  const chunk = 480; // 20 ms, arriving one at a time, each played before the next lands
+  for (let index = 0; index < 60; index += 1) {
+    player.enqueue(speechTone(chunk, index * chunk));
+    await settle();
+    audio.finishPlaying();
+    await settle();
+  }
+  player.endOfReply();
+  for (let guard = 0; guard < 20 && !player.idle; guard += 1) {
+    await settle();
+    audio.finishPlaying();
+  }
+  assert.equal(player.idle, true);
+  const speed = (60 * chunk) / audio.total();
+  assert.ok(speed > 1.4 && speed < 1.6, `effective speed ${speed.toFixed(2)}×`);
+  await player.close();
+});
+
+test("audio that stops arriving lets the held tail play without an end-of-reply mark", async () => {
+  const audio = fakePlaybackContext();
+  const player = new PcmPlayer(() => audio.context);
+  player.setSpeed(1.5);
+  player.enqueue(speechTone(4_800));
+  await settle();
+  audio.finishPlaying();
+  await settle();
+  assert.equal(player.idle, false, "the stretcher still holds the reply's last moments");
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  audio.finishPlaying();
+  await settle();
+  assert.equal(player.idle, true);
   await player.close();
 });
 
@@ -1572,6 +1663,34 @@ test("the user's turn ends once, at whichever comes first: Live's reply, a finis
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.deepEqual(quiet.heard, ["Yes, do it"], "silence ends a turn Live has not answered");
   await quiet.stop();
+});
+
+test("talking over Live keeps one utterance through the cut-off reply's leftovers", async () => {
+  const { fixture, heard, stop } = await listenToVoiceInput({ utteranceQuietMs: 40 });
+  const liveAudio: AssistantLiveRendererEvent = { type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 };
+  fixture.emit(liveAudio); // Live is speaking
+  fixture.emit(hearUser("Don't"));
+  fixture.emit({ type: "playback_flush", sessionId: "session-1" });
+  fixture.emit({ type: "caption", sessionId: "session-1", direction: "output", text: "and then I", final: true });
+  fixture.emit(liveAudio);
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  fixture.emit(hearUser(" allow once"));
+  assert.deepEqual(heard, [], "the cut-off reply's leftovers do not end the user's turn");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(heard, ["Don't allow once"]);
+  assert.equal(matchLiveVoicePhrase(heard[0]!), null);
+
+  // Google's finished mark still ends speech over a reply at once.
+  fixture.emit(liveAudio);
+  fixture.emit(hearUser("Deny", { finished: true }));
+  assert.deepEqual(heard, ["Don't allow once", "Deny"]);
+
+  // Once Live's reply has ended, its next reply ends the user's turn at once.
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  fixture.emit(hearUser("Allow once"));
+  fixture.emit(liveAudio);
+  assert.deepEqual(heard, ["Don't allow once", "Deny", "Allow once"]);
+  await stop();
 });
 
 test("words still pending when Live ends are dropped, and an utterance begun before an approval stays fenced", async () => {
