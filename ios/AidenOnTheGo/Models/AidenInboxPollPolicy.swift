@@ -16,6 +16,8 @@ enum AidenInboxPollPolicy {
     static let coldStartPageLimit = 3
     /// The most a delay stretches, so machines don't all fire together.
     static let jitterRange: ClosedRange<Double> = 0...0.2
+    /// Reads of the workspace list for one unknown id while the machine answers 5xx.
+    static let workspaceReadLimit = 3
 
     /// Failures replace the role's delay rather than add to it. `jitter`
     /// multiplies by `1 + jitter`, and is held to `jitterRange`.

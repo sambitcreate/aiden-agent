@@ -342,6 +342,8 @@ final class AidenUnifiedInboxStore {
     /// A chat shows only under a workspace its machine has named, and a poll
     /// reads chats alone, so a chat from a workspace made since the last connect
     /// asks for the list once. An id the list doesn't hold isn't asked about again.
+    /// A 5xx hasn't answered that, so the next polls ask, up to
+    /// `AidenInboxPollPolicy.workspaceReadLimit` reads for each id.
     private func learnWorkspaces(of machine: Machine, over connection: AidenHostConnection) async -> AidenHomePollResult {
         let unknown = Set(machine.model.chats.map(\.workspaceId))
             .subtracting(connection.workspaces.map(\.id))
@@ -353,8 +355,17 @@ final class AidenUnifiedInboxStore {
             return .abandoned
         } catch let error as AidenRemoteClientError where error.isCredentialRevoked {
             return .failed(error)
-        } catch AidenRemoteClientError.server(_, _) {
+        } catch AidenRemoteClientError.server(let statusCode, _) where statusCode >= 500 {
             // The machine is there and the rows are read, so this poll did its job.
+            for id in unknown {
+                machine.workspaceReadsFailed[id, default: 0] += 1
+                if machine.workspaceReadsFailed[id, default: 0] >= AidenInboxPollPolicy.workspaceReadLimit {
+                    machine.workspacesAskedAbout.insert(id)
+                }
+            }
+            return .loaded
+        } catch AidenRemoteClientError.server(_, _) {
+            // Refused rather than down: asking again would get the same answer.
         } catch {
             return .failed(error)
         }
@@ -417,6 +428,7 @@ private final class Machine {
     /// Reads back what this phone saved, once, when the machine is first seen.
     var savedRows: Task<Void, Never>?
     var workspacesAskedAbout: Set<String> = []
+    var workspaceReadsFailed: [String: Int] = [:]
 
     init(lease: Lease, model: AidenHomeModel) {
         self.lease = lease

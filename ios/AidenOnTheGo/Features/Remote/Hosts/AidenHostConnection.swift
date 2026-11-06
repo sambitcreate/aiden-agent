@@ -334,11 +334,18 @@ final class AidenHostConnection {
     }
 
     /// Reads the workspace list again for a poll that found a chat outside it.
-    /// A connect that ran meanwhile has answered with a newer list.
+    /// A connect that ran meanwhile has answered with a newer list. A failure
+    /// after the lease ended is the old pairing's, so it surfaces as cancellation.
     func refreshWorkspacesForPoll() async throws {
         let context = try requestContext(scope: .owner)
         let generation = connectionGeneration
-        let workspaces = try await probeClient().workspaces()
+        let workspaces: [AidenWorkspace]
+        do {
+            workspaces = try await probeClient().workspaces()
+        } catch {
+            guard isLive(context) else { throw CancellationError() }
+            throw error
+        }
         try Task.checkCancellation()
         guard isLive(context), connectionGeneration == generation else { return }
         applyWorkspaceSnapshot(workspaces)

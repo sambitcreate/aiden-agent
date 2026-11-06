@@ -62,7 +62,8 @@ private final class AidenInboxTestClock: Clock, @unchecked Sendable {
     }
 }
 
-/// Holds a cache write at its start until the test lets it go on.
+/// Holds the next cache write at its start until the test lets it go on. Writes
+/// after that one pass, so a test can land a newer write ahead of it.
 private actor AidenInboxSaveGate {
     private(set) var arrivals = 0
     private var isClosed = false
@@ -78,6 +79,7 @@ private actor AidenInboxSaveGate {
 
     func pass() async {
         guard isClosed else { return }
+        isClosed = false
         arrivals += 1
         await withCheckedContinuation { waiting.append($0) }
     }
@@ -236,6 +238,14 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
     private func polls(_ instanceId: String) -> Int {
         responder.requests(instanceId: instanceId).filter { $0 == "GET /chat-summaries" }.count
+    }
+
+    private func untilSaving(_ gate: AidenInboxSaveGate) async {
+        let deadline = Date().addingTimeInterval(60)
+        while await gate.arrivals == 0, Date() < deadline {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
     }
 
     private func workspaceReads(_ instanceId: String) -> Int {
@@ -724,6 +734,34 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         store.stop()
     }
 
+    func testAWalkTheCacheTurnedAwayIsWalkedAgain() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serveThreeFullPages(on: "studio")
+        let gate = AidenInboxSaveGate()
+        cache = AidenChatCache(
+            root: root.appending(path: "gated", directoryHint: .isDirectory),
+            beforeMetadataWrite: { await gate.pass() }
+        )
+        let store = makeStore(coordinator)
+        store.setInboxVisible(true)
+        await gate.close()
+        store.start()
+        await untilSaving(gate)
+
+        // A newer write lands first, so the walk's save is turned away.
+        try await save([row("newer", age: 0)], on: "studio")
+        await gate.open()
+        await untilAsleep(1)
+        XCTAssertEqual(polls("studio"), 3)
+
+        clock.advance(by: .seconds(15))
+        await waitUntil("the next poll") { polls("studio") > 3 }
+        await untilAsleep(1)
+        XCTAssertEqual(polls("studio"), 6, "That walk never landed, so this poll walks")
+        store.stop()
+    }
+
     func testAWalkThatFailsIsTriedAgain() async throws {
         let coordinator = coordinator("studio")
         await connectAll(coordinator)
@@ -870,8 +908,77 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         clock.advance(by: .seconds(15))
         await waitUntil("the next poll, on time") { polls("studio") == pollsBefore + 1 }
         await untilAsleep(1)
-        XCTAssertEqual(workspaceReads("studio"), readsBefore + 1, "The machine answered, so it isn't asked again")
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 2, "A 5xx may pass, so the next poll asks again")
         store.stop()
+    }
+
+    func testAWorkspaceListThatKeepsFailingIsReadThreeTimes() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("lost", age: 1, workspace: "workspace_gone"), row("known", age: 2)], on: "studio")
+        responder.reply(instanceId: "studio", path: "/workspaces", status: 503, json: serverErrorJSON)
+        let store = makeStore(coordinator)
+        let readsBefore = workspaceReads("studio")
+
+        await startAndSettle(store, machines: 1)
+        for _ in 0..<4 { await store.refreshAll() }
+
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 3)
+        store.stop()
+    }
+
+    func testAWorkspaceListThatRecoversBringsItsChatIn() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("fresh", age: 1, needsYou: true, workspace: "workspace_new")], on: "studio")
+        responder.reply(instanceId: "studio", path: "/workspaces", status: 500, json: serverErrorJSON)
+        let store = makeStore(coordinator)
+        store.setInboxVisible(true)
+        await startAndSettle(store, machines: 1)
+        XCTAssertEqual(store.inbox.needsYouCount, 0)
+
+        serveWorkspaces("workspace_app", "workspace_new", on: "studio")
+        await store.refreshAll()
+
+        XCTAssertEqual(rowIDs(store.inbox, on: "studio"), ["fresh"])
+        XCTAssertEqual(store.inbox.needsYouCount, 1)
+        store.stop()
+    }
+
+    func testARefusalOfTheWorkspaceListIsNotAnsweredAgain() async throws {
+        let coordinator = coordinator("studio")
+        await connectAll(coordinator)
+        serve([row("lost", age: 1, workspace: "workspace_gone")], on: "studio")
+        responder.reply(instanceId: "studio", path: "/workspaces", status: 403, json: serverErrorJSON)
+        let store = makeStore(coordinator)
+        let readsBefore = workspaceReads("studio")
+
+        await startAndSettle(store, machines: 1)
+        await store.refreshAll()
+
+        XCTAssertEqual(workspaceReads("studio"), readsBefore + 1)
+        store.stop()
+    }
+
+    func testAnOldCredentialsRefusalOfTheWorkspaceListSaysNothingOfANewPairing() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        await connectAll(coordinator)
+        let laptop = try connection("laptop", in: coordinator)
+        let readsBefore = workspaceReads("laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces")
+        responder.reply(instanceId: "laptop", path: "/workspaces", status: 401, json: revokedJSON)
+        let read = Task { try await laptop.refreshWorkspacesForPoll() }
+        await waitUntil("the read") { workspaceReads("laptop") == readsBefore + 1 }
+
+        laptop.advanceHostGeneration()
+        release()
+
+        do {
+            try await read.value
+            XCTFail("A 401 can't read as an answer")
+        } catch {
+            XCTAssertTrue(aidenIsCancellation(error), "Only the old pairing was refused: \(error)")
+        }
     }
 
     func testAWorkspaceReadThatFindsNoMachineIsAFailedPoll() async throws {
@@ -1304,11 +1411,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await gate.close()
         serve([row("late", age: 0)], on: "studio")
         let refresh = Task { await store.refreshAll() }
-        let deadline = Date().addingTimeInterval(60)
-        while await gate.arrivals == 0, Date() < deadline {
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
+        await untilSaving(gate)
 
         store.stop()
         await gate.open()
@@ -1365,6 +1468,27 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         releaseConnect()
         await check.value
         XCTAssertEqual(studio.connectionState, .connected)
+        store.stop()
+    }
+
+    func testARevocationCountsEvenAfterANewerConnect() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        await connectAll(coordinator)
+        serve([row("before", age: 1)], on: "laptop")
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 2)
+        let laptop = try connection("laptop", in: coordinator)
+        let release = responder.hold(instanceId: "laptop", path: "/chat-summaries")
+        let refresh = Task { await store.refreshAll() }
+        await waitUntil("the poll") { polls("laptop") == 2 }
+
+        await laptop.connect(over: .probe)
+        responder.reply(instanceId: "laptop", path: "/chat-summaries", status: 401, json: revokedJSON)
+        release()
+        await refresh.value
+
+        XCTAssertTrue(laptop.isRevoked)
+        await waitUntil("the rows to drop") { rowIDs(store.inbox, on: "laptop").isEmpty }
         store.stop()
     }
 

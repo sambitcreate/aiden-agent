@@ -513,7 +513,7 @@ final class AidenHomeModel {
                             writeToken: writeToken,
                             requestEditGeneration: requestEditGeneration,
                             isWanted: { self.loadingAttempt == attempt && host.holdsHomeContext(context) }
-                        ) else { return }
+                        ) != .stale else { return }
                         chatListLoadState = .loaded
                         prefetchRecentTranscripts(client: client, context: context, host: host)
                     } catch {
@@ -604,22 +604,25 @@ final class AidenHomeModel {
                 if let walkFailure, aidenIsCancellation(walkFailure) { return .abandoned }
             }
             guard isWanted() else { return .abandoned }
+            let admission: PageAdmission
             do {
-                guard try await admitFirstPage(
+                admission = try await admitFirstPage(
                     page,
                     context: context,
                     keepingWalkedRows: !walkingPages || walkFailure != nil,
                     writeToken: writeToken,
                     requestEditGeneration: requestEditGeneration,
                     isWanted: isWanted
-                ) else { return .abandoned }
+                )
             } catch {
                 // The machine answered. Failing to save that says nothing about it.
                 if chatListLoadState != .loaded { chatListLoadState = .failed(error.localizedDescription) }
                 return walkFailure.map { .failed($0) } ?? .abandoned
             }
+            guard admission != .stale else { return .abandoned }
             chatListLoadState = .loaded
-            return walkFailure.map { .failed($0) } ?? .loaded
+            if let walkFailure { return .failed(walkFailure) }
+            return walkingPages && admission == .turnedAway ? .abandoned : .loaded
         } catch let error where aidenIsCancellation(error) {
             return .abandoned
         } catch {
@@ -705,8 +708,7 @@ final class AidenHomeModel {
         }
     }
 
-    /// Saves a first page and lays this model's own edits over it. False when
-    /// the answer stopped counting on the way.
+    /// Saves a first page and lays this model's own edits over it.
     private func admitFirstPage(
         _ loadedPage: AidenChatCache.SummarySnapshot,
         context: AidenRemoteRequestContext,
@@ -714,14 +716,14 @@ final class AidenHomeModel {
         writeToken: UInt64,
         requestEditGeneration: UInt64,
         isWanted: @MainActor () -> Bool
-    ) async throws -> Bool {
+    ) async throws -> PageAdmission {
         let walked = keepingWalkedRows ? rowsPast(loadedPage) : []
         let snapshot = AidenChatCache.SummarySnapshot(
             summaries: loadedPage.summaries + walked,
             nextCursor: walked.isEmpty ? loadedPage.nextCursor : nextChatCursor
         )
         let generation = nextSummaryCacheGeneration()
-        _ = try await chatCache.saveChatSummaries(
+        let saved = try await chatCache.saveChatSummaries(
             snapshot,
             instanceId: context.instanceId,
             generation: generation, writeToken: writeToken
@@ -729,7 +731,7 @@ final class AidenHomeModel {
         let state = await chatCache.summaryState(instanceId: context.instanceId)
         let admitted = state.snapshot
 
-        guard isWanted() else { return false }
+        guard isWanted() else { return .stale }
         chats = admitted?.summaries ?? []
         nextChatCursor = admitted?.nextCursor
         paginationState = .idle
@@ -786,7 +788,7 @@ final class AidenHomeModel {
             let readThrough = localSummaryEdits[id]?.readThrough
             persistCurrentSummaries(changedID: id, triageOnly: localSummaryEdits[id]?.triageOnly ?? false, readThrough: readThrough)
         }
-        return true
+        return saved ? .saved : .turnedAway
     }
 
     /// Rows past the end of a first page. A row the page ran past and doesn't
@@ -915,9 +917,19 @@ extension AidenHostConnection: AidenHomeHost {
     func holdsHomeContext(_ context: AidenRemoteRequestContext) -> Bool { isLive(context) }
 }
 
+/// What became of a first page.
+private enum PageAdmission {
+    /// The answer stopped counting on the way.
+    case stale
+    /// The cache already holds a newer write. The model shows that.
+    case turnedAway
+    case saved
+}
+
 enum AidenHomePollResult {
     case loaded
-    /// Cancelled, or its machine moved on. It says nothing about the machine.
+    /// Cancelled, its machine moved on, or a cold walk the cache turned away, so
+    /// the walk is still to do. It says nothing about the machine.
     case abandoned
     case failed(Error)
 }
