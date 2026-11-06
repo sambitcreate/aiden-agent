@@ -1010,13 +1010,15 @@ func aidenChatIsScrolledAwayFromLatest(
 struct AidenChatJumpToLatestButton: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
+    @ScaledMetric(relativeTo: .body) private var arrowSize: CGFloat = 13
 
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "arrow.down")
-                .font(.system(size: 13, weight: .semibold))
+                // Grows with the text size, but stays inside the 34 pt circle.
+                .font(.system(size: min(arrowSize, 20), weight: .semibold))
                 .foregroundStyle(palette.foreground)
                 .frame(width: 34, height: 34)
                 .contentShape(Circle())

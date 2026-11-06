@@ -84,7 +84,6 @@ enum AidenMarkdownDocument {
 /// so a finished reply keeps its exact position when it settles.
 struct AidenMarkdownView: View {
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenLowPowerMode) private var lowPowerMode
     let content: String
@@ -109,7 +108,6 @@ struct AidenMarkdownView: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 let chunks = AidenMarkdownContentCache.shared.chunks(for: content, streaming: isStreaming)
-                let bodySize = AidenMarkdownMetrics.bodySize(for: dynamicTypeSize)
                 let fading = isStreaming && !reduceMotion && !lowPowerMode
                     ? AidenMarkdownChunkReveal.newChunkIndices(
                         chunks,
@@ -118,13 +116,12 @@ struct AidenMarkdownView: View {
                     : []
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(chunks, id: \.index) { chunk in
-                        AidenMarkdownChunkView(chunk: chunk, fadesIn: fading.contains(chunk.index), bodySize: bodySize)
+                        AidenMarkdownChunkView(chunk: chunk, fadesIn: fading.contains(chunk.index))
                             .equatable()
                     }
                 }
-                    .markdownTheme(.aidenChat(colorScheme: colorScheme, bodySize: bodySize))
+                    .markdownTheme(.aidenChat(colorScheme: colorScheme))
                     .markdownImageProvider(AidenMarkdownNoNetworkImageProvider())
-                    .markdownCodeSyntaxHighlighter(.plainText)
                     .markdownTextStyle {
                         ForegroundColor(.primary)
                         BackgroundColor(nil)
@@ -161,24 +158,18 @@ private final class AidenRenderedMarkdownLength {
 }
 
 /// One chunk of a rendered reply. Equal chunks skip their body, so a sealed
-/// chunk is not re-laid out while the tail streams. The reader's text size is
-/// part of what makes two chunks equal: a sealed chunk keeps its cached parse
-/// when the size changes, but it is drawn again at the new size.
+/// chunk is not re-laid out while the tail streams.
 private struct AidenMarkdownChunkView: View, Equatable {
     let chunk: AidenMarkdownChunk
-    let bodySize: CGFloat
     @State private var isRevealed: Bool
 
-    init(chunk: AidenMarkdownChunk, fadesIn: Bool, bodySize: CGFloat) {
+    init(chunk: AidenMarkdownChunk, fadesIn: Bool) {
         self.chunk = chunk
-        self.bodySize = bodySize
         _isRevealed = State(initialValue: !fadesIn)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.bodySize == rhs.bodySize
-            && lhs.chunk.leadingGap == rhs.chunk.leadingGap
-            && lhs.chunk.text == rhs.chunk.text
+        lhs.chunk.leadingGap == rhs.chunk.leadingGap && lhs.chunk.text == rhs.chunk.text
     }
 
     var body: some View {
@@ -199,12 +190,15 @@ private struct AidenMarkdownNoNetworkImageProvider: ImageProvider {
 }
 
 private extension MarkdownUI.Theme {
-    static func aidenChat(colorScheme: ColorScheme, bodySize: CGFloat) -> MarkdownUI.Theme {
+    /// The text size stays 16 here on purpose. MarkdownUI scales whatever size the
+    /// theme gives it with the reader's text size (a `@ScaledMetric` relative to
+    /// `.body`), so handing it an already scaled size would scale it twice.
+    static func aidenChat(colorScheme: ColorScheme) -> MarkdownUI.Theme {
         MarkdownUI.Theme.gitHub
             .text {
                 ForegroundColor(.primary)
                 BackgroundColor(nil)
-                FontSize(bodySize)
+                FontSize(AidenMarkdownMetrics.baseBodySize)
             }
             .code {
                 FontFamilyVariant(.monospaced)
@@ -222,6 +216,8 @@ private extension MarkdownUI.Theme {
 
 /// How big chat text is. Body text is 16 pt at the default text size and follows
 /// the reader's text size from there, the way the system's body style does.
+/// MarkdownUI scales its own text by itself, so `bodySize(for:)` is for what is
+/// drawn outside it, such as the code block.
 enum AidenMarkdownMetrics {
     static let baseBodySize: CGFloat = 16
     /// Code is drawn a little smaller than the text around it.

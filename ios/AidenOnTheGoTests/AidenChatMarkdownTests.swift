@@ -248,11 +248,32 @@ final class AidenChatMarkdownTests: XCTestCase {
         XCTAssertEqual(Set(sizes).count, sizes.count, "Two text sizes drew the same chat text")
     }
 
+    /// MarkdownUI already scales the theme's font size with the reader's text size. A
+    /// size that was scaled before it was handed over grows twice, so the reply is
+    /// measured against ordinary body text: it may be a little taller (line spacing, a
+    /// 16 pt base), never a multiple of it.
+    func testChatTextGrowsLikeBodyTextAndNotFasterAtEverySize() throws {
+        let sentence = "A long line of reply text that wraps onto several lines. "
+        let markdown = String(repeating: sentence, count: 8)
+        for size in [DynamicTypeSize.large, .xxxLarge, .accessibility3, .accessibility5] {
+            let reply = try renderedHeight(of: AidenMarkdownView(content: markdown).dynamicTypeSize(size))
+            let body = try renderedHeight(of: Text(verbatim: markdown).font(.body).dynamicTypeSize(size)
+                .frame(maxWidth: .infinity, alignment: .leading))
+            XCTAssertLessThanOrEqual(reply, body * 1.4, "Reply text is far taller than body text at \(size): \(reply) against \(body)")
+            XCTAssertGreaterThanOrEqual(reply, body * 0.65, "Reply text is far shorter than body text at \(size): \(reply) against \(body)")
+        }
+    }
+
     func testChatTextGrowsWhenTheTextSizeGrows() throws {
         let markdown = String(repeating: "A long line of reply text that wraps onto several lines. ", count: 8)
         let normal = try renderedHeight(of: AidenMarkdownView(content: markdown).dynamicTypeSize(.large))
         let large = try renderedHeight(of: AidenMarkdownView(content: markdown).dynamicTypeSize(.accessibility3))
         XCTAssertGreaterThan(large, normal * 1.8)
+        let bodyNormal = try renderedHeight(of: Text(verbatim: markdown).font(.body).dynamicTypeSize(.large)
+            .frame(maxWidth: .infinity, alignment: .leading))
+        let bodyLarge = try renderedHeight(of: Text(verbatim: markdown).font(.body).dynamicTypeSize(.accessibility3)
+            .frame(maxWidth: .infinity, alignment: .leading))
+        XCTAssertLessThan(large / normal, bodyLarge / bodyNormal * 1.3, "Reply text grows faster than body text")
     }
 
     func testSettledChunksRedrawWhenTheTextSizeChanges() throws {
@@ -265,7 +286,10 @@ final class AidenChatMarkdownTests: XCTestCase {
 
         host.update(AidenMarkdownView(content: markdown, isStreaming: true).dynamicTypeSize(.accessibility3))
         drainMainLoop()
-        XCTAssertGreaterThan(host.fittingHeight(), before * 1.8)
+        let grown = host.fittingHeight()
+        XCTAssertGreaterThan(grown, before * 1.8)
+        // Body text goes from 17 to 40 pt, so the reply cannot more than triple once it wraps more.
+        XCTAssertLessThan(grown, before * 4.5, "The reply grew by more than its text size did")
 
         host.update(AidenMarkdownView(content: markdown, isStreaming: true).dynamicTypeSize(.large))
         drainMainLoop()
@@ -282,21 +306,26 @@ final class AidenChatMarkdownTests: XCTestCase {
         host.update(AidenMarkdownView(content: markdown, isStreaming: true).dynamicTypeSize(.accessibility2))
         drainMainLoop()
 
-        // Only the open tail is parsed on a render; the sealed chunk comes from the cache. A
-        // sealed chunk parsed again would add its own length, which is not a whole number of tails.
+        // MarkdownUI draws the new size itself, so the reply may not be parsed at all. If it
+        // is, only the open tail is parsed on a render and the sealed chunk comes from the cache.
+        // A sealed chunk parsed again would add its own length, which is not a whole number of tails.
         let split = AidenMarkdownBlockSplitter.split(markdown)
         XCTAssertFalse(split.settled.isEmpty)
         let tail = split.tail.utf8.count
         let parsedSince = AidenMarkdownContentCache.shared.parsedCharacterCount - parsed
-        XCTAssertGreaterThan(parsedSince, 0, "The size change never drew the reply again")
         XCTAssertEqual(parsedSince % tail, 0, "A sealed chunk was parsed again after the size change")
     }
 
-    func testCodeTextGrowsWithTheTextSize() throws {
-        let code = "```swift\nlet value = 1\n```"
+    func testCodeTextGrowsWithTheTextSizeAndStaysSmallerThanBodyText() throws {
+        XCTAssertLessThan(AidenMarkdownMetrics.codeScale, 1)
+        XCTAssertGreaterThan(AidenMarkdownMetrics.codeScale, 0.75, "Code is much smaller than the text around it")
+
+        let code = "```swift\nlet value = 1\nlet other = 2\nlet third = 3\n```"
         let normal = try renderedHeight(of: AidenMarkdownView(content: code).dynamicTypeSize(.large))
         let large = try renderedHeight(of: AidenMarkdownView(content: code).dynamicTypeSize(.accessibility3))
         XCTAssertGreaterThan(large, normal)
+        // Three lines of code at about 0.85 of the body size, plus a header that does not scale with it.
+        XCTAssertLessThan(large, normal * 3.2, "Code text grows faster than body text")
     }
 
     // MARK: - Hosting
