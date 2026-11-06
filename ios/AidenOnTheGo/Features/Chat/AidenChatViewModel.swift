@@ -1591,13 +1591,14 @@ final class AidenChatViewModel {
     }
 
     private func scheduleDraftPersistence() {
-        guard !isReadOnlyPresentation, !isRemoved, liveOwner != nil, let session = draftSession else { return }
+        // Retained, not live: a re-paired machine is still paired, so its text stays.
+        guard !isReadOnlyPresentation, !isRemoved, coordinator.isRetained(owner), let session = draftSession else { return }
         let text = draft
         draftPersistenceTask?.cancel()
         draftPersistenceTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled, let self, !self.isRemoved,
-                  self.liveOwner != nil,
+                  self.coordinator.isRetained(self.owner),
                   self.draftSession == session,
                   self.draft == text else { return }
             _ = try? await self.draftStore.save(text, session: session)

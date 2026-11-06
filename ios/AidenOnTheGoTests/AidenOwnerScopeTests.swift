@@ -364,6 +364,20 @@ final class AidenOwnerScopeTests: XCTestCase {
         XCTAssertEqual(coordinator.activeInstanceId, "laptop")
     }
 
+    func testADraftIsStillSavedAfterItsMachineIsRepaired() async throws {
+        let a = try model(owner: "studio")
+        await a.load(observeProgress: false)
+
+        coordinator.hosts.connection(for: "studio")?.advanceHostGeneration()
+        XCTAssertFalse(coordinator.isLive(a.owner))
+        XCTAssertTrue(coordinator.isRetained(a.owner))
+
+        a.draft = "still mine"
+        try await Task.sleep(for: .milliseconds(200)) // past the draft debounce
+        await a.waitForDraftPersistence()
+        XCTAssertEqual(savedDraftCount(), 1)
+    }
+
     // MARK: A chat left running stays out of the selected machine
 
     /// Starts a turn on studio and leaves its event stream parked, with two
