@@ -1693,7 +1693,7 @@ export function useAssistantLive(
   return useAssistantLiveWithDependencies(dependencies);
 }
 
-/** The microphone's input latency in seconds when the browser reports one (capped at 2 s), else 0. */
+/** The microphone's full input latency in seconds when the browser reports one, else 0. A long delay only widens the fence. */
 function reportedInputLatencySeconds(stream: MediaStream): number {
   try {
     const latency = (stream.getTracks()[0]?.getSettings?.() as { latency?: unknown } | undefined)?.latency;
