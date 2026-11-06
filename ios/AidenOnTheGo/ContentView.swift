@@ -96,10 +96,14 @@ struct ContentView: View {
                     }
                 )
             case .connecting, .connected, .offline:
-                AidenProductShellView(
-                    coordinator: coordinator,
-                    navigationRequest: $navigationRequest
-                )
+                if AppConfig.tabShellEnabled {
+                    AidenAppShellView(coordinator: coordinator, navigationRequest: $navigationRequest)
+                } else {
+                    AidenProductShellView(
+                        coordinator: coordinator,
+                        navigationRequest: $navigationRequest
+                    )
+                }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
