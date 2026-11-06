@@ -226,6 +226,9 @@ final class AidenTranscriptFollowController {
     @ObservationIgnored private let animationSettle: @MainActor () async -> Void
     /// The newest reported distance from the bottom.
     @ObservationIgnored private var distanceFromBottom: CGFloat = 0
+    /// Read when a scroll fires: a lazy stack's first estimate can overflow a
+    /// screen its settled rows fit, and scrolling then pulls them off the top.
+    @ObservationIgnored private var transcriptFits = false
     @ObservationIgnored private var followGeneration: UInt64 = 0
     @ObservationIgnored private var bottomArrivalGeneration: UInt64 = 0
     @ObservationIgnored private var jumpButtonGeneration: UInt64 = 0
@@ -267,6 +270,7 @@ final class AidenTranscriptFollowController {
         )
         let wasNearBottom = isNearBottom
         distanceFromBottom = metrics.distanceFromBottom
+        transcriptFits = metrics.transcriptFits
         if nearBottom != isNearBottom { isNearBottom = nearBottom }
         let isAtBottom = AidenChatScrollPolicy.isAtBottom(distanceFromBottom: metrics.distanceFromBottom)
         handle(.contentScrolled(
@@ -345,11 +349,12 @@ final class AidenTranscriptFollowController {
             await pause()
             guard let self, !Task.isCancelled, generation == self.followGeneration else { return }
             if !isUserInitiated, !self.latch.isFollowing { return }
+            if self.transcriptFits { return }
             let animates = animated && !self.isStreaming
             perform(animates)
             guard animates else { return }
             await self.animationSettle()
-            guard !Task.isCancelled, generation == self.followGeneration, self.latch.isFollowing,
+            guard !Task.isCancelled, generation == self.followGeneration, self.latch.isFollowing, !self.transcriptFits,
                   !AidenChatScrollPolicy.isAtBottom(distanceFromBottom: self.distanceFromBottom) else { return }
             perform(false)
         }

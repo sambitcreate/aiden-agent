@@ -10,6 +10,8 @@ struct AidenChatScrollMetrics: Equatable {
     /// A scroll with no gesture carried the reader away from the bottom since
     /// the last delivered report; see `AidenChatScrollPolicy.isScrollingAwayFromBottom`.
     let movedAwayFromBottom: Bool
+    /// All of the transcript fits between the insets, so there's no bottom to reach.
+    var transcriptFits = false
 }
 
 /// Reports the transcript's scroll geometry and the gesture events that drive
@@ -261,7 +263,8 @@ struct AidenChatScrollObserver: UIViewRepresentable {
                 distanceFromBottom: geometry.distanceFromBottom,
                 isUserInteracting: isUserInteracting,
                 movedAwayFromBottom: !isUserInteracting
-                    && AidenChatScrollPolicy.isScrollingAwayFromBottom(previous: deliveredGeometry, current: geometry)
+                    && AidenChatScrollPolicy.isScrollingAwayFromBottom(previous: deliveredGeometry, current: geometry),
+                transcriptFits: geometry.contentHeight <= geometry.visibleHeight
             )
             guard metrics != lastMetrics else { return }
             lastMetrics = metrics

@@ -14713,8 +14713,13 @@ private final class AidenManualPauses {
 
 @MainActor
 final class AidenTranscriptFollowControllerTests: XCTestCase {
-    private func metrics(_ distance: CGFloat, interacting: Bool = false) -> AidenChatScrollMetrics {
-        AidenChatScrollMetrics(distanceFromBottom: distance, isUserInteracting: interacting, movedAwayFromBottom: false)
+    private func metrics(_ distance: CGFloat, interacting: Bool = false, fits: Bool = false) -> AidenChatScrollMetrics {
+        AidenChatScrollMetrics(
+            distanceFromBottom: distance,
+            isUserInteracting: interacting,
+            movedAwayFromBottom: false,
+            transcriptFits: fits
+        )
     }
 
     func testANewerFollowScrollCancelsTheStaleSnap() async {
@@ -14728,6 +14733,34 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         await first?.value
         await second?.value
         XCTAssertEqual(performed, ["second"])
+    }
+
+    /// A lazy stack's first estimate can overflow a screen its settled rows
+    /// fit. Scrolling to the bottom then pulls a short chat down from the top.
+    func testAFollowLeavesATranscriptThatSettledShort() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed = 0
+        controller.updateMetrics(metrics(0))
+        let task = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed += 1 }
+        await pauses.waitForPending(1)
+        controller.updateMetrics(metrics(0, fits: true))
+        pauses.releaseAll()
+        await task?.value
+        XCTAssertEqual(performed, 0)
+    }
+
+    func testAFollowRunsOnceATranscriptOutgrowsTheScreen() async {
+        let pauses = AidenManualPauses()
+        let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
+        var performed = 0
+        controller.updateMetrics(metrics(0, fits: true))
+        let task = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed += 1 }
+        await pauses.waitForPending(1)
+        controller.updateMetrics(metrics(0))
+        pauses.releaseAll()
+        await task?.value
+        XCTAssertEqual(performed, 1)
     }
 
     func testADragDuringThePauseCancelsAnAutomaticFollow() async {
