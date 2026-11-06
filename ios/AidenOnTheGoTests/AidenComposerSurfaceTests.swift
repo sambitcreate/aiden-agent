@@ -231,6 +231,39 @@ final class AidenComposerSurfaceTests: XCTestCase {
         expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
     )
 
+    // MARK: - The composer inset and the transcript
+
+    func testAComposerGrowingBesideAShortChatLeavesItWhereItIs() throws {
+        let probe = try growComposer(contentHeight: 300)
+        XCTAssertEqual(probe.follows, 0, "Following the bottom pulls a short chat down from the top")
+    }
+
+    func testAComposerGrowingOverTheLastWordsFollowsThem() throws {
+        let probe = try growComposer(contentHeight: 500)
+        XCTAssertGreaterThan(probe.follows, 0, "The composer grew over words the person could read")
+    }
+
+    func testAComposerGrowingOverALongChatFollows() throws {
+        let probe = try growComposer(contentHeight: 1_500)
+        XCTAssertGreaterThan(probe.follows, 0)
+    }
+
+    /// Grows a composer from one line's height to a tall one beside a transcript.
+    private func growComposer(contentHeight: CGFloat) throws -> AidenComposerInsetProbe {
+        let probe = AidenComposerInsetProbe()
+        let window = try show(AidenComposerInsetHost(probe: probe, contentHeight: contentHeight))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > 0 }))
+        drainMainLoop()
+        probe.follows = 0
+
+        let inset = probe.bottomInset
+        probe.composerHeight = 300
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > inset }))
+        drainMainLoop()
+        return probe
+    }
+
     private func show(_ view: some View) throws -> UIWindow {
         // The test host can reach its first test before its scene has connected.
         func connectedScene() -> UIWindowScene? {
@@ -342,6 +375,32 @@ private struct AidenComposerSwapHost: View {
                 .onDisappear { swap.disappearances += 1 }
         } else {
             Text("Which one?")
+        }
+    }
+}
+
+@MainActor
+@Observable
+private final class AidenComposerInsetProbe {
+    var composerHeight: CGFloat = 60
+    var bottomInset: CGFloat = 0
+    var follows = 0
+}
+
+private struct AidenComposerInsetHost: View {
+    let probe: AidenComposerInsetProbe
+    let contentHeight: CGFloat
+
+    var body: some View {
+        ScrollView {
+            Color.clear.frame(height: contentHeight)
+        }
+        .aidenOnComposerInsetChange { probe.follows += 1 }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, inset in
+            probe.bottomInset = inset
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: probe.composerHeight)
         }
     }
 }

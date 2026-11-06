@@ -41,7 +41,6 @@ struct AidenBotSessionChatView: View {
     @State private var follow = AidenTranscriptFollowController()
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
     @State private var ownSendScroll = 0
-    @State private var footerHeight: CGFloat = 0
     @State private var spending = AidenSpendingNoticeModel()
     @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -101,7 +100,6 @@ struct AidenBotSessionChatView: View {
                     // The composer is there at once; messages wait for the Mac (R14).
                     if let model {
                         footer(model)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
                     } else if startFailed {
                         startFailureHint
                             .padding(.horizontal, 16)
@@ -423,14 +421,12 @@ struct AidenBotSessionChatView: View {
                 )
                 .scrollDismissesKeyboard(.interactively)
                 .aidenComposerSoftScrollEdge()
+                .aidenOnComposerInsetChange { followIfAtEnd(proxy) }
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.revealedPartial) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.queued.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.outgoing.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: ownSendScroll) { _, _ in followIfAtEnd(proxy, userInitiated: true) }
-                // The footer's height is the transcript's bottom inset, which
-                // moving doesn't scroll anything: the latest words would slide under it.
-                .onChange(of: footerHeight) { _, _ in followIfAtEnd(proxy) }
                 .onAppear { follow.setStreaming(model.isRunning) }
                 .onChange(of: reduceMotion, initial: true) { _, reduce in
                     model.pacesPartialReveal = !reduce

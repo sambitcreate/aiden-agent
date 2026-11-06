@@ -35,6 +35,23 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Following the bottom never pulls a chat shorter than the screen down from the top.
+    func testAShortChatStaysAtTheTop() {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10))
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        chat.tap()
+        let firstMessage = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Where do we stand?")).firstMatch
+        XCTAssertTrue(firstMessage.waitForExistence(timeout: 10), "The chat did not open")
+
+        let navigationBar = app.navigationBars.firstMatch.frame
+        XCTAssertLessThan(firstMessage.frame.minY - navigationBar.maxY, 48, "The chat opened below the top of the screen")
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertLessThan(firstMessage.frame.minY - navigationBar.maxY, 48, "The chat moved down the screen")
+        app.terminate()
+    }
+
     /// Light, dark and the largest accessibility text, so later work has a
     /// "before" to compare with. A screen that cannot be reached fails the test
     /// instead of being skipped.

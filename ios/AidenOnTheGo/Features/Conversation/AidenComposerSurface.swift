@@ -445,4 +445,16 @@ extension View {
     func aidenComposerSoftScrollEdge() -> some View {
         modifier(AidenComposerSoftScrollEdge())
     }
+
+    /// The composer is the transcript's bottom inset, and an inset moving scrolls
+    /// nothing: without this the latest words slide under a composer that grew.
+    /// A transcript that fits between the insets (`containerSize` is that space)
+    /// has nothing to keep in view, and scrolling it would pull it down from the top.
+    func aidenOnComposerInsetChange(_ action: @escaping () -> Void) -> some View {
+        onScrollGeometryChange(for: CGFloat?.self) { geometry in
+            geometry.contentSize.height > geometry.containerSize.height ? geometry.contentInsets.bottom : nil
+        } action: { _, bottomInset in
+            if bottomInset != nil { action() }
+        }
+    }
 }

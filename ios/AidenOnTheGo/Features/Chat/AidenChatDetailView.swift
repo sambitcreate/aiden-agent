@@ -44,7 +44,6 @@ struct AidenChatDetailView: View {
     @State private var composerSession: AidenComposerSession
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: false)
     @State private var chatLoadEpoch = 0
-    @State private var composerHeight: CGFloat = 0
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
     @State private var isConfirmingBotDelete = false
@@ -323,10 +322,7 @@ struct AidenChatDetailView: View {
         ZStack(alignment: .bottom) {
             transcript
                 // The composer floats on Liquid Glass and the transcript scrolls under it.
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    composer
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
-                }
+                .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             AidenAttachmentPickerOverlay(
                 picker: attachmentPicker,
                 motionNamespace: attachmentMotionNamespace,
@@ -387,6 +383,7 @@ struct AidenChatDetailView: View {
             )
             .scrollDismissesKeyboard(.interactively)
             .aidenComposerSoftScrollEdge()
+            .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
             )
@@ -415,11 +412,6 @@ struct AidenChatDetailView: View {
                 jumpToLatest(proxy)
             }
             .onChange(of: model.chat.messages.count) { _, _ in
-                followLatest(proxy, animated: false)
-            }
-            // The composer's height is the transcript's bottom inset, which
-            // moving doesn't scroll anything: the latest words would slide under it.
-            .onChange(of: composerHeight) { _, _ in
                 followLatest(proxy, animated: false)
             }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
