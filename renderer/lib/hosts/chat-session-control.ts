@@ -495,7 +495,10 @@ export class ChatSessionControl {
       (adapter, idempotencyKey) =>
         adapter.submitInput(chatId, { runId, mode, text, idempotencyKey, ...(inputSource ? { inputSource } : {}) }),
       text,
-      key => ({ kind: "submitInput", input: { runId, mode, text, idempotencyKey: key } }),
+      key => ({
+        kind: "submitInput",
+        input: { runId, mode, text, idempotencyKey: key, ...(inputSource ? { inputSource } : {}) },
+      }),
     );
   }
 

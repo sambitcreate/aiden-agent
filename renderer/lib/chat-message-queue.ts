@@ -100,11 +100,16 @@ export class ChatMessageQueue {
   update(message: QueuedChatMessage) {
     if (this.snapshot.editingId !== message.id || this.snapshot.sendingId) return;
     this.validate(message);
+    // The person rewrote it, so it is no longer what Aiden Live sent: no "By voice".
+    const edited = structuredClone(message);
+    if (edited.options?.inputSource) {
+      const { inputSource: _voice, ...options } = edited.options;
+      if (Object.keys(options).length > 0) edited.options = options;
+      else delete edited.options;
+    }
     this.publish({
       ...this.snapshot,
-      messages: this.snapshot.messages.map((item) =>
-        item.id === message.id ? structuredClone(message) : item,
-      ),
+      messages: this.snapshot.messages.map((item) => (item.id === message.id ? edited : item)),
       editingId: undefined,
     });
   }

@@ -2107,7 +2107,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               },
               input: firstMessageInput,
               worktree: worktreeRequest,
-              message: { text, attachments },
+              message: { text, attachments, ...(inputSource ? { inputSource } : {}) },
             });
             // The progress view holds the message now; a composer that opens
             // on this draft meanwhile starts empty instead of repeating it.
@@ -4122,6 +4122,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <DraftWorktreeSendView
             text={worktreeSend.text}
             attachments={worktreeSend.attachments}
+            inputSource={worktreeSend.inputSource}
             view={worktreeSend.view}
             onDecide={worktreeSend.decide}
           />
