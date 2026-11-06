@@ -1,3 +1,4 @@
+import Darwin
 import Observation
 import SwiftUI
 import XCTest
@@ -7,6 +8,23 @@ import XCTest
 /// person is doing in it belongs to the conversation.
 @MainActor
 final class AidenComposerSurfaceTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        Self.setAccessibilityAutomation(true)
+    }
+
+    override func tearDown() {
+        Self.setAccessibilityAutomation(false)
+        super.tearDown()
+    }
+
+    private static func setAccessibilityAutomation(_ isEnabled: Bool) {
+        typealias Setter = @convention(c) (Int32) -> Void
+        guard let library = dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW),
+              let symbol = dlsym(library, "_AXSSetAutomationEnabled") else { return }
+        unsafeBitCast(symbol, to: Setter.self)(isEnabled ? 1 : 0)
+    }
 
     // MARK: - Input state outlives the view
 
@@ -231,6 +249,148 @@ final class AidenComposerSurfaceTests: XCTestCase {
         expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
     )
 
+    // MARK: - The largest text size
+
+    func testEveryControlFitsAtTheLargestTextSize() async throws {
+        for width: CGFloat in [390, 375] {
+            for state in AidenComposerFitHost.State.allCases {
+                let context = "\(state) at \(width)"
+                let session = AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice())
+                if state == .busyWhileRecording { await session.toggleVoice() }
+                let host = AidenComposerFitHost(session: session, state: state, probe: AidenComposerFitProbe())
+                let window = try show(host, width: width)
+                defer { close(window) }
+                XCTAssertTrue(runMainLoop(until: { host.probe.surface != .zero }), context)
+                drainMainLoop()
+
+                let elements = accessibleElements(in: window)
+                let surface = host.probe.surface
+                XCTAssertLessThanOrEqual(surface.width, width - 32 + 0.5, "The surface outgrew its place: \(context)")
+                var frames: [CGRect] = []
+                for label in state.controls {
+                    let element = try XCTUnwrap(elements.first { $0.accessibilityLabel == label }, "No \(label): \(context)")
+                    let frame = element.accessibilityFrame
+                    XCTAssertTrue(surface.insetBy(dx: -0.5, dy: -0.5).contains(frame), "\(label) \(frame) leaves \(surface): \(context)")
+                    XCTAssertGreaterThanOrEqual(frame.height, 44, "\(label) is too short to tap: \(context)")
+                    XCTAssertGreaterThanOrEqual(frame.width, 44, "\(label) is too narrow to tap: \(context)")
+                    for other in frames {
+                        XCTAssertFalse(other.insetBy(dx: 1, dy: 1).intersects(frame), "\(label) overlaps a control: \(context)")
+                    }
+                    frames.append(frame)
+                }
+            }
+        }
+    }
+
+    func testAtTheLargestTextSizeOnlyTheChipLeavesTheRow() async throws {
+        let host = AidenComposerFitHost(
+            session: AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice()),
+            state: .idle,
+            probe: AidenComposerFitProbe()
+        )
+        let window = try show(host, width: 375)
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { host.probe.surface != .zero }))
+        drainMainLoop()
+
+        let elements = accessibleElements(in: window)
+        let attach = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Add attachment" }).accessibilityFrame
+        let send = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Send message" }).accessibilityFrame
+        XCTAssertEqual(attach.midY, send.midY, accuracy: 1, "The controls took more lines than they need")
+    }
+
+    func testAtDefaultTextARunLeavesTheChipOnItsRow() async throws {
+        let host = AidenComposerFitHost(
+            session: AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice()),
+            state: .busy,
+            probe: AidenComposerFitProbe(),
+            textSize: .large
+        )
+        let window = try show(host, width: 390)
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { host.probe.surface != .zero }))
+        drainMainLoop()
+
+        let elements = accessibleElements(in: window)
+        let chip = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Model" }).accessibilityFrame
+        let stop = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Stop response" }).accessibilityFrame
+        XCTAssertEqual(chip.midY, stop.midY, accuracy: 1, "A run starting must not make the composer taller")
+        XCTAssertLessThanOrEqual(chip.maxX, stop.minX)
+    }
+
+    // MARK: - The listening bar
+
+    func testTheListeningBarAppearsOnlyWhileRecording() async throws {
+        let voice = AidenComposerFakeVoice()
+        let session = AidenComposerSession(voice: voice)
+        let window = try show(AidenComposerListeningBar(session: session))
+        defer { close(window) }
+        drainMainLoop()
+        XCTAssertNil(listeningBarStop(in: window))
+
+        await session.toggleVoice()
+        XCTAssertTrue(runMainLoop(until: { listeningBarStop(in: window) != nil }), "The bar never came up")
+
+        await session.toggleVoice()
+        XCTAssertTrue(runMainLoop(until: { listeningBarStop(in: window) == nil }), "The bar stayed up")
+    }
+
+    func testTheListeningBarsStopIsAFullTarget() async throws {
+        let voice = AidenComposerFakeVoice()
+        let session = AidenComposerSession(voice: voice)
+        await session.toggleVoice()
+        let window = try show(AidenComposerListeningBar(session: session))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { listeningBarStop(in: window) != nil }))
+
+        let stop = try XCTUnwrap(listeningBarStop(in: window))
+        XCTAssertGreaterThanOrEqual(stop.accessibilityFrame.height, 44)
+    }
+
+    func testTappingTheListeningBarEndsTheRecordingAndKeepsTheTranscript() async throws {
+        let voice = AidenComposerFakeVoice()
+        let draft = AidenComposerFakeDraft()
+        let session = AidenComposerSession(draftOwner: draft, voice: voice)
+        await session.toggleVoice()
+        voice.speak("buy milk")
+        let window = try show(AidenComposerListeningBar(session: session))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { listeningBarStop(in: window) != nil }))
+
+        let stop = try XCTUnwrap(listeningBarStop(in: window))
+        XCTAssertTrue(stop.accessibilityActivate())
+
+        // The button's work runs on the main actor, so this test has to give way to it.
+        for _ in 0..<300 where session.isRecording {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(session.isRecording, "The tap left the recording running")
+        XCTAssertEqual(draft.draft, "buy milk")
+        XCTAssertEqual(voice.discards, 0, "The tap threw away what was said")
+    }
+
+    private func listeningBarStop(in window: UIWindow) -> NSObject? {
+        accessibleElements(in: window).first { $0.accessibilityLabel == "Stop voice input" }
+    }
+
+    /// What VoiceOver would see, read the way an assistive client does. The tree
+    /// is only built while accessibility automation is on (see `setUp`).
+    private func accessibleElements(in root: NSObject) -> [NSObject] {
+        var found: [NSObject] = []
+        func walk(_ object: NSObject) {
+            if object.isAccessibilityElement {
+                found.append(object)
+                return
+            }
+            if let elements = object.accessibilityElements {
+                elements.compactMap { $0 as? NSObject }.forEach(walk)
+            }
+            (object as? UIView)?.subviews.forEach(walk)
+        }
+        walk(root)
+        return found
+    }
+
     // MARK: - The composer inset and the transcript
 
     func testAComposerGrowingBesideAShortChatLeavesItWhereItIs() throws {
@@ -264,7 +424,7 @@ final class AidenComposerSurfaceTests: XCTestCase {
         return probe
     }
 
-    private func show(_ view: some View) throws -> UIWindow {
+    private func show(_ view: some View, width: CGFloat = 390) throws -> UIWindow {
         // The test host can reach its first test before its scene has connected.
         func connectedScene() -> UIWindowScene? {
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
@@ -272,7 +432,7 @@ final class AidenComposerSurfaceTests: XCTestCase {
         _ = runMainLoop(until: { connectedScene() != nil }, timeout: 10)
         let scene = try XCTUnwrap(connectedScene())
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 800)
         window.rootViewController = UIHostingController(rootView: view.environment(AidenHapticCenter()))
         window.makeKeyAndVisible()
         return window
@@ -402,6 +562,85 @@ private struct AidenComposerInsetHost: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Color.clear.frame(height: probe.composerHeight)
         }
+    }
+}
+
+@MainActor
+private final class AidenComposerFitProbe {
+    var surface = CGRect.zero
+}
+
+/// A real chat's composer: the same chip and busy pill, at the largest text size,
+/// with the 16 pt gutters the conversation gives it.
+private struct AidenComposerFitHost: View {
+    enum State: CaseIterable {
+        case idle, busy, busyWhileRecording
+
+        var controls: [String] {
+            switch self {
+            case .idle: ["Add attachment", "Model", "Start voice input", "Send message"]
+            case .busy: ["Add attachment", "Model", "Queue message", "Choose message action", "Stop response"]
+            case .busyWhileRecording:
+                ["Add attachment", "Model", "Stop voice input", "Queue message", "Choose message action", "Stop response"]
+            }
+        }
+    }
+
+    let session: AidenComposerSession
+    let state: State
+    let probe: AidenComposerFitProbe
+    var textSize = DynamicTypeSize.accessibility5
+
+    var body: some View {
+        AidenComposerSurface(
+            session: session,
+            config: .chat(model: "Claude Sonnet 4.5"),
+            controls: AidenComposerControls(offersMic: state == .idle),
+            onSend: {},
+            onStop: state == .idle ? nil : {},
+            attachButton: {
+                AidenComposerAttachButton(
+                    isOpen: false,
+                    isBusy: false,
+                    showsSpinner: true,
+                    hint: "",
+                    coordinateSpace: "fit",
+                    action: {}
+                )
+            },
+            modelChip: {
+                Menu {
+                    Button("Another model") {}
+                } label: {
+                    AidenComposerModelChipLabel(
+                        provider: nil,
+                        modelID: nil,
+                        modelLabel: "Claude Sonnet 4.5",
+                        thinkingLevel: "high"
+                    )
+                }
+                .accessibilityLabel("Model")
+            },
+            busyControl: {
+                AidenComposerRunInputPill(
+                    title: "Queue",
+                    actionLabel: "Queue message",
+                    canSubmit: true,
+                    onSubmit: {},
+                    modeMenu: { Button("Steer") {} }
+                )
+            }
+        )
+        .background {
+            GeometryReader { proxy in
+                Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, frame in
+                    probe.surface = frame
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .coordinateSpace(name: "fit")
+        .dynamicTypeSize(textSize)
     }
 }
 

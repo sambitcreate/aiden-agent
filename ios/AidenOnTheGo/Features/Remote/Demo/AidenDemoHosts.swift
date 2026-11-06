@@ -494,6 +494,8 @@ enum AidenDemoHosts {
         responder.reply(instanceId: id, path: "/chat-summaries", status: 200, json: AidenDemoContent.summariesJSON(rows))
         // The Settings screen reads memory settings.
         responder.reply(instanceId: id, path: "/memory/settings", status: 200, json: AidenDemoContent.memorySettingsJSON())
+        // The chat composer's model chip reads the catalog.
+        responder.reply(instanceId: id, path: "/models", status: 200, json: AidenDemoContent.modelsJSON())
         // Opening a row reads the whole chat.
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
@@ -592,6 +594,22 @@ private enum AidenDemoContent {
 
     static func emptyBotsJSON() -> Data {
         data(["bots": [Any](), "maxBots": 256])
+    }
+
+    static func modelsJSON() -> Data {
+        data([
+            "providers": [[
+                "id": "anthropic",
+                "label": "Anthropic",
+                "models": [[
+                    "id": "claude-sonnet-4-5",
+                    "label": "Claude Sonnet 4.5",
+                    "thinkingLevels": ["low", "medium", "high"],
+                    "defaultThinkingLevel": "medium",
+                ]],
+            ]],
+            "defaults": ["provider": "anthropic", "model": "claude-sonnet-4-5"],
+        ])
     }
 
     static func memorySettingsJSON() -> Data {

@@ -47,6 +47,15 @@ struct AidenComposerControls: Equatable {
 }
 
 enum AidenComposerLayout {
+    /// A control grows with the text, but never below a full target, and never so
+    /// far that a row of them leaves the screen at the largest text sizes.
+    static func actionSize(scaled: CGFloat) -> CGFloat {
+        min(max(44, scaled), 60)
+    }
+
+    /// The glyphs stop here so they stay inside a control that has stopped growing.
+    static let largestGlyphSize = DynamicTypeSize.accessibility1
+
     static func lineRange(maxLines: Int) -> ClosedRange<Int> {
         1...max(1, maxLines)
     }
@@ -64,6 +73,14 @@ enum AidenComposerLayout {
     }
 }
 
+/// The side of a composer control at the current text size.
+@propertyWrapper
+struct AidenComposerActionSize: DynamicProperty {
+    @ScaledMetric(relativeTo: .body) private var scaled: CGFloat = 40
+
+    var wrappedValue: CGFloat { AidenComposerLayout.actionSize(scaled: scaled) }
+}
+
 /// The one composer chats and Bots share: a Liquid Glass surface around the
 /// field and its controls. Input state lives in the session, so this view can
 /// leave the hierarchy without ending anything.
@@ -79,7 +96,7 @@ struct AidenComposerSurface<
 >: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
+    @AidenComposerActionSize private var actionSize
     @ScaledMetric(relativeTo: .body) private var lineHeight: CGFloat = 22
     @FocusState private var ownFocus: Bool
     @Bindable private var session: AidenComposerSession
@@ -124,8 +141,6 @@ struct AidenComposerSurface<
         self.footer = footer()
     }
 
-    private var actionSize: CGFloat { max(44, controlSize) }
-
     /// The chip needs a row of its own, and so do accessibility text sizes.
     private var isStacked: Bool { config.showsModelChip || dynamicTypeSize.isAccessibilitySize }
 
@@ -137,12 +152,7 @@ struct AidenComposerSurface<
                     .padding(.top, AidenSpacing.xs)
                 if isStacked {
                     field
-                    HStack(spacing: AidenSpacing.xs) {
-                        if config.showsAttachments { attachButton }
-                        if config.showsModelChip { modelChip }
-                        Spacer(minLength: 0)
-                        actions
-                    }
+                    stackedControls
                 } else {
                     HStack(alignment: .bottom, spacing: AidenSpacing.xs) {
                         if config.showsAttachments { attachButton }
@@ -166,6 +176,57 @@ struct AidenComposerSurface<
             // interactive, glass, so streamed updates don't recompute it.
             .aidenComposerGlass()
         }
+    }
+
+    /// One row. A chip that runs out of room there shortens, so a run starting
+    /// never changes the composer's height. At accessibility sizes shortening
+    /// isn't enough: the chip has its own line, and the run controls take another
+    /// if they need it.
+    @ViewBuilder
+    private var stackedControls: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+                chip
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: AidenSpacing.xs) {
+                        attachment
+                        Spacer(minLength: 0)
+                        actions
+                    }
+                    VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+                        HStack(spacing: AidenSpacing.xs) {
+                            attachment
+                            mic
+                        }
+                        HStack(spacing: AidenSpacing.xs) {
+                            Spacer(minLength: 0)
+                            runControls
+                        }
+                    }
+                }
+            }
+        } else {
+            controlRow
+        }
+    }
+
+    private var controlRow: some View {
+        HStack(spacing: AidenSpacing.xs) {
+            attachment
+            chip
+            Spacer(minLength: 0)
+            actions
+        }
+    }
+
+    @ViewBuilder
+    private var attachment: some View {
+        if config.showsAttachments { attachButton }
+    }
+
+    @ViewBuilder
+    private var chip: some View {
+        if config.showsModelChip { modelChip }
     }
 
     private var field: some View {
@@ -196,11 +257,21 @@ struct AidenComposerSurface<
 
     @ViewBuilder
     private var actions: some View {
+        mic
+        runControls
+    }
+
+    @ViewBuilder
+    private var mic: some View {
         // A dictation already running keeps its stop control, whatever else
         // has taken the mic's place.
         if config.showsMic, controls.offersMic || session.isRecording {
             micButton
         }
+    }
+
+    @ViewBuilder
+    private var runControls: some View {
         if let onStop {
             busyControl
             AidenComposerStopButton(label: controls.stopLabel, isEnabled: controls.canStop, action: onStop)
@@ -227,6 +298,7 @@ struct AidenComposerSurface<
                 } else {
                     Image(systemName: "mic")
                         .font(.body.weight(.medium))
+                        .dynamicTypeSize(...AidenComposerLayout.largestGlyphSize)
                 }
             }
             .frame(width: actionSize, height: actionSize)
@@ -244,7 +316,7 @@ struct AidenComposerSurface<
 
 /// Send, on the surface and wherever a conversation puts it beside Stop.
 struct AidenComposerSendButton: View {
-    @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
+    @AidenComposerActionSize private var actionSize
     let label: String
     let isEnabled: Bool
     let action: () -> Void
@@ -253,7 +325,8 @@ struct AidenComposerSendButton: View {
         Button(action: action) {
             Image(systemName: "arrow.up")
                 .font(.body.weight(.semibold))
-                .frame(width: max(44, controlSize), height: max(44, controlSize))
+                .dynamicTypeSize(...AidenComposerLayout.largestGlyphSize)
+                .frame(width: actionSize, height: actionSize)
         }
         .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
         .disabled(!isEnabled)
@@ -264,7 +337,7 @@ struct AidenComposerSendButton: View {
 /// Stop stays its own control, apart from the busy pill.
 struct AidenComposerStopButton: View {
     @Environment(\.aidenPalette) private var palette
-    @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
+    @AidenComposerActionSize private var actionSize
     let label: String
     let isEnabled: Bool
     let action: () -> Void
@@ -273,8 +346,9 @@ struct AidenComposerStopButton: View {
         Button(action: action) {
             Image(systemName: "stop.fill")
                 .font(.body.weight(.semibold))
+                .dynamicTypeSize(...AidenComposerLayout.largestGlyphSize)
                 .foregroundStyle(palette.danger)
-                .frame(width: max(44, controlSize), height: max(44, controlSize))
+                .frame(width: actionSize, height: actionSize)
                 .background(palette.danger.opacity(0.14), in: Circle())
         }
         .buttonStyle(.plain)
@@ -287,7 +361,7 @@ struct AidenComposerStopButton: View {
 /// grow out of it, in the conversation's own coordinate space.
 struct AidenComposerAttachButton: View {
     @Environment(\.aidenPalette) private var palette
-    @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
+    @AidenComposerActionSize private var actionSize
     let isOpen: Bool
     let isBusy: Bool
     /// False while the upload bar shows progress: it is then the only spinner.
@@ -300,8 +374,9 @@ struct AidenComposerAttachButton: View {
         Button(action: action) {
             Image(systemName: "plus")
                 .font(.title3.weight(.medium))
+                .dynamicTypeSize(...AidenComposerLayout.largestGlyphSize)
                 .foregroundStyle(palette.foreground)
-                .frame(width: max(44, controlSize), height: max(44, controlSize))
+                .frame(width: actionSize, height: actionSize)
                 .rotationEffect(.degrees(isOpen ? 45 : 0))
                 .opacity(isBusy ? 0.48 : 1)
                 .overlay(alignment: .bottomTrailing) {
@@ -338,26 +413,31 @@ struct AidenComposerListeningBar: View {
     let session: AidenComposerSession
 
     var body: some View {
-        if session.isRecording {
-            HStack(spacing: AidenSpacing.s) {
-                AidenListeningWaveform(isAnimated: !reduceMotion)
-                Text("Listening")
-                    .font(.footnote)
-                    .foregroundStyle(palette.secondary)
-                Spacer(minLength: 0)
-                Button("Stop voice input") {
-                    Task { await session.toggleVoice() }
+        Group {
+            if session.isRecording {
+                HStack(spacing: AidenSpacing.s) {
+                    AidenListeningWaveform(isAnimated: !reduceMotion)
+                    Text("Listening")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                    Spacer(minLength: 0)
+                    Button {
+                        Task { await session.toggleVoice() }
+                    } label: {
+                        Text("Stop voice input")
+                            .font(.footnote.weight(.semibold))
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .font(.footnote.weight(.semibold))
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-                .buttonStyle(.plain)
+                .padding(.horizontal, AidenSpacing.m)
+                .aidenChromeGlass(in: Capsule())
+                .padding(.bottom, AidenSpacing.s)
+                .transition(.opacity)
             }
-            .padding(.horizontal, AidenSpacing.m)
-            .aidenChromeGlass(in: Capsule())
-            .padding(.bottom, AidenSpacing.s)
-            .transition(.opacity)
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: session.isRecording)
     }
 }
 

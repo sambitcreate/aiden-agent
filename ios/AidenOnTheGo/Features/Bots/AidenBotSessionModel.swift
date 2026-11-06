@@ -1239,7 +1239,7 @@ final class AidenBotSessionModel {
     /// Revision 33: the Mac announces `bot-attachments-v1`, so the composer offers its +.
     var attachmentsSupported = false
     /// Photos and files staged on the Mac for the next message, in the order they were added.
-    var pendingAttachments: [AidenAttachmentReference] = []
+    private(set) var pendingAttachments: [AidenAttachmentReference] = []
     /// Attachments are being prepared or uploaded; the + and Send wait for them.
     private(set) var isAttaching = false
     /// Revision 50: the phone holds `attachments:raw`, so pictures go as their own bytes.

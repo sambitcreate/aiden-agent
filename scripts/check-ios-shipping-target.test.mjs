@@ -889,7 +889,11 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /\.fileImporter\(/u);
   assert.match(
     chat,
-    /if let provider = model\.selectedProvider[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: model\.selectedModel\?\.id/u,
+    /AidenComposerModelChipLabel\(\s*provider: model\.selectedProvider,\s*modelID: model\.selectedModel\?\.id/u,
+  );
+  assert.match(
+    chat,
+    /if let provider \{[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: modelID/u,
   );
   assert.match(chat, /Section \{[\s\S]*?header: \{[\s\S]*?AidenProviderIcon/u);
   assert.match(chat, /contextMenu[\s\S]*?Label\("Copy", systemImage: "doc\.on\.doc"\)/u);

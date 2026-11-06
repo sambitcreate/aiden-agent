@@ -241,30 +241,14 @@ struct AidenComposerView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    if let provider = model.selectedProvider {
-                        AidenProviderIcon(
-                            providerID: provider.id,
-                            providerLabel: provider.label,
-                            modelID: model.selectedModel?.id,
-                            artwork: provider.artwork,
-                            size: 15,
-                            color: palette.secondary
-                        )
-                    }
-                    Text(model.selectedModel?.label ?? "Model").lineLimit(1)
-                    if let level = model.selectedThinkingLevel,
-                       model.selectedModel?.thinkingLevels?.isEmpty == false {
-                        Text("· \(level.capitalized)")
-                            .lineLimit(1)
-                            .foregroundStyle(palette.secondary.opacity(0.8))
-                    }
-                    Image(systemName: "chevron.down").font(.caption2)
-                }
-                .font(.caption)
-                .foregroundStyle(palette.secondary)
-                .frame(maxWidth: 180, alignment: .leading)
-                .frame(minHeight: 44)
+                AidenComposerModelChipLabel(
+                    provider: model.selectedProvider,
+                    modelID: model.selectedModel?.id,
+                    modelLabel: model.selectedModel?.label ?? "Model",
+                    thinkingLevel: model.selectedModel?.thinkingLevels?.isEmpty == false
+                        ? model.selectedThinkingLevel
+                        : nil
+                )
             }
             .accessibilityLabel("Model")
             .accessibilityValue(selectedModelAccessibilityValue)
@@ -295,38 +279,16 @@ struct AidenComposerView: View {
     /// the mode's name sends in that mode (touch and hold for the menu), and the
     /// chevron opens the same Steer/Queue menu.
     private var runInputPill: some View {
-        HStack(spacing: 0) {
-            Menu {
-                runInputModeMenu
-            } label: {
-                Text(model.runInputMode.busyLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .contentTransition(.interpolate)
-                    .padding(.leading, 14)
-                    .padding(.trailing, 4)
-                    .frame(minHeight: 44)
-            } primaryAction: {
+        AidenComposerRunInputPill(
+            title: model.runInputMode.busyLabel,
+            actionLabel: model.runInputMode.busyActionLabel,
+            canSubmit: model.canSubmitRunInput,
+            onSubmit: {
                 session.stopVoice()
                 Task { await model.submitRunInput(model.runInputMode) }
-            }
-            .accessibilityLabel(model.runInputMode.busyActionLabel)
-            .accessibilityHint(String(localized: "Touch and hold to choose Steer or Queue"))
-
-            Menu {
-                runInputModeMenu
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.bold))
-                    .padding(.leading, 4)
-                    .padding(.trailing, 12)
-                    .frame(minHeight: 44)
-            }
-            .accessibilityLabel(String(localized: "Choose message action"))
-        }
-        .foregroundStyle(runInputButtonForeground)
-        .background(runInputButtonBackground, in: Capsule().inset(by: 7))
-        .menuStyle(.button)
-        .buttonStyle(.plain)
+            },
+            modeMenu: { runInputModeMenu }
+        )
         .disabled(model.isStopping || model.isSubmittingRunInput || model.isReadOnlyPresentation)
         .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: model.runInputMode)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.canSubmitRunInput)
@@ -353,15 +315,6 @@ struct AidenComposerView: View {
             }
             .accessibilityAddTraits(model.runInputMode == mode ? .isSelected : [])
         }
-    }
-
-    private var runInputButtonBackground: Color {
-        if model.canSubmitRunInput { return palette.fillAccent }
-        return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
-    }
-
-    private var runInputButtonForeground: Color {
-        model.canSubmitRunInput ? palette.onFillAccent : palette.secondary
     }
 
     private var selectedModelAccessibilityValue: String {
@@ -402,6 +355,92 @@ enum AidenVoiceCaptureLifecyclePolicy {
 /// panel is presentation only: skills hand the Mac an opaque lease, mentions
 /// insert display text. It inherits the composer glass surface rather than
 /// introducing a second floating container.
+/// The face of the model chip: the provider, the model and its thinking level.
+struct AidenComposerModelChipLabel: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let provider: AidenProvider?
+    let modelID: String?
+    let modelLabel: String
+    let thinkingLevel: String?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let provider {
+                AidenProviderIcon(
+                    providerID: provider.id,
+                    providerLabel: provider.label,
+                    modelID: modelID,
+                    artwork: provider.artwork,
+                    size: 15,
+                    color: palette.secondary
+                )
+            }
+            Text(modelLabel).lineLimit(1)
+            if let thinkingLevel {
+                Text("· \(thinkingLevel.capitalized)")
+                    .lineLimit(1)
+                    .foregroundStyle(palette.secondary.opacity(0.8))
+            }
+            Image(systemName: "chevron.down").font(.caption2)
+        }
+        .font(.caption)
+        .foregroundStyle(palette.secondary)
+        // At accessibility sizes the chip has its own line to use.
+        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : 180, alignment: .leading)
+        .frame(minHeight: 44)
+    }
+}
+
+/// Steer or Queue while a response runs. A tap on the mode's name sends in that
+/// mode (touch and hold for the menu), and the chevron opens the same menu.
+struct AidenComposerRunInputPill<ModeMenu: View>: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String
+    let actionLabel: String
+    let canSubmit: Bool
+    let onSubmit: () -> Void
+    @ViewBuilder let modeMenu: () -> ModeMenu
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Menu {
+                modeMenu()
+            } label: {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .contentTransition(.interpolate)
+                    .padding(.leading, 14)
+                    .padding(.trailing, 4)
+                    .frame(minHeight: 44)
+            } primaryAction: {
+                onSubmit()
+            }
+            .accessibilityLabel(actionLabel)
+            .accessibilityHint(String(localized: "Touch and hold to choose Steer or Queue"))
+
+            Menu {
+                modeMenu()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .padding(.leading, 4)
+                    .padding(.trailing, 12)
+                    .frame(minHeight: 44)
+            }
+            .accessibilityLabel(String(localized: "Choose message action"))
+        }
+        .foregroundStyle(canSubmit ? palette.onFillAccent : palette.secondary)
+        .background(
+            canSubmit ? palette.fillAccent : palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12),
+            in: Capsule().inset(by: 7)
+        )
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+    }
+}
+
 private struct AidenComposerSuggestionList: View {
     @Environment(\.aidenPalette) private var palette
     let suggestions: [AidenComposerSuggestion]

@@ -6061,15 +6061,15 @@ final class AidenChatTests: XCTestCase {
                 session: AidenComposerSession(draftOwner: model, attachmentOwner: model),
                 swap: swap
             ))
-            // The test host can reach its first test before its scene has connected.
-            try await self.waitUntil({ !UIApplication.shared.connectedScenes.isEmpty })
+            // A fresh test host can take a while to connect its scene and show a window.
+            try await self.waitUntil({ !UIApplication.shared.connectedScenes.isEmpty }, attempts: 3_000)
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
             window.rootViewController = host
             window.makeKeyAndVisible()
             defer { window.isHidden = true; window.rootViewController = nil }
-            try await self.waitUntil({ swap.appearances == 1 })
+            try await self.waitUntil({ swap.appearances == 1 }, attempts: 3_000)
 
             let task = try XCTUnwrap(model.prepareAttachments(.success(["synthetic selection"])) { _ in
                 await preparation.wait { started.fulfill() }
@@ -6180,10 +6180,11 @@ final class AidenChatTests: XCTestCase {
     @MainActor
     private func waitUntil(
         _ condition: @MainActor () -> Bool,
+        attempts: Int = 500,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
-        for _ in 0..<500 {
+        for _ in 0..<attempts {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }

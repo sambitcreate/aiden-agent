@@ -29,7 +29,7 @@ protocol AidenComposerDraftOwner: AnyObject {
 /// Holds the attachments staged for the next message, and the work preparing more.
 @MainActor
 protocol AidenComposerAttachmentOwner: AnyObject {
-    var pendingAttachments: [AidenAttachmentReference] { get set }
+    var pendingAttachments: [AidenAttachmentReference] { get }
     var isPreparingAttachments: Bool { get }
     func cancelAttachmentPreparation()
 }
@@ -47,7 +47,7 @@ final class AidenComposerSession {
     private let draftOwner: (any AidenComposerDraftOwner)?
     @ObservationIgnored private let voice: any AidenComposerVoiceCapture
     private var localText: String
-    private var localAttachments: [AidenAttachmentReference]
+    private let localAttachments: [AidenAttachmentReference]
 
     init(
         text: String = "",
@@ -75,14 +75,7 @@ final class AidenComposerSession {
     }
 
     var attachments: [AidenAttachmentReference] {
-        get { attachmentOwner?.pendingAttachments ?? localAttachments }
-        set {
-            if let attachmentOwner {
-                attachmentOwner.pendingAttachments = newValue
-            } else {
-                localAttachments = newValue
-            }
-        }
+        attachmentOwner?.pendingAttachments ?? localAttachments
     }
 
     /// Words or attachments: either is a message.
