@@ -396,7 +396,10 @@ export class PeerHostManager {
       const ambiguous =
         (request.method ?? "GET") !== "GET" &&
         error instanceof PeerTransportError &&
-        (error.code === "unavailable" || error.code === "invalid_response");
+        (error.code === "unavailable" ||
+          error.code === "invalid_response" ||
+          // The host itself cannot say how this key ended, so it is not a refusal.
+          error.remote?.code === "idempotency_in_flight");
       if (!ambiguous) return { ok: false, error: operationError(error) };
       const reconciled = signal?.aborted ? undefined : await this.reconcile(id, record);
       return {

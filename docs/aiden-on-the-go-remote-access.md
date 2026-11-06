@@ -98,7 +98,7 @@ outside a Git repository.
 Environment files may contain secrets. All choices start unchecked. Select only
 files you want on that computer. Aiden offers ignored root-level `.env*` and
 `.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
-the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+the transfer at 16 files and 512 KiB. Each selected file must also be ignored by the cloned repository with both case-sensitive and case-insensitive Git matching or the clone is discarded. User-level Git excludes do not satisfy this check. Nothing existing is overwritten. The cloned
 project becomes available after the selected files arrive. The new chat opens on
 the destination; a typed prompt and attachments carry over when that computer has
 no saved draft. An existing remote draft is retained, with the local prompt still
@@ -132,7 +132,7 @@ When a Bot shares an image (a chart it drew, a screenshot it took), the paired M
 
 ## Browser recordings
 
-When the agent records a browser tab, the paired Mac (contract revision 46) lets Aiden On The Go for iPhone and Android show the recording under the "Stopped browser recording" line, with its length and size. Tap **Play** to download it from the Mac and watch it full screen. The phone reads the video only when you tap Play. A recording deleted from the Mac says "This recording is no longer on the Mac." On iPhone, a recording the Mac saved as WebM (only when its H.264 encoder is unavailable) says to watch it on the Mac. Older phones and Macs show the activity line without the card.
+When the agent records a browser tab, the paired Mac (contract revision 46) lets Aiden On The Go for iPhone and Android show the recording under the "Stopped browser recording" line, with its length and size. Tap **Play** to download it from the Mac and watch it full screen. The phone reads the video only when you tap Play. Each Play owns a separate temporary file: another download, a cancellation or a missing recording does not delete an active download or player. Closing the player, replacing its recording card or leaving the chat removes that Play's file, including when the download finishes before the player appears or after the card has gone. Android startup also clears playback files abandoned by the previous process. A recording deleted from the Mac says "This recording is no longer on the Mac." On iPhone, a recording the Mac saved as WebM (only when its H.264 encoder is unavailable) says to watch it on the Mac. Older phones and Macs show the activity line without the card.
 
 ## Values read from a web page
 

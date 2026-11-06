@@ -98,6 +98,9 @@ function harness(
     approvalWaitsForAbort?: boolean;
     onApprovalRequest?: () => void;
     onRunShellStart?: () => void;
+    onDispatchStarted?: () => void;
+    onAuthorizedWorkspaceRead?: () => void;
+    now?: () => number;
     implementerRunGrant?: boolean;
     parentPermission?: "ask" | "full";
   } = {},
@@ -109,6 +112,7 @@ function harness(
   let rawCalls = 0;
   let allocated = 0;
   let current: SubagentAuthorityV2 | undefined = granted;
+  const runControl = new AbortController();
   const input: SubagentShellBrokerV2Input = {
     authority: granted,
     childId: "child-shell",
@@ -130,6 +134,7 @@ function harness(
       markEffectDispatchStarted: async () => {
         await options.dispatchJournal;
         transitions.push("dispatch_started");
+        options.onDispatchStarted?.();
       },
       cancelEffectBeforeDispatch: async () => {
         options.onCancel?.();
@@ -142,7 +147,10 @@ function harness(
       },
     },
     currentAuthority: () => current,
-    currentWorkspace: async () => workspace,
+    currentWorkspace: async () => {
+      if (transitions.includes("authorized")) options.onAuthorizedWorkspaceRead?.();
+      return workspace;
+    },
     validateWorkspace: async () => {},
     requestApproval: async (prompt, signal) => {
       prompts.push(prompt.details);
@@ -191,7 +199,8 @@ function harness(
     },
     registry,
     implementerRunGrant: options.implementerRunGrant,
-    now: () => 1_000,
+    runSignal: runControl.signal,
+    now: options.now ?? (() => 1_000),
     randomUUID: () => `shell-effect-${++allocated}`,
   };
   return {
@@ -202,6 +211,12 @@ function harness(
     rawCalls: () => rawCalls,
     revoke: () => {
       current = undefined;
+    },
+    /** What Stop does: abort the run, then revoke its authority and approvals. */
+    stopRun: () => {
+      runControl.abort(new Error("Subagent run stopped by its owner."));
+      current = undefined;
+      input.ledger.cancelRun(granted.runId);
     },
   };
 }
@@ -521,4 +536,76 @@ test("every shutdown caller waits for the same cancellation", async (t) => {
   cancelled();
   await Promise.all([first, second]);
   assert.equal(run.transitions.filter((state) => state === "cancelled_before_dispatch").length, 1);
+});
+
+test("a run stopped during the final workspace check never dispatches", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  const stopped = harness(workspace, { onAuthorizedWorkspaceRead: () => stopped.stopRun() });
+  assert.equal(await stopped.gate.beforeToolCall(call(command)), undefined);
+  await assert.rejects(
+    stopped.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    }),
+  );
+  assert.equal(stopped.rawCalls(), 0);
+  assert.equal(stopped.transitions.includes("dispatch_started"), false);
+  assert.equal(stopped.transitions[stopped.transitions.length - 1], "cancelled_before_dispatch");
+});
+
+test("a run stopped while dispatch is being journaled never reaches the helper", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  const stopped = harness(workspace, { onDispatchStarted: () => stopped.stopRun() });
+  assert.equal(await stopped.gate.beforeToolCall(call(command)), undefined);
+  await assert.rejects(
+    stopped.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    }),
+    /stopped by its owner/u,
+  );
+  assert.equal(stopped.rawCalls(), 0);
+  assert.equal(stopped.transitions[stopped.transitions.length - 1], "unknown");
+});
+
+test("an approval that expires while dispatch is being journaled never spawns", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  let clock = 1_000;
+  const expiring = harness(workspace, {
+    now: () => clock,
+    onDispatchStarted: () => {
+      clock = 1_000_000;
+    },
+  });
+  assert.equal(await expiring.gate.beforeToolCall(call(command)), undefined);
+  await assert.rejects(
+    expiring.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    }),
+  );
+  assert.equal(expiring.rawCalls(), 0);
+  assert.equal(expiring.transitions[expiring.transitions.length - 1], "unknown");
+});
+
+test("a consumed shell approval cannot be replayed", async (t) => {
+  const workspace = await fixture(t);
+  const command = "printf 'one'\nprintf 'two'";
+  const once = harness(workspace);
+  const execute = () =>
+    once.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    });
+  assert.equal(await once.gate.beforeToolCall(call(command)), undefined);
+  await execute();
+  await assert.rejects(execute(), /no live one-shot approval/u);
+  assert.equal(once.rawCalls(), 1);
 });

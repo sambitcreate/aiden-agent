@@ -1882,7 +1882,9 @@ class AidenChatTest {
         val scopeJob = Job()
         val present = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
         val gone = "recording-11111111-2222-4333-8444-555555555555"
+        val slowId = "recording-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
         val video = ByteArray(4_096) { (it % 251).toByte() }
+        val slowVideo = ByteArray(256 * 1024) { (it % 239).toByte() }
         val initial = AidenChat(
             id = "chat-recording", workspaceId = "workspace-recording", title = "Recording",
             messages = listOf(AidenChatMessage("reply-one", AidenChatRole.ASSISTANT, "Recorded", createdAt = Instant.EPOCH)),
@@ -1900,6 +1902,12 @@ class AidenChatTest {
                     .setHeader("Cache-Control", "no-store")
                     .setHeader("X-Content-Type-Options", "nosniff")
                     .setBody(okio.Buffer().write(video))
+                "/api/aiden/v1/chats/chat-recording/recordings/$slowId" -> MockResponse()
+                    .setHeader("Content-Type", "video/webm")
+                    .setHeader("Cache-Control", "no-store")
+                    .setHeader("X-Content-Type-Options", "nosniff")
+                    .setBody(okio.Buffer().write(slowVideo))
+                    .throttleBody(4096, 250, TimeUnit.MILLISECONDS)
                 else -> MockResponse().setResponseCode(404).setHeader("Content-Type", "application/json")
                     .setBody("""{"error":{"code":"not_found","message":"Recording not found.","requestId":"req_1","retryable":false}}""")
             }
@@ -1915,6 +1923,10 @@ class AidenChatTest {
                 ), null)
                 val cache = AidenChatCache(directory)
                 val drafts = AidenChatDraftStore(directory)
+                // Simulate a previous process dying during a download/player.
+                recordings.mkdirs()
+                File(recordings, "abandoned.part").writeBytes(byteArrayOf(1))
+                File(recordings, "$gone.webm").writeBytes(byteArrayOf(2))
                 val coordinator = AidenRemoteCoordinator(
                     installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob),
                     browserRecordingDir = recordings
@@ -1924,24 +1936,44 @@ class AidenChatTest {
                 val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("recording", model)
                 assertTrue(model.canPlayBrowserRecordings)
-
-                // A stale file from an earlier Play is dropped before the next one is read.
-                recordings.mkdirs()
-                File(recordings, "$gone.webm").writeBytes(byteArrayOf(1))
-                val loaded = model.browserRecording(AidenBrowserRecordingRecap(present, "video/mp4", 12_400, video.size.toLong()))
-                val ready = loaded as AidenBrowserRecordingLoad.Ready
+                assertTrue("startup reclaims only the previous process's playback files", recordings.list()!!.isEmpty())
+                val slow = async { model.browserRecording(AidenBrowserRecordingRecap(slowId, "video/webm", 2000, slowVideo.size.toLong())) }
+                val partial = withTimeout(5_000) {
+                    var file: File? = null
+                    while (file == null) {
+                        file = withContext(Dispatchers.IO) { recordings.listFiles()?.firstOrNull { it.extension == "part" && it.length() > 0 } }
+                        if (file == null) kotlinx.coroutines.delay(10)
+                    }
+                    file
+                }
+                val ready: AidenBrowserRecordingLoad.Ready
+                try {
+                    assertFalse("the first video is still downloading", slow.isCompleted)
+                    ready = model.browserRecording(AidenBrowserRecordingRecap(present, "video/mp4", 12_400, video.size.toLong())) as AidenBrowserRecordingLoad.Ready
+                    assertFalse("the first request overlaps the second", slow.isCompleted)
+                    assertTrue("another Play must not unlink an active download", partial.exists())
+                    val prefix = partial.readBytes()
+                    assertArrayEquals(slowVideo.copyOf(prefix.size), prefix)
+                } finally {
+                    slow.cancelAndJoin()
+                }
                 assertEquals("video/mp4", ready.recording.mimeType)
-                assertEquals(File(recordings, "$present.mp4"), ready.recording.file)
+                assertEquals(recordings, ready.recording.file.parentFile)
+                assertEquals("mp4", ready.recording.file.extension)
                 assertArrayEquals(video, ready.recording.file.readBytes())
-                assertEquals(listOf("$present.mp4"), recordings.list()!!.sorted())
+                assertEquals(listOf(ready.recording.file.name), recordings.list()!!.sorted())
 
                 assertEquals(
                     AidenBrowserRecordingLoad.Missing,
                     model.browserRecording(AidenBrowserRecordingRecap(gone, "video/mp4", 1_000, 10))
                 )
-                // Nothing is left behind for the recording the Mac no longer has.
-                assertTrue(recordings.list()!!.isEmpty())
+                // A 404 and cancellation clean only their own files; the ready player keeps its video.
+                assertArrayEquals(video, ready.recording.file.readBytes())
                 viewModels.clearAndJoin()
+                // A card can dispose after navigation has already cleared its view model.
+                model.releaseBrowserRecording(ready.recording)
+                withTimeout(5_000) { while (ready.recording.file.exists()) kotlinx.coroutines.delay(10) }
+                assertTrue(recordings.list()!!.isEmpty())
             }
         } finally {
             scopeJob.cancel()
