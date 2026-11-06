@@ -49,6 +49,7 @@ import {
   useWindowChrome,
 } from "../lib/window-chrome";
 import { windowControlsApi } from "../lib/ipc";
+import { useLiveGuardAttributes } from "./live-guard";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -1646,6 +1647,7 @@ export function Dialog({
   onEscapeKeyDown,
   children,
 }: DialogProps) {
+  const liveGuard = useLiveGuardAttributes();
   const dismissBlocked = Boolean(
     dismissDisabled || cancelDisabled || (busy && !allowCancelWhileBusy),
   );
@@ -1663,6 +1665,7 @@ export function Dialog({
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <DialogPrimitive.Content
+          {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy || undefined}
           onCloseAutoFocus={(event) => {
@@ -1786,6 +1789,7 @@ export function AlertDialog({
   busy?: boolean;
   keepOpenOnConfirm?: boolean;
 }) {
+  const liveGuard = useLiveGuardAttributes();
   // Remember what had focus when the dialog opened so closing can return there.
   const openerRef = React.useRef<HTMLElement | null>(null);
   React.useLayoutEffect(() => {
@@ -1815,6 +1819,7 @@ export function AlertDialog({
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <AlertDialogPrimitive.Content
+          {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
@@ -1876,9 +1881,11 @@ export const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
 >(function Content({ className, sideOffset = 6, onCloseAutoFocus, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes();
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
+        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -1958,9 +1965,11 @@ export const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
 >(function SubContent({ className, sideOffset = 4, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes();
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.SubContent
+        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -2032,9 +2041,11 @@ export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(function PopoverContent({ className, sideOffset = 6, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes();
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
+        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -2055,9 +2066,11 @@ export const HoverCardContent = React.forwardRef<
   React.ElementRef<typeof HoverCardPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Content>
 >(function HoverCardContent({ className, sideOffset = 8, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes();
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
+        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -2078,9 +2091,11 @@ export const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(function ContextContent({ className, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes();
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
+        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         className={cn(
@@ -2134,9 +2149,11 @@ export const ContextMenuSubContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
 >(function ContextSubContent({ className, sideOffset = 4, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes();
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.SubContent
+        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
@@ -2189,9 +2206,11 @@ export const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(function SelectContent({ className, children, position = "popper", ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes();
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
+        {...liveGuard}
         ref={ref}
         data-slot="popover-content"
         position={position}

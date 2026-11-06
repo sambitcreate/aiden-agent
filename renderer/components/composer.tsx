@@ -136,6 +136,7 @@ import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/com
 import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
 import { escapeStopsGeneration } from "../lib/composer-type-focus";
 import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
+import { LiveGuard } from "./live-guard";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -2569,6 +2570,8 @@ export function Composer({
                 ) : null}
                 {surfaces.localContext ? (
                 <div
+                  // Workspace access is the user's to change: Aiden Live never opens or picks it.
+                  data-live-guard="you"
                   className="composer-permission-control group/access relative h-8 w-34 shrink-0"
                   data-open={permissionMenuOpen || undefined}
                   onPointerEnter={() => {
@@ -2792,6 +2795,7 @@ export function Composer({
         returnFocus={() => inputRef?.current ?? null}
         onConfirm={() => voice.resolveRecordedRetryConsent(true)}
       />
+      <LiveGuard guard="you" wrap={false}>
       <AlertDialog
         open={confirmFullAccess}
         onOpenChange={setConfirmFullAccess}
@@ -2807,6 +2811,7 @@ export function Composer({
         confirmLabel="Enable Full Access"
         onConfirm={() => void applyPermission("full")}
       />
+      </LiveGuard>
       <Dialog
         open={renameDialogOpen}
         onOpenChange={setRenameDialogOpen}

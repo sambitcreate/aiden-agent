@@ -584,6 +584,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     // Hovering anywhere on a reply reveals the action row at its end.
     <div
       data-transcript-reply={assistant ? "" : undefined}
+      data-live-item=""
       className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
     >
       {live ? (
@@ -1186,6 +1187,8 @@ export function MessageList({
           ref={transcriptRef}
           className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
           data-subagent-chip-focus-scope="true"
+          // Chat text is data, never instructions: Aiden Live sees only how many messages there are.
+          data-live-content="chat"
         >
           {transcriptRows}
 

@@ -284,6 +284,7 @@ function Transcript({ captions }: { captions: readonly AssistantLiveCaption[] })
       className="gemini-live-hud-transcript"
       aria-label="Live captions"
       role="log"
+      data-live-content="chat"
       aria-live="polite"
       aria-relevant="additions text"
       onScroll={(event) => {

@@ -26,6 +26,7 @@ import { formatRelativeTime } from "../lib/relative-time";
 import { cn } from "../lib/ui-utils";
 import type { Workspace } from "../lib/types";
 import type { WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
+import { LiveGuard } from "./live-guard";
 import {
   pickWorkspaceArtifact,
   workspaceArtifactPage,
@@ -614,6 +615,7 @@ function ArtifactAccessNotice({
   }
   if (access !== "needs-approval") return null;
   return (
+    <LiveGuard guard="you">
     <Callout color="warning" className="mb-3">
       <div className="flex items-center gap-3">
         <Text variant="small" className="min-w-0 flex-1">
@@ -676,6 +678,7 @@ function ArtifactAccessNotice({
         </ul>
       </Dialog>
     </Callout>
+    </LiveGuard>
   );
 }
 
@@ -722,5 +725,10 @@ function ArtifactPage({
   );
   const handleAction = React.useCallback((action: AidenUiAction) => onAction?.(view, action), [onAction, view]);
   // AidenUiBlock contains its own render failures, falling back to the page's text.
-  return <AidenUiBlock key={artifactId} visual={visual} hideCaption onStateChange={onStateChange} onAction={handleAction} />;
+  // An artifact's text and buttons come from the workspace: Aiden Live never reads or presses them.
+  return (
+    <div className="contents" data-live-content="artifact">
+      <AidenUiBlock key={artifactId} visual={visual} hideCaption onStateChange={onStateChange} onAction={handleAction} />
+    </div>
+  );
 }
