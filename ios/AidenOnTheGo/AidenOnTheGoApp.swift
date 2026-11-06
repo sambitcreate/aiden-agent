@@ -88,20 +88,28 @@ struct AidenOnTheGoApp: App {
         AidenDiagnostics.record(.app, event: .launch, outcome: .started)
         let haptics = AidenHapticCenter()
         _haptics = State(initialValue: haptics)
+        let coordinator: AidenRemoteCoordinator
 #if DEBUG
         // `-AidenDemoScenario <name>` runs the real shell against fake machines.
         if let scenario = AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) {
-            _remoteCoordinator = State(initialValue: AidenDemoHosts.coordinator(
+            coordinator = AidenDemoHosts.coordinator(
                 scenario,
                 responder: AidenDemoResponder(),
                 haptics: haptics
-            ))
+            )
         } else {
-            _remoteCoordinator = State(initialValue: AidenRemoteCoordinator(haptics: haptics))
+            coordinator = AidenRemoteCoordinator(haptics: haptics)
         }
 #else
-        _remoteCoordinator = State(initialValue: AidenRemoteCoordinator(haptics: haptics))
+        coordinator = AidenRemoteCoordinator(haptics: haptics)
 #endif
+        _remoteCoordinator = State(initialValue: coordinator)
+        // A tap can launch the app, so this can't wait for `ContentView`.
+        AidenNotificationPresentationDelegate.openTap = { $0.open(coordinator: coordinator) }
+        // The unit-test host never touches the device's notifications.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            Task { await AidenNotificationIdentifierMigration.runOnce() }
+        }
     }
 
     var body: some Scene {
