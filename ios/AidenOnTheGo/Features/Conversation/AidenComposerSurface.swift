@@ -549,6 +549,14 @@ extension View {
     /// nothing: without this the latest words slide under a composer that grew.
     /// A transcript that fits between the insets (`containerSize` is that space)
     /// has nothing to keep in view, and scrolling it would pull it down from the top.
+    func aidenReportsTranscriptFit(to follow: AidenTranscriptFollowController) -> some View {
+        onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentSize.height <= geometry.containerSize.height
+        } action: { _, fits in
+            follow.updateTranscriptFit(fits)
+        }
+    }
+
     func aidenOnComposerInsetChange(_ action: @escaping () -> Void) -> some View {
         onScrollGeometryChange(for: CGFloat?.self) { geometry in
             geometry.contentSize.height > geometry.containerSize.height ? geometry.contentInsets.bottom : nil

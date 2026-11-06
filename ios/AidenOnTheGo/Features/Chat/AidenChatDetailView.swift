@@ -401,6 +401,7 @@ struct AidenChatDetailView: View {
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
+            .aidenReportsTranscriptFit(to: follow)
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }

@@ -263,6 +263,11 @@ final class AidenTranscriptFollowController {
         updateJumpButton()
     }
 
+    /// All of the transcript fits between the insets, so there's no bottom to reach.
+    func updateTranscriptFit(_ fits: Bool) {
+        transcriptFits = fits
+    }
+
     func updateMetrics(_ metrics: AidenChatScrollMetrics) {
         let nearBottom = AidenChatScrollPolicy.isNearBottom(
             distanceFromBottom: metrics.distanceFromBottom,
@@ -270,7 +275,6 @@ final class AidenTranscriptFollowController {
         )
         let wasNearBottom = isNearBottom
         distanceFromBottom = metrics.distanceFromBottom
-        transcriptFits = metrics.transcriptFits
         if nearBottom != isNearBottom { isNearBottom = nearBottom }
         let isAtBottom = AidenChatScrollPolicy.isAtBottom(distanceFromBottom: metrics.distanceFromBottom)
         handle(.contentScrolled(

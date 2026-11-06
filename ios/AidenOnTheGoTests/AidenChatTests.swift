@@ -14713,12 +14713,11 @@ private final class AidenManualPauses {
 
 @MainActor
 final class AidenTranscriptFollowControllerTests: XCTestCase {
-    private func metrics(_ distance: CGFloat, interacting: Bool = false, fits: Bool = false) -> AidenChatScrollMetrics {
+    private func metrics(_ distance: CGFloat, interacting: Bool = false) -> AidenChatScrollMetrics {
         AidenChatScrollMetrics(
             distanceFromBottom: distance,
             isUserInteracting: interacting,
-            movedAwayFromBottom: false,
-            transcriptFits: fits
+            movedAwayFromBottom: false
         )
     }
 
@@ -14741,10 +14740,10 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         let pauses = AidenManualPauses()
         let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
         var performed = 0
-        controller.updateMetrics(metrics(0))
+        controller.updateTranscriptFit(false)
         let task = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed += 1 }
         await pauses.waitForPending(1)
-        controller.updateMetrics(metrics(0, fits: true))
+        controller.updateTranscriptFit(true)
         pauses.releaseAll()
         await task?.value
         XCTAssertEqual(performed, 0)
@@ -14754,10 +14753,10 @@ final class AidenTranscriptFollowControllerTests: XCTestCase {
         let pauses = AidenManualPauses()
         let controller = AidenTranscriptFollowController(followPause: { await pauses.pause() }, jumpButtonDelay: {})
         var performed = 0
-        controller.updateMetrics(metrics(0, fits: true))
+        controller.updateTranscriptFit(true)
         let task = controller.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in performed += 1 }
         await pauses.waitForPending(1)
-        controller.updateMetrics(metrics(0))
+        controller.updateTranscriptFit(false)
         pauses.releaseAll()
         await task?.value
         XCTAssertEqual(performed, 1)

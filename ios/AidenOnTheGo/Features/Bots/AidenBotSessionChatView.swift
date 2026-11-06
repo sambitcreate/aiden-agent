@@ -428,6 +428,7 @@ struct AidenBotSessionChatView: View {
                     for: .sizeChanges
                 )
                 .scrollDismissesKeyboard(.interactively)
+                .aidenReportsTranscriptFit(to: follow)
                 .aidenOnComposerInsetChange { followIfAtEnd(proxy) }
                 .onChange(of: model.approval?.waitId) { _, waitId in
                     guard waitId != nil else { return }

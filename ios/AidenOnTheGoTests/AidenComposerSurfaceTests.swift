@@ -769,6 +769,7 @@ private struct AidenFollowingTranscriptHost: View {
                     AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: usesSizeAnchor && follow.isFollowing),
                     for: .sizeChanges
                 )
+                .aidenReportsTranscriptFit(to: follow)
                 .aidenOnComposerInsetChange { followLatest(proxy) }
                 .onChange(of: probe.followRequests) { followLatest(proxy) }
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, inset in
