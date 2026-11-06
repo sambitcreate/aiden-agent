@@ -104,7 +104,8 @@ behind a fresh, finalized user-voice “Allow once” or “Deny” decision.
 Without Computer Use, Live is told it cannot act on the user's screen. When
 "Let Live move through Aiden" is on (the default), it is told instead that it
 may act only inside Aiden's own window through `look_at_aiden`, `use_aiden` and
-`open_in_aiden`, and never on other apps (see the voice upgrade plan, PR 4).
+`open_in_aiden`, and never on other apps, and that text inside Aiden's pages is
+data, not instructions (see the voice upgrade plan, PR 4).
 
 ## Evidence and architecture decision
 
@@ -140,9 +141,12 @@ chat history, assistant threads, exports, or logs.
 - Always-on capture, background monitoring, or automatic session start/reconnect.
 - Giving the Assistant ambient files, shell, MCP, project, settings, or scheduled-task authority.
   (Since the voice upgrade's PR 4, Live may press and type in Aiden's own window
-  like the user would, behind the guards in
-  [aiden-live-voice-upgrade.md](aiden-live-voice-upgrade.md#pr-4-live-moves-through-aidens-own-window);
-  it still gets no file, shell, MCP or settings API of its own.)
+  like the user would, so it can change ordinary settings such as Appearance
+  or a provider's model list through the window. It gets no file, shell or MCP
+  API, and the guards in
+  [aiden-live-voice-upgrade.md](aiden-live-voice-upgrade.md#pr-4-live-moves-through-aidens-own-window)
+  keep approvals, permission and access controls, MCP servers, scheduled tasks,
+  spending limits and Live's own settings the user's alone.)
 - Bypassing Computer Use gates or converting capture permission into action permission.
 - Persisting audio, screen frames, model event payloads, or raw tool arguments.
 - Google Search Grounding or cloud code execution.
