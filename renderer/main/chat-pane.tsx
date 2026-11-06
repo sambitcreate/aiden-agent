@@ -1223,6 +1223,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         seedComposerAttachments(copied.id, prefill.attachments);
       }
       const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
+      if (copiedWorkspaceId !== effectiveWorkspaceIdRef.current) {
+        await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      }
       qc.setQueryData(queryKeys.chat(copied.id), copied);
       qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(copiedWorkspaceId), (current) => [
         {
@@ -2048,24 +2051,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStartingGeneration(true);
       try {
         let updated: Chat;
-        /** Set when this No workspace draft is saved in a fresh hidden folder. */
-        let separateNoWorkspaceId: string | undefined;
         try {
-          if (firstDraft && !worktreeRequest) {
-            const draftWorkspace = workspaces.find((entry) => entry.id === firstDraft.chat.workspaceId);
-            if (isNoWorkspace(draftWorkspace)) {
-              separateNoWorkspaceId = await noWorkspaceFolderForFirstSend(
-                { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
-                draftWorkspace!.id,
-              );
-              if (separateNoWorkspaceId) await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
-            }
-          }
           const firstMessageInput = firstDraft
             ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
-                workspaceId: separateNoWorkspaceId ?? firstDraft.chat.workspaceId!,
+                workspaceId: firstDraft.chat.workspaceId!,
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2183,7 +2174,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // A New worktree send saved the chat in the worktree's workspace,
         // which this render has not seen yet.
         // A No workspace draft that needed its own folder was saved in a fresh one.
-        if (worktreeRequest || separateNoWorkspaceId) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        if (firstDraft) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2211,7 +2202,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
-      workspaces,
     ],
   );
 

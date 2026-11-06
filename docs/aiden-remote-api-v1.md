@@ -477,7 +477,7 @@ Public keys in `info` are their base64url strings. The host uses a fresh ephemer
 
 ### Fork (contract revision 21, `chat-fork-v1`, `chat-fork-summary-v1`)
 
-Fork creates a new regular chat in the same workspace from one message of an existing one. The source is never changed. Bot chats are not forked (`404 not_found`). A host that implements forking advertises `chat-fork-v1`; one that can also summarize the rest of the source advertises `chat-fork-summary-v1`. Without a feature its routes answer `404 not_found`.
+Fork creates a new regular chat from one message of an existing one. Named workspace chats keep their workspace. A No workspace chat gets a fresh hidden workspace with an empty private folder and independent Ask first access; clients must use the returned chat's workspace ID rather than requiring the source ID. The source is never changed. Bot chats are not forked (`404 not_found`). A host that implements forking advertises `chat-fork-v1`; one that can also summarize the rest of the source advertises `chat-fork-summary-v1`. Without a feature its routes answer `404 not_found`.
 
 - `POST /chats/{chatId}/fork` (`chat:write`; requires `If-Match` with the chat revision and an `Idempotency-Key`). The body is `{messageId, position, summary?}`:
   - `position: "after"` keeps everything through `messageId`, which must be a settled assistant reply.

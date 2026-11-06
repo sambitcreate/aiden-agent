@@ -2352,65 +2352,70 @@ final class AidenChatTests: XCTestCase {
 
     @MainActor
     func testEditInForkSeedsTheForkComposerWithThePromptAndItsAttachments() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-prefill-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
-        let cache = AidenChatCache(root: root)
-        let draftStore = AidenChatDraftStore(root: root.appending(path: "drafts"))
-        let attachmentID = "att_\(String(repeating: "F", count: 43))"
-        let sourceJSON = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[{"id":"message-u1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-a1","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"},{"id":"message-u2","role":"user","text":"Now check the error codes.","createdAt":"2026-09-14T12:00:02Z"},{"id":"message-a2","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:03Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:03Z","revision":"revision-7"}"#
-        let forkChatJSON = #"{"id":"chat-fork-edit","workspaceId":"workspace-1","title":"Progress lifecycle (fork)","messages":[{"id":"message-f1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-f2","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"}],"createdAt":"2026-09-14T12:05:00Z","updatedAt":"2026-09-14T12:05:00Z","revision":"revision-fork-1","forkedFrom":{"chatId":"chat-progress-lifecycle","messageId":"message-u2","position":"before","at":"2026-09-14T12:05:00Z"}}"#
-        let forkResultJSON = #"{"chat":\#(forkChatJSON),"prefill":{"text":"Now check the error codes.","attachments":[{"id":"\#(attachmentID)","name":"codes.txt","mimeType":"text/plain","kind":"text","size":42,"expiresAt":"2099-01-01T00:00:00Z"}]}}"#
-        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-fork-v1","chat-fork-summary-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
-        let source = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(sourceJSON.utf8))
-        let fixture = AidenStreamRecoveryFixture(chat: source)
-        var coordinator: AidenRemoteCoordinator!
-        let model = try await makeProgressLifecycleModel(
-            mode: .denied,
-            cache: cache,
-            draftStore: draftStore,
-            onCoordinator: { coordinator = $0 },
-            initialChat: source,
-            responseOverride: { request in
-                switch (request.httpMethod, request.url?.path) {
-                case (_, "/api/aiden/v1/server"):
-                    return (200, "application/json", Data(serverJSON.utf8))
-                case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/fork"):
-                    XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "revision-7")
-                    XCTAssertNotNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
-                    return (201, "application/json", Data(forkResultJSON.utf8))
-                case ("GET", "/api/aiden/v1/chats/chat-fork-edit"):
-                    return (200, "application/json", Data(forkChatJSON.utf8))
-                default:
-                    return fixture.response(request)
+        for targetWorkspaceID in ["workspace-1", "private-fork-home"] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-prefill-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+            let cache = AidenChatCache(root: root)
+            let draftStore = AidenChatDraftStore(root: root.appending(path: "drafts"))
+            let attachmentID = "att_\(String(repeating: "F", count: 43))"
+            let sourceJSON = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","messages":[{"id":"message-u1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-a1","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"},{"id":"message-u2","role":"user","text":"Now check the error codes.","createdAt":"2026-09-14T12:00:02Z"},{"id":"message-a2","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:03Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:03Z","revision":"revision-7"}"#
+            let forkChatJSON = #"{"id":"chat-fork-edit","workspaceId":"\#(targetWorkspaceID)","title":"Progress lifecycle (fork)","messages":[{"id":"message-f1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-f2","role":"assistant","text":"Starting.","createdAt":"2026-09-14T12:00:01Z"}],"createdAt":"2026-09-14T12:05:00Z","updatedAt":"2026-09-14T12:05:00Z","revision":"revision-fork-1","forkedFrom":{"chatId":"chat-progress-lifecycle","messageId":"message-u2","position":"before","at":"2026-09-14T12:05:00Z"}}"#
+            let forkResultJSON = #"{"chat":\#(forkChatJSON),"prefill":{"text":"Now check the error codes.","attachments":[{"id":"\#(attachmentID)","name":"codes.txt","mimeType":"text/plain","kind":"text","size":42,"expiresAt":"2099-01-01T00:00:00Z"}]}}"#
+            let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-fork-v1","chat-fork-summary-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+            let source = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(sourceJSON.utf8))
+            let fixture = AidenStreamRecoveryFixture(chat: source)
+            var coordinator: AidenRemoteCoordinator!
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: cache,
+                draftStore: draftStore,
+                onCoordinator: { coordinator = $0 },
+                initialChat: source,
+                responseOverride: { request in
+                    switch (request.httpMethod, request.url?.path) {
+                    case (_, "/api/aiden/v1/server"):
+                        return (200, "application/json", Data(serverJSON.utf8))
+                    case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/fork"):
+                        XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "revision-7")
+                        XCTAssertNotNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
+                        return (201, "application/json", Data(forkResultJSON.utf8))
+                    case ("GET", "/api/aiden/v1/chats/chat-fork-edit"):
+                        return (200, "application/json", Data(forkChatJSON.utf8))
+                    default:
+                        return fixture.response(request)
+                    }
                 }
-            }
-        )
+            )
 
-        let availability = try XCTUnwrap(model.forkAvailability)
-        XCTAssertTrue(availability.supportsSummary)
-        let forked = await model.fork(messageId: "message-u2", action: .editInFork)
-        XCTAssertNil(model.presentedError)
-        let fork = try XCTUnwrap(forked)
-        XCTAssertEqual(fork.id, "chat-fork-edit")
-        XCTAssertEqual(model.chat.id, "chat-progress-lifecycle", "Forking never rewrites the source chat.")
+            let availability = try XCTUnwrap(model.forkAvailability)
+            XCTAssertTrue(availability.supportsSummary)
+            let forked = await model.fork(messageId: "message-u2", action: .editInFork)
+            XCTAssertNil(model.presentedError)
+            let fork = try XCTUnwrap(forked)
+            XCTAssertEqual(fork.id, "chat-fork-edit")
+            XCTAssertEqual(fork.workspaceId, targetWorkspaceID)
+            let cached = await cache.loadChat(instanceId: "instance-progress-lifecycle", chatId: fork.id)
+            XCTAssertEqual(cached?.workspaceId, targetWorkspaceID)
+            XCTAssertEqual(model.chat.id, "chat-progress-lifecycle", "Forking never rewrites the source chat.")
 
-        // Opening the fork restores the edited prompt and its attachments.
-        let forkModel = AidenChatViewModel(
-            coordinator: coordinator,
-            chat: fork,
-            cache: cache,
-            draftStore: draftStore,
-            modelPreferenceStore: testModelPreferences,
-            onChatUpdated: { _ in }
-        )
-        await forkModel.load(observeProgress: false)
-        XCTAssertEqual(forkModel.draft, "Now check the error codes.")
-        XCTAssertEqual(forkModel.pendingAttachments.map(\.id), [attachmentID])
-        XCTAssertEqual(forkModel.chat.forkedFrom?.messageId, "message-u2")
+            // Opening the fork restores the edited prompt and its attachments.
+            let forkModel = AidenChatViewModel(
+                coordinator: coordinator,
+                chat: fork,
+                cache: cache,
+                draftStore: draftStore,
+                modelPreferenceStore: testModelPreferences,
+                onChatUpdated: { _ in }
+            )
+            await forkModel.load(observeProgress: false)
+            XCTAssertEqual(forkModel.draft, "Now check the error codes.")
+            XCTAssertEqual(forkModel.pendingAttachments.map(\.id), [attachmentID])
+            XCTAssertEqual(forkModel.chat.forkedFrom?.messageId, "message-u2")
 
-        // A prompt that is not eligible never reaches the Mac.
-        let refused = await model.fork(messageId: "message-u1", action: .editInFork)
-        XCTAssertNil(refused)
+            // A prompt that is not eligible never reaches the Mac.
+            let refused = await model.fork(messageId: "message-u1", action: .editInFork)
+            XCTAssertNil(refused)
+        }
     }
 
     @MainActor
