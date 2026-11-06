@@ -2767,7 +2767,8 @@ export function Composer({
                     Loading model…
                   </span>
                 ) : null}
-                {contextMeter}
+                {/* The owner chose a quieter composer beside the design canvas, so design mode hides the context meter. */}
+                {designControls?.on ? null : contextMeter}
                 {thinkingControl}
                 {modelPicker}
                 <Button

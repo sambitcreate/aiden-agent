@@ -74,6 +74,7 @@ Design mode is a per-chat layout on an ordinary workspace chat. In it, the right
   - The width is renderer-local and global, not per chat (`aiden-agent.design.chat-width`).
   - Messages fill the column: `--chat-content-max-width: none`, with a 16 px left gutter and the usual Live-pill clearance on the right.
   - The terminal drawer stays in the chat column.
+  - The composer hides its context meter while design mode is on, to keep the narrow column quiet. It comes back when design mode turns off.
   - The top bar keeps its actions whole: the title may shrink to nothing, the actions never shrink, and when the header is narrower than 480 px of content, Quick View and Terminal move into the ••• tools menu.
 - **Canvas region:**
   - It takes everything left over, with a minimum of 320 px. It is one region named "Design canvas"; while empty it reads "Ask Aiden to design something, or add a note."

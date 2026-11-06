@@ -2,6 +2,7 @@
 import { installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
+import * as React from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
@@ -48,9 +49,11 @@ const SESSION_CHAT = {
 function ComposerHarness({
   slashPaletteBlocked = false,
   designControls = null,
+  contextMeter,
 }: {
   slashPaletteBlocked?: boolean;
   designControls?: DesignModeControls | null;
+  contextMeter?: React.ReactNode;
 }) {
   return (
     <DesignModeControlsContext.Provider value={designControls}>
@@ -64,6 +67,7 @@ function ComposerHarness({
             sessionChat={SESSION_CHAT}
             onRenameChat={() => undefined}
             slashPaletteBlocked={slashPaletteBlocked}
+            contextMeter={contextMeter}
             onSend={async (text) => {
               sends.push(text);
             }}
@@ -265,4 +269,22 @@ test("sending /design off turns design mode off, and any other word after /desig
   assert.deepEqual(changes, [[false, "slash"]]);
   assert.equal(textbox.value, "", "the command is cleared");
   assert.deepEqual(sends, []);
+});
+
+test("the context meter shows in a chat and hides while that chat is in design mode", async () => {
+  const meter = <span role="meter" aria-label="Context used" aria-valuenow={40} />;
+  const changes: Array<[boolean, string]> = [];
+  for (const [controls, shown] of [
+    [null, true],
+    [recordingDesignControls(changes), true],
+    [{ ...recordingDesignControls(changes), on: true }, false],
+  ] as const) {
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<ComposerHarness designControls={controls} contextMeter={meter} />);
+    });
+    const present = screen.queryByRole("meter", { name: "Context used" }) !== null;
+    assert.ok(present === shown, `design mode ${controls?.on ? "on" : "off"}: meter ${present ? "shown" : "hidden"}`);
+    view.unmount();
+  }
 });

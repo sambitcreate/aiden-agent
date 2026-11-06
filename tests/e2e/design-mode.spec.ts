@@ -140,11 +140,13 @@ async function expectHeaderClear(page: Page): Promise<void> {
 }
 
 /**
- * The composer's footer controls each keep their own space inside the composer: "+", the
- * context meter and Send are all there, no two controls overlap, and none spills outside.
+ * The composer's footer controls each keep their own space inside the composer: "+" and Send
+ * are there, no two controls overlap, and none spills outside. The context meter shows only
+ * outside design mode.
  */
 async function expectComposerFooterClear(
   footer: ReturnType<Page["locator"]>,
+  { designMode = true }: { designMode?: boolean } = {},
 ): Promise<void> {
   const problems = await footer.evaluate((row) => {
     const composer = row.closest(".composer-responsive") ?? row;
@@ -194,13 +196,12 @@ async function expectComposerFooterClear(
     }
     return { found, names: pieces.map((piece) => piece.name) };
   });
-  const required = [
-    /^Attach files or images$/u,
-    /^Context usage/u,
-    /^(Send|Queue) message$/u,
-  ];
+  const required = [/^Attach files or images$/u, /^(Send|Queue) message$/u];
   for (const name of required)
     expect(problems.names.some((piece) => name.test(piece))).toBe(true);
+  expect(problems.names.some((piece) => /^Context usage/u.test(piece))).toBe(
+    !designMode,
+  );
   expect(problems.found).toEqual([]);
 }
 
@@ -664,7 +665,9 @@ test("design mode fits narrow windows: split beside the sidebar, stacked below 6
 
   // Outside design mode a narrow window's composer degrades the same way.
   await setWindowWidth(app, page, 420);
-  await expectComposerFooterClear(page.locator(".composer-footer-row").first());
+  await expectComposerFooterClear(page.locator(".composer-footer-row").first(), {
+    designMode: false,
+  });
 });
 
 test("Aiden asks to open design mode on a card, then puts its work on the canvas; Not now leaves the chat as it was", async ({
