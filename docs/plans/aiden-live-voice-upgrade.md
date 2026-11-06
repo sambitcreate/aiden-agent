@@ -66,7 +66,7 @@ Status: Built on `claude/project-thread-kc0y85-live-approvals` (2026-11-06), rev
 - **Only speech that starts after arming.** On arming, the approval takes the bus start mark (`voiceInputFence()`). Each utterance carries a start mark (`LiveVoiceInput.startedAt`), and it counts only if that mark is above the fence. The mark comes from when the microphone first heard the speech, because captions arrive only after transcription:
   - `LiveSpeechOnsets` (`renderer/lib/live-speech-onsets.ts`) reads each microphone packet's level. It opens a stretch of speech at level 0.04, and 500 ms of quiet ends it.
   - The utterance's first caption, interim or final, claims the onset of the earliest stretch still in reach: one still going on, or one that ended within the last 5 s of audio.
-  - Only when the microphone heard nothing does the caption's arrival set the mark.
+  - When no onset is in reach (speech too quiet to measure, or a caption later than the 5 s window), the utterance gets an untrusted mark below every fence, so it can never answer an approval by voice; the card still answers taps.
   - So an "allow" spoken before arming does not count, even if its caption arrives or finishes after. Neither does a repeated "allow" meant for the previous approval.
   - It fails closed: speech under way at arm time stays before the fence until a silence gap. Nearby earlier speech can make a fresh "allow" count as early, and the person then says it again or taps.
   - Continuous loud noise behaves the same way, so in a noisy room voice may never count, and the card still answers taps.

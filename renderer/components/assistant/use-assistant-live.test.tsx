@@ -1623,21 +1623,51 @@ test("speech that arrives in pieces is heard as one utterance, so a phrase insid
   await stop();
 });
 
+function micPacket(fixture: { worklets: Array<{ emit(message: unknown): void }> }, sample: number): void {
+  // 20 ms of 16 kHz audio at a constant level.
+  const data = new ArrayBuffer(640);
+  const view = new DataView(data);
+  for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, sample, true);
+  fixture.worklets[0]!.emit({ type: "pcm", data });
+}
+
 test("an utterance keeps the start mark of its first caption, so speech begun before a fence stays before it", async () => {
   const { fixture, stop } = await listenToVoiceInput();
   const inputs: LiveVoiceInput[] = [];
   const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
   fixture.emit(hearUser("Al", { final: false }));
   // An approval arms here, while the user is already mid-word.
   const fence = liveSessionBus.voiceInputFence();
   fixture.emit(hearUser("Allow"));
   fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  for (let index = 0; index < 300; index += 1) micPacket(fixture, 0);
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
   fixture.emit(hearUser("Allow"));
   fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
   unsubscribe();
   assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
   assert.ok(inputs[0]!.startedAt <= fence, "begun before the fence, finished after it");
   assert.ok(inputs[1]!.startedAt > fence, "begun after the fence");
+  await stop();
+});
+
+test("speech whose onset the microphone cannot vouch for never lands after a fence", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  // "Allow" said before the approval armed...
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  const fence = liveSessionBus.voiceInputFence();
+  // ...but its first caption arrives only after the onset has aged out.
+  for (let index = 0; index < 400; index += 1) micPacket(fixture, 0);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  // Speech too quiet for the microphone to mark, captioned after the fence.
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "a caption later than the onset window stays before the fence");
+  assert.ok(inputs[1]!.startedAt <= fence, "speech the microphone never marked stays before the fence");
   await stop();
 });
 

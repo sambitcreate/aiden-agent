@@ -25,7 +25,7 @@ import type {
 } from "../../shared/assistant-live";
 import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 import { liveSessionBus } from "../../lib/live-session-bus";
-import { LiveSpeechOnsets } from "../../lib/live-speech-onsets";
+import { LIVE_UNTRUSTED_VOICE_START, LiveSpeechOnsets } from "../../lib/live-speech-onsets";
 import { LiveTimeStretcher } from "../../lib/live-time-stretch";
 
 export interface AssistantLiveCaption {
@@ -833,7 +833,7 @@ export function useAssistantLiveWithDependencies(
       if (!text) return;
       pendingUtterance.current = {
         receiptId: pending?.receiptId ?? ++voiceApprovalReceiptId.current,
-        startedAt: pending?.startedAt ?? utteranceStartedAt.current ?? liveSessionBus.beginVoiceInput(),
+        startedAt: pending?.startedAt ?? utteranceStartedAt.current ?? LIVE_UNTRUSTED_VOICE_START,
         text,
         overReply: pending ? pending.overReply : liveReplyOpen.current,
       };
@@ -910,7 +910,11 @@ export function useAssistantLiveWithDependencies(
         // heard this speech: speech begun before an approval armed stays
         // before its fence however late its caption arrives or ends.
         if (event.direction === "input" && utteranceStartedAt.current === null) {
-          utteranceStartedAt.current = speechOnsets.claim() ?? liveSessionBus.beginVoiceInput();
+          // No onset in reach (speech too quiet to measure, or its caption came
+          // after the lag window): the start cannot be proven to follow any
+          // fence, so the utterance gets the untrusted mark and never answers
+          // an approval by voice. It is still heard as ordinary speech.
+          utteranceStartedAt.current = speechOnsets.claim() ?? LIVE_UNTRUSTED_VOICE_START;
         }
         if (event.direction === "input" && event.final) {
           continueUtterance(event.text);

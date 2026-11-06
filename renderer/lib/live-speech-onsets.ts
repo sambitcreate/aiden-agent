@@ -4,8 +4,8 @@
 // so the first caption of an utterance can arrive well after the person
 // started talking. The voice-approval fence compares utterance start marks.
 // So the Live hook stamps each utterance with the onset of the earliest
-// speech that could belong to it, and uses the caption's arrival only when
-// the microphone heard nothing.
+// speech that could belong to it. When the microphone heard nothing in reach
+// it uses LIVE_UNTRUSTED_VOICE_START, which no approval accepts.
 //
 // This fails closed. Speech under way when an approval arms keeps its
 // earlier mark until a silence gap ends it. Any utterance whose first caption
@@ -21,6 +21,11 @@ export const LIVE_SPEECH_ONSET_LEVEL = 0.04;
 export const LIVE_SPEECH_SILENCE_MS = 500;
 /** How late a caption may arrive and still be traced to the speech before it. */
 export const LIVE_SPEECH_CAPTION_LAG_MS = 5_000;
+/**
+ * Start mark for an utterance whose onset the microphone cannot vouch for.
+ * It is below every fence, so such speech never answers an approval.
+ */
+export const LIVE_UNTRUSTED_VOICE_START = 0;
 
 interface SpeechStretch {
   mark: number;
