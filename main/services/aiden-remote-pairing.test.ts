@@ -25,6 +25,7 @@ const fingerprint = `sha256/${Buffer.alloc(32, 4).toString("base64")}`;
 function fixture(options: {
   devices?: Array<{ type: string; revokedAt?: number }>;
   issueFails?: boolean;
+  beforeDeviceList?: () => Promise<void>;
   botCapabilitiesSupported?: boolean;
   hostCapabilitiesSupported?: boolean;
 } = {}) {
@@ -55,7 +56,7 @@ function fixture(options: {
           },
         };
       },
-      listDevices: async () => (options.devices ?? []) as never,
+      listDevices: async () => { await options.beforeDeviceList?.(); return (options.devices ?? []) as never; },
     },
     {
       now: () => now,
@@ -517,4 +518,18 @@ test("a paired phone counts once with its route and the phones in use; a desktop
   await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint, "tailscale").bootstrap.secret), "phone");
   await analyticsSettled();
   assert.deepEqual(sent, [{ event: "phone_paired", props: { transport: "tailscale", device_count: "2-3" } }]);
+});
+
+
+test("phone count metadata cannot move an earlier pairing to a new analytics sender", async (t) => {
+  const previous = captureAnalyticsEvents(t);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const phone = fixture({ beforeDeviceList: () => held });
+  await phone.service.exchange(exchange(phone.service.begin(endpoint, fingerprint).bootstrap.secret), "phone");
+  const current = captureAnalyticsEvents(t);
+  release();
+  await analyticsSettled();
+  assert.deepEqual(previous, []);
+  assert.deepEqual(current, [], "the earlier pairing cannot be attributed to the replacement sender");
 });

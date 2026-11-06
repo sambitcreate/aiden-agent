@@ -86,12 +86,17 @@ superseded. Runner capacity can still cause queueing.
 - Browser containment, terminal coverage thresholds, Ruby policy, Rust
   formatting/tests/clippy and native helper production/test builds retain their
   execution modes. Registry validation checks both files and these prerequisites.
-- Electron files run across three isolated macOS runners with one worker each and
-  `--fail-on-flaky-tests`. File-duration weights come from hosted run 41534097337;
-  the cancelled shard's last file includes an allowance for its unfinished test.
-  A separate completed run checks the allocation against independent timings;
-  newly discovered specs get a default weight and always run. Live-provider specs
-  remain opt-in; production diagnostics run separately with the production profile.
+- Electron files run across four isolated macOS runners with one worker each and
+  `--fail-on-flaky-tests`, retaining the 20-minute job limit. File-duration weights
+  preserve larger historical estimates and complete windows from hosted runs
+  41784199399 and 41789418295. Cancelled terminal windows are lower bounds, never
+  treated as completed timings. The completed run 41778188548 independently checks
+  the allocation. A measured budget check reserves two minutes for setup/cleanup
+  and at least three minutes of headroom; real runner variation can still differ.
+  Newly discovered specs get a default weight and always run. A real Playwright
+  collection check verifies that every deterministic case belongs to exactly one
+  shard. Live-provider specs remain opt-in; production diagnostics run separately
+  with the production profile.
 - Linux runs the same Electron shards on three Ubuntu runners in `linux-e2e`,
   beside the packaging job rather than after it. The required `Linux x64` and
   `Linux arm64` checks fail if a selected shard does not pass. Each shard builds
@@ -123,6 +128,54 @@ reruns and total runner usage. Parallelism may trade more runner-minutes for les
 waiting. Browser caches, install retries and further Linux migration are follow-up
 experiments only if measured overhead or failures justify them.
 
+On 2026-11-04, run [41789418295](https://github.com/sambitcreate/aiden-agent/actions/runs/41789418295)
+hit the 20-minute job limit on Electron shard 1 after starting its final case;
+GitHub's annotation explicitly identified the job deadline, with no individual
+spec failure printed. Its three shards collected 118/80/96 cases. Shards 2 and 3
+completed their test steps in 881/684 seconds; shard 1 was cancelled after 1,126
+seconds of testing plus setup. The earlier run 41784199399 instead timed out on
+shard 3, so refreshing weights from one fast runner alone would conceal the
+variance. Four shards using the conservative complete-file measurements project
+under 15 minutes each before the setup reserve, while the independent completed
+run projects roughly 10–11 minutes. This adds one runner's setup cost in exchange
+for headroom. It changes neither test timeouts nor retries; exact-head hosted CI
+must still pass.
+
+The Linux x64 job in run [41801806234](https://github.com/sambitcreate/aiden-agent/actions/runs/41801806234/job/126479810811)
+failed the flaky-test gate on 2026-11-04: the Usage data persistence check read a
+fresh profile's `settings.json` before it existed, then passed on its existing
+retry. The switch updates optimistically, so its unchecked state does not prove
+that the first settings write has finished. That test now treats only `ENOENT`
+as a pending poll result and still requires persisted `analytics.enabled: false`
+before relaunching and checking the switch again. A filesystem regression also
+requires malformed JSON and other read errors to fail. This changes no product
+behavior, test timeout, retry policy or flaky-test gate.
+
+The local proactive suite also exposed a fake-clock ordering failure in the
+held-event gap test on 2026-11-04. A fixed 20 ms pause could expire before a
+timer's store read finished; the next clock advance then missed a retry timer
+registered afterward. The test now gates that read deliberately and waits for
+the dispatcher's drain before advancing again. It checks the full five-minute
+boundary, exact run order and settled durable receipts without a timing guess.
+The production event dispatcher and its limits are unchanged.
+
+Electron shard 2 in run [41813917090](https://github.com/sambitcreate/aiden-agent/actions/runs/41813917090/job/126521250640)
+failed the flaky-test gate on the Bot-browser held-tab reveal case: its first
+attempt failed the gray-pixel assertion and its existing retry passed. The
+fixture showed a new password field after two seconds without establishing that
+the periodic held-tab scanner had observed it first. A controlled slow scan
+reproduced the unmasked field and text leak under that unsupported premise.
+The fixture now waits for the real scanner to finish observing the new password
+before the person presses Show, then retains every pixel, no-secret and typing
+refusal assertion. Its standalone Electron uses sRGB so exact red controls do
+not depend on a host display profile, and pixel snapshots follow two animation
+frames after the person's page action rather than assuming load/click means
+paint has finished. Production masking, its documented
+first-observation limitation, timeouts, retries and the flaky-test gate remain
+unchanged.
+
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has
 been removed to keep release hardening separate from this CI rollout.
+
+Shared public Remote DTO, parser and limit modules select both native clients even when edited without a server file, including Bot watches, Open work, routine models and their separately served directory, starter Bot presets, peers and resume contracts. Connection cards, message outcome categories, triage patches, approval controls and custom-model inputs also select native validation. Native source comments naming TypeScript files are not a complete contract inventory. Add newly mirrored public contracts to the inventory and cover their single-file classification. Generic host helpers remain on the desktop/CLI/Linux route.

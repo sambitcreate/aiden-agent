@@ -9,7 +9,7 @@ import {
   analyticsProviderId,
   analyticsThinking,
 } from "./analytics-ids.js";
-import { reportAnalyticsEvent } from "./analytics-report.js";
+import { captureAnalyticsReporter, reportAnalyticsEvent } from "./analytics-report.js";
 
 type MessageOrigin = AnalyticsEventProps<"chat_message_sent">["origin"];
 
@@ -24,12 +24,13 @@ export interface ChatMessageSent {
 
 /** One person's message reached a running turn. Subagent turns never come through here. */
 export function reportChatMessageSent(sent: ChatMessageSent): void {
+  const report = captureAnalyticsReporter();
   void Promise.all([
     Promise.resolve().then(sent.inWorkspace).catch(() => false),
     Promise.resolve().then(() => (typeof sent.origin === "function" ? sent.origin() : sent.origin)),
   ])
     .then(([inWorkspace, origin]) =>
-      reportAnalyticsEvent("chat_message_sent", {
+      report("chat_message_sent", {
         provider_id: analyticsProviderId(sent.providerId),
         model_id: analyticsModelId(sent.providerId, sent.model),
         in_workspace: inWorkspace,

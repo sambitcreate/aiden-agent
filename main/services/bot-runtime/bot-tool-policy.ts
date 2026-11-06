@@ -1,3 +1,4 @@
+import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calendar-policy.js";
 import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_PLAN_STEP_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME } from "../../../renderer/shared/bot-plans.js";
 import { BOT_REQUEST_ACCESS_TOOL_NAME } from "../../../renderer/shared/bot-access-requests.js";
@@ -13,7 +14,12 @@ import { BOT_REQUEST_ACCESS_TOOL_NAME } from "../../../renderer/shared/bot-acces
 // Exact joins (MCP tools, skills) are computed on demand from a fresh catalog,
 // so a connection or skill whose fingerprint changed is refused at call time.
 
+import { botExecutionScope } from "./bot-execution.js";
+import { BOT_PEER_TOOL } from "../bot-peers/tool.js";
+import { botPeerIngress } from "../bot-peers/ingress.js";
+import { BOT_OPEN_WORK_TOOL } from "../bot-open-work/tool.js";
 import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
+import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../composio-service-tool.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
 import type { BotRuntimeEffectiveAuthority, BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
 import { isComputerUseCapabilityTool } from "../bot-tool-authority.js";
@@ -73,6 +79,8 @@ export interface BotToolTurn {
   telegram?: boolean;
   /** Routine runs get no question or hand-off card: nobody is waiting on the other end. */
   routine?: boolean;
+  /** Host-owned peer request/return provenance, also restrictive in mixed contexts. */
+  peer?: boolean;
 }
 
 export type BotToolVerdict = { allowed: true } | { allowed: false; reason: string };
@@ -84,12 +92,13 @@ export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> 
     telegram: requestId?.startsWith("tg:") ?? false,
     routine: requestId?.startsWith("routine:") ?? false,
     intro: requestId?.startsWith(BOT_INTRO_REQUEST_PREFIX) ?? false,
+    peer: botPeerIngress() || (requestId?.startsWith("peer:") ?? false),
   };
 }
 
 /** Use the shared turn classifier, including A's message and reply kinds. */
 export function botRunUnattended(requestIds: readonly (string | undefined)[]): boolean {
-  return requestIds.some((id) => { const turn = botTurnOf(id); return turn.routine || turn.telegram || turn.botMessage; });
+  return requestIds.some((id) => { const turn = botTurnOf(id); return turn.routine || turn.telegram || turn.botMessage || turn.peer; });
 }
 
 const UNATTENDED_WITHHELD = new Set<string>([
@@ -113,6 +122,9 @@ const UNATTENDED_WITHHELD = new Set<string>([
  * every input allows it.
  */
 export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
+  if (requestIds.length === 0 && botPeerIngress()) requestIds = [undefined];
+  if (requestIds.some(id => botTurnOf(id).peer) && [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME].includes(name)) return false;
+  if (name === BOT_PEER_TOOL && requestIds.some(isBotMessageRequestId)) return false;
   if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return requestIds.length > 0 && requestIds.every(id => {
     const kind = botMessageTurnOf(id).kind;
     return kind === "person" || kind === "message";
@@ -122,19 +134,20 @@ export function botIngressAllowsTool(name: string, requestIds: readonly (string 
   // A routine's notepad belongs to routine runs alone: a person's turn, or a
   // run a person's message joined, never sees it.
   if (name === ROUTINE_NOTES_TOOL) {
-    return requestIds.length > 0 && requestIds.every((requestId) => botTurnOf(requestId).routine);
+    return requestIds.length > 0 && requestIds.every((requestId) => botTurnOf(requestId).routine && !botTurnOf(requestId).peer);
   }
   // A wake-up is the Bot's answer to a person: no routine, event, catch-up or
   // wake-up run sets another one, so a Bot cannot keep itself awake.
   if (name === WAKE_UP_TOOL) {
     return requestIds.every((requestId) => {
       const turn = botTurnOf(requestId);
-      return !turn.routine && !turn.intro && !turn.botMessage;
+      return !turn.routine && !turn.intro && !turn.peer && !turn.botMessage;
     });
   }
   return requestIds.every((requestId) => {
     const turn = botTurnOf(requestId);
     if (turn.intro) return false;
+    if (turn.peer) return name !== "bot_memory" && name !== SUGGEST_CONNECTION_TOOL_NAME && !UNATTENDED_WITHHELD.has(name);
     if (turn.telegram || turn.routine || turn.botMessage) return !UNATTENDED_WITHHELD.has(name);
     return true;
   });
@@ -158,6 +171,8 @@ export async function botToolVerdict(
   args?: unknown,
 ): Promise<BotToolVerdict> {
   const { authority } = facts;
+  if (name === BOT_PEER_TOOL) return verdict(!turn.botMessage, "Approved-peer messaging is off for a Bot-message turn."); // The dedicated host service rechecks the exact named pair/source at every call.
+  if ((turn.peer || botPeerIngress()) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
   if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
     if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: "This Bot can already use your whole Mac." };
@@ -168,6 +183,7 @@ export async function botToolVerdict(
   if (name === INSPECT_IMAGE_TOOL_NAME) {
     return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
   }
+  if (name === BOT_OPEN_WORK_TOOL) return verdict(hasCapability(facts, "tasks"), "Task tracking is off for this Bot.");
   if (name === WEB_SEARCH_TOOL) return verdict(hasCapability(facts, "web"), "Web search is off for this Bot.");
   if (isComputerUseCapabilityTool(name)) {
     return verdict(hasCapability(facts, "computer_use"), "Computer Use is off for this Bot.");
@@ -231,7 +247,23 @@ export async function botToolVerdict(
     const key = await facts.skillToolKeyFor?.(requested);
     return verdict(key !== undefined && granted.has(key), "This skill is not enabled for this Bot.");
   }
-  if ((await facts.mcpTools()).has(name)) return { allowed: true };
+  if ((await facts.mcpTools()).has(name)) {
+    const watch = botExecutionScope()?.claim.connectorRestriction;
+    if (watch) {
+      const granted = (await facts.mcpTools()).get(name), raw = await facts.mcpToolDescriptor?.(name);
+      if(watch.binding.adapter==="composio-calendar-v1"){
+        if(!isComposioServiceToolDescriptor(raw)||!granted||!watch.binding.tools.some(tool=>tool.exactFingerprint===granted.exactFingerprint)||args!==undefined&&!calendarWatchCallAllowed(watch,args))return {allowed:false,reason:"This Calendar watch permits one verified read of its accepted account, calendar and window."};
+      }else{
+        if (raw?.name !== "mail_messages_search" || !granted || !watch.binding.tools.some(tool => tool.exactFingerprint === granted.exactFingerprint)) return {allowed:false,reason:"This watch may read only its accepted mailbox with its verified read operation."};
+        if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args) || (args as {mailbox?:unknown}).mailbox !== watch.binding.mailbox)) return {allowed:false,reason:"This watch cannot switch its accepted mailbox or account."};
+      }
+    }
+    if ((turn.routine || turn.telegram || turn.peer) && composioServiceCallRequiresForeground(args)
+      && isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name))) {
+      return { allowed: false, reason: "Composio connection setup needs the person in the foreground." };
+    }
+    return { allowed: true };
+  }
   return { allowed: false, reason: "This tool is not available to this Bot." };
 }
 
@@ -246,11 +278,13 @@ export async function botToolApprovalSummary(
   facts: BotToolFacts,
 ): Promise<string | undefined> {
   if (name === SHARE_IMAGE_TOOL_NAME) return summarizeToolCall(name, args);
-  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL) return undefined;
+  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL || name === BOT_OPEN_WORK_TOOL) return undefined;
   // The browser asks through its live tab and page (`bot-browser-approval.ts`).
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
   // Inside the Bot's own computer the baseline is allowed; rules read the intent (§8.7).
   if (name === BOT_COMPUTER_TOOL_NAME || name === BOT_COMPUTER_SHELL_TOOL_NAME) return undefined;
+  const watch=botExecutionScope()?.claim.connectorRestriction;
+  if(watch?.binding.adapter==="composio-calendar-v1"&&calendarWatchCallAllowed(watch,args)&&isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name)))return undefined;
   const grant = (await facts.mcpTools()).get(name);
   return grant?.effect === "mutating" ? summarizeToolCall(name, args) : undefined;
 }

@@ -73,6 +73,7 @@ export interface BotTranscriptToolCall {
 export type BotToolResultStatus = "ok" | "failed" | "blocked" | "stopped";
 
 export type BotTranscriptEntry =
+  | { id: string; type: "peer"; exchangeId: string; direction: "sent" | "received"; peerBotId: string; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result"; final?: true; at?: number }
   | { id: string; type: "bot_message"; kind: "request" | "reply"; botId: string; botName: string; text: string; at?: number }
   | { id: string; type: "bot_message_status"; data: BotMessageStatusEntryData; at?: number }
   | {
@@ -330,35 +331,36 @@ export interface BotLiveSummary {
   lastReplyAt: number | null;
 }
 
-/** When the newest reply with visible text arrived, or null when none has a time. */
-export function botLastReplyAt(entries: readonly BotTranscriptEntry[]): number | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
+/** Peer input and a turn that delegates are quiet until the host seals the root's final marker. */
+function peerAttention(entries: readonly BotTranscriptEntry[]): { quiet: Set<string>; finals: Map<string, { text: string; at?: number }> } {
+  const quiet = new Set<string>(), finals = new Map<string, { text: string; at?: number }>(), returns = new Map<string, { start: number; end: number }>();
+  let start = 0, unattended = false, activeReturn: { start: number; end: number } | undefined;
+  for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!;
-    if (entry.type === "assistant" && entry.text.trim() && entry.at !== undefined) return entry.at;
+    const input = entry.type === "user" || entry.type === "routine" || entry.type === "peer" && !entry.final && entry.direction === "received" && ["request", "question", "result"].includes(entry.messageKind);
+    if (input) { if (activeReturn) activeReturn.end = index; activeReturn = undefined; start = index; unattended = entry.type === "peer"; if (entry.type === "peer" && entry.messageKind === "result") { activeReturn = { start: index, end: entries.length }; returns.set(entry.exchangeId, activeReturn); } }
+    if (entry.type === "peer" && entry.direction === "sent" && (entry.messageKind === "request" || entry.messageKind === "question")) { unattended = true; for (let previous = start; previous < index; previous++) { const candidate = entries[previous]!; if (candidate.type === "assistant") quiet.add(candidate.id); } }
+    if (entry.type === "assistant" && unattended) quiet.add(entry.id);
+    if (entry.type === "peer" && entry.final) { const range = returns.get(entry.exchangeId); let answer: Extract<BotTranscriptEntry, { type: "assistant" }> | undefined; if (range) for (let previous = range.start + 1; previous < Math.min(range.end, index); previous++) { const candidate = entries[previous]!; if (candidate.type === "assistant" && candidate.text.trim()) answer = candidate; } finals.set(entry.id, { text: answer?.text ?? "Delegated task update", ...(entry.at === undefined ? answer?.at === undefined ? {} : { at: answer.at } : { at: entry.at }) }); }
   }
+  return { quiet, finals };
+}
+/** The newest person-facing reply; peer intermediates do not create unread attention. */
+export function botLastReplyAt(entries: readonly BotTranscriptEntry[]): number | null {
+  const attention = peerAttention(entries);
+  for (let index = entries.length - 1; index >= 0; index--) { const entry = entries[index]!, final = attention.finals.get(entry.id); if (final?.at !== undefined) return final.at; if (entry.type === "assistant" && !attention.quiet.has(entry.id) && entry.text.trim() && entry.at !== undefined) return entry.at; }
   return null;
 }
-
-/** The last thing worth previewing in a list row: the newest visible message text. */
+/** The last thing worth previewing; full quiet text remains available in the transcript. */
 export function botTranscriptPreview(entries: readonly BotTranscriptEntry[]): { text: string; at?: number } | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index]!;
-    if (entry.type === "assistant" && entry.text.trim()) {
-      return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
-    }
-    if (entry.type === "user" && (entry.text.trim() || entry.imageCount > 0)) {
-      const text = entry.text.trim() ? oneLine(entry.text) : entry.imageCount === 1 ? "Photo" : `${entry.imageCount} photos`;
-      return { text, ...(entry.at === undefined ? {} : { at: entry.at }) };
-    }
-    if (entry.type === "question_answer") {
-      return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
-    }
-    if (entry.type === "handoff_result") {
-      return { text: oneLine(botHandoffResultLine(entry)), ...(entry.at === undefined ? {} : { at: entry.at }) };
-    }
-    if (entry.type === "routine") {
-      return { text: entry.label, ...(entry.at === undefined ? {} : { at: entry.at }) };
-    }
+  const attention = peerAttention(entries);
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!, final = attention.finals.get(entry.id); if (final) return { ...final, text: oneLine(final.text) };
+    if (entry.type === "assistant" && !attention.quiet.has(entry.id) && entry.text.trim()) return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
+    if (entry.type === "user" && (entry.text.trim() || entry.imageCount > 0)) { const text = entry.text.trim() ? oneLine(entry.text) : entry.imageCount === 1 ? "Photo" : `${entry.imageCount} photos`; return { text, ...(entry.at === undefined ? {} : { at: entry.at }) }; }
+    if (entry.type === "question_answer") return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
+    if (entry.type === "handoff_result") return { text: oneLine(botHandoffResultLine(entry)), ...(entry.at === undefined ? {} : { at: entry.at }) };
+    if (entry.type === "routine") return { text: entry.label, ...(entry.at === undefined ? {} : { at: entry.at }) };
   }
   return null;
 }

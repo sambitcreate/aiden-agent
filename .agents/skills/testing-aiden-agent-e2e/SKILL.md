@@ -9,7 +9,7 @@ description: How to write, list, type-check, and run the Playwright Electron e2e
 None for the mock harness. `tests/e2e/fixtures.ts` runs a deterministic mock LM Studio on a random localhost port. You only need a real LM Studio for `npm run test:e2e:live:lmstudio` (`AIDEN_E2E_LIVE_LMSTUDIO=1`, optional `AIDEN_E2E_LMSTUDIO_BASE_URL`).
 
 ## Where the suite can run
-CI runs the Electron suite in two places, both from `.github/workflows/ci.yml` and both sharded three ways by `scripts/ci-e2e-shards.mjs`: the main gate on `macos-26` (the `e2e` job, which reuses the `build` job's output), and the `linux-e2e` job on `ubuntu-24.04`, where each shard builds the app itself and runs `xvfb-run --auto-servernum node scripts/ci-e2e-shards.mjs N/3`. To run the whole suite locally on Linux, use `xvfb-run --auto-servernum npm run test:e2e`.
+CI runs the Electron suite in two places, both from `.github/workflows/ci.yml` and sharded by `scripts/ci-e2e-shards.mjs`: the main gate on `macos-26` (the four-shard `e2e` job, which reuses the `build` job's output), and the three-shard `linux-e2e` job on `ubuntu-24.04`, where each shard builds the app itself and runs `xvfb-run --auto-servernum node scripts/ci-e2e-shards.mjs N/3`. To run the whole suite locally on Linux, use `xvfb-run --auto-servernum npm run test:e2e`.
 
 ### On a Mac: run it in a Cua Space
 Do not run window-opening tests on the Mac's own display. Use the Cua Space runner, which syncs the checkout (including uncommitted files) into a local Linux sandbox and runs it like CI's Linux E2E step:

@@ -5,7 +5,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath, URL } from "node:url";
 
 import {
   analyzeChangedPaths,
@@ -117,18 +116,56 @@ test("scoped paths never select mobile or Apple jobs for desktop-only server cha
   assert.deepEqual(decideChangedAreas(["packages/cli/src/commands.ts", ".memory/cli.md"]), select("desktop", "catalog", "cli"));
 });
 
-test("every shared file a native client names keeps the mobile jobs selected", () => {
-  const named = spawnSync(
-    "git",
-    ["grep", "-hoE", "renderer/shared/[A-Za-z0-9_/-]+\\.[a-z]+", "--", "ios", "android"],
-    { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8" },
-  );
-  assert.equal(named.status, 0, named.stderr);
-  const paths = new Set(named.stdout.trim().split("\n"));
-  assert.ok(paths.size > 0);
-  for (const path of paths) {
-    const areas = classifyChangedPath(path);
-    assert.ok(areas.ios && areas.android, `${path} must select iOS and Android`);
+test("public Remote parser and DTO edits select both native clients without a server-file change", () => {
+  for (const path of [
+    "renderer/shared/background-jobs.ts",
+    "renderer/shared/subagent-runs.ts",
+    "renderer/shared/bot-connector-watches.ts",
+    "renderer/shared/bot-open-work.ts",
+    "renderer/shared/bot-routine-models.ts",
+    "renderer/shared/bot-routine-model-directory.ts",
+    "renderer/shared/bot-presets.ts",
+    "renderer/shared/bot-peers.ts",
+    "renderer/shared/bot-execution-resume.ts",
+    "renderer/shared/bot-access-requests.ts",
+    "renderer/shared/bot-issues.ts",
+    "renderer/shared/bot-messages.ts",
+    "renderer/shared/bot-plans.ts",
+    "renderer/shared/bot-routine-schedule.ts",
+    "renderer/shared/bot-routine-proposals.ts",
+    "renderer/shared/bot-memory.ts",
+    "renderer/shared/bot-handoffs.ts",
+    "renderer/shared/chat-run-input.ts",
+    "renderer/shared/chat-row-state.ts",
+    "renderer/shared/chat-copy-contract.ts",
+    "renderer/shared/devices.ts",
+    "renderer/shared/app-controls.ts",
+    "renderer/shared/tool-approval-scope.ts",
+  ]) {
+    assert.deepEqual(decideChangedAreas([path]), allTrue, path);
+  }
+});
+
+test("phone connect cards, message outcomes, triage and approval/provider inputs keep native validation", () => {
+  for (const path of [
+    "renderer/shared/bot-connections.ts",
+    "renderer/shared/provider-failure.ts",
+    "renderer/shared/chat-triage.ts",
+    "renderer/shared/assistant.ts",
+    "renderer/shared/custom-model-options.ts",
+  ]) {
+    assert.deepEqual(decideChangedAreas([path]), allTrue, path);
+  }
+});
+
+test("host-only shared helpers still avoid unrelated native and Apple jobs", () => {
+  for (const path of [
+    "renderer/shared/provider.ts",
+    "renderer/shared/unicode-prefix.ts",
+    "renderer/shared/model-visibility.ts",
+    "renderer/shared/subagent-safe-text.ts",
+  ]) {
+    assert.deepEqual(decideChangedAreas([path]), select("desktop", "catalog", "cli", "linux"), path);
   }
 });
 

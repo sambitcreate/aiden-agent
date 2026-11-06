@@ -11,10 +11,13 @@ struct AidenBotSessionChatView: View {
     var initialSummary: AidenBotSummary?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isChatVisible = false
     @Environment(\.aidenPalette) private var palette
     @State private var model: AidenBotSessionModel?
     @State private var summary: AidenBotSummary?
     @State private var draft = ""
+    @State private var peerExchangeID: String?
     @State private var isShowingProfile = false
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
@@ -51,6 +54,11 @@ struct AidenBotSessionChatView: View {
     @State private var isFileImporterPresented = false
     @State private var attachButtonCenter: CGPoint?
     @Namespace private var attachmentMotionNamespace
+
+    private var resumeVisitIsActive: Bool {
+        isChatVisible && scenePhase == .active && !isShowingProfile && !isShowingAdvanced
+            && peerExchangeID == nil && presentedFilesGrant == nil && !isFileImporterPresented && !attachmentPicker.isPresented
+    }
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
@@ -130,7 +138,19 @@ struct AidenBotSessionChatView: View {
         ) { result in
             attachFiles(result)
         }
-        .onDisappear { attachmentPicker.reset() }
+        .onAppear {
+            isChatVisible = true
+            model?.setResumeForegroundVisit(active: resumeVisitIsActive)
+        }
+        .onDisappear {
+            isChatVisible = false
+            model?.setResumeForegroundVisit(active: false)
+            attachmentPicker.reset()
+        }
+        .onChange(of: resumeVisitIsActive) { _, active in
+            // The feed remains alive for background hand-offs (G24).
+            model?.setResumeForegroundVisit(active: active)
+        }
         .background(palette.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -154,6 +174,14 @@ struct AidenBotSessionChatView: View {
                                 Button("Done") { presentedFilesGrant = nil }
                             }
                         }
+                }
+            }
+        }
+        .sheet(isPresented: Binding(get: { peerExchangeID != nil }, set: { if !$0 { peerExchangeID = nil } })) {
+            if let peerExchangeID {
+                NavigationStack {
+                    AidenBotPeerExchangeView(coordinator: coordinator, botID: botID, exchangeID: peerExchangeID)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.peerExchangeID = nil } } }
                 }
             }
         }
@@ -185,6 +213,13 @@ struct AidenBotSessionChatView: View {
                 onSaveFailed: { advancedSaveError = $0 }
             )
         }
+        .alert("Resume with an unconfirmed cost?", isPresented: Binding(
+            get: { model?.resumeModel?.needsConsent == true },
+            set: { _ in }
+        )) {
+            Button("Resume and acknowledge possible charge") { Task { await model?.confirmUnknownCostResume() } }
+            Button("Cancel", role: .cancel) { model?.resumeModel?.cancelConsent() }
+        } message: { Text(AidenBotResumeModel.confirmation) }
         .alert(
             "Something Went Wrong",
             isPresented: Binding(
@@ -560,6 +595,10 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .peer(peer):
+            if coordinator.server?.supportsBotPeerExchanges == true {
+                AidenBotPeerTranscriptRow(peer: peer) { peerExchangeID = peer.exchangeId }
+            }
         case let .sharedImage(image):
             // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
             AidenMessageImageAttachmentsView(
@@ -797,7 +836,7 @@ struct AidenBotSessionChatView: View {
             } else if model.isInterrupted {
                 AidenBotInterruptedCard(
                     isAccessBlocked: model.isAccessBlocked,
-                    isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss),
+                    isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss) || model.resumeModel?.busy == true,
                     canAct: canWrite,
                     onResume: { Task { await model.resume() } },
                     onDismiss: { Task { await model.dismiss() } },
@@ -1174,6 +1213,19 @@ struct AidenBotSessionChatView: View {
             allowedSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
             plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true
         )
+        model.setResumeForegroundVisit(active: resumeVisitIsActive)
+        model.routineModelsSupported = { coordinator.server?.supportsBotRoutineModels == true }
+        do {
+            model.resumeModel = AidenBotResumeModel(botID: botID, transport: client,
+                mayResume: { [weak model] in
+                    resumeVisitIsActive && UIApplication.shared.applicationState == .active
+                        && coordinator.isCurrent(context) && coordinator.server?.supportsBotRoutineModels == true
+                        && coordinator.connectionState == .connected
+                        && coordinator.installationStore.activeInstallation?.canWriteBots == true
+                        && model?.canResumeExecution == true
+                }, version: { [weak model] in model?.resumeConfirmationVersion ?? "released" },
+                store: .shared, scope: .init(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID))
+        }
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
         model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
         feedOpenedWith = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)

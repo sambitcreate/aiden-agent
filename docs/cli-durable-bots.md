@@ -59,4 +59,15 @@ Bot responses count toward the Bot that runs them in the profile-local `spending
 
 ## Acceptance
 
+The bundled parity suite exercises preservation, failed-backup recovery, duplicate requests, memory persistence, routine deduplication, process-death Resume/Dismiss, paused routine refusal, pausing and unpausing from the CLI (a running turn stopped and left for Resume, the pause surviving a restart, and an open session stream hearing it), and revocation. Shared desktop runtime tests cover the same core. macOS and Linux bundle/runtime acceptance, native capability fallback, and physical pairing/background behavior are separate gates; passing local storage tests does not establish physical-device acceptance.
+
+## Optional desktop management
+
+Accepted scheduled inputs retain host-issued routine provenance verified against the CLI scheduler’s task/run store; a public send cannot claim that origin.
+
+Open work’s protected store/tool and linked execution helpers are shared-core code, but the Electron host owns the current Open work management integration. The standalone CLI does not advertise `bot:open-work` or serve its optional routes. This does not add an interactive CLI or a second scheduler.
+
+Routine-model configuration and its `bot:routine-models` management capability are also wired by the Electron host only. Shared scheduler claim hooks remain optional so the CLI keeps its current model defaults and existing durable routine flow. The standalone CLI does not offer the desktop’s protected routine grants or unconfirmed-cost acknowledgement controls.
+
+Bot peers and their `bot:peers` capability are also Electron-host features. The CLI does not install the pair authority or delivery actor, expose pair/exchange management, or offer `message_peer`. Paired clients leave those controls unavailable for a CLI host.
 The bundled parity suite uses a local fake SSE provider for an Alpha-to-Beta message, Beta's Pong answer and both projected transcript rows, then checks capability-gated HTTPS list/detail responses, global and per-Bot switches, false-only persistence and public approval redaction. It also checks spending attribution and unreadable spending state. The existing suite exercises preservation, failed-backup recovery, duplicate requests, memory persistence, routine deduplication, process-death Resume/Dismiss, paused routine refusal, pausing and unpausing from the CLI (a running turn stopped and left for Resume, the pause surviving a restart, and an open session stream hearing it), and revocation. Shared desktop runtime tests cover the same core. macOS and Linux bundle/runtime acceptance, native capability fallback, and physical pairing/background behavior are separate gates; passing local storage tests does not establish physical-device acceptance.

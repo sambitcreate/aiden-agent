@@ -220,6 +220,16 @@ sealed class AidenBotSessionEntry {
         }
     }
 
+    @OptIn(ExperimentalSerializationApi::class)
+    @KeepGeneratedSerializer
+    @Serializable(with=AidenBotSessionPeerSerializer::class)
+    @SerialName("peer")
+    data class Peer(override val id:String,val exchangeId:String,val direction:AidenPeerDirection,val peerBotId:String,val peerName:String,val messageKind:AidenPeerMessageKind,
+        @Serializable(with=InstantIso8601Serializer::class)val createdAt:Instant?=null,
+        @SerialName("final") @Serializable(with=AidenStrictBooleanSerializer::class)val isFinal:Boolean?=null):AidenBotSessionEntry(){
+        init{AidenPeerWire.id(id);AidenPeerWire.id(exchangeId);AidenPeerWire.id(peerBotId);AidenPeerWire.label(peerName);AidenOpenWorkWire.check(isFinal==null || isFinal && messageKind==AidenPeerMessageKind.RESULT)}
+    }
+
     @Serializable
     @SerialName("connect_card")
     data class ConnectCard(
@@ -339,7 +349,7 @@ sealed class AidenBotSessionEntry {
         /** The entry types this build reads. Any other `type` is skipped (revision 27). */
         val KNOWN_TYPES: Set<String> = setOf(
             "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
-            "shared_image"
+            "shared_image", "peer"
         )
 
         /**
@@ -352,6 +362,14 @@ sealed class AidenBotSessionEntry {
                 ?: throw AidenBotContractException.InvalidField("entry.type")
             return type.takeUnless { it in KNOWN_TYPES }
         }
+    }
+}
+
+object AidenBotSessionPeerSerializer:JsonTransformingSerializer<AidenBotSessionEntry.Peer>(AidenBotSessionEntry.Peer.generatedSerializer()) {
+    override fun transformDeserialize(element:JsonElement):JsonElement {
+        element.refusingNullLiterals("entry","createdAt","final")
+        val body=element as? JsonObject ?: return element
+        return if("type" in body)JsonObject(body-"type") else body
     }
 }
 

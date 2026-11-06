@@ -100,7 +100,7 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: Electron E2E (${{ matrix.shard }}/3)
+    name: Electron E2E (${{ matrix.shard }}/4)
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: macos-26
@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -128,7 +128,7 @@ jobs:
       - name: Restore production build
         run: tar -xf "$RUNNER_TEMP/desktop-build/desktop-build.tar"
       - name: Run deterministic Electron E2E shard
-        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
+        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json

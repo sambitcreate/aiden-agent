@@ -1,6 +1,10 @@
 package sbtbiswas.AidenOnTheGo
 
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -21,6 +25,7 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRunEventCodec
 import sbtbiswas.AidenOnTheGo.networking.AidenRunSSEParser
 import sbtbiswas.AidenOnTheGo.networking.AidenSSEParser
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import sbtbiswas.AidenOnTheGo.protocol.AidenSSEParserException
@@ -58,6 +63,24 @@ class AidenForeignRunTest {
         assertEquals(sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus.COMPLETED, projection.timeline?.status)
         projection.apply(frame(0, "snapshot", """{"runId":"run-1","chatId":"chat-1","reason":"gap","epoch":"e1","state":"running","pendingApprovalIds":[],"pendingQuestionIds":[],"approvals":[],"questions":[],"nextSequence":1}"""))
         assertNull(projection.timeline)
+    }
+
+    @Test
+    fun checkpointTextBoundsNullsAndPrivatePayloadFieldsFailClosed() {
+        val wire = Json.parseToJsonElement(contractText()).jsonObject.getValue("runCheckpoint").jsonObject
+        val payload = wire.getValue("payload").jsonObject
+        fun decodeBody(body: JsonObject) = AidenRunEventCodec.decode(JsonObject(wire + ("payload" to body)).toString().toByteArray())
+        for (field in listOf("replyText", "replyReasoning")) {
+            val maximum = "🙂".repeat(32_768)
+            val decoded = (decodeBody(JsonObject(payload + (field to JsonPrimitive(maximum)))).kind as AidenRemoteRunEvent.Kind.Snapshot).snapshot
+            assertEquals(maximum, if (field == "replyText") decoded.replyText else decoded.replyReasoning)
+            assertThrows(AidenRemoteContractException::class.java) { decodeBody(JsonObject(payload + (field to JsonPrimitive("🙂".repeat(32_769))))) }
+        }
+        for (field in listOf("replyText", "replyReasoning", "timeline")) {
+            val failure = if (field == "timeline") SerializationException::class.java else AidenRemoteContractException::class.java
+            assertThrows(failure) { decodeBody(JsonObject(payload + (field to JsonNull))) }
+        }
+        assertThrows(AidenRemoteContractException::class.java) { decodeBody(JsonObject(payload + ("credentials" to JsonPrimitive("private")))) }
     }
 
     @Test

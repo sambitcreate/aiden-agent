@@ -1,3 +1,7 @@
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { AidenOperationContractError } from "./aiden-remote-operation-contract.js";
+import { BOT_PERSON_INPUT_KIND } from "./bot-runtime/bot-input-entry.js";
+import { BOT_PEER_MESSAGE_ENTRY_KIND } from "../../renderer/shared/bot-peers.js";
 import { botPlanItemView, type BotPlanItem, type BotPlanView } from "../../renderer/shared/bot-plans.js";
 import { BotAccessRequestStaleError, createBotAccessRequests } from "./bot-runtime/bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-runtime/bot-access-authorization.js";
@@ -75,6 +79,7 @@ import { createBotMemoryStore, memoryView as memoryStoreView } from "./bot-memor
 
 const BOT_ID = "bot_session_1";
 const DEVICE_ID = "device_1";
+const COST_RECEIPT = "cost_" + "a".repeat(64);
 const RESUME_KEY = "resume-request-0001";
 
 function bot(id = BOT_ID, name = "Planner"): BotDefinition {
@@ -211,6 +216,28 @@ test("a second Resume with the same request key is a no-op that returns the curr
   assert.deepEqual(second, first);
   assert.equal(fake.calls.resume, 1, "the provider-facing resume runs once");
   await service.close();
+});
+
+test("unknown provider cost Resume needs negotiated explicit consent and its accepted key replays once", async () => {
+  const fake = fakeRuntime({ kind: "interrupted", submissionId: "10" }); let effects = 0;
+  const service = sessionService({ ...fake.runtime, resume: async (botId, requestId, options) => {
+    if (options?.acknowledgeUnknownCost !== true || options.expectedCostReceiptId !== COST_RECEIPT) throw new BotSessionError("spending_unconfirmed");
+    effects++; return fake.runtime.resume(botId, requestId, options);
+  } });
+  try {
+    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-unconfirmed-01", {}, { routineModels: true }), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale");
+    assert.equal(effects, 0);
+    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-legacy-client", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: COST_RECEIPT }), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request");
+    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-invalid-false", { acknowledgeUnknownCost: false }, { routineModels: true }));
+    assert.equal(effects, 0);
+    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-missing-token", { acknowledgeUnknownCost: true, expectedSubmissionId: "10" }, { routineModels: true }), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request");
+    const accepted = await service.resume(DEVICE_ID, BOT_ID, "cost-confirmed-key1", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: COST_RECEIPT }, { routineModels: true });
+    assert.equal(accepted.state, "running");
+    await service.resume(DEVICE_ID, BOT_ID, "cost-confirmed-key1", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: COST_RECEIPT }, { routineModels: true });
+    assert.equal(effects, 1);
+    await assert.rejects(service.resume(DEVICE_ID, BOT_ID, "cost-confirmed-key1", { acknowledgeUnknownCost: true, expectedSubmissionId: "10", expectedCostReceiptId: "cost_" + "b".repeat(64) }, { routineModels: true }), (error: unknown) => error instanceof AidenOperationContractError && error.code === "idempotency_conflict");
+    assert.equal(effects, 1);
+  } finally { await service.close(); }
 });
 
 test("a Resume after the turn already resumed reads the current state without a second resume", async () => {
@@ -918,13 +945,13 @@ after(() => {
   for (const root of durableRoots) rmSync(root, { recursive: true, force: true });
 });
 
-async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges?: boolean } = {}) {
+async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges?: boolean; holdResume?: Promise<void> } = {}) {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-session-"));
   durableRoots.push(profileDir);
   const child = spawnHarnessChild("stream", [profileDir, "bot:killed", "req-killed"]);
   await child.waitFor("STREAMING");
   await child.kill();
-  const fauxModels = createFauxModels([fauxAssistantMessage("resumed answer"), fauxAssistantMessage("extra")]);
+  const fauxModels = createFauxModels([async () => { await options.holdResume; return fauxAssistantMessage("resumed answer"); }, fauxAssistantMessage("extra")]);
   // The runtime's own state bridge, as the desktop exposes it (`onBotSessionStateChange`).
   const stateListeners = new Set<(botId: string) => void>();
   const runtime = await createBotSessionService({
@@ -964,7 +991,8 @@ async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges
 }
 
 test("two phones tapping Resume at once on a turn killed mid-stream make one provider request", async () => {
-  const { runtime, service, fauxModels } = await interruptedDurableBot();
+  let release!: () => void; const holdResume = new Promise<void>((resolve) => { release = resolve; });
+  const { runtime, service, fauxModels } = await interruptedDurableBot({ holdResume });
   try {
     const paused = await service.session("bot:killed");
     assert.equal(paused.state, "interrupted");
@@ -976,6 +1004,7 @@ test("two phones tapping Resume at once on a turn killed mid-stream make one pro
     ]);
     assert.equal(first.state, "running");
     assert.deepEqual(second, first);
+    release();
     await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
     assert.equal(fauxModels.calls(), 1);
 
@@ -983,13 +1012,15 @@ test("two phones tapping Resume at once on a turn killed mid-stream make one pro
     assert.equal(settled.state, "idle");
     assert.ok(settled.entries.some((entry) => entry.type === "message" && entry.text === "resumed answer"));
   } finally {
+    release();
     await service.close();
     await runtime.shutdown();
   }
 });
 
 test("a paused Bot reads as unavailable to phones on every surface the shipped contract decodes, and its writes are stale", async () => {
-  const { runtime, service, fauxModels } = await interruptedDurableBot();
+  let release!: () => void; const holdResume = new Promise<void>((resolve) => { release = resolve; });
+  const { runtime, service, fauxModels } = await interruptedDurableBot({ holdResume });
   const stream = await openStream(service, "bot:killed");
   try {
     await stream.until(() => stream.frames.length >= 1, "the first snapshot");
@@ -1030,9 +1061,11 @@ test("a paused Bot reads as unavailable to phones on every surface the shipped c
     await runtime.unpause("bot:killed");
     assert.equal((await service.session("bot:killed")).state, "interrupted");
     assert.equal((await service.resume("device_a", "bot:killed", "resume-request-0p1", {})).state, "running");
+    release();
     await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
     assert.equal(fauxModels.calls(), 1);
   } finally {
+    release();
     await stream.close();
     await service.close();
     await runtime.shutdown();
@@ -1528,7 +1561,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -2483,6 +2516,32 @@ function userBubbles(entries: readonly { type: string; role?: string; text?: str
   return entries.filter((entry) => entry.type === "message" && entry.role === "user").map((entry) => [entry.text, entry.submissionId ?? null]);
 }
 
+test("peer navigation is negotiated in fetch, incremental frames and reconnect snapshots with gapless legacy streams", async () => {
+  const peer: RawEntry = { id: 2, kind: BOT_PEER_MESSAGE_ENTRY_KIND, data: { exchangeId: "exchange_one", direction: "sent", peerBotId: "bot_researcher", peerName: "Researcher", messageKind: "request", at: 1000 } };
+  const driven = drivenConversation([user(1, "Coordinate the review")]);
+  const runtime = fakeRuntime({ kind: "idle" }).runtime; runtime.conversation = async () => driven.conversation as never;
+  const service = sessionService(runtime), holder = await openAudienceStream(service, { peers: true }), legacy = await openAudienceStream(service, {}), combined = await openAudienceStream(service, { peers: true, accessRequests: true, plans: true, allowed: true }), approvalsOnly = await openAudienceStream(service, { accessRequests: true, plans: true, allowed: true });
+  try {
+    await holder.until(() => holder.frames.length > 0, "peer holder snapshot"); await legacy.until(() => legacy.frames.length > 0, "legacy snapshot");
+    await driven.emit([user(1, "Coordinate the review"), peer, assistant(3, "The review is underway.")]);
+    await holder.until(() => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.type === "peer"), "peer navigation frame");
+    await legacy.until(() => legacy.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "The review is underway."), "legacy ordinary reply");
+    await combined.until(() => combined.frames.some(frame => frame.type === "entry" && frame.payload.entry.type === "peer"), "combined audience peer frame");
+    await approvalsOnly.until(() => approvalsOnly.frames.some(frame => frame.type === "entry" && frame.payload.entry.text === "The review is underway."), "approval-only audience reply");
+    assert.equal(approvalsOnly.raw.some(data => data.includes("exchange_one") || data.includes("peerBotId")), false, "plan/access/allow-list grants do not grant peer visibility or reuse its cached frame");
+    assert.ok(gapless(combined.frames)); assert.ok(gapless(approvalsOnly.frames));
+    const entry = holder.frames.find((frame) => frame.type === "entry" && frame.payload.entry.type === "peer")!.payload.entry;
+    assert.equal(entry.exchangeId, "exchange_one"); assert.equal(entry.createdAt, new Date(1000).toISOString()); assert.equal("at" in entry, false);
+    assert.deepEqual(parseAidenRemoteBotSessionEntry(entry), entry);
+    assert.equal((await service.session(BOT_ID)).entries.some((entry) => entry.type === "peer"), false);
+    assert.equal((await service.session(BOT_ID, { peers: true })).entries.some((entry) => entry.type === "peer"), true);
+    const reconnect = await openAudienceStream(service, { peers: true });
+    try { await reconnect.until(() => reconnect.frames.length > 0, "peer reconnect snapshot"); assert.equal(reconnect.frames[0].payload.session.entries.some((entry: { type: string }) => entry.type === "peer"), true); }
+    finally { await reconnect.close(); }
+    assert.equal(legacy.raw.some((data) => data.includes("peerBotId") || data.includes("exchange_one")), false);
+    assert.ok(gapless(holder.frames)); assert.ok(gapless(legacy.frames));
+  } finally { await holder.close(); await legacy.close(); await combined.close(); await approvalsOnly.close(); await service.close(); }
+});
 test("a person's send carries its submissionId on its bubble in frames and on a reconnect snapshot, and a routine's input never does", async () => {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-submission-"));
   durableRoots.push(profileDir);
@@ -2585,7 +2644,7 @@ test("only the person's own message is tagged: a routine's input and a question 
   );
 });
 
-test("a device without bot:activity gets each tagged bubble without its id, at the same seq", async () => {
+for (const kind of ["pi.user", BOT_PERSON_INPUT_KIND]) test(`a device without bot:activity gets each tagged ${kind} bubble without its id, at the same seq`, async () => {
   const driven = drivenConversation([]);
   const fake = fakeRuntime({ kind: "running", submissionId: "17" });
   let placed = new Map<string, string>();
@@ -2596,11 +2655,11 @@ test("a device without bot:activity gets each tagged bubble without its id, at t
     await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
     await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
     placed = new Map([["1", "17"]]);
-    await driven.emit([user(1, "Plan dinners")]);
+    await driven.emit([{ ...user(1, "Plan dinners"), kind }]);
     // The turn ended: the session forgets the submission, the projector does not.
     placed = new Map();
     fake.setState({ kind: "idle" });
-    await driven.emit([user(1, "Plan dinners"), assistant(2, "Monday: soup.")]);
+    await driven.emit([{ ...user(1, "Plan dinners"), kind }, assistant(2, "Monday: soup.")]);
     await holder.until(() => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.role === "assistant"), "the reply");
     await legacy.until(() => legacy.frames.length === holder.frames.length, "the same frames");
 

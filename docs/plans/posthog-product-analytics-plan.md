@@ -1,6 +1,6 @@
 # Anonymous Usage Analytics and Crash Reporting (PostHog)
 
-Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, shipped in 0.64.0; PR 3, feature events, and PR 4, crashes and errors, merged)
+Status: Active (PR 1, core with nothing sending, and PR 2, consent and lifecycle, shipped in 0.64.0; PR 3, feature events, and PR 4, crashes and errors, merged; release acceptance remains separate)
 Date: 2026-10-28
 Base: `origin/main` at `8504c773c` (0.62.0 + #625–#628)
 Scope: Electron desktop app (macOS and Linux) first, then the `aiden` CLI. iOS and Android are out of scope.

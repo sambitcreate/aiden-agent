@@ -113,6 +113,7 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 - **Joining a running chat.** Revision 58 clients can request a bounded snapshot of the server’s public reply, reasoning and activity when they attach or reconnect. Saved messages are available through the usual chat history.
 - **Phones and other runs.** A paired phone can watch, stop and answer approvals on a run another device started (`phone-run-control-v1`), shares read markers and unread state with paired desktops, and marks chats Done or snoozes them from its Inbox (`chat-triage-v1`, under the `chat:write` it was paired with). It doesn't read the host feed, and it offers no Steer on a run it didn't start.
 - **Project transfer.** The server does not advertise the desktop's `workspace-clone-v1` project transfer (Add this project to another machine); its Remote API keeps the existing workspace creation modes.
+- **Connector-watch management.** The optional `bot:watches` surface belongs to the Electron desktop on Mac and Linux. This server does not wire or advertise it; ordinary Composio MCP tools keep their existing CLI behavior.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
 ## Bots
@@ -136,6 +137,8 @@ CLI Bots also omit `propose_plan` and `plan_step`. The CLI supplies no plan cove
 Server chats have no schedule tool, so the model can't create or change schedules. Manage them with the `aiden schedule` commands or from a paired app.
 
 ## MCP connectors
+
+The built-in Composio consumer connection exposes one `composio` tool and one service allowance. Manage its enabled apps/tools in Composio; each call validates the current operation schema while Aiden's action approvals and Bot rules still apply. Old partial Custom grants and individual hidden-operation exclusions require the person's single Composio allowance before broader service access. Credential or endpoint changes still invalidate old calls. See [Composio access](../../docs/composio.md).
 
 The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the server yet; it uses every skill and connector it has.
 
@@ -239,3 +242,9 @@ packages/cli/
 From this directory, after the root install: `npm install && npm run build`. `npm test` builds nothing; run `npm run build` first, because the tests exercise the built bundle. From the repository root, `npm run test:cli` installs, builds and tests in one step.
 
 History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-plan.md`](../../docs/plans/aiden-cli-plan.md), [parity checklist](../../docs/plans/aiden-cli-parity-checklist.md)) and became serve-only on 2026-10-30 ([`docs/plans/aiden-serve-only-cli.md`](../../docs/plans/aiden-serve-only-cli.md)).
+
+The optional Open work management API is currently wired by the Electron desktop host, not `aiden serve`. The CLI does not advertise `bot:open-work`; paired clients keep that management surface unavailable for this host. The shared runtime’s request-scoped Stop and evidence helpers remain portable. See [Open work](../../docs/bot-open-work.md).
+
+Routine-model management (`bot:routine-models`) and Bot peers (`bot:peers`) also require the Electron host. The CLI retains its current routine model defaults and does not install pair authority, the peer delivery actor or `message_peer`. See [CLI durable Bots](../../docs/cli-durable-bots.md).
+
+The per-routine model/thinking/fallback API (`bot:routine-models`) and its protected execution grants are likewise desktop-host features. `aiden serve` retains its existing Bot model defaults and does not advertise those optional management routes or the desktop’s unconfirmed-cost Resume controls. See [routine models](../../docs/bot-routine-models.md).
