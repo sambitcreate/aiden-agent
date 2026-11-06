@@ -54,3 +54,30 @@ test("a caption with no speech heard leaves the mark to the caption itself", () 
   onsets.reset();
   assert.equal(onsets.claim(), null, "a stopped microphone forgets what it heard");
 });
+
+test("speech already given to a finished utterance never shadows the next one", () => {
+  const { bus, onsets, play } = microphone();
+  play(SPEECH, 300);
+  play(QUIET, LIVE_SPEECH_SILENCE_MS + PACKET_MS);
+  const first = onsets.claim();
+  assert.ok(first !== null);
+  onsets.retire(first);
+  // An approval arms well inside the caption lag window of that speech.
+  const fence = bus.voiceInputFence();
+  play(QUIET, 400);
+  play(SPEECH, 300);
+  const next = onsets.claim();
+  assert.ok(next !== null && next > fence, "fresh speech after the fence counts as fresh");
+});
+
+test("finishing an utterance keeps speech that is still going on before a fence", () => {
+  const { bus, onsets, play } = microphone();
+  play(SPEECH, 300);
+  const first = onsets.claim();
+  assert.ok(first !== null);
+  onsets.retire(first);
+  const fence = bus.voiceInputFence();
+  play(SPEECH, 300);
+  const next = onsets.claim();
+  assert.ok(next !== null && next <= fence, "the same unbroken speech began before the fence");
+});

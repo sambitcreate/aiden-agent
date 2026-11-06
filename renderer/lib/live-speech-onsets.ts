@@ -69,6 +69,16 @@ export class LiveSpeechOnsets {
     return this.stretches[0]?.mark ?? null;
   }
 
+  /**
+   * An utterance holding `mark` was finished and published: speech that had
+   * ended by then belongs to it (or to earlier utterances), so it must not
+   * shadow the next utterance. A stretch still going on is kept, since more
+   * captions may follow from the same speech.
+   */
+  retire(mark: number): void {
+    this.stretches = this.stretches.filter((stretch) => stretch.mark > mark || stretch.endedAt === null);
+  }
+
   /** Live stopped or the microphone was released. */
   reset(): void {
     this.audioMs = 0;
