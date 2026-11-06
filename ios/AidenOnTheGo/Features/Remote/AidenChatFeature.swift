@@ -9537,24 +9537,84 @@ struct AidenWebExtractRecapView: View {
     }
 }
 
+/// Owns a Play from before its await through presentation or card removal.
+@MainActor @Observable
+final class AidenBrowserRecordingCardState {
+    private(set) var isLoading = false
+    private(set) var failure: AidenBrowserRecordingLoad?
+    var playback: AidenBrowserRecordingPlayback?
+    private var ownedFile: URL?
+    private var disposed = false
+    private var generation: UInt64 = 0
+
+    func activate() { disposed = false }
+
+    func play(
+        _ recording: AidenBrowserRecordingRecap,
+        using load: (AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad
+    ) async {
+        guard !disposed, !isLoading else { return }
+        let requestGeneration = generation
+        isLoading = true
+        failure = nil
+        let result = await load(recording)
+        guard !disposed, generation == requestGeneration else {
+            if case .ready(let file) = result { AidenBrowserRecordingFile.remove(file) }
+            return
+        }
+        isLoading = false
+        switch result {
+        case .ready(let file):
+            if let previous = ownedFile { release(previous) }
+            // Take ownership before SwiftUI can schedule the player's first frame.
+            ownedFile = file
+            playback = AidenBrowserRecordingPlayback(url: file)
+        case .missing, .failed:
+            failure = result
+        }
+    }
+
+    func release(_ file: URL) {
+        guard ownedFile == file else { return }
+        ownedFile = nil
+        if playback?.url == file { playback = nil }
+        AidenBrowserRecordingFile.remove(file)
+    }
+
+    func dispose() {
+        disposed = true
+        generation &+= 1
+        isLoading = false
+        if let file = ownedFile { release(file) }
+    }
+}
+
 /// The video the agent recorded of a browser tab, under its activity line
 /// (contract revision 46). The bytes stay on the Mac until Play is pressed;
 /// a WebM fallback, or a Mac that does not serve recordings, is watched on
 /// the Mac instead.
+@MainActor
 struct AidenBrowserRecordingCardView: View {
     @Environment(\.aidenPalette) private var palette
     let recording: AidenBrowserRecordingRecap
     /// Present while the Mac announces `chat-browser-recordings-v1`.
     var load: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
-    @State private var isLoading = false
-    @State private var failure: AidenBrowserRecordingLoad?
-    @State private var playback: AidenBrowserRecordingPlayback?
-    /// The saved copy the player is showing, removed when it closes.
-    @State private var lastPlayedFile: URL?
+    @State private var state: AidenBrowserRecordingCardState
+
+    init(
+        recording: AidenBrowserRecordingRecap,
+        load: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil,
+        state: AidenBrowserRecordingCardState? = nil
+    ) {
+        self.recording = recording
+        self.load = load
+        _state = State(initialValue: state ?? AidenBrowserRecordingCardState())
+    }
 
     private var playsHere: Bool { load != nil && recording.playsOnPhone }
 
     var body: some View {
+        @Bindable var state = state
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: "video")
@@ -9580,7 +9640,7 @@ struct AidenBrowserRecordingCardView: View {
                 Text(verbatim: AidenBrowserRecordingLoad.watchOnMacMessage)
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
-            } else if let failure {
+            } else if let failure = state.failure {
                 Text(verbatim: failure == .missing
                     ? AidenBrowserRecordingLoad.missingMessage
                     : AidenBrowserRecordingLoad.failedMessage)
@@ -9595,28 +9655,31 @@ struct AidenBrowserRecordingCardView: View {
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: recording.accessibilityLabel))
-        .fullScreenCover(item: $playback, onDismiss: {
-            // The copy on the phone exists only while it plays.
-            if let file = lastPlayedFile { AidenBrowserRecordingFile.remove(file) }
-            lastPlayedFile = nil
-        }) { item in
+        .onAppear { state.activate() }
+        .onDisappear { state.dispose() }
+        .onChange(of: recording.id) { _, _ in
+            state.dispose()
+            state.activate()
+        }
+        .fullScreenCover(item: $state.playback) { item in
             AidenBrowserRecordingPlayerView(url: item.url)
+                .onDisappear { state.release(item.url) }
         }
     }
 
     private var playButton: some View {
         Button {
-            Task { await play() }
+            if let load { Task { await state.play(recording, using: load) } }
         } label: {
             HStack(spacing: 6) {
-                if isLoading {
+                if state.isLoading {
                     ProgressView()
                         .controlSize(.small)
                 } else {
                     Image(systemName: "play.fill")
                         .imageScale(.small)
                 }
-                Text(isLoading ? "Loading\u{2026}" : "Play")
+                Text(state.isLoading ? "Loading\u{2026}" : "Play")
             }
             .font(.caption.weight(.semibold))
             .foregroundStyle(palette.accent)
@@ -9624,25 +9687,10 @@ struct AidenBrowserRecordingCardView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isLoading)
+        .disabled(state.isLoading)
         .accessibilityLabel(Text(verbatim: "Play browser recording, \(recording.durationLabel)"))
     }
 
-    @MainActor
-    private func play() async {
-        guard let load, !isLoading else { return }
-        isLoading = true
-        failure = nil
-        let result = await load(recording)
-        isLoading = false
-        switch result {
-        case .ready(let url):
-            lastPlayedFile = url
-            playback = AidenBrowserRecordingPlayback(url: url)
-        case .missing, .failed:
-            failure = result
-        }
-    }
 }
 
 /// One presentation of the player for a saved recording file.

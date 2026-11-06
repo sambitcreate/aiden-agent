@@ -4,10 +4,24 @@ import java.io.File
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.CoroutineContext
+import okhttp3.ResponseBody
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -78,7 +92,7 @@ class AidenBrowserRecordingClientTest {
     private fun savedFiles(): List<String> = directory.list().orEmpty().sorted()
 
     @Test
-    fun streamsTheVideoToAFileNamedByItsIdWithChatReadAuthentication() = runBlocking {
+    fun streamsTheVideoToAPerPlayFileWithChatReadAuthentication() = runBlocking {
         server.enqueue(videoResponse())
 
         val saved = client.browserRecording("chat_fixture_01", recordingId, directory)
@@ -92,10 +106,11 @@ class AidenBrowserRecordingClientTest {
         assertTrue(request.getHeader("Accept")!!.contains("video/webm"))
 
         assertEquals("video/mp4", saved.mimeType)
-        assertEquals(File(directory, "$recordingId.mp4"), saved.file)
+        assertEquals(directory, saved.file.parentFile)
+        assertEquals("mp4", saved.file.extension)
         assertArrayEquals(video, saved.file.readBytes())
         // Only the finished file remains; no partial download is left beside it.
-        assertEquals(listOf("$recordingId.mp4"), savedFiles())
+        assertEquals(listOf(saved.file.name), savedFiles())
     }
 
     @Test
@@ -105,8 +120,90 @@ class AidenBrowserRecordingClientTest {
         val saved = client.browserRecording("chat-1", recordingId, directory)
 
         assertEquals("video/webm", saved.mimeType)
-        assertEquals("$recordingId.webm", saved.file.name)
+        assertEquals(directory, saved.file.parentFile)
+        assertEquals("webm", saved.file.extension)
         assertArrayEquals(video, saved.file.readBytes())
+    }
+
+    @Test
+    fun overlappingPlaysOfTheSameRecordingHaveIndependentFileLifetimes() = runBlocking {
+        val paused = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        val firstResponse = AtomicBoolean(true)
+        val transport = OkHttpClient.Builder().addNetworkInterceptor { chain ->
+            val response = chain.proceed(chain.request())
+            if (!firstResponse.compareAndSet(true, false)) return@addNetworkInterceptor response
+            val original = response.body!!
+            var reads = 0
+            val heldSource = object : ForwardingSource(original.source()) {
+                override fun read(sink: Buffer, byteCount: Long): Long {
+                    if (reads++ == 1) {
+                        // The first body chunk was written; hold the next read
+                        // while the other Play downloads and publishes its file.
+                        paused.countDown()
+                        check(resume.await(5, TimeUnit.SECONDS))
+                    }
+                    return super.read(sink, byteCount)
+                }
+            }.buffer()
+            response.newBuilder().body(object : ResponseBody() {
+                override fun contentType() = original.contentType()
+                override fun contentLength() = original.contentLength()
+                override fun source() = heldSource
+            }).build()
+        }.build()
+        val concurrentClient = AidenRemoteClient(client.endpoint, client.credential, transport)
+        server.enqueue(videoResponse())
+        val firstRequest = async { concurrentClient.browserRecording("chat-1", recordingId, directory) }
+        val otherVideo = video.reversedArray()
+        try {
+            assertTrue(withContext(Dispatchers.IO) { paused.await(5, TimeUnit.SECONDS) })
+            val partial = directory.listFiles()!!.single { it.extension == "part" }
+            assertTrue(partial.length() > 0)
+            server.enqueue(videoResponse(body = otherVideo))
+            val second = concurrentClient.browserRecording("chat-1", recordingId, directory)
+            assertFalse(firstRequest.isCompleted)
+            resume.countDown()
+            val first = withTimeout(5_000) { firstRequest.await() }
+            assertTrue("each Play owns a different file", first.file != second.file)
+            assertArrayEquals(video, first.file.readBytes())
+            assertArrayEquals(otherVideo, second.file.readBytes())
+            assertTrue(first.file.delete())
+            assertArrayEquals(otherVideo, second.file.readBytes())
+            assertEquals(listOf(second.file.name), savedFiles())
+        } finally {
+            resume.countDown()
+            firstRequest.cancel()
+        }
+    }
+
+    @Test
+    fun cancellationBeforeTheSavedFileReachesItsCallerRemovesOnlyThatFile() {
+        val continuations = LinkedBlockingQueue<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { continuations.add(block) }
+        }
+        val scopeJob = Job()
+        val retained = File(directory, "another-player.mp4").apply { writeBytes(byteArrayOf(7, 8, 9)) }
+        server.enqueue(videoResponse())
+        val request = CoroutineScope(dispatcher + scopeJob).async { client.browserRecording("chat-1", recordingId, directory) }
+        try {
+            continuations.poll(5, TimeUnit.SECONDS)!!.run()
+            // The IO worker saved the video, but its dispatcher has not delivered the result.
+            val delivery = continuations.poll(5, TimeUnit.SECONDS)!!
+            assertEquals(2, directory.listFiles()!!.size)
+            request.cancel()
+            delivery.run()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!request.isCompleted && System.nanoTime() < deadline) {
+                continuations.poll(100, TimeUnit.MILLISECONDS)?.run()
+            }
+            assertTrue(request.isCompleted)
+            assertEquals(listOf(retained.name), savedFiles())
+            assertArrayEquals(byteArrayOf(7, 8, 9), retained.readBytes())
+        } finally {
+            scopeJob.cancel()
+        }
     }
 
     @Test
