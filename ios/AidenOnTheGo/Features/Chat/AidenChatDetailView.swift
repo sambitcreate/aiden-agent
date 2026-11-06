@@ -444,7 +444,10 @@ struct AidenChatDetailView: View {
     private func messageList(_ proxy: ScrollViewProxy) -> some View {
         AidenTranscriptRowStack(
             spacing: presentationStyle == .botMessages ? 3 : 18,
-            bottomAnchorID: AidenChatScrollPolicy.transcriptBottomAnchorID
+            bottomAnchorID: AidenChatScrollPolicy.transcriptBottomAnchorID,
+            // A group that opens or closes changes height under a reader who is
+            // following the end, and that would push the line they tapped away.
+            onGroupToggle: { [follow] in follow.handle(.userScrollBegin) }
         ) {
             if let forkLabel = model.forkSource.label {
                 AidenChatForkLineageRow(label: forkLabel)

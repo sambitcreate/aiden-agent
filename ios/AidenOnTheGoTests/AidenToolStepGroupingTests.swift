@@ -271,6 +271,30 @@ final class AidenToolStepGroupingTests: XCTestCase {
         XCTAssertFalse(expansion.isExpanded(groups[1]))
     }
 
+    func testATapTellsTheScreenFirstAndThenFlipsTheGroup() throws {
+        var events: [String] = []
+        var expansion: AidenToolStepGroupExpansion!
+        let healthy = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "read_file")])
+            .groupedForDisplay(scope: "s").first?.group)
+        expansion = AidenToolStepGroupExpansion(onToggle: { events.append("told, open: \(expansion.isExpanded(healthy))") })
+
+        expansion.toggle(healthy)
+        expansion.toggle(healthy)
+
+        XCTAssertEqual(events, ["told, open: false", "told, open: true"], "The screen must hear of a tap before the group changes")
+        XCTAssertFalse(expansion.isExpanded(healthy))
+    }
+
+    func testATapClosesAFailedGroupThatStartedOpen() throws {
+        let expansion = AidenToolStepGroupExpansion()
+        let failed = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .failed)])
+            .groupedForDisplay(scope: "s").first?.group)
+
+        expansion.toggle(failed)
+
+        XCTAssertFalse(expansion.isExpanded(failed))
+    }
+
     func testARunningGroupShowsItsLatestStepAndStaysCollapsed() throws {
         let expansion = AidenToolStepGroupExpansion()
         let group = try XCTUnwrap(rows(text: "", steps: [

@@ -84,11 +84,26 @@ struct AidenChronologicalTranscript: View {
 final class AidenToolStepGroupExpansion {
     private var opened = Set<String>()
     private var closed = Set<String>()
+    /// Runs just before a group opens or closes, so the screen can stop
+    /// following the end: the reader tapped a line, and the line shouldn't
+    /// leave their screen when the group changes height.
+    private let onToggle: (() -> Void)?
+
+    init(onToggle: (() -> Void)? = nil) {
+        self.onToggle = onToggle
+    }
 
     func isExpanded(_ group: AidenToolStepGroup) -> Bool {
         if opened.contains(group.id) { return true }
         if closed.contains(group.id) { return false }
         return group.hasFailure
+    }
+
+    /// The reader's tap.
+    func toggle(_ group: AidenToolStepGroup) {
+        let expanded = !isExpanded(group)
+        onToggle?()
+        setExpanded(expanded, for: group.id)
     }
 
     func setExpanded(_ expanded: Bool, for id: String) {
@@ -166,7 +181,7 @@ struct AidenToolStepGroupView: View, Equatable {
     private func header(isExpanded: Bool) -> some View {
         Button {
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                expansion.setExpanded(!isExpanded, for: group.id)
+                expansion.toggle(group)
                 toggles += 1
             }
         } label: {
