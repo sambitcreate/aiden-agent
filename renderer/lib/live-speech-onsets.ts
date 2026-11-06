@@ -70,13 +70,14 @@ export class LiveSpeechOnsets {
   }
 
   /**
-   * An utterance holding `mark` was finished and published: speech that had
-   * ended by then belongs to it (or to earlier utterances), so it must not
+   * An utterance was finished and published. Every stretch that had ended by
+   * then was heard before Live closed that turn, so it belongs to that
+   * utterance (or an earlier one), however many pauses split it, and must not
    * shadow the next utterance. A stretch still going on is kept, since more
    * captions may follow from the same speech.
    */
-  retire(mark: number): void {
-    this.stretches = this.stretches.filter((stretch) => stretch.mark > mark || stretch.endedAt === null);
+  retireFinished(): void {
+    this.stretches = this.stretches.filter((stretch) => stretch.endedAt === null);
   }
 
   /** Live stopped or the microphone was released. */

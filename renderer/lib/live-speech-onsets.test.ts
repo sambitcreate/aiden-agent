@@ -59,9 +59,8 @@ test("speech already given to a finished utterance never shadows the next one", 
   const { bus, onsets, play } = microphone();
   play(SPEECH, 300);
   play(QUIET, LIVE_SPEECH_SILENCE_MS + PACKET_MS);
-  const first = onsets.claim();
-  assert.ok(first !== null);
-  onsets.retire(first);
+  assert.ok(onsets.claim() !== null);
+  onsets.retireFinished();
   // An approval arms well inside the caption lag window of that speech.
   const fence = bus.voiceInputFence();
   play(QUIET, 400);
@@ -73,11 +72,26 @@ test("speech already given to a finished utterance never shadows the next one", 
 test("finishing an utterance keeps speech that is still going on before a fence", () => {
   const { bus, onsets, play } = microphone();
   play(SPEECH, 300);
-  const first = onsets.claim();
-  assert.ok(first !== null);
-  onsets.retire(first);
+  assert.ok(onsets.claim() !== null);
+  onsets.retireFinished();
   const fence = bus.voiceInputFence();
   play(SPEECH, 300);
   const next = onsets.claim();
   assert.ok(next !== null && next <= fence, "the same unbroken speech began before the fence");
+});
+
+test("an utterance split by a pause retires both of its stretches", () => {
+  const { bus, onsets, play } = microphone();
+  play(SPEECH, 300);
+  play(QUIET, LIVE_SPEECH_SILENCE_MS + PACKET_MS);
+  assert.ok(onsets.claim() !== null);
+  // The same sentence goes on after a pause long enough to end a stretch.
+  play(SPEECH, 300);
+  play(QUIET, LIVE_SPEECH_SILENCE_MS + PACKET_MS);
+  onsets.retireFinished();
+  const fence = bus.voiceInputFence();
+  play(QUIET, 400);
+  play(SPEECH, 300);
+  const next = onsets.claim();
+  assert.ok(next !== null && next > fence, "neither half of the finished sentence shadows the new answer");
 });
