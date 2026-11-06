@@ -180,6 +180,18 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.releaseBeforeRead.afterDrain).toBe(unobserved);
   expect(result.releaseBeforeRead.pressAfterDrain).toBe(unobserved);
   expect(result.releaseBeforeRead.afterNavigation).toBe(unobserved);
+  const privateMetadata = result.releaseBeforeRead.metadata;
+  expect(privateMetadata.person.url).toContain("callback?code=held-metadata-code");
+  expect(privateMetadata.person.title).toBe("held-metadata-title");
+  expect(privateMetadata.person.heldForPerson).toBeUndefined();
+  expect(privateMetadata.gateway).toContain(privateMetadata.healthyTabId);
+  expect(privateMetadata.gateway).toContain("/whoami?healthy=1");
+  for (const output of [privateMetadata.gateway, privateMetadata.status]) {
+    expect(output).not.toContain("held-metadata-code");
+    expect(output).not.toContain("held-metadata-title");
+    expect(output).not.toContain("/callback");
+    expect(output).toContain("Password protection unavailable");
+  }
   expect(painted(result.releaseRecovery.field)).toBe(true);
   expect(result.releaseRecovery.leaked).toBe(false);
   expect(result.releaseRecovery.control).toEqual(RED);

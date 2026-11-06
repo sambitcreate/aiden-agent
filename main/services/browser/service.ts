@@ -428,7 +428,8 @@ export class BrowserService {
       if (tab.state.workspaceId !== workspaceId || tab.hold?.holdId !== holdId) continue;
       // Once the person has shown a field, a later scan cannot establish what
       // it used to be. Keep this tab closed to Bot reads instead of guessing.
-      if (tab.pendingNavigationUrl !== undefined || tab.heldFieldWatch?.observedDocument !== this.heldFieldDocument(tab))
+      if (tab.pendingNavigationUrl !== undefined || tab.view.webContents.isLoading() ||
+        tab.heldFieldWatch?.observedDocument !== this.heldFieldDocument(tab))
         tab.heldFieldObservationLost = true;
       tab.hold = undefined;
       delete tab.state.heldForPerson;
@@ -512,6 +513,16 @@ export class BrowserService {
       workspace.state.agentAccessOverride,
     );
     return redactBrowserData(clone(workspace.state));
+  }
+  /** Bot state reads cannot reveal a page whose held-field coverage was lost. */
+  getBotState(workspaceId: string): BrowserState {
+    const state = this.getState(workspaceId);
+    state.tabs = state.tabs.map((tab) => {
+      if (!this.tabs.get(tab.id)?.heldFieldObservationLost) return tab;
+      const { favicon: _favicon, error: _error, ...rest } = tab;
+      return { ...rest, url: "", title: "Password protection unavailable", canGoBack: false, canGoForward: false };
+    });
+    return state;
   }
   getApprovalTarget(workspaceId: string, tabId?: string): BrowserApprovalTarget {
     this.mainWindow(workspaceId);
@@ -784,6 +795,20 @@ export class BrowserService {
     wc.on("did-start-loading", publish);
     wc.on("did-stop-loading", publish);
     wc.on("did-stop-loading", () => this.finishPreviewNavigation(tab));
+    wc.on("did-stop-loading", () => tab.heldFieldWatch?.read());
+    // The pierced scan includes same-process child documents. A child can
+    // replace its password form without changing the main document identity.
+    // Use the watch's scalar revision for the whole frame tree, rather than
+    // retaining an unbounded collection of frame identifiers.
+    wc.on("did-frame-navigate", (_event, _url, _code, _status, isMainFrame) => {
+      if (!isMainFrame) tab.heldFieldWatch?.invalidate();
+    });
+    wc.on("did-frame-finish-load", (_event, isMainFrame) => {
+      if (!isMainFrame) {
+        tab.heldFieldWatch?.invalidate();
+        tab.heldFieldWatch?.read();
+      }
+    });
     wc.on("dom-ready", () => {
       tab.heldFieldWatch?.invalidate();
       tab.heldFieldWatch?.read();
@@ -829,8 +854,8 @@ export class BrowserService {
       publish();
     });
     wc.on("did-start-navigation", (_event, url, inPlace, isMainFrame) => {
+      if (!inPlace) tab.heldFieldWatch?.invalidate();
       if (isMainFrame && !inPlace) {
-        tab.heldFieldWatch?.invalidate();
         // Capture native state before Electron delivers its queued crash event.
         // Loading alone cannot distinguish a replacement from a current crash.
         navigationSupersededCrash = wc.isCrashed();
@@ -1743,7 +1768,8 @@ export class BrowserService {
       const revision = watch.revision, document = this.heldFieldDocument(tab);
       try {
         await this.recallSensitiveFields(tab, undefined, false);
-        if (tab.heldFieldWatch === watch && revision === watch.revision && !tab.view.webContents.isDestroyed() && document === this.heldFieldDocument(tab))
+        if (tab.heldFieldWatch === watch && revision === watch.revision && !tab.view.webContents.isDestroyed() &&
+          !tab.view.webContents.isLoading() && document === this.heldFieldDocument(tab))
           watch.observedDocument = document;
       } catch { /* An unread document remains unobserved. */ }
       reading = false;
