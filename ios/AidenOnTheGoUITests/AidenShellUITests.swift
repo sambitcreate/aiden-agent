@@ -313,9 +313,7 @@ final class AidenShellUITests: XCTestCase {
         load.tap()
 
         let stayed = waitUntil(timeout: 8) { reading.exists && reading.isHittable && reading.frame.minY < 300 }
-        let landedOn = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Turn ")).allElementsBoundByIndex
-            .filter(\.isHittable).map(\.label)
-        XCTAssertTrue(stayed, "The reader lost their place. Now on screen: \(landedOn)")
+        XCTAssertTrue(stayed, "The reader lost their place: the message they were reading is on screen \(reading.exists && reading.isHittable), at y \(reading.frame.minY)")
 
         // Jump to latest still takes the reader to the end.
         let jump = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Jump to latest")).firstMatch
