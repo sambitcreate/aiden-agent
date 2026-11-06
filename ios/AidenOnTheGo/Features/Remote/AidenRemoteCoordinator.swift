@@ -889,15 +889,20 @@ final class AidenRemoteCoordinator {
     /// immediate purge path as coordinator-owned Workspace operations. A 401
     /// from any paired machine reaches that machine's own connection. A context
     /// from before a re-pairing is neither current nor live, so an old
-    /// credential's answer can't end the new pairing.
+    /// credential's answer can't end the new pairing. Revocation ends a context's
+    /// lease, so a second 401 from a machine already revoked finds it neither
+    /// too: it has nothing left to report, and its caller still has words to
+    /// give back.
     func handleCredentialRevocation(
         _ error: Error,
         context: AidenRemoteRequestContext
     ) async -> Bool {
-        guard isCurrent(context) || isLive(context),
-              let clientError = error as? AidenRemoteClientError,
+        guard let clientError = error as? AidenRemoteClientError,
               clientError.isCredentialRevoked,
               let connection = hosts.connection(for: context.instanceId) else { return false }
+        guard isCurrent(context) || isLive(context) else {
+            return connection.isRevoked && isRetained(context)
+        }
         await connection.handleConnectionError(error)
         return true
     }

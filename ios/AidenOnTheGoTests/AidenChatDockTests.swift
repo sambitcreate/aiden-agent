@@ -393,6 +393,99 @@ final class AidenChatDockTests: XCTestCase {
         model.setViewPresent(false)
     }
 
+    /// The 401 that revokes the machine isn't always this send's: the send can
+    /// be out when another request finds out first.
+    func testASecond401OnARevokedMachineBringsTheDraftBack() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let model = try chatModel(owner: "laptop")
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).adopt(connectionState: .connected)
+        responder.reply(instanceId: "laptop", method: "POST", path: "/chats/c1/turns", status: 401, json: Self.revokedJSON)
+        let release = responder.hold(instanceId: "laptop", path: "/chats/c1/turns")
+        let before = model.chat.messages.count
+        model.draft = "Keep these words"
+
+        let send = Task { await model.send() }
+        while !responder.requests(instanceId: "laptop").contains("POST /chats/c1/turns") { await Task.yield() }
+        let body = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: Self.revokedJSON).error
+        let first = await coordinator.handleCredentialRevocation(
+            AidenRemoteClientError.server(statusCode: 401, body: body),
+            context: model.owner
+        )
+        XCTAssertTrue(first)
+        XCTAssertEqual(try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).isRevoked, true)
+        release()
+        await send.value
+
+        XCTAssertEqual(model.draft, "Keep these words")
+        XCTAssertEqual(model.chat.messages.count, before, "The bubble of a send that failed stayed")
+        XCTAssertNil(model.pendingSend, "A revoked machine can't take a retry")
+        XCTAssertEqual(model.presentedError, AidenDockCopy.machineRevoked)
+        model.setViewPresent(false)
+    }
+
+    func testASecond401OnARevokedMachineBringsARunInputBack() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let model = try chatModel(owner: "laptop")
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        await reachOwner("laptop")
+        responder.reply(instanceId: "laptop", method: "POST", path: "/streams/stream_1/inputs", status: 401, json: Self.revokedJSON)
+        let release = responder.hold(instanceId: "laptop", path: "/streams/stream_1/inputs")
+        model.streamState = .running
+        model.activeStreamID = "stream_1"
+        model.draft = "Keep these words"
+
+        let submit = Task { await model.submitRunInput(.steer) }
+        while !responder.requests(instanceId: "laptop").contains("POST /streams/stream_1/inputs") { await Task.yield() }
+        let body = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: Self.revokedJSON).error
+        _ = await coordinator.handleCredentialRevocation(
+            AidenRemoteClientError.server(statusCode: 401, body: body),
+            context: model.owner
+        )
+        release()
+        await submit.value
+
+        XCTAssertEqual(model.draft, "Keep these words")
+        XCTAssertNil(model.pendingSend, "A revoked machine can't take a retry")
+        XCTAssertEqual(model.presentedError, AidenDockCopy.machineRevoked)
+        model.setViewPresent(false)
+    }
+
+    func testASecond401OnARevokedMachinePutsTheOldNameBack() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let model = try chatModel(owner: "laptop")
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        await reachOwner("laptop")
+        responder.reply(instanceId: "laptop", method: "PATCH", path: "/chats/c1", status: 401, json: Self.revokedJSON)
+        let release = responder.hold(instanceId: "laptop", path: "/chats/c1")
+        let previous = model.chat.localTitleOverride
+
+        let rename = Task { await model.rename(to: "A new name") }
+        while !responder.requests(instanceId: "laptop").contains("PATCH /chats/c1") { await Task.yield() }
+        let body = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: Self.revokedJSON).error
+        _ = await coordinator.handleCredentialRevocation(
+            AidenRemoteClientError.server(statusCode: 401, body: body),
+            context: model.owner
+        )
+        release()
+        await rename.value
+
+        XCTAssertEqual(model.chat.localTitleOverride, previous)
+        model.setViewPresent(false)
+    }
+
     func testARunInputOnARevokedMachineBringsTheDraftBack() async throws {
         try makeCoordinator(.four)
         await coordinator.start()
