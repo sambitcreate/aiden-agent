@@ -536,6 +536,7 @@ interface HarnessOptions {
   ) => Promise<void>;
   compactChat?: import("./telegram-service-core.js").TelegramServiceDeps["compactChat"];
   abortChat?: (chatId: string) => Promise<void>;
+  acquireOwnership?: import("./telegram-service-core.js").TelegramServiceDeps["acquireOwnership"];
   admitRunInput?: import("./telegram-service-core.js").TelegramServiceDeps["admitRunInput"];
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
@@ -605,6 +606,7 @@ function harness(o: HarnessOptions = {}) {
     applyModelSelection: o.applyModelSelection,
     compactChat: o.compactChat,
     abortChat: o.abortChat,
+    acquireOwnership: o.acquireOwnership,
     admitRunInput: o.admitRunInput,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
@@ -639,6 +641,66 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
+
+test("Connect fails and stays saved as off when another process owns polling", async () => {
+  const h = harness({ enabled: false, acquireOwnership: () => ({ acquired: false, recovered: false, ownerPid: 4242 }) });
+
+  await assert.rejects(h.service.setEnabled(true), /already owned by process 4242/u);
+
+  assert.equal(h.config.state.enabled, false);
+  assert.equal(h.api.getMeCalls(), 0);
+});
+
+test("Connect stops polling again when the on setting cannot be saved", async () => {
+  const h = harness({ enabled: false, autoStop: false, delayAfterFirstBatch: true });
+  h.config.setSettings = async () => { throw new Error("disk full"); };
+
+  await assert.rejects(h.service.setEnabled(true), /disk full/u);
+
+  assert.equal(h.service.getStatus().status, "disabled");
+});
+
+test("Connect starts polling and saves the bridge as on", async () => {
+  const h = harness({ enabled: false, autoStop: false, delayAfterFirstBatch: true });
+
+  await h.service.setEnabled(true);
+
+  assert.equal(h.config.state.enabled, true);
+  assert.equal(h.service.getStatus().status, "polling");
+  h.service.stop();
+});
+
+test("Disconnect fails when the running Telegram turn cannot be stopped, with polling off", async () => {
+  const h = harness({
+    enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "long job"))]],
+    abortChat: async () => { throw new Error("The running turn did not stop in time."); },
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+
+  await assert.rejects(h.service.setEnabled(false), /did not stop in time/u);
+
+  assert.equal(h.config.state.enabled, false);
+  assert.equal(h.service.getStatus().status, "disabled");
+  h.turnMock.completePendingTurn();
+});
+
+test("Disconnect ends the running Telegram turn and succeeds", async () => {
+  const stopped: string[] = [];
+  const h = harness({
+    enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    batches: [[makeUpdate(1, makeMessage(1, person(42), "long job"))]],
+    abortChat: async (chatId) => { stopped.push(chatId); h.turnMock.completePendingTurn(); },
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+
+  await h.service.setEnabled(false);
+
+  assert.equal(stopped.length, 1);
+  assert.equal(h.config.state.enabled, false);
+});
 
 test("start() is a no-op when the bridge is not enabled (status stays disabled)", async () => {
   const { service, api } = harness({ enabled: false, hasToken: true });

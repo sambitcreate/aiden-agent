@@ -1025,19 +1025,9 @@ export function createTelegramProfileManager() {
       else await secrets.deleteKey(key);
     },
     async setEnabled(enabled: boolean): Promise<void> {
-      if (enabled) {
-        // Check first: a failed Connect must not leave the bridge saved as on.
-        await telegramBotBindings.assertHealthy();
-        await setProfileSettings(activeProfile, { telegramEnabled: true });
-        await serviceFor(activeProfile).start();
-        return;
-      }
-      try {
-        await setProfileSettings(activeProfile, { telegramEnabled: false });
-      } finally {
-        // Turning the bridge off also ends the unattended turn it started, even if saving failed.
-        await serviceFor(activeProfile).stopAndSettle();
-      }
+      // Check first: a failed Connect must not leave the bridge saved as on.
+      if (enabled) await telegramBotBindings.assertHealthy();
+      await serviceFor(activeProfile).setEnabled(enabled);
     },
     connect: () => serviceFor(activeProfile).connect(),
     disconnect: () => serviceFor(activeProfile).disconnect(),

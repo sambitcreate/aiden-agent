@@ -427,14 +427,18 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     // would allow a concurrent dispatch on the same chat.
   }
 
-  async function stopAndSettle(): Promise<void> {
+  /** Polling always stops. Resolves false when the running turn could not be ended. */
+  async function stopAndSettle(): Promise<boolean> {
     dispatchCancellation?.abort();
     const chatId = activeChatId;
     stop();
-    if (chatId && deps.abortChat) {
-      await deps.abortChat(chatId).catch((cause) => {
-        deps.warn(`Telegram active turn did not settle cleanly: ${cause instanceof Error ? cause.message : String(cause)}`);
-      });
+    if (!chatId || !deps.abortChat) return true;
+    try {
+      await deps.abortChat(chatId);
+      return true;
+    } catch (cause) {
+      deps.warn(`Telegram active turn did not settle cleanly: ${cause instanceof Error ? cause.message : String(cause)}`);
+      return false;
     }
   }
 
@@ -448,6 +452,29 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
     beginPolling();
     deps.info("Telegram bridge connected.");
+  }
+
+  /** The person's Connect or Disconnect. It fails when the bridge didn't end up as they asked. */
+  async function setEnabled(enabled: boolean): Promise<void> {
+    if (enabled) {
+      // connect() reports a polling conflict, which start() only records, so nothing is saved as on.
+      await connect();
+      try {
+        await deps.config.setSettings({ telegramEnabled: true });
+      } catch (cause) {
+        await stopAndSettle();
+        throw cause;
+      }
+      return;
+    }
+    let settled = false;
+    try {
+      await deps.config.setSettings({ telegramEnabled: false });
+    } finally {
+      // Turning the bridge off also ends the unattended turn it started, even if saving failed.
+      settled = await stopAndSettle();
+    }
+    if (!settled) throw new Error("Telegram is off, but its running turn did not stop in time.");
   }
 
   /** Disconnect and clear pairing (keeps the token). */
@@ -2096,6 +2123,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     stop,
     stopAndSettle,
     connect,
+    setEnabled,
     disconnect,
     resetPairing,
     refreshCommands,
