@@ -346,10 +346,11 @@ export function ComputerUseSettings() {
       <div className="flex items-start gap-1.5 px-4">
         <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">
           In an allowed chat, your selected model may receive screenshots, window details and
-          accessibility text, and Aiden can click and type without asking again.
+          accessibility text, and Aiden can click and type without asking again. Aiden doesn’t
+          save that content; your provider’s data policy applies.
         </Text>
         <InfoHint topic="how Computer Use behaves">
-          Aiden asks once in each chat unless you turn on Always allow. It doesn’t save that content; your provider handles it under its data policy.
+          Aiden asks once in each chat unless you turn on Always allow.
         </InfoHint>
       </div>
     </>

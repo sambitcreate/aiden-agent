@@ -83,7 +83,13 @@ test("the page leads with context settings, then usage and spending limits", asy
 test("the page says what compaction may send to the chat model", async () => {
   await mount();
   await screen.findByText(/may be sent to your chat model/u);
-  await screen.findByText(/\/compact-LLM or \/compact-VCC/u);
+});
+
+test("the one-time compaction commands sit in the group's hint", async () => {
+  await mount();
+  fireEvent.click(await screen.findByRole("button", { name: "About automatic compaction" }));
+  const hint = await screen.findByRole("tooltip");
+  assert.match(hint.textContent ?? "", /\/compact-LLM or \/compact-VCC/u);
 });
 
 test("a group hint explains itself without renaming its heading", async () => {
@@ -98,6 +104,39 @@ test("spending limits stay locked when settings can't be read, so a save can't w
   await mount({}, { settingsFail: true });
   const trigger = await screen.findByRole("combobox", { name: /chat/iu });
   assert.equal(trigger.hasAttribute("disabled"), true);
+});
+
+test("a settings read failure says why the limits can't change", async () => {
+  await mount({}, { settingsFail: true });
+  assert.match((await screen.findByRole("alert")).textContent ?? "", /Couldn’t load your limits/u);
+});
+
+test("a second limit change during a slow save waits its turn and keeps both", async () => {
+  const { held, stored } = await mount({}, { hold: true });
+  await chooseOption("Longest wait for a usage limit", "Up to 1 hour");
+  await waitFor(() => assert.equal(held.length, 1));
+  assert.equal(screen.getByRole("combobox", { name: /longest wait/iu }).hasAttribute("disabled"), false);
+
+  await chooseOption("Spending limit for each chat", "$5.00");
+  assert.equal(held.length, 1);
+
+  held[0]!.finish();
+  await waitFor(() => assert.equal(held.length, 2));
+  held[1]!.finish();
+  await waitFor(() => assert.deepEqual(stored().spendingLimits, { chatUsd: 5 }));
+  assert.equal(stored().usageLimitWaitHours, 1);
+});
+
+test("a failed limit change puts the page back to what was stored", async () => {
+  const { held } = await mount({}, { hold: true });
+  const before = (await screen.findByRole("combobox", { name: /longest wait/iu })).textContent;
+  await chooseOption("Longest wait for a usage limit", "Up to 1 hour");
+  await waitFor(() => assert.equal(held.length, 1));
+  assert.match(screen.getByRole("combobox", { name: /longest wait/iu }).textContent ?? "", /Up to 1 hour/u);
+  held[0]!.fail();
+  await waitFor(() =>
+    assert.equal(screen.getByRole("combobox", { name: /longest wait/iu }).textContent, before),
+  );
 });
 
 test("choosing an engine saves only that choice", async () => {

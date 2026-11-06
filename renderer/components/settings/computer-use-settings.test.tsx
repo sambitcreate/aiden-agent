@@ -96,9 +96,11 @@ test("resetting chat permissions clears grants and shows Always allow as off aga
 });
 
 test("the form fill row appears only when there is a downloaded model to remove", async () => {
-  mount({ computerUseEnabled: true });
+  const calls = mount({ computerUseEnabled: true });
   await screen.findByRole("switch", { name: alwaysAllowName });
-  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Remove model" }) === null, true));
+  await waitFor(() => assert.equal(calls.some((call) => call.channel === "formFill:status"), true));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(screen.queryByText("Form fill specialist") === null, true);
   cleanup();
 
   mount({ computerUseEnabled: true }, "ready");
