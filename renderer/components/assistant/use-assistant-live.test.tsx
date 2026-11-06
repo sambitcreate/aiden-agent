@@ -45,6 +45,8 @@ import type {
   AssistantLiveSnapshot,
 } from "../../shared/assistant-live.js";
 import type { ComputerUseStatus } from "../../lib/types.js";
+import { liveSessionBus, type LiveVoiceInput } from "../../lib/live-session-bus.js";
+import { matchLiveVoicePhrase } from "../../shared/live-voice-phrases.js";
 import {
   assistantLiveRuntimeErrorDetail,
   assistantLiveStartErrorDetail,
@@ -1433,7 +1435,7 @@ test("final input receipt sequence advances synchronously at event delivery", as
   await fixture.unmount();
 });
 
-test("batched finalized input events retain every approval receipt in FIFO order", async () => {
+test("batched finalized utterances retain every approval receipt in FIFO order", async () => {
   const fixture = await mountHook();
   await fixture.controller().start();
   fixture.emitBatch([
@@ -1444,6 +1446,7 @@ test("batched finalized input events retain every approval receipt in FIFO order
       text: "Allow once",
       final: true,
     },
+    { type: "turn", sessionId: "session-1", state: "turn_complete" },
     {
       type: "caption",
       sessionId: "session-1",
@@ -1451,6 +1454,7 @@ test("batched finalized input events retain every approval receipt in FIFO order
       text: "Deny",
       final: true,
     },
+    { type: "turn", sessionId: "session-1", state: "turn_complete" },
   ]);
   assert.deepEqual(fixture.controller().voiceApprovalReceipts, [
     { id: 1, text: "Allow once" },
@@ -1471,13 +1475,17 @@ test("a pending exact voice approval survives bounded receipt eviction", async (
       text: "Allow once.",
       final: true,
     },
-    ...Array.from({ length: 300 }, (_, index) => ({
-      type: "caption" as const,
-      sessionId: "session-1",
-      direction: "input" as const,
-      text: `noise ${index}`,
-      final: true,
-    })),
+    { type: "turn", sessionId: "session-1", state: "turn_complete" },
+    ...Array.from({ length: 300 }, (_, index): AssistantLiveRendererEvent[] => [
+      {
+        type: "caption",
+        sessionId: "session-1",
+        direction: "input",
+        text: `noise ${index}`,
+        final: true,
+      },
+      { type: "turn", sessionId: "session-1", state: "turn_complete" },
+    ]).flat(),
   ]);
   assert.equal(fixture.controller().voiceApprovalReceipts.length, 256);
   assert.deepEqual(fixture.controller().voiceApprovalReceipts[0], {
@@ -1485,6 +1493,111 @@ test("a pending exact voice approval survives bounded receipt eviction", async (
     text: "Allow once.",
   });
   await fixture.unmount();
+});
+
+function hearUser(text: string, extra: Partial<Extract<AssistantLiveRendererEvent, { type: "caption" }>> = {}): AssistantLiveRendererEvent {
+  return { type: "caption", sessionId: "session-1", direction: "input", text, final: true, ...extra };
+}
+
+async function listenToVoiceInput(
+  overrides: Partial<AssistantLiveDependencies> = {},
+): Promise<{ fixture: HookFixture; heard: string[]; stop(): Promise<void> }> {
+  const fixture = await mountHook(overrides);
+  await fixture.controller().start();
+  const heard: string[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input: LiveVoiceInput) => heard.push(input.text));
+  return {
+    fixture,
+    heard,
+    async stop() {
+      unsubscribe();
+      await fixture.unmount();
+    },
+  };
+}
+
+test("speech that arrives in pieces is heard as one utterance, so a phrase inside it does not count", async () => {
+  const { fixture, heard, stop } = await listenToVoiceInput();
+  fixture.emit(hearUser("Don't"));
+  fixture.emit(hearUser(" allow"));
+  fixture.emit(hearUser(" this"));
+  assert.deepEqual(heard, [], "nothing is heard while the user may still be talking");
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(heard, ["Don't allow this"]);
+  assert.equal(matchLiveVoicePhrase(heard[0]!), null);
+  assert.deepEqual(
+    fixture.controller().voiceApprovalReceipts.map((receipt) => receipt.text),
+    ["Don't allow this"],
+  );
+  await stop();
+});
+
+test("a phrase split across pieces is heard whole and still matches", async () => {
+  const { fixture, heard, stop } = await listenToVoiceInput();
+  fixture.emit(hearUser("Allow"));
+  fixture.emit(hearUser("."));
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(heard, ["Allow."]);
+  assert.equal(matchLiveVoicePhrase(heard[0]!)?.kind, "allow");
+  await stop();
+});
+
+test("the user's turn ends once, at whichever comes first: Live's reply, a finished mark, or silence", async () => {
+  const replying = await listenToVoiceInput();
+  replying.fixture.emit(hearUser("Bye"));
+  replying.fixture.emit({ type: "caption", sessionId: "session-1", direction: "output", text: "Goodbye", final: true });
+  replying.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(replying.heard, ["Bye"], "Live's first words end the turn, and the later turn end adds nothing");
+  replying.fixture.emit({ type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 });
+  assert.deepEqual(replying.heard, ["Bye"]);
+  await replying.stop();
+
+  const audio = await listenToVoiceInput();
+  audio.fixture.emit(hearUser("Deny"));
+  audio.fixture.emit({ type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 });
+  assert.deepEqual(audio.heard, ["Deny"], "Live's first sound ends the turn");
+  await audio.stop();
+
+  const marked = await listenToVoiceInput();
+  marked.fixture.emit(hearUser("Allow"));
+  marked.fixture.emit(hearUser(" once", { finished: true }));
+  assert.deepEqual(marked.heard, ["Allow once"]);
+  marked.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(marked.heard, ["Allow once"]);
+  await marked.stop();
+
+  const quiet = await listenToVoiceInput({ utteranceQuietMs: 20 });
+  quiet.fixture.emit(hearUser("Yes,"));
+  quiet.fixture.emit(hearUser(" do it"));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(quiet.heard, ["Yes, do it"], "silence ends a turn Live has not answered");
+  await quiet.stop();
+});
+
+test("words still pending when Live ends are dropped, and an utterance begun before an approval stays fenced", async () => {
+  const ended = await listenToVoiceInput({ utteranceQuietMs: 20 });
+  ended.fixture.emit(hearUser("Allow"));
+  ended.fixture.emit({
+    type: "snapshot",
+    snapshot: { available: true, reason: "available", sessionId: "session-1", state: "closed" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(ended.heard, []);
+  await ended.stop();
+
+  const fenced = await listenToVoiceInput();
+  fenced.fixture.emit(hearUser("Allow"));
+  // An approval prompt appearing now takes this baseline.
+  const baseline = fenced.fixture.controller().latestVoiceApprovalReceiptId();
+  fenced.fixture.emit(hearUser(" once"));
+  fenced.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  const [receipt] = fenced.fixture.controller().voiceApprovalReceipts;
+  assert.equal(receipt?.text, "Allow once");
+  assert.ok(receipt!.id <= baseline, "speech that began before the prompt cannot answer it");
+  fenced.fixture.emit(hearUser("Allow once"));
+  fenced.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.ok(fenced.fixture.controller().voiceApprovalReceipts[1]!.id > baseline);
+  await fenced.stop();
 });
 
 test("caption turns preserve a long response beyond the former fragment cap", () => {

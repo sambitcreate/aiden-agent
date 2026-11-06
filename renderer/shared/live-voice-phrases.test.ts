@@ -28,7 +28,7 @@ test("transcripts match with punctuation, case and Latin accents changed", () =>
   assert.equal(matchLiveVoicePhrase("再见！")?.kind, "end");
 });
 
-test("a phrase inside a longer sentence, a bare yes, or a greeting never counts", () => {
+test("a phrase inside a longer sentence, a question, a bare yes, or a greeting never counts", () => {
   for (const text of [
     "I would allow it if the tests pass",
     "please don't deny anything yet",
@@ -38,6 +38,9 @@ test("a phrase inside a longer sentence, a bare yes, or a greeting never counts"
     "salut",
     "안녕",
     "bye the way, what is it doing",
+    "Allow?",
+    "deny ?",
+    "再见？",
     "",
   ]) {
     assert.equal(matchLiveVoicePhrase(text), null, text);

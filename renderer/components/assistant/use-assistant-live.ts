@@ -411,7 +411,15 @@ export interface AssistantLiveDependencies {
     requestPermissions?(): Promise<ComputerUseStatus>;
   };
   ordinaryBusyReason?: string | null;
+  /** Silence after the user's last words that ends an utterance no reply has ended yet. */
+  utteranceQuietMs?: number;
 }
+
+/**
+ * Ends a user utterance when Google has neither marked it finished nor started
+ * a reply, so a spoken answer still counts while Live waits on a tool.
+ */
+export const ASSISTANT_LIVE_UTTERANCE_QUIET_MS = 2_000;
 
 function defaultDependencies(geminiLive: boolean): AssistantLiveDependencies {
   let devices = { input: "default", output: "default" };
@@ -577,6 +585,13 @@ export function useAssistantLiveWithDependencies(
   const captionId = React.useRef(0);
   const voiceApprovalReceiptId = React.useRef(0);
   const voiceApprovalReceiptRetentionFloor = React.useRef<number | null>(null);
+  // Google transcribes the user's speech in pieces ("Don't", " allow", " this").
+  // Pieces join into one utterance that is published once, when the user's turn
+  // ends, so a fixed phrase is matched against everything that was said. The
+  // receipt id is taken at the first piece, so an approval shown mid-sentence
+  // still fences words that started before it.
+  const pendingUtterance = React.useRef<{ receiptId: number; text: string } | null>(null);
+  const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestVoiceApprovalReceiptId = React.useCallback(
     () => voiceApprovalReceiptId.current,
     [],
@@ -716,6 +731,54 @@ export function useAssistantLiveWithDependencies(
     [stopScreenCapture],
   );
 
+  const discardUtterance = React.useCallback(() => {
+    pendingUtterance.current = null;
+    if (utteranceQuietTimer.current !== null) clearTimeout(utteranceQuietTimer.current);
+    utteranceQuietTimer.current = null;
+  }, []);
+
+  const endUtterance = React.useCallback(() => {
+    const pending = pendingUtterance.current;
+    discardUtterance();
+    if (!pending || !mounted.current) return;
+    liveSessionBus.publishVoiceInput(pending.text);
+    const receipt = { id: pending.receiptId, text: pending.text };
+    setVoiceApprovalReceipts((current) => {
+      const next = [...current, receipt];
+      const floor = voiceApprovalReceiptRetentionFloor.current;
+      const protectedReceipt =
+        floor === null
+          ? undefined
+          : next.find(
+              (candidate) =>
+                candidate.id > floor &&
+                assistantLiveVoiceApprovalDecision(candidate.text) !== null,
+            );
+      const tail = next.slice(protectedReceipt ? -255 : -256);
+      return protectedReceipt && !tail.some((candidate) => candidate.id === protectedReceipt.id)
+        ? [protectedReceipt, ...tail]
+        : tail;
+    });
+  }, [discardUtterance]);
+
+  const continueUtterance = React.useCallback(
+    (fragment: string) => {
+      const pending = pendingUtterance.current;
+      const text = joinAssistantLiveCaptionFragments(pending?.text ?? "", fragment);
+      if (!text) return;
+      pendingUtterance.current = {
+        receiptId: pending?.receiptId ?? ++voiceApprovalReceiptId.current,
+        text,
+      };
+      if (utteranceQuietTimer.current !== null) clearTimeout(utteranceQuietTimer.current);
+      utteranceQuietTimer.current = setTimeout(
+        endUtterance,
+        dependencies.utteranceQuietMs ?? ASSISTANT_LIVE_UTTERANCE_QUIET_MS,
+      );
+    },
+    [dependencies.utteranceQuietMs, endUtterance],
+  );
+
   const acceptEvent = React.useCallback(
     (event: AssistantLiveRendererEvent) => {
       if (!mounted.current) return;
@@ -726,6 +789,7 @@ export function useAssistantLiveWithDependencies(
         else if (event.snapshot.state === "open") playerRef.current?.resume();
         if (["closed", "failed", "disconnected"].includes(event.snapshot.state)) {
           sessionRef.current = null;
+          discardUtterance();
           setCaptions([]);
           setVoiceApprovalReceipts([]);
           setComputerUseActing(false);
@@ -738,6 +802,16 @@ export function useAssistantLiveWithDependencies(
         return;
       }
       if (event.sessionId !== sessionRef.current) return;
+      // Anything Live says or does next means the user's turn is over.
+      if (
+        event.type === "audio" ||
+        event.type === "model_text" ||
+        event.type === "tool_request" ||
+        event.type === "turn" ||
+        (event.type === "caption" && event.direction === "output")
+      ) {
+        endUtterance();
+      }
       if (event.type === "tool_request") {
         void liveSessionBus.runToolRequest(event);
         return;
@@ -756,28 +830,12 @@ export function useAssistantLiveWithDependencies(
         playerRef.current?.flush();
         setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "caption") {
-        // Assign the approval receipt synchronously at IPC delivery time. React may defer
+        // The receipt id is assigned synchronously at IPC delivery time. React may defer
         // the caption render, but an immediately following approval notification must
-        // still fence every utterance that arrived before the prompt.
+        // still fence every utterance that began before the prompt.
         if (event.direction === "input" && event.final) {
-          liveSessionBus.publishVoiceInput(event.text);
-          const receipt = { id: ++voiceApprovalReceiptId.current, text: event.text };
-          setVoiceApprovalReceipts((current) => {
-            const next = [...current, receipt];
-            const floor = voiceApprovalReceiptRetentionFloor.current;
-            const protectedReceipt =
-              floor === null
-                ? undefined
-                : next.find(
-                    (candidate) =>
-                      candidate.id > floor &&
-                      assistantLiveVoiceApprovalDecision(candidate.text) !== null,
-                  );
-            const tail = next.slice(protectedReceipt ? -255 : -256);
-            return protectedReceipt && !tail.some((candidate) => candidate.id === protectedReceipt.id)
-              ? [protectedReceipt, ...tail]
-              : tail;
-          });
+          continueUtterance(event.text);
+          if (event.finished) endUtterance();
         }
         setCaptions((current) =>
           reconcileAssistantLiveCaption(current, event, () => ++captionId.current),
@@ -790,6 +848,7 @@ export function useAssistantLiveWithDependencies(
         setError(assistantLiveRuntimeErrorDetail(event.code));
       } else if (event.type === "reconnect_required") {
         sessionRef.current = null;
+        discardUtterance();
         setCaptions([]);
         setVoiceApprovalReceipts([]);
         setReconnectRequired(true);
@@ -802,7 +861,7 @@ export function useAssistantLiveWithDependencies(
         void teardownMedia();
       }
     },
-    [teardownMedia],
+    [continueUtterance, discardUtterance, endUtterance, teardownMedia],
   );
 
   React.useEffect(() => {
@@ -823,11 +882,12 @@ export function useAssistantLiveWithDependencies(
       setupAbortRef.current = null;
       unsubscribe();
       sessionRef.current = null;
+      discardUtterance();
       void teardownMedia();
       void dependencies.api.stop().catch(() => undefined);
       releaseDisplayAuthority();
     };
-  }, [acceptEvent, dependencies.api, dependencies.geminiLive, releaseDisplayAuthority, teardownMedia]);
+  }, [acceptEvent, dependencies.api, dependencies.geminiLive, discardUtterance, releaseDisplayAuthority, teardownMedia]);
 
   React.useEffect(() => {
     const generation = ++availabilityGeneration.current;
@@ -1160,6 +1220,7 @@ export function useAssistantLiveWithDependencies(
               setSnapshot(next);
               if (!activeSnapshot(next)) {
                 setCaptions([]);
+                pendingUtterance.current = null;
                 setVoiceApprovalReceipts([]);
               }
               setError(
@@ -1270,6 +1331,7 @@ export function useAssistantLiveWithDependencies(
     setError(null);
     setReconnectRequired(false);
     setCaptions([]);
+    pendingUtterance.current = null;
     setVoiceApprovalReceipts([]);
     setComputerUseActing(false);
     setMicrophoneMuted(false);
@@ -1370,6 +1432,7 @@ export function useAssistantLiveWithDependencies(
         setSnapshot(next);
         if (!activeSnapshot(next)) {
           setCaptions([]);
+          pendingUtterance.current = null;
           setVoiceApprovalReceipts([]);
         }
         setError(null);
@@ -1382,6 +1445,7 @@ export function useAssistantLiveWithDependencies(
           setSnapshot(reconciled);
           if (!activeSnapshot(reconciled)) {
             setCaptions([]);
+            pendingUtterance.current = null;
             setVoiceApprovalReceipts([]);
           }
           setError(

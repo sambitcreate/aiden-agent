@@ -123,6 +123,8 @@ export type GeminiLiveProtocolEvent =
       direction: "input" | "output";
       final: boolean;
       text: string;
+      /** Google marked this transcription finished, which ends the user's utterance. */
+      finished?: true;
     }
   | { type: "model_text"; text: string }
   | { type: "turn"; state: "generation_complete" | "turn_complete" | "waiting" }
@@ -1334,6 +1336,7 @@ export class GeminiLiveProtocol {
         final:
           typeof value.finished === "boolean" ? value.finished : defaultFinal,
         text,
+        ...(value.finished === true ? { finished: true as const } : {}),
       });
     }
   }
