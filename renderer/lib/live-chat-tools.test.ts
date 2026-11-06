@@ -401,6 +401,34 @@ test("handlers registered on the session bus answer main's requests", async () =
   ]);
 });
 
+test("speech that starts while a read is on its way to Live does not authorize a send", async () => {
+  const bus = new LiveSessionBus();
+  let handOver!: () => void;
+  bus.setSession("s1", {
+    toolResult: () => new Promise<boolean>((resolve) => (handOver = () => resolve(true))),
+    note: async () => true,
+  });
+  const gate = new LiveChatRequestGate(bus);
+  const { handlers, registry } = harness({ requests: gate });
+  const open = controller();
+  registry.register(Symbol(), open);
+  bus.registerTool("read_open_chat", handlers.read_open_chat);
+  const reading = bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "read_open_chat", args: {} });
+  while (!handOver) await new Promise((resolve) => setImmediate(resolve));
+  // The chat text has been read but not yet handed to Live when the person starts talking.
+  bus.publishVoiceInput("Send it");
+  handOver();
+  await reading;
+  assert.equal(code(await handlers.send_to_open_chat({ text: "ship it", mode: "auto" }, {
+    sessionId: "s1",
+    signal: new AbortController().signal,
+    commit: () => undefined,
+  })), "needs_user_request");
+  bus.publishVoiceInput("Send the release notes");
+  assert.equal(gate.allows(), true, "speech after the hand-off counts");
+  assert.deepEqual(open.sent, []);
+});
+
 test("a chat that opens after Live gave up on the call is still reported as opened", async () => {
   // Main's broker and registry wired to the window's session bus, as in the app.
   const bus = new LiveSessionBus();

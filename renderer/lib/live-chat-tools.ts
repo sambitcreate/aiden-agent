@@ -189,7 +189,7 @@ export function createLiveChatToolHandlers(
   };
 
   return {
-    read_open_chat: guarded((args) => {
+    read_open_chat: guarded((args, context) => {
       const controller = deps.controller();
       if (!controller) return liveChatFailure(LIVE_CHAT_ERRORS.noChat);
       const limit =
@@ -197,8 +197,11 @@ export function createLiveChatToolHandlers(
           ? Math.min(LIVE_CHAT_MAX_READ_MESSAGES, Math.max(1, Math.floor(args.limit)))
           : undefined;
       const snapshot = controller.read(limit);
-      // The result goes to Live now: from here on, a send needs speech that starts later.
+      // The result goes to Live now: from here on, a send needs speech that
+      // starts later. The fence moves again once the result has actually been
+      // handed over, so speech that began on the way doesn't count either.
       deps.requests.exposed();
+      context.afterReport?.(() => deps.requests.exposed());
       return {
         ok: true,
         chat: {

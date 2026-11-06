@@ -14,6 +14,12 @@ export interface LiveRendererToolContext {
    * hides the result: the bus reports the real outcome when it arrives.
    */
   commit(): void;
+  /**
+   * Runs `listener` once this result has been handed to main, which passes it
+   * straight on to Live. It does not run when the result never goes out (a
+   * cancel answered first, or a session that changed).
+   */
+  afterReport?(listener: () => void): void;
 }
 
 export type LiveRendererToolHandler = (
@@ -145,7 +151,12 @@ export class LiveSessionBus {
     const transport = this.transport;
     if (!transport || request.sessionId !== this.sessionId) return;
     const handler = this.tools.get(request.name);
-    const entry = { abort: new AbortController(), committed: false, reported: false };
+    const entry = {
+      abort: new AbortController(),
+      committed: false,
+      reported: false,
+      afterReport: [] as Array<() => void>,
+    };
     this.inFlight.set(request.requestId, entry);
     let response: LiveRendererToolResult;
     try {
@@ -155,6 +166,9 @@ export class LiveSessionBus {
             signal: entry.abort.signal,
             commit: () => {
               entry.committed = true;
+            },
+            afterReport: (listener) => {
+              entry.afterReport.push(listener);
             },
           })
         : toolError("tool_unavailable", "That part of Aiden is not open right now.");
@@ -169,6 +183,14 @@ export class LiveSessionBus {
     if (request.sessionId !== this.sessionId) return;
     entry.reported = true;
     await this.report(transport, request.sessionId, request.requestId, response);
+    // A failed hand-off may still have reached Live, so the listeners run either way.
+    for (const listener of entry.afterReport) {
+      try {
+        listener();
+      } catch {
+        // One listener's failure does not skip the others.
+      }
+    }
   }
 
   /**
