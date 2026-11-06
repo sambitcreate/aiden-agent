@@ -26,7 +26,7 @@ import {
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
-import { writeFileAtomic } from "../services/durable-fs.js";
+import { replaceWorkspaceText } from "../services/design-canvas/text-write.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
 import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
 import { isPathInside } from "../shared/path-containment.js";
@@ -427,15 +427,12 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         }
         const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, framePath));
         if (!plan.ok) return plan;
-        try {
-          // Another writer (an editor, Aiden) may have changed the file since it was read.
-          if ((await fs.readFile(resolved.absolute, "utf8")) !== source) return { ok: false, reason: "changed" };
-          // Readers see the old file or the new one, never a half-written page.
-          await writeFileAtomic(resolved.absolute, plan.source);
-        } catch {
-          return { ok: false, reason: "missing" };
-        }
-        return { ok: true };
+        // Another writer (an editor, Aiden) may have changed the file since it was read.
+        const current = await fs.readFile(resolved.absolute, "utf8").catch(() => null);
+        if (current === null) return { ok: false, reason: "missing" };
+        if (current !== source) return { ok: false, reason: "changed" };
+        const written = await replaceWorkspaceText(resolved.absolute, plan.source);
+        return written === "written" ? { ok: true } : { ok: false, reason: "missing" };
       });
     },
   );
