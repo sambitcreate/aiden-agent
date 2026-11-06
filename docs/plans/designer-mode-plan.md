@@ -3,6 +3,8 @@
 Status: superseded (see note below); Phase 0 is a go/no-go gate  
 
 > **Superseded (2026-10-07):** folded into [Design Studio + Create Images rebuild](design-studio-create-images-rebuild-plan.md) as DS-4 "Connected app". This document remains the reference for DS-4 entry criteria.
+>
+> **Update (2026-10-31):** DS-4 was superseded along with Design Studio by [Design mode](../superpowers/specs/2026-10-31-design-mode-design.md), which does not plan Designer Mode. This document is kept as history only.
 
 Date: 2026-07-22  
 Aiden baseline: `b6b0eff6bb55e0113a05cc8d069fce2c1be67b40`  

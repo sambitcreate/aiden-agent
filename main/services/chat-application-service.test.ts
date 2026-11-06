@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { emptyDesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
+import { DesignGrantRegistry } from "./design-canvas/grants.js";
+import { DesignCanvasStore } from "./design-canvas/store.js";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Chat, Workspace } from "./types.js";
 import fs from "node:fs/promises";
@@ -67,6 +70,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
       },
       rename: async () => chat(),
       setChatModelSelection: async () => chat(),
+      setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async (id: string, workspaceId: string) =>
         chat(id, workspaceId),
       remove: async () => undefined,
@@ -267,6 +271,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
       create: async () => chat(),
       rename: async () => chat(),
       setChatModelSelection: async () => chat(),
+      setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { events.push("chat"); },
     },
@@ -285,6 +290,7 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
       create: async () => chat(),
       rename: async () => chat(),
       setChatModelSelection: async () => chat(),
+      setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { throw new Error("disk failed"); },
     } as ChatApplicationDependencies["chatStore"],
@@ -594,12 +600,98 @@ test("a committed deletion offers the chat's workspace for release, and a failed
       create: async () => chat(),
       rename: async () => chat(),
       setChatModelSelection: async () => chat(),
+      setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { throw new Error("disk failed"); },
     } as ChatApplicationDependencies["chatStore"],
   });
   await assert.rejects(uncommitted.service.remove("chat-1"), /disk failed/u);
   assert.deepEqual(released, ["workspace-1"], "nothing is released for a deletion that did not commit");
+});
+
+test("deleting a chat deletes its design canvas, and a canvas that cannot be deleted keeps the chat", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-canvas-"));
+  try {
+    const designCanvasStore = new DesignCanvasStore({ root: () => root });
+    await designCanvasStore.save("chat-1", emptyDesignCanvas(), 0);
+    await designCanvasStore.save("chat-2", emptyDesignCanvas(), 0);
+    await fixture({ designCanvasStore }).service.remove("chat-1");
+    assert.deepEqual(await fs.readdir(root), ["chat-2.json"]);
+
+    let removed = false;
+    const failing = fixture({
+      designCanvasStore: { delete: async () => { throw new Error("disk failed"); } },
+      chatStore: {
+        listRegular: async () => [],
+        list: async () => [],
+        get: async (id: string) => chat(id),
+        create: async () => chat(),
+        rename: async () => chat(),
+        setChatModelSelection: async () => chat(),
+        setDesignMode: async () => chat(),
+        moveEmptyChatToWorkspace: async () => chat(),
+        remove: async () => { removed = true; },
+      } as ChatApplicationDependencies["chatStore"],
+    });
+    await assert.rejects(failing.service.remove("chat-2"), /design canvas/u);
+    assert.equal(removed, false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a chat's design grant ends when design mode turns off, the chat moves or the chat is deleted", async () => {
+  const designGrants = new DesignGrantRegistry();
+  const { service } = fixture({ designGrants });
+  const issue = (chatId: string) => designGrants.issue(chatId, `/work/${chatId}`);
+
+  const kept = issue("chat-1");
+  await service.setDesignMode("chat-1", true);
+  assert.notEqual(designGrants.resolve(kept), null, "turning design mode on keeps the grant");
+  await service.setDesignMode("chat-1", false);
+  assert.equal(designGrants.resolve(kept), null);
+
+  const moving = issue("chat-2");
+  const bystander = issue("chat-3");
+  await service.moveEmptyToWorkspace("chat-2", "workspace-1");
+  assert.equal(designGrants.resolve(moving), null);
+  assert.notEqual(designGrants.resolve(bystander), null);
+
+  await service.remove("chat-3");
+  assert.equal(designGrants.resolve(bystander), null);
+});
+
+test("a canvas save or grant that lands while the chat is being deleted does not outlive it", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-race-"));
+  try {
+    const designCanvasStore = new DesignCanvasStore({ root: () => root });
+    const designGrants = new DesignGrantRegistry();
+    let lateGrant = "";
+    const { service } = fixture({
+      designCanvasStore,
+      designGrants,
+      chatStore: {
+        listRegular: async () => [],
+        list: async () => [],
+        get: async (id: string) => chat(id),
+        create: async () => chat(),
+        rename: async () => chat(),
+        setChatModelSelection: async () => chat(),
+        setDesignMode: async () => chat(),
+        moveEmptyChatToWorkspace: async () => chat(),
+        // The chat still exists until remove commits, so in-flight IPC passes its checks.
+        remove: async () => {
+          await designCanvasStore.save("chat-1", emptyDesignCanvas(), 0);
+          lateGrant = designGrants.issue("chat-1", "/work/site");
+        },
+      } as ChatApplicationDependencies["chatStore"],
+    });
+    await service.remove("chat-1");
+    assert.deepEqual(await fs.readdir(root), []);
+    assert.equal(designGrants.resolve(lateGrant), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a delete rolled forward at startup clears the chat's Inbox state, even when one store fails", async (t) => {

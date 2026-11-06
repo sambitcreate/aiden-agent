@@ -66,6 +66,7 @@ export type SlashCommandIcon =
   | "check"
   | "copy"
   | "clone"
+  | "design"
   | "editor"
   | "environment"
   | "export"
@@ -98,7 +99,9 @@ export type SlashCommandAction =
       action: "fork" | "clone" | "export" | "compact" | "details" | "logout" | "worktree";
     }
   | { kind: "composer-instruction"; instruction: "visualize" | "btw" }
-  | { kind: "follow-through"; action: "until" | "follow" };
+  | { kind: "follow-through"; action: "until" | "follow" }
+  /** Turns the chat's design mode on, or off with "off" after the command. */
+  | { kind: "design-mode" };
 
 export type SlashCommandAvailability =
   | "always"
@@ -113,7 +116,9 @@ export type SlashCommandAvailability =
   | "workspace-worktree"
   | "idle-workspace"
   /** A chat in a workspace with folder access, on the desktop. */
-  | "workspace-chat";
+  | "workspace-chat"
+  /** A local project or No workspace chat that can use design mode. */
+  | "design-chat";
 
 export interface SlashCommandDefinition {
   name: string;
@@ -125,7 +130,8 @@ export interface SlashCommandDefinition {
   action: SlashCommandAction;
   behavior: "immediate" | "picker" | "argument" | "navigation";
   availability: SlashCommandAvailability;
-  argument: "none" | "optional-title" | "optional-branch" | "optional-prompt";
+  /** "optional-off" takes nothing or the word "off", so picking it runs at once. */
+  argument: "none" | "optional-title" | "optional-branch" | "optional-prompt" | "optional-off";
   /** Commands such as New chat cannot silently discard meaningful composer state. */
   draftPolicy: "preserve" | "require-empty";
 }
@@ -579,6 +585,19 @@ export const SLASH_COMMANDS = Object.freeze([
     behavior: "immediate",
     availability: "workspace-chat",
     argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "design",
+    aliases: [],
+    title: "Design mode",
+    description: "Chat on the left, canvas on the right. Type /design off to leave.",
+    keywords: ["canvas", "layout", "mockup", "ui"],
+    icon: "design",
+    action: { kind: "design-mode" },
+    behavior: "argument",
+    availability: "design-chat",
+    argument: "optional-off",
     draftPolicy: "preserve",
   }),
 ] satisfies readonly SlashCommandDefinition[]);

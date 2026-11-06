@@ -655,6 +655,18 @@ body {
   corner-shape: squircle;
 }
 
+/* In a short window the approval card's icon is the first thing to go, so
+   the question, its details and the buttons keep the room. */
+@media (max-height: 560px) {
+  .approval-shell .approval-icon-tile {
+    display: none;
+  }
+
+  .approval-shell .approval-icon-tile + * {
+    margin-top: 0;
+  }
+}
+
 /* A diff's line bands run to the well's edge; a scrollbar appears only when it overflows. */
 .approval-diff {
   scrollbar-gutter: auto;
@@ -1738,10 +1750,12 @@ textarea {
 }
 
 /*
- * The composer footer stays one row and collapses by priority instead of
- * wrapping: the model label truncates first (it is the row's only shrinking
+ * The composer footer collapses by priority as the composer (not the window)
+ * narrows: the model label truncates first (it is the row's only shrinking
  * item), then "Full access" drops to its icon, then the context meter drops
- * its percentage. Only a phone-width composer wraps.
+ * its percentage, then the model and Reasoning labels drop to their icons.
+ * Past that the actions wrap onto their own line, and wrap again inside it,
+ * so no control is ever drawn over another.
  */
 @container composer (max-width: 560px) {
   .composer-permission-control {
@@ -1778,9 +1792,35 @@ textarea {
   }
 }
 
-@container composer (max-width: 380px) {
+@container composer (max-width: 420px) {
+  .composer-model-label,
+  .composer-reasoning-label {
+    display: none;
+  }
+
+  .composer-model-trigger {
+    width: 1.75rem;
+    padding-inline: 0;
+  }
+
+  /*
+   * With the model label gone nothing in the row shrinks, so wrapping on
+   * natural widths is safe. The actions join the footer row itself, so they
+   * fill the room beside "+" before taking another line: "+" stays first on
+   * the left and the rest packs to the right, Send last.
+   */
   .composer-footer-row {
     flex-wrap: wrap;
+    justify-content: flex-end;
+    column-gap: 0.125rem;
+  }
+
+  .composer-footer-row > :first-child {
+    margin-inline-end: auto;
+  }
+
+  .composer-action-row {
+    display: contents;
   }
 }
 
@@ -2927,6 +2967,20 @@ textarea {
   width: 100%;
   max-width: var(--chat-content-max-width);
   margin-inline: auto;
+}
+
+/* Design mode's narrow chat column fills its width. The Live pill sits at the
+   column's bottom-right edge (clear of the canvas controls), so the column
+   keeps the usual pill clearance on the right only and a small gutter on the
+   left. The title may shrink to nothing so the actions never overlap it. */
+[data-design-mode] {
+  --chat-content-max-width: none;
+}
+[data-design-mode] .aiden-dock-inset {
+  padding-inline: 16px var(--aiden-dock-gutter);
+}
+[data-design-mode] .scroll-area-header h1 {
+  min-width: 0;
 }
 
 /* The pane around the transcript column is the size container wide inline

@@ -312,6 +312,7 @@ import type {
   WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
+import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { invoke, onNotification } from "./ipc-bridge";
 
 export { invoke, onNotification } from "./ipc-bridge";
@@ -415,6 +416,10 @@ export const appApi = {
   setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
+  /** Widen this window for design mode; `widened` is false when the display is too narrow. */
+  widenForDesign: () => invoke<{ widened: boolean }>("app:widenForDesign"),
+  /** Whether widening could work: not full screen or maximized, on a display at least 1280 px wide. */
+  designWindowCanWiden: () => invoke<{ canWiden: boolean }>("app:designWindowCanWiden"),
   /** The commands that can run now, so the menu bar greys out the rest. */
   setMenuCommands: (commandIds: readonly string[]) =>
     invoke<boolean>("app:setMenuCommands", [...commandIds]),
@@ -1635,6 +1640,8 @@ export const chatsApi = {
   /** Change the model this chat answers with; other chats and new chats keep theirs. */
   setModel: (id: string, providerId: string, model: string) =>
     invoke<Chat | null>("chats:setModel", id, providerId, model),
+  /** Turn design mode on or off for this chat; every window hears `chats:design-mode-changed`. */
+  setDesignMode: (id: string, enabled: boolean) => invoke<Chat | null>("chats:setDesignMode", id, enabled),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.
@@ -2305,4 +2312,56 @@ export const ttsApi = {
   clearCache: () => invoke<{ ok: true }>("tts:cache:clear"),
   onEvent: (handler: (event: TtsServiceEvent) => void) =>
     onNotification<TtsServiceEvent>("tts:event", handler),
+};
+
+/** Result of `designCanvas:save`; mirrors main's `DesignCanvasSaveResult`. */
+export type DesignCanvasSaveResult =
+  | { ok: true; revision: number }
+  | { ok: false; reason: "conflict"; doc: DesignCanvas }
+  | { ok: false; reason: "invalid"; issues: string[] };
+
+/** The per-chat design canvas. Available only while design mode's flag is on. */
+export const designCanvasApi = {
+  getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
+  /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
+  saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
+    invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),
+  onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number }) => void) =>
+    onNotification<{ chatId: string; revision: number }>("designCanvas:updated", handler),
+  /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
+  getDesignCanvasGrant: (chatId: string) =>
+    invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),
+  /** A PNG of this window's own page inside `rect` (CSS pixels), at most 1024 px on a side. */
+  captureDesignFrame: (rect: { x: number; y: number; width: number; height: number }) =>
+    invoke<{ dataUrl: string } | { error: "unavailable" }>("designCanvas:capture", rect),
+  /** Replaces the workspace files whose changes reload this chat's frames (at most 50). */
+  watchDesignFiles: (chatId: string, paths: string[]) =>
+    invoke<void>("designCanvas:watch", chatId, paths),
+  onDesignFilesChanged: (handler: (update: { chatId: string; paths: string[] }) => void) =>
+    onNotification<{ chatId: string; paths: string[] }>("designCanvas:filesChanged", handler),
+  /** Opens the file dialog in the chat's workspace folder. */
+  pickDesignFile: (chatId: string, kind: "file" | "image") =>
+    invoke<
+      | { path: string }
+      | { cancelled: true }
+      | { error: "outside-workspace" | "unsupported" | "unavailable" }
+    >("designCanvas:pickFile", chatId, kind),
+  /** Aiden asked to enter design mode; this window shows the card. */
+  onDesignModeConsent: (handler: (request: { requestId: string; chatId: string; reason: string }) => void) =>
+    onNotification<{ requestId: string; chatId: string; reason: string }>("designCanvas:consent", handler),
+  /** A card stopped waiting: answered, the reply stopped, or it timed out. */
+  onDesignModeConsentClosed: (handler: (closed: { requestId: string }) => void) =>
+    onNotification<{ requestId: string }>("designCanvas:consentClosed", handler),
+  /** The person's answer. Enter turns design mode on in main before Aiden hears it. False when the card expired. */
+  answerDesignModeConsent: (requestId: string, answer: "enter" | "decline") =>
+    invoke<boolean>("designCanvas:consentAnswer", requestId, answer),
+  /** Aiden asks the canvas to fit these frames (all when empty). */
+  onDesignCanvasFocus: (handler: (request: { chatId: string; frameIds: string[] }) => void) =>
+    onNotification<{ chatId: string; frameIds: string[] }>("designCanvas:focus", handler),
+  /** Aiden asks for a picture of the canvas; answer with `answerDesignCanvasSnapshot`. */
+  onDesignCanvasSnapshot: (handler: (request: { requestId: string; chatId: string }) => void) =>
+    onNotification<{ requestId: string; chatId: string }>("designCanvas:snapshot", handler),
+  /** A PNG data URL of the canvas region, or null when it is not on screen. */
+  answerDesignCanvasSnapshot: (requestId: string, dataUrl: string | null) =>
+    invoke<boolean>("designCanvas:snapshotAnswer", requestId, dataUrl),
 };

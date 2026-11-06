@@ -9,20 +9,25 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
-import { StudioCapabilityRoute } from "./studio-capability-route";
+import {
+  AppCapabilitiesProvider,
+  DISABLED_APP_CAPABILITIES,
+  type AppCapabilities,
+} from "../lib/app-capabilities";
+import { redirectRetiredRoute, StudioCapabilityRoute } from "./studio-capability-route";
 
-async function render(path: string, flags: { designStudio: boolean; createImages: boolean }) {
+const EVERY_CAPABILITY = Object.fromEntries(
+  Object.entries(DISABLED_APP_CAPABILITIES).map(([key, value]) => [key, typeof value === "boolean" ? true : value]),
+) as unknown as AppCapabilities;
+
+async function render(path: string, capabilities: AppCapabilities) {
   const root = createRootRoute({ component: () => <Outlet /> });
   const home = createRoute({ getParentRoute: () => root, path: "/", component: () => <p>home</p> });
-  const design = createRoute({
+  const design = createRoute({ getParentRoute: () => root, path: "/design", beforeLoad: redirectRetiredRoute });
+  const designProject = createRoute({
     getParentRoute: () => root,
-    path: "/design",
-    component: () => (
-      <StudioCapabilityRoute feature="designStudio">
-        <p>design body</p>
-      </StudioCapabilityRoute>
-    ),
+    path: "/design/$projectId",
+    beforeLoad: redirectRetiredRoute,
   });
   const images = createRoute({
     getParentRoute: () => root,
@@ -34,28 +39,35 @@ async function render(path: string, flags: { designStudio: boolean; createImages
     ),
   });
   const router = createRouter({
-    routeTree: root.addChildren([home, design, images]),
+    routeTree: root.addChildren([home, design, designProject, images]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   await router.load();
-  return renderToStaticMarkup(
-    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, ...flags }}>
+  // Under Node the router resolves as a server and reports a redirect instead of following it;
+  // follow it the way the client router does.
+  const redirect = router.state.redirect;
+  if (redirect) await router.navigate({ ...redirect.options, replace: true });
+  const markup = renderToStaticMarkup(
+    <AppCapabilitiesProvider capabilities={capabilities}>
       <RouterProvider router={router} />
     </AppCapabilitiesProvider>,
   );
+  return { markup, pathname: router.state.location.pathname };
 }
 
-test("studio routes render none of their feature while its capability is off", async () => {
-  const off = { designStudio: false, createImages: false };
-  assert.equal((await render("/design", off)).includes("design body"), false);
-  assert.equal((await render("/images", off)).includes("images body"), false);
+test("Images renders only while its capability is on", async () => {
+  assert.equal((await render("/images", DISABLED_APP_CAPABILITIES)).markup.includes("images body"), false);
+  assert.match(
+    (await render("/images", { ...DISABLED_APP_CAPABILITIES, createImages: true })).markup,
+    /images body/u,
+  );
 });
 
-test("each studio route renders only under its own capability", async () => {
-  assert.match(await render("/design", { designStudio: true, createImages: false }), /design body/u);
-  assert.equal(
-    (await render("/images", { designStudio: true, createImages: false })).includes("images body"),
-    false,
-  );
-  assert.match(await render("/images", { designStudio: false, createImages: true }), /images body/u);
+test("a stale Design Studio link lands on the chat home even with every capability on", async () => {
+  for (const path of ["/design", "/design/project-1"]) {
+    const { markup, pathname } = await render(path, EVERY_CAPABILITY);
+    assert.equal(pathname, "/", path);
+    assert.match(markup, /home/u, path);
+  }
+  assert.match((await render("/images", EVERY_CAPABILITY)).markup, /images body/u);
 });

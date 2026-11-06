@@ -3324,6 +3324,12 @@ test("context pressure is null when the host cannot project, and Bot chats and u
   await assert.rejects(unwired.service.contextPressure("chat-1"), hasCode("not_found", 404));
 });
 
+test("a chat's desktop design mode stays off the Remote projection", () => {
+  const projection = projectAidenRemoteChat(chat({ designMode: true }));
+  assert.equal(projection.id, "chat-1");
+  assert.equal("designMode" in projection, false);
+});
+
 test("a phone's message counts once for the turn it started, and a turn that never starts counts nothing", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const failed = fixture(chat(), { startThrows: true });

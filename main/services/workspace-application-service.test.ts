@@ -8,6 +8,7 @@ import test from "node:test";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
+import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { WorkspaceArtifactStore } from "./workspace-artifacts/store.js";
 import type { Workspace } from "./types.js";
@@ -346,6 +347,17 @@ test("removing a workspace drops its artifacts, and a failure there does not und
   };
   await failing.service.remove("workspace-1");
   assert.ok(failing.events.includes("remove-record"));
+});
+
+test("removing a workspace ends the design grants on its folder and no others", async () => {
+  const designGrants = new DesignGrantRegistry();
+  const inside = designGrants.issue("chat-1", "/work/site");
+  const elsewhere = designGrants.issue("chat-2", "/work/other");
+  const application = fixture({ existing: workspace({ folderPath: "/work/site" }) });
+  (application.deps as { designGrants?: unknown }).designGrants = designGrants;
+  await application.service.remove("workspace-1");
+  assert.equal(designGrants.resolve(inside), null);
+  assert.notEqual(designGrants.resolve(elsewhere), null);
 });
 
 async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, initial: Workspace[]) {
