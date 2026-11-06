@@ -41,6 +41,12 @@ let resetsInProgress = 0;
 export const COMPUTER_USE_RESETTING_REASON =
   "Computer Use permissions are being reset. Ask again in a moment.";
 
+export const COMPUTER_USE_ACCESS_CHANGED_REASON =
+  "Computer Use access kept changing while this request was checked. Ask again.";
+
+/** Reads a decision may repeat when grants keep being revoked underneath it. */
+const MAX_DECIDE_ATTEMPTS = 3;
+
 export function computerUseGrantRevision(): number {
   return grantRevision;
 }
@@ -155,17 +161,35 @@ export function createComputerUseAccessGate(
     }
   };
 
-  const setPending = (pending: boolean) =>
-    persist(
+  // Whether this gate has marked the chat. Readiness alone cannot say: setup can
+  // finish between calls, leaving a marker on a call that sees a ready Mac.
+  let marked = false;
+  const setPending = (pending: boolean) => {
+    marked = pending;
+    return persist(
       pending
         ? "Could not mark the chat to continue Computer Use."
         : "Could not clear the chat's Computer Use continue marker.",
       () => deps.setPendingContinue(pending),
     );
+  };
+  const clearPending = async () => {
+    if (marked) await setPending(false);
+  };
+
+  const decideAgain = (
+    toolCallId: string,
+    signal: AbortSignal | undefined,
+    attempt: number,
+  ): Promise<ComputerUseAccessDecision> =>
+    attempt < MAX_DECIDE_ATTEMPTS
+      ? decide(toolCallId, signal, attempt + 1)
+      : Promise.resolve({ allowed: false, reason: COMPUTER_USE_ACCESS_CHANGED_REASON });
 
   const decide = async (
     toolCallId: string,
     signal?: AbortSignal,
+    attempt = 1,
   ): Promise<ComputerUseAccessDecision> => {
     if (declined)
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
@@ -192,8 +216,13 @@ export function createComputerUseAccessGate(
         );
       }
     }
+    // A revocation during the awaits above makes both the cached grant and this
+    // read stale. Decide again so a passed grant is current at this point.
+    if (revision !== grantRevision) return decideAgain(toolCallId, signal, attempt);
     if (grantedAt === revision) {
       if (status.ready) {
+        await clearPending();
+        if (revision !== grantRevision) return decideAgain(toolCallId, signal, attempt);
         establishedAt = revision;
         return { allowed: true };
       }
@@ -208,6 +237,12 @@ export function createComputerUseAccessGate(
     if (!status.ready) await setPending(true);
     const { outcome, scope } = await deps.requestAccess(toolCallId, signal);
     if (outcome === "allowed") {
+      // Nothing may be saved while stored grants are being cleared.
+      if (resetsInProgress > 0)
+        return { allowed: false, reason: COMPUTER_USE_RESETTING_REASON };
+      // The answer is fresh as of now, even if grants moved while the card was
+      // open. Only a revocation after this point can overrule it.
+      const answeredAt = grantRevision;
       if (scope === "always") {
         await persist(
           "Could not save Always allow for Computer Use.",
@@ -220,7 +255,7 @@ export function createComputerUseAccessGate(
         );
       }
       // A bare allow or "once" grants this response only.
-      grantedAt = revision;
+      grantedAt = answeredAt;
       const current = status.ready ? status : await readStatus(signal, true);
       if (!current)
         return { allowed: false, reason: UNDECIDED_REASONS.cancelled };
@@ -228,16 +263,19 @@ export function createComputerUseAccessGate(
       // after setup (and a restart, if macOS needs one).
       if (!current.ready)
         return { allowed: false, reason: COMPUTER_USE_SETUP_REASON };
-      if (!status.ready) await setPending(false);
-      establishedAt = revision;
+      // A revoked allow goes back through a decision, which owns the marker.
+      if (answeredAt !== grantRevision) return decideAgain(toolCallId, signal, attempt);
+      await clearPending();
+      if (answeredAt !== grantRevision) return decideAgain(toolCallId, signal, attempt);
+      establishedAt = answeredAt;
       return { allowed: true };
     }
     if (outcome === "denied") {
       declined = true;
-      if (!status.ready) await setPending(false);
+      await clearPending();
       return { allowed: false, reason: COMPUTER_USE_DECLINED_REASON };
     }
-    if (outcome === "cancelled" && !status.ready) {
+    if (outcome === "cancelled" && marked) {
       // Keep the marker across an app quit so the chat can offer Continue
       // after restart; a user Stop ends the request.
       const origin = deps.cancellationOrigin();

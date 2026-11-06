@@ -96,6 +96,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
   const pairingService = new AidenRemotePairingService(
     "host_tls",
     {
+      revokeDevice: async () => true,
       issueDevice: async (input) => {
         issuedCapabilities.push([...input.capabilities!]);
         return {
@@ -524,7 +525,10 @@ test("a Mac holding attachments:raw sends a picture to a real host as its own by
     instanceId: "host_raw",
     displayName: () => "Raw fixture",
     appVersion: "1",
-    pairing: new AidenRemotePairingService("host_raw", { issueDevice: async () => { throw new Error("unused"); } }),
+    pairing: new AidenRemotePairingService("host_raw", {
+      issueDevice: async () => { throw new Error("unused"); },
+      revokeDevice: async () => { throw new Error("unused"); },
+    }),
     devices: {
       acquireDeviceAuthorization: () => () => undefined,
       authenticate: async (credential) =>

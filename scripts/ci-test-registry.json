@@ -539,6 +539,7 @@
         "main/services/bot-runtime/bot-activity-detail.test.ts",
         "main/services/bot-runtime/bot-extension.test.ts",
         "main/services/bot-runtime/bot-question-tool.test.ts",
+        "main/services/bot-runtime/bot-questions.test.ts",
         "main/services/bot-runtime/bot-handoffs.test.ts",
         "main/services/bot-runtime/bot-handoff-tool.test.ts",
         "main/services/bot-runtime/bot-tool-policy.test.ts",
