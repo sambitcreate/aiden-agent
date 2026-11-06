@@ -146,6 +146,16 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.reveal.typingShownByPerson).toBe(result.expected.typingRefusal);
   expect(result.reveal.probedShownByBot, "approvals and rules still read a password field").toBe("password");
   expect(result.reveal.probedType, "also after the person showed it").toBe("password");
+  // Each page the person opens on a held tab is read as it loads, however slow the read before it:
+  // one opened while the next timed read was seconds away, and one that loaded during a read.
+  for (const opened of ["openedDuringBackoff", "openedDuringRead"] as const) {
+    const seen = result.slowReads[opened];
+    expect(seen.shownType, `${opened}: the page did show the field as text`).toBe("text");
+    expect(painted(seen.field), `${opened}: the field is still covered`).toBe(true);
+    expect(seen.leaked, `${opened}: the value stays out of the snapshot`).toBe(false);
+  }
+  // A Bot's wait counts from after its read of the page, so a slow read can't use it up.
+  expect(result.slowReads.waitAfterSlowRead).toBe("ran");
   // A remembered field the person showed as plain text: a Bot's wait and
   // scroll can't tell its value apart through the row around it, and the
   // snapshot's locators don't quote it, each on a page nothing marked first.
