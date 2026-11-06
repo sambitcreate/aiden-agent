@@ -32,13 +32,13 @@ test("listing loads the image registry first and sends nothing to a provider", a
   assert.equal(fake.calls.length, 0, "and sent no provider request");
 });
 
-test("a request loads the image registry before its synchronous model lookup", async () => {
+test("a request loads the image registry before checking the available models", async () => {
   const fake = fakeImageModels();
   let loaded = false;
   const port = createWiredImagePort({
     // Like the image registry, lookups see nothing until it has loaded.
     models: {
-      getAvailableOfType: (...args) => fake.models.getAvailableOfType(...args),
+      getAvailableOfType: (...args) => loaded ? fake.models.getAvailableOfType(...args) : Promise.resolve([]),
       getModelOfType: ((type: "image", provider: string, id: string) =>
         loaded ? fake.models.getModelOfType(type, provider, id) : undefined) as typeof fake.models.getModelOfType,
       generateImages: (...args) => fake.models.generateImages(...args),

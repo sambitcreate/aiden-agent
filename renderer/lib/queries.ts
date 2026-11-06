@@ -40,6 +40,7 @@ import {
   webFetchApi,
   workspacesApi,
 } from "./ipc";
+import type { TelegramStatus } from "./ipc";
 import type { BotDefinition } from "../shared/bots";
 import { isWindowActive } from "./window-activity";
 import { keepPullRequestWhilePaused, pausedPollInterval } from "./github-pause";
@@ -73,6 +74,7 @@ export const queryKeys = {
   botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
   /** One Bot's routines (the Routines panel); `["bot-routines"]` matches every Bot's. */
   botRoutines: (id: string) => ["bot-routines", id] as const,
+  botAllowed: (id?: string) => ["bot-allowed", id ?? "all"] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -932,8 +934,23 @@ export function useWebFetch() {
   return useQuery({ queryKey: queryKeys.webFetch, queryFn: webFetchApi.get });
 }
 
+const TELEGRAM_PAIRING_POLL_MS = 3_000;
+
+/**
+ * Nothing announces a rejected token or a finished /start, so watch a running bridge until its bot
+ * has answered and an owner has paired. A failed bridge has stopped, so there is nothing to wait for.
+ */
+export function telegramStatusPollInterval(status: TelegramStatus | undefined): number | false {
+  if (!status?.enabled || !status.polling) return false;
+  return status.allowedUserId === undefined || !status.botUsername ? TELEGRAM_PAIRING_POLL_MS : false;
+}
+
 export function useTelegramSettings() {
-  return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
+  return useQuery({
+    queryKey: queryKeys.telegram,
+    queryFn: telegramApi.get,
+    refetchInterval: (query) => telegramStatusPollInterval(query.state.data),
+  });
 }
 
 // Each Remote snapshot runs the Tailscale CLI twice. Settings changes arrive as

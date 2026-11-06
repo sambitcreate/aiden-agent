@@ -27,6 +27,30 @@ test("workspace terminal opens a real PTY, runs a shell command, and persists ou
   // sent while the shell is still starting, it races the typed command and
   // can drop its first characters ("cho: command not found").
   await expect(drawer.getByRole("log", { name: "Terminal output" })).toHaveText(/\S/u);
+  // Area navigation runs before Ghostty consumes a key. A saved command that
+  // cannot run inside the terminal must still leave the built-in F6 path free.
+  const terminalInput = drawer.locator(".ghostty-input");
+  await terminalInput.press("F6");
+  expect(await page.evaluate(() => document.activeElement?.closest('[data-focus-region]')?.getAttribute("data-focus-region"))).toBe("sidebar");
+  await terminalInput.focus();
+  await page.keyboard.press("Shift+F6");
+  const composer = page.locator('[data-focus-region="composer"] textarea');
+  await expect(composer).toBeFocused();
+  await page.evaluate(async () => {
+    await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", binding: "Shift+F6" });
+  });
+  await terminalInput.focus();
+  await page.keyboard.press("Shift+F6");
+  await expect(composer).toBeFocused();
+  await expect(page.locator("[data-command-palette-content]")).toBeHidden();
+  await page.evaluate(async () => {
+    await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", disabled: true });
+  });
+  await terminalInput.focus();
+  await page.keyboard.press("Shift+F6");
+  await expect(composer).toBeFocused();
+  await terminalInput.focus();
+
   // With no selection, Cmd+C still belongs to macOS; it must not prefix the
   // next shell command with a literal "c" through Ghostty's key encoder.
   await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+C`);

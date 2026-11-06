@@ -5,11 +5,15 @@ import { buildMcpPresetStates } from "./mcp-preset-states.js";
 import { hasMcpProviderAuthGrant, setMcpProviderAuthGrant } from "../services/mcp-provider-auth.js";
 // Phase-2 IPC handlers: Skills, MCP servers, Exa web search, and voice transcription.
 
-import { ipcMain } from "../platform.js";
+import { app, ipcMain } from "../platform.js";
+import { registerComposioWatchInspection } from "./composio-watch-inspection.js";
+import { createComposioSettingsInspection, saveComposioSettingsInspection } from "../services/bot-routine-events/composio-settings-inspection.js";
+import { createComposioSettingsCalendarReadCheck, saveComposioCalendarReadCheck } from "../services/bot-routine-events/composio-settings-calendar-check.js";
+import { COMPOSIO_SERVICE_SERVER_ID } from "../../renderer/shared/composio-service.js";
 import { configStore } from "../services/config-store.js";
 import { publishAppControlsChanged } from "../services/app-controls-events-main.js";
 import { secrets } from "../services/secrets.js";
-import { mcpManager, prewarmMcpServers } from "../services/mcp.js";
+import { mcpManager, prewarmMcpServers, withForegroundComposioSettingsMcpClient } from "../services/mcp.js";
 import {
   authorizeMcpServer,
   cancelMcpAuthorization,
@@ -533,6 +537,21 @@ export function registerPhase2Handlers(): void {
       providerAuthorized: server ? await hasMcpProviderAuthGrant(server) : false,
     };
   });
+  const inspectComposio = createComposioSettingsInspection({
+    configured: async () => (await configStore.listMcpServers()).find((server) => server.id === COMPOSIO_SERVICE_SERVER_ID),
+    withClient: withForegroundComposioSettingsMcpClient,
+    publish: (result, current) => saveComposioSettingsInspection(app.getPath("userData"), result, current),
+  });
+  registerComposioWatchInspection<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("Composio inspection needs the active application document.")),
+    inspect: inspectComposio,
+    checkCalendarReads: createComposioSettingsCalendarReadCheck({
+      configured: async () => (await configStore.listMcpServers()).find((server) => server.id === COMPOSIO_SERVICE_SERVER_ID),
+      withClient: withForegroundComposioSettingsMcpClient,
+      publish: (result, current) => saveComposioCalendarReadCheck(app.getPath("userData"), result, current),
+    }),
+  });
   registerMcpControlHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("MCP changes must come from the active application document.")),
@@ -621,7 +640,7 @@ export function registerPhase2Handlers(): void {
     },
     launchApproved: (server) => mcpStdioApprovals.isApproved(server),
     macAppStatus: (preset) => mcpMacAppStatus(preset),
-    openMacApp: (preset) => openMcpMacApp(preset),
+    openMacApp: (preset, isCurrent) => openMcpMacApp(preset, undefined, isCurrent),
   });
   mcpLiveStatus.subscribe((status) => ipcMain.broadcast("mcp:statusChanged", status));
   // Force-drop all cached MCP connections so the next message reconnects fresh.

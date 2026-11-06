@@ -7,7 +7,7 @@ import {
   createSubagentAuthorityV2,
   subagentAuthorityDigestV2,
 } from "./authority-v2.js";
-import { subagentEffectEvidenceDigestV2 } from "./subagent-effect-v2.js";
+import { McpToolCallNotSentError, subagentEffectEvidenceDigestV2 } from "./subagent-effect-v2.js";
 import {
   parseBackgroundSubagentRunV2,
   type BackgroundSubagentRunV2,
@@ -452,6 +452,23 @@ test("durable effects advance monotonically from preparation through terminal ev
   const persisted = parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"));
   assert.equal(persisted?.effects[0]?.terminalDigest, terminalDigest);
   assert.equal(persisted?.approvals[0]?.state, "consumed");
+});
+
+test("a dispatch-started MCP mutation needs local proof of no send to persist cancellation", async () => {
+  const state = stateWith(database([snapshot()], [manifest()]));
+  const open = () => createSubagentRunStoreV2(async () => "/private/v2", { storageFactory: () => storage(state), now: () => 20 });
+  const store = open();
+  await store.initialize();
+  await store.prepareEffect(effectInput());
+  await store.authorizeEffect(effectOwner());
+  await store.markEffectDispatchStarted(effectOwner());
+  await assert.rejects(store.cancelEffectBeforeDispatch(effectOwner()), /after dispatch/u);
+  await store.cancelEffectBeforeDispatch(effectOwner(), new McpToolCallNotSentError("Inventory changed"));
+  const reopened = open();
+  await reopened.initialize();
+  assert.equal((await reopened.getEffect(effectOwner()))?.state, "cancelled_before_dispatch");
+  const saved = parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents!));
+  assert.equal(saved?.approvals[0]?.state, "cancelled");
 });
 
 test("expired prepared approval cannot cross the authorization barrier", async () => {

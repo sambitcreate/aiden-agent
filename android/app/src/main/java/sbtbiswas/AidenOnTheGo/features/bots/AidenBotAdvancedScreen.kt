@@ -262,7 +262,8 @@ fun AidenBotAdvancedSheet(
      */
     saveHost: AidenBotSaveHost? = null,
     onSaveSettled: (AidenBotDetail) -> Unit = {},
-    onSaveFailed: (String) -> Unit = {}
+    onSaveFailed: (String) -> Unit = {},
+    messagingCoordinator: sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator? = null
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
@@ -411,6 +412,14 @@ fun AidenBotAdvancedSheet(
                                 )
                             }
                         }
+                    }
+                }
+
+                if (messagingCoordinator != null) {
+                    AidenBotMessagingSection(messagingCoordinator, latestBot,
+                        locked = cat != null && current != null && current.changesAccess(latestBot, cat)) { saved ->
+                        latestBot = saved
+                        reporter.saved(saved)
                     }
                 }
 

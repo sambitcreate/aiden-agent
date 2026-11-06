@@ -90,10 +90,12 @@ export async function isMcpMacAppOpen(
 export async function openMcpMacApp(
   preset: MacAppMcpPreset,
   probe: McpMacAppProbe = nodeMacAppProbe(),
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   if (probe.platform !== "darwin") throw new Error(`${preset.name} works only on a Mac.`);
   const installed = await findMacApp(preset.macApp, probe);
   if (!installed) throw new Error(`${preset.name} isn’t in your Applications folder.`);
+  if (!isCurrent()) throw new Error("Opening this app requires the active application document.");
   await probe.open(installed.bundle);
 }
 

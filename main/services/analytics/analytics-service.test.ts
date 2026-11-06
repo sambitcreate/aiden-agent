@@ -9,6 +9,9 @@ import type { AnalyticsState } from "./analytics-consent.js";
 import type { AnalyticsMessage } from "./analytics-core.js";
 import { PENDING_CRASH_FILE, RUN_MARKER_FILE } from "./analytics-crash.js";
 import { createAnalyticsService, type AnalyticsServiceOptions } from "./analytics-service.js";
+import { reportChatMessageSent } from "./analytics-feature-reports.js";
+import { reportAnalyticsEvent, setAnalyticsReporter } from "./analytics-report.js";
+import { analyticsSettled } from "./test-support.js";
 
 const SUPER = { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "release" } as const;
 
@@ -24,8 +27,13 @@ function fakeTransport() {
   const immediate: AnalyticsMessage[] = [];
   let state: "open" | "shut" | "discarded" = "open";
   const transport: PostHogTransport = {
+    revokeQueue: () => { queued.length = 0; },
     capture: (message) => void (state === "open" && queued.push(message)),
     captureOptOut: async (message) => void immediate.push(message),
+    captureNow: async (message) => {
+      immediate.push(message);
+      return true;
+    },
     flush: async () => void sent.push(...queued.splice(0)),
     shutdown: async () => {
       sent.push(...queued.splice(0));
@@ -148,7 +156,7 @@ test("a launch after an unclean exit or an update is labelled, and the update is
   t.after(crashed.cleanup);
   writeFileSync(join(crashed.runDirectory, RUN_MARKER_FILE), "");
   await crashed.service.start();
-  assert.equal(crashed.events()[0]!.properties.launch_kind, "after_crash");
+  assert.equal(crashed.events().find((message) => message.event === "app_opened")!.properties.launch_kind, "after_crash");
 
   const updated = harness({ initial: { ...shown, lastVersion: "1.39.2" } });
   t.after(updated.cleanup);
@@ -419,6 +427,10 @@ test("finishing onboarding starts sending and reports a custom provider without 
   await h.service.onboardingFinished("incomplete");
   assert.equal(h.transports.length, 0);
 
+  await h.service.onboardingFinished("deferred");
+  assert.equal(h.transports.length, 0, "completion alone cannot acknowledge an unread row");
+  assert.equal(h.stored().noticeShownAt, undefined);
+  await h.service.markNoticeShown();
   await h.service.onboardingFinished("completed", "my-company-gateway");
   const finished = h.events().find((message) => message.event === "onboarding_finished");
   assert.deepEqual([finished!.properties.outcome, finished!.properties.provider_id], ["completed", "custom"]);
@@ -467,4 +479,268 @@ test("quitting flushes what is queued and a clean exit clears the run marker", a
 
   assert.deepEqual(h.transports[0]!.sent.map((message) => message.event), ["app_opened", "app_active"]);
   assert.equal(existsSync(join(h.runDirectory, RUN_MARKER_FILE)), false);
+});
+
+test("an action while start is still reading settings is sent once sending is allowed", async (t) => {
+  const consented = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
+  const h = harness({ initial: consented });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  assert.deepEqual(h.names(), []);
+  await h.service.start();
+  assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened"]);
+});
+
+test("an action held during start is dropped when sending isn't allowed, even after a later yes", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await h.service.start();
+  await h.service.markNoticeShown();
+  assert.deepEqual(h.names(), ["app_opened", "app_active"]);
+});
+
+test("a yes that arrives during start doesn't cover what was held before it", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await Promise.all([h.service.start(), h.service.markNoticeShown()]);
+  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+});
+
+test("quitting during start still sends what was held", async (t) => {
+  let release = () => {};
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const fake = fakeTransport();
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => { await ready; return fake.transport; },
+  });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  void h.service.start();
+  const quit = h.service.shutdown();
+  release();
+  await quit;
+  assert.ok(fake.sent.some((message) => message.event === "terminal_opened"));
+});
+
+test("a startup that outlives quitting makes no transport and sends nothing", async (t) => {
+  let release = () => {};
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const fake = fakeTransport();
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => { await ready; return fake.transport; },
+  });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  const starting = h.service.start();
+  // The service's own timers don't hold a process open.
+  const open = setTimeout(() => undefined, 5_000);
+  t.after(() => clearTimeout(open));
+  await h.service.shutdown(30);
+  release();
+  await starting;
+  assert.equal(fake.state(), "discarded");
+  assert.deepEqual(fake.sent, []);
+});
+
+test("turning usage data off during start drops what was held", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
+  h.service.track("terminal_opened", {});
+  await h.service.setEnabled(false);
+  await h.service.start();
+  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+});
+
+test("a burst before start is held only up to its limit", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
+  for (let count = 0; count < 500; count += 1) h.service.track("terminal_opened", {});
+  await h.service.start();
+  assert.equal(h.names().filter((name) => name === "terminal_opened").length, 100);
+});
+
+test("a feature event reaches the transport only while sending is allowed", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  await h.service.start();
+  h.service.track("terminal_opened", {});
+  assert.deepEqual(h.names(), [], "nothing is sent before the notice has been shown");
+
+  await h.service.markNoticeShown();
+  h.service.track("terminal_opened", {});
+  h.service.track("provider_connected", { provider_id: "anthropic", auth: "key" });
+  assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened", "provider_connected"]);
+  assert.ok(h.events().every((message) => message.properties.$process_person_profile === false));
+});
+
+
+function bindFeatureReports(t: { after(fn: () => void): void }, service: ReturnType<typeof createAnalyticsService>) {
+  setAnalyticsReporter((event, props) => service.track(event, props), () => service.actionReporter());
+  t.after(() => setAnalyticsReporter(undefined));
+}
+
+function delayedMessageReport() {
+  let finish!: (value: boolean) => void;
+  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
+  reportChatMessageSent({ providerId: "custom:private", model: "private-model", origin: "desktop", inWorkspace: () => workspace });
+  return finish;
+}
+
+test("a pre-disclosure message cannot borrow a later notice while its metadata lookup waits", async t => {
+  const h = harness(); t.after(h.cleanup);
+  await h.service.start();
+  bindFeatureReports(t, h.service);
+  const finish = delayedMessageReport();
+  assert.equal((await h.service.status()).noticePending, true);
+  await h.service.markNoticeShown();
+  finish(true);
+  await analyticsSettled();
+  assert.deepEqual(h.names(), ["app_opened", "app_active"]);
+});
+
+test("a disabled message cannot borrow a later opt-in while its metadata lookup waits", async t => {
+  const h = harness({ initial: { enabled: false, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+  await h.service.start();
+  bindFeatureReports(t, h.service);
+  const finish = delayedMessageReport();
+  await h.service.setEnabled(true);
+  finish(false);
+  await analyticsSettled();
+  assert.deepEqual(h.names(), ["app_opened", "app_active"]);
+});
+
+test("an opt-out request invalidates held metadata immediately and a later opt-in cannot restore it", async t => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+  await h.service.start();
+  bindFeatureReports(t, h.service);
+  const old = delayedMessageReport();
+  const off = h.service.setEnabled(false), on = h.service.setEnabled(true);
+  old(true);
+  await Promise.all([off, on]);
+  await analyticsSettled();
+  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+  const fresh = delayedMessageReport();
+  fresh(false);
+  await analyticsSettled();
+  const sent = h.events().filter(message => message.event === "chat_message_sent");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.properties.in_workspace, false);
+  assert.equal(sent[0]!.properties.model_id, "custom");
+});
+
+test("a consented message begun during startup may finish its metadata after startup", async t => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+  bindFeatureReports(t, h.service);
+  const finish = delayedMessageReport();
+  await h.service.start();
+  finish(true);
+  await analyticsSettled();
+  const sent = h.events().filter(message => message.event === "chat_message_sent");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.properties.in_workspace, true);
+});
+
+test("shutdown discards unfinished metadata without changing the action or sending after shutdown", async t => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+  await h.service.start();
+  bindFeatureReports(t, h.service);
+  const finish = delayedMessageReport();
+  await h.service.shutdown();
+  finish(true);
+  await analyticsSettled();
+  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+});
+
+
+test("a message after a queued disable cannot use the prior core while an earlier consent write is held", async t => {
+  let stored: AnalyticsState = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
+  let hold = false, entered!: () => void, release!: () => void;
+  const writing = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const h = harness({ store: {
+    read: async () => stored,
+    update: async mutate => {
+      if (hold) { hold = false; entered(); await gate; }
+      return stored = mutate(stored);
+    },
+  } }); t.after(h.cleanup);
+  await h.service.start();
+  bindFeatureReports(t, h.service);
+  hold = true;
+  const prior = h.service.setEnabled(true);
+  await writing;
+  const disabled = h.service.setEnabled(false);
+  const finish = delayedMessageReport();
+  finish(true);
+  await analyticsSettled();
+  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+  release();
+  await Promise.all([prior, disabled]);
+  await h.service.setEnabled(true);
+  await analyticsSettled();
+  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+});
+
+test("metadata completed under initial consent keeps the existing startup-and-quit flush", async t => {
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  const fake = fakeTransport();
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" }, createTransport: async () => { await ready; return fake.transport; } }); t.after(h.cleanup);
+  bindFeatureReports(t, h.service);
+  const start = h.service.start();
+  delayedMessageReport()(true);
+  await analyticsSettled();
+  const quit = h.service.shutdown();
+  release();
+  await Promise.all([start, quit]);
+  assert.equal(fake.sent.filter(message => message.event === "chat_message_sent").length, 1);
+});
+
+test("a direct feature hook cannot reach a background flush after a queued disable request", async t => {
+  let stored: AnalyticsState = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
+  let hold = false, entered!: () => void, release!: () => void;
+  const writing = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const h = harness({ store: {
+    read: async () => stored,
+    update: async mutate => {
+      if (hold) { hold = false; entered(); await gate; }
+      return stored = mutate(stored);
+    },
+  } }); t.after(h.cleanup);
+  await h.service.start();
+  bindFeatureReports(t, h.service);
+  const transport = h.transports[0]!;
+  await transport.transport.flush();
+  hold = true;
+  const prior = h.service.setEnabled(true);
+  await writing;
+  const disabled = h.service.setEnabled(false);
+  try {
+    reportAnalyticsEvent("terminal_opened", {});
+    await transport.transport.flush();
+    assert.equal(transport.sent.filter(message => message.event === "terminal_opened").length, 0);
+  } finally {
+    release();
+    await Promise.all([prior, disabled]);
+  }
+  await h.service.setEnabled(true);
+  reportAnalyticsEvent("terminal_opened", {});
+  await h.transports[h.transports.length - 1]!.transport.flush();
+  assert.equal(h.events().filter(message => message.event === "terminal_opened").length, 1);
+});
+
+test("shutdown immediately rejects new direct feature hooks while preserving the existing queued flush", async t => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+  await h.service.start();
+  bindFeatureReports(t, h.service);
+  reportAnalyticsEvent("terminal_opened", {});
+  const quit = h.service.shutdown();
+  reportAnalyticsEvent("terminal_opened", {});
+  await quit;
+  assert.equal(h.events().filter(message => message.event === "terminal_opened").length, 1);
 });

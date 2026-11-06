@@ -616,10 +616,13 @@ test("managed worktree cleanup is root-bound, resumable, and packaged as signed 
     packageJson,
     /"from": "build\/native\/aiden-worktree-remover"[\s\S]+"to": "Helpers\/aiden-worktree-remover"/u,
   );
-  assert.match(
-    packageJson,
-    /"pretest:subagents": "npm run build:worktree-remover[\s\S]+build:subagent-run-store/u,
-  );
+  const preparation = JSON.parse(packageJson).scripts["pretest:subagents"].split(/\s*&&\s*/u) as string[];
+  const firstTest = preparation.findIndex((command) => command.startsWith("npm run test:"));
+  assert.ok(firstTest >= 0, "the subagent preparation chain must lead into its test suites");
+  for (const command of ["npm run build:worktree-remover", "npm run build:subagent-run-store"]) {
+    const at = preparation.indexOf(command);
+    assert.ok(at >= 0 && at < firstTest, `${command} must complete before subagent tests start`);
+  }
 });
 
 test("every workspace path capability is renderer-document owned and mutation admitted", async () => {
@@ -951,7 +954,7 @@ test("independent child egress rollbacks are evaluated before Web Search readine
   const webRollout = llm.indexOf("const childWebRollout = subagentChildWebEnabled()");
   const webReadiness = llm.indexOf("await webSearchService.availability()", webRollout);
   const mcpRollout = llm.indexOf("const childMcpRollout = subagentChildMcpEnabled()");
-  const mcpInventory = llm.indexOf("resolveProductionSubagentMcpInventory(signal)", mcpRollout);
+  const mcpInventory = llm.indexOf("resolveProductionSubagentMcpInventory(", mcpRollout);
   assert.ok(webRollout >= 0);
   assert.ok(webReadiness > webRollout);
   assert.match(llm.slice(webRollout, webReadiness), /childWebRollout\s*&&/u);

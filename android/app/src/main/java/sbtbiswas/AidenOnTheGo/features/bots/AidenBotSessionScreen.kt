@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -132,11 +133,12 @@ fun AidenBotSessionScreen(
     botDeleter: AidenBotDeleter? = AidenRemoteBotDeleter,
     onBotDeleted: () -> Unit = onNavigateBack,
     /** The "Memory updated" caption opens Profile → Memory. */
-    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile
+    onNavigateToBotMemory: (String) -> Unit = onNavigateToBotProfile,
+    onOpenPeerExchange:(String)->Unit = {}
 ) {
     // One battery-saver receiver for the chat's faces, marks and skeletons.
     AidenPowerSaveScope {
-        AidenBotSessionContent(botId, coordinator, onNavigateBack, onNavigateToBotProfile, botDeleter, onBotDeleted, onNavigateToBotMemory)
+        AidenBotSessionContent(botId, coordinator, onNavigateBack, onNavigateToBotProfile, botDeleter, onBotDeleted, onNavigateToBotMemory, onOpenPeerExchange)
     }
 }
 
@@ -148,7 +150,8 @@ private fun AidenBotSessionContent(
     onNavigateToBotProfile: (String) -> Unit,
     botDeleter: AidenBotDeleter?,
     onBotDeleted: () -> Unit,
-    onNavigateToBotMemory: (String) -> Unit
+    onNavigateToBotMemory: (String) -> Unit,
+    onOpenPeerExchange:(String)->Unit
 ) {
     val palette = AidenTheme.palette
     val resources = LocalResources.current
@@ -166,7 +169,17 @@ private fun AidenBotSessionContent(
         }
         return
     }
-    val controller = remember(botId, cl) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val resumeVisit=remember(lifecycleOwner){java.util.concurrent.atomic.AtomicInteger()}
+    DisposableEffect(lifecycleOwner) {
+        val observer=androidx.lifecycle.LifecycleEventObserver { _,event ->
+            if(event==Lifecycle.Event.ON_RESUME || event==Lifecycle.Event.ON_PAUSE)resumeVisit.incrementAndGet()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose{resumeVisit.incrementAndGet();lifecycleOwner.lifecycle.removeObserver(observer)}
+    }
+    val resumePairing=coordinator.activePairing
+    val controller = remember(botId, cl, resumePairing, lifecycleOwner) {
         // The pairing names the chat's cached transcript and its unsent messages (R14, R17).
         val sessionKey = coordinator.installationStore.activeInstallation?.let { AidenBotSessionKey(it.instanceId, it.deviceId, botId) }
         AidenBotSessionController(
@@ -175,8 +188,14 @@ private fun AidenBotSessionContent(
             scope,
             knownState,
             activitySupported = activitySupportedNow,
+            initialFeedGrants = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation),
+            plansSupported = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_PLANS) == true,
             sessionKey = sessionKey,
-            store = coordinator.botSessionStore
+            store = coordinator.botSessionStore,
+            routineModelsSupported = { coordinator.serverInfo.value?.supportsBotRoutineModels==true },
+            mayResume = { lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && coordinator.holdsPairing(resumePairing) && coordinator.holdsReadAuthority(cl,resumePairing?.instanceId) && coordinator.installationStore.activeInstallation?.canWriteBots==true },
+            resumeLifetime = { resumeVisit.get().toString() },
+            resumeJournal = resumePairing?.let { pairing -> coordinator.botRoutineControlJournals.journal(pairing.instanceId,pairing.deviceId,pairing.pairedAt,"$botId|resume"){coordinator.holdsPairing(pairing)} }
         )
     }
     DisposableEffect(controller) {
@@ -186,20 +205,28 @@ private fun AidenBotSessionContent(
     // The Mac shapes the feed by the grants this phone holds when it opens (cards, Chat activity,
     // hand-offs and the paused state). This chat can open from the pairing's saved features while
     // it connects, before this connection has negotiated a grant (`bot:handoffs` after the Mac
-    // updates); once `/server` has answered, every grant is negotiated and saved, and a feed that
-    // opened without one opens again.
-    val feedOpenedWith = remember(controller) { aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) }
+    // updates). Once `/server` has answered, each gain or loss reopens the feed with that
+    // audience; the controller remembers the latest adopted set across repeated transitions.
     val grantsSettled = serverInfo != null
-    LaunchedEffect(controller, grantsSettled) {
-        if (grantsSettled && aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation) != feedOpenedWith) {
-            controller.reopenFeed()
-        }
+    controller.allowedSupported = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ALLOWED) == true
+    val feedGrantsNow = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
+    LaunchedEffect(controller, grantsSettled, feedGrantsNow) {
+        controller.setPlansSupported(AidenRemoteCapability.BOT_PLANS in feedGrantsNow)
+        if (grantsSettled) controller.updateFeedGrants(feedGrantsNow)
     }
     val ui by controller.state.collectAsStateWithLifecycle()
+    val resumeUi=controller.resumeController?.state?.collectAsStateWithLifecycle()?.value ?: AidenBotResumeUiState()
+    val resumeNeedsAccess=resumeUi.pending?.request?.acknowledgeUnknownCost==true && serverInfo?.supportsBotRoutineModels!=true
+    if(resumeUi.consentSubmissionId!=null) {
+        AlertDialog(onDismissRequest={controller.resumeController?.cancelConsent()},
+            title={Text(stringResource(R.string.bot_resume_cost_title))},text={Text(AIDEN_BOT_UNKNOWN_COST_CONFIRMATION)},
+            confirmButton={TextButton(onClick={scope.launch{controller.confirmResume()}},enabled=!resumeUi.busy){Text(stringResource(R.string.bot_resume_confirm))}},
+            dismissButton={TextButton(onClick={controller.resumeController?.cancelConsent()}){Text(stringResource(R.string.action_cancel))}})
+    }
+
     // Revision 37 (G24): a hand-off that arrives while the app is in the background, with this
     // chat still open behind it, posts one local notification that opens the chat.
     val appContext = LocalContext.current.applicationContext
-    val lifecycleOwner = LocalLifecycleOwner.current
     val handoffNotifier = remember(appContext) { AidenScheduledRunNotifier(appContext) }
     val botName by rememberUpdatedState(identity.name)
     DisposableEffect(controller, lifecycleOwner) {
@@ -337,7 +364,7 @@ private fun AidenBotSessionContent(
                 scope.launch {
                     isDeleting = true
                     try {
-                        deleter.delete(cl, botId)
+                        coordinator.deleteBot(cl,botId,deleter)
                         // The Bot and its feed are gone: stop following before leaving.
                         controller.stopFollowing()
                         confirmingDelete = false
@@ -434,6 +461,10 @@ private fun AidenBotSessionContent(
                         )
                     }
                     if (row is AidenBotSessionRow.Entry) when (val entry = row.entry) {
+                        is AidenBotSessionEntry.Peer -> if(serverInfo?.supportsBotPeerExchanges==true) {
+                            Text(stringResource(if(entry.direction==sbtbiswas.AidenOnTheGo.models.AidenPeerDirection.SENT)R.string.bot_peers_messaged else R.string.bot_peers_message_from,entry.peerName),color=palette.secondary)
+                            if(serverInfo?.supportsBotPeerExchanges==true)AidenTonalButton(stringResource(R.string.bot_peers_view_exchange),onClick={onOpenPeerExchange(entry.exchangeId)})
+                        }
                         is AidenBotSessionEntry.Message -> AidenBotSessionMessageRow(entry)
                         is AidenBotSessionEntry.ConnectCard -> AidenBotConnectCard(
                             card = entry,
@@ -485,7 +516,9 @@ private fun AidenBotSessionContent(
                     )
                 }
                 // Revision 42 (`bot:issues`): the host's "Needs you" cards.
-                items(ui.openIssues, key = { "issue-${it.id}" }) { issue ->
+                items(ui.openIssues.filter { issue ->
+                    issue.isAvailable(accessRequests = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACCESS_REQUESTS) == true)
+                }, key = { "issue-${it.id}" }) { issue ->
                     AidenBotIssueCard(
                         issue = issue,
                         canAct = canWriteBots,
@@ -521,11 +554,24 @@ private fun AidenBotSessionContent(
                         )
                     }
                 }
+                if(resumeUi.problem!=null || resumeUi.pending!=null) {
+                    item(key="resume-request") {
+                        Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                            Text(stringResource(if(resumeNeedsAccess)R.string.bot_resume_capability_lost else when(resumeUi.problem){
+                                AidenRoutineControlProblem.STORAGE->R.string.bot_routine_models_storage
+                                AidenRoutineControlProblem.EXPIRED->R.string.bot_routine_models_expired
+                                AidenRoutineControlProblem.FAILED->R.string.bot_resume_preflight_failed
+                                else->R.string.bot_resume_uncertain
+                            }),color=palette.secondary)
+                            if(resumeUi.pending!=null)AidenTonalButton(stringResource(R.string.bot_resume_retry),enabled=canWriteBots && !resumeUi.busy && !resumeNeedsAccess,onClick={scope.launch{controller.resume()}})
+                        }
+                    }
+                }
                 if (ui.isInterrupted) {
                     item(key = "interrupted") {
                         AidenBotInterruptedCard(
                             blocked = ui.session?.blocked,
-                            busy = ui.isResuming || ui.isDismissing,
+                            busy = ui.isResuming || ui.isDismissing || resumeUi.busy || resumeUi.pending!=null || !canWriteBots,
                             onResume = { scope.launch { controller.resume() } },
                             onDismiss = { scope.launch { controller.dismiss() } },
                             onOpenAdvanced = ::openAdvanced
@@ -547,11 +593,31 @@ private fun AidenBotSessionContent(
                         )
                     }
                 }
+                ui.approvalSuccessNotice?.let { notice -> item(key = "approval-notice") { Text(notice) } }
                 ui.session?.approval?.let { approval ->
                     item(key = "approval-${approval.waitId}") {
-                        AidenBotApprovalCard(approval, enabled = !ui.isRespondingToApproval) { decision ->
-                            scope.launch { controller.respondToApproval(decision) }
-                        }
+                        AidenBotApprovalCard(approval, enabled = canWriteBots && !ui.isRespondingToApproval,
+                            onRespond = { decision -> scope.launch { controller.respondToApproval(decision) } },
+                            botName = botName, allowedSupported = controller.allowedSupported,
+                            onAlways = { scope.launch { controller.respondToApproval(sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision.ALLOW, sbtbiswas.AidenOnTheGo.models.AidenApprovalScope.ALWAYS) } })
+                    }
+                }
+                ui.session?.plan?.takeIf { ui.plansSupported }?.let { plan ->
+                    item(key = "plan-${plan.planId}") {
+                        AidenBotPlanCard(plan, botName,
+                            canAnswer = canWriteBots && ui.isConnected && plan.planId !in ui.respondingPlanIds,
+                            error = ui.planError,
+                            onRespond = { decision -> scope.launch { controller.respondToPlan(decision) } })
+                    }
+                }
+                ui.session?.accessRequest?.takeIf {
+                    coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.BOT_ACCESS_REQUESTS) == true
+                }?.let { request ->
+                    item(key = "access-${request.waitId}") {
+                        AidenBotAccessRequestCard(request, botName,
+                            showsApprovalCount = controller.allowedSupported,
+                            canAnswer = canWriteBots && ui.isConnected && !ui.isAnsweringAccessRequest,
+                            onAnswer = { choice -> scope.launch { controller.answerAccessRequest(choice) } })
                     }
                 }
                 ui.handoff?.let { handoff ->
@@ -571,6 +637,11 @@ private fun AidenBotSessionContent(
                 if (ui.needsModel) {
                     item(key = "needs-model") { AidenBotNeedsModelCard(busy = openingAdvanced, onSetUp = ::openAdvanced) }
                 }
+                ui.accessSuccessNotice?.let { message ->
+                    item(key = "access-success") {
+                        Text(message, color = palette.success, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 // A notice about unsent messages (copy shared with iOS), else the last action's error.
                 (ui.notice?.let { resources.getString(it.text) } ?: ui.actionError)?.let { message ->
                     item(key = "error") {
@@ -583,7 +654,7 @@ private fun AidenBotSessionContent(
             AidenBotSessionComposer(
                 draft = draft,
                 onDraftChange = { draft = it.take(AidenBotSessionWire.MAX_MESSAGE_LENGTH) },
-                placeholder = when (composerMode) {
+                placeholder = if (ui.composerHeldForPlan) "Review the plan to continue" else when (composerMode) {
                     AidenBotComposerMode.MESSAGE -> aidenBotChatPlaceholder(identity.name)
                     AidenBotComposerMode.HANDOFF_NOTE -> stringResource(R.string.bot_handoff_note_placeholder)
                     AidenBotComposerMode.HELD_FOR_SIGN_IN -> stringResource(R.string.bot_handoff_sign_in_placeholder)
@@ -591,11 +662,13 @@ private fun AidenBotSessionContent(
                     AidenBotComposerMode.PAUSED -> stringResource(R.string.bot_paused_placeholder, identity.name)
                 },
                 enabled = ui.composerEnabled,
+                sendHeld = ui.composerHeldForPlan,
                 // A hand-off note is one answer, never Steer or Queue.
                 busy = ui.offersBusyModes && composerMode == AidenBotComposerMode.MESSAGE,
                 busyMode = busyMode,
                 onPickBusyMode = { busyMode = it },
-                onSend = {
+                onSend = send@{
+                    if (ui.composerHeldForPlan) return@send
                     // The draft clears at once and the bubble shows (R14); a refused message comes back.
                     val text = draft
                     draft = ""
@@ -983,6 +1056,8 @@ fun aidenBotIssueActionLabel(action: AidenBotIssueAction): String = when (action
     AidenBotIssueActionKind.RESUME_ROUTINE -> stringResource(R.string.bot_issue_resume_routine)
     AidenBotIssueActionKind.STOP_RUN -> stringResource(R.string.bot_issue_stop)
     AidenBotIssueActionKind.KEEP_WAITING -> stringResource(R.string.bot_issue_keep_waiting)
+    AidenBotIssueActionKind.ALLOW_FOLDER -> stringResource(R.string.bot_issue_allow_folder)
+    AidenBotIssueActionKind.DISMISS_ACCESS -> stringResource(R.string.bot_access_not_now)
 }
 
 @Composable
@@ -991,6 +1066,7 @@ private fun AidenBotSessionComposer(
     onDraftChange: (String) -> Unit,
     placeholder: String,
     enabled: Boolean,
+    sendHeld: Boolean,
     busy: Boolean,
     busyMode: AidenStreamInputMode,
     onPickBusyMode: (AidenStreamInputMode) -> Unit,
@@ -1022,7 +1098,7 @@ private fun AidenBotSessionComposer(
             // parity). The menu opens with an empty draft too, so a mode can be picked first.
             AidenRunInputSplitButton(
                 mode = busyMode,
-                canSubmit = enabled && draft.isNotBlank(),
+                canSubmit = enabled && !sendHeld && draft.isNotBlank(),
                 canChooseMode = enabled,
                 onSubmit = onSend,
                 onPickMode = onPickBusyMode
@@ -1030,7 +1106,7 @@ private fun AidenBotSessionComposer(
         } else {
             FilledIconButton(
                 onClick = onSend,
-                enabled = enabled && draft.isNotBlank(),
+                enabled = enabled && !sendHeld && draft.isNotBlank(),
                 shape = AidenShape.Button,
                 colors = aidenFilledIconButtonColors(),
                 modifier = Modifier.size(AidenUi.MinimumTouchTarget)

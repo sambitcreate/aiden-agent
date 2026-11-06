@@ -228,6 +228,7 @@ struct AidenBotAdvancedView: View {
             }
             modelSection(catalog).disabled(isLocked)
             accessSection(catalog).disabled(isLocked)
+            messagingSection
             chatActivitySection
             Group {
                 if draft?.usesFullAccess == false {
@@ -252,6 +253,25 @@ struct AidenBotAdvancedView: View {
                 .onAppear { chatActivityReport.appeared(.chatActivity) }
                 // The sheet or the chat can close straight from here, with Advanced never showing again.
                 .onDisappear { chatActivityReport.disappeared(.chatActivity, reportBehind: onSaved) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var messagingSection: some View {
+        if let bot = baselineBot,
+           coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botMessaging) == true,
+           bot.botMessaging != nil {
+            AidenBotMessagingSection(coordinator: coordinator, bot: bot, locked: isDirty || !canWrite) { saved in
+                if let catalog, let draft, let baselineBot {
+                    if let rebased = try? aidenBotEditorRebasedDraft(
+                        draft, baseline: baselineBot, baselineCatalog: catalog,
+                        authoritative: saved, authoritativeCatalog: catalog
+                    ) { self.draft = rebased }
+                }
+                baselineBot = saved
+                if let context = try? coordinator.requestContext() { cacheDetail(saved, for: context) }
+                onSaved(saved)
             }
         }
     }
@@ -1359,5 +1379,137 @@ struct AidenBotChatActivityPreviewView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Shared across the list and Advanced for the active, authenticated connection.
+@MainActor
+@Observable
+final class AidenBotMessagingModel {
+    private var context: AidenRemoteRequestContext?
+    private(set) var settings: AidenBotMessagingSettings?
+    private(set) var isSaving = false
+    private(set) var generation = 0
+    private(set) var error: String?
+
+    func value(for context: AidenRemoteRequestContext?) -> AidenBotMessagingSettings? {
+        self.context == context ? settings : nil
+    }
+
+    func adopt(_ value: AidenBotMessagingSettings?, context: AidenRemoteRequestContext, generation: Int? = nil) {
+        if let generation, generation != self.generation { return }
+        if self.context != context {
+            self.context = context
+            self.generation += 1
+            isSaving = false
+            error = nil
+        } else if isSaving { return }
+        settings = value
+    }
+
+    func save(
+        enabled: Bool,
+        context: AidenRemoteRequestContext,
+        send: @escaping @MainActor () async throws -> AidenBotMessagingSettings,
+        read: @escaping @MainActor () async throws -> AidenBotMessagingSettings?,
+        isCurrent: @MainActor () -> Bool
+    ) async {
+        guard self.context == context, let previous = settings, !isSaving, isCurrent() else { return }
+        isSaving = true
+        generation += 1
+        error = nil
+        settings = AidenBotMessagingSettings(enabled: enabled)
+        do {
+            let call = AidenBotMainActorCall(send)
+            let saved = try await aidenBotWithin(.seconds(12)) { try await call.call() }
+            guard self.context == context, isCurrent() else { return }
+            settings = saved
+        } catch {
+            let call = AidenBotMainActorCall(read)
+            let authoritative = try? await aidenBotWithin(.seconds(12)) { try await call.call() }
+            guard self.context == context, isCurrent() else { return }
+            settings = authoritative ?? previous
+            if authoritative?.enabled != enabled { self.error = AidenBotIdentitySaver.failedMessage }
+        }
+        if self.context == context { isSaving = false }
+    }
+}
+
+func aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings?, canWrite: Bool, saving: Bool) -> Bool {
+    settings?.enabled == true && canWrite && !saving
+}
+
+struct AidenBotMessagingSection: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
+    let bot: AidenBotDetail
+    let locked: Bool
+    let onSaved: (AidenBotDetail) -> Void
+    @State private var optimistic: AidenBotMessaging?
+    @State private var isSaving = false
+    @State private var saveError: String?
+
+    private var enabled: Bool {
+        coordinator.botMessaging.value(for: try? coordinator.requestContext())?.enabled == true
+    }
+
+    var body: some View {
+        Section {
+            if let value = optimistic ?? bot.botMessaging {
+                Toggle("Other Bots can message \(bot.name)", isOn: Binding(
+                    get: { value.receive }, set: { save(receive: $0) }
+                ))
+                Toggle("\(bot.name) can message other Bots", isOn: Binding(
+                    get: { value.send }, set: { save(send: $0) }
+                ))
+            }
+            if let saveError { Text(saveError).foregroundStyle(.secondary) }
+        } header: {
+            Text("Other Bots")
+        } footer: {
+            if coordinator.botMessaging.value(for: try? coordinator.requestContext())?.enabled == false { Text("Turned off for all Bots") }
+            else if !enabled { Text("Connect to check Bot messaging.") }
+            else if locked { Text("Save or cancel your changes first.") }
+        }
+        .disabled(!aidenBotMessagingControlsEnabled(
+            settings: coordinator.botMessaging.value(for: try? coordinator.requestContext()),
+            canWrite: !locked, saving: isSaving || coordinator.botMessaging.isSaving
+        ))
+        .task(id: try? coordinator.requestContext()) {
+            guard let context = try? coordinator.requestContext(),
+                  let client = try? coordinator.remoteClient(for: context) else { return }
+            let generation = coordinator.botMessaging.generation
+            do {
+                let list = try await client.bots()
+                guard coordinator.isCurrent(context) else { return }
+                coordinator.botMessaging.adopt(list.messaging, context: context, generation: generation)
+            } catch { saveError = "Couldn’t check Bot messaging. Try again when connected." }
+        }
+    }
+
+    private func save(receive: Bool? = nil, send: Bool? = nil) {
+        guard !locked, enabled, !isSaving, let previous = bot.botMessaging,
+              let context = try? coordinator.requestContext(),
+              let client = try? coordinator.remoteClient(for: context),
+              let patch = try? AidenBotIdentityPatch(botMessaging: AidenBotMessagingPatch(receive: receive, send: send)) else { return }
+        optimistic = patch.botMessaging?.applying(to: previous)
+        isSaving = true
+        saveError = nil
+        Task { @MainActor in
+            let saver = AidenBotIdentitySaver(
+                send: { patch, revision in try await client.updateBotIdentity(id: bot.id, revision: revision, patch: patch) },
+                refresh: { try await client.bot(id: bot.id) }
+            )
+            saver.adopt(bot)
+            let result = await saver.save(patch)
+            guard coordinator.isCurrent(context) else { return }
+            switch result {
+            case .saved(let saved): onSaved(saved)
+            case .failed(let authoritative):
+                if let authoritative { onSaved(authoritative) }
+                saveError = AidenBotIdentitySaver.failedMessage
+            }
+            optimistic = nil
+            isSaving = false
+        }
     }
 }

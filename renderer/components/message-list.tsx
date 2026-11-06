@@ -92,6 +92,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
+  replayedTextLength?: number;
   /** Reasoning explicitly emitted by the current supported provider. */
   streamingReasoning: string | null;
   /** Versioned GUI artifacts emitted by Pi extensions during this response. */
@@ -154,9 +155,11 @@ interface MessageListProps {
 }
 
 interface AssistantResponseProps {
+  imageScope?: string;
   workDetails?: WorkDetailsMode;
   retainWorkDetails?: boolean;
   content: string;
+  replayedTextLength?: number;
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
   attachments?: readonly Attachment[];
@@ -220,9 +223,11 @@ type RenderVisual = (
 ) => React.ReactNode;
 
 function AssistantResponse({
+  imageScope,
   workDetails = "standard",
   retainWorkDetails = false,
   content,
+  replayedTextLength = 0,
   timeline,
   reasoning,
   attachments,
@@ -357,8 +362,10 @@ function AssistantResponse({
           content ? (
             <SafeMessageBubble
               key="text-0"
+              imageScope={imageScope}
               role="assistant"
               content={content}
+              replayedTextLength={replayedTextLength}
               streaming={streaming}
               streamComplete={streamComplete}
               onStreamHandoffComplete={onStreamHandoffComplete}
@@ -433,8 +440,10 @@ function AssistantResponse({
         return (
           <SafeMessageBubble
             key={row.key}
+            imageScope={imageScope}
             role="assistant"
             content={row.content}
+            replayedTextLength={Math.max(0, replayedTextLength - row.startOffset)}
             // Every text row of a running turn stays on the gated reveal path,
             // so text a tool step closed keeps its release slot after newer
             // prose takes over the last row.
@@ -466,6 +475,7 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 }
 
 interface SettledMessageRowProps {
+  imageScope: string;
   workDetails?: WorkDetailsMode;
   retainWorkDetails?: boolean;
   chatId: string;
@@ -505,6 +515,7 @@ interface SettledMessageRowProps {
  * only the live row, do not re-render or re-derive settled history.
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
+  imageScope,
   workDetails,
   retainWorkDetails,
   chatId,
@@ -576,10 +587,11 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
     >
       {live ? (
-        <AssistantResponse {...live} workDetails={workDetails} retainWorkDetails={retainWorkDetails} streaming />
+        <AssistantResponse {...live} imageScope={imageScope} workDetails={workDetails} retainWorkDetails={retainWorkDetails} streaming />
       ) : !message ? null : message.role === "assistant" ? (
         <>
           <AssistantResponse
+            imageScope={imageScope}
             workDetails={workDetails}
             retainWorkDetails={retainWorkDetails}
             content={message.content}
@@ -610,9 +622,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
           ) : null}
         </>
       ) : message.notice ? (
-        <AgentNoticeCard notice={message.notice} content={message.content} />
+        <AgentNoticeCard notice={message.notice} content={message.content} imageScope={imageScope} />
       ) : (
         <SafeMessageBubble
+          imageScope={imageScope}
           role={message.role}
           content={message.content}
           attachments={message.attachments}
@@ -770,6 +783,7 @@ export function MessageList({
   chatId,
   messages,
   streamingText,
+  replayedTextLength,
   streamingReasoning,
   streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamingArtifactPlacements = EMPTY_PLACEMENTS,
@@ -1093,10 +1107,12 @@ export function MessageList({
   const liveRow = streamingRowVisible ? (
     <SettledMessageRow
       key={liveKey}
+      imageScope={`${chatId}:${liveKey}`}
       workDetails={workDetails}
       retainWorkDetails={collapseTiming === "next-input" && (settlingIndex < 0 || settlingIndex >= latestExchangeStart)}
       live={{
         content: streamingText ?? "",
+        replayedTextLength,
         timeline,
         reasoning: streamingReasoning,
         attachments: liveAttachments,
@@ -1130,6 +1146,7 @@ export function MessageList({
     transcriptRows.push(
       <SettledMessageRow
         key={settledRowKeys.get(message.id)}
+        imageScope={`${chatId}:${settledRowKeys.get(message.id)}`}
         workDetails={workDetails}
         retainWorkDetails={collapseTiming === "next-input" && messageIndex >= latestExchangeStart}
         chatId={chatId}

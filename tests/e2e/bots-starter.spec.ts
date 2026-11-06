@@ -99,6 +99,15 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
   await expect(page.getByText("Start with your 10am review.")).toBeVisible();
   await expect(page.getByText(question, { exact: true })).toBeVisible();
 
+  // The same message menu opens from its focused action on platforms without
+  // a native Shift+F10 contextmenu event (including macOS).
+  const messageActions = page.getByRole("button", { name: "Message actions for Chief of Staff’s message" });
+  await messageActions.focus();
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Reply", exact: true }).click();
+  await expect(composer).toHaveValue("> Start with your 10am review.\n\n");
+  await composer.fill("");
+
   // The Bot asks an A–E question: the card takes the composer's place.
   await aiden.app.evaluate(({ BrowserWindow }, botId) => {
     const question = {

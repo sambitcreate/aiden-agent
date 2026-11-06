@@ -532,7 +532,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   fallback={<UnrenderableSubagentUpdate content={resultText} />}
                 >
                   <div className="min-w-0 [overflow-wrap:anywhere]">
-                    <Markdown content={resultText} />
+                    <Markdown content={resultText} imageScope={run.runId} />
                   </div>
                 </ErrorBoundary>
               </section>

@@ -111,7 +111,10 @@ export async function resolveBotModelRuntime(
     throw new Error("This Bot's AI connection is no longer configured.");
   }
   if (signal?.aborted) throw signal.reason;
-  return withPinnedBotProviderAuth(runtime, auth, provider.streamSimple.bind(provider));
+  return withPinnedBotProviderAuth(runtime, auth, provider.streamSimple.bind(provider), {
+    fetchDeferred: provider.fetchDeferred?.bind(provider),
+    cancelDeferred: provider.cancelDeferred?.bind(provider),
+  });
 }
 
 /**

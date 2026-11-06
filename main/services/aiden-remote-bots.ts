@@ -35,6 +35,7 @@ import {
   parseAidenRemoteBotDetail,
   parseAidenRemoteBotIdentityPatchRequest,
   parseAidenRemoteBotList,
+  parseAidenRemoteBotMessagingSettings,
   parseAidenRemoteBotSummary,
   type AidenRemoteBotAccessView,
   type AidenRemoteBotAvatarView,
@@ -253,6 +254,7 @@ export interface AidenRemoteBotServiceOptions {
   application: BotApplicationPort;
   /** Contract revision 30 (`bot-activity-v1`): Bot detail carries `chatActivity` and `PATCH` accepts it. */
   chatActivity?: boolean;
+  messaging?: { enabled(): Promise<boolean>; setEnabled(value: boolean): Promise<boolean> };
   chatStore: { get(chatId: string): Promise<Chat | null> };
   /** Permanently erases a Bot (the durable session's `deleteBot`). */
   deleteBot?(botId: string): Promise<void>;
@@ -306,6 +308,20 @@ export class AidenRemoteBotService {
   /** Revision 30: whether Bot detail carries `chatActivity` and `PATCH` accepts it. */
   get supportsChatActivity(): boolean {
     return this.options.chatActivity === true;
+  }
+
+  get supportsBotMessaging(): boolean {
+    return this.options.messaging !== undefined;
+  }
+
+  async updateMessaging(input: unknown): Promise<{enabled: boolean}> {
+    const parsed = parseRequest(parseAidenRemoteBotMessagingSettings, input, "The Bot messaging settings are invalid.");
+    if (!this.options.messaging) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    const enabled = await this.options.messaging.setEnabled(parsed.enabled);
+    this.options.notifyBotsChanged?.();
+    return { enabled };
   }
 
   /** Shared with the durable-session routes so every Bot POST uses one ledger. */
@@ -495,6 +511,7 @@ export class AidenRemoteBotService {
     return parseAidenRemoteBotDetail({
       ...summary,
       instructions: bot.instructions,
+      ...(this.supportsBotMessaging ? {botMessaging: {receive: bot.acceptsBotMessages !== false, send: bot.messagesOtherBots !== false}} : {}),
       access: parseAidenRemoteBotAccessView(access),
       ...(modelSelection ? { modelSelection } : {}),
       ...(visionModelSelection ? { visionModelSelection } : {}),
@@ -514,7 +531,7 @@ export class AidenRemoteBotService {
     ]);
     const summaries = await mapBounded(bots, 8, (bot) =>
       this.summary(bot, health?.get(bot.id) ?? "ready", sessions?.get(bot.id)));
-    return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS });
+    return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS, ...(this.options.messaging ? {messaging: {enabled: await this.options.messaging.enabled()}} : {}) });
   }
 
   async get(botId: string, audienceId?: string): Promise<AidenRemoteBotDetail> {
@@ -693,7 +710,7 @@ export class AidenRemoteBotService {
   ): Promise<AidenRemoteBotDetail> {
     const parsed = parseRequest(
       (value: unknown) =>
-        parseAidenRemoteBotIdentityPatchRequest(value, { allowChatActivity: this.supportsChatActivity }),
+        parseAidenRemoteBotIdentityPatchRequest(value, { allowChatActivity: this.supportsChatActivity, allowBotMessaging: this.supportsBotMessaging }),
       input,
       "The Bot identity update is invalid.",
     );
@@ -723,6 +740,8 @@ export class AidenRemoteBotService {
         avatar: recipe(parsed.avatar ?? existing.avatar),
         // Absent keeps the saved choice (slice B ruling 2); only an explicit pick changes it.
         ...(parsed.chatActivity ? { chatActivity: parsed.chatActivity } : {}),
+        ...(parsed.botMessaging?.receive === undefined ? {} : {acceptsBotMessages: parsed.botMessaging.receive}),
+        ...(parsed.botMessaging?.send === undefined ? {} : {messagesOtherBots: parsed.botMessaging.send}),
       });
       this.options.notifyBotsChanged?.(updated.id);
       return this.detail(updated, audienceId);

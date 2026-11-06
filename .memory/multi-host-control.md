@@ -128,3 +128,7 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
 - PeerTransport keeps fixed DNS, refused, network, TLS and timeout categories; raw OS errors never enter renderer status. Actual request deadlines now report timeout rather than generic unavailability. Cancellation keeps its old unavailable result.
 - PeerHostManager preserves the category through retry backoff. Connections uses the last known route for actionable Tailscale or LAN recovery copy; alternate routes may have been tried. No network probes, grants, or shared Remote HTTP protocol changed. iOS and Android use their existing native connection diagnostics and do not consume this desktop IPC status.
 - Focused tests exercise a real request deadline, DNS lookup failure, supervisor recovery and route-specific presentation. Physical paired-machine acceptance remains separate.
+
+## Live history (Remote revision 58)
+
+Readers opt into active-run checkpoints on the two run SSE routes. The host captures only projected visible content, seals its coalescible delta at the snapshot cursor and applies the device's existing prompt projection. The paired desktop also folds content at the floor of its shared replay buffer. The renderer handles live events while serialized transcript reads are outstanding and only hands off a completed reply to a read started after settlement. Phones opt in explicitly so strict older decoders keep the original gap shape.
