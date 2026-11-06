@@ -11,6 +11,10 @@ import {
 } from "./live-chat-tools";
 import { LiveSessionBus } from "./live-session-bus";
 import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
+import { liveChatToolProviderFactory } from "../../main/services/gemini-live/live-chat-tools.js";
+import { LiveRendererToolBroker, LiveToolRegistry } from "../../main/services/gemini-live/live-tools.js";
+import type { RendererDocumentOwner } from "../../main/services/renderer-document-owner.js";
+import { liveChatNoteText } from "../shared/live-chat-tools";
 
 function controller(overrides: Partial<LiveChatController> = {}): LiveChatController & { sent: string[]; stops: number } {
   const sent: string[] = [];
@@ -355,6 +359,87 @@ test("handlers registered on the session bus answer main's requests", async () =
     "needs_user_request",
     "stopping",
   ]);
+});
+
+test("a chat that opens after Live gave up on the call is still reported as opened", async () => {
+  // Main's broker and registry wired to the window's session bus, as in the app.
+  const bus = new LiveSessionBus();
+  let broker!: LiveRendererToolBroker;
+  broker = new LiveRendererToolBroker(
+    "s1",
+    (event) => {
+      if (event.type === "tool_cancel") bus.cancelToolRequest("s1", event.requestId);
+      else void bus.runToolRequest(event);
+    },
+    30_000,
+    1_000,
+  );
+  bus.setSession("s1", {
+    toolResult: async (_session, requestId, response) => broker.resolve(requestId, response),
+    note: async () => true,
+  });
+  let navigate!: (opened: boolean) => void;
+  const { handlers } = harness({
+    openChat: () => new Promise<boolean>((resolve) => (navigate = resolve)),
+  });
+  bus.registerTool("find_and_open_chat", handlers.find_and_open_chat);
+  const owner = {} as RendererDocumentOwner;
+  const provider = liveChatToolProviderFactory(
+    { owner, sessionId: "s1", signal: new AbortController().signal, renderer: broker },
+    {},
+    {},
+  )!;
+  const registry = new LiveToolRegistry([provider], { sessionId: "s1", owner });
+
+  const pending = registry.dispatch({ id: "c1", name: "find_and_open_chat", args: { query: "release notes" } });
+  while (!navigate) await new Promise((resolve) => setImmediate(resolve));
+  registry.cancel("c1");
+  await new Promise((resolve) => setImmediate(resolve));
+  navigate(true);
+  const result = await pending;
+  assert.equal(result.ok, true, "the navigation happened, so Live must not say it failed");
+  assert.equal(result.opened, true);
+  assert.deepEqual(result.untrusted_chat_content, { title: "Release notes" });
+});
+
+test("secrets in chat titles and workspace names never reach Live or a note", async () => {
+  const secret = "DB_PASSWORD=hunter2";
+  let controls!: LiveChatControlRegistry;
+  const { registry, run, speak, log } = harness({
+    openNewChatIn: async () => {
+      controls.register(Symbol(), controller({ chatId: "draft-1", isDraft: true }));
+      return "draft-1";
+    },
+    listChats: async () => [
+      { id: "chat-1", title: `Fix login ${secret}`, updatedAt: 3 },
+      { id: "chat-5", title: `Deploy ${secret}`, updatedAt: 2 },
+      { id: "chat-6", title: `Deploy ${secret} again`, updatedAt: 1 },
+    ],
+    listWorkspaces: async () => [{ id: "ws-1", name: `Website API_KEY=sk-live-1234567890abcdef` }],
+  });
+  const open = controller({
+    read: () => ({ title: `Fix login ${secret}`, busy: false, waitingForApproval: false, messages: [], truncated: false }),
+    send: async () => ({ ok: true, status: "sent", title: `Fix login ${secret}` }),
+    stop: () => ({ ok: true, status: "stopping", title: `Fix login ${secret}` }),
+  });
+  controls = registry;
+  registry.register(Symbol(), open);
+  const results: unknown[] = [await run("read_open_chat")];
+  speak();
+  results.push(await run("send_to_open_chat", { text: "Hi", mode: "auto" }));
+  speak();
+  results.push(await run("stop_open_chat"));
+  results.push(await run("find_and_open_chat", { query: "deploy" }));
+  results.push(await run("find_and_open_chat", { query: "fix login" }));
+  results.push(await run("start_new_chat", {}));
+  const spoken = JSON.stringify(results);
+  assert.doesNotMatch(spoken, /hunter2|sk-live/u);
+  assert.match(spoken, /Fix login DB_PASSWORD=\[hidden\]/u, "the rest of the title is kept");
+  assert.match(spoken, /closeMatches/u);
+  assert.match(spoken, /"workspace":"Website API_KEY=\[hidden\]"/u);
+  const watched = log.find((entry) => entry.startsWith("watch:"))!;
+  assert.doesNotMatch(liveChatNoteText("finished", watched.split(":").slice(2).join(":")), /hunter2/u);
+  assert.equal(liveChatNoteText("approval", `Deploy ${secret}`), "The chat “Deploy DB_PASSWORD=[hidden]” is waiting for an approval.");
 });
 
 test("the chat access notice shows once and is remembered, and never once a saved setting says it was shown", async () => {

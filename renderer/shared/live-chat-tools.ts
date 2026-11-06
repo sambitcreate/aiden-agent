@@ -336,7 +336,7 @@ export function findLiveWorkspace<T extends { id: string; name: string }>(
 export type LiveChatNoteKind = "finished" | "failed" | "approval" | "question";
 
 function quotedTitle(title: string): string {
-  const clean = oneLine(redactBareCredentialTokens(title, REDACTED)) || "Untitled";
+  const clean = oneLine(redactLiveChatSecrets(title)) || "Untitled";
   return clean.length > 80 ? `${clean.slice(0, 79)}…` : clean;
 }
 

@@ -15,6 +15,7 @@ import {
   findLiveChat,
   findLiveWorkspace,
   liveChatFailure,
+  redactLiveChatSecrets,
   type LiveChatCandidate,
   type LiveChatSendMode,
   type LiveChatToolName,
@@ -107,7 +108,7 @@ const cancelled = (): LiveRendererToolResult => liveChatFailure(LIVE_CHAT_ERRORS
 function withUntrustedTitle(result: LiveRendererToolResult): LiveRendererToolResult {
   if (typeof result.title !== "string") return result;
   const { title, ...rest } = result;
-  return { ...rest, untrusted_chat_content: { title } };
+  return { ...rest, untrusted_chat_content: { title: redactLiveChatSecrets(title) } };
 }
 
 export function createLiveChatToolHandlers(
@@ -165,7 +166,7 @@ export function createLiveChatToolHandlers(
           busy: snapshot.busy,
           ...(snapshot.waitingForApproval ? { waitingForApproval: true } : {}),
         },
-        untrusted_chat_content: { title: snapshot.title, messages: snapshot.messages },
+        untrusted_chat_content: { title: redactLiveChatSecrets(snapshot.title), messages: snapshot.messages },
         ...(snapshot.truncated ? { olderMessagesLeftOut: true } : {}),
       };
     }),
@@ -196,9 +197,9 @@ export function createLiveChatToolHandlers(
       if (context.signal.aborted) return cancelled();
       if (found.kind === "none") return liveChatFailure(LIVE_CHAT_ERRORS.notFound);
       if (found.kind === "ambiguous") {
-        return { ok: true, opened: false, untrusted_chat_content: { closeMatches: found.titles } };
+        return { ok: true, opened: false, untrusted_chat_content: { closeMatches: found.titles.map(redactLiveChatSecrets) } };
       }
-      const title = { untrusted_chat_content: { title: found.chat.title } };
+      const title = { untrusted_chat_content: { title: redactLiveChatSecrets(found.chat.title) } };
       if (deps.controller()?.chatId === found.chat.id) {
         return { ok: true, opened: true, alreadyOpen: true, ...title };
       }
@@ -221,7 +222,8 @@ export function createLiveChatToolHandlers(
         : (workspaces.find((entry) => entry.id === deps.currentWorkspaceId()) ?? null);
       if (!workspace) return liveChatFailure(LIVE_CHAT_ERRORS.workspaceNotFound);
       if (!commit(context)) return cancelled();
-      const started = { ok: true, started: true, untrusted_chat_content: { workspace: workspace.name } };
+      const workspaceLabel = redactLiveChatSecrets(workspace.name);
+      const started = { ok: true, started: true, untrusted_chat_content: { workspace: workspaceLabel } };
       let draftId: string | null;
       try {
         draftId = await deps.openNewChatIn(workspace.id);
@@ -243,7 +245,7 @@ export function createLiveChatToolHandlers(
         ...sent,
         started: true,
         untrusted_chat_content: {
-          workspace: workspace.name,
+          workspace: workspaceLabel,
           ...(sent.untrusted_chat_content as Record<string, unknown> | undefined),
         },
       };

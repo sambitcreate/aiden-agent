@@ -88,7 +88,7 @@ test("bad arguments are refused in main and never reach the window", async () =>
   assert.equal(requests.length, 0);
 });
 
-test("a cancelled call is withdrawn from the window; a lost send or stop is outcome_unknown, not cancelled", async () => {
+test("a cancelled call is withdrawn from the window; a lost send, stop, open or start is outcome_unknown, not cancelled", async () => {
   const requests: LiveRendererToolRequest[] = [];
   const cancels: string[] = [];
   const broker = new LiveRendererToolBroker("s1", (event) => {
@@ -109,6 +109,7 @@ test("a cancelled call is withdrawn from the window; a lost send or stop is outc
     ["c2", "stop_open_chat", {}],
     ["c3", "send_to_open_chat", { text: "Hi", mode: "auto" }],
     ["c4", "start_new_chat", { text: "Hi" }],
+    ["c5", "find_and_open_chat", { query: "Fix login" }],
   ] as const) {
     const pending = registry.dispatch({ id, name, args });
     await new Promise((resolve) => setImmediate(resolve));

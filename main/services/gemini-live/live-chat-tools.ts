@@ -191,10 +191,14 @@ function isLiveChatToolName(name: string): name is LiveChatToolName {
   return (LIVE_CHAT_TOOL_NAMES as readonly string[]).includes(name);
 }
 
-/** Tools that change something; a lost result is reported as outcome_unknown, never cancelled. */
+/**
+ * Tools that change something (opening a chat changes what is on screen); a
+ * lost result is reported as outcome_unknown, never cancelled.
+ */
 const MUTATING: ReadonlySet<LiveChatToolName> = new Set([
   "send_to_open_chat",
   "stop_open_chat",
+  "find_and_open_chat",
   "start_new_chat",
 ]);
 
