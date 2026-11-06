@@ -505,6 +505,27 @@ test("a same-id replacement that settles during its own publication is withdrawn
   }
 });
 
+test("a same-id replacement that fails to publish leaves the shown original to be withdrawn", async () => {
+  const withdrawn: Array<[string, string]> = [];
+  let replacement: Promise<string> | undefined;
+  const ask = (toolCallId: string) =>
+    coordinator.request(
+      { streamId: "s-same", approvalId: "same", toolCallId, toolName: "write", summary: "x" },
+      undefined,
+      "document-one",
+    );
+  const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(
+    (prompt) => {
+      if (prompt.toolCallId === "second") throw new Error("surface gone");
+      replacement = ask("second");
+    },
+    (approvalId, outcome) => withdrawn.push([approvalId, outcome]),
+  );
+  assert.equal(await ask("first"), "cancelled");
+  assert.equal(await replacement, "unavailable");
+  assert.deepEqual(withdrawn, [["same", "cancelled"]]);
+});
+
 test("a publication that throws after settling its own prompt keeps the outcome and still withdraws", async () => {
   const withdrawn: string[] = [];
   const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(

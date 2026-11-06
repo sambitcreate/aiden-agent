@@ -82,7 +82,7 @@ export function toolApprovalBlockReason(
  * every settlement path removes both the map entry and signal listener.
  */
 export class ToolApprovalCoordinator {
-  /** Prompts inside their publish callback, by id, so a re-ask can claim the id. */
+  /** Prompts inside their publish callback, by id, so a shown re-ask can claim the id. */
   private readonly publications = new Map<string, { replaced: boolean }>();
   private readonly pending = new Map<string, PendingApproval>();
   private readonly closedStreams = new Map<string, "cancelled" | "detached">();
@@ -132,8 +132,6 @@ export class ToolApprovalCoordinator {
       if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
       return Promise.resolve(closedOutcome);
     }
-    const publishingPrompt = this.publications.get(approvalId);
-    if (publishingPrompt) publishingPrompt.replaced = true;
     this.pending.get(approvalId)?.settle("cancelled");
     return new Promise<ToolApprovalOutcome>((resolve) => {
       let phase: ApprovalPromptPhase = "admitted";
@@ -192,6 +190,9 @@ export class ToolApprovalCoordinator {
         if (enclosing) this.publications.set(approvalId, enclosing);
         else this.publications.delete(approvalId);
       }
+      // Reaching here means this prompt was shown, so it owns the id from now on.
+      // A replacement that was never shown leaves the enclosing prompt to withdraw.
+      if (enclosing) enclosing.replaced = true;
       if (settledWhilePublishing === undefined) phase = "published";
       // Withdrawal goes by id, so a same-id replacement asked during publication
       // owns the id from then on, even if it has already settled and withdrawn.
