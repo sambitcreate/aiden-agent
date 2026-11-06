@@ -27,53 +27,9 @@ import {
   assistantLiveVoiceApprovalFromReceipts,
 } from "./use-assistant-live-approvals.js";
 import type { AssistantLiveController } from "./use-assistant-live.js";
+import { idleLiveController } from "./assistant-live-test-fixture.js";
 
-const idleLive: AssistantLiveController = {
-  visible: true,
-  available: true,
-  availabilityDetail: "Approved model: gemini-live-reviewed",
-  active: false,
-  setupOpen: false,
-  busy: false,
-  microphone: true,
-  microphoneActive: false,
-  microphoneLevel: 0,
-  microphonePermission: "granted",
-  microphonePermissionReady: true,
-  microphonePermissionDetail: "Microphone permission is allowed.",
-  model: "gemini-live-reviewed",
-  state: "idle",
-  captions: [],
-  voiceApprovalReceipts: [],
-  latestVoiceApprovalReceiptId: () => 0,
-  retainVoiceApprovalReceiptsAfter: () => undefined,
-  error: null,
-  reconnectRequired: false,
-  startBlockedReason: null,
-  computerUseEnabled: true,
-  computerUseActing: false,
-  computerUseReady: true,
-  computerUseBusy: false,
-  computerUseDetail: "Ready",
-  computerUsePermissions: { accessibility: true, screenRecording: true },
-  computerUseError: null,
-  screenShareAvailable: false,
-  screenSourceLabel: null,
-  screenActive: false,
-  screenBusy: false,
-  screenError: null,
-  setupComplete: true,
-  setSetupOpen: () => undefined,
-  setMicrophone: () => undefined,
-  setComputerUse: async () => undefined,
-  requestMicrophonePermission: async () => true,
-  prepareComputerUse: async () => undefined,
-  chooseScreenSource: async () => undefined,
-  releaseScreen: () => undefined,
-  start: async () => undefined,
-  stop: async () => undefined,
-  cancelSetup: async () => undefined,
-};
+const idleLive = idleLiveController;
 
 test("Live voice and action states share the animated duplex helix", () => {
   for (const state of ["thinking", "speaking", "acting"] as const) {
