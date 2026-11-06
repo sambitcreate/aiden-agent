@@ -1238,8 +1238,8 @@ struct AidenToolStepGroup: Identifiable, Equatable {
         return parts.joined(separator: ", ")
     }
 
-    /// The scalars decide first, so a group a token didn't touch is told apart
-    /// from one it did without walking its steps.
+    /// Groups that differ are usually told apart by the cheap fields, without
+    /// walking the steps. Two equal groups still compare every step.
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.isRunning == rhs.isRunning && lhs.hasFailure == rhs.hasFailure
             && lhs.summary == rhs.summary && lhs.steps == rhs.steps
@@ -1267,8 +1267,10 @@ extension Array where Element == AidenChronologicalRow {
     ///
     /// The Mac numbers steps from `tool-1` in every run, so `scope` (the run's
     /// generation ID, the same live and settled) keeps one group's ID apart
-    /// from another's in the expansion state held above the rows.
-    func groupedForDisplay(scope: String = "") -> [AidenChronologicalBlock] {
+    /// from another's in the expansion state held above the rows. `active` is
+    /// whether the reply is still being written: a step left "running" in a
+    /// reply that no longer is doesn't make its group run.
+    func groupedForDisplay(scope: String, active: Bool) -> [AidenChronologicalBlock] {
         var blocks: [AidenChronologicalBlock] = []
         blocks.reserveCapacity(count)
         var run: [AidenChronologicalRow] = []
@@ -1291,14 +1293,14 @@ extension Array where Element == AidenChronologicalRow {
             for row in run {
                 for step in row.steps {
                     steps.append(step)
-                    if step.status == .pending || step.status == .running { running = true }
+                    if active, step.status == .pending || step.status == .running { running = true }
                     if step.status == .failed { failed = true }
                 }
             }
             blocks.append(.toolGroup(AidenToolStepGroup(
                 id: scope.isEmpty ? first.id : "\(scope)/\(first.id)",
                 steps: run,
-                summary: AidenAgentActivityPresentation.summary(toolSteps: steps, running: running),
+                summary: AidenAgentActivityPresentation.summary(toolSteps: steps, running: running, separatesStopped: true),
                 isRunning: running,
                 hasFailure: failed
             )))
@@ -1340,8 +1342,12 @@ extension Array where Element == AidenChronologicalRow {
         return blocks
     }
 
+    /// A step that is waiting on the person stays visible. A question never
+    /// reaches `awaitingApproval`: it stays running until it is answered, and
+    /// its recap (which makes it a recap row) only exists once it completes.
     private static func canFold(_ step: AidenAgentStep) -> Bool {
-        step.kind == .tool && step.status != .awaitingApproval
+        guard step.kind == .tool, step.status != .awaitingApproval else { return false }
+        return !(step.toolName == AidenQuestionnaireRecap.toolName && step.status?.isActive == true)
     }
 }
 
@@ -1768,11 +1774,17 @@ enum AidenAgentActivityPresentation {
 
     /// The same sentence for any run of tool steps: a whole timeline, or one
     /// group of consecutive steps in the transcript.
-    static func summary(toolSteps: [AidenAgentStep], running: Bool) -> String {
+    /// The whole-timeline sentence matches desktop, where a stopped call may
+    /// have run partway and so still counts. A group in the transcript sets
+    /// `separatesStopped` and says "stopped" instead of claiming it ran.
+    static func summary(toolSteps: [AidenAgentStep], running: Bool, separatesStopped: Bool = false) -> String {
         // Matches desktop: a denied or blocked call never ran, so it is
         // counted as skipped. A call still waiting for approval is not counted yet.
         let skipped = toolSteps.filter { $0.status == .blocked }
-        let tools = toolSteps.filter { $0.status != .blocked && $0.status != .awaitingApproval }
+        let stopped = separatesStopped ? toolSteps.filter { $0.status == .cancelled } : []
+        let tools = toolSteps.filter {
+            $0.status != .blocked && $0.status != .awaitingApproval && !(separatesStopped && $0.status == .cancelled)
+        }
         let files = tools.filter { $0.toolName == "read_file" }.count
         let searches = tools.filter { $0.toolName == "grep" || $0.toolName == "glob" }.count
         let directories = tools.filter { $0.toolName == "list_dir" }.count
@@ -1804,12 +1816,14 @@ enum AidenAgentActivityPresentation {
         if mac > 0 { clauses.append("\(mac) Computer Use action\(mac == 1 ? "" : "s")") }
         if compactions > 0 { clauses.append(running ? "compacting context" : "compacted context") }
         if other > 0 { clauses.append("\(other) tool call\(other == 1 ? "" : "s")") }
-        if !skipped.isEmpty {
-            let noun = skipped.allSatisfy { $0.toolName == "run_command" }
+        func clause(_ verb: String, _ steps: [AidenAgentStep]) -> String {
+            let noun = steps.allSatisfy { $0.toolName == "run_command" }
                 ? "command"
-                : skipped.allSatisfy { $0.toolName == "write_file" || $0.toolName == "edit_file" } ? "file change" : "action"
-            clauses.append("skipped \(skipped.count) \(noun)\(skipped.count == 1 ? "" : "s")")
+                : steps.allSatisfy { $0.toolName == "write_file" || $0.toolName == "edit_file" } ? "file change" : "action"
+            return "\(verb) \(steps.count) \(noun)\(steps.count == 1 ? "" : "s")"
         }
+        if !skipped.isEmpty { clauses.append(clause("skipped", skipped)) }
+        if !stopped.isEmpty { clauses.append(clause("stopped", stopped)) }
         if clauses.isEmpty { return running ? "Waiting for approval" : "No activity" }
         let sentence = clauses.joined(separator: ", ")
         guard explored.isEmpty, let first = sentence.first else { return sentence }

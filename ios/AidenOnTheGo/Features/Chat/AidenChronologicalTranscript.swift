@@ -17,11 +17,11 @@ struct AidenChronologicalTranscript: View {
 
     /// Tells one run's groups from another's in the expansion state: the run's
     /// generation ID, which is the same for the live reply and the settled one.
-    var groupScope = ""
+    let groupScope: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(rows.groupedForDisplay(scope: groupScope)) { block in
+            ForEach(rows.groupedForDisplay(scope: groupScope, active: active)) { block in
                 switch block {
                 case .row(let row):
                     rowView(row)
@@ -214,10 +214,8 @@ struct AidenToolStepGroupView: View, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel(group.accessibilityLabel(isExpanded: isExpanded))
         .accessibilityHint(isExpanded ? "Hides the steps" : "Shows the steps")
-        .accessibilityAddTraits(.isButton)
     }
 }
 
