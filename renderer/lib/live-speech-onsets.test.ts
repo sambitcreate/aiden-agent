@@ -134,3 +134,27 @@ test("speech heard right after a fence counts as begun before it", () => {
   const later = onsets.claim();
   assert.ok(later !== null && later > fence, "speech once the guard has passed is fresh");
 });
+
+test("speech captured before a fence stays before it however long the backlog that delays it", () => {
+  const bus = new LiveSessionBus();
+  const onsets = new LiveSpeechOnsets(() => bus.beginVoiceInput());
+  let captureClock = 10;
+  bus.onVoiceInputFence((fence) => onsets.fenced(fence, captureClock));
+  const play = (level: number, ms: number, capturedUntil: () => number) => {
+    for (let elapsed = 0; elapsed < ms; elapsed += PACKET_MS) onsets.packet(level, PACKET_MS, capturedUntil());
+  };
+  const fence = bus.voiceInputFence();
+  // A second of audio captured before the fence is still queued for the
+  // window, longer than the handled-audio guard, and ends in speech.
+  play(QUIET, 1_000, () => captureClock - 0.5);
+  play(SPEECH, 300, () => captureClock);
+  const early = onsets.claim();
+  assert.ok(early !== null && early <= fence, "captured before the fence");
+  play(QUIET, LIVE_SPEECH_SILENCE_MS + PACKET_MS, () => captureClock);
+  onsets.retireFinished();
+  // Speech captured well after the fence is fresh.
+  captureClock += 2;
+  play(SPEECH, 300, () => captureClock);
+  const fresh = onsets.claim();
+  assert.ok(fresh !== null && fresh > fence, "captured after the fence");
+});

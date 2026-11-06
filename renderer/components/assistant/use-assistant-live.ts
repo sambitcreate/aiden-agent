@@ -652,7 +652,12 @@ export function useAssistantLiveWithDependencies(
   const utteranceStartedAt = React.useRef<number | null>(null);
   /** Speech onsets heard at the microphone, which come before any caption. */
   const [speechOnsets] = React.useState(() => new LiveSpeechOnsets(() => liveSessionBus.beginVoiceInput()));
-  React.useEffect(() => liveSessionBus.onVoiceInputFence((fence) => speechOnsets.fenced(fence)), [speechOnsets]);
+  /** Reads the microphone's capture clock (its AudioContext's time) while capture runs. */
+  const captureClock = React.useRef<(() => number) | null>(null);
+  React.useEffect(
+    () => liveSessionBus.onVoiceInputFence((fence) => speechOnsets.fenced(fence, captureClock.current?.())),
+    [speechOnsets],
+  );
   /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
   const liveReplyOpen = React.useRef(false);
   const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -784,6 +789,7 @@ export function useAssistantLiveWithDependencies(
       microphoneLevelRef.current = 0;
       microphoneLevelFrame.current = 0;
       speechOnsets.reset();
+      captureClock.current = null;
       if (mounted.current) {
         setMicrophoneActive(false);
         setMicrophoneLevel(0);
@@ -1279,6 +1285,7 @@ export function useAssistantLiveWithDependencies(
         const silent = context.createGain();
         silent.gain.value = 0;
         source.connect(worklet).connect(silent).connect(context.destination);
+        captureClock.current = () => context.currentTime;
         let stopped = false;
         let loggedInput = false;
         let audioSendFailed = false;
@@ -1335,7 +1342,7 @@ export function useAssistantLiveWithDependencies(
         };
         worklet.port.onmessage = (message: MessageEvent<unknown>) => {
           if (stopped || !isCurrent()) return;
-          const data = message.data as { type?: unknown; data?: unknown };
+          const data = message.data as { type?: unknown; data?: unknown; capturedUntil?: unknown };
           if (data?.type !== "pcm" || !(data.data instanceof ArrayBuffer)) return;
           const pcm = new Uint8Array(data.data);
           if (!loggedInput) {
@@ -1346,7 +1353,11 @@ export function useAssistantLiveWithDependencies(
           // rather than a cut-off stream.
           if (microphoneMutedRef.current) pcm.fill(0);
           const measured = measureGeminiLivePcmLevel(pcm);
-          speechOnsets.packet(measured, (pcm.byteLength / 2 / GEMINI_LIVE_WORKLET_SAMPLE_RATE) * 1_000);
+          speechOnsets.packet(
+            measured,
+            (pcm.byteLength / 2 / GEMINI_LIVE_WORKLET_SAMPLE_RATE) * 1_000,
+            typeof data.capturedUntil === "number" ? data.capturedUntil : undefined,
+          );
           const previous = microphoneLevelRef.current;
           const smoothed =
             measured >= previous
