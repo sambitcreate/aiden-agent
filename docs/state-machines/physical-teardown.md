@@ -41,3 +41,20 @@ Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession`
 | `backend:M121`, `M122` | `bot-computers/host.ts` | A failed stop counts as off only if Lume says so, an unreadable state counts as on, and the slot stays held until then. Read only; no real VM was run. |
 | `backend:M089`, `M090` | `acp/` | Shutdown waits for launches and one exit rejects pending calls. On leader exit the group gets SIGKILL and its ledger entry is released without waiting, so a descendant stuck past SIGKILL would be forgotten. Not reproduced and left as is. |
 | `backend:M102`, `M103` | `subagents/child-agent-runtime.ts`, `subagent-inference-process-core.ts` | Shutdown returns false and keeps its children when isolation or settlement is not clean. |
+
+## Quit and update install
+
+`createLifecycleCheck` in `main/application-lifecycle-core.ts` serializes close, reload, quit and onboarding reset. `shutdownAndQuit` joins a shutdown already running, and `cleanupApplication` runs once. `createUpdateInstallIntent` owns an accepted update install. It waits for the check to be free, because whoever holds it owns the outcome. A quit that completes installs the update. A quit cancelled for good withdraws the install before it releases the check, and the update stays ready, so a later ordinary quit cannot install it unasked. A renderer veto retries the quit, and the install rides on that retry. A failed shutdown also withdraws it.
+
+The flags in `main/index.ts` (`backend:M001`) stay where they are. Each is written in few places and the cancel paths reset them, but they have no Electron-free harness, so moving them would trade a read-checked flow for an untested one.
+
+## Not done in this slice
+
+| Inventory | Owner | Why |
+|---|---|---|
+| `backend:M112` | `follow-through/background-jobs.ts` | Not audited beyond `recordCheckGroup`. |
+| `backend:M125`, `M126`, `M130`, `M156`, `clients:C43` | Browser, device helper host, terminal, Ghostty | Not audited. |
+| `cli-native:N13`, `O01` | iMCP launcher, bounded-command guard | Not audited. |
+| Rank 13 capture and input owners, including `M131`, `M133`–`M138` | Recording, dictation, speech, TTS | Not audited. Permission and device behavior needs real hardware evidence, which this slice did not gather. |
+| Rank 14 remainder: `M002`–`M004`, `M165`, `M192` | Startup and updater owners | `M002` already has a pure core. The others were not audited. |
+| Shutdown and restart trace across P1 to P4 | All lanes | Needs the P2, P3 and P4 work on one branch, which has not merged. |

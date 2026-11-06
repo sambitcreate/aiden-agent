@@ -20,7 +20,9 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 
 - P0/P1: done apart from review and CI. #735 admission, #736 generation settlement, #741 run input, #742 Pi run gate, #743 generation stream, #744 background launch, #745 side-question slot, plus the first-send PR. Dispositions are in `docs/state-machines/retained-p1-owners.md`.
 - P5a: shared process settlement and subagent shell are in PRs. `docs/state-machines/physical-teardown.md` records the contract.
-- P5b, P5c, P5d: not started when this was written.
+- P5b: Computer Use host in a PR. P5c: MCP stdio in a PR; Bot VM, ACP and subagent runtime kept as they are.
+- P5d: update-install withdrawal in a PR. Everything else in P5 is listed under "Not done in this slice" in `docs/state-machines/physical-teardown.md`, with reasons.
+- Blocked: the shutdown and restart trace across P1 to P4 needs Lanes B and C merged.
 
 ## Lane overlap
 
@@ -31,6 +33,27 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 
 - E2E: use `CUA_SPACE=aiden-e2e` and read the Playwright totals, not only the exit code. An earlier Space never became ready and a piped `tail` hid it.
 - Conflict resolution on `retained-p1-owners.md`: the M106 row and the First send section share a hunk, so check both survive.
+
+## Known failures
+
+- `tests/e2e/follow-through-lifecycle.spec.ts:30` and `:64` fail in the Cua Space on the unmodified base `bc663001f` too, with the same lines and messages (`alive(pid)` true; `git:createWorktree` disk capacity). Not from this lane. Whether they pass elsewhere rests on macOS CI.
+- `use-assistant-live.test.tsx`, "Live device preparation failure...", failed once on #743. Cause unknown, not fixed.
+- `mcp-failure-diagnostics.test.ts` matched `8443` inside a random hash. Fixed in #768.
+
+- Rust `guard::tests::authenticated_bridge_lease_eof_revokes_the_whole_broker_group` failed once locally at load about 10 ("broker survived authenticated bridge lease EOF", `guard.rs:490`, two-second deadline). No `native/` change in this lane. Not fixed.
+- One JS failure in `npm run test:computer-use` on the #766 fix: 514 passed, 1 failed, log discarded, test unidentified. 12 later JS runs clean. The new lease-retry test is not ruled out. Recorded in #766.
+
+- `tests/e2e/bot-browser.spec.ts:22` flaked once on #742 (line 143 expected `text`, got `password`) and `tests/e2e/chat-top-bar.spec.ts:104` once on #756 ("Resulting promise was garbage collected" at line 117). Both passed on retry and on the one whole-run rerun. Causes unknown, not fixed. Recorded in those PRs.
+- Electron E2E (3/3) hit the 20-minute job limit once on #755 at test 85 of 92, no test over 34s, so a slow runner. Normal time is 12 to 16 minutes, so the limit has little room. Recorded in #755.
+
+- `bot-browser.spec.ts:22` flaked again on #745, at line 109: the masking check found `737` in a snapshot. Probably a chance match in a substring search, as in `69728320a`, but the run kept no snapshot, so a real leak is not ruled out. Needs the Bot browser owner.
+- `renderer/lib/use-voice-recorder.test.tsx` failed once on #736 at line 117: `recording` read right after waiting only for the transcript. Looks like a test race, unconfirmed, not fixed.
+- `chat-top-bar.spec.ts:563` flaked on #769: `notes.txt` was ENOENT while polling after Save, and the retry passed. Cause unknown. Worth checking whether a save can leave the file briefly missing.
+- A test that fails with an edited file open also reports "Electron shutdown timed out after 35000 ms". Reproduced with a throwaway spec on both `b96154694` and the unmodified base `bc663001f`, so not from this lane.
+
+## Handed to the owner
+
+- `aiden serve stop` cannot force-stop an MCP survivor whose wrapper exited: `daemonMcpGroups()` in `packages/cli/src/serve-lifecycle.ts` needs a direct child of the daemon. Predates this lane, needs `packages/cli` work, and `feature/sm-serve-*` branches change that file.
 
 ## Unverified
 
