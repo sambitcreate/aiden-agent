@@ -650,8 +650,8 @@ export const spendingApi = {
   status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
     parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
   /** Raise the chat's limit, or the Bot's month, by the limit once more. */
-  allowMore: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
-    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", ownerKind, ownerId)),
+  allowMore: async (notice: SpendingStatusView) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", notice.ownerKind, notice.ownerId, notice)),
   botLimit: async (botId: string) => parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
   /** "default" follows Settings, null is no limit, a number is the Bot's own. */
   setBotLimit: async (botId: string, choice: "default" | null | number) =>

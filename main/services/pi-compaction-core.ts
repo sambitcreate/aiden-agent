@@ -934,6 +934,7 @@ export class PiCompactionCoordinator {
 export function createPiCompactionModels(
   runtime: ResolvedModelRuntime,
   onAssistantMessage?: (message: AssistantMessage) => void | Promise<void>,
+  beforeSummaryRefusal?: () => Promise<string | undefined>,
 ): Models {
   const streamSimple: Models["streamSimple"] = (model, context, options) => {
     const stream = runtime.models.getModel(model.provider, model.id)
@@ -960,7 +961,12 @@ export function createPiCompactionModels(
     get(target, property) {
       if (property === "streamSimple") return streamSimple;
       if (property === "completeSimple") {
-        return (...args: Parameters<Models["completeSimple"]>) => streamSimple(...args).result();
+        return async (...args: Parameters<Models["completeSimple"]>) => {
+          // Pi issues every summary, including split turns and retries, through completeSimple.
+          const refusal = await beforeSummaryRefusal?.();
+          if (refusal) throw new Error(refusal);
+          return streamSimple(...args).result();
+        };
       }
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;

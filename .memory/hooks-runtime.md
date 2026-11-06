@@ -56,3 +56,5 @@ The contract lives in `main/services/hooks/hook-types.ts`. Every surface goes th
 - Known and documented: `run_command` can write the `<userData>/hooks/` store on the desktop; subagents' tools skip Pre/PostToolUse; the shell reopens a script after the recheck; transitive imports aren't pinned.
 
 Pullfrog on 7e2b03ae0 (2026-11-06): after a hook, Bots recheck a routine's go-ahead and any new hand-off, because only plan permits and allow-list entries recheck themselves (the probe skips both). The trust store now fails the load on any unreadable approval rather than dropping it. A changed repo guard keeps a separate Missing row; a saved one clears with Delete. After a rewrite, only the checked dispatch can stop the turn or add context.
+
+Merge of #758 into hooks (2026-11-06): the daemon's hook `ask` now goes through `createDaemonApprovals`, its Stop loop reads `entry.stopRequested`, and `hooks` is an allowed command in the lifetime-tracked socket handler. `daemon-turns.test.mjs` and `serve-lifetime.test.mjs` cover all three with real hooks; each test was checked against a reverted line.
