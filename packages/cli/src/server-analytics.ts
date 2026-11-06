@@ -240,8 +240,10 @@ interface MessagelessError {
   cause?: MessagelessError;
 }
 
-/** What V8 writes before a message: a name, then a Node code if any. */
-const STACK_HEADER_NAME = /^[\w$.]*(?: \[\w+\])?(?:: )?$/u;
+/** The header V8 writes: a name and any Node code, then ": " and the message if there is one. */
+const STACK_NAME = String.raw`[\w$.]+(?: \[\w+\])?`;
+const HEADER_WITHOUT_MESSAGE = new RegExp(`^${STACK_NAME}$`, "u");
+const HEADER_BEFORE_MESSAGE = new RegExp(`^${STACK_NAME}: $`, "u");
 
 /**
  * The frames of a stack, or none if its header isn't the error's name and
@@ -251,7 +253,8 @@ const STACK_HEADER_NAME = /^[\w$.]*(?: \[\w+\])?(?:: )?$/u;
 function stackBelowHeader(stack: unknown, message: unknown): string | undefined {
   if (typeof stack !== "string" || typeof message !== "string") return undefined;
   const start = message === "" ? stack.search(/\n|$/u) : stack.indexOf(message);
-  if (start < 0 || !STACK_HEADER_NAME.test(stack.slice(0, start))) return undefined;
+  const header = message === "" ? HEADER_WITHOUT_MESSAGE : HEADER_BEFORE_MESSAGE;
+  if (start < 0 || !header.test(stack.slice(0, start))) return undefined;
   const frames = stack.slice(start + message.length);
   return frames === "" || frames.startsWith("\n") ? frames : undefined;
 }

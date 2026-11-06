@@ -557,6 +557,12 @@ test("a stack written before its error's message changed sends no frames", async
     assert.doesNotMatch(JSON.stringify(h.sent.at(-1)), new RegExp(`${name}|server\\.js`, "u"));
   }
 
+  const cleared = new Error(`\n    at private_customer_name (${h.appDir}/chunks/server.js:7:9)`);
+  void cleared.stack;
+  cleared.message = "";
+  assert.deepEqual(await framesOf(cleared), [0], "a message that opened on a new line leaves a header with a colon");
+  assert.doesNotMatch(JSON.stringify(h.sent.at(-1)), /private_customer_name|server\.js/u);
+
   const wrapper = new Error("save failed");
   wrapper.cause = changed("cause_q3", "could not save");
   assert.equal((await framesOf(wrapper))[1], 0, "a cause is held to the same rule");
