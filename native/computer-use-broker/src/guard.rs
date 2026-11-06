@@ -34,7 +34,7 @@ fn pipe_cloexec() -> Result<(OwnedFd, OwnedFd), String> {
     Ok((read, write))
 }
 
-fn waitpid_blocking(pid: libc::pid_t) {
+fn waitpid_blocking(pid: libc::pid_t) -> libc::c_int {
     let mut status = 0;
     loop {
         // SAFETY: pid is the child returned by fork and status is writable.
@@ -42,12 +42,22 @@ fn waitpid_blocking(pid: libc::pid_t) {
         if result == pid
             || (result < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD))
         {
-            return;
+            return status;
         }
         if result < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
             continue;
         }
-        return;
+        return status;
+    }
+}
+
+fn describe_wait_status(status: libc::c_int) -> String {
+    if libc::WIFEXITED(status) {
+        format!("exit {}", libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        format!("signal {}", libc::WTERMSIG(status))
+    } else {
+        format!("status {status:#x}")
     }
 }
 
@@ -382,14 +392,18 @@ pub(crate) fn start(
     } else {
         -1
     };
+    let handshake_error = io::Error::last_os_error();
     drop(ready_read);
     if poll_result <= 0 || read_result != 1 || ready != READY_BYTE {
         // Keep the lease writer open while killing the unarmed child so it
         // cannot enter its EOF-triggered group teardown path.
         // SAFETY: pid is the unreaped child returned by fork.
         unsafe { libc::kill(pid, libc::SIGKILL) };
-        waitpid_blocking(pid);
-        return Err("containment guard did not arm in time".to_owned());
+        let status = waitpid_blocking(pid);
+        return Err(format!(
+            "containment guard did not arm: poll {poll_result}, read {read_result}, {}, last error: {handshake_error}",
+            describe_wait_status(status)
+        ));
     }
     Ok(ContainmentGuard {
         death_writer: Some(death_write),
@@ -431,8 +445,13 @@ while :; do /bin/sleep 30; done
         let guard_pid = guard.pid();
         let deadline = Instant::now() + Duration::from_secs(2);
         let descendant = loop {
-            if let Ok(value) = fs::read_to_string(&pid_file) {
-                break value.trim().parse::<libc::pid_t>().unwrap();
+            // The shell creates the file before it writes the pid, so an empty
+            // read only means the pid is not published yet.
+            let published = fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|value| value.trim().parse::<libc::pid_t>().ok());
+            if let Some(pid) = published {
+                break pid;
             }
             assert!(
                 Instant::now() < deadline,
@@ -467,6 +486,21 @@ while :; do /bin/sleep 30; done
             thread::sleep(Duration::from_millis(20));
         }
         let _ = fs::remove_file(pid_file);
+    }
+
+    #[test]
+    fn guard_that_exits_before_arming_reports_how_it_ended() {
+        // A reaped child's pid names no live process group, so the guard's
+        // setpgid fails and it exits with its dedicated status.
+        let mut finished = Command::new("/usr/bin/true").spawn().unwrap();
+        let missing_group = finished.id() as libc::pid_t;
+        finished.wait().unwrap();
+
+        let Err(error) = start(missing_group, Duration::from_secs(30)) else {
+            panic!("a guard that cannot join the group must not arm");
+        };
+
+        assert!(error.contains("exit 70"), "{error}");
     }
 
     #[test]
