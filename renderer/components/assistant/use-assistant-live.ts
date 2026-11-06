@@ -806,6 +806,7 @@ export function useAssistantLiveWithDependencies(
     const pending = pendingUtterance.current;
     discardUtterance();
     if (!pending || !mounted.current) return;
+    speechOnsets.retire(pending.startedAt);
     liveSessionBus.publishVoiceInput(pending.text, pending.startedAt);
     const receipt = { id: pending.receiptId, text: pending.text };
     setVoiceApprovalReceipts((current) => {
@@ -824,7 +825,7 @@ export function useAssistantLiveWithDependencies(
         ? [protectedReceipt, ...tail]
         : tail;
     });
-  }, [discardUtterance]);
+  }, [discardUtterance, speechOnsets]);
 
   const continueUtterance = React.useCallback(
     (fragment: string) => {

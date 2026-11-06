@@ -1652,6 +1652,25 @@ test("an utterance keeps the start mark of its first caption, so speech begun be
   await stop();
 });
 
+test("a fresh utterance right after a finished one lands after a fence taken between them", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0);
+  fixture.emit(hearUser("What was that", { finished: true }));
+  // An approval arms a moment later, well inside the caption lag window.
+  const fence = liveSessionBus.voiceInputFence();
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 0);
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["What was that", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence);
+  assert.ok(inputs[1]!.startedAt > fence, "the second utterance began after the fence");
+  await stop();
+});
+
 test("speech whose onset the microphone cannot vouch for never lands after a fence", async () => {
   const { fixture, stop } = await listenToVoiceInput();
   const inputs: LiveVoiceInput[] = [];
