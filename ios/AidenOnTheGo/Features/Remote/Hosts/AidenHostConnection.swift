@@ -218,6 +218,17 @@ final class AidenHostConnection {
         }
     }
 
+    /// Connected, or checking again after being connected. A machine that
+    /// hasn't answered since launch isn't known online, whatever its saved rows
+    /// say.
+    var isKnownOnline: Bool {
+        switch connectionState {
+        case .connected: true
+        case .connecting: settledState?.connectionState == .connected
+        default: false
+        }
+    }
+
     /// True while the newest attempt is running. `connectionState` can't say:
     /// it starts at `.connecting`, and `disconnect()` returns it there, with
     /// nothing in flight either time.
@@ -306,6 +317,13 @@ final class AidenHostConnection {
 
     func handleConnectionError(_ error: Error) async {
         await record(error, over: .interactive)
+    }
+
+    /// What a failed Inbox poll says about the machine. It counts as a probe: a
+    /// transport failure takes a machine that said it was connected offline, and
+    /// nothing reaches the app-wide error, because nobody was waiting on it.
+    func handlePollError(_ error: Error) async {
+        await record(error, over: .probe)
     }
 
     func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace]) {

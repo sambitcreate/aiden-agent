@@ -55,6 +55,8 @@ final class AidenDemoResponder: @unchecked Sendable {
         let method: String
         /// `*` matches every path.
         let path: String
+        /// Nil matches every query string.
+        var query: String? = nil
     }
 
     private struct HoldKey: Hashable {
@@ -91,11 +93,13 @@ final class AidenDemoResponder: @unchecked Sendable {
         AidenDemoURLProtocol.unregister(token: token)
     }
 
-    func reply(instanceId: String, method: String = "GET", path: String, status: Int, json: Data) {
+    /// `query` answers one exact query string, such as one page of a list, ahead
+    /// of the path's other answers.
+    func reply(instanceId: String, method: String = "GET", path: String, query: String? = nil, status: Int, json: Data) {
         lock.lock()
         defer { lock.unlock() }
         // Only this method's answer is replaced; other methods on the path stay.
-        outcomes[Route(instanceId: instanceId, method: method, path: path)] = .reply(status: status, json: json)
+        outcomes[Route(instanceId: instanceId, method: method, path: path, query: query)] = .reply(status: status, json: json)
     }
 
     /// Fails every method on `path` with a transport error. `path: "*"` takes the
@@ -166,6 +170,7 @@ final class AidenDemoResponder: @unchecked Sendable {
     ) -> Result<(HTTPURLResponse, Data), URLError> {
         lock.lock()
         let outcome = [
+            Route(instanceId: instanceId, method: method, path: path, query: url.query),
             Route(instanceId: instanceId, method: method, path: path),
             Route(instanceId: instanceId, method: "*", path: path),
             Route(instanceId: instanceId, method: "*", path: "*"),

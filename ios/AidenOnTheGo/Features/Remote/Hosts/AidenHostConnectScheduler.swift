@@ -64,6 +64,14 @@ final class AidenHostConnectScheduler {
         finishIfIdle()
     }
 
+    /// Checks one machine that a poll can't reach, behind the same limit as every
+    /// other connect. Nothing happens in the background, or to a machine that
+    /// can't connect.
+    func connect(instanceId: String) {
+        guard isForeground, let connection = registry.connection(for: instanceId), canConnect(connection) else { return }
+        enqueue([connection])
+    }
+
     private func pathChanged() {
         guard isForeground else { return }
         enqueue(registry.ordered.filter { connection in
