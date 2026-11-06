@@ -657,6 +657,13 @@ export function OnboardingFlow({
           savingRef.current = true; setSaving(true); setProviderError(null);
           try {
             queryClient.setQueryData(queryKeys.settings, await settingsApi.setGeminiUsageScope(googleScope));
+            if (googleScope === "models_and_transcription") {
+              const refreshed = await providersApi.list();
+              queryClient.setQueryData(queryKeys.providers, refreshed);
+              const google = refreshed.find(provider => provider.id === "google");
+              if (!google) throw new Error("Couldn’t read the saved Google connection.");
+              await confirmConnection(google);
+            }
             setGoogleScope(null);
           } catch (cause) { setProviderError(cause instanceof Error ? cause.message : "Couldn’t save Google chat access."); }
           finally { savingRef.current = false; setSaving(false); }
@@ -667,8 +674,16 @@ export function OnboardingFlow({
         onOpenChange={nextOpen => { if (!nextOpen && attempt.current === routeAttempt) { attempt.current++; setRoute(null); } }}
         onSaved={async () => {
           const refreshed = await providersApi.list();
+          queryClient.setQueryData(queryKeys.providers, refreshed);
           const ready = refreshed.find(p => p.id === builtin.id);
           if (!ready) throw new Error("Couldn’t read the saved connection.");
+          const currentSettings = await settingsApi.get();
+          if (routeAttempt !== attempt.current) return;
+          if (ready.id === "google" && currentSettings.geminiUsageScope === "transcription_only") {
+            setRoute(null);
+            setGoogleScope("transcription_only");
+            return;
+          }
           await confirmConnection(ready);
         }} />}
     </OnboardingDialogShell>

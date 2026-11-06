@@ -258,15 +258,48 @@ test("a sign-in finishing after cancellation leaves the user's deferred setup in
   assert.equal(calls.some(c => c.channel === "app:setOnboardingProgress" && c.args[0] === "provider"), false);
 });
 
-test("a voice-only Google connection with a missing credential opens key repair first", async () => {
+test("Google repair saves the missing key, requests chat access and confirms a usable connection", async () => {
   const google = { ...readyProvider, id: "google", label: "Google", needsKey: true, hasKey: false,
     canLogout: true, authMethods: [{ type: "api_key", canLogin: true, label: "API key" }] };
-  mountOnboarding({ bots: [], botsCapability: false, overrides: {
+  let flowId = "";
+  let scope = "transcription_only";
+  const calls = mountOnboarding({ bots: [], botsCapability: false, overrides: {
     "app:getOnboardingState": () => ({ ...resumeAfterProvider, providerReady: false, selectedProviderId: undefined, lastSatisfiedStep: "profile" }),
     "providers:list": () => [google],
-    "settings:get": () => ({ geminiUsageScope: "transcription_only" }),
+    "settings:get": () => ({ geminiUsageScope: scope }),
+    "providers:auth:start": request => {
+      flowId = (request as { flowId: string }).flowId;
+      emitBotTestNotification("providers:auth:prompt", {
+        providerId: "google", flowId, promptId: "google-key", type: "secret", message: "Enter API key",
+      });
+      return { started: true };
+    },
+    "providers:auth:respond": request => {
+      assert.equal((request as { value: string }).value, "replacement-fixture");
+      google.hasKey = true;
+      return { accepted: true };
+    },
+    "settings:setGeminiUsageScope": value => {
+      scope = value as string;
+      return { geminiUsageScope: scope };
+    },
   } });
   fireEvent.click(await screen.findByRole("button", { name: "Finish connection: Google" }));
   const editor = await screen.findByRole("dialog", { name: "Set up Google" });
-  assert.ok(within(editor).getByRole("button", { name: "API key" }));
+  fireEvent.click(within(editor).getByRole("button", { name: "API key" }));
+  await screen.findByText("Enter API key");
+  fireEvent.change(editor.querySelector('input[type="password"]')!, { target: { value: "replacement-fixture" } });
+  fireEvent.click(within(editor).getByRole("button", { name: "Continue" }));
+  await waitFor(() => assert.equal(google.hasKey, true));
+  await act(async () => emitBotTestNotification("providers:auth:done", { providerId: "google", flowId }));
+  const access = await screen.findByRole("dialog", { name: "Set up Google Gemini access?" });
+  assert.equal(scope, "transcription_only", "saving a key must wait for explicit chat access consent");
+  assert.equal(calls.some(c => c.channel === "app:setOnboardingProgress"), false);
+  fireEvent.click(within(access).getByRole("radio", { name: /Models \+ transcription/u }));
+  fireEvent.click(within(access).getByRole("button", { name: "Save Gemini access" }));
+  await screen.findByText("Google is ready for chat");
+  await waitFor(() => assert.ok(!screen.queryByRole("dialog", { name: "Set up Google Gemini access?" })));
+  fireEvent.click(screen.getByRole("button", { name: "Continue setup" }));
+  await screen.findByRole("heading", { name: "Finish setup" });
+  assert.deepEqual(calls.find(c => c.channel === "app:setOnboardingProgress")?.args, ["provider", "google"]);
 });

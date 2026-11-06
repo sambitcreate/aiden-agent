@@ -63,3 +63,5 @@ Implemented the shared chooser in Settings and onboarding. Existing connections 
 ## Guided connection integration (2026-11-06)
 
 Merged current main into the guided connection branch, retaining the Settings reorganization’s InfoHint controls and model-catalog disclosure. Updated the Finish setup disclosure to point to Voice & Speech and Context & Limits. The combined mounted provider, catalog and onboarding suites pass.
+
+PR #781 review follow-up connects Google credential repair directly to explicit Gemini chat-access consent and readiness confirmation. The mounted flow test replaces a missing key, grants chat access and reaches Finish setup.
