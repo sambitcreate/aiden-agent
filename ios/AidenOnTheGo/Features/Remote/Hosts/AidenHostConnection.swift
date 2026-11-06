@@ -67,8 +67,10 @@ protocol AidenHostConnectionDelegate: AnyObject {
     ) throws
     func hostConnectionDidApplyWorkspaceSnapshot(_ connection: AidenHostConnection)
     func hostConnection(_ connection: AidenHostConnection, didFailWith error: Error)
-    /// The selected machine's credential was revoked.
-    func hostConnectionWasRevoked(_ connection: AidenHostConnection) async
+    /// The selected machine's credential was revoked. `route` is the attempt that
+    /// found out: only a probe holds a scheduler slot, so only there must the
+    /// next machine's connect stay out of the attempt.
+    func hostConnectionWasRevoked(_ connection: AidenHostConnection, over route: AidenHostConnection.ConnectRoute) async
     /// A machine other than the selected one had its credential revoked. Its
     /// cached data stays while a view is on screen showing it. A view under a
     /// full-screen cover counts as gone, because `.onDisappear` fires for it.
@@ -104,6 +106,7 @@ final class AidenHostConnection {
 
     private struct ConnectInFlight {
         let attempt: Int
+        let route: ConnectRoute
         let work: Task<Void, Never>
     }
 
@@ -182,7 +185,7 @@ final class AidenHostConnection {
             delegate?.hostConnectionWillConnect(self)
         }
         let work = Task { await run(attempt: attempt, over: route) }
-        connectInFlight = ConnectInFlight(attempt: attempt, work: work)
+        connectInFlight = ConnectInFlight(attempt: attempt, route: route, work: work)
         let deadline = timeout.map { timeout in
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
@@ -216,8 +219,13 @@ final class AidenHostConnection {
     /// live. A machine that had never settled stays at `.connecting`, with
     /// `isConnectInFlight` false, until something connects it again. One that
     /// already answered stays `.connected`: only negotiation was left to stop.
-    func cancelConnect() {
+    ///
+    /// With `route`, only an attempt over that route stops. The scheduler passes
+    /// `.probe`, so an interactive connect that took over from its probe isn't
+    /// cut short by the app leaving the foreground.
+    func cancelConnect(over route: ConnectRoute? = nil) {
         guard isConnectInFlight else { return }
+        if let route, connectInFlight?.route != route { return }
         connectInFlight?.work.cancel()
         connectInFlight = nil
         connectionGeneration &+= 1
@@ -446,7 +454,7 @@ final class AidenHostConnection {
         if let clientError = error as? AidenRemoteClientError, clientError.isCredentialRevoked {
             if let delegate {
                 if isSelected {
-                    await delegate.hostConnectionWasRevoked(self)
+                    await delegate.hostConnectionWasRevoked(self, over: route)
                 } else {
                     await delegate.hostConnectionWasRevokedInBackground(self)
                 }

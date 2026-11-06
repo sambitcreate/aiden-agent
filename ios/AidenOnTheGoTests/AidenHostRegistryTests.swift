@@ -496,7 +496,7 @@ final class AidenHostRegistryTests: XCTestCase {
         let laptop = try connection("laptop", in: coordinator)
         let context = try coordinator.requestContext()
 
-        await coordinator.hostConnectionWasRevoked(laptop)
+        await coordinator.hostConnectionWasRevoked(laptop, over: .interactive)
 
         XCTAssertNotNil(coordinator.hosts.connection(for: "laptop"))
         XCTAssertNil(coordinator.presentedError)

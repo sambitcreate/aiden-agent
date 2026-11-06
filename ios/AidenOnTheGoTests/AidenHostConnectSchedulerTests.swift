@@ -485,6 +485,52 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertEqual(studio.server?.instanceId, "studio")
     }
 
+    func testAForegroundReturnMakesOneAttemptOnTheSelectedMachine() async throws {
+        let coordinator = fourOnlineMachines()
+        let scheduler = scheduler(for: coordinator)
+        let release = responder.hold(instanceId: "studio", path: "/server")
+        defer { release() }
+        let studio = try connection("studio", in: coordinator)
+
+        // The order the app takes on coming back: the interactive connect is
+        // queued first, and the scheduler's pass follows it.
+        let interactive = Task { await coordinator.connectActiveInstallation() }
+        let foreground = Task { await scheduler.foregrounded() }
+        try await waitUntil("the other machines") {
+            ["laptop", "mini", "build"].allSatisfy { (try? self.connection($0, in: coordinator))?.connectionState == .connected }
+        }
+        try await settle()
+
+        XCTAssertEqual(serverRequests("studio"), 1, "The probe left the selected machine to its own connect")
+        XCTAssertTrue(studio.isConnectInFlight)
+        release()
+        await interactive.value
+        await foreground.value
+        XCTAssertEqual(serverRequests("studio"), 1)
+        XCTAssertEqual(studio.connectionState, .connected)
+    }
+
+    func testBackgroundingLeavesAnInteractiveConnectThatTookOverFromAProbe() async throws {
+        let coordinator = fourOnlineMachines()
+        let scheduler = scheduler(for: coordinator)
+        let release = responder.hold(instanceId: "laptop", path: "/server")
+        defer { release() }
+        let laptop = try connection("laptop", in: coordinator)
+
+        let foreground = Task { await scheduler.foregrounded() }
+        try await waitUntil("laptop's probe") { self.serverRequests("laptop") == 1 }
+        let interactive = Task { await laptop.connect() }
+        try await waitUntil("laptop's interactive connect") { self.serverRequests("laptop") == 2 }
+
+        scheduler.backgrounded()
+
+        XCTAssertTrue(laptop.isConnectInFlight, "An attempt the scheduler didn't start keeps running")
+        release()
+        await interactive.value
+        await foreground.value
+        XCTAssertEqual(laptop.connectionState, .connected)
+    }
+
     // MARK: Failures stay on their own machine
 
     func testANonSelectedFailureShowsNothing() async throws {
@@ -772,7 +818,64 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         await attempt.value
 
         XCTAssertEqual(coordinator.activeInstanceId, "laptop")
-        XCTAssertEqual(coordinator.connectionState, .connected)
+        try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }
+    }
+
+    func testARevokedProbeEndsWithoutWaitingForTheNextMachinesConnect() async throws {
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: ["studio", "laptop"].map { AidenDemoHosts.installation(instanceId: $0, name: $0) },
+            responder: responder
+        )
+        await coordinator.start()
+        responder.reply(instanceId: "studio", path: "/server", status: 401, json: revokedJSON)
+        let release = responder.hold(instanceId: "laptop", path: "/server")
+        defer { release() }
+        let studio = try connection("studio", in: coordinator)
+        var attemptEnded = false
+
+        let attempt = Task {
+            await studio.connect(over: .probe)
+            attemptEnded = true
+        }
+        try await waitUntil("the next machine's connect") { serverRequests("laptop") == 1 }
+
+        try await waitUntil("the revoked machine's attempt to end") { attemptEnded }
+        XCTAssertEqual(coordinator.connectionState, .connecting, "The next machine is still connecting")
+        release()
+        await attempt.value
+        try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }
+        XCTAssertTrue(coordinator.presentedError?.contains("revoked") == true)
+    }
+
+    func testAnArrivingMachineWithAPurgePendingKeepsItsLegacyEnvironmentFilesUntilPurged() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "AidenEnvironment-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: ["studio", "laptop"].map { AidenDemoHosts.installation(instanceId: $0, name: $0) },
+            responder: responder,
+            workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache(directory: directory)
+        )
+        await coordinator.start()
+        let laptop = try connection("laptop", in: coordinator)
+        await laptop.connect(over: .probe)
+        let workspaceId = try XCTUnwrap(laptop.workspaces.first?.id)
+        let digest = SHA256.hash(data: Data("laptop\u{0}\(workspaceId)".utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let legacyFile = directory.appending(path: "\(digest).json")
+        try Data("{}".utf8).write(to: legacyFile, options: .atomic)
+        let view = NSObject()
+        coordinator.setOnScreen(true, view: view, instanceId: "laptop")
+        await coordinator.hostConnectionWasRevokedInBackground(laptop)
+        XCTAssertTrue(laptop.isPurgePending)
+
+        // Forgetting the selected machine moves the selection onto laptop.
+        await coordinator.removeInstallation("studio")
+
+        XCTAssertNil(coordinator.hosts.connection(for: "laptop"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
     }
 
     private func keychainCoordinator(_ keychain: AidenUnreliableKeychain) -> AidenRemoteCoordinator {
@@ -956,7 +1059,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         arriving.adopt(connectionIssue: AidenConnectionIssue.classify(URLError(.cannotConnectToHost)))
 
         try await holdingThePurge(in: coordinator) {
-            let revoking = Task { await coordinator.hostConnectionWasRevoked(studio) }
+            let revoking = Task { await coordinator.hostConnectionWasRevoked(studio, over: .interactive) }
             try await waitUntil("the selection to move") { coordinator.activeInstanceId == next.id }
 
             XCTAssertEqual(coordinator.connectionState, .connecting)

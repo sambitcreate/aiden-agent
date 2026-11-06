@@ -438,7 +438,7 @@ final class AidenRemoteCoordinator {
         // Selecting a machine revoked in the background: its credential is dead,
         // so it takes the selected machine's path rather than a connect.
         if connection.isPurgePending {
-            await hostConnectionWasRevoked(connection)
+            await revokeSelectedConnectionAndConnectNext(connection)
             return
         }
         await connection.connect()
@@ -926,7 +926,7 @@ final class AidenRemoteCoordinator {
 
     private func purgeRevokedMachine(_ connection: AidenHostConnection) async {
         guard !hostConnectionIsSelected(connection) else {
-            await hostConnectionWasRevoked(connection)
+            await revokeSelectedConnectionAndConnectNext(connection)
             return
         }
         let installationId = connection.instanceId
@@ -1003,8 +1003,13 @@ final class AidenRemoteCoordinator {
         guard let selectedConnection else { return }
         selectedConnection.advanceConnectionGeneration()
         guard selectedConnection.connectionState != .connected else { return }
-        server = nil
-        workspaces = []
+        // A machine revoked in the background still needs its workspaces: the
+        // purge reads them to find the legacy cache files, as it does when the
+        // selection switches to it.
+        if !selectedConnection.isPurgePending {
+            server = nil
+            workspaces = []
+        }
         connectionIssue = nil
         connectionState = .connecting
     }
@@ -1218,11 +1223,50 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         presentedError = error.localizedDescription
     }
 
-    func hostConnectionWasRevoked(_ connection: AidenHostConnection) async {
+    /// Called from inside the revoked connection's own attempt. A probe holds a
+    /// scheduler slot, so the next machine's connect runs beside that attempt
+    /// rather than in it: ending the attempt, by timeout or by `backgrounded()`,
+    /// can't leave the slot held, and the connect isn't cut short with it. An
+    /// interactive attempt holds no slot, and its caller waits for the outcome.
+    func hostConnectionWasRevoked(
+        _ connection: AidenHostConnection,
+        over route: AidenHostConnection.ConnectRoute
+    ) async {
+        guard route == .probe else {
+            await revokeSelectedConnectionAndConnectNext(connection)
+            return
+        }
+        let message = Self.revocationMessage
+        switch await revokeSelectedConnection(connection) {
+        case .notSelected:
+            return
+        case .needsPairing:
+            presentedError = message
+        case .connectNext:
+            presentedError = message
+            Task {
+                await connectActiveInstallation()
+                presentedError = message
+            }
+        }
+    }
+
+    private static var revocationMessage: String {
+        String(localized: "This device was revoked. Pair it with Aiden Agent again.")
+    }
+
+    private enum RevocationOutcome {
+        case notSelected
+        case needsPairing
+        /// Another machine is selected and still needs its connect.
+        case connectNext
+    }
+
+    /// Removes the selected machine's pairing and data.
+    private func revokeSelectedConnection(_ connection: AidenHostConnection) async -> RevocationOutcome {
         // Everything below acts on the selected machine and the app-wide error.
-        guard hostConnectionIsSelected(connection) else { return }
+        guard hostConnectionIsSelected(connection) else { return .notSelected }
         let installationId = connection.instanceId
-        let revocationMessage = String(localized: "This device was revoked. Pair it with Aiden Agent again.")
         let previousInstallationId = activeInstanceId
         let knownWorkspaceIds = previousInstallationId == installationId
             ? Set(workspaces.map(\.id))
@@ -1244,10 +1288,23 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
         updateIntentCatalog(for: installationId)
         connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
-        if installationStore.activeInstallation != nil {
+        return installationStore.activeInstallation == nil ? .needsPairing : .connectNext
+    }
+
+    /// For a caller that isn't inside the revoked machine's attempt, like
+    /// selecting a machine revoked in the background: it waits for the next
+    /// machine's connect.
+    private func revokeSelectedConnectionAndConnectNext(_ connection: AidenHostConnection) async {
+        let message = Self.revocationMessage
+        switch await revokeSelectedConnection(connection) {
+        case .notSelected:
+            return
+        case .needsPairing:
+            presentedError = message
+        case .connectNext:
             await connectActiveInstallation()
+            presentedError = message
         }
-        presentedError = revocationMessage
     }
 
     /// Nothing here reaches the person: not the error, not the pairing screen.

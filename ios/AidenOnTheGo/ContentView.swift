@@ -200,13 +200,19 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             switch sceneRefreshGate.transition(to: phase) {
             case .refresh:
-                // Above the guard, so a selected machine that needs pairing can't
-                // leave the scheduler in its background state. It runs beside the
-                // wait below, which stays on the selected machine alone, so no
-                // other machine can hold up the links it releases.
-                Task { await connectScheduler?.foregrounded() }
-                guard coordinator.connectionState != .needsPairing else { return }
+                // A selected machine that needs pairing still releases the
+                // scheduler from its background state.
+                guard coordinator.connectionState != .needsPairing else {
+                    Task { await connectScheduler?.foregrounded() }
+                    return
+                }
                 sceneConnectionRefreshInProgress = true
+                // The interactive connect is queued first, and it marks itself
+                // in flight before it first suspends. The scheduler's pass
+                // queued after it then skips the selected machine, so a foreground
+                // return makes one attempt there, under the interactive policy.
+                // The wait stays on the selected machine alone, so no other
+                // machine can hold up the links it releases.
                 Task {
                     await coordinator.connectActiveInstallation()
                     sceneConnectionRefreshInProgress = false
@@ -224,6 +230,7 @@ struct ContentView: View {
                         )
                     }
                 }
+                Task { await connectScheduler?.foregrounded() }
             case .suspend:
                 connectScheduler?.backgrounded()
                 externalNewChats.invalidate()

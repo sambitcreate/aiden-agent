@@ -53,12 +53,13 @@ final class AidenHostConnectScheduler {
 
     /// Stops the connects this scheduler queued or started, and marks every
     /// machine to be checked again on return. A connect started elsewhere, like
-    /// the selected machine's own, keeps running. Contexts stay live: only a
+    /// the selected machine's own, keeps running, including one that took over
+    /// from a probe still counted in `running`. Contexts stay live: only a
     /// machine's connect attempt ends, so a chat keeps working on return.
     func backgrounded() {
         isForeground = false
         pending = []
-        running.values.forEach { $0.cancelConnect() }
+        running.values.forEach { $0.cancelConnect(over: .probe) }
         unverified = Set(registry.connections.keys)
         finishIfIdle()
     }
