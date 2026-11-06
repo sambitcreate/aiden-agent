@@ -1,5 +1,9 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -1661,6 +1665,53 @@ class AidenBotSessionControllerTest {
         assertTrue(controller.state.value.outgoing.isEmpty())
     }
 
+    private fun outboxDeliveryFixture(): kotlinx.serialization.json.JsonObject {
+        val relative = "protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json"
+        val root = generateSequence(java.io.File(System.getProperty("user.dir")!!).absoluteFile) { it.parentFile }
+            .first { java.io.File(it, relative).isFile }
+        return kotlinx.serialization.json.Json.parseToJsonElement(java.io.File(root, relative).readText()).jsonObject
+    }
+
+    @Test
+    fun failuresThatMayHaveReachedTheMacKeepTheirKeyByTheSharedFixture() {
+        for (element in outboxDeliveryFixture().getValue("classification").jsonArray) {
+            val row = element.jsonObject
+            val error = serverError(
+                row.getValue("status").jsonPrimitive.int,
+                AidenRemoteErrorCode(row.getValue("code").jsonPrimitive.content)
+            )
+            assertEquals(
+                row.getValue("name").jsonPrimitive.content,
+                row.getValue("ambiguous").jsonPrimitive.boolean,
+                aidenBotMessageFailureIsAmbiguous(error)
+            )
+        }
+    }
+
+    @Test
+    fun everyFailedSendTakesTheStepBothPhonesAgreeOn() {
+        val fixture = outboxDeliveryFixture()
+        val maxAttempts = fixture.getValue("maxConnectionAttempts").jsonPrimitive.int
+        assertEquals(AidenBotSessionController.MAX_CONNECTION_ATTEMPTS, maxAttempts)
+        for (element in fixture.getValue("steps").jsonArray) {
+            val row = element.jsonObject
+            // Android has no Bot attachment sending.
+            if (row["iosOnly"]?.jsonPrimitive?.boolean == true) continue
+            val step = aidenBotOutboxFailureStep(
+                ambiguous = row.getValue("ambiguous").jsonPrimitive.boolean,
+                attempts = row.getValue("attempts").jsonPrimitive.int,
+                maxAttempts = maxAttempts,
+                echoed = row.getValue("echoed").jsonPrimitive.boolean,
+                echoNamesSubmission = row.getValue("echoNamesSubmission").jsonPrimitive.boolean
+            )
+            assertEquals(
+                row.getValue("name").jsonPrimitive.content,
+                row.getValue("step").jsonPrimitive.content.uppercase(),
+                step.name
+            )
+        }
+    }
+
     @Test
     fun aDeferredMessageHoldsBackTheOnesBehindIt() = runTest {
         val transport = FakeTransport(runningSession)
@@ -1699,6 +1750,35 @@ class AidenBotSessionControllerTest {
         assertEquals(transport.sends[0].second, transport.sends[3].second)
         assertEquals(AidenBotOutgoingStatus.SENT, controller.state.value.outbox.single().status)
         assertEquals("the bubble keeps its identity", failed.id, controller.state.value.outbox.single().id)
+    }
+
+    @Test
+    fun aRefusedMessageGivesBackTheEntryItClaimedToTheMessageBehindIt() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope)
+        controller.refetch()
+        transport.sendGate = CompletableDeferred()
+        transport.sendFailures += serverError(400, AidenRemoteErrorCode.INVALID_REQUEST)
+        val refused = async { controller.send("Yes.") }
+        val behind = async { controller.send("Yes.") }
+        runCurrent()
+        // Its text matches, but it is the entry of the message behind, as that one's receipt will say.
+        controller.frame(AidenBotSessionEventPayload.Entry(userEntry("entry_41", "Yes.", "1")))
+        val claiming = controller.state.value.outbox.first()
+        assertEquals("entry_41", claiming.echoEntryId)
+
+        transport.sendGate!!.complete(Unit)
+        refused.await()
+        behind.await()
+        runCurrent()
+
+        val failed = controller.state.value.outbox.single()
+        assertEquals(claiming.id, failed.id)
+        assertEquals(AidenBotOutgoingStatus.FAILED, failed.status)
+        assertFalse(failed.keepsKey)
+        assertFalse(failed.echoed)
+        assertNull(failed.echoEntryId)
+        assertNull(failed.echoSubmissionId)
     }
 
     @Test

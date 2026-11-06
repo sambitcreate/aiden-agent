@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "description": "What a phone's Bot outbox does after a failed send. iOS and Android both run these rows. Rows marked iosOnly need Bot attachment sending, which Android does not have.",
+  "maxConnectionAttempts": 3,
+  "classification": [
+    { "name": "the host could not admit the request", "status": 500, "code": "internal_error", "ambiguous": true },
+    { "name": "the host is unavailable", "status": 503, "code": "internal_error", "ambiguous": true },
+    { "name": "the request timed out", "status": 408, "code": "internal_error", "ambiguous": true },
+    { "name": "the host is rate limiting", "status": 429, "code": "rate_limited", "ambiguous": true },
+    { "name": "the host cannot say how the key ended", "status": 409, "code": "idempotency_in_flight", "ambiguous": true },
+    { "name": "the key was reused with another body", "status": 409, "code": "idempotency_conflict", "ambiguous": false },
+    { "name": "a settled rejection replayed", "status": 409, "code": "internal_error", "ambiguous": false },
+    { "name": "the request was invalid", "status": 400, "code": "invalid_request", "ambiguous": false }
+  ],
+  "steps": [
+    { "name": "a definite refusal", "ambiguous": false, "attempts": 0, "echoed": false, "echoNamesSubmission": false, "step": "refused" },
+    { "name": "a definite refusal with an echo", "ambiguous": false, "attempts": 0, "echoed": true, "echoNamesSubmission": true, "step": "refused" },
+    { "name": "a refusal for lost uploads", "ambiguous": false, "attempts": 0, "echoed": false, "echoNamesSubmission": false, "lostAttachment": true, "step": "refused_attachments_gone", "iosOnly": true },
+    { "name": "the first lost answer", "ambiguous": true, "attempts": 0, "echoed": false, "echoNamesSubmission": false, "step": "retry_later" },
+    { "name": "the second lost answer", "ambiguous": true, "attempts": 1, "echoed": true, "echoNamesSubmission": false, "step": "retry_later" },
+    { "name": "out of tries with no echo", "ambiguous": true, "attempts": 2, "echoed": false, "echoNamesSubmission": false, "step": "out_of_tries" },
+    { "name": "out of tries with an untagged echo", "ambiguous": true, "attempts": 2, "echoed": true, "echoNamesSubmission": false, "step": "settled_by_echo" },
+    { "name": "out of tries with another submission's echo", "ambiguous": true, "attempts": 2, "echoed": true, "echoNamesSubmission": true, "step": "out_of_tries" }
+  ]
+}

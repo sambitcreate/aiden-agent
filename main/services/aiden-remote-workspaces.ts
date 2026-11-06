@@ -1,10 +1,12 @@
 import type { ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
 import { capturePeerProjectRoot, assertPeerProjectRoot, createPeerProjectFile } from "./peer-project-file-io.js";
+import { peerProjectGit } from "./peer-project-source.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { parsePeerProjectClone, PEER_PROJECT_CLONE_TIMEOUT_MS, type PeerProjectCloneRequest } from "../../renderer/shared/peer-project-clone.js";
 import { parseCloneUrl } from "../../renderer/shared/workspace-intake.js";
 import type { WorkspaceIntakeService } from "./workspace-intake.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -245,51 +247,17 @@ export class AidenRemoteWorkspaceService {
     input: unknown,
     action: () => Promise<T>,
   ): Promise<T> {
-    if (!this.options.persistIdempotency) {
-      return this.idempotency.execute(scope, input, action);
-    }
-    let release!: () => void;
-    let reject!: (error: unknown) => void;
-    const durableAdmission = new Promise<void>((resolve, rejectPromise) => {
-      release = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await durableAdmission;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      release();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError(
-        "internal_error",
-        "Aiden could not durably prepare this workspace request.",
-        500,
-      );
-    }
-    let result: T;
-    let actionError: unknown;
-    let actionFailed = false;
-    try {
-      result = await pending;
-    } catch (error) {
-      actionFailed = true;
-      actionError = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The workspace change may have completed, but Aiden could not durably record its outcome.",
-        409,
-      );
-    }
-    if (actionFailed) throw actionError;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not durably prepare this workspace request.",
+        outcomeUnrecordedMessage: "The workspace change may have completed, but Aiden could not durably record its outcome.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   async list(): Promise<{ workspaces: AidenRemoteWorkspaceProjection[] }> {
@@ -352,6 +320,16 @@ export class AidenRemoteWorkspaceService {
                   await assertPeerProjectRoot(root);
                   for (const file of parsed.files) {
                     controller.signal.throwIfAborted();
+                    try {
+                      // A staging-path Git config can differ after the clone is moved.
+                      // Require protection under both case-matching modes.
+                      for (const ignoreCase of ["false", "true"]) {
+                        await peerProjectGit(root.path, ["-c", "core.excludesFile=/dev/null", "-c", `core.ignoreCase=${ignoreCase}`, "check-ignore", "-q", "--", file.name]);
+                      }
+                    } catch {
+                      throw new AidenRemoteServiceError("invalid_request", "The destination repository must ignore each selected environment file.", 400);
+                    }
+                    await assertPeerProjectRoot(root);
                     await createPeerProjectFile(root, file.name, file.content, controller.signal);
                   }
                   await current();

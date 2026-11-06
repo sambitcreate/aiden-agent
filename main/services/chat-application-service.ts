@@ -139,6 +139,22 @@ export async function forgetChatInboxState(
   );
 }
 
+/**
+ * How a delete attempt ended. Admission reopens only when no durable tombstone
+ * can remain, so without a removed chat it means the delete rolled back and the
+ * chat stays in use. While a tombstone may remain, including when its status
+ * could not be read, the fences stay closed for startup to roll forward.
+ */
+type ChatDeletionSettlement = "completed" | "rolled_back" | "roll_forward_pending";
+
+function chatDeletionSettlement(
+  admissionReleased: boolean,
+  chatRemoved: boolean,
+): ChatDeletionSettlement {
+  if (!admissionReleased) return "roll_forward_pending";
+  return chatRemoved ? "completed" : "rolled_back";
+}
+
 export function createChatApplicationService(deps: ChatApplicationDependencies) {
   const markReconciliationRequired = (owner: ChatApplicationOwner): never => {
     deps.llmClient.markAppendReconciliationRequired(owner.documentId);
@@ -448,14 +464,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             );
           }
         }
+        const settlement = chatDeletionSettlement(releaseAdmission, chatRemoved);
         // A delete that rolled back keeps the chat, so it keeps its context
         // (interrupted waits, Unavailable prompts, spending) too.
-        const rolledBack = releaseAdmission && !chatRemoved;
-        if (!rolledBack) deps.releaseChatContext?.(chatId);
-        if (releaseAdmission) {
-          // Admission reopening without a removed chat means the delete rolled back
-          // before any durable tombstone, so the chat stays in use.
-          if (!chatRemoved) deps.followThrough?.restoreChat?.(chatId);
+        if (settlement === "rolled_back") deps.followThrough?.restoreChat?.(chatId);
+        else deps.releaseChatContext?.(chatId);
+        if (settlement !== "roll_forward_pending") {
           finishAttachmentDeletion?.();
           finishDeletion();
         }

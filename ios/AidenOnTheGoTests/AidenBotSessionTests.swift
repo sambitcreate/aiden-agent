@@ -5558,6 +5558,74 @@ final class AidenBotIssueTests: XCTestCase {
     }
 }
 
+/// The rows Android runs too, read from the shared fixture.
+@MainActor
+final class AidenBotOutboxDeliveryFixtureTests: XCTestCase {
+    private struct Fixture: Decodable {
+        struct Classification: Decodable {
+            let name: String
+            let status: Int
+            let code: String
+            let ambiguous: Bool
+        }
+
+        struct Step: Decodable {
+            let name: String
+            let ambiguous: Bool
+            let attempts: Int
+            let echoed: Bool
+            let echoNamesSubmission: Bool
+            let lostAttachment: Bool?
+            let step: String
+        }
+
+        let maxConnectionAttempts: Int
+        let classification: [Classification]
+        let steps: [Step]
+    }
+
+    private func fixture() throws -> Fixture {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let file = root.appendingPathComponent("protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json")
+        return try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: file))
+    }
+
+    func testFailuresThatMayHaveReachedTheMacKeepTheirKey() throws {
+        for row in try fixture().classification {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(row.code)","message":"No.","requestId":"req_test_1","retryable":false}"#.utf8)
+            )
+            let error = AidenRemoteClientError.server(statusCode: row.status, body: body)
+            XCTAssertEqual(AidenBotSessionModel.messageFailureIsAmbiguous(error), row.ambiguous, row.name)
+        }
+    }
+
+    func testEveryFailedSendTakesTheStepBothPhonesAgreeOn() throws {
+        let shared = try fixture()
+        XCTAssertEqual(shared.maxConnectionAttempts, AidenBotSessionModel.maxConnectionAttempts)
+        let steps: [String: AidenBotOutboxFailureStep] = [
+            "refused": .refused(attachmentsGone: false),
+            "refused_attachments_gone": .refused(attachmentsGone: true),
+            "retry_later": .retryLater,
+            "settled_by_echo": .settledByEcho,
+            "out_of_tries": .outOfTries,
+        ]
+        for row in shared.steps {
+            let step = aidenBotOutboxFailureStep(
+                ambiguous: row.ambiguous,
+                lostAttachment: row.lostAttachment ?? false,
+                attempts: row.attempts,
+                maxAttempts: shared.maxConnectionAttempts,
+                echoed: row.echoed,
+                echoNamesSubmission: row.echoNamesSubmission
+            )
+            XCTAssertEqual(step, steps[row.step], row.name)
+        }
+    }
+}
+
 private actor ConsentSessionResumeTransport: AidenBotResumeTransport {
     var calls: [(UUID, String?, String?)] = []
     var replies: [Result<AidenBotSessionStateView, Error>] = []
