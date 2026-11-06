@@ -13,11 +13,14 @@ afterEach(cleanup);
 type Held = { patch: Partial<AppSettings>; finish(): void; fail(): void };
 
 /** Holds every settings save open until the test finishes or fails it, like a slow disk. */
-async function mount(settings: Partial<AppSettings> = {}, options: { hold?: boolean } = {}) {
+async function mount(settings: Partial<AppSettings> = {}, options: { hold?: boolean; settingsFail?: boolean } = {}) {
   let stored: Partial<AppSettings> = { ...settings };
   const held: Held[] = [];
   const calls = installBotTestIpc({
-    "settings:get": () => stored,
+    "settings:get": () => {
+      if (options.settingsFail) throw new Error("unreadable");
+      return stored;
+    },
     "providers:list": () => [{ id: "local", models: ["fast"] }],
     "settings:set": (value: unknown) => {
       const patch = value as Partial<AppSettings>;
@@ -75,6 +78,26 @@ test("the page leads with context settings, then usage and spending limits", asy
   const positions = titles.map((title) => text.indexOf(title));
   assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
   assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+});
+
+test("the page says what compaction may send to the chat model", async () => {
+  await mount();
+  await screen.findByText(/may be sent to your chat model/u);
+  await screen.findByText(/\/compact-LLM or \/compact-VCC/u);
+});
+
+test("a group hint explains itself without renaming its heading", async () => {
+  await mount();
+  await screen.findByRole("heading", { name: "Spending limits" });
+  fireEvent.click(screen.getByRole("button", { name: "About spending limits" }));
+  const hint = await screen.findByRole("tooltip");
+  assert.match(hint.textContent ?? "", /API key requests/u);
+});
+
+test("spending limits stay locked when settings can't be read, so a save can't wipe them", async () => {
+  await mount({}, { settingsFail: true });
+  const trigger = await screen.findByRole("combobox", { name: /chat/iu });
+  assert.equal(trigger.hasAttribute("disabled"), true);
 });
 
 test("choosing an engine saves only that choice", async () => {

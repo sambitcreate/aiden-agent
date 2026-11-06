@@ -246,11 +246,13 @@ export function Disclosure({
   defaultOpen = false,
   children,
   className,
+  contentClassName,
 }: {
   title: React.ReactNode;
   defaultOpen?: boolean;
   children: React.ReactNode;
   className?: string;
+  contentClassName?: string;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   return (
@@ -264,7 +266,7 @@ export function Disclosure({
           {title}
         </Button>
       </CollapsiblePrimitive.Trigger>
-      <CollapsiblePrimitive.Content className="min-w-0 pl-1">{children}</CollapsiblePrimitive.Content>
+      <CollapsiblePrimitive.Content className={cn("min-w-0 pl-1", contentClassName)}>{children}</CollapsiblePrimitive.Content>
     </CollapsiblePrimitive.Root>
   );
 }

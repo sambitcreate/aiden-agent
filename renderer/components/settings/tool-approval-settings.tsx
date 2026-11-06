@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Button, Callout, Field, FieldSet, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { chatsApi } from "../../lib/ipc";
 import {
   describeToolApprovalRule,
@@ -34,7 +35,14 @@ export function ToolApprovalSettingsView({
   const busy = pending !== null;
   return (
     <>
-      <FieldSet title="Always allowed">
+      <FieldSet
+        title="Always allowed"
+        hint={
+          <InfoHint topic="always allowed rules">
+            Rules match only the exact command or file path you approved, in that workspace, and stay on this device. Allow for this chat ends when the app quits.
+          </InfoHint>
+        }
+      >
         {rules === null ? (
           <Field>
             {error ? (
@@ -91,11 +99,6 @@ export function ToolApprovalSettingsView({
           {error}
         </Callout>
       ) : null}
-      <Text as="p" variant="small" color="secondary" className="mb-7">
-        Rules match only the exact command or the exact file path you approved, in the workspace
-        where you approved it. Allow for this chat lasts until the app quits and never appears
-        here. Rules stay on this device.
-      </Text>
     </>
   );
 }

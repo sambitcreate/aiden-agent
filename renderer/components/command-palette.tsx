@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
@@ -162,6 +162,7 @@ export function AppCommandPalette({
 }) {
   const capabilities = useAppCapabilities();
   const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const { activeId, workspaces } = useActiveWorkspace();
   const { binding, canExecute, execute, palette } = useCommandSystem();
@@ -1132,7 +1133,7 @@ export function AppCommandPalette({
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
-                        void navigate(settingsLocation(destination.id));
+                        void navigate(settingsLocation(destination.id, router.state.location));
                       }}
                       className="min-h-11 px-3"
                     >

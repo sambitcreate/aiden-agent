@@ -61,9 +61,14 @@ test("a workspace switch updates that workspace alone", async () => {
 test("Memory says what its switches keep, and leaves compaction to Context & Limits", async () => {
   mount();
   await screen.findByRole("switch", { name: "Use memory globally" });
+  fireEvent.click(screen.getByRole("button", { name: "About turning memory off" }));
+  assert.match((await screen.findByRole("tooltip")).textContent ?? "", /Approved facts stay on this device/u);
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  fireEvent.click(screen.getByRole("button", { name: "About workspace memory" }));
+  await waitFor(() =>
+    assert.match(screen.getByRole("tooltip").textContent ?? "", /Bot memory has its own scope/u),
+  );
   const text = document.body.textContent ?? "";
-  assert.match(text, /Existing approved\s+facts stay on this device/u);
-  assert.match(text, /Bot memory has its own scope/u);
   assert.equal(screen.queryByRole("radiogroup", { name: "Automatic compaction engine" }), null);
   assert.equal(screen.queryByRole("switch", { name: "Warm prompt caches during active chats" }), null);
   assert.doesNotMatch(text, /Model compaction budgets/u);

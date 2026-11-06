@@ -218,7 +218,6 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
   assert.match(styles, /@container composer \(max-width: 520px\)/u);
   assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);
-  assert.match(styles, /@container settings-content \(max-width: 640px\)/u);
 });
 
 // Workspace layout is covered by Electron geometry checks in workspace-panel.spec.ts

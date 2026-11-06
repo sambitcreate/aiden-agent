@@ -1776,21 +1776,6 @@ textarea {
   }
 }
 
-@container settings-content (max-width: 640px) {
-  .settings-computer-use-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.75rem;
-  }
-
-  .settings-computer-use-actions {
-    align-items: flex-start;
-  }
-
-  .settings-action-align {
-    justify-content: flex-start;
-  }
-}
-
 /* Plugin directory cards pair up only when the Settings content column (not
  * the window) has room for two readable cards. */
 .settings-plugin-grid {

@@ -17,6 +17,7 @@ import {
   Textarea,
   toast,
 } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { FolderGit2, Plus, Trash2 } from "lucide-react";
 import { skillsApi, settingsApi } from "../../lib/ipc";
 import {
@@ -125,8 +126,7 @@ export function SkillsSettings() {
       </FieldSet>
       {!globallyEnabled ? (
         <Text variant="small" color="secondary">
-          Skills are off. Aiden won’t discover, attach, or load skills until you turn them on again.
-          Visible chat history stays available. Hidden skill instructions won’t be replayed.
+          Skills are off. Aiden won’t discover, attach, or load skills until you turn them on.
         </Text>
       ) : null}
 
@@ -175,13 +175,11 @@ export function SkillsSettings() {
 
       {globallyEnabled && discoveredList.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2">
-          <div>
+          <div className="flex items-center gap-1.5">
             <Text variant="strong">Built-in and discovered skills</Text>
-            <Text variant="small" color="secondary" className="mt-0.5 block">
-              Aiden includes the immutable aiden-app skill. Other skills come from SKILL.md files in workspace and global <code>.agents/skills</code>,{" "}
-              <code>.claude/skills</code>, and <code>.aiden/&#123;skill,skills&#125;</code> folders, plus enabled installed Claude Code plugins. Plugin skills use a plugin:name namespace.
-              Availability follows the same collision and safety rules as the composer and model.
-            </Text>
+            <InfoHint topic="discovered skills">
+              Aiden includes the aiden-app skill. Others come from SKILL.md files in .agents, .claude and .aiden folders, plus enabled Claude Code plugins.
+            </InfoHint>
           </div>
           <div className="settings-card rounded-card">
             {discoveredList.map((s, i) => (

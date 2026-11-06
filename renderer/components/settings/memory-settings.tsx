@@ -2,6 +2,7 @@ import { MemoryFactsSection } from "./memory-facts-section";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Field, FieldSet, Switch, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { settingsApi, workspacesApi } from "../../lib/ipc";
 import { queryKeys, useSettings, useWorkspaces } from "../../lib/queries";
 import type { AppSettings, Workspace } from "../../lib/types";
@@ -51,6 +52,11 @@ export function MemorySettings() {
       <FieldSet title="Memory controls">
         <Field
           label="Use memory"
+          hint={
+            <InfoHint topic="turning memory off">
+              Off stops memory tools, prompt context and new indexing. Approved facts stay on this device for when you turn it back on.
+            </InfoHint>
+          }
           description="Lets Aiden recall approved facts, suggest new facts during chats, and index conversation metadata for retrieval."
         >
           <Switch
@@ -61,12 +67,15 @@ export function MemorySettings() {
           />
         </Field>
       </FieldSet>
-      <Text as="p" variant="small" color="secondary" className="text-pretty">
-        Turning memory off stops memory tools, prompt context, and new indexing. Existing approved
-        facts stay on this device and become available again if you turn it back on.
-      </Text>
 
-      <FieldSet title="Workspaces">
+      <FieldSet
+        title="Workspaces"
+        hint={
+          <InfoHint topic="workspace memory">
+            These switches affect regular workspace chats. Bot memory has its own scope and follows Use memory.
+          </InfoHint>
+        }
+      >
         {workspaces.isLoading ? (
           <Text as="p" variant="small" color="secondary" className="p-4" role="status">
             Loading workspaces…
@@ -96,10 +105,6 @@ export function MemorySettings() {
           </Text>
         )}
       </FieldSet>
-      <Text as="p" variant="small" color="secondary" className="text-pretty">
-        Workspace switches affect regular workspace chats. Bot memory has its own scope and
-        follows the global switch.
-      </Text>
 
       <MemoryFactsSection workspaces={workspaces.data ?? []} />
     </div>

@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
 import { Badge, Button, Callout, Dialog, Field, FieldSet, Switch, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { computerUseApi, formFillApi, settingsApi } from "../../lib/ipc";
 import { reduceComputerUseRefreshState } from "../../lib/computer-use-readiness";
 import { useRequestComputerUsePermissions } from "../computer-use-access-approval";
@@ -124,16 +125,16 @@ function FormFillSpecialistField() {
       setRemoving(false);
     }
   };
+  // With no model on disk this row has nothing to act on.
+  if (!status || status.state === "not-downloaded") return null;
   return (
     <Field
       label="Form fill specialist"
       description="Unavailable until Computer Use can keep each fill bound to the document you approved. Existing downloaded model files can be removed."
     >
-      {status && status.state !== "not-downloaded" ? (
-        <Button size="small" variant="transparent" onClick={() => void remove()} disabled={removing}>
-          {removing ? "Removing…" : "Remove model"}
-        </Button>
-      ) : <Text variant="small" color="secondary">Unavailable</Text>}
+      <Button size="small" variant="transparent" onClick={() => void remove()} disabled={removing}>
+        {removing ? "Removing…" : "Remove model"}
+      </Button>
     </Field>
   );
 }
@@ -342,21 +343,15 @@ export function ComputerUseSettings() {
           </Callout>
         ) : null}
       </Dialog>
-      <FieldSet title="How it behaves">
-        <div className="settings-computer-use-grid grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6 p-4 max-[640px]:grid-cols-1 max-[640px]:gap-3">
-          <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">
-            Aiden asks once in each chat before it uses your computer, unless you turn on Always
-            allow. In an allowed chat, your selected model may receive screenshots, window details,
-            and accessibility text, and Aiden can click and type without asking again. Aiden doesn’t
-            save that content; your provider handles it under its data policy.
-          </Text>
-          <div className="settings-computer-use-actions flex min-w-0 flex-col items-end gap-2 max-[640px]:items-start">
-            <div className="settings-action-align flex flex-wrap justify-end gap-2 max-[640px]:justify-start">
-              <Badge className="whitespace-nowrap">Asks once per chat</Badge>
-            </div>
-          </div>
-        </div>
-      </FieldSet>
+      <div className="flex items-start gap-1.5 px-4">
+        <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">
+          In an allowed chat, your selected model may receive screenshots, window details and
+          accessibility text, and Aiden can click and type without asking again.
+        </Text>
+        <InfoHint topic="how Computer Use behaves">
+          Aiden asks once in each chat unless you turn on Always allow. It doesn’t save that content; your provider handles it under its data policy.
+        </InfoHint>
+      </div>
     </>
   );
 }

@@ -3,6 +3,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { LockKeyhole } from "lucide-react";
 import { Button, Callout, Field, FieldSet, Switch, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { BotAllowedList } from "../bots/bot-allowed-list";
 import { useBotAllowed, useBotAllowedRemoval } from "../../main/bots/use-bot-allowed";
 import { useAppCapabilities } from "../../lib/app-capabilities";
@@ -67,6 +68,11 @@ export function BotsSettings() {
       <FieldSet title="Routines">
         <Field
           label="Go ahead without asking"
+          hint={
+            <InfoHint topic="going ahead without asking">
+              With this off, a routine skips Ask first steps and the Bot says so in its reply. Changes in connected apps wait under Needs you.
+            </InfoHint>
+          }
           description="When a Bot runs a routine on its own, steps set to Ask first and changes in connected apps go ahead without waiting for your OK. In chats, Bots still ask."
         >
           <Switch
@@ -101,9 +107,6 @@ export function BotsSettings() {
           </Field>
         ) : null}
       </FieldSet>
-      <Text as="p" variant="small" color="secondary" className="text-pretty">
-        With this off, a routine skips an Ask first step and the Bot tells you in its reply, and a change in a connected app waits under Needs you until you answer.
-      </Text>
     </>
   );
 }

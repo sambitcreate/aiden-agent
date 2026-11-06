@@ -2,7 +2,7 @@
 
 Aiden handles two kinds of limits on the Mac and Linux desktop app: the ones a provider sets (rate limits and plan windows), and the dollar limits the owner sets. Both live in **Settings → Context & Limits**. Nothing about either leaves the computer. The two settings travel with Aiden's portable settings like other preferences; the saved waits and the spending ledger stay on this computer only.
 
-The CLI does not wait for provider usage limits. Its Bot runner records paid response costs in the profile-local `spending.json` and enforces the monthly Bot and routine-run limits configured in the profile's `aiden.json`. It uses the same API-key versus subscription classification as desktop. The CLI has no Limits & spending editor or temporary spending-allowance controls.
+The CLI does not wait for provider usage limits. Its Bot runner records paid response costs in the profile-local `spending.json` and enforces the monthly Bot and routine-run limits configured in the profile's `aiden.json`. It uses the same API-key versus subscription classification as desktop. The CLI has no Context & Limits editor or temporary spending-allowance controls.
 
 ## Waiting out a provider's usage limit
 

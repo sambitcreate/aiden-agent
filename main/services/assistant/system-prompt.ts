@@ -6,7 +6,7 @@ import { aidenAppGuidance } from "../aiden-app-knowledge.js";
 import { RESPONSE_FORMAT_GUIDANCE } from "../response-format-guidance.js";
 
 export interface AssistantPromptInput {
-  /** Settings section ids the assistant may talk about. */
+  /** Settings page titles, with tabs in brackets, the assistant may talk about. */
   settingsPages: readonly string[];
   /**
    * Names of the tools actually handed to this generation. The prompt is

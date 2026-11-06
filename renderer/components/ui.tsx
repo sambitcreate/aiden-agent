@@ -344,12 +344,23 @@ export const Label = React.forwardRef<
 
 export function FieldSet({
   title,
+  hint,
   className,
   children,
-}: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
+}: React.PropsWithChildren<{
+  title?: React.ReactNode;
+  /** An `InfoHint` beside the title, kept out of the heading's accessible name. */
+  hint?: React.ReactNode;
+  className?: string;
+}>) {
   return (
     <section className={cn("settings-group mb-7", className)}>
-      {title ? <h2 className="settings-group-title mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
+      {title ? (
+        <div className="mb-3 flex items-center gap-1.5 px-4">
+          <h2 className="settings-group-title text-large-strong text-primary">{title}</h2>
+          {hint}
+        </div>
+      ) : null}
       <div className="settings-group-card overflow-visible rounded-card bg-well">{children}</div>
     </section>
   );
@@ -357,12 +368,15 @@ export function FieldSet({
 
 export function Field({
   label,
+  hint,
   description,
   orientation = "horizontal",
   className,
   children,
 }: React.PropsWithChildren<{
   label?: React.ReactNode;
+  /** An `InfoHint` beside the label, kept out of the row's accessible name. */
+  hint?: React.ReactNode;
   description?: React.ReactNode;
   orientation?: "horizontal" | "vertical";
   className?: string;
@@ -385,8 +399,11 @@ export function Field({
       {label || description || orientation === "horizontal" ? (
       <div className="min-w-0">
         {label ? (
-          <div id={labelId} className="text-strong text-primary">
-            {label}
+          <div className="flex items-center gap-1.5">
+            <div id={labelId} className="min-w-0 text-strong text-primary">
+              {label}
+            </div>
+            {hint}
           </div>
         ) : null}
         {description ? (

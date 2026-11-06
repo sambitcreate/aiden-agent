@@ -10,6 +10,7 @@ import {
   parseSettingsSearch,
   parseSettingsSection,
   resolveSettingsSection,
+  settingsLocation,
   SETTINGS_DESTINATIONS,
   SETTINGS_GROUPS,
   SETTINGS_PAGES,
@@ -79,6 +80,13 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
     section: "modelData",
   });
   assert.deepEqual(parseSettingsSearch({ section: "unknown" }), {});
+});
+
+test("asking again for the open Settings section replaces its history entry", () => {
+  const onLinks = { pathname: "/settings", search: { section: "links" } };
+  assert.equal(settingsLocation("links", onLinks).replace, true);
+  assert.equal(settingsLocation("providers", onLinks).replace, undefined);
+  assert.equal(settingsLocation("links", { pathname: "/chat", search: {} }).replace, undefined);
 });
 
 test("parses the Remote Access settings deep link", () => {

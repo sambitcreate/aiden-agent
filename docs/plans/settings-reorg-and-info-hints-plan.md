@@ -1,6 +1,6 @@
 # Settings reorganization and InfoHint plan
 
-Status: Proposed, revised 2026-11-05 after a code review of the first draft. Nothing here has shipped.
+Status: In progress on `feature/settings-reorg`, revised 2026-11-05 after a code review of the first draft.
 
 Prototype: [`assets/settings-reorg-prototype.html`](assets/settings-reorg-prototype.html). It's a static mock that runs in a browser, with no app code behind it.
 
@@ -120,7 +120,7 @@ Sidebar, palette and assistant lists must filter the same way, through one share
 | Intel Mac | yes | no | One tab, titled Computer Use |
 | Linux | no | no | Page hidden |
 
-The gates are in `main/services/host-platform-capabilities.ts:35-36`. `assistantSettingsSections` (`settings-section.ts:253`) doesn't filter `computerUse` today, so the assistant can name a Linux-hidden page. Phase 1 fixes that. Simulator keeps its `devices` gate.
+The gates are in `main/services/host-platform-capabilities.ts:35-36`. `assistantSettingsPages` in `settings-section.ts` (formerly `assistantSettingsSections`, which didn't filter `computerUse`) must filter it, so the assistant can name a Linux-hidden page. Phase 1 fixes that. Simulator keeps its `devices` gate.
 
 ### Search and palette
 

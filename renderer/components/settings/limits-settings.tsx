@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Text, toast } from "../ui";
+import { Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useSettings } from "../../lib/queries";
 import type { AppSettings } from "../../lib/types";
@@ -78,6 +79,8 @@ export function LimitsSettings() {
     if (day === DEFAULT_SPENDING_MONTH_START_DAY) delete next.monthStartDay;
     void save({ spendingLimits: next }, "Couldn’t change when a Bot’s month starts.");
   };
+  // Spending limits save as a whole, so nothing can change until they've loaded or while one is saving.
+  const locked = !settings.data || saving;
   const amountValue = (amount: number | undefined) => (amount === undefined ? "none" : String(amount));
 
   return (
@@ -85,14 +88,21 @@ export function LimitsSettings() {
       <AutomaticCompactionGroup />
       <PromptCacheGroup />
       <CompactionBudgetGroup />
-      <FieldSet title="Usage limits">
+      <FieldSet
+        title="Usage limits"
+        hint={
+          <InfoHint topic="usage limits">
+            Aiden tries once when the limit resets, then lets waiting replies go one at a time. Weekly caps and billing problems fail right away.
+          </InfoHint>
+        }
+      >
         <Field
           label="Wait for a limit to clear"
           description="When a provider’s rate limit or plan limit turns a reply away before it starts, Aiden waits and sends it again with the same model. Chats, Bots and routines all wait."
         >
           <Select
             value={String(waitHours)}
-            disabled={settings.isLoading}
+            disabled={locked}
             onValueChange={(value) => {
               const hours = Number(value);
               if (isUsageLimitWaitHours(hours)) void setWaitHours(hours);
@@ -111,17 +121,19 @@ export function LimitsSettings() {
           </Select>
         </Field>
       </FieldSet>
-      <Text as="p" variant="small" color="secondary" className="-mt-4 px-4 text-pretty">
-        Aiden tries once when the provider says the limit resets, then lets waiting replies go one at a time.
-        Limits that last days, like a weekly cap, and billing problems fail right away with the reset time.
-        Retry now on a waiting reply tries again at once.
-      </Text>
-      <FieldSet title="Spending limits">
+      <FieldSet
+        title="Spending limits"
+        hint={
+          <InfoHint topic="spending limits">
+            Only API key requests count; sign-ins and local models are $0. At a limit, the reply finishes its step and stops until you allow more.
+          </InfoHint>
+        }
+      >
         <Field label="Each chat" description="The whole chat, with the helpers it starts.">
           <SpendingAmountSelect
             label="Spending limit for each chat"
             value={amountValue(limits.chatUsd)}
-            disabled={settings.isLoading}
+            disabled={locked}
             onChange={(value) => setLimit("chatUsd", value)}
           />
         </Field>
@@ -129,7 +141,7 @@ export function LimitsSettings() {
           <SpendingAmountSelect
             label="Spending limit for each Bot per month"
             value={amountValue(limits.botMonthUsd)}
-            disabled={settings.isLoading}
+            disabled={locked}
             onChange={(value) => setLimit("botMonthUsd", value)}
           />
         </Field>
@@ -137,14 +149,14 @@ export function LimitsSettings() {
           <SpendingAmountSelect
             label="Spending limit for each routine run"
             value={amountValue(limits.routineRunUsd)}
-            disabled={settings.isLoading}
+            disabled={locked}
             onChange={(value) => setLimit("routineRunUsd", value)}
           />
         </Field>
         <Field label="A Bot’s month starts on">
           <Select
             value={String(monthStartDay)}
-            disabled={settings.isLoading}
+            disabled={locked}
             onValueChange={(value) => {
               const day = Number(value);
               if (Number.isInteger(day)) setMonthStartDay(day);
@@ -163,11 +175,6 @@ export function LimitsSettings() {
           </Select>
         </Field>
       </FieldSet>
-      <Text as="p" variant="small" color="secondary" className="-mt-4 px-4 text-pretty">
-        Only requests paid for with an API key count. Claude and ChatGPT sign-ins, and models on this Mac, count as
-        $0. When a limit is reached, the reply finishes the step it’s on, then stops. Allow more from the chat, the
-        Bot, or your phone.
-      </Text>
     </div>
   );
 }
