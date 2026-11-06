@@ -27,7 +27,6 @@ import type { AnalyticsEventProps, AnalyticsSuperProperties } from "../../../mai
 import { setAnalyticsReporter, type AnalyticsReporter } from "../../../main/services/analytics/analytics-report.js";
 import type { SanitizedException, isSystemErrorCode, sanitizeException } from "../../../main/services/analytics/analytics-sanitize.js";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
-import { stackWithoutMessage } from "../../../renderer/shared/diagnostics.js";
 import { atomicJson, cliLeaseHelperPath, leaseGuardPath } from "./state.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -241,6 +240,22 @@ interface MessagelessError {
   cause?: MessagelessError;
 }
 
+/** What V8 writes before a message: a name, then a Node code if any. */
+const STACK_HEADER_NAME = /^[\w$.]*(?: \[\w+\])?(?:: )?$/u;
+
+/**
+ * The frames of a stack, or none if its header isn't the error's name and
+ * current message. A stack opens with the message it was written with, whose
+ * lines could pose as frames, and changing the message leaves that stack behind.
+ */
+function stackBelowHeader(stack: unknown, message: unknown): string | undefined {
+  if (typeof stack !== "string" || typeof message !== "string") return undefined;
+  const start = message === "" ? stack.search(/\n|$/u) : stack.indexOf(message);
+  if (start < 0 || !STACK_HEADER_NAME.test(stack.slice(0, start))) return undefined;
+  const frames = stack.slice(start + message.length);
+  return frames === "" || frames.startsWith("\n") ? frames : undefined;
+}
+
 /**
  * What a server's crash report may say about an error: its type, frames and
  * system error code. A server's messages quote file names, hosts and prompt text
@@ -252,8 +267,7 @@ function withoutMessage(value: unknown, depth = 0): MessagelessError {
     const { name, stack, message, code, cause } = value as { name?: unknown; stack?: unknown; message?: unknown; code?: unknown; cause?: unknown };
     return {
       name,
-      // A stack opens with the message, whose lines could otherwise pose as frames.
-      stack: typeof stack === "string" ? stackWithoutMessage(stack, message) : stack,
+      stack: stackBelowHeader(stack, message),
       message: "",
       code,
       ...(cause !== undefined && cause !== null && depth < MAX_REPORTED_CAUSES ? { cause: withoutMessage(cause, depth + 1) } : {}),

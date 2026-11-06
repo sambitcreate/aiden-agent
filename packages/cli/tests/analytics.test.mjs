@@ -535,6 +535,46 @@ test("the lines of a crash's message can't pose as frames, on an error or its ca
   assert.deepEqual(posed.properties.$exception_list.map(framesOf), h.sent.at(-1).properties.$exception_list.map(framesOf), "only the error's real frames remain");
 });
 
+test("a stack written before its error's message changed sends no frames", async (t) => {
+  const h = harness(t, { state: allowed });
+  started(h);
+  await settle();
+  const posing = (name) => `save failed\n    at ${name} (${h.appDir}/chunks/server.js:7:9)\n    at /home/jane/notes.js:1:1`;
+  const framesOf = async (error) => {
+    api.reportServerRejection(error);
+    await settle();
+    return h.sent.at(-1).properties.$exception_list.map((entry) => entry.stacktrace?.frames.length ?? 0);
+  };
+  const changed = (name, message) => {
+    const error = new Error(posing(name));
+    void error.stack;
+    error.message = message;
+    return error;
+  };
+
+  for (const [name, message] of [["replaced_q3", "could not save"], ["emptied_q3", ""], ["shortened_q3", "save"], ["tail_q3", "failed"]]) {
+    assert.deepEqual(await framesOf(changed(name, message)), [0], `message now ${JSON.stringify(message)}`);
+    assert.doesNotMatch(JSON.stringify(h.sent.at(-1)), new RegExp(`${name}|server\\.js`, "u"));
+  }
+
+  const wrapper = new Error("save failed");
+  wrapper.cause = changed("cause_q3", "could not save");
+  assert.equal((await framesOf(wrapper))[1], 0, "a cause is held to the same rule");
+  assert.doesNotMatch(JSON.stringify(h.sent.at(-1)), /cause_q3|server\.js/u);
+
+  let coded;
+  try {
+    Buffer.alloc(-1);
+  } catch (error) {
+    coded = error;
+  }
+  assert.match(coded.stack, /^RangeError \[ERR_OUT_OF_RANGE\]: /u);
+  const unnamed = new Error("");
+  for (const intact of [new Error("save failed"), coded, unnamed]) {
+    assert.ok((await framesOf(intact))[0] > 0, `${intact.name} keeps its frames`);
+  }
+});
+
 test("a crash during the stop still ends the process with the crash, not a clean exit", async (t) => {
   const slowStop = fakeTransport({ shutdown: () => new Promise((resolve) => setTimeout(resolve, 20)), flush: () => new Promise((resolve) => setTimeout(resolve, 60)) });
   const h = harness(t, { state: allowed, transport: slowStop, crashFlushCapMs: 500 });
