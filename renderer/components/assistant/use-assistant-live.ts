@@ -652,6 +652,7 @@ export function useAssistantLiveWithDependencies(
   const utteranceStartedAt = React.useRef<number | null>(null);
   /** Speech onsets heard at the microphone, which come before any caption. */
   const [speechOnsets] = React.useState(() => new LiveSpeechOnsets(() => liveSessionBus.beginVoiceInput()));
+  React.useEffect(() => liveSessionBus.onVoiceInputFence((fence) => speechOnsets.fenced(fence)), [speechOnsets]);
   /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
   const liveReplyOpen = React.useRef(false);
   const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -910,6 +911,7 @@ export function useAssistantLiveWithDependencies(
         // The bus start mark likewise, taken from when the microphone first
         // heard this speech: speech begun before an approval armed stays
         // before its fence however late its caption arrives or ends.
+        if (event.direction === "input") speechOnsets.heard();
         if (event.direction === "input" && utteranceStartedAt.current === null) {
           // No onset in reach (speech too quiet to measure, or its caption came
           // after the lag window): the start cannot be proven to follow any
