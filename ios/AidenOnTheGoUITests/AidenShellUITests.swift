@@ -294,6 +294,68 @@ final class AidenShellUITests: XCTestCase {
         add(attachment)
     }
 
+    // MARK: Load earlier
+
+    /// Load earlier adds rows above the reader. The message they were reading stays
+    /// on screen instead of the screen landing on the top of the new page.
+    func testLoadEarlierKeepsTheReaderOnTheMessageTheyWereReading() {
+        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoLongChat", "YES"])
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
+        openLongChat(in: app)
+
+        let load = loadEarlierButton(in: app)
+        scrollToTop(until: load, in: app)
+        XCTAssertTrue(load.isHittable, "Never reached Load earlier")
+        // The oldest message of the window the chat opened with.
+        let reading = app.staticTexts["Turn 45."]
+        XCTAssertTrue(reading.waitForExistence(timeout: 5), "The oldest message is not on screen")
+
+        load.tap()
+
+        let stayed = waitUntil(timeout: 8) { reading.exists && reading.isHittable && reading.frame.minY < 300 }
+        let landedOn = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Turn ")).allElementsBoundByIndex
+            .filter(\.isHittable).map(\.label)
+        XCTAssertTrue(stayed, "The reader lost their place. Now on screen: \(landedOn)")
+
+        // Jump to latest still takes the reader to the end.
+        let jump = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Jump to latest")).firstMatch
+        XCTAssertTrue(jump.waitForExistence(timeout: 5), "No Jump to latest after leaving the end")
+        jump.tap()
+        let newest = app.staticTexts["Turn 69."]
+        XCTAssertTrue(waitUntil(timeout: 8) { newest.exists && newest.isHittable && !jump.exists }, "Jump to latest did not reach the end")
+        app.terminate()
+    }
+
+    private func openLongChat(in app: XCUIApplication) {
+        _ = openInbox(in: app)
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rename the onboarding assets")).firstMatch
+        for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "No long chat in the inbox")
+        row.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+    }
+
+    private func loadEarlierButton(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Load earlier")).firstMatch
+    }
+
+    private func scrollToTop(until element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<40 where !(element.exists && element.isHittable) {
+            app.swipeDown(velocity: .fast)
+        }
+        // Let the scroll come to rest before anything is measured.
+        _ = waitUntil(timeout: 2) { false }
+    }
+
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return condition()
+    }
+
     // MARK: Navigation
 
     /// Opens the Inbox and returns the first chat row. In the menu shell that is
