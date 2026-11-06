@@ -844,7 +844,35 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         release()
         await attempt.value
         try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }
-        XCTAssertTrue(coordinator.presentedError?.contains("revoked") == true)
+        try await waitUntil("the revocation message") { coordinator.presentedError?.contains("revoked") == true }
+    }
+
+    func testAProbeRevokedWhileNegotiatingEndsWithoutWaitingForTheNextMachinesConnect() async throws {
+        var studioInstallation = AidenDemoHosts.installation(instanceId: "studio", name: "studio")
+        studioInstallation.deviceCapabilities.removeAll { $0 == .tasksRead }
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: [studioInstallation, AidenDemoHosts.installation(instanceId: "laptop", name: "laptop")],
+            responder: responder
+        )
+        responder.reply(instanceId: "studio", method: "POST", path: "/device/capabilities", status: 401, json: revokedJSON)
+        let release = responder.hold(instanceId: "laptop", path: "/server")
+        defer { release() }
+        let studio = try connection("studio", in: coordinator)
+        var attemptEnded = false
+
+        let attempt = Task {
+            await studio.connect(over: .probe)
+            attemptEnded = true
+        }
+        try await waitUntil("the next machine's connect") { serverRequests("laptop") == 1 }
+
+        try await waitUntil("the revoked machine's attempt to end") { attemptEnded }
+        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.connectionState, .connecting, "The next machine is still connecting")
+        release()
+        await attempt.value
+        try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }
+        try await waitUntil("the revocation message") { coordinator.presentedError?.contains("revoked") == true }
     }
 
     func testAnArrivingMachineWithAPurgePendingKeepsItsLegacyEnvironmentFilesUntilPurged() async throws {

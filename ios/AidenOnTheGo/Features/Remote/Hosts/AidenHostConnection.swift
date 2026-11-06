@@ -189,8 +189,8 @@ final class AidenHostConnection {
         let deadline = timeout.map { timeout in
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                // An attempt that ended can still be running: a revocation carries
-                // on inside it to the next machine's connect.
+                // An attempt that ended can still be running, such as a revocation
+                // finishing its purge.
                 guard !Task.isCancelled, isCurrent(attempt: attempt) else { return }
                 await expire(attempt: attempt, over: route)
                 work.cancel()
@@ -308,7 +308,8 @@ final class AidenHostConnection {
     func negotiateProgressCapabilitiesIfNeeded(
         server: AidenServer,
         client: AidenRemoteClient,
-        attempt: Int
+        attempt: Int,
+        over route: ConnectRoute = .interactive
     ) async {
         guard isCurrent(attempt: attempt) else { return }
         var requested: [AidenRemoteCapability] = []
@@ -339,7 +340,7 @@ final class AidenHostConnection {
         } catch {
             // Feature discovery and the device-capability update are additive;
             // older Macs remain connected with the existing feature set.
-            await handleRevocationDuringNegotiation(error, attempt: attempt)
+            await handleRevocationDuringNegotiation(error, attempt: attempt, over: route)
         }
     }
 
@@ -437,7 +438,7 @@ final class AidenHostConnection {
             let client = route == .probe
                 ? try probeClient(credential: credential)
                 : try client(credential: credential)
-            try await load(using: client, attempt: attempt)
+            try await load(using: client, attempt: attempt, over: route)
         } catch {
             guard isCurrent(attempt: attempt) else { return }
             await record(error, over: route)
@@ -505,7 +506,7 @@ final class AidenHostConnection {
         return client
     }
 
-    private func load(using client: AidenRemoteClient, attempt: Int) async throws {
+    private func load(using client: AidenRemoteClient, attempt: Int, over route: ConnectRoute) async throws {
         async let serverRequest = client.server()
         async let workspaceRequest = client.workspaces()
         let (server, workspaces) = try await (serverRequest, workspaceRequest)
@@ -519,9 +520,9 @@ final class AidenHostConnection {
         connectionIssue = nil
         connectionState = .connected
         await refreshDeviceIdentity(using: client, currentName: server.deviceName)
-        await negotiateProgressCapabilitiesIfNeeded(server: server, client: client, attempt: attempt)
+        await negotiateProgressCapabilitiesIfNeeded(server: server, client: client, attempt: attempt, over: route)
         for capabilities in Self.capabilitiesAskedForAlone {
-            await negotiateCapabilityAloneIfNeeded(capabilities, client: client, attempt: attempt)
+            await negotiateCapabilityAloneIfNeeded(capabilities, client: client, attempt: attempt, over: route)
         }
     }
 
@@ -572,7 +573,8 @@ final class AidenHostConnection {
     private func negotiateCapabilityAloneIfNeeded(
         _ capabilities: [AidenRemoteCapability],
         client: AidenRemoteClient,
-        attempt: Int
+        attempt: Int,
+        over route: ConnectRoute
     ) async {
         guard isCurrent(attempt: attempt),
               let server = self.server, server.instanceId == instanceId,
@@ -597,15 +599,15 @@ final class AidenHostConnection {
             // A Mac without the route, or a refusal (400 or 404), keeps the
             // grants the device already has: hand-offs stay on the Mac, and
             // scheduled-task approvals keep the summary card.
-            await handleRevocationDuringNegotiation(error, attempt: attempt)
+            await handleRevocationDuringNegotiation(error, attempt: attempt, over: route)
         }
     }
 
-    private func handleRevocationDuringNegotiation(_ error: Error, attempt: Int) async {
+    private func handleRevocationDuringNegotiation(_ error: Error, attempt: Int, over route: ConnectRoute) async {
         guard isCurrent(attempt: attempt),
               let clientError = error as? AidenRemoteClientError,
               clientError.isCredentialRevoked else { return }
-        await handleConnectionError(error)
+        await record(error, over: route)
     }
 
     private func refreshDeviceIdentity(

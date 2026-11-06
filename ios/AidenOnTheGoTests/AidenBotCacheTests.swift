@@ -150,6 +150,33 @@ final class AidenBotCacheTests: XCTestCase {
         XCTAssertTrue(bIsCurrent)
     }
 
+    func testReactivatingAnInstanceWithANewDeviceMakesTheOldPairingStale() async throws {
+        let (cache, root) = temporaryCache("repair")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let list = try fixture().botList
+        let first = AidenBotCacheSnapshot(list: list, savedAt: Date(timeIntervalSince1970: 1))
+        let second = AidenBotCacheSnapshot(list: list, savedAt: Date(timeIntervalSince1970: 2))
+        let late = AidenBotCacheSnapshot(list: list, savedAt: Date(timeIntervalSince1970: 3))
+        let old = await cache.activate(instanceId: "instance-a", deviceId: "dev1")
+        _ = try await cache.store(first, activation: old)
+        let repaired = await cache.activate(instanceId: "instance-a", deviceId: "dev2")
+        _ = try await cache.store(second, activation: repaired)
+
+        let oldIsCurrent = await cache.isCurrent(old)
+        let lateStore = try await cache.store(late, activation: old)
+        let lateMerge = try await cache.mergeAndStore(AidenBotCacheSegments(list: list), activation: old)
+
+        let repairedIsCurrent = await cache.isCurrent(repaired)
+        let dev2 = await cache.load(instanceId: "instance-a", deviceId: "dev2")
+        let dev1 = await cache.load(instanceId: "instance-a", deviceId: "dev1")
+        XCTAssertFalse(oldIsCurrent)
+        XCTAssertFalse(lateStore)
+        XCTAssertNil(lateMerge)
+        XCTAssertTrue(repairedIsCurrent)
+        XCTAssertEqual(dev2, second, "The new pairing's rows are unchanged")
+        XCTAssertEqual(dev1, first, "The refused write didn't reach the old pairing either")
+    }
+
     func testAStaleWriteAfterPurgeIsRefused() async throws {
         let (cache, root) = temporaryCache("purge-stale")
         defer { try? FileManager.default.removeItem(at: root) }

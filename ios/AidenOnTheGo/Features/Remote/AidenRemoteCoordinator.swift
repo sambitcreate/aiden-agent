@@ -1223,11 +1223,13 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         presentedError = error.localizedDescription
     }
 
-    /// Called from inside the revoked connection's own attempt. A probe holds a
-    /// scheduler slot, so the next machine's connect runs beside that attempt
-    /// rather than in it: ending the attempt, by timeout or by `backgrounded()`,
-    /// can't leave the slot held, and the connect isn't cut short with it. An
-    /// interactive attempt holds no slot, and its caller waits for the outcome.
+    /// Reached from the revoked connection's own attempt, and from
+    /// `handleConnectionError` when a request outside any attempt finds out. A
+    /// probe holds a scheduler slot, so the next machine's connect runs beside
+    /// that attempt rather than in it: ending the attempt, by timeout or by
+    /// `backgrounded()`, can't leave the slot held, and the connect isn't cut
+    /// short with it. An interactive attempt holds no slot, and its caller waits
+    /// for the outcome.
     func hostConnectionWasRevoked(
         _ connection: AidenHostConnection,
         over route: AidenHostConnection.ConnectRoute
@@ -1243,7 +1245,8 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         case .needsPairing:
             presentedError = message
         case .connectNext:
-            presentedError = message
+            // The connect clears the error when it starts, so it is set once the
+            // connect has ended, as it is on the awaiting path.
             Task {
                 await connectActiveInstallation()
                 presentedError = message
