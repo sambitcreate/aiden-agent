@@ -14,6 +14,7 @@ import {
   geminiLiveScaledFrameSize,
   GeminiLivePcmPlaybackQueue,
   loadGeminiLivePcmWorklet,
+  GEMINI_LIVE_WORKLET_SAMPLE_RATE,
   measureGeminiLivePcmLevel,
   type DisplayMediaStream,
   type GeminiLiveDisplayFrameSource,
@@ -23,6 +24,9 @@ import type {
   AssistantLiveSnapshot,
 } from "../../shared/assistant-live";
 import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
+import { liveSessionBus } from "../../lib/live-session-bus";
+import { LIVE_UNTRUSTED_VOICE_START, LiveSpeechOnsets } from "../../lib/live-speech-onsets";
+import { LiveTimeStretcher } from "../../lib/live-time-stretch";
 
 export interface AssistantLiveCaption {
   id: number;
@@ -47,6 +51,8 @@ export interface AssistantLiveController {
   microphone: boolean;
   microphoneActive: boolean;
   microphoneLevel: number;
+  /** The user muted the microphone during the session; Live hears silence. */
+  microphoneMuted: boolean;
   microphonePermission: AssistantLiveMicrophonePermission;
   microphonePermissionReady: boolean;
   microphonePermissionDetail: string;
@@ -74,6 +80,13 @@ export interface AssistantLiveController {
   setupComplete: boolean;
   setSetupOpen(open: boolean): void;
   setMicrophone(enabled: boolean): void;
+  setMicrophoneMuted(muted: boolean): void;
+  /** Loudness of Live's voice playing now, 0 to 1. Read it per frame. */
+  outputLevel(): number;
+  /** Whether replies are still queued or playing, and how often playback was cut off. */
+  playbackState(): { idle: boolean; bargeIns: number };
+  /** Pitch-preserving speaking speed for Live's replies. */
+  setPlaybackSpeed(speed: number): void;
   setComputerUse(enabled: boolean): Promise<void>;
   requestMicrophonePermission(): Promise<boolean>;
   prepareComputerUse(): Promise<void>;
@@ -180,13 +193,25 @@ function stopSource(source: AudioBufferSourceNode | null): void {
 }
 
 /** Generation-fenced 24 kHz player. Every asynchronous continuation rechecks its epoch. */
+/** How long arriving audio may pause before the stretcher's held tail plays. */
+export const PCM_STARVATION_MS = 250;
+
 export class PcmPlayer {
   private context: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null;
+  private levelSamples: Float32Array<ArrayBuffer> | null = null;
   private source: AudioBufferSourceNode | null = null;
   private starting = false;
   private paused = false;
   private epoch = 0;
+  private flushes = 0;
+  private bargeIns = 0;
+  /** Set once the reply has ended, or audio has not arrived for a while: play the held tail. */
+  private releaseHeld = false;
+  private starvationTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly queue = new GeminiLivePcmPlaybackQueue();
+  /** Pitch-preserving speed change; idle at 1×. */
+  private readonly stretcher = new LiveTimeStretcher();
 
   constructor(private readonly createContext = () => new AudioContext({ sampleRate: 24_000 })) {}
 
@@ -207,8 +232,53 @@ export class PcmPlayer {
     }
   }
 
+  /** Speaking speed for replies; applies from the next audio played. */
+  setSpeed(speed: number): void {
+    this.stretcher.setSpeed(speed);
+  }
+
+  /** True when nothing is queued, held back or playing. */
+  get idle(): boolean {
+    return !this.source && !this.starting && this.queue.queuedChunks === 0 && !this.stretcher.pending;
+  }
+
+  /** Counts every flush, including a resumption's. */
+  get flushCount(): number {
+    return this.flushes;
+  }
+
+  /** Counts only flushes because the user talked over a reply. */
+  get bargeInCount(): number {
+    return this.bargeIns;
+  }
+
+  /**
+   * Live finished generating this reply: play what the stretcher still holds.
+   * Until then, a short gap in arriving audio keeps the stretcher's state, so
+   * a reply that streams in small pieces keeps its speed.
+   */
+  endOfReply(): void {
+    if (!this.stretcher.pending) return;
+    this.releaseHeld = true;
+    void this.playNext().catch(() => {
+      this.starting = false;
+    });
+  }
+
+  /** Loudness of what is playing now, 0 to 1. */
+  level(): number {
+    const analyser = this.analyser;
+    if (!analyser || !this.source) return 0;
+    const samples = (this.levelSamples ??= new Float32Array(analyser.fftSize));
+    analyser.getFloatTimeDomainData(samples);
+    let squareSum = 0;
+    for (const sample of samples) squareSum += sample * sample;
+    return Math.min(1, Math.sqrt(squareSum / samples.length) * 4);
+  }
+
   enqueue(pcm: Uint8Array): void {
     if (this.paused) return;
+    this.clearStarvation();
     this.queue.enqueue(pcm);
     void this.playNext().catch(() => {
       console.info("[aiden-live] playback-failed");
@@ -231,7 +301,9 @@ export class PcmPlayer {
     });
   }
 
+  /** The user talked over the reply. */
   flush(): void {
+    this.bargeIns += 1;
     this.flushInternal();
   }
 
@@ -240,22 +312,71 @@ export class PcmPlayer {
     this.flushInternal();
     const context = this.context;
     this.context = null;
+    this.analyser = null;
     if (context) await context.close().catch(() => undefined);
   }
 
   private flushInternal(): void {
     this.epoch += 1;
+    this.flushes += 1;
+    this.clearStarvation();
+    this.releaseHeld = false;
     this.queue.flush();
+    this.stretcher.reset();
     const source = this.source;
     this.source = null;
     this.starting = false;
     stopSource(source);
   }
 
+  /** The next stretch of audio to play, joining chunks until some is ready. */
+  private nextSamples(): Float32Array<ArrayBuffer> | null {
+    for (;;) {
+      const pcm = this.queue.dequeue();
+      if (!pcm) {
+        // Caught up with the reply. Keep what the stretcher holds unless the
+        // reply has ended or audio stopped arriving (see endOfReply).
+        if (!this.releaseHeld || !this.stretcher.pending) return null;
+        this.releaseHeld = false;
+        return this.stretcher.drain();
+      }
+      const decoded = new Float32Array(pcm.byteLength / 2);
+      const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+      for (let index = 0; index < decoded.length; index += 1) {
+        decoded[index] = view.getInt16(index * 2, true) / 32_768;
+      }
+      const samples = this.stretcher.process(decoded);
+      if (samples.length > 0) return samples;
+    }
+  }
+
+  private clearStarvation(): void {
+    if (this.starvationTimer !== null) clearTimeout(this.starvationTimer);
+    this.starvationTimer = null;
+  }
+
+  /** Audio that stops arriving for a while is treated as the end of the reply. */
+  private armStarvation(): void {
+    this.clearStarvation();
+    this.starvationTimer = setTimeout(() => {
+      this.starvationTimer = null;
+      this.endOfReply();
+    }, PCM_STARVATION_MS);
+  }
+
+  private destinationFor(context: AudioContext): AudioNode {
+    if (this.analyser) return this.analyser;
+    if (typeof context.createAnalyser !== "function") return context.destination;
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.connect(context.destination);
+    this.analyser = analyser;
+    return analyser;
+  }
+
   private async playNext(): Promise<void> {
     if (this.paused || this.source || this.starting) return;
-    const pcm = this.queue.dequeue();
-    if (!pcm) return;
+    if (this.queue.queuedChunks === 0 && !this.stretcher.pending) return;
     const epoch = this.epoch;
     this.starting = true;
     const context = (this.context ??= this.createContext());
@@ -266,20 +387,17 @@ export class PcmPlayer {
         return;
       }
     }
-    const samples = new Float32Array(pcm.byteLength / 2);
-    const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-    for (let index = 0; index < samples.length; index += 1) {
-      samples[index] = view.getInt16(index * 2, true) / 32_768;
-    }
-    if (epoch !== this.epoch || this.paused || context !== this.context) {
+    const samples = this.nextSamples();
+    if (!samples || samples.length === 0 || epoch !== this.epoch || this.paused || context !== this.context) {
       this.starting = false;
+      if (!samples && epoch === this.epoch && this.stretcher.pending) this.armStarvation();
       return;
     }
     const buffer = context.createBuffer(1, samples.length, 24_000);
     buffer.copyToChannel(samples, 0);
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(this.destinationFor(context));
     source.onended = () => {
       if (epoch !== this.epoch) return;
       if (this.source === source) this.source = null;
@@ -312,6 +430,8 @@ interface AssistantLiveApi {
   bindDisplay?(): Promise<string | null>;
   releaseDisplay?(bindingId: string): Promise<boolean>;
   sendFrame?(sessionId: string, frame: Uint8Array): Promise<boolean>;
+  toolResult?(sessionId: string, requestId: string, response: Record<string, unknown>): Promise<boolean>;
+  note?(sessionId: string, text: string, options?: { awaitDelivery?: boolean }): Promise<boolean>;
   onEvent(handler: (event: AssistantLiveRendererEvent) => void): () => void;
 }
 
@@ -341,7 +461,15 @@ export interface AssistantLiveDependencies {
     requestPermissions?(): Promise<ComputerUseStatus>;
   };
   ordinaryBusyReason?: string | null;
+  /** Silence after the user's last words that ends an utterance no reply has ended yet. */
+  utteranceQuietMs?: number;
 }
+
+/**
+ * Ends a user utterance when Google has neither marked it finished nor started
+ * a reply, so a spoken answer still counts while Live waits on a tool.
+ */
+export const ASSISTANT_LIVE_UTTERANCE_QUIET_MS = 2_000;
 
 function defaultDependencies(geminiLive: boolean): AssistantLiveDependencies {
   let devices = { input: "default", output: "default" };
@@ -507,6 +635,32 @@ export function useAssistantLiveWithDependencies(
   const captionId = React.useRef(0);
   const voiceApprovalReceiptId = React.useRef(0);
   const voiceApprovalReceiptRetentionFloor = React.useRef<number | null>(null);
+  // Google transcribes the user's speech in pieces ("Don't", " allow", " this").
+  // Pieces join into one utterance that is published once, when the user's turn
+  // ends, so a fixed phrase is matched against everything that was said. The
+  // receipt id is taken at the first piece, so an approval shown mid-sentence
+  // still fences words that started before it.
+  //
+  // Live's output ends the user's turn only when Live was quiet as the user
+  // began. Speech that talks over a reply is followed by that reply's
+  // leftovers (a late caption, a last chunk, its turn end), so such an
+  // utterance ends only on Google's finished mark or the quiet timer.
+  const pendingUtterance = React.useRef<
+    { receiptId: number; startedAt: number; text: string; overReply: boolean } | null
+  >(null);
+  /** Bus start mark of the utterance under way, taken on its first input caption, interim or final. */
+  const utteranceStartedAt = React.useRef<number | null>(null);
+  /** Speech onsets heard at the microphone, which come before any caption. */
+  const [speechOnsets] = React.useState(() => new LiveSpeechOnsets(() => liveSessionBus.beginVoiceInput()));
+  /** Reads the microphone's capture clock (its AudioContext's time) while capture runs. */
+  const captureClock = React.useRef<(() => number) | null>(null);
+  React.useEffect(
+    () => liveSessionBus.onVoiceInputFence((fence) => speechOnsets.fenced(fence, captureClock.current?.())),
+    [speechOnsets],
+  );
+  /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
+  const liveReplyOpen = React.useRef(false);
+  const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestVoiceApprovalReceiptId = React.useCallback(
     () => voiceApprovalReceiptId.current,
     [],
@@ -520,10 +674,36 @@ export function useAssistantLiveWithDependencies(
     reason: "live_model_unverified",
     state: "idle",
   });
+  const liveApi = dependencies.api;
+  const busSessionId = activeSnapshot(snapshot) ? (snapshot.sessionId ?? null) : null;
+  React.useEffect(() => {
+    const { toolResult, note } = liveApi;
+    liveSessionBus.setSession(
+      busSessionId,
+      busSessionId && toolResult && note
+        ? { toolResult: toolResult.bind(liveApi), note: note.bind(liveApi) }
+        : null,
+    );
+  }, [busSessionId, liveApi]);
+  React.useEffect(() => () => liveSessionBus.setSession(null, null), []);
   const [setupOpen, setSetupOpenState] = React.useState(false);
   const [microphone, setMicrophone] = React.useState(true);
   const [microphoneActive, setMicrophoneActive] = React.useState(false);
   const [microphoneLevel, setMicrophoneLevel] = React.useState(0);
+  const [microphoneMuted, setMicrophoneMutedState] = React.useState(false);
+  const microphoneMutedRef = React.useRef(false);
+  const setMicrophoneMuted = React.useCallback((muted: boolean) => {
+    microphoneMutedRef.current = muted;
+    setMicrophoneMutedState(muted);
+  }, []);
+  const outputLevel = React.useCallback(() => playerRef.current?.level() ?? 0, []);
+  const playbackState = React.useCallback(() => {
+    const player = playerRef.current;
+    return { idle: player?.idle ?? true, bargeIns: player?.bargeInCount ?? 0 };
+  }, []);
+  const setPlaybackSpeed = React.useCallback((speed: number) => {
+    playerRef.current?.setSpeed(speed);
+  }, []);
   const [microphonePermission, setMicrophonePermission] =
     React.useState<AssistantLiveMicrophonePermission>("checking");
   const [busy, setBusy] = React.useState(false);
@@ -608,6 +788,8 @@ export function useAssistantLiveWithDependencies(
       mediaCleanupRef.current = null;
       microphoneLevelRef.current = 0;
       microphoneLevelFrame.current = 0;
+      speechOnsets.reset();
+      captureClock.current = null;
       if (mounted.current) {
         setMicrophoneActive(false);
         setMicrophoneLevel(0);
@@ -620,6 +802,58 @@ export function useAssistantLiveWithDependencies(
     [stopScreenCapture],
   );
 
+  const discardUtterance = React.useCallback(() => {
+    pendingUtterance.current = null;
+    utteranceStartedAt.current = null;
+    if (utteranceQuietTimer.current !== null) clearTimeout(utteranceQuietTimer.current);
+    utteranceQuietTimer.current = null;
+  }, []);
+
+  const endUtterance = React.useCallback(() => {
+    const pending = pendingUtterance.current;
+    discardUtterance();
+    if (!pending || !mounted.current) return;
+    speechOnsets.retireFinished();
+    liveSessionBus.publishVoiceInput(pending.text, pending.startedAt);
+    const receipt = { id: pending.receiptId, text: pending.text };
+    setVoiceApprovalReceipts((current) => {
+      const next = [...current, receipt];
+      const floor = voiceApprovalReceiptRetentionFloor.current;
+      const protectedReceipt =
+        floor === null
+          ? undefined
+          : next.find(
+              (candidate) =>
+                candidate.id > floor &&
+                assistantLiveVoiceApprovalDecision(candidate.text) !== null,
+            );
+      const tail = next.slice(protectedReceipt ? -255 : -256);
+      return protectedReceipt && !tail.some((candidate) => candidate.id === protectedReceipt.id)
+        ? [protectedReceipt, ...tail]
+        : tail;
+    });
+  }, [discardUtterance, speechOnsets]);
+
+  const continueUtterance = React.useCallback(
+    (fragment: string) => {
+      const pending = pendingUtterance.current;
+      const text = joinAssistantLiveCaptionFragments(pending?.text ?? "", fragment);
+      if (!text) return;
+      pendingUtterance.current = {
+        receiptId: pending?.receiptId ?? ++voiceApprovalReceiptId.current,
+        startedAt: pending?.startedAt ?? utteranceStartedAt.current ?? LIVE_UNTRUSTED_VOICE_START,
+        text,
+        overReply: pending ? pending.overReply : liveReplyOpen.current,
+      };
+      if (utteranceQuietTimer.current !== null) clearTimeout(utteranceQuietTimer.current);
+      utteranceQuietTimer.current = setTimeout(
+        endUtterance,
+        dependencies.utteranceQuietMs ?? ASSISTANT_LIVE_UTTERANCE_QUIET_MS,
+      );
+    },
+    [dependencies.utteranceQuietMs, endUtterance],
+  );
+
   const acceptEvent = React.useCallback(
     (event: AssistantLiveRendererEvent) => {
       if (!mounted.current) return;
@@ -630,6 +864,8 @@ export function useAssistantLiveWithDependencies(
         else if (event.snapshot.state === "open") playerRef.current?.resume();
         if (["closed", "failed", "disconnected"].includes(event.snapshot.state)) {
           sessionRef.current = null;
+          discardUtterance();
+          liveReplyOpen.current = false;
           setCaptions([]);
           setVoiceApprovalReceipts([]);
           setComputerUseActing(false);
@@ -642,6 +878,29 @@ export function useAssistantLiveWithDependencies(
         return;
       }
       if (event.sessionId !== sessionRef.current) return;
+      const liveOutput =
+        event.type === "audio" ||
+        event.type === "model_text" ||
+        event.type === "tool_request" ||
+        (event.type === "caption" && event.direction === "output");
+      // Anything Live says or does next means the user's turn is over, unless
+      // the user was talking over a reply whose leftovers may still arrive.
+      if ((liveOutput || event.type === "turn") && pendingUtterance.current?.overReply === false) {
+        endUtterance();
+      }
+      if (liveOutput) liveReplyOpen.current = true;
+      else if (event.type === "turn" && event.state === "turn_complete") liveReplyOpen.current = false;
+      else if (event.type === "playback_flush" && pendingUtterance.current) {
+        pendingUtterance.current.overReply = true;
+      }
+      if (event.type === "tool_request") {
+        void liveSessionBus.runToolRequest(event);
+        return;
+      }
+      if (event.type === "tool_cancel") {
+        liveSessionBus.cancelToolRequest(event.sessionId, event.requestId);
+        return;
+      }
       if (event.type === "audio" && event.pcm instanceof Uint8Array) {
         if (receivedAudioSession.current !== event.sessionId) {
           receivedAudioSession.current = event.sessionId;
@@ -652,32 +911,30 @@ export function useAssistantLiveWithDependencies(
         playerRef.current?.flush();
         setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "caption") {
-        // Assign the approval receipt synchronously at IPC delivery time. React may defer
+        // The receipt id is assigned synchronously at IPC delivery time. React may defer
         // the caption render, but an immediately following approval notification must
-        // still fence every utterance that arrived before the prompt.
+        // still fence every utterance that began before the prompt.
+        // The bus start mark likewise, taken from when the microphone first
+        // heard this speech: speech begun before an approval armed stays
+        // before its fence however late its caption arrives or ends.
+        if (event.direction === "input") speechOnsets.heard();
+        if (event.direction === "input" && utteranceStartedAt.current === null) {
+          // No onset in reach (speech too quiet to measure, or its caption came
+          // after the lag window): the start cannot be proven to follow any
+          // fence, so the utterance gets the untrusted mark and never answers
+          // an approval by voice. It is still heard as ordinary speech.
+          utteranceStartedAt.current = speechOnsets.claim() ?? LIVE_UNTRUSTED_VOICE_START;
+        }
         if (event.direction === "input" && event.final) {
-          const receipt = { id: ++voiceApprovalReceiptId.current, text: event.text };
-          setVoiceApprovalReceipts((current) => {
-            const next = [...current, receipt];
-            const floor = voiceApprovalReceiptRetentionFloor.current;
-            const protectedReceipt =
-              floor === null
-                ? undefined
-                : next.find(
-                    (candidate) =>
-                      candidate.id > floor &&
-                      assistantLiveVoiceApprovalDecision(candidate.text) !== null,
-                  );
-            const tail = next.slice(protectedReceipt ? -255 : -256);
-            return protectedReceipt && !tail.some((candidate) => candidate.id === protectedReceipt.id)
-              ? [protectedReceipt, ...tail]
-              : tail;
-          });
+          continueUtterance(event.text);
+          if (event.finished) endUtterance();
         }
         setCaptions((current) =>
           reconcileAssistantLiveCaption(current, event, () => ++captionId.current),
         );
       } else if (event.type === "turn") {
+        // The reply is fully generated: play what the speed stretcher holds.
+        if (event.state !== "waiting") playerRef.current?.endOfReply();
         setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "computer_use_state") {
         setComputerUseActing(event.active);
@@ -685,6 +942,7 @@ export function useAssistantLiveWithDependencies(
         setError(assistantLiveRuntimeErrorDetail(event.code));
       } else if (event.type === "reconnect_required") {
         sessionRef.current = null;
+        discardUtterance();
         setCaptions([]);
         setVoiceApprovalReceipts([]);
         setReconnectRequired(true);
@@ -697,7 +955,7 @@ export function useAssistantLiveWithDependencies(
         void teardownMedia();
       }
     },
-    [teardownMedia],
+    [continueUtterance, discardUtterance, endUtterance, teardownMedia],
   );
 
   React.useEffect(() => {
@@ -718,11 +976,12 @@ export function useAssistantLiveWithDependencies(
       setupAbortRef.current = null;
       unsubscribe();
       sessionRef.current = null;
+      discardUtterance();
       void teardownMedia();
       void dependencies.api.stop().catch(() => undefined);
       releaseDisplayAuthority();
     };
-  }, [acceptEvent, dependencies.api, dependencies.geminiLive, releaseDisplayAuthority, teardownMedia]);
+  }, [acceptEvent, dependencies.api, dependencies.geminiLive, discardUtterance, releaseDisplayAuthority, teardownMedia]);
 
   React.useEffect(() => {
     const generation = ++availabilityGeneration.current;
@@ -1026,6 +1285,11 @@ export function useAssistantLiveWithDependencies(
         const silent = context.createGain();
         silent.gain.value = 0;
         source.connect(worklet).connect(silent).connect(context.destination);
+        // The capture clock is render time, which trails the sound in the
+        // room by the input latency; add whatever latency the browser reports
+        // on top of the tracker's own slack.
+        const inputLatency = reportedInputLatencySeconds(stream);
+        captureClock.current = () => context.currentTime + inputLatency;
         let stopped = false;
         let loggedInput = false;
         let audioSendFailed = false;
@@ -1055,6 +1319,7 @@ export function useAssistantLiveWithDependencies(
               setSnapshot(next);
               if (!activeSnapshot(next)) {
                 setCaptions([]);
+                pendingUtterance.current = null;
                 setVoiceApprovalReceipts([]);
               }
               setError(
@@ -1081,14 +1346,22 @@ export function useAssistantLiveWithDependencies(
         };
         worklet.port.onmessage = (message: MessageEvent<unknown>) => {
           if (stopped || !isCurrent()) return;
-          const data = message.data as { type?: unknown; data?: unknown };
+          const data = message.data as { type?: unknown; data?: unknown; capturedUntil?: unknown };
           if (data?.type !== "pcm" || !(data.data instanceof ArrayBuffer)) return;
           const pcm = new Uint8Array(data.data);
           if (!loggedInput) {
             loggedInput = true;
             console.info("[aiden-live] input-first-packet");
           }
+          // Muted: Live keeps getting silence, so it hears the user stop
+          // rather than a cut-off stream.
+          if (microphoneMutedRef.current) pcm.fill(0);
           const measured = measureGeminiLivePcmLevel(pcm);
+          speechOnsets.packet(
+            measured,
+            (pcm.byteLength / 2 / GEMINI_LIVE_WORKLET_SAMPLE_RATE) * 1_000,
+            typeof data.capturedUntil === "number" ? data.capturedUntil : undefined,
+          );
           const previous = microphoneLevelRef.current;
           const smoothed =
             measured >= previous
@@ -1162,8 +1435,11 @@ export function useAssistantLiveWithDependencies(
     setError(null);
     setReconnectRequired(false);
     setCaptions([]);
+    pendingUtterance.current = null;
+    liveReplyOpen.current = false;
     setVoiceApprovalReceipts([]);
     setComputerUseActing(false);
+    setMicrophoneMuted(false);
     try {
       await dependencies.prepareAudioSession?.(setupAbort.signal);
       if (setupAbort.signal.aborted || !mounted.current || operationGeneration.current !== generation) return;
@@ -1231,6 +1507,7 @@ export function useAssistantLiveWithDependencies(
     busy,
     screenBusy,
     computerUseEnabled,
+    setMicrophoneMuted,
     dependencies,
     microphone,
     microphonePermission,
@@ -1260,6 +1537,7 @@ export function useAssistantLiveWithDependencies(
         setSnapshot(next);
         if (!activeSnapshot(next)) {
           setCaptions([]);
+          pendingUtterance.current = null;
           setVoiceApprovalReceipts([]);
         }
         setError(null);
@@ -1272,6 +1550,7 @@ export function useAssistantLiveWithDependencies(
           setSnapshot(reconciled);
           if (!activeSnapshot(reconciled)) {
             setCaptions([]);
+            pendingUtterance.current = null;
             setVoiceApprovalReceipts([]);
           }
           setError(
@@ -1345,6 +1624,7 @@ export function useAssistantLiveWithDependencies(
     microphone,
     microphoneActive,
     microphoneLevel,
+    microphoneMuted,
     microphonePermission,
     microphonePermissionReady,
     microphonePermissionDetail,
@@ -1378,6 +1658,10 @@ export function useAssistantLiveWithDependencies(
     setupComplete,
     setSetupOpen,
     setMicrophone,
+    setMicrophoneMuted,
+    outputLevel,
+    playbackState,
+    setPlaybackSpeed,
     setComputerUse,
     requestMicrophonePermission,
     prepareComputerUse,
@@ -1407,4 +1691,14 @@ export function useAssistantLive(
     [audioDependencies, geminiLive, ordinaryBusyReason, providers.dataUpdatedAt, providers.fetchStatus],
   );
   return useAssistantLiveWithDependencies(dependencies);
+}
+
+/** The microphone's full input latency in seconds when the browser reports one, else 0. A long delay only widens the fence. */
+function reportedInputLatencySeconds(stream: MediaStream): number {
+  try {
+    const latency = (stream.getTracks()[0]?.getSettings?.() as { latency?: unknown } | undefined)?.latency;
+    return typeof latency === "number" && Number.isFinite(latency) && latency > 0 ? latency : 0;
+  } catch {
+    return 0;
+  }
 }

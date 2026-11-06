@@ -12,10 +12,8 @@ import {
   Lock,
   MessageSquare,
   Mic,
-  Mic2,
   Monitor,
   Moon,
-  MousePointer2,
   MousePointerClick,
   OctagonAlert,
   PanelRightOpen,
@@ -26,7 +24,6 @@ import {
   Settings,
   ShieldCheck,
   ShieldQuestion,
-  Square,
   Sun,
   Wrench,
   X,
@@ -40,6 +37,7 @@ import { COMMAND_BY_ID, prettyAcceleratorForPlatform, type CommandId } from "../
 import {
   ArtButton,
   ArtChip,
+  ArtComposer,
   ArtIcon,
   ArtWindow,
   Bar,
@@ -88,91 +86,76 @@ export function PermissionsArt() {
   );
 }
 
+// Five offset sine strands, like the ribbon Live draws while it speaks.
+const RIBBON_STRANDS = [0, 1, 2, 3, 4].map((strand) => {
+  const phase = strand * 0.9;
+  const amplitude = 5 + strand * 1.2;
+  let d = "";
+  for (let x = 0; x <= 96; x += 4) {
+    const edge = Math.sin((Math.PI * x) / 96);
+    const y = 12 + Math.sin(x / 9 + phase) * amplitude * edge;
+    d += `${x === 0 ? "M" : "L"}${x} ${y.toFixed(1)} `;
+  }
+  return d.trim();
+});
 
-/** Live's floating HUD over a shared window, waiting on a one-action voice approval. */
+/** Live's ribbon pill floating above a chat's composer, with its captions card, while Live speaks. */
 export function AidenLiveArt() {
   return (
     <>
-      <ArtWindow className="oa-live-screen" style={{ left: 14, top: 18, width: 186, height: 170 }}>
-        <div className="oa-live-screen-bar oa-separator-bottom">
+      <ArtWindow className="oa-live-chat" style={{ left: 14, top: 12, width: 364, height: 196 }}>
+        <div className="oa-live-chat-bar oa-separator-bottom">
           <TrafficLights />
-          <Bar width={46} tone="soft" />
+          <Bar width={58} tone="soft" />
         </div>
-        <div className="oa-live-screen-body">
-          <div className="oa-stack" style={{ gap: 5 }}>
+        <div className="oa-live-chat-body">
+          <span className="oa-live-bubble">
+            <Bar width={96} tone="soft" />
+          </span>
+          <div className="oa-stack" style={{ gap: 5, width: "72%" }}>
+            <Bar width="92%" />
             <Bar width="70%" tone="soft" />
-            <Bar width="52%" tone="soft" />
-            <Bar width="62%" tone="soft" />
-            <Bar width="44%" tone="soft" />
-            <Bar width="58%" tone="soft" />
-          </div>
-          <div className="oa-stack" style={{ gap: 5 }}>
-            <Bar width="86%" />
-            <Bar width="100%" tone="soft" />
-            <Bar width="74%" tone="soft" />
-            <Bar width="90%" tone="soft" />
-            <Bar width="62%" tone="soft" />
-            <span className="oa-live-target">
-              <Bar width={30} tone="ink" />
-            </span>
           </div>
         </div>
-        <span className="oa-live-cursor">
-          <ArtIcon icon={MousePointer2} />
+      </ArtWindow>
+      <ArtComposer style={{ left: 56, top: 148, width: 280 }} placeholder="Ask anything" />
+      <div className="oa-live-captions oa-anim-pop" style={{ left: 98, top: 48, width: 196 }}>
+        <div className="oa-row">
+          <b>You</b>
+          <Bar width="58%" tone="soft" />
+        </div>
+        <div className="oa-row">
+          <b>Aiden</b>
+          <Bar width="74%" tone="soft" />
+        </div>
+      </div>
+      {/* The floating ribbon pill, dark glass in every theme, as in the app. */}
+      <div className="oa-live-pill" style={{ left: 70, top: 98, width: 252 }}>
+        <span className="oa-live-ribbon">
+          {RIBBON_STRANDS.map((strand, index) => (
+            <span
+              key={strand}
+              className="oa-live-strand oa-anim-bars"
+              style={{ color: `var(--live-spectrum-${index + 1})`, transformOrigin: "center", animationDelay: `${index * 0.18}s`, opacity: 0.55 + index * 0.08 }}
+            >
+              <svg viewBox="0 0 96 24" preserveAspectRatio="none">
+                <path d={strand} />
+              </svg>
+            </span>
+          ))}
         </span>
-      </ArtWindow>
-      <ArtChip icon={Monitor} className="oa-live-sharing" style={{ left: 24, top: 160 }}>
-        Sharing screen
-      </ArtChip>
-      <ArtWindow raised className="oa-live-hud" style={{ left: 178, top: 26, width: 200 }}>
-        <div className="oa-live-head">
-          <span className="oa-live-mark">
-            <AidenActivityMark mark="glance" size={20} />
-          </span>
-          <span className="oa-stack" style={{ gap: 3, flex: 1 }}>
-            <span className="oa-row">
-              <span className="oa-strong">Live</span>
-              <span className="oa-live-badge">Approval needed</span>
-            </span>
-            <span style={{ color: "var(--text-tertiary)" }}>Google Gemini</span>
-          </span>
-          <span className="oa-live-stop">
-            <ArtIcon icon={Square} />
-          </span>
-        </div>
-        <div className="oa-live-captions">
-          <div className="oa-row">
-            <b>You</b>
-            <Bar width="46%" tone="soft" />
-            <span className="oa-live-level">
-              {[0, 0.25, 0.1, 0.4, 0.18].map((delay) => (
-                <i key={delay} className="oa-anim-bars" style={{ animationDelay: `${delay}s` }} />
-              ))}
-            </span>
-          </div>
-          <div className="oa-row">
-            <b>Aiden</b>
-            <Bar width="62%" tone="soft" />
-          </div>
-        </div>
-        <div className="oa-live-approval">
-          <div className="oa-row" style={{ gap: 5 }}>
-            <span className="oa-live-approval-icon">
-              <ArtIcon icon={Mic2} />
-            </span>
-            <span className="oa-strong">Voice approval required</span>
-          </div>
-          <div className="oa-stack" style={{ gap: 4, margin: "7px 0 8px" }}>
-            <Bar width="88%" />
-            <Bar width="70%" tone="soft" />
-            <Bar width="48%" tone="soft" />
-          </div>
-          {/* Live approvals are spoken, not clicked. */}
-          <div className="oa-live-say">
-            Say <span className="oa-live-word">“Allow once”</span> or <span className="oa-live-word">“Deny.”</span>
-          </div>
-        </div>
-      </ArtWindow>
+        <span className="oa-live-pill-title">Speaking</span>
+        <span className="oa-grow" />
+        <span className="oa-live-pill-control">
+          <ArtIcon icon={Mic} />
+        </span>
+        <span className="oa-live-pill-control">
+          <ArtIcon icon={Ellipsis} />
+        </span>
+        <span className="oa-live-pill-control oa-live-pill-end">
+          <ArtIcon icon={X} />
+        </span>
+      </div>
     </>
   );
 }
