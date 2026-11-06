@@ -66,6 +66,7 @@ function harness(
     model?: string;
     signal?: AbortSignal;
     tools?: ConstructorParameters<typeof GeminiLiveProtocol>[0]["tools"];
+    voice?: string;
   } = {},
 ) {
   const server = new FakeGeminiLiveServer();
@@ -77,6 +78,7 @@ function harness(
     model: options.model ?? "gemini-3.1-flash-live-preview",
     onEvent: (event) => events.push(event),
     ...(options.tools ? { tools: options.tools } : {}),
+    ...(options.voice ? { voice: options.voice } : {}),
     ...(options.connectTimeoutMs
       ? { connectTimeoutMs: options.connectTimeoutMs }
       : {}),
@@ -143,6 +145,18 @@ test("seeds ordered history once, then sends conversational text through realtim
   assert.deepEqual(config.contextWindowCompression, { slidingWindow: {} });
   assert.deepEqual(config.sessionResumption, {});
   assert.ok(config.abortSignal instanceof AbortSignal);
+});
+
+test("a chosen voice asks Gemini for that prebuilt voice; without one the provider default stays", async () => {
+  const chosen = harness({ voice: "Kore" });
+  await chosen.protocol.start();
+  assert.deepEqual(chosen.server.latest.params.config!.speechConfig, {
+    voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
+  });
+
+  const unchosen = harness();
+  await unchosen.protocol.start();
+  assert.equal(unchosen.server.latest.params.config!.speechConfig, undefined);
 });
 
 test("extended-thinking sessions enable low thinking and a voice-first action contract", async () => {

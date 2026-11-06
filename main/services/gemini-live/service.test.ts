@@ -15,6 +15,7 @@ import { GeminiLiveComputerUseBridge } from "./computer-use-bridge.js";
 import type { GeminiLiveComputerUseController } from "./computer-use-bridge.js";
 import type { GeminiLiveDisplayMediaBinding } from "./display-media-contract.js";
 import { ComputerUseParameters } from "../computer-use/schema.js";
+import { prepareLiveToolProviders } from "./live-tool-providers.js";
 
 class FakeOwner implements RendererDocumentOwner {
   destroyed = false;
@@ -52,7 +53,11 @@ function serviceHarness(
   overrides: Partial<
     Pick<
       ConstructorParameters<typeof GeminiLiveService>[0],
-      "screenShareEnabled" | "prepareComputerUse" | "acceptanceEvidence" | "prepareTools"
+      | "screenShareEnabled"
+      | "prepareComputerUse"
+      | "acceptanceEvidence"
+      | "prepareTools"
+      | "resolveVoice"
     >
   > = {},
 ) {
@@ -1182,4 +1187,78 @@ test("Live notes are bounded, spaced out, and a burst beyond the queue is refuse
   for (let step = 0; step < 3; step += 1) t.mock.timers.tick(2_000);
   assert.deepEqual(notes().slice(1).map((note) => note.replace(/^\[[^\]]+\] /u, "")), ["two", "three", "four", "five"]);
   subject.service.stop(owner);
+});
+
+test("Live reads the chosen voice at each start, so a change applies next time", async () => {
+  let voice: string | null = "Kore";
+  const subject = serviceHarness(undefined, { resolveVoice: () => voice });
+  const owner = new FakeOwner(61, "61:1:live-voice");
+  const speech = (index: number) => subject.servers[index]!.latest.params.config?.speechConfig;
+
+  await subject.service.start(owner, intent);
+  voice = "Puck";
+  // The running session keeps the voice it started with.
+  assert.deepEqual(speech(0), { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } });
+  await subject.service.stop(owner);
+
+  await subject.service.start(owner, intent);
+  assert.deepEqual(speech(1), { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } });
+  await subject.service.stop(owner);
+});
+
+test("a voice that cannot be read leaves Live on the provider's default voice", async () => {
+  const subject = serviceHarness(undefined, {
+    resolveVoice: () => {
+      throw new Error("settings unreadable");
+    },
+  });
+  const owner = new FakeOwner(62, "62:1:live-voice-failure");
+  const session = await subject.service.start(owner, intent);
+  assert.equal(session.state, "open");
+  assert.equal(subject.servers[0]!.latest.params.config?.speechConfig, undefined);
+  await subject.service.stop(owner);
+});
+
+test("saying goodbye lets the window end Live, and talking over the goodbye cancels it", async () => {
+  const subject = serviceHarness(undefined, {
+    prepareTools: (input) => prepareLiveToolProviders(input, {}),
+  });
+  const owner = new FakeOwner(63, "63:1:live-end-session");
+  const session = await subject.service.start(owner, intent);
+  const server = subject.servers[0]!;
+  const tools = server.latest.params.config?.tools as Array<{ functionDeclarations?: Array<{ name?: string }> }>;
+  assert.ok(tools.flatMap((tool) => tool.functionDeclarations ?? []).some((d) => d.name === "end_session"));
+  assert.match(String(server.latest.params.config?.systemInstruction), /Call end_session only when the user clearly wants to end/u);
+
+  // Gemini's arguments never reach the window.
+  server.latest.emit({
+    toolCall: { functionCalls: [{ id: "bye-1", name: "end_session", args: { reason: "<script>" } }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const first = owner.events.find((event) => event.type === "tool_request");
+  assert.ok(first && first.type === "tool_request");
+  assert.equal(first.name, "end_session");
+  assert.deepEqual(first.args, {});
+
+  // The user talks over the goodbye: the window is told to cancel before playback is flushed.
+  server.latest.emit({ serverContent: { interrupted: true } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const cancelIndex = owner.events.findIndex(
+    (event) => event.type === "tool_cancel" && event.requestId === first.requestId,
+  );
+  const flushIndex = owner.events.findIndex((event) => event.type === "playback_flush");
+  assert.ok(cancelIndex >= 0, "the pending end request is cancelled");
+  assert.ok(flushIndex > cancelIndex, "cancellation reaches the window before the flush");
+  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, first.requestId, { ok: true }), false);
+
+  // A later goodbye goes through when the window answers.
+  server.latest.emit({
+    toolCall: { functionCalls: [{ id: "bye-2", name: "end_session", args: {} }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const requests = owner.events.filter((event) => event.type === "tool_request");
+  const second = requests[requests.length - 1];
+  assert.ok(second && second.type === "tool_request" && second.requestId !== first.requestId);
+  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, second.requestId, { ok: true, ended: true }), true);
+  await subject.service.stop(owner);
 });
