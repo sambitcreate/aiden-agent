@@ -5,7 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { fauxProvider, type Api, type Model } from "@earendil-works/pi-ai";
 import { createChatStore } from "./chat-store-core.js";
-import { isHookBlockedPrompt, parseHookBlockedPrompt, withoutHookBlockedPrompts } from "./hook-blocked-prompt.js";
+import { isHookBlockedPrompt, markPromptHookBlocked, parseHookBlockedPrompt, withoutHookBlockedPrompts } from "./hook-blocked-prompt.js";
 import {
   PiCompactionSessionStore,
   projectVisibleHistoryWithoutSkills,
@@ -94,6 +94,39 @@ test("a prompt a hook blocked on turn N never reaches the model on turn N+1, a f
   const forkSession = await sessions.openChat(fork.id);
   await syncChatMessagesToPiSession(forkSession, fork.messages, model, false);
   assert.doesNotMatch(JSON.stringify(await forkSession.buildContext()), /sk-live-BLOCKED/);
+});
+
+test("a fork of a prompt whose mark could not be saved still keeps it from the model", async (t) => {
+  const chatsRoot = await tempDir(t, "aiden-hook-blocked-fork-");
+  const piRoot = await tempDir(t, "aiden-hook-blocked-fork-pi-");
+  const store = createChatStore(async () => chatsRoot);
+  const chat = await store.create({});
+  const prompted = await store.appendMessage(chat.id, { role: "user", content: BLOCKED });
+  const promptId = prompted.messages[prompted.messages.length - 1]!.id;
+  const reported: unknown[] = [];
+  const brokenStore = { setPromptHookBlock: async () => { throw new Error("disk full"); } };
+  await markPromptHookBlocked(brokenStore, chat.id, promptId, "Blocked by hook scan: secret", (error) => reported.push(error));
+  assert.equal(reported.length, 1, "the failed write is reported");
+
+  await store.appendMessage(chat.id, { role: "user", content: "Then list the open issues" });
+  const replied = await store.appendMessage(chat.id, { role: "assistant", content: "Listed." });
+  const fork = await store.copyVisibleHistory({
+    sourceChatId: chat.id,
+    forkAt: { messageId: replied.messages[replied.messages.length - 1]!.id, position: "after" },
+  });
+
+  const copied = fork.messages.find((message) => message.content === BLOCKED);
+  assert.ok(copied);
+  assert.notEqual(copied.id, promptId, "a fork's messages get new ids");
+  assert.equal(copied.hookBlocked?.reason, "Blocked by hook scan: secret");
+  assert.equal((await store.get(fork.id))!.messages.find((message) => message.id === copied.id)?.hookBlocked?.reason, "Blocked by hook scan: secret", "the fork saved a real mark");
+
+  const sessions = new PiCompactionSessionStore({ root: async () => piRoot });
+  const session = await sessions.openChat(fork.id);
+  await syncChatMessagesToPiSession(session, fork.messages, fauxModel(), false);
+  const context = JSON.stringify(await session.buildContext());
+  assert.doesNotMatch(context, /sk-live-BLOCKED/);
+  assert.match(context, /Then list the open issues/);
 });
 
 test("a renderer append can't mark a prompt, and clearing the mark lets a retried prompt through", async (t) => {

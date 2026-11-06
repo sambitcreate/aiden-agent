@@ -315,13 +315,41 @@ test("overlapping proposal approvals: one wins, and a hook deleted mid-approval 
   const winner = results[0]?.ok ? "./first.sh" : "./second.sh";
   assert.equal((await service.listHooks()).hooks.find((hook) => hook.id === id)?.handler.command, winner);
 
-  const update = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./revived.sh" } });
   const removal = await service.proposeHook({ scope, event: "Stop", existingId: id, delete: true });
-  assert.ok(update.ok && removal.ok);
-  const [updated, deleted] = await Promise.all([service.approveProposal(update.value.id), service.approveProposal(removal.value.id)]);
-  assert.equal(updated.ok, false, "the update's scan finishes after the delete");
+  const revival = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./revived.sh" } });
+  assert.ok(removal.ok && revival.ok);
+  const [deleted, revived] = await Promise.all([service.approveProposal(removal.value.id), service.approveProposal(revival.value.id)]);
   assert.ok(deleted.ok);
+  assert.equal(revived.ok, false, "an update approved behind a delete has nothing left to change");
   assert.equal((await service.listHooks()).hooks.some((hook) => hook.id === id), false, "the deleted hook is not brought back");
+});
+
+test("a hook deleted while its update is being approved leaves no approval behind", async (t) => {
+  const f = await fixture(t);
+  const service = await f.create();
+  const scope = { kind: "workspace" as const, workspaceRoot: f.workspace };
+  const saved = await service.saveHook({ scope, event: "Stop", name: "Check", handler: { type: "command", command: "./old.sh" } });
+  assert.ok(saved.ok && saved.value);
+  const id = saved.value.id;
+  const update = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./new.sh" } });
+  assert.ok(update.ok);
+  const [updated, deleted] = await Promise.all([service.approveProposal(update.value.id), service.deleteHook(id)]);
+  assert.ok(updated.ok && deleted.ok);
+  await service.flush();
+  const trustFile = JSON.parse(await fs.readFile(path.join(f.root, "hooks-trust.json"), "utf8")) as { approvals: Record<string, Array<{ hookId: string }>> };
+  assert.deepEqual(Object.values(trustFile.approvals).flat().filter((record) => record.hookId === id), [], "a later hook with this digest must need its own approval");
+  assert.equal((await service.listHooks()).hooks.some((hook) => hook.id === id), false);
+});
+
+test("a proposal approved twice at once applies once", async (t) => {
+  const f = await fixture(t);
+  const service = await f.create();
+  const scope = { kind: "workspace" as const, workspaceRoot: f.workspace };
+  const proposal = await service.proposeHook({ scope, event: "Stop", handler: { type: "command", command: "./once.sh" } });
+  assert.ok(proposal.ok);
+  const results = await Promise.all([service.approveProposal(proposal.value.id), service.approveProposal(proposal.value.id)]);
+  assert.deepEqual(results.map((result) => result.ok).sort(), [false, true]);
+  assert.equal((await service.listHooks()).hooks.filter((hook) => hook.handler.command === "./once.sh").length, 1);
 });
 
 test("deleting hooks: stored entries go away, repo hooks lose their approval", async (t) => {

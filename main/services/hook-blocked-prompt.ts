@@ -31,11 +31,13 @@ export function boundedHookBlockedReason(reason: string): string {
 type MaybeBlockedMessage = { id?: unknown; role?: unknown; hookBlocked?: unknown };
 
 /**
- * Prompts a hook blocked in this process, by message id. The stored mark is
- * what survives a restart; this set keeps the prompt out of every projection
- * even when writing that mark failed, so a failed write never lets it through.
+ * Prompts a hook blocked in this process: message id to bounded reason. The
+ * stored mark is what survives a restart; this record keeps the prompt out of
+ * every projection even when writing that mark failed, so a failed write never
+ * lets it through. A copy gets a new id, so `hookBlockedField` turns the record
+ * into a real mark on the copy.
  */
-const blockedInThisProcess = new Set<string>();
+const blockedInThisProcess = new Map<string, string>();
 
 /** True when a hook blocked this user message, so it must never reach a model. */
 export function isHookBlockedPrompt(message: MaybeBlockedMessage): boolean {
@@ -55,19 +57,19 @@ export interface PromptHookBlockStore {
 }
 
 /**
+ * Keep a prompt out of every projection in this process, before it is even
+ * saved. Run input a hook refused is held this way, then saved and marked.
+ */
+export function holdHookBlockedPrompt(messageId: string, reason: string): void {
+  blockedInThisProcess.set(messageId, boundedHookBlockedReason(reason));
+}
+
+/**
  * Mark a prompt a UserPromptSubmit hook refused. It is excluded at once, in
  * this process, before the write; a write that throws or finds no such
  * message is retried once and then reported, and the prompt stays excluded
  * for as long as this process runs.
  */
-/**
- * Keep a prompt out of every projection in this process, before it is even
- * saved. Run input a hook refused is held this way, then saved and marked.
- */
-export function holdHookBlockedPrompt(messageId: string): void {
-  blockedInThisProcess.add(messageId);
-}
-
 export async function markPromptHookBlocked(
   store: PromptHookBlockStore,
   chatId: string,
@@ -75,7 +77,7 @@ export async function markPromptHookBlocked(
   reason: string,
   onError: (error: unknown) => void,
 ): Promise<void> {
-  holdHookBlockedPrompt(messageId);
+  holdHookBlockedPrompt(messageId, reason);
   const write = async () => {
     if (!(await store.setPromptHookBlock(chatId, messageId, reason))) {
       throw new Error("The prompt was not found in its chat.");
@@ -115,10 +117,14 @@ export async function clearPromptHookBlock(
 
 /**
  * `{ hookBlocked }` for a blocked user message, `{}` otherwise. Spread it into
- * a parsed or copied message so an unmarked one has no `hookBlocked` key.
+ * a parsed or copied message so an unmarked one has no `hookBlocked` key. A
+ * prompt held in this process counts even when its stored mark never landed,
+ * so a fork of it stays blocked under its new id.
  */
-export function hookBlockedField(message: { role?: unknown; hookBlocked?: unknown }): { hookBlocked?: HookBlockedPromptV1 } {
+export function hookBlockedField(message: MaybeBlockedMessage): { hookBlocked?: HookBlockedPromptV1 } {
   if (message.role !== "user") return {};
+  const held = typeof message.id === "string" ? blockedInThisProcess.get(message.id) : undefined;
+  if (held !== undefined) return { hookBlocked: { reason: held } };
   const hookBlocked = parseHookBlockedPrompt(message.hookBlocked);
   return hookBlocked ? { hookBlocked } : {};
 }

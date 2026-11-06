@@ -2791,6 +2791,24 @@ test("daemon chats run approved hooks after Aiden's own rules, and file tools ca
   assert.equal(hooks.getRunLog(listed.hooks[0].id).length, 1, "the hook ran once, for the write it matched");
 });
 
+test("the daemon refuses agent writes to its own hook store however they are spelled, and leaves its neighbours writable", async (t) => {
+  const dir = temporary(t), workspace = dirname(dir);
+  mkdirSync(join(dir, "hooks", "nested"), { recursive: true });
+  writeFileSync(join(dir, "hooks", "hooks.json"), "{}");
+  const link = join(dir, "hooks-link");
+  symlinkSync(join(dir, "hooks"), link);
+  const hooks = await api.startCliHooks(dir);
+  t.after(() => api.stopCliHooks(hooks));
+  const refused = (path, cwd = workspace) => api.daemonWriteTargetsProtectedConfig(cwd, { path });
+  for (const path of [join(dir, "hooks", "hooks.json"), join(dir, "hooks", "hooks-trust.json"), join(dir, "hooks", "nested", "new.json"), join(link, "hooks.json"), `@${join(dir, "hooks", "hooks.json")}`]) {
+    assert.equal(refused(path), true, path);
+  }
+  assert.equal(refused("hooks/hooks.json", dir), true, "relative to a workspace opened at the store's parent");
+  assert.equal(refused("./nested/../hooks/hooks.json", dir), true);
+  assert.equal(refused(join(dir, "hooks-notes", "plan.md")), false, "a sibling that only starts with the same name");
+  assert.equal(refused("notes.md", dir), false);
+});
+
 test("aiden hooks list shows background hooks, and stopping the daemon stops them", async (t) => {
   const dir = temporary(t);
   const hooks = await api.startCliHooks(dir);

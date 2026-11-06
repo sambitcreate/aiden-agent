@@ -9,6 +9,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import os from "node:os";
 import * as path from "node:path";
+import { setProtectedAgentConfigRoots } from "./protected-agent-config-paths.js";
 import { promisify } from "node:util";
 import test from "node:test";
 import {
@@ -324,6 +325,39 @@ test("a workspace opened inside .claude cannot write its settings file", async (
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }
+});
+
+test("the file tools refuse a registered hook store however it is spelled, and leave its neighbours writable", async (t) => {
+  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-hook-root-")));
+  const store = path.join(parent, "profile", "hooks");
+  await fs.mkdir(path.join(store, "nested"), { recursive: true });
+  await fs.writeFile(path.join(store, "hooks.json"), "{}\n", "utf8");
+  await fs.writeFile(path.join(store, "nested", "state.json"), "{}\n", "utf8");
+  await fs.symlink(store, path.join(parent, "alias"));
+  setProtectedAgentConfigRoots([store]);
+  t.after(async () => {
+    setProtectedAgentConfigRoots([]);
+    await fs.rm(parent, { recursive: true, force: true });
+  });
+
+  const tools = buildCodingTools(parent);
+  const write = tools.find((tool) => tool.name === "write_file");
+  const edit = tools.find((tool) => tool.name === "edit_file");
+  assert.ok(write && edit);
+  for (const target of ["profile/hooks/hooks.json", "profile/hooks/nested/state.json", "profile/hooks/new.json", "alias/hooks.json", "profile/../profile/hooks/hooks.json"]) {
+    await assert.rejects(write.execute("w", { path: target, content: "changed\n" }), /cannot change hook or agent settings files/u, target);
+  }
+  for (const target of ["profile/hooks/hooks.json", "alias/nested/state.json"]) {
+    await assert.rejects(edit.execute("e", { path: target, old_string: "{}", new_string: "changed" }), /cannot change hook or agent settings files/u, target);
+  }
+  assert.equal(await fs.readFile(path.join(store, "hooks.json"), "utf8"), "{}\n");
+  assert.equal(await fs.readFile(path.join(store, "nested", "state.json"), "utf8"), "{}\n");
+  await assert.rejects(fs.stat(path.join(store, "new.json")), { code: "ENOENT" });
+
+  // A sibling whose name only starts the same is not the store.
+  await write.execute("ok", { path: "profile/hooks-notes/plan.md", content: "fine\n" });
+  await edit.execute("ok", { path: "profile/hooks-notes/plan.md", old_string: "fine", new_string: "still fine" });
+  assert.equal(await fs.readFile(path.join(parent, "profile", "hooks-notes", "plan.md"), "utf8"), "still fine\n");
 });
 
 test("workspace search and read tools exclude credential paths from model-visible results", async () => {

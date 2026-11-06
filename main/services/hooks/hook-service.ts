@@ -632,6 +632,17 @@ export function createHookService(deps: HookServiceDeps): HookService {
     emit(change);
   };
 
+  // Every change to a hook waits for the one before it. Each reads a hook, scans
+  // its scripts and writes, with awaits between: run side by side, a delete could
+  // land between an approval's two writes and leave a trust record for a hook
+  // that no longer exists, or an update could bring a deleted hook back.
+  let mutations: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(work: () => Promise<T>): Promise<T> => {
+    const run = mutations.then(work);
+    mutations = run.catch(() => undefined);
+    return run;
+  };
+
   const pruneProposals = () => {
     const time = now();
     for (const [id, proposal] of proposals) if (proposal.expiresAt <= time) proposals.delete(id);
@@ -768,8 +779,9 @@ export function createHookService(deps: HookServiceDeps): HookService {
     const problem = proposalTargetProblem(proposal, shown);
     if (problem) return { ok: false, reason: problem };
     if (proposal.action === "delete" && shown) {
+      const listing = await storedListing(shown);
       await entries.remove(proposal.hookId);
-      await trust.revoke(storedEntryListing(shown));
+      await trust.revoke(listing);
       changed({ reason: "hooks", hookId: proposal.hookId });
       return { ok: true, value: undefined };
     }
@@ -779,12 +791,6 @@ export function createHookService(deps: HookServiceDeps): HookService {
     if (current.digest !== proposal.digest) {
       return { ok: false, reason: "A script this hook runs changed after it was proposed; propose it again so the owner sees the current version." };
     }
-    // The scan awaited, so another approval, edit or delete may have finished
-    // meanwhile: check the target again with nothing awaited before the upsert,
-    // which changes the in-memory store synchronously.
-    const existing = entries.get(proposal.hookId);
-    const raced = proposalTargetProblem(proposal, existing);
-    if (raced) return { ok: false, reason: raced };
     const time = now();
     const entry: StoredHookEntry = {
       id: definition.id,
@@ -794,7 +800,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
       matcher: definition.matcher,
       handler: definition.handler,
       source: definition.source === "agent" ? "agent" : definition.source === "bot" ? "bot" : "settings",
-      createdAt: existing?.createdAt ?? time,
+      createdAt: shown?.createdAt ?? time,
       updatedAt: time,
     };
     await entries.upsert(entry);
@@ -855,14 +861,16 @@ export function createHookService(deps: HookServiceDeps): HookService {
       return [...proposals.values()];
     },
 
-    async approveProposal(proposalId) {
-      pruneProposals();
-      const proposal = proposals.get(proposalId);
-      if (!proposal) return { ok: false, reason: "That proposal expired or was already answered." };
-      await ensureLoaded();
-      proposals.delete(proposalId);
-      emit({ reason: "proposals" });
-      return applyProposal(proposal);
+    approveProposal(proposalId) {
+      return serialized(async () => {
+        await ensureLoaded();
+        pruneProposals();
+        const proposal = proposals.get(proposalId);
+        if (!proposal) return { ok: false, reason: "That proposal expired or was already answered." };
+        proposals.delete(proposalId);
+        emit({ reason: "proposals" });
+        return applyProposal(proposal);
+      });
     },
 
     rejectProposal(proposalId) {
@@ -871,56 +879,64 @@ export function createHookService(deps: HookServiceDeps): HookService {
       return removed;
     },
 
-    async saveHook(input) {
-      await ensureLoaded();
-      const built = buildProposal({ ...input, origin: "owner" });
-      if (!built.ok) return built;
-      const scripted = await withProposalScripts(built.value);
-      return scripted.ok ? applyProposal(scripted.value) : scripted;
+    saveHook(input) {
+      return serialized(async () => {
+        await ensureLoaded();
+        const built = buildProposal({ ...input, origin: "owner" });
+        if (!built.ok) return built;
+        const scripted = await withProposalScripts(built.value);
+        return scripted.ok ? applyProposal(scripted.value) : scripted;
+      });
     },
 
-    async approveDigest(hookId, expectedDigest) {
-      await ensureLoaded();
-      const found = await findListing(hookId);
-      if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
-      const { listing } = found;
-      if (listing.status === "unsupported") return { ok: false, reason: listing.unsupportedReason ?? "This hook is not supported." };
-      if (typeof expectedDigest !== "string" || !expectedDigest) return { ok: false, reason: "Approving a hook needs the digest that was shown for it." };
-      if (expectedDigest !== listing.digest) return { ok: false, reason: "The hook changed since it was shown; review it again." };
-      const definition = listingDefinition(listing);
-      if (!definition) return { ok: false, reason: "This hook is not supported." };
-      // A repo hook's id is its position in the file; let an approval displaced by
-      // an inserted hook follow the unchanged hook to its new place.
-      const root = found.entry ? undefined : repoRootFor(hookId);
-      await trust.approve(definition, root ? (await readRepo(root)).hooks : []);
-      changed({ reason: "hooks", hookId });
-      return { ok: true, value: withLastRun(statusOf(listing)) };
+    approveDigest(hookId, expectedDigest) {
+      return serialized(async () => {
+        await ensureLoaded();
+        const found = await findListing(hookId);
+        if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
+        const { listing } = found;
+        if (listing.status === "unsupported") return { ok: false, reason: listing.unsupportedReason ?? "This hook is not supported." };
+        if (typeof expectedDigest !== "string" || !expectedDigest) return { ok: false, reason: "Approving a hook needs the digest that was shown for it." };
+        if (expectedDigest !== listing.digest) return { ok: false, reason: "The hook changed since it was shown; review it again." };
+        const definition = listingDefinition(listing);
+        if (!definition) return { ok: false, reason: "This hook is not supported." };
+        // A repo hook's id is its position in the file; let an approval displaced by
+        // an inserted hook follow the unchanged hook to its new place.
+        const root = found.entry ? undefined : repoRootFor(hookId);
+        await trust.approve(definition, root ? (await readRepo(root)).hooks : []);
+        changed({ reason: "hooks", hookId });
+        return { ok: true, value: withLastRun(statusOf(listing)) };
+      });
     },
 
-    async setEnabled(hookId, enabled) {
-      await ensureLoaded();
-      const found = await findListing(hookId);
-      if (!found) return false;
-      await trust.setEnabled(found.listing, enabled);
-      changed({ reason: "hooks", hookId });
-      return true;
+    setEnabled(hookId, enabled) {
+      return serialized(async () => {
+        await ensureLoaded();
+        const found = await findListing(hookId);
+        if (!found) return false;
+        await trust.setEnabled(found.listing, enabled);
+        changed({ reason: "hooks", hookId });
+        return true;
+      });
     },
 
-    async deleteHook(hookId) {
-      await ensureLoaded();
-      const entry = entries.get(hookId);
-      if (entry) {
-        await entries.remove(hookId);
-        await trust.revoke(await storedListing(entry));
+    deleteHook(hookId) {
+      return serialized(async () => {
+        await ensureLoaded();
+        const entry = entries.get(hookId);
+        if (entry) {
+          await entries.remove(hookId);
+          await trust.revoke(await storedListing(entry));
+          changed({ reason: "hooks", hookId });
+          return { ok: true, value: undefined };
+        }
+        const found = await findListing(hookId);
+        if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
+        const root = repoRootFor(hookId);
+        await trust.revoke(found.listing, root ? (await readRepo(root)).hooks : []);
         changed({ reason: "hooks", hookId });
         return { ok: true, value: undefined };
-      }
-      const found = await findListing(hookId);
-      if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
-      const root = repoRootFor(hookId);
-      await trust.revoke(found.listing, root ? (await readRepo(root)).hooks : []);
-      changed({ reason: "hooks", hookId });
-      return { ok: true, value: undefined };
+      });
     },
 
     async setPaused(paused) {

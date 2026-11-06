@@ -174,7 +174,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     // A refused input stays visible but marked, so no model ever sees it
     // (the same as a refused prompt that starts a run). It is held out of
     // every projection in this process, and saved already marked.
-    if (hookBlocked) holdHookBlockedPrompt(messageId);
+    if (hookBlocked) holdHookBlockedPrompt(messageId, hookBlocked);
     try {
       await appendChatMessageWithReconciliation({
         messageId,
