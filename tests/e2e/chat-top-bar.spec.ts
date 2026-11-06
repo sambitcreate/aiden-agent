@@ -444,7 +444,7 @@ test.describe("folder workspaces", () => {
     await expect(dialog).toBeHidden();
     await expect(page.locator("[data-chat-title-menu]")).toContainText("Renamed from the top bar");
     await expect(
-      page.locator("[data-sidebar]").getByText("Renamed from the top bar", { exact: true }),
+      page.locator("[data-sidebar]").getByRole("button", { name: "Renamed from the top bar", exact: true }),
     ).toBeVisible();
   });
   test("turning workspace access off hides repository and folder actions", async ({ aiden }) => {
