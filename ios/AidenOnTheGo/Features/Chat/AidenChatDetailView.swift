@@ -959,10 +959,13 @@ struct AidenChatDetailView: View {
     /// answers.
     private func loadEarlierMessages() {
         let anchorID = model.chat.messages.first?.id
+        let ticket = follow.placeTicket()
         Task {
             await model.loadEarlierMessages()
             guard let anchorID, model.chat.messages.first?.id != anchorID,
-                  model.chat.messages.contains(where: { $0.id == anchorID }) else { return }
+                  model.chat.messages.contains(where: { $0.id == anchorID }),
+                  // The reader may have jumped to latest, sent, or scrolled while the page loaded.
+                  follow.keepsPlace(ticket) else { return }
             keptPlaceID = model.renderID(forMessageID: anchorID)
         }
     }

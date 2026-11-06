@@ -60,6 +60,55 @@ final class AidenTranscriptPlaceTests: XCTestCase {
         XCTAssertNotNil(element(labeled: "row 30", in: window), "Later growth moved the reader")
     }
 
+    // MARK: - Whether the reader still wants their place kept
+
+    func testThePlaceIsKeptWhenTheReaderHasNotMovedSinceTheTap() {
+        let follow = readerAwayFromTheEnd()
+        let ticket = follow.placeTicket()
+
+        XCTAssertTrue(follow.keepsPlace(ticket))
+    }
+
+    func testThePlaceIsNotKeptWhenFollowIsOnAtArrival() {
+        let follow = readerAwayFromTheEnd()
+        let ticket = follow.placeTicket()
+
+        // The reader scrolled back to the end during the load: follow has latched on again.
+        follow.handle(.userScrollEnd(isAtBottom: true))
+
+        XCTAssertFalse(follow.keepsPlace(ticket), "A page arriving would pull a following reader up the transcript")
+    }
+
+    func testThePlaceIsNotKeptAfterJumpToLatestOrASendDuringTheLoad() {
+        let follow = readerAwayFromTheEnd()
+        let ticket = follow.placeTicket()
+
+        follow.handle(.reset)
+        XCTAssertFalse(follow.keepsPlace(ticket))
+        // Even if the reader then drags away again, that is a new decision, not the one the ticket was for.
+        follow.handle(.userScrollBegin)
+        follow.handle(.userScrollEnd(isAtBottom: false))
+        XCTAssertFalse(follow.keepsPlace(ticket))
+    }
+
+    func testThePlaceIsNotKeptWhenTheReaderScrolledDuringTheLoad() {
+        let follow = readerAwayFromTheEnd()
+        let ticket = follow.placeTicket()
+
+        follow.handle(.userScrollBegin)
+        follow.handle(.userScrollEnd(isAtBottom: false))
+
+        XCTAssertFalse(follow.keepsPlace(ticket), "The reader moved on, so the page must not move them back")
+    }
+
+    private func readerAwayFromTheEnd() -> AidenTranscriptFollowController {
+        let follow = AidenTranscriptFollowController()
+        follow.handle(.userScrollBegin)
+        follow.handle(.userScrollEnd(isAtBottom: false))
+        XCTAssertFalse(follow.isFollowing)
+        return follow
+    }
+
     // MARK: - Hosting
 
     private func show(_ view: some View) throws -> UIWindow {
