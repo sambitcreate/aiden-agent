@@ -1031,7 +1031,7 @@ private struct AidenLoadEarlierMessagesButton: View {
                         .controlSize(.mini)
                 } else {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption2.weight(.semibold))
                 }
                 Text(isLoading ? "Loading earlier messages" : "Load earlier messages")
                     .font(.footnote.weight(.medium))

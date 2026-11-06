@@ -836,6 +836,8 @@ struct AidenActivityPhaseCard: View {
 struct AidenToolActivityCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .caption) private var glyphSize: CGFloat = 14
+    @ScaledMetric(relativeTo: .caption) private var glyphFrame: CGFloat = 18
     let tools: [AidenLiveTool]
     @State private var isExpanded = false
 
@@ -866,9 +868,9 @@ struct AidenToolActivityCard: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: hasIssue ? "exclamationmark.circle.fill" : (isComplete ? "checkmark.circle.fill" : "wrench.and.screwdriver.fill"))
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: glyphSize, weight: .semibold))
                         .foregroundStyle(palette.secondary)
-                        .frame(width: 18, height: 18)
+                        .frame(width: glyphFrame, height: glyphFrame)
                     Text(hasIssue ? "Tool issue" : (isComplete ? "Tools used" : "Using tools"))
                         .font(.caption.weight(.semibold))
                     Text(summary).font(.caption).foregroundStyle(palette.secondary).lineLimit(1)
