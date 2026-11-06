@@ -4,10 +4,10 @@
 
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
-import { afterEach, before, test } from "node:test";
+import { afterEach, before, mock, test } from "node:test";
 import { createElement } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { installBotTestIpc } from "../../main/bots/test-dom";
+import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import type * as Storage from "../../shared/storage";
 import type {
   StorageCleanupPreview,
@@ -16,6 +16,7 @@ import type {
   StorageWorktreeFacts,
 } from "../../shared/storage";
 import type { SettingsSection } from "../../shared/settings-section";
+import type { toast as Toast } from "../ui";
 import type { StorageSettings as StorageSettingsView } from "./storage-settings";
 
 // Loaded from the hook so an import failure is the test error, not a file
@@ -36,12 +37,18 @@ let StorageSettings: typeof StorageSettingsView = () => {
   throw new Error("storage page was not loaded");
 };
 
+let toast: typeof Toast;
+
 before(async () => {
   ({ assembleStorageReport, classifyThread, classifyWorktree, emptyStorageReport } = await import("../../shared/storage"));
   ({ StorageSettings } = await import("./storage-settings"));
+  ({ toast } = await import("../ui"));
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  mock.restoreAll();
+  cleanup();
+});
 
 const NOW = 1_800_000_000_000;
 const DAY = 24 * 60 * 60 * 1_000;
@@ -193,6 +200,13 @@ function mount(
   return calls;
 }
 
+/** A row's own actions, leaving out the hint that explains it. */
+function rowActions(row: HTMLElement) {
+  return within(row)
+    .queryAllByRole("button")
+    .filter((button) => !button.getAttribute("aria-label")?.startsWith("About "));
+}
+
 function cleanupCall(calls: ReturnType<typeof mount>) {
   return calls.find((entry) => entry.channel === "storage:cleanup")?.args[0];
 }
@@ -212,7 +226,8 @@ test("the page shows the total and what is using space, with an action on each r
   assert.ok(within(screen.getByRole("group", { name: "Logs and diagnostics" })).getByRole("button", { name: "Clear…" }));
   assert.ok(within(screen.getByRole("group", { name: "Voice and helper models" })).getByRole("button", { name: /Manage/u }));
   // Chats are deleted one at a time from their own rows, so the category has no sweep.
-  assert.equal(within(screen.getByRole("group", { name: "Chats" })).queryAllByRole("button").length, 0);
+  assert.equal(rowActions(screen.getByRole("group", { name: "Chats" })).length, 0);
+  assert.ok(screen.getByRole("button", { name: "About Browser data" }), "what a category holds is one hint away");
   // A category with nothing on disk is not listed.
   assert.ok(!screen.queryByRole("group", { name: "Bot computers" }));
 });
@@ -285,7 +300,8 @@ test("clearing the browser cache says sign-ins are kept", async () => {
   const dialog = await screen.findByRole("alertdialog");
   assert.match(dialog.textContent ?? "", /Clear browser cache\?/u);
   assert.match(dialog.textContent ?? "", /You stay signed in to websites/u);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Clear 450 MB" }));
+  assert.match(dialog.textContent ?? "", /frees up to 450 MB/u, "a file in use stays, so the size is a ceiling");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Clear cache" }));
   await waitFor(() => assert.ok(cleanupCall(calls)));
   assert.equal((cleanupCall(calls) as StorageCleanupRequest).action, "clear-browser-cache");
 });
@@ -303,7 +319,24 @@ test("a cleanup amount that was only partly measured is promised as a minimum", 
   const row = await screen.findByRole("group", { name: "Logs and diagnostics" });
   fireEvent.click(within(row).getByRole("button", { name: "Clear…" }));
   const dialog = await screen.findByRole("alertdialog");
-  assert.match(dialog.textContent ?? "", /This frees at least 500 KB/u);
+  assert.match(dialog.textContent ?? "", /at least 500 KB/u);
+  cleanup();
+
+  installBotTestIpc({
+    "storage:report": () => report(),
+    "storage:refresh": () => report(),
+    "storage:preview": (request: unknown) => ({
+      ...previewFor(request as StorageCleanupRequest),
+      totalComplete: false,
+    }),
+  });
+  render(createElement(StorageSettings, {}));
+  fireEvent.click(await screen.findByRole("button", { name: "Remove idle-worktree" }));
+  const worktree = await screen.findByRole("alertdialog");
+  assert.ok(
+    within(worktree).getByRole("button", { name: "Remove 1 · at least 3.00 GB" }),
+    "the button that deletes must not promise more than the description",
+  );
 });
 
 test("Clear cache is off when the browser has nothing cached", async () => {
@@ -322,7 +355,7 @@ test("Manage opens the settings page that owns the data, and is hidden when that
 
   mount({ onOpenSection: () => {}, canOpenSection: () => false });
   const hidden = await screen.findByRole("group", { name: "Voice and helper models" });
-  assert.equal(within(hidden).queryAllByRole("button").length, 0);
+  assert.equal(rowActions(hidden).length, 0);
 });
 
 test("a scan that is still running says so and keeps cleanup off", async () => {
@@ -372,6 +405,149 @@ test("a read that throws says the files are unchanged", async () => {
   });
   render(createElement(StorageSettings));
   await flush();
-  await screen.findByText(/Nothing was changed/u);
-  await screen.findByText(/Your files are unchanged/u);
+  assert.equal(await screen.findAllByText(/Nothing was changed/u).then((found) => found.length), 1);
+});
+
+/** Opens the worktree review and answers cleanup with `result`, or by throwing it. */
+async function reviewAndConfirm(result: unknown, handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+  const calls = installBotTestIpc({
+    "storage:report": () => report(),
+    "storage:refresh": () => report(),
+    "storage:preview": (request: unknown) => previewFor(request as StorageCleanupRequest),
+    "storage:cleanup": () => {
+      if (result instanceof Error) throw result;
+      return result;
+    },
+    ...handlers,
+  });
+  render(createElement(StorageSettings, {}));
+  const row = await screen.findByRole("group", { name: "Worktrees" });
+  fireEvent.click(within(row).getByRole("button", { name: "Review…" }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove 1 · 3.00 GB" }));
+  return calls;
+}
+
+test("a scan that starts behind the page turns cleanup off straight away", async () => {
+  let current = report();
+  installBotTestIpc({
+    "storage:report": () => current,
+    "storage:refresh": () => current,
+  });
+  render(createElement(StorageSettings, {}));
+  const remove = await screen.findByRole("button", { name: "Remove idle-worktree" });
+  assert.equal(remove.hasAttribute("disabled"), false);
+
+  current = { ...current, scan: { ...current.scan, status: "scanning" } };
+  emitBotTestNotification("storage:changed", { kind: "scan-started" });
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: /Measuring/u })));
+  assert.equal(screen.getByRole("button", { name: "Remove idle-worktree" }).hasAttribute("disabled"), true);
+});
+
+test("every worktree a review will remove is on the list, however long it is", async () => {
+  const items = Array.from({ length: 60 }, (_, index) => ({
+    id: `ws-${index}`,
+    kind: "worktree" as const,
+    label: `worktree-${index}`,
+    bytes: 1_000,
+  }));
+  const calls = installBotTestIpc({
+    "storage:report": () => report(),
+    "storage:refresh": () => report(),
+    "storage:preview": (request: unknown) => ({
+      ...previewFor(request as StorageCleanupRequest),
+      items,
+      skipped: [],
+      totalBytes: 60_000,
+    }),
+    "storage:cleanup": () => ({ removed: [], skipped: [], failed: [], freedBytes: 0 }),
+  });
+  render(createElement(StorageSettings, {}));
+  const row = await screen.findByRole("group", { name: "Worktrees" });
+  fireEvent.click(within(row).getByRole("button", { name: "Review…" }));
+  const dialog = await screen.findByRole("alertdialog");
+  const listed = within(within(dialog).getByRole("list", { name: "Worktrees to remove" })).getAllByRole("listitem");
+  assert.equal(listed.length, 60);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: /Remove 60/u }));
+  await waitFor(() => assert.ok(calls.some((entry) => entry.channel === "storage:cleanup")));
+  const sent = calls.find((entry) => entry.channel === "storage:cleanup")?.args[0] as StorageCleanupRequest;
+  assert.equal(sent.targetIds?.length, listed.length, "nothing goes that the person was not shown");
+});
+
+test("an item kept at the last moment is reported, even when the review already kept others", async () => {
+  const success = mock.method(toast, "success", () => "");
+  const failure = mock.method(toast, "error", () => "");
+  // The review kept two; the removal kept one more it had listed.
+  await reviewAndConfirm({
+    removed: [{ id: "ws-idle", label: "idle-worktree" }],
+    skipped: [{ id: "ws-other", label: "other-worktree", reason: "active", bytes: 1 }],
+    failed: [],
+    freedBytes: 3_000_000_000,
+  });
+  await waitFor(() => assert.equal(failure.mock.callCount(), 1));
+  assert.equal(success.mock.callCount(), 0);
+  assert.match(String(failure.mock.calls[0]!.arguments[0]), /Freed 3\.00 GB\. 1 item was kept/u);
+  assert.ok(await screen.findByRole("status"), "the outcome stays on the page after the toast fades");
+});
+
+test("a clear that freed nothing measurable does not claim a number", async () => {
+  const success = mock.method(toast, "success", () => "");
+  installBotTestIpc({
+    "storage:report": () => report(),
+    "storage:refresh": () => report(),
+    "storage:preview": (request: unknown) => previewFor(request as StorageCleanupRequest),
+    "storage:cleanup": () => ({
+      removed: [{ id: "logs", label: "Logs" }],
+      skipped: [],
+      failed: [],
+      freedBytes: 0,
+    }),
+  });
+  render(createElement(StorageSettings, {}));
+  const row = await screen.findByRole("group", { name: "Logs and diagnostics" });
+  fireEvent.click(within(row).getByRole("button", { name: "Clear…" }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Clear logs" }));
+  await waitFor(() => assert.equal(success.mock.callCount(), 1));
+  assert.doesNotMatch(String(success.mock.calls[0]!.arguments[0]), /Freed/u);
+});
+
+test("a cleanup that fails closes the stale review and measures again", async () => {
+  const failure = mock.method(toast, "error", () => "");
+  const calls = await reviewAndConfirm(new Error("Aiden is quitting."));
+  await waitFor(() => assert.equal(failure.mock.callCount(), 1));
+  await waitFor(() => assert.ok(!screen.queryByRole("alertdialog"), "its list may name what is already gone"));
+  await waitFor(() => assert.ok(calls.some((entry) => entry.channel === "storage:refresh")));
+  assert.match((await screen.findByRole("status")).textContent ?? "", /could not finish/u);
+});
+
+test("a review someone cancelled does not come back when a slower preview lands", async () => {
+  let release: (value: StorageCleanupPreview) => void = () => {};
+  const calls = installBotTestIpc({
+    "storage:report": () => report(),
+    "storage:refresh": () => report(),
+    "storage:preview": (request: unknown) => {
+      const asked = request as StorageCleanupRequest;
+      if (asked.inactiveDays === 14) return previewFor(asked);
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    },
+  });
+  render(createElement(StorageSettings, {}));
+  const row = await screen.findByRole("group", { name: "Worktrees" });
+  fireEvent.click(within(row).getByRole("button", { name: "Review…" }));
+  const dialog = await screen.findByRole("alertdialog");
+
+  const select = within(dialog).getByRole("combobox", { name: "Unused for" });
+  fireEvent.click(select);
+  fireEvent.click(await screen.findByRole("option", { name: "30 days" }));
+  await waitFor(() => assert.equal(calls.filter((entry) => entry.channel === "storage:preview").length, 2));
+
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.ok(!screen.queryByRole("alertdialog")));
+  release(previewFor({ action: "remove-worktrees", inactiveDays: 30 }));
+  await flush();
+  assert.ok(!screen.queryByRole("alertdialog"));
 });

@@ -128,6 +128,7 @@ export interface StorageItem {
 export type StorageProtectionReason =
   | "unknown-git-state"
   | "active"
+  | "terminal"
   | "changing"
   | "uncommitted"
   | "unpushed"
@@ -139,6 +140,7 @@ export type StorageProtectionReason =
 export const STORAGE_PROTECTION_COPY: Readonly<Record<StorageProtectionReason, string>> = {
   "unknown-git-state": "Aiden couldn’t read its Git state",
   active: "A chat is using it right now",
+  terminal: "A terminal is open in it",
   changing: "Aiden is changing it right now",
   uncommitted: "Has changes not committed to Git",
   unpushed: "Has commits that aren’t pushed",
@@ -190,6 +192,8 @@ export interface StorageWorktreeFacts {
   uncommitted: number;
   unpushed: number;
   active: boolean;
+  /** Removing the worktree would kill a shell open in it. */
+  terminalOpen?: boolean;
   changing: boolean;
   gitStateKnown: boolean;
   /** Scheduled tasks that run in this workspace; null when they could not be read. */
@@ -207,6 +211,7 @@ export function worktreeProtectionReason(
   if (!facts.gitStateKnown) return "unknown-git-state";
   if (facts.routineCount === null) return "unknown-routines";
   if (facts.active) return "active";
+  if (facts.terminalOpen) return "terminal";
   if (facts.changing) return "changing";
   if (facts.uncommitted > 0) return "uncommitted";
   if (facts.unpushed > 0) return "unpushed";

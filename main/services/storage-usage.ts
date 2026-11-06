@@ -7,7 +7,8 @@
 //
 // Deletion is decided here, not in the renderer: every cleanup re-reads live
 // Git, scheduled-task and activity facts and refuses anything with local work
-// or a live user.
+// or a live user, then checks activity once more inside the deletion itself,
+// after that path has closed the door on new work.
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -43,11 +44,17 @@ import {
   type StorageCleanupSkipped,
   type StorageInactiveDays,
   type StorageItem,
+  type StorageProtectionReason,
   type StorageReport,
   type StorageScanState,
   type StorageThreadView,
   type StorageWorktreeView,
 } from "../../renderer/shared/storage.js";
+
+const ALREADY_GONE = "It is already gone.";
+
+/** A live re-check's verdict: keep it for a reason, it no longer exists, or go ahead. */
+type LiveCheck = StorageProtectionReason | "gone" | null;
 
 /** A scan older than this is refreshed on the next read, in the background. */
 export const STORAGE_SCAN_STALE_MS = 60_000;
@@ -78,6 +85,17 @@ export interface StorageCleanupScope {
   targetIds?: string[];
 }
 
+/**
+ * Thrown from inside a deletion when work started after the last live check.
+ * The item is kept, so the cleanup reports it as skipped rather than failed.
+ */
+export class StorageItemInUseError extends Error {
+  constructor(readonly reason: StorageProtectionReason) {
+    super("This item came into use before it could be removed.");
+    this.name = "StorageItemInUseError";
+  }
+}
+
 export interface StorageServiceDependencies {
   profileRoot(): string;
   listWorkspaces(): Promise<Workspace[]>;
@@ -86,6 +104,8 @@ export interface StorageServiceDependencies {
   isChatBusy(chatId: string): boolean;
   /** Workspaces with an in-flight create or remove. */
   isWorkspaceChanging(workspaceId: string): boolean;
+  /** Workspaces with a live terminal, which removing the worktree would kill. */
+  hasOpenTerminal(workspaceId: string): boolean;
   /** Chats the person pinned in the Inbox; a rejection means the state is unknown. */
   pinnedChatIds(): Promise<ReadonlySet<string>>;
   /**
@@ -93,10 +113,14 @@ export interface StorageServiceDependencies {
    * workspace stops its tasks for good, so a rejection keeps every worktree.
    */
   scheduledTaskWorkspaceIds(): Promise<readonly string[]>;
-  /** Remove one managed worktree through Aiden's own transactional path. */
-  removeWorktree(workspaceId: string): Promise<void>;
-  /** Remove one chat and everything it owns. */
-  removeChat(chatId: string): Promise<void>;
+  /**
+   * Remove one managed worktree through Aiden's own transactional path.
+   * `assertStillSafe` must run after that path stops admitting new work and
+   * before it stops anything; it throws StorageItemInUseError to keep the item.
+   */
+  removeWorktree(workspaceId: string, assertStillSafe: () => void): Promise<void>;
+  /** Remove one chat and everything it owns, with the same `assertStillSafe` contract. */
+  removeChat(chatId: string, assertStillSafe: () => void): Promise<void>;
   /** Read a worktree's Git status; throws when Git cannot be read. */
   worktreeGitState(input: {
     repositoryPath: string;
@@ -126,11 +150,30 @@ export interface StorageUsageService {
   cleanup(scope: StorageCleanupScope): Promise<StorageCleanupResult>;
   /** Stop accepting scan results (the window closed or the app is quitting). */
   dispose(): void;
+  /**
+   * Stop before the next item of any running cleanup, and resolve once the item
+   * in progress has finished, so quitting never cuts a removal in half.
+   */
+  shutdown(): Promise<void>;
 }
 
 function isInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+/**
+ * Whether a recorded worktree path really sits under `realRoot`, a fully resolved
+ * root. The final folder of a walk is checked with lstat, but a linked parent is
+ * not, so a path that only looks inside must be resolved first. A worktree that
+ * no longer exists holds nothing, so it stays in and measures zero.
+ */
+async function resolvesInside(realRoot: string, candidate: string): Promise<boolean> {
+  try {
+    return isInside(realRoot, await fs.realpath(candidate));
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -146,6 +189,9 @@ export function createStorageUsageService(
   let inFlight: Promise<StorageReport> | null = null;
   let cleaning: Promise<unknown> | null = null;
   let disposed = false;
+  // Bumped when a cleanup changes the disk. A walk that began under an older
+  // value may have read what is now gone, so its result is thrown away.
+  let generation = 0;
 
   async function runScan(): Promise<StorageReport> {
     const startedAt = now();
@@ -166,9 +212,14 @@ export function createStorageUsageService(
     // root are measured, so a record pointing elsewhere never walks an
     // unrelated directory.
     const managed = workspaces.filter((workspace) => workspace.managedWorktree);
-    const measurable = managed.filter((workspace) =>
-      isInside(worktreeRoot, workspace.managedWorktree!.worktreePath),
-    );
+    const realWorktreeRoot = path.join(await fs.realpath(profileRoot).catch(() => profileRoot), "worktrees");
+    const measurable: Workspace[] = [];
+    for (const workspace of managed) {
+      const worktreePath = workspace.managedWorktree!.worktreePath;
+      if (isInside(worktreeRoot, worktreePath) && (await resolvesInside(realWorktreeRoot, worktreePath))) {
+        measurable.push(workspace);
+      }
+    }
     const worktreeBytes = new Map<string, { bytes: number; complete: boolean }>();
     const imageSizes = new Map<string, number>();
     let browserCacheBytes = 0;
@@ -291,6 +342,7 @@ export function createStorageUsageService(
             active: chats.some(
               (chat) => chat.workspaceId === workspace.id && dependencies.isChatBusy(chat.id),
             ),
+            terminalOpen: dependencies.hasOpenTerminal(workspace.id),
             changing: dependencies.isWorkspaceChanging(workspace.id),
             gitStateKnown: gitState !== null,
             routineCount: routines === null ? null : (routines.get(workspace.id) ?? 0),
@@ -378,8 +430,13 @@ export function createStorageUsageService(
     }
   }
 
-  function idleReport(): StorageReport {
-    return emptyStorageReport({ status: "idle", scannedAt: null, error: null, truncated: false });
+  function placeholderReport(): StorageReport {
+    return emptyStorageReport({
+      status: inFlight ? "scanning" : "idle",
+      scannedAt: null,
+      error: null,
+      truncated: false,
+    });
   }
 
   function isStale(): boolean {
@@ -398,7 +455,12 @@ export function createStorageUsageService(
     dependencies.broadcast?.({ kind: "scan-started" });
     inFlight = (async () => {
       try {
-        const report = await runScan();
+        let seen: number;
+        let report: StorageReport;
+        do {
+          seen = generation;
+          report = await runScan();
+        } while (seen !== generation && !disposed);
         if (!disposed) cached = { report, scannedAt: report.scan.scannedAt ?? startedAt };
         return report;
       } catch (error) {
@@ -461,12 +523,12 @@ export function createStorageUsageService(
   }
 
   /** Re-read one worktree's live Git state, scheduled tasks and activity right before removal. */
-  async function liveWorktreeProtection(worktree: StorageWorktreeView): Promise<string | null> {
+  async function liveWorktreeProtection(worktree: StorageWorktreeView): Promise<LiveCheck> {
     const workspace = (await dependencies.listWorkspaces()).find(
       (entry) => entry.id === worktree.workspaceId,
     );
     const tree = workspace?.managedWorktree;
-    if (!tree) return "unknown-git-state";
+    if (!tree) return "gone";
     const [gitState, routines, chats] = await Promise.all([
       readGitState(tree),
       readRoutineCounts(),
@@ -484,6 +546,7 @@ export function createStorageUsageService(
       active: chats.some(
         (chat) => chat.workspaceId === worktree.workspaceId && dependencies.isChatBusy(chat.id),
       ),
+      terminalOpen: dependencies.hasOpenTerminal(worktree.workspaceId),
       changing: dependencies.isWorkspaceChanging(worktree.workspaceId),
       gitStateKnown: gitState !== null,
       routineCount: routines === null ? null : (routines.get(worktree.workspaceId) ?? 0),
@@ -491,10 +554,10 @@ export function createStorageUsageService(
   }
 
   /** Re-read one chat's pin, owner and activity right before deleting it. */
-  async function liveThreadProtection(chatId: string): Promise<string | null> {
+  async function liveThreadProtection(chatId: string): Promise<LiveCheck> {
     const [pins, chats] = await Promise.all([readPinState(), dependencies.listChats()]);
     const chat = chats.find((entry) => entry.id === chatId);
-    if (!chat) return "owned";
+    if (!chat) return "gone";
     return threadProtectionReason({
       active: dependencies.isChatBusy(chatId),
       pinned: pins.kind === "unknown" || pins.pinned.has(chatId),
@@ -502,10 +565,46 @@ export function createStorageUsageService(
     });
   }
 
+  /** The synchronous last check, run inside a deletion once new work is shut out. */
+  function assertChatStillSafe(chatId: string): void {
+    if (dependencies.isChatBusy(chatId)) throw new StorageItemInUseError("active");
+  }
+
+  function assertWorktreeStillSafe(workspaceId: string, chats: readonly ChatMeta[]): void {
+    if (chats.some((chat) => chat.workspaceId === workspaceId && dependencies.isChatBusy(chat.id))) {
+      throw new StorageItemInUseError("active");
+    }
+    if (dependencies.hasOpenTerminal(workspaceId)) throw new StorageItemInUseError("terminal");
+    if (dependencies.isWorkspaceChanging(workspaceId)) throw new StorageItemInUseError("changing");
+  }
+
+  /**
+   * What a clear really freed: the measured amount before, less what a fresh
+   * walk still finds. Logs in use and caches a live session holds stay on disk,
+   * so the plan's number is only an upper bound. When the walk can't vouch for
+   * the folder, nothing is claimed.
+   */
+  async function bytesFreedByClear(plan: StorageCleanupPreview): Promise<number> {
+    generation += 1;
+    cached = null;
+    if (disposed) return 0;
+    const after = await startScan();
+    if (after.scan.status !== "ready") return 0;
+    const logs = plan.action === "clear-logs";
+    const category = after.categories.find((entry) => entry.id === (logs ? "logs" : "browser"));
+    if (category?.complete === false) return 0;
+    const left = logs ? (category?.bytes ?? 0) : after.browserCacheBytes;
+    return Math.max(0, plan.totalBytes - left);
+  }
+
   async function runCleanup(scope: StorageCleanupScope): Promise<StorageCleanupResult> {
     const targetIds = scope.targetIds === undefined ? undefined : [...new Set(scope.targetIds)];
     if (scope.action === "delete-threads" && targetIds?.length !== 1) {
       throw new Error("Chats are deleted one at a time.");
+    }
+    // A sweep deletes what the person reviewed, never whatever is idle by now.
+    if (scope.action === "remove-worktrees" && !targetIds?.length) {
+      throw new Error("Worktrees are removed only from a reviewed list.");
     }
     const plan = await preview({
       action: scope.action,
@@ -517,18 +616,30 @@ export function createStorageUsageService(
     const skipped: StorageCleanupSkipped[] = [...plan.skipped];
 
     if (plan.action === "clear-logs" || plan.action === "clear-browser-cache") {
-      if (plan.items.length > 0) {
-        const logs = plan.action === "clear-logs";
-        try {
-          await (logs ? dependencies.clearLogs() : dependencies.clearBrowserCache());
-          removed.push(...plan.items);
-        } catch (error) {
-          const reason = logs ? "Aiden could not clear its logs." : "Aiden could not clear the browser cache.";
-          dependencies.logError?.("storage", reason, error);
-          failed.push({ id: plan.items[0]!.id, label: plan.items[0]!.label, reason });
-        }
+      if (plan.items.length === 0) return finish(removed, skipped, failed);
+      const logs = plan.action === "clear-logs";
+      try {
+        await (logs ? dependencies.clearLogs() : dependencies.clearBrowserCache());
+        removed.push(...plan.items);
+      } catch (error) {
+        const reason = logs ? "Aiden could not clear its logs." : "Aiden could not clear the browser cache.";
+        dependencies.logError?.("storage", reason, error);
+        failed.push({ id: plan.items[0]!.id, label: plan.items[0]!.label, reason });
       }
-      return finish(removed, skipped, failed);
+      // A clear that stopped partway still deleted something, so it is measured too.
+      return { removed, skipped, failed, freedBytes: await bytesFreedByClear(plan) };
+    }
+
+    // A reviewed item the latest report no longer lists has already been removed.
+    const planned = new Set([...plan.items, ...plan.skipped].map((entry) => entry.id));
+    for (const id of targetIds ?? []) {
+      if (!planned.has(id)) {
+        failed.push({
+          id,
+          label: plan.action === "remove-worktrees" ? "This worktree" : "This chat",
+          reason: ALREADY_GONE,
+        });
+      }
     }
 
     // Live facts are re-read per target: a worktree that gained a commit or a
@@ -539,16 +650,32 @@ export function createStorageUsageService(
         item.kind === "worktree"
           ? await liveWorktreeProtectionFor(item.id)
           : await liveThreadProtection(item.id);
+      if (reason === "gone") {
+        failed.push({ id: item.id, label: item.label, reason: ALREADY_GONE });
+        continue;
+      }
       if (reason) {
         skipped.push({ id: item.id, label: item.label, reason, bytes: item.bytes });
         continue;
       }
+      // Checked after the awaits above, so nothing starts once quitting has begun.
+      if (disposed) {
+        failed.push({ id: item.id, label: item.label, reason: "Aiden was quitting, so this was left in place." });
+        continue;
+      }
       try {
-        await (item.kind === "worktree"
-          ? dependencies.removeWorktree(item.id)
-          : dependencies.removeChat(item.id));
+        if (item.kind === "worktree") {
+          const chats = await dependencies.listChats();
+          await dependencies.removeWorktree(item.id, () => assertWorktreeStillSafe(item.id, chats));
+        } else {
+          await dependencies.removeChat(item.id, () => assertChatStillSafe(item.id));
+        }
         removed.push(item);
       } catch (error) {
+        if (error instanceof StorageItemInUseError) {
+          skipped.push({ id: item.id, label: item.label, reason: error.reason, bytes: item.bytes });
+          continue;
+        }
         const fallback =
           item.kind === "worktree" ? "Aiden could not remove this worktree." : "Aiden could not delete this chat.";
         dependencies.logError?.("storage", fallback, error);
@@ -561,10 +688,10 @@ export function createStorageUsageService(
     }
     return finish(removed, skipped, failed);
 
-    async function liveWorktreeProtectionFor(workspaceId: string): Promise<string | null> {
+    async function liveWorktreeProtectionFor(workspaceId: string): Promise<LiveCheck> {
       const report = await freshReport();
       const worktree = report.worktrees.find((entry) => entry.workspaceId === workspaceId);
-      return worktree ? liveWorktreeProtection(worktree) : "unknown-git-state";
+      return worktree ? liveWorktreeProtection(worktree) : "gone";
     }
 
     function finish(
@@ -572,6 +699,7 @@ export function createStorageUsageService(
       skippedItems: StorageCleanupSkipped[],
       failures: Array<{ id: string; label: string; reason: string }>,
     ): StorageCleanupResult {
+      generation += 1;
       cached = null;
       if (!disposed) void startScan();
       return {
@@ -585,9 +713,9 @@ export function createStorageUsageService(
 
   return {
     async report() {
-      const snapshot = cached?.report ?? idleReport();
+      // Start first, so the snapshot says a scan is running and the page shows it.
       if (isStale() && !inFlight) void startScan();
-      return snapshot;
+      return cached?.report ?? placeholderReport();
     },
     async refresh() {
       return inFlight ?? startScan();
@@ -597,6 +725,7 @@ export function createStorageUsageService(
       // One cleanup at a time: two overlapping runs could both pass the live
       // re-check for the same item before either removes it.
       while (cleaning) await cleaning.catch(() => undefined);
+      if (disposed) throw new Error("Aiden is quitting.");
       const run = runCleanup(scope);
       cleaning = run;
       try {
@@ -607,6 +736,10 @@ export function createStorageUsageService(
     },
     dispose() {
       disposed = true;
+    },
+    async shutdown() {
+      disposed = true;
+      while (cleaning) await cleaning.catch(() => undefined);
     },
   };
 }

@@ -493,6 +493,11 @@ export class TerminalService {
     }
   }
 
+  /** Whether a shell is open in this workspace, so removing it would end that shell. */
+  hasOpenSession(workspaceId: string): boolean {
+    return [...this.sessions.values()].some((session) => session.workspaceId === workspaceId);
+  }
+
   closeForWorkspace(workspaceId: string): void {
     for (const [id, session] of this.sessions) {
       if (session.workspaceId !== workspaceId) continue;

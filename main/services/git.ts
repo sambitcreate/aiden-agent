@@ -6519,31 +6519,16 @@ export class GitService {
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.length > 0 && !line.endsWith("/HEAD"));
+    // A failed count rejects: "nothing unpushed" is what lets a worktree be removed.
     const count = await this.run(
       cwd,
       remoteRefs.length > 0
         ? ["rev-list", "--count", branchRef, "--not", ...remoteRefs]
         : ["rev-list", "--count", branchRef],
       { signal },
-    ).catch(() => undefined);
-    if (!count || count.exitCode !== 0) return 0;
+    );
     const ahead = Number(count.stdout.trim());
     return Number.isSafeInteger(ahead) && ahead > 0 ? ahead : 0;
-  }
-
-  /** Whether a branch exists in this repository, without failing the read. */
-  async managedWorktreeBranchExists(
-    cwd: string,
-    branch: string,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
-    await this.requireRepository(await this.repository(cwd));
-    const result = await this.run(
-      cwd,
-      ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
-      { allowExitCodes: [1], signal },
-    );
-    return result.exitCode === 0;
   }
 
   /**

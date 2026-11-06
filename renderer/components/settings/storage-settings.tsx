@@ -4,6 +4,7 @@ import { ChevronRight, Loader2, RefreshCw } from "lucide-react";
 
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { storageApi } from "../../lib/ipc";
+import { settingsLocation } from "../../lib/settings-section";
 import { availableSettingsDestinations, type SettingsSection } from "../../shared/settings-section";
 import {
   DEFAULT_STORAGE_INACTIVE_DAYS,
@@ -21,7 +22,8 @@ import {
   type StorageReport,
   type StorageScanState,
 } from "../../shared/storage";
-import { AlertDialog, Badge, Button, EmptyState, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Text, toast } from "../ui";
+import { AlertDialog, Badge, Button, EmptyState, Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 
 /** How many of the largest worktrees and chats the page lists. */
 const LARGEST_ITEM_COUNT = 8;
@@ -58,9 +60,6 @@ function protectionCopy(reason: string | undefined): string {
   if (reason === "recent") return "Used recently";
   return STORAGE_PROTECTION_COPY[reason as StorageProtectionReason] ?? "Kept";
 }
-
-const ROW_CLASS =
-  "settings-field relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-5 p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden max-[540px]:grid-cols-1 max-[540px]:gap-2";
 
 function segmentColor(index: number): string {
   return `var(--chart-${(index % 8) + 1})`;
@@ -100,7 +99,7 @@ function StorageBar({ report }: { report: StorageReport }) {
 /** Size on the left of a fixed-width action column, so sizes line up down a card. */
 function SizeAndAction({ size, children }: { size: string; children?: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-end gap-3 max-[540px]:justify-start">
+    <div className="flex items-center justify-end gap-3">
       <Text variant="small" color="secondary" className="shrink-0 tabular-nums">
         {size}
       </Text>
@@ -127,22 +126,14 @@ function ItemRow({
   onAction: () => void;
 }) {
   return (
-    <div className={ROW_CLASS}>
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-strong text-primary">{label}</span>
-          {keptReason ? (
-            <Badge color="gray" className="shrink-0">
-              Kept
-            </Badge>
-          ) : null}
-        </div>
-        <div className="truncate text-small text-secondary">
-          {keptReason ? `${caption} · ${keptReason}` : caption}
-        </div>
-      </div>
+    <Field
+      label={<span className="block truncate">{label}</span>}
+      description={keptReason ? `${caption} · ${keptReason}` : caption}
+    >
       <SizeAndAction size={size}>
-        {keptReason ? null : (
+        {keptReason ? (
+          <Badge color="gray">Kept</Badge>
+        ) : (
           <Button
             size="small"
             variant="filled"
@@ -154,7 +145,7 @@ function ItemRow({
           </Button>
         )}
       </SizeAndAction>
-    </div>
+    </Field>
   );
 }
 
@@ -169,7 +160,7 @@ export function StorageSettingsPage() {
   return (
     <StorageSettings
       canOpenSection={(section) => available.has(section)}
-      onOpenSection={(section) => void navigate({ to: "/settings", search: { section }, replace: true })}
+      onOpenSection={(section) => void navigate({ ...settingsLocation(section), replace: true })}
     />
   );
 }
@@ -186,17 +177,22 @@ export function StorageSettings({
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [busy, setBusy] = React.useState<StorageCleanupAction | "refresh" | "preview" | null>(null);
   const [preview, setPreview] = React.useState<OpenPreview | null>(null);
+  // What the last cleanup did, kept on the page after its toast has gone.
+  const [outcome, setOutcome] = React.useState<string | null>(null);
   const refreshRef = React.useRef<HTMLButtonElement | null>(null);
+  const latestLoad = React.useRef(0);
+  const latestWindowChange = React.useRef(0);
 
   const load = React.useCallback(async (mode: "read" | "refresh") => {
+    // Reads overlap (a scan starting, then finishing); only the newest may land.
+    const request = ++latestLoad.current;
     try {
       const next = mode === "refresh" ? await storageApi.refresh() : await storageApi.report();
+      if (request !== latestLoad.current) return;
       setReport(next);
       setLoadFailed(false);
-      return next;
     } catch {
-      setLoadFailed(true);
-      return null;
+      if (request === latestLoad.current) setLoadFailed(true);
     }
   }, []);
 
@@ -204,7 +200,7 @@ export function StorageSettings({
     // Subscribe before the first read, so a scan that finishes behind the page
     // is never missed.
     const stop = storageApi.onChange((event) => {
-      if (event?.kind === "scan-finished") void load("read");
+      if (event?.kind === "scan-started" || event?.kind === "scan-finished") void load("read");
     });
     void load("read");
     return stop;
@@ -227,15 +223,31 @@ export function StorageSettings({
     }
   };
 
+  const closePreview = () => {
+    latestWindowChange.current += 1;
+    setPreview(null);
+    setBusy(null);
+  };
+
   const changeWindow = async (inactiveDays: StorageInactiveDays) => {
-    if (!preview) return;
+    if (!preview || busy) return;
+    const change = ++latestWindowChange.current;
     const request = { ...preview.request, inactiveDays };
+    // Holds Confirm off, so what it removes is always the list on screen.
+    setBusy("preview");
     try {
       const data = await storageApi.preview(request);
-      setPreview({ request, single: false, data });
+      if (change === latestWindowChange.current) setPreview({ request, single: false, data });
     } catch {
-      toast.error("Aiden could not work out what would be removed.");
+      if (change === latestWindowChange.current) toast.error("Aiden could not work out what would be removed.");
+    } finally {
+      if (change === latestWindowChange.current) setBusy(null);
     }
+  };
+
+  const announce = (kind: "success" | "error", message: string) => {
+    toast[kind](message);
+    setOutcome(message);
   };
 
   const runCleanup = async () => {
@@ -246,29 +258,35 @@ export function StorageSettings({
       return;
     }
     setBusy(request.action);
+    setOutcome(null);
     try {
       const result = await storageApi.cleanup({
         action: request.action,
         inactiveDays: data.inactiveDays,
         targetIds: data.items.map((item) => item.id),
       });
-      const freed = formatStorageBytes(result.freedBytes);
+      const freed = result.freedBytes > 0 ? `Freed ${formatStorageBytes(result.freedBytes)}.` : "No measurable space was freed.";
+      // The removal only reports what the review had listed, so everything here is news.
+      const notRemoved = result.failed.length + result.skipped.length;
       if (result.removed.length === 0) {
         const kept = result.skipped[0];
-        toast.error(
+        announce(
+          "error",
           result.failed[0]?.reason ??
             (kept ? `Aiden kept ${kept.label}: ${protectionCopy(kept.reason).toLowerCase()}.` : "Nothing was removed."),
         );
-      } else if (result.failed.length > 0 || result.skipped.length > data.skipped.length) {
-        const notRemoved = result.failed.length + result.skipped.length - data.skipped.length;
-        toast.error(`Freed ${freed}. ${notRemoved} item${notRemoved === 1 ? " was" : "s were"} kept or could not be removed.`);
+      } else if (notRemoved > 0) {
+        announce("error", `${freed} ${notRemoved} item${notRemoved === 1 ? " was" : "s were"} kept or could not be removed.`);
       } else {
-        toast.success(`Freed ${freed}.`);
+        announce("success", freed);
       }
-      setPreview(null);
-      await load("refresh");
     } catch {
-      toast.error("Aiden could not finish cleaning up.");
+      announce("error", "Aiden could not finish cleaning up. The sizes below show what is left.");
+    }
+    // Either way the review is out of date: its list may name what has already gone.
+    setPreview(null);
+    try {
+      await load("refresh");
     } finally {
       setBusy(null);
     }
@@ -343,38 +361,43 @@ export function StorageSettings({
 
   return (
     <>
-      <FieldSet title="On this computer">
+      <FieldSet
+        title="On this computer"
+        action={
+          <Button
+            ref={refreshRef}
+            size="small"
+            variant="filled"
+            disabled={busy !== null || scanning}
+            onClick={() => void refresh()}
+          >
+            {busy === "refresh" || scanning ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {scanning ? "Measuring…" : "Measure again"}
+          </Button>
+        }
+      >
         <div className="p-4">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex items-baseline gap-3">
-                <span className="text-heading1 font-semibold tabular-nums text-primary">
-                  {report ? formatStorageBytes(total) : "—"}
-                </span>
-                <span className="text-small text-secondary">used by Aiden</span>
-              </div>
-              <div className="mt-0.5 text-small text-secondary">
-                {report ? scanCaption(report.scan) : "Checking how much disk Aiden uses…"}
-              </div>
-            </div>
-            <Button
-              ref={refreshRef}
-              size="small"
-              variant="filled"
-              disabled={busy !== null || scanning}
-              onClick={() => void refresh()}
-            >
-              {busy === "refresh" || scanning ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              {scanning ? "Measuring…" : "Measure again"}
-            </Button>
+          <div className="flex items-baseline gap-3">
+            <span className="text-heading1 font-semibold tabular-nums text-primary">
+              {report ? formatStorageBytes(total) : "—"}
+            </span>
+            <span className="text-small text-secondary">used by Aiden</span>
+          </div>
+          <div className="mt-0.5 text-small text-secondary">
+            {report ? scanCaption(report.scan) : "Checking how much disk Aiden uses…"}
           </div>
           {report && total > 0 ? (
             <div className="mt-4">
               <StorageBar report={report} />
             </div>
           ) : null}
-          {!report && loadFailed ? (
-            <Text as="p" variant="small" color="secondary" className="mt-3">
+          {outcome ? (
+            <Text as="p" variant="small" color="secondary" role="status" className="mt-3">
+              {outcome}
+            </Text>
+          ) : null}
+          {loadFailed ? (
+            <Text as="p" variant="small" color="secondary" role="status" className="mt-3">
               Aiden could not measure local storage. Nothing was changed.
             </Text>
           ) : null}
@@ -386,29 +409,38 @@ export function StorageSettings({
           {usedCategories(report).map((category, index) => {
             const definition = storageCategory(category.id);
             return (
-              <div key={category.id} className={ROW_CLASS} role="group" aria-label={definition.label}>
-                <div className="flex min-w-0 items-start gap-3">
-                  <span
-                    aria-hidden="true"
-                    className="mt-[0.45rem] size-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: segmentColor(index) }}
-                  />
-                  <div className="min-w-0">
-                    <div className="text-strong text-primary">{definition.label}</div>
-                    <div className="text-small text-secondary">{definition.description}</div>
-                  </div>
-                </div>
+              <Field
+                key={category.id}
+                label={
+                  <span className="flex min-w-0 items-center gap-3">
+                    <span
+                      aria-hidden="true"
+                      className="size-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: segmentColor(index) }}
+                    />
+                    {definition.label}
+                  </span>
+                }
+                hint={<InfoHint topic={definition.label}>{definition.description}</InfoHint>}
+              >
                 <SizeAndAction size={sizeLabel(category.bytes, category.complete !== false)}>
                   {categoryAction(category)}
                 </SizeAndAction>
-              </div>
+              </Field>
             );
           })}
         </FieldSet>
       ) : null}
 
       {worktrees.length > 0 ? (
-        <FieldSet title="Largest worktrees">
+        <FieldSet
+          title="Largest worktrees"
+          hint={
+            <InfoHint topic="worktree removal">
+              Aiden only removes worktrees it created, and never one with work that isn’t saved and pushed.
+            </InfoHint>
+          }
+        >
           {worktrees.map((worktree) => (
             <ItemRow
               key={worktree.workspaceId}
@@ -434,7 +466,10 @@ export function StorageSettings({
       ) : null}
 
       {threads.length > 0 ? (
-        <FieldSet title="Largest chats">
+        <FieldSet
+          title="Largest chats"
+          hint={<InfoHint topic="chat deletion">Chats are deleted one at a time, and only when you ask.</InfoHint>}
+        >
           {threads.map((thread) => (
             <ItemRow
               key={thread.chatId}
@@ -467,15 +502,10 @@ export function StorageSettings({
         />
       ) : null}
 
-      <Text as="p" variant="small" color="tertiary" className="px-4">
-        Aiden only removes worktrees it created, and never one with work that isn’t saved and pushed.
-        Chats are deleted one at a time, and only when you ask.
-      </Text>
-
       <AlertDialog
         open={preview !== null}
         onOpenChange={(open) => {
-          if (!open && busy === null) setPreview(null);
+          if (!open && (busy === null || busy === "preview")) closePreview();
         }}
         title={preview ? previewTitle(preview) : ""}
         description={preview ? previewDescription(preview) : undefined}
@@ -494,12 +524,6 @@ export function StorageSettings({
       >
         {preview ? <PreviewBody preview={preview} onWindowChange={changeWindow} /> : null}
       </AlertDialog>
-
-      {loadFailed ? (
-        <p role="status" className="px-4 text-small text-secondary">
-          Local storage could not be read. Your files are unchanged.
-        </p>
-      ) : null}
     </>
   );
 }
@@ -541,22 +565,31 @@ function previewDescription({ request, single, data }: OpenPreview): string {
     case "delete-threads":
       return `“${data.items[0]!.label}” and its pictures are deleted for good. This frees ${freed}.`;
     case "clear-logs":
-      return `This frees ${freed}. Chats, settings, credentials and projects stay untouched.`;
+      return `${clearAmount(data)} Chats, settings, credentials and projects stay untouched.`;
     case "clear-browser-cache":
-      return `This frees ${freed}. You stay signed in to websites, and open tabs keep working.`;
+      return `${clearAmount(data)} You stay signed in to websites, and open tabs keep working.`;
   }
+}
+
+/** A file in use stays through a clear, so its measured size is a ceiling, not a promise. */
+function clearAmount(data: StorageCleanupPreview): string {
+  return data.totalComplete
+    ? `This frees up to ${formatStorageBytes(data.totalBytes)}.`
+    : `Aiden measured at least ${formatStorageBytes(data.totalBytes)} here, and clears what isn’t in use.`;
 }
 
 function previewConfirmLabel({ request, data }: OpenPreview): string {
   if (data.items.length === 0) return "Close";
-  const freed = formatStorageBytes(data.totalBytes);
+  const freed = sizeLabel(data.totalBytes, data.totalComplete).replace(/^At least/u, "at least");
   switch (request.action) {
     case "remove-worktrees":
       return `Remove ${data.items.length} · ${freed}`;
     case "delete-threads":
       return `Delete · ${freed}`;
-    default:
-      return `Clear ${freed}`;
+    case "clear-logs":
+      return "Clear logs";
+    case "clear-browser-cache":
+      return "Clear cache";
   }
 }
 
@@ -569,7 +602,8 @@ function PreviewBody({
 }) {
   const { request, single, data } = preview;
   if (request.action !== "remove-worktrees") return null;
-  const items = data.items.slice(0, 50);
+  // Every item, however many: nothing may go that the person was not shown.
+  const items = data.items;
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {single ? null : (
@@ -592,7 +626,11 @@ function PreviewBody({
         </div>
       )}
       {items.length > 0 ? (
-        <ul className="flex min-w-0 flex-col gap-2 rounded-card bg-control p-3" aria-label="Worktrees to remove">
+        <ul
+          className="flex max-h-56 min-w-0 flex-col gap-2 overflow-y-auto rounded-card bg-control p-3"
+          aria-label="Worktrees to remove"
+          tabIndex={0}
+        >
           {items.map((item) => (
             <li key={item.id} className="flex min-w-0 items-baseline gap-3">
               <span className="min-w-0 flex-1">
@@ -605,11 +643,6 @@ function PreviewBody({
             </li>
           ))}
         </ul>
-      ) : null}
-      {data.items.length > items.length ? (
-        <Text variant="small" color="tertiary">
-          and {data.items.length - items.length} more
-        </Text>
       ) : null}
       {items.length > 0 ? (
         <Text variant="small" color="secondary">

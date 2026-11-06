@@ -15,6 +15,7 @@ import {
   deleteAllDiagnosticData,
   pruneExpiredDiagnosticCrashDumps,
 } from "./diagnostic-support.js";
+import { closeDeviceSessionsForChat } from "../handlers/devices.js";
 import { gitManagedWorktreeDirtyState, gitManagedWorktreeUnpushedCommits } from "./git.js";
 import { llmClient } from "./llm-client.js";
 import { readRegularFile } from "./regular-file-read.js";
@@ -51,6 +52,7 @@ export const storageUsageService = createStorageUsageService({
   listChats: () => chatStore.list(),
   isChatBusy: (chatId) => llmClient.isChatBusy(chatId),
   isWorkspaceChanging: (workspaceId) => workspaceMutationGate.isChanging(workspaceId),
+  hasOpenTerminal: (workspaceId) => terminalService.hasOpenSession(workspaceId),
   async pinnedChatIds() {
     const snapshot = await chatTriage.snapshot();
     const pinned = new Set<string>();
@@ -82,11 +84,29 @@ export const storageUsageService = createStorageUsageService({
       if (partition) await clearSessionCaches(session.fromPartition(partition));
     }
   },
-  removeWorktree: async (workspaceId) => {
-    await workspaceWorktreeApplicationService.remove(headlessOwner, workspaceId);
+  removeWorktree: async (workspaceId, assertStillSafe) => {
+    // The validator runs in the same turn that closes the workspace's mutation
+    // gate, before terminals, generation or schedules are stopped.
+    await workspaceWorktreeApplicationService.remove(headlessOwner, workspaceId, assertStillSafe);
   },
-  removeChat: async (chatId) => {
-    await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
+  removeChat: async (chatId, assertStillSafe) => {
+    // `assertCurrent` runs twice: once with admission closed, before anything is
+    // stopped, and again inside the final store write, when the chat's other
+    // records are gone. Only the first may keep the chat; aborting at the second
+    // would leave it half deleted.
+    let checked = false;
+    await chatApplicationService.remove(chatId, {
+      rejectFeatureOwned: true,
+      assertCurrent: () => {
+        if (checked) return;
+        checked = true;
+        assertStillSafe();
+      },
+    });
+    // The same follow-up the chat list's own delete does, so a paired device
+    // stops streaming the chat and any open window drops it.
+    closeDeviceSessionsForChat(chatId);
+    ipcMain.broadcast("chats:changed", {});
   },
   async worktreeGitState({ repositoryPath, worktreePath, branch }) {
     const [dirty, unpushed] = await Promise.all([

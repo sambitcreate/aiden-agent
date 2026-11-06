@@ -1,6 +1,6 @@
 # Settings → Storage
 
-**Status:** in review (2026-11-04; reworked 2026-11-05). Desktop only. No Aiden Remote revision.
+**Status:** in review (2026-11-04; reworked 2026-11-05; review fixes 2026-11-06). Desktop only. No Aiden Remote revision.
 
 ## Why
 
