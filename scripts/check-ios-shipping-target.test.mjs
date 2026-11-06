@@ -625,7 +625,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /loadingAttempt = attempt/u);
   assert.match(
     shell,
-    /guard loadingAttempt == attempt, coordinator\.isCurrent\(context\) else \{ return \}/u,
+    /guard loadingAttempt == attempt, host\.holdsHomeContext\(context\) else \{ return \}/u,
   );
   assert.match(shell, /if loadingAttempt == attempt \{[\s\S]{0,100}isLoading = false/u);
   assert.match(
