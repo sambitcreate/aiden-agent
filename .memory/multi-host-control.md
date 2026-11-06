@@ -132,3 +132,7 @@ Plan: `docs/plans/completed/desktop-multi-host-control-plan.md` (with its PR 1â€
 ## Remote project environment admission
 
 The receiving clone checks each selected environment filename against repository ignore rules in both case-matching modes before writing. It ignores user-level excludes for this check, so a source-only or machine-local ignore cannot leave a secret stageable on the destination. A clone with an unprotected selected name fails before publication. Explicit forced Git adds can still override ignore rules.
+
+## Live history (Remote revision 58)
+
+Readers opt into active-run checkpoints on the two run SSE routes. The host captures only projected visible content, seals its coalescible delta at the snapshot cursor and applies the device's existing prompt projection. The paired desktop also folds content at the floor of its shared replay buffer. The renderer handles live events while serialized transcript reads are outstanding and only hands off a completed reply to a read started after settlement. Phones opt in explicitly so strict older decoders keep the original gap shape.

@@ -48,13 +48,34 @@ test("a skill switched off in Workspace settings is gone from the next message",
   // The row's ⋯ button shows on hover.
   await page.getByRole("button", { name: "Collapse Aiden E2E workspace" }).hover();
   await page.getByRole("button", { name: "Actions for Aiden E2E workspace" }).click();
+  // Start renaming the moment the dialog shows, as a quick person would: the
+  // closing menu must not pull focus out of the field, which would save the
+  // half-typed name.
+  const typeNameOnOpen = page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const tick = () => {
+          const field = document.querySelector<HTMLInputElement>('[role="dialog"] input[aria-label="Workspace name"]');
+          if (!field) return void requestAnimationFrame(tick);
+          field.focus();
+          field.select();
+          document.execCommand("insertText", false, "Renamed by mistake");
+          resolve();
+        };
+        tick();
+      }),
+  );
   await page.getByRole("menuitem", { name: "Workspace settings…" }).click();
+  await typeNameOnOpen;
   const dialog = page.getByRole("dialog", { name: "Workspace settings" });
   await expect(dialog).toBeVisible();
   const nameField = dialog.getByRole("textbox", { name: "Workspace name" });
-  await expect(nameField).toHaveValue("Aiden E2E workspace");
+  // The menu is gone only once its closing animation ends, which is when it
+  // would hand focus back to its button.
+  await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0);
+  await expect(nameField).toBeFocused();
+  await expect(nameField).toHaveValue("Renamed by mistake");
   // The first Escape in an edited name undoes the edit and keeps the dialog open.
-  await nameField.fill("Renamed by mistake");
   await nameField.press("Escape");
   await expect(dialog).toBeVisible();
   await expect(nameField).toHaveValue("Aiden E2E workspace");
@@ -68,6 +89,8 @@ test("a skill switched off in Workspace settings is gone from the next message",
   await expect
     .poll(async () => (await ipc<{ disabledSkills?: string[] }>(page, "workspaces:get", E2E_WORKSPACE_ID)).disabledSkills)
     .toEqual(["release notes"]);
+  // By now any save of the name would have landed: the half-typed name was never kept.
+  expect((await ipc<{ name: string }>(page, "workspaces:get", E2E_WORKSPACE_ID)).name).toBe("Aiden E2E workspace");
 
   // Arrow keys move between sections, and Done closes the dialog.
   await dialog.getByRole("tab", { name: "Skills" }).press("ArrowDown");

@@ -5,17 +5,14 @@
  * assignments, then self-identifying vendor token formats.
  */
 
+import { BARE_CREDENTIAL_TOKEN } from "../../renderer/shared/credential-tokens.js";
+
 /** Credential shapes that are unambiguous wherever they appear. */
 export const CREDENTIAL_TOKEN_PATTERNS: readonly RegExp[] = [
   /-----BEGIN [^-\n]+ PRIVATE KEY-----[\s\S]*?-----END [^-\n]+ PRIVATE KEY-----/giu,
   /\bauthorization\s*:\s*bearer\s*[:=]?\s*[^\s,;]+/giu,
   /\b(?:api[_ -]?key|access[_ -]?token|password|secret)["']?\s*[:=]\s*[^\s,;]+/giu,
-  /\bsk-[A-Za-z0-9_-]{16,}\b/gu,
-  /\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,})\b/gu,
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gu,
-  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu,
-  /\bAIza[A-Za-z0-9_-]{20,}\b/gu,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu,
+  BARE_CREDENTIAL_TOKEN,
 ];
 
 /** Replace every credential match from {@link CREDENTIAL_TOKEN_PATTERNS}. */

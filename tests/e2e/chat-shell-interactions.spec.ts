@@ -1033,7 +1033,14 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(second).toBeVisible();
 
   await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
-  await palette.getByRole("combobox").fill("Go to Scheduled");
+  await palette.getByRole("combobox").fill("Search settings");
+  await palette.getByRole("combobox").press("Enter");
+  const settingsSearch = palette.getByRole("combobox", { name: "Search settings" });
+  await settingsSearch.fill("Control this device");
+  await expect(palette.getByRole("option").filter({ hasText: "Control this device" })).toContainText("Connections");
+  await settingsSearch.fill("");
+  await settingsSearch.press("Backspace");
+  await palette.getByRole("combobox", { name: "Search commands" }).fill("Go to Scheduled");
   await palette.getByRole("combobox").press("Enter");
   await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
   await expect(second).toBeHidden();
@@ -1088,6 +1095,34 @@ test("F6 moves between areas, arrows move through the chat list, and Command+F f
   await page.keyboard.press("Escape");
   await expect(find).toBeHidden();
   await expect(message).toBeFocused();
+});
+
+test("saved focus-navigation shortcuts take priority and disabling restores the built-in key", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(page.getByText("Opened palette-chat-first", { exact: true })).toBeVisible();
+  const message = page.locator('[data-focus-region="composer"] textarea');
+  const palette = page.locator("[data-command-palette-content]");
+  for (const [binding, key] of [["Alt+Up", "Alt+ArrowUp"], ["Shift+F6", "Shift+F6"]]) {
+    await page.evaluate(async (binding) => {
+      await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", binding });
+    }, binding);
+    await message.focus();
+    await page.keyboard.press(key);
+    await expect(palette.getByRole("combobox", { name: "Search Models" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(palette).toBeHidden();
+  }
+  await page.evaluate(async () => {
+    await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", disabled: true });
+  });
+  await message.focus();
+  await page.keyboard.press("Shift+F6");
+  await expect(page.getByRole("region", { name: "Conversation" })).toBeFocused();
+  await expect(palette).toBeHidden();
 });
 
 test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show keys and grey out what can't run", async ({ aiden }) => {

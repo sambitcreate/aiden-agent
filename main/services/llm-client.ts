@@ -314,7 +314,7 @@ import { createPiTurnContextPreparation } from "./pi-turn-context.js";
 import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
-import { assistantSettingsSections } from "../../renderer/lib/settings-section.js";
+import { assistantSettingsPages } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
@@ -1384,7 +1384,7 @@ async function prepareGeneration(
   const subagentWebEnabled = subagentWebAvailability?.ready === true;
   const discoveredSubagentMcpInventory =
     allowSubagents && childMcpRollout && subagentRunStore.selection === "v2"
-      ? await resolveProductionSubagentMcpInventory(signal)
+      ? await resolveProductionSubagentMcpInventory(signal, { disabledMcpServerIds: workspaceDisabledMcpServerIds })
       : [];
   const botSubagentMcpConnectionIdentities =
     botContext && discoveredSubagentMcpInventory.length > 0
@@ -1396,9 +1396,7 @@ async function prepareGeneration(
         discoveredSubagentMcpInventory,
         botSubagentMcpConnectionIdentities,
       )
-    : discoveredSubagentMcpInventory.filter(
-        (scope) => !workspaceDisabledMcpServerIds?.includes(scope.serverId),
-      );
+    : discoveredSubagentMcpInventory;
   const subagentShellBinary = resolveSubagentShellRunnerBinary();
   const subagentShellEnabled =
     allowSubagents &&
@@ -3303,7 +3301,8 @@ export const llmClient = {
           ? (designWiring?.baseSystemPrompt ?? "")
           : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              settingsSections: assistantSettingsSections({
+              settingsPages: assistantSettingsPages({
+                computerUse: hostPlatformCapabilities().computerUse,
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
               }),

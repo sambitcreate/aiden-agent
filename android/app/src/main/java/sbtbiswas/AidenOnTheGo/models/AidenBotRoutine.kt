@@ -327,7 +327,9 @@ enum class AidenBotRoutineNotificationStatus {
 @Serializable
 enum class AidenBotNotificationKind {
     @SerialName("routine") ROUTINE,
-    @SerialName("issue") ISSUE
+    @SerialName("issue") ISSUE,
+    @SerialName("peer") PEER,
+    @SerialName("message") MESSAGE
 }
 
 /**
@@ -357,12 +359,13 @@ data class AidenBotRoutineNotification(
         routineId?.let { AidenBotWire.validateString(it, "notification.routineId", AidenBotRoutineWire.MAX_ID_LENGTH) }
         AidenBotWire.validateString(routineName, "notification.routineName", AidenBotRoutineWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(preview, "notification.preview", MAX_PREVIEW_LENGTH, allowEmpty = true)
+        if(kind==AidenBotNotificationKind.PEER){AidenOpenWorkWire.text(routineName,120,480);AidenOpenWorkWire.text(preview,160,640,true)}
         // A routine result says which routine ran and how it ended; an issue card carries neither.
         when (kind ?: AidenBotNotificationKind.ROUTINE) {
             AidenBotNotificationKind.ROUTINE -> if (routineId == null || status == null) {
                 throw AidenBotContractException.InvalidField("notification")
             }
-            AidenBotNotificationKind.ISSUE -> if (routineId != null || status != null) {
+            AidenBotNotificationKind.ISSUE, AidenBotNotificationKind.PEER, AidenBotNotificationKind.MESSAGE -> if (routineId != null || status != null) {
                 throw AidenBotContractException.InvalidField("notification")
             }
         }

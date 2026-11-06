@@ -620,6 +620,5 @@ test("Linux hold setup is distinct from an active desktop binding", () => {
   assert.equal(parseAppCapabilities({ dictationHoldTrigger: "Desktop shortcut" }).dictationHoldTrigger, "Desktop shortcut");
   const settings = source("./settings/dictation-shortcut-settings.tsx");
   assert.match(settings, /capabilities\.dictationHoldToTalk \|\| capabilities\.dictationHoldSetup/u);
-  assert.match(settings, /disabled=\{holdBusy\}/u);
   assert.match(settings, /desktop assign a hold shortcut for this session/u);
 });

@@ -1,3 +1,4 @@
+import { isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 // The `bot_memory` tool (spec 2026-10-09 §7).
 //
 // Main-owned and needs no file authority or approval: it writes only this
@@ -13,6 +14,7 @@
 // Replay is `unsafe`: an interrupted batch becomes an interrupted error and
 // the model reads the live state from its next result.
 
+import { botPeerIngress } from "../bot-peers/ingress.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { BOT_MEMORY_LIMITS, type BotMemoryTarget } from "../../../renderer/shared/bot-memory.js";
@@ -177,12 +179,16 @@ export function botMemoryToolEntry(botId: string, memory: Pick<BotMemoryRuntime,
 
 /** Whether a run serving inputs with these request ids may save memory: never on routine or self-intro turns. */
 export function botMemoryAllowed(requestIds: readonly (string | undefined)[]): boolean {
-  return !requestIds.some((id) => id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
+  return !botPeerIngress() && requestIds.length > 0 && !requestIds.some((id) => isBotMessageRequestId(id) || id?.startsWith("peer:") || id?.startsWith("routine:") || id?.startsWith(BOT_INTRO_REQUEST_PREFIX));
 }
 
-/** Wrap the ingress rule so `bot_memory` follows `botMemoryAllowed` and every other tool `base`. */
+/** Withhold memory writes and recall on Bot-message inputs; otherwise recall follows the base policy. */
 export function withBotMemoryIngress(
   base: (name: string, requestIds: readonly (string | undefined)[]) => boolean,
 ): (name: string, requestIds: readonly (string | undefined)[]) => boolean {
-  return (name, requestIds) => (name === BOT_MEMORY_TOOL_NAME ? botMemoryAllowed(requestIds) : base(name, requestIds));
+  return (name, requestIds) => {
+    if (name === BOT_MEMORY_TOOL_NAME) return botMemoryAllowed(requestIds);
+    if (name === "bot_recall" && (requestIds.length === 0 || requestIds.some(isBotMessageRequestId))) return false;
+    return base(name, requestIds);
+  };
 }

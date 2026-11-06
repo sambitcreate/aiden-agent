@@ -21,6 +21,12 @@ const kinds = (rows: ReturnType<typeof botTranscriptRows>) => rows.map((row) => 
 
 const quiet = { running: false, level: "quiet" } as const;
 
+test("peer messages remain quiet exchange navigation and never become a person's request bubble", () => {
+  const rows = botTranscriptRows([{ id: "peer1", type: "peer", exchangeId: "exchange1", direction: "received", peerBotId: "bot_other", peerName: "Researcher", messageKind: "request", at: 10 }], null, quiet);
+  assert.equal(rows.length, 1); assert.equal(rows[0].kind, "peer");
+  assert.ok(rows[0].kind === "peer"); assert.equal(rows[0].exchangeId, "exchange1"); assert.equal(rows[0].peerName, "Researcher");
+});
+
 test("narration written alongside tool calls is a bubble, and tool steps never become rows", () => {
   const rows = botTranscriptRows(
     [
@@ -286,4 +292,17 @@ test("the person's answer to a hand-off is their own row, with the note below, a
     const done = rows.find((row) => row.kind === "handoff_result");
     assert.equal(done?.kind === "handoff_result" ? done.note : undefined, "It said verified.");
   }
+});
+
+
+test("Bot message rows start separate turns and preserve display-only saved answers", () => {
+  const rows = botTranscriptRows([
+    user("u", "First"), step("a", ""),
+    {id: "b", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Saved reply"},
+    step("b-step", ""), answer("done", "Done"),
+    {id: "s", type: "bot_message_status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Read me"}},
+  ], null, {running: false, level: "summary"});
+  assert.equal(rows.filter(r => r.kind === "recap").length, 2);
+  assert.ok(rows.some(r => r.kind === "bot_message" && r.label === "COS replied" && r.botName === "COS"));
+  assert.ok(rows.some(r => r.kind === "bot_message_status" && r.text === "Read me"));
 });

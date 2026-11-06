@@ -10,7 +10,6 @@ import {
   AlertDialog,
   Badge,
   Button,
-  Callout,
   Dialog,
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +31,7 @@ import {
 import { imageGenerationApi } from "../../lib/ipc";
 import { formatRelativeTime } from "../../lib/relative-time";
 import { ImageModelLogo, ImageProviderLogo } from "../image-model-logo";
+import { InfoHint } from "../ui-info-hint";
 import { ProviderSetupRow } from "./provider-setup-row";
 import {
   FAL_REFERENCE_FIELDS,
@@ -93,6 +93,8 @@ export function ImageGenerationSettings() {
   const [notices, setNotices] = React.useState<Readonly<Record<string, Notice>>>({});
   const [setupProvider, setSetupProvider] = React.useState<ImageGenerationProviderId | null>(null);
   const setupTriggers = React.useRef<Partial<Record<ImageGenerationProviderId, HTMLButtonElement | null>>>({});
+  const [addingModel, setAddingModel] = React.useState(false);
+  const addModelTrigger = React.useRef<HTMLButtonElement>(null);
   const [confirmRemove, setConfirmRemove] = React.useState<ImageGenerationProviderId | null>(
     null,
   );
@@ -239,15 +241,15 @@ export function ImageGenerationSettings() {
 
   return (
     <div>
-      <Callout className="mb-7">
-        <Text variant="small-strong">Separate keys for images</Text>
-        <Text variant="small" color="secondary" className="text-pretty">
-          Image generation uses only the keys on this page. They’re encrypted on this Mac and never
-          used for chat, and your chat provider keys are never used for images.
-        </Text>
-      </Callout>
-
-      <FieldSet title="Providers">
+      <FieldSet
+        title="Providers"
+        hint={
+          <InfoHint topic="separate image keys">
+            Images use their own keys, stored encrypted on this device. Chat keys never make images,
+            and image keys never run chats.
+          </InfoHint>
+        }
+      >
         {state.providers.map((provider, index) => {
           const action = provider.key.connected ? "Manage" : "Set up";
           return (
@@ -302,12 +304,22 @@ export function ImageGenerationSettings() {
         onToggle={toggleModel}
         onSetMany={setModelsEnabled}
         onRemove={removeModel}
+        addModelButton={
+          <Button ref={addModelTrigger} variant="muted" size="small" onClick={() => setAddingModel(true)}>
+            <Plus aria-hidden="true" />
+            Add model by ID…
+          </Button>
+        }
       />
 
-      <AddModelForm
-        busy={pending.has("add")}
-        onAdd={(request) => run("add", () => imageGenerationApi.addCustomModel(request))}
-      />
+      {addingModel ? (
+        <AddModelDialog
+          busy={pending.has("add")}
+          onAdd={(request) => run("add", () => imageGenerationApi.addCustomModel(request))}
+          onClose={() => setAddingModel(false)}
+          returnFocus={() => addModelTrigger.current}
+        />
+      ) : null}
 
       <AlertDialog
         open={confirmRemove !== null}
@@ -664,12 +676,14 @@ function ModelsGroup({
   onToggle,
   onSetMany,
   onRemove,
+  addModelButton,
 }: {
   state: ImageGenerationState;
   pending: ReadonlySet<string>;
   onToggle: (model: ImageGenerationModelView, enabled: boolean) => void;
   onSetMany: (changes: ImageGenerationSetModelEnabledRequest[]) => Promise<ImageGenerationActionResult | null>;
   onRemove: (model: ImageGenerationModelView) => void;
+  addModelButton: React.ReactNode;
 }) {
   const [bulkMessage, setBulkMessage] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
@@ -715,7 +729,7 @@ function ModelsGroup({
   };
 
   return (
-    <FieldSet title="Models">
+    <FieldSet title="Models" action={addModelButton}>
       <div className="flex flex-col gap-3 p-4">
         <label className="relative block">
           <Search
@@ -903,12 +917,16 @@ const ID_PLACEHOLDERS: Record<ImageGenerationProviderId, string> = {
   fal: "fal-ai/endpoint",
 };
 
-function AddModelForm({
+function AddModelDialog({
   busy,
   onAdd,
+  onClose,
+  returnFocus,
 }: {
   busy: boolean;
   onAdd: (request: ImageGenerationAddCustomModelRequest) => Promise<ImageGenerationActionResult | null>;
+  onClose: () => void;
+  returnFocus: () => HTMLElement | null;
 }) {
   const [provider, setProvider] = React.useState<ImageGenerationProviderId>("openrouter");
   const [id, setId] = React.useState("");
@@ -917,7 +935,7 @@ function AddModelForm({
   const [referenceField, setReferenceField] = React.useState(NO_REFERENCE_FIELD);
   const [editEndpoint, setEditEndpoint] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
-  const formId = React.useId();
+  const idInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const changeProvider = (next: ImageGenerationProviderId) => {
     setProvider(next);
@@ -927,8 +945,12 @@ function AddModelForm({
     setError(null);
   };
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  // The fields are disabled while adding, which drops focus; a failed add brings it back.
+  React.useEffect(() => {
+    if (error && !busy) idInputRef.current?.focus();
+  }, [error, busy]);
+
+  const submit = async () => {
     if (busy || !id.trim()) return;
     setError(null);
     const request: ImageGenerationAddCustomModelRequest = { provider, id: id.trim() };
@@ -944,150 +966,143 @@ function AddModelForm({
       return;
     }
     toast.success(`Added ${request.name ?? request.id}.`);
-    setId("");
-    setName("");
-    setReferences(false);
-    setReferenceField(NO_REFERENCE_FIELD);
-    setEditEndpoint("");
+    onClose();
   };
 
   const referenceOptions: readonly string[] =
     provider === "replicate" ? Object.keys(REPLICATE_REFERENCE_FIELDS) : FAL_REFERENCE_FIELDS;
 
   return (
-    <FieldSet title="Add model by ID">
-      <Field
-        orientation="vertical"
-        description="Add a model the lists don’t include yet. Aiden checks the ID format here; the provider checks the rest when you generate."
-      >
-        <form
-          id={formId}
-          className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3"
-          onSubmit={(event) => void submit(event)}
-        >
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      title="Add model by ID"
+      description="Add a model the lists don’t include yet. Aiden checks the ID format here; the provider checks the rest when you generate."
+      confirmLabel="Add model"
+      confirmDisabled={!id.trim()}
+      busy={busy}
+      submitOnEnter
+      returnFocus={returnFocus}
+      onConfirm={submit}
+    >
+      <div className="flex flex-col gap-3 pb-0.5">
+        <label className="flex min-w-0 flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Provider
+          </Text>
+          <Select
+            value={provider}
+            disabled={busy}
+            onValueChange={(value) => changeProvider(value as ImageGenerationProviderId)}
+          >
+            <SelectTrigger aria-label="Provider for the new model">
+              <SelectValue>{IMAGE_GENERATION_PROVIDER_NAMES[provider]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {IMAGE_GENERATION_PROVIDER_IDS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {IMAGE_GENERATION_PROVIDER_NAMES[option]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="flex min-w-0 flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Model ID
+          </Text>
+          <Input
+            ref={idInputRef}
+            value={id}
+            onChange={(event) => {
+              setId(event.target.value);
+              setError(null);
+            }}
+            placeholder={ID_PLACEHOLDERS[provider]}
+            maxLength={IMAGE_GENERATION_LIMITS.maxModelIdLength}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={error ? true : undefined}
+            disabled={busy}
+          />
+        </label>
+        <label className="flex min-w-0 flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Name (optional)
+          </Text>
+          <Input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={IMAGE_GENERATION_LIMITS.maxModelNameLength}
+            autoComplete="off"
+            disabled={busy}
+          />
+        </label>
+        {provider === "fal" ? (
           <label className="flex min-w-0 flex-col gap-1.5">
             <Text variant="small" color="secondary">
-              Provider
+              Edit endpoint (optional)
             </Text>
-            <Select
-              value={provider}
+            <Input
+              value={editEndpoint}
+              onChange={(event) => setEditEndpoint(event.target.value)}
+              placeholder="fal-ai/endpoint/edit"
+              maxLength={IMAGE_GENERATION_LIMITS.maxModelIdLength}
+              autoComplete="off"
+              spellCheck={false}
               disabled={busy}
-              onValueChange={(value) => changeProvider(value as ImageGenerationProviderId)}
-            >
-              <SelectTrigger aria-label="Provider for the new model">
-                <SelectValue>{IMAGE_GENERATION_PROVIDER_NAMES[provider]}</SelectValue>
+            />
+          </label>
+        ) : null}
+        {provider === "replicate" || (provider === "fal" && editEndpoint.trim()) ? (
+          <label className="flex min-w-0 flex-col gap-1.5">
+            <Text variant="small" color="secondary">
+              Reference image input (optional)
+            </Text>
+            <Select value={referenceField} disabled={busy} onValueChange={setReferenceField}>
+              <SelectTrigger aria-label="Reference image input">
+                <SelectValue>
+                  {referenceField === NO_REFERENCE_FIELD
+                    ? provider === "fal"
+                      ? "Default (image_urls)"
+                      : "None"
+                    : referenceField}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {IMAGE_GENERATION_PROVIDER_IDS.map((option) => (
-                  <SelectItem key={option} value={option}>
-                    {IMAGE_GENERATION_PROVIDER_NAMES[option]}
+                <SelectItem value={NO_REFERENCE_FIELD}>
+                  {provider === "fal" ? "Default (image_urls)" : "None"}
+                </SelectItem>
+                {referenceOptions.map((field) => (
+                  <SelectItem key={field} value={field}>
+                    {field}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </label>
-          <label className="flex min-w-0 flex-col gap-1.5">
+        ) : null}
+        {provider === "openrouter" ? (
+          <div className="flex min-w-0 items-center justify-between gap-3">
             <Text variant="small" color="secondary">
-              Model ID
+              Takes reference images
             </Text>
-            <Input
-              value={id}
-              onChange={(event) => {
-                setId(event.target.value);
-                setError(null);
-              }}
-              placeholder={ID_PLACEHOLDERS[provider]}
-              maxLength={IMAGE_GENERATION_LIMITS.maxModelIdLength}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={error ? true : undefined}
+            <Switch
+              checked={references}
               disabled={busy}
+              aria-label="Takes reference images"
+              onCheckedChange={setReferences}
             />
-          </label>
-          <label className="flex min-w-0 flex-col gap-1.5">
-            <Text variant="small" color="secondary">
-              Name (optional)
-            </Text>
-            <Input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={IMAGE_GENERATION_LIMITS.maxModelNameLength}
-              autoComplete="off"
-              disabled={busy}
-            />
-          </label>
-          {provider === "fal" ? (
-            <label className="flex min-w-0 flex-col gap-1.5">
-              <Text variant="small" color="secondary">
-                Edit endpoint (optional)
-              </Text>
-              <Input
-                value={editEndpoint}
-                onChange={(event) => setEditEndpoint(event.target.value)}
-                placeholder="fal-ai/endpoint/edit"
-                maxLength={IMAGE_GENERATION_LIMITS.maxModelIdLength}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={busy}
-              />
-            </label>
-          ) : null}
-          {provider === "replicate" || (provider === "fal" && editEndpoint.trim()) ? (
-            <label className="flex min-w-0 flex-col gap-1.5">
-              <Text variant="small" color="secondary">
-                Reference image input (optional)
-              </Text>
-              <Select value={referenceField} disabled={busy} onValueChange={setReferenceField}>
-                <SelectTrigger aria-label="Reference image input">
-                  <SelectValue>
-                    {referenceField === NO_REFERENCE_FIELD
-                      ? provider === "fal"
-                        ? "Default (image_urls)"
-                        : "None"
-                      : referenceField}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_REFERENCE_FIELD}>
-                    {provider === "fal" ? "Default (image_urls)" : "None"}
-                  </SelectItem>
-                  {referenceOptions.map((field) => (
-                    <SelectItem key={field} value={field}>
-                      {field}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-          ) : null}
-          {provider === "openrouter" ? (
-            <div className="flex min-w-0 items-center justify-between gap-3 self-end">
-              <Text variant="small" color="secondary">
-                Takes reference images
-              </Text>
-              <Switch
-                checked={references}
-                disabled={busy}
-                aria-label="Takes reference images"
-                onCheckedChange={setReferences}
-              />
-            </div>
-          ) : null}
-        </form>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {error ? (
-            <Text as="p" variant="small" color="status-red" role="alert" className="min-w-0 flex-1">
-              {error}
-            </Text>
-          ) : (
-            <span />
-          )}
-          <Button type="submit" form={formId} size="medium" disabled={busy || !id.trim()}>
-            <Plus aria-hidden="true" />
-            Add model
-          </Button>
-        </div>
-      </Field>
-    </FieldSet>
+          </div>
+        ) : null}
+        {error ? (
+          <Text as="p" variant="small" color="status-red" role="alert">
+            {error}
+          </Text>
+        ) : null}
+      </div>
+    </Dialog>
   );
 }

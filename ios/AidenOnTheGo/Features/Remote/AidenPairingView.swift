@@ -9,7 +9,7 @@ struct AidenDiscoveredAgent: Identifiable, Equatable {
 
 enum AidenPairingAlertCopy {
     static let title = String(localized: "Aiden On The Go")
-    static let fallbackMessage = String(localized: "Try again from Aiden Agent → Settings → Aiden On The Go.")
+    static let fallbackMessage = String(localized: "Try again from Aiden Agent → Settings → Connections.")
 }
 
 enum AidenDiscoveryIdentity {
@@ -567,7 +567,7 @@ struct AidenPairingView: View {
                         .foregroundStyle(palette.secondary)
                 }
 
-                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your desktop, go to Settings → Aiden On The Go.")
+                pairingStep(number: 1, title: "Open Aiden Agent", detail: "On your desktop, go to Settings → Connections.")
                 pairingStep(number: 2, title: "Connect your phone", detail: "Choose where you’ll use Aiden, then select Connect a device. Review what Aiden will enable.")
                 pairingStep(number: 3, title: "Scan to finish", detail: "Keep the QR or setup code visible. Both expire after five minutes and can be used once.")
                 Text("Read Aloud uses your desktop’s settings. Enable it on the desktop; selected response text is sent to Google only when you press Play. Charges may apply.")
@@ -616,7 +616,7 @@ struct AidenPairingView: View {
     private var pairingPage: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Scan the code in Settings → Aiden On The Go on your desktop.")
+                Text("Scan the code in Settings → Connections on your desktop.")
                     .font(.subheadline)
                     .foregroundStyle(palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)

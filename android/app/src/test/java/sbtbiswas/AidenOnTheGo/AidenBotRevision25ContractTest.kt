@@ -229,6 +229,7 @@ class AidenBotRevision25ContractTest {
                     is AidenBotSessionEntry.MemoryUpdate -> "memory_update"
                     is AidenBotSessionEntry.RoutineProposal -> "routine_proposal"
                     is AidenBotSessionEntry.SharedImage -> "shared_image"
+                    is AidenBotSessionEntry.Peer -> "peer"
                 }
             }
         )

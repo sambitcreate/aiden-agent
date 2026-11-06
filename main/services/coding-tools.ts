@@ -1,3 +1,5 @@
+import { isProtectedCredentialPath, isEnvironmentSecretPath, type ProtectedPathFinalKind } from "./model-file-policy.js";
+export { isEnvironmentSecretPath } from "./model-file-policy.js";
 import { markHostCommandObservation } from "./pi-host-command-observation.js";
 // Filesystem + shell tools that let the Pi agent operate on a workspace folder.
 // Every path is resolved against — and confined to — the workspace root, so the
@@ -330,6 +332,7 @@ interface WorkspaceRootGuard {
   canonical: string | null;
   identity: Stats | null;
   exactIdentity: PinnedWorkspaceRootIdentity | null;
+  assertReadPath?: CodingToolOptions["assertReadPath"];
   testObserver?: {
     beforeDirectoryOpen?(directoryPath: string): void | Promise<void>;
     afterDirectoryOpen?(directoryPath: string): void | Promise<void>;
@@ -613,243 +616,6 @@ function formatBoundedSearchResult(
   return `${body.slice(0, bodyLimit)}${marker}${suffix}`;
 }
 
-const PROTECTED_CREDENTIAL_FILE_NAMES = new Set([
-  "auth.json",
-  "credentials",
-  "credentials.json",
-  "id_dsa",
-  "id_ecdsa",
-  "id_ed25519",
-  "id_rsa",
-  "identity",
-  "service-account.json",
-  "service_account.json",
-  ".git-credentials",
-  ".gitconfig",
-  ".bunfig.toml",
-  ".netrc",
-  ".npmrc",
-  ".pnpmrc",
-  ".pypirc",
-  ".sentryclirc",
-  ".terraformrc",
-  ".vault-token",
-  ".yarnrc",
-  ".yarnrc.yml",
-  "_netrc",
-]);
-const PROTECTED_CREDENTIAL_FILE_EXTENSIONS = new Set([
-  ".asc",
-  ".der",
-  ".jks",
-  ".kdbx",
-  ".key",
-  ".keystore",
-  ".p12",
-  ".pem",
-  ".pfx",
-  ".ppk",
-]);
-const PROTECTED_CREDENTIAL_DATA_EXTENSIONS = new Set([
-  ".conf",
-  ".config",
-  ".ini",
-  ".json",
-  ".toml",
-  ".txt",
-  ".xml",
-  ".yaml",
-  ".yml",
-]);
-const SAFE_CREDENTIAL_FAMILY_SOURCE_EXTENSIONS = new Set([
-  ".c",
-  ".cjs",
-  ".cpp",
-  ".cs",
-  ".go",
-  ".h",
-  ".hpp",
-  ".java",
-  ".js",
-  ".jsx",
-  ".kt",
-  ".kts",
-  ".md",
-  ".mjs",
-  ".php",
-  ".py",
-  ".rb",
-  ".rs",
-  ".swift",
-  ".ts",
-  ".tsx",
-]);
-const CREDENTIAL_WRAPPER_EXTENSIONS = new Set([
-  ...PROTECTED_CREDENTIAL_DATA_EXTENSIONS,
-  ".backup",
-  ".bak",
-  ".bz2",
-  ".copy",
-  ".gz",
-  ".old",
-  ".orig",
-  ".original",
-  ".save",
-  ".saved",
-  ".swp",
-  ".temp",
-  ".tar",
-  ".tgz",
-  ".tmp",
-  ".7z",
-  ".rar",
-  ".xz",
-  ".zip",
-  ".zst",
-]);
-const PROTECTED_CREDENTIAL_DIRECTORY_NAMES = new Set([
-  ".aws",
-  ".azure",
-  ".bundle",
-  ".cargo",
-  ".dbt",
-  ".docker",
-  ".gem",
-  ".git",
-  ".gnupg",
-  ".gradle",
-  ".hex",
-  ".kube",
-  ".m2",
-  ".nuget",
-  ".password-store",
-  ".ssh",
-  ".terraform",
-  ".terraform.d",
-]);
-const PROTECTED_CREDENTIAL_PATH_PREFIXES = [
-  ".config/gcloud",
-  ".config/composer",
-  ".config/doctl",
-  ".config/gh",
-  ".config/heroku",
-  ".config/hub",
-  ".config/op",
-  ".config/pypoetry",
-  ".config/rclone",
-  ".config/containers",
-  ".local/share/keyrings",
-] as const;
-const SAFE_HIDDEN_DIRECTORY_NAMES = new Set([
-  ".changeset",
-  ".circleci",
-  ".claude",
-  ".devcontainer",
-  ".github",
-  ".husky",
-  ".storybook",
-  ".vscode",
-]);
-const SAFE_ENVIRONMENT_FILE_NAMES = new Set([".env.example"]);
-const SAFE_HIDDEN_FILE_NAMES = new Set([
-  ".browserslistrc",
-  ".commitlintrc",
-  ".dockerignore",
-  ".editorconfig",
-  ".env.example",
-  ".eslintignore",
-  ".eslintrc",
-  ".gitattributes",
-  ".gitignore",
-  ".lintstagedrc",
-  ".markdownlint",
-  ".markdownlintignore",
-  ".node-version",
-  ".npmignore",
-  ".nvmrc",
-  ".prettierignore",
-  ".prettierrc",
-  ".python-version",
-  ".ruby-version",
-  ".swiftlint.yml",
-  ".stylelintrc",
-  ".tool-versions",
-  ".watchmanconfig",
-]);
-const SAFE_HIDDEN_CONFIG_EXTENSIONS = [".cjs", ".js", ".json", ".mjs", ".yaml", ".yml"] as const;
-
-function isSafeEnvironmentExample(segment: string): boolean {
-  return SAFE_ENVIRONMENT_FILE_NAMES.has(segment.toLocaleLowerCase("en-US"));
-}
-
-function isSafeHiddenFileName(segment: string): boolean {
-  if (SAFE_HIDDEN_FILE_NAMES.has(segment)) return true;
-  const configBases = [
-    ".commitlintrc",
-    ".eslintrc",
-    ".lintstagedrc",
-    ".markdownlint",
-    ".prettierrc",
-    ".stylelintrc",
-  ] as const;
-  return configBases.some((base) =>
-    SAFE_HIDDEN_CONFIG_EXTENSIONS.some((extension) => segment === `${base}${extension}`),
-  );
-}
-
-function containsCredentialFamily(value: string): boolean {
-  const candidate = value
-    .normalize("NFKC")
-    .replace(/[\p{Z}\p{Pd}\p{Pc}\u00b7\u2022\u2219]+/gu, "_");
-  return (
-    /(?:^|[._-])(?:auth|oauth|credentials?|creds?|passwords?|secrets?|tokens?)(?:[._-]|$)/u.test(
-      candidate,
-    ) ||
-    /(?:^|[._-])(?:htpasswd|passwd|pw|pwd|shadow)(?:[._-]|$)/u.test(candidate) ||
-    /(?:^|[._-])(?:(?:key|trust)[._-]?store|keychain|keyring|vault|wallet|logins?|kubeconfig|dockerconfigjson)(?:[._-]|$)/u.test(
-      candidate,
-    ) ||
-    /(?:^|[._-])client[._-]?secret(?:[._-]|$)/u.test(candidate) ||
-    /(?:^|[._-])service[._-]?account(?:[._-]|$)/u.test(candidate) ||
-    /(?:^|[._-])(?:adc|sp|service[._-]?principal)(?:[._-]|$)/u.test(candidate) ||
-    /(?:^|[._-])(?:pat|personal[._-]?access[._-]?tokens?)(?:[._-]|$)/u.test(candidate) ||
-    /(?:^|[-_])(?:gpg|pgp|putty)(?:[-_]|$)/u.test(candidate) ||
-    /(?:^|[._-])(?:(?:api|access|auth|bearer|consumer|private|refresh|secret)[._-]?)?(?:keys?|tokens?)(?:[._-]|$)/u.test(
-      candidate,
-    )
-  );
-}
-
-function isProtectedCredentialFileName(segment: string): boolean {
-  let candidate = segment
-    .replace(/~/gu, "")
-    .replace(/[._-](?:backup|bak|copy|old|orig|original|save|saved|swp|temp|tmp)(?=[._-]|$)/gu, "");
-  for (;;) {
-    if (PROTECTED_CREDENTIAL_FILE_NAMES.has(candidate)) return true;
-    const extension = path.extname(candidate);
-    const stem = extension ? candidate.slice(0, -extension.length) : candidate;
-    const credentialFamily = containsCredentialFamily(candidate) || containsCredentialFamily(stem);
-    if (
-      credentialFamily &&
-      (extension.length === 0 ||
-        extension === ".pub" ||
-        PROTECTED_CREDENTIAL_DATA_EXTENSIONS.has(extension) ||
-        !SAFE_CREDENTIAL_FAMILY_SOURCE_EXTENSIONS.has(extension))
-    ) {
-      return true;
-    }
-    if (/^id_(?:dsa|ecdsa|ed25519|rsa)(?:_sk)?\.pub$/u.test(candidate)) return false;
-    if (PROTECTED_CREDENTIAL_FILE_EXTENSIONS.has(extension)) return true;
-    if (
-      !extension ||
-      (!CREDENTIAL_WRAPPER_EXTENSIONS.has(extension) && !/^\.\d{1,14}$/u.test(extension))
-    ) {
-      return false;
-    }
-    candidate = stem;
-  }
-}
-
 function containsPrivateKeyMaterial(buffer: Buffer): boolean {
   // Keep this check limited to unambiguous key encodings; ordinary source and
   // documentation may contain credential-shaped prose that must remain readable.
@@ -860,49 +626,6 @@ function containsPrivateKeyMaterial(buffer: Buffer): boolean {
     /-----BEGIN PGP PRIVATE KEY BLOCK-----/u.test(sample) ||
     /^PuTTY-User-Key-File-[123]:/mu.test(sample) ||
     /---- BEGIN SSH2 (?:ENCRYPTED )?PRIVATE KEY ----/u.test(sample)
-  );
-}
-
-type ProtectedPathFinalKind = "directory" | "file" | "unknown";
-
-/** Keep common credential-bearing paths out of every model-visible filesystem result. */
-function isProtectedCredentialPath(
-  relativePath: string,
-  finalKind: ProtectedPathFinalKind = "unknown",
-): boolean {
-  const rawSegments = relativePath
-    .split(/[\\/]/)
-    .filter((segment) => segment.length > 0 && segment !== "." && segment !== "..");
-  const segments = rawSegments.map((segment) => segment.toLocaleLowerCase("en-US"));
-  if (
-    segments.some(
-      (segment) =>
-        segment === ".env" ||
-        (segment.startsWith(".env.") && !isSafeEnvironmentExample(segment)) ||
-        segment === ".envrc" ||
-        segment.startsWith(".envrc.") ||
-        isProtectedCredentialFileName(segment) ||
-        PROTECTED_CREDENTIAL_DIRECTORY_NAMES.has(segment),
-    )
-  ) {
-    return true;
-  }
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index] ?? "";
-    if (!segment.startsWith(".")) continue;
-    const isFinalSegment = index === segments.length - 1;
-    if (
-      SAFE_HIDDEN_DIRECTORY_NAMES.has(segment) &&
-      (!isFinalSegment || finalKind === "directory")
-    ) {
-      continue;
-    }
-    if (isFinalSegment && finalKind === "file" && isSafeHiddenFileName(segment)) continue;
-    return true;
-  }
-  const normalized = segments.join("/");
-  return PROTECTED_CREDENTIAL_PATH_PREFIXES.some((prefix) =>
-    `/${normalized}/`.includes(`/${prefix}/`),
   );
 }
 
@@ -920,19 +643,6 @@ function rejectProtectedCredential(
       "Reading credential files is disabled to keep workspace secrets out of model context.",
     );
   }
-}
-
-/** Preserve the parent agent's established narrow `.env*` read/search exclusion. */
-export function isEnvironmentSecretPath(relativePath: string): boolean {
-  return relativePath
-    .split(/[\\/]/)
-    .some((segment) => {
-      const normalized = segment.toLocaleLowerCase("en-US");
-      return (
-        normalized === ".env" ||
-        (normalized.startsWith(".env.") && !isSafeEnvironmentExample(normalized))
-      );
-    });
 }
 
 function rejectEnvironmentSecret(root: string, fullPath: string): void {
@@ -1008,6 +718,7 @@ async function readParentFile(
   await verifyWorkspaceRoot(workspace, signal);
   const canonical = assertRealPathInRoot(root, await fs.realpath(full), full);
   throwIfAborted(signal, "File read cancelled.");
+  await workspace.assertReadPath?.(canonical);
   rejectEnvironmentSecret(root, canonical);
   const handle = await fs.open(canonical, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
   try {
@@ -1017,6 +728,7 @@ async function readParentFile(
     if (!stat.isFile()) throw new Error("The requested path is not a regular file.");
     const verified = assertRealPathInRoot(root, await fs.realpath(full), full);
     throwIfAborted(signal, "File read cancelled.");
+    await workspace.assertReadPath?.(verified);
     rejectEnvironmentSecret(root, verified);
     if (!sameFile(stat, await fs.stat(verified))) throw new Error("File changed while opening.");
     throwIfAborted(signal, "File read cancelled.");
@@ -1072,6 +784,7 @@ async function parentDirectoryEntries(
   throwIfAborted(signal, "Directory traversal cancelled.");
   const canonical = assertRealPathInRoot(root, await fs.realpath(full), full);
   throwIfAborted(signal, "Directory traversal cancelled.");
+  await workspace.assertReadPath?.(canonical);
   const before = await fs.stat(canonical);
   throwIfAborted(signal, "Directory traversal cancelled.");
   const directory = await fs.opendir(canonical, { bufferSize: 1 });
@@ -1081,6 +794,7 @@ async function parentDirectoryEntries(
     await verifyWorkspaceRoot(workspace, signal);
     const after = assertRealPathInRoot(root, await fs.realpath(full), full);
     throwIfAborted(signal, "Directory traversal cancelled.");
+    await workspace.assertReadPath?.(after);
     if (canonical !== after || !sameFile(before, await fs.stat(after))) throw new Error("Directory changed while opening.");
     const entries: Dirent[] = [];
     while (!parentScanStopped(budget, signal)) {
@@ -1095,6 +809,15 @@ async function parentDirectoryEntries(
       budget.entries++;
       workspace.testObserver?.onDirectoryEntry?.(path.join(full, entry.name));
       throwIfAborted(signal, "Directory traversal cancelled.");
+      if (workspace.assertReadPath) {
+        try {
+          const entryPath = assertRealPathInRoot(root, await fs.realpath(path.join(full, entry.name)), entry.name);
+          await workspace.assertReadPath(entryPath);
+        } catch {
+          throwIfAborted(signal, "Directory traversal cancelled.");
+          continue;
+        }
+      }
       entries.push(entry);
     }
     // Omit an over-budget directory instead of allowing filesystem enumeration
@@ -1680,6 +1403,7 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
               if (matches.has(candidate)) continue;
               try {
                 const canonical = assertRealPathInRoot(root, await fs.realpath(resolveInRoot(workspace.lexical, candidate)), candidate);
+                await workspace.assertReadPath?.(canonical);
                 if (isEnvironmentSecretPath(candidate) || isEnvironmentSecretPath(path.relative(root, canonical))) continue;
               } catch {
                 throwIfAborted(signal, "File search cancelled.");
@@ -2049,6 +1773,8 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
  * mid-generation drops the directory from the next command.
  */
 export interface CodingToolOptions {
+  /** Main-owned canonical read fence, checked for direct reads and each search entry. */
+  assertReadPath?: (canonicalPath: string) => void | Promise<void>;
   pathPrefix?: string | (() => string | null | undefined);
   /** A shorter deadline for process-lifecycle tests; production uses the fixed limit. */
   commandTimeoutMs?: number;
@@ -2199,6 +1925,7 @@ function withForegroundReadScope(tool: AgentTool): AgentTool {
 }
 
 function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool[] {
+  workspace.assertReadPath = options.assertReadPath;
   return [
     declarePiRuntimeReplay(withForegroundReadScope(makeParentReadFile(workspace)), "safe"),
     declarePiRuntimeReplay(withForegroundReadScope(makeParentListDir(workspace)), "safe"),

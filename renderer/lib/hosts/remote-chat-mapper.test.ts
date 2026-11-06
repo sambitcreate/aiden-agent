@@ -124,6 +124,30 @@ test("rows the transcript cannot render are skipped and malformed pages are reje
   assert.throws(() => mapRemoteMessagesWindow({ chatId: "c", messages: [] }), /unreadable/);
 });
 
+test("host image placements survive mapping without admitting malformed or non-image placements", () => {
+  const bytes = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  for (const toolName of ["generate_image", "display_image", "share_image"]) {
+    const [message] = served([{
+      id: "reply", role: "assistant", content: "Explanation after the image.", createdAt: 1,
+      timeline: { ...timeline, steps: [{ ...timeline.steps[0]!, toolName }] },
+      attachments: [{ id: "photo", name: "Photo.png", kind: "image", mimeType: "image/png", size: Buffer.from(bytes, "base64").length, data: bytes }],
+      imagePlacements: [{ attachmentId: "photo", toolCallId: "call-1" }],
+    }], { limit: 50 }).messages;
+    assert.deepEqual(message?.imagePlacements, [{ attachmentId: "photo", toolCallId: "call-1" }], toolName);
+    assert.equal(message?.attachments?.[0]?.data, undefined, "placement does not inline image bytes");
+  }
+
+  const attachment = { id: "photo", name: "Photo.png", kind: "image", mimeType: "image/png", size: 10 };
+  const projected = { id: "reply", role: "assistant", text: "Reply", createdAt: "2026-11-02T00:00:00Z" };
+  for (const toolCallId of [undefined, null, 1, "call-0", "call-01", "call-1/other", `call-${"1".repeat(130)}`]) {
+    const message = mapRemoteMessage({ ...projected, attachments: [{ ...attachment, toolCallId }] });
+    assert.equal(message?.attachments?.length, 1, "an invalid additive placement must not drop the picture");
+    assert.equal(message?.imagePlacements, undefined);
+  }
+  assert.equal(mapRemoteMessage({ ...projected, role: "user", attachments: [{ ...attachment, toolCallId: "call-1" }] })?.imagePlacements, undefined);
+  assert.equal(mapRemoteMessage({ ...projected, attachments: [{ ...attachment, kind: "text", mimeType: "text/plain", toolCallId: "call-1" }] })?.imagePlacements, undefined);
+});
+
 test("a summary row or chat projection maps to a chat with no transcript of its own", () => {
   const chat = mapRemoteChat({
     id: "chat-9",
@@ -221,4 +245,13 @@ test("another computer's browser recording shows as its activity line without a 
   assert.ok(step?.kind === "tool");
   assert.equal(step.toolName, "browser_recording_stop");
   assert.equal(step && "recording" in step, false);
+});
+
+test("the host can remove the cached prefix or reveal earlier pages at the same anchor", () => {
+  const all = numbered(5);
+  const cached = mergeNewestWindow(emptyRemoteTranscript("chat-1"), served(all, { limit: 10 }));
+  const shortened = mergeNewestWindow(cached, served(all.slice(2), { limit: 10 }));
+  assert.deepEqual(shortened.messages.map((m) => m.id), ["m2", "m3", "m4"]);
+  const restored = mergeNewestWindow(shortened, served(all, { limit: 3 }));
+  assert.equal(restored.hasOlder, true);
 });
