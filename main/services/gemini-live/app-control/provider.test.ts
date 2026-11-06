@@ -231,7 +231,8 @@ function harness(
   });
   bus.registerTool(LIVE_APP_CONTROL_RENDERER_TOOL, controller.handle);
   const opened: string[] = [];
-  const switchedOn = { on: true };
+  /** The switch; `hold` makes the next read of it wait. */
+  const switchedOn: { on: boolean; hold: Promise<void> | null } = { on: true, hold: null };
   const provider = new AidenAppControlProvider({
     port,
     renderer: broker,
@@ -243,7 +244,12 @@ function harness(
     idleMs: 1,
     sessionCalls: options.sessionCalls,
     callTimeoutMs: options.callTimeoutMs,
-    enabled: () => switchedOn.on,
+    enabled: async () => {
+      const hold = switchedOn.hold;
+      switchedOn.hold = null;
+      if (hold) await hold;
+      return switchedOn.on;
+    },
   });
   let sequence = 0;
   const call = (name: string, args: Record<string, unknown> = {}) =>
@@ -617,6 +623,29 @@ test("turning Let Live move through Aiden off mid-session stops the tools and an
     await h.settle();
     assert.equal(signedOut, 0, "the OK can't act once the switch is off");
     assert.equal(code(await h.call("use_aiden", { element: 2, action: "press" })), "turned_off");
+  } finally {
+    h.dispose();
+  }
+});
+
+test("between the user's OK and the confirmed action, no other move can slip in", async () => {
+  const h = harness(`<button id="out" data-live-guard="confirm">Sign out</button>`);
+  try {
+    let signedOut = 0;
+    h.document.getElementById("out")!.addEventListener("click", () => (signedOut += 1));
+    assert.equal((await h.call("use_aiden", { element: await h.ref("Sign out"), action: "press" })).status, "waiting_for_user");
+    await h.noteMatching(PROMPT);
+    let release!: () => void;
+    h.switchedOn.hold = new Promise<void>((resolve) => (release = resolve));
+    const shown = h.activity.get();
+    if (shown?.kind === "confirm") shown.confirm();
+    await h.settle();
+    // The confirmed action is still checking the switch; another call must wait its turn.
+    assert.equal(code(await h.call("open_in_aiden", { place: "appearance" })), "waiting_for_user");
+    assert.deepEqual(h.opened, []);
+    release();
+    await h.noteMatching(/^The user confirmed/u);
+    assert.equal(signedOut, 1);
   } finally {
     h.dispose();
   }

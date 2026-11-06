@@ -237,6 +237,8 @@ export function buildAidenScreen(input: {
       const nodeRole = axRole(node);
       const name = clip(text(node.name), MAX_NAME);
       const dom = node.backendDOMNodeId !== undefined ? facts.get(node.backendDOMNodeId) : undefined;
+      // Inside chat or page content that slipped past its region root: never read, never descend.
+      if (dom?.content) continue;
       const visible = dom?.visible === true;
       if (DIALOG_ROLES.has(nodeRole)) {
         dialog = name || "Dialog";

@@ -7,6 +7,8 @@ import { cleanup, render } from "@testing-library/react";
 import { AIDEN_ELEMENT_FACTS_SOURCE, type AidenElementFacts } from "../../main/services/gemini-live/app-control/page-action";
 import { idleLiveController } from "./assistant/assistant-live-test-fixture";
 import { LiveRibbon } from "./assistant/live-ribbon";
+import { AccessRequestCard } from "./bots/access-request-card";
+import { DeviceEraseSection } from "./device-erase-control";
 import { LiveGuard } from "./live-guard";
 import {
   AlertDialog,
@@ -130,4 +132,48 @@ test("the Live ribbon's Take over, Confirm and Cancel are the user's alone by ma
     assert.ok(button, `${name} is shown`);
     assert.equal(facts(button, "button", name)?.guard, "you", name);
   }
+});
+
+test("a Bot's access card is the user's to answer, including Always for this folder and Not now", () => {
+  render(
+    <AccessRequestCard
+      request={{
+        botId: "bot:a",
+        waitId: "attempt-1",
+        toolCallId: "call-1",
+        target: "folder",
+        label: "Taxes",
+        place: "~/Documents/Taxes",
+        why: "Prepare your return.",
+        choices: ["not_now", "always", "once"],
+      }}
+      botName="Ada"
+      busy={false}
+      onAnswer={() => undefined}
+    />,
+  );
+  for (const name of ["Not now", "Always for this folder", "Allow once"]) {
+    assert.equal(facts(byText(name), "button", name)?.guard, "you", name);
+  }
+});
+
+test("erasing a simulator is the user's, in the panel and in the confirmation it opens", () => {
+  render(
+    <DeviceEraseSection
+      chatId="chat-1"
+      target={{ platform: "ios", hostId: "local", deviceId: "sim-1" }}
+      deviceName="iPhone 17"
+      onReconnect={() => undefined}
+      onCloseSession={() => undefined}
+      api={{ erase: async () => ({ wasBooted: false, deviceId: "sim-1" }), open: async () => undefined }}
+      defaultConfirmOpen
+    />,
+  );
+  const open = Array.from(document.querySelectorAll("button")).find(
+    (button) => button.textContent?.trim() === "Erase all content and settings…",
+  );
+  assert.ok(open, "the erase button is shown");
+  assert.equal(facts(open, "button", "Erase all content and settings…")?.guard, "you");
+  const erase = byText("Erase");
+  assert.equal(facts(erase, "button", "Erase")?.guard, "you");
 });

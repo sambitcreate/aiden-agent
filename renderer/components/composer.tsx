@@ -62,6 +62,7 @@ import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
+import { aidenLivePreferences } from "../shared/aiden-live-settings";
 import type { Attachment, Chat, GitInfo, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, effectiveBusySendMode } from "../lib/composer-submission";
 import {
@@ -666,6 +667,7 @@ export function Composer({
     !composerInputLocked &&
     !(isGenerating && stoppingGeneration);
   const settings = useSettings();
+  const liveChatAccess = aidenLivePreferences(settings.data).chatAccess;
   // Design comments waiting to go to Aiden; they go with the next send.
   const commentTray = useDesignCommentTray(chatId);
   // Read at transcript time so dictionary edits apply to an in-flight recording.
@@ -2200,7 +2202,14 @@ export function Composer({
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
-        <div data-focus-region="composer" className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
+        <div
+          data-focus-region="composer"
+          // With "Let Live use the open chat" off, Aiden Live can't type or send here through the window either.
+          data-live-guard={liveChatAccess ? undefined : "you"}
+          className="composer-responsive pointer-events-auto relative isolate"
+          inert={firstSendPending || undefined}
+          aria-busy={firstSendPending || undefined}
+        >
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={

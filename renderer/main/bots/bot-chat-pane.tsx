@@ -1744,8 +1744,9 @@ export function BotChatPane({ botId }: { botId: string }) {
     </div>
   );
 
+  // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.
   return shell(
-    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6">
+    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6" data-live-content="chat">
       {live.failed && live.stale ? (
         <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
           <Text variant="small" color="red">

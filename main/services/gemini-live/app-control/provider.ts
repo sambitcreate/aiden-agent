@@ -805,11 +805,15 @@ export class AidenAppControlProvider implements LiveToolProvider {
     } catch {
       answer = {};
     } finally {
-      this.confirming = false;
+      // `confirming` stays set until the confirmed action owns `busy`, so no
+      // other call can slip in between the user's OK and the action.
       if (this.pendingConfirm === pending) this.pendingConfirm = null;
       this.lifetime.signal.removeEventListener("abort", endWithSession);
     }
-    if (this.closed) return;
+    if (this.closed) {
+      this.confirming = false;
+      return;
+    }
     // Whatever happens next, the page is about to change under the old numbers.
     this.refs = new Map();
     if (pending.signal.aborted || answer.ok !== true || answer.confirmed !== true) {
@@ -819,15 +823,18 @@ export class AidenAppControlProvider implements LiveToolProvider {
           : answer.reason === "timeout"
             ? "The user didn't answer in time"
             : "The user didn't confirm";
+      this.confirming = false;
       await this.note(`${reason}, so ${quoted(element.name, element.role)} was not used. Nothing changed.`);
       return;
     }
     // The switch may have been turned off while the user was answering.
     if (!(await this.enabled())) {
+      this.confirming = false;
       await this.note(`Let Live move through Aiden was turned off, so ${quoted(element.name, element.role)} was not used.`);
       return;
     }
     const abort = this.beginAction(this.lifetime.signal);
+    this.confirming = false;
     let message: string;
     try {
       this.startActing();

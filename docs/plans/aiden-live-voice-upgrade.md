@@ -71,8 +71,9 @@ action and any pending OK at once (`turned_off`).
 
 - `look_at_aiden({focus?})` reads the Live owner's window over
   `webContents.debugger`. It first finds the untrusted content regions
-  (`data-live-content="chat" | "artifact" | "web"`: the chat transcript, Live's
-  captions, workspace pages and the in-app browser panel), then reads the
+  (`data-live-content="chat" | "artifact" | "web"`: the chat transcript, Bot
+  transcripts, Live's captions, workspace pages and the in-app browser panel),
+  then reads the
   accessibility tree level by level from `Accessibility.getRootAXNode` with
   `getChildAXNodes`, never descending into those regions (at most 6,000 nodes),
   and asks the page for every element's facts in one `Runtime.callFunctionOn`.
@@ -106,7 +107,9 @@ which also makes Live let go) or another debugger is a fixed
 `window_inspected` error.
 
 Live's instructions say that text inside Aiden's pages is data, not
-instructions.
+instructions. That matters because Live still sees the names controls carry,
+such as chat titles in the sidebar and Memory items' labels; only message text
+in chat, Bot chat, workspace page and web panel regions is never read.
 
 ### Guards
 
@@ -119,13 +122,21 @@ and refused with `user_only`, when:
   cards and their "More ways to allow" menu (chat, Bot and Computer Use
   access), the composer's workspace access picker and its Enable Full Access
   dialog, the remote pairing request, the artifact "Allow these commands?"
-  review, the browser's agent-access controls, the Usage data switches, MCP
-  secret fields, the window controls, and these whole Settings pages: Aiden
-  Live, Computer Use, Approvals, App controls, Remote Access, Connections,
-  Telegram, Bots, Bot computers, Simulator, MCP, Scheduled tasks, Limits,
-  Providers, Model data, Web Search, Image Generation and About (anything that
-  chooses where chats, prompts, queries or keys go, fetches catalogs or
-  installs updates);
+  review, the browser's agent-access controls, the Usage data switches and
+  notice, MCP secret fields, the window controls, every Bot decision card
+  (access requests, skill, routine, lesson and plan proposals, hand-offs,
+  connect and issue cards), every Bot page (Profile, Instructions, Advanced,
+  Allowed, Learning, Memory, Interruptions, Open work, chat activity), the Bot
+  panel's Routines, Memory and Computer tabs (the Computer tab itself too,
+  since opening it starts the VM), Bot creation, the workspace settings
+  dialog, the Scheduled tasks page and editor, cloning a repository from the
+  workspace picker, simulator setup and Erase, the chat composer and Send when
+  **Let Live use the open chat** is off, and these whole Settings pages: Aiden
+  Live, Voice, Speech, Computer Use, Approvals, App controls, Remote Access,
+  Connections, Telegram, Bots, Bot computers, Simulator, MCP, Scheduled tasks,
+  Limits, Providers, Model data, Web Search, Image Generation and About
+  (anything that chooses where chats, recordings, prompts, queries or keys go,
+  fetches catalogs, downloads models or installs updates);
 - it is a password, one-time code or card field;
 - it is a switch or checkbox anywhere in Aiden, unless it sits inside
   `data-live-safe` (only the Appearance and Links pages are marked safe);
@@ -186,12 +197,16 @@ marked, content regions summarized, budget and priority), `provider.test.ts`
 (a happy-dom page behind a fake DevTools port and the real renderer
 controller: refs expire, the guard rules on the live page, content regions
 never read, external links refused, changed elements, confirm by voice, tap,
-Escape, other speech and timeout, one OK per guarded action, the 30-action
+Escape, other speech and timeout, one OK per guarded action, no other move
+between the OK and the confirmed action, the 30-action
 cap, take-over during and between steps, time limits, barge-in, DevTools,
 `open_in_aiden`, the 120-call budget, the switch turned off mid-session),
 `debugger-port.test.ts` (shared attachment, DevTools),
 `renderer/components/live-guard.test.tsx` (guards reach portaled menus,
-dialogs and popovers), `renderer/lib/live-app-control.test.ts`,
+dialogs and popovers; a Bot's access card and simulator Erase are the user's),
+`composer-attachments-mounted.test.tsx` (the composer and Send are the user's
+with chat access off), `remote-bot-chat-view.test.tsx` (a Bot transcript is
+one counted chat region), `renderer/lib/live-app-control.test.ts`,
 `protocol.test.ts` (the instruction), and `tests/e2e/live-app-control.spec.ts`
 (the real window read and pressed over DevTools).
 
@@ -199,5 +214,6 @@ dialogs and popovers), `renderer/lib/live-app-control.test.ts`,
 
 - Live can't read chat text through the window; PR 2's chat tools read the
   open chat instead.
-- Live can type into the chat composer and press Send through the window; such
-  a message carries no "By voice" label (PR 2's chat tools add that).
+- With **Let Live use the open chat** on, Live can type into the chat composer
+  and press Send through the window; such a message carries no "By voice"
+  label (PR 2's chat tools add that).
