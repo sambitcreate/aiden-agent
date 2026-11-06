@@ -186,6 +186,10 @@ test("secret assignments and private key blocks never reach Live, while ordinary
   assert.doesNotMatch(read.messages[0]!.text, /wJalrXUt/u);
   // Mid-line, with a colon or spaces, as in a chat title.
   assert.equal(redactLiveChatSecrets("Fix login DB_PASSWORD: hunter2"), "Fix login DB_PASSWORD: [hidden]");
+  assert.equal(
+    redactLiveChatSecrets("Fix login DB_PASSWORD: correct horse battery staple"),
+    "Fix login DB_PASSWORD: [hidden]",
+  );
   assert.equal(redactLiveChatSecrets("Deploy API_KEY = sk-live now"), "Deploy API_KEY = [hidden] now");
   assert.equal(redactLiveChatSecrets("Open https://example.com: done"), "Open https://example.com: done");
 });
