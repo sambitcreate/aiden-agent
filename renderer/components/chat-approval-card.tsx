@@ -1,7 +1,7 @@
 import { ClassifierApproval } from "./classifier-approval";
 import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
-import { CalendarClock, ChevronDown, FilePen, FilePlus, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
+import { CalendarClock, ChevronDown, FilePen, FilePlus, Hand, Mic, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
 import {
   Button,
   DropdownMenu,
@@ -269,6 +269,23 @@ function rememberScopeHint(
     : `Won't ask again for ${target} until Aiden quits.`;
 }
 
+/** The quiet line Aiden Live adds while it is on an approval. */
+function LiveVoiceApprovalHint({ mode }: { mode: "voice" | "tap" }) {
+  const Icon = mode === "voice" ? Mic : Hand;
+  return (
+    <Text
+      variant="small"
+      color="secondary"
+      as="p"
+      role="note"
+      className="mt-1.5 flex shrink-0 items-center justify-center gap-1.5 text-center"
+    >
+      <Icon aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
+      {mode === "voice" ? "Live is listening. Say “allow” or “deny”." : "Live can’t answer this one. Tap to choose."}
+    </Text>
+  );
+}
+
 export interface ChatApprovalDecisionOptions {
   formFillExcludedOrders?: number[];
   scope?: ToolApprovalScope;
@@ -298,6 +315,7 @@ export function ChatApprovalCard({
   pendingCount = 1,
   computerUseHost = "local",
   keyboardShortcuts = false,
+  liveVoice = null,
 }: {
   pending: ApprovalPrompt;
   deciding: boolean;
@@ -318,6 +336,11 @@ export function ChatApprovalCard({
    * chat's own card takes them, so one key never answers two approvals.
    */
   keyboardShortcuts?: boolean;
+  /**
+   * Aiden Live is on this approval: "voice" takes a spoken allow or deny,
+   * "tap" means this one needs a button.
+   */
+  liveVoice?: "voice" | "tap" | null;
 }) {
   const details = pending.details as unknown;
   const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
@@ -490,6 +513,7 @@ export function ChatApprovalCard({
             {disabledReason}
           </Text>
         ) : null}
+        {liveVoice && !disabledReason ? <LiveVoiceApprovalHint mode={liveVoice} /> : null}
         <div className="@container mt-3.5 flex shrink-0 gap-2">
           <Button
             ref={denyRef}

@@ -16,6 +16,7 @@ import {
 import { AssistantComputerUseApproval } from "./assistant-computer-use-approval";
 import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
 import type { AssistantLiveApprovals } from "./use-assistant-live-approvals";
+import { useLiveChatVoiceApprovals } from "./use-live-chat-voice-approvals";
 
 const SESSION_ACTIONS: AssistantLiveApprovals = {
   approvals: [],
@@ -72,6 +73,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   const navigate = useNavigate();
   const live = useAssistantLive(null);
   const settings = useSettings();
+  useLiveChatVoiceApprovals(settings.data);
   // Until settings load, keep Live off so a disabled feature never flashes on.
   const enabled = settings.data ? settings.data.aidenLiveEnabled !== false : false;
   const buttonVisible = settings.data?.aidenLiveButtonVisible !== false;

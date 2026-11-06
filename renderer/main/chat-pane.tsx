@@ -150,6 +150,10 @@ import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ChatApprovalCard } from "../components/chat-approval-card";
 import { liveOpenChat } from "../lib/live-open-chat";
+import {
+  useLiveApprovalVoiceHint,
+  usePublishLiveChatApprovals,
+} from "../components/assistant/use-live-chat-voice-approvals";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
   chatsApi,
@@ -2549,6 +2553,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [chatControl, chatId],
   );
+  // Aiden Live answers the first approval by voice through this same decide.
+  usePublishLiveChatApprovals(chatId, approvals, decideApproval);
 
   React.useEffect(() => {
     if (!questionnaire) return;
@@ -3160,6 +3166,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const pending = approvals[0];
+  const pendingLiveVoice = useLiveApprovalVoiceHint(pending?.approvalId);
   const showComputerUseContinue =
     computerUsePendingContinue &&
     computerUseContinueHiddenFor !== chatId &&
@@ -3668,6 +3675,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
                   keyboardShortcuts
+                  liveVoice={pendingLiveVoice}
                 />
               ) : null}
             </EventPresence>
