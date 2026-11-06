@@ -77,18 +77,25 @@ const SKILL_GROUP_TITLES: Record<SkillGroup["id"], string> = {
 };
 
 /** Your skills, then this folder's, then built-in and global ones; empty groups are left out. */
+/** Skills whose name or description contains the query; a blank query keeps them all. */
+export function filterSkillsByQuery<T extends { name: string; description: string }>(
+  skills: readonly T[],
+  query: string,
+): readonly T[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return skills;
+  return skills.filter(
+    (skill) =>
+      skill.name.toLocaleLowerCase().includes(needle) ||
+      skill.description.toLocaleLowerCase().includes(needle),
+  );
+}
+
 export function groupWorkspaceSkills(
   skills: readonly WorkspaceSkillChoice[],
   query = "",
 ): SkillGroup[] {
-  const needle = query.trim().toLocaleLowerCase();
-  const matches = needle
-    ? skills.filter(
-        (skill) =>
-          skill.name.toLocaleLowerCase().includes(needle) ||
-          skill.description.toLocaleLowerCase().includes(needle),
-      )
-    : skills;
+  const matches = filterSkillsByQuery(skills, query);
   return (["configured", "workspace", "global"] as const).flatMap((id) => {
     const inGroup = matches.filter((skill) => SKILL_GROUP_OF[skill.source] === id);
     return inGroup.length > 0 ? [{ id, title: SKILL_GROUP_TITLES[id], skills: inGroup }] : [];

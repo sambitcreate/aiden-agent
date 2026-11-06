@@ -21,6 +21,22 @@ Settings adapts the Appearance page and the desktop UI references in `chatgpt-de
 
 Write user-facing paths with page titles: `Settings → Voice & Speech → Text to Speech`, naming a tab only when it helps.
 
+## InfoHint rules
+
+`InfoHint` (`renderer/components/ui-info-hint.tsx`) explains one thing in at most two short sentences. Its panel is narrow, and focus stays on the trigger and closes on blur, so a link or button inside it can't be reached by keyboard.
+
+| Content | Where it goes |
+|---|---|
+| One fact, two short sentences at most, nothing to click | `InfoHint` |
+| Longer steps or reference text | `Disclosure` on the page, open by default when the user needs it |
+| Any button, link or control | On the page |
+| Privacy disclosure, data leaving the device, charges or unattended authority | Visible on the page, shortened where possible |
+| Text that changes with the current selection or status | Next to that control |
+
+These stay on the page for those reasons: the Text to Speech cloud processing notice and **Clear generated audio**, the Computer Use data disclosure, "What leaves this device" for web pages, **Manage Bot grants** and **Manage schedule grants**, Always comes to you, the Telegram security notice, Aiden Live's state, Beta badge, Scheduled tasks and Global shortcut rows, and the connector exposure help. Context & Limits keeps "may be sent to your chat model" visible while the compaction override detail sits in a hint.
+
+Name a hint's `topic` so that "About <topic>" reads as a label for the trigger. Tests open it by that name and assert the `tooltip` text.
+
 ## Tokens and adaptation
 
 The `.settings-responsive` container defines `--settings-card-radius`, `--settings-card-fill`, `--settings-row-inset`, and `--settings-row-gap`. They derive from Aiden's semantic theme tokens; Appearance cards use these same variables. Shared heading metrics are 26/32px, with secondary copy and 26px spacing before content. Groups use soft neutral surfaces, inset separators, and restrained elevation, with no outline (Untitled borderless surfaces). Status appears in semantic labels, icons, and fills, never decorative colored borders.
@@ -51,7 +67,14 @@ While Inbox is the chosen view, and only on a host with the `badgeCount` capabil
 
 ## Aiden Live
 
-Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the readiness, audio, and actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the Live readiness and Actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+
+## Page notes
+
+- **Text to Speech** has three groups: Setup, Voice and delivery, and Privacy and storage.
+- **Skills** shows a search field once more than 8 skills are discovered, the same field and threshold as workspace settings (`renderer/components/list-search-field.tsx`). It matches a skill's name and description.
+- **Providers** explains itself through hints. Chat title generation and Model catalog are one row each, and Model catalog keeps the manual **Update model catalogs** action.
+- **Keyboard shortcuts** puts the recorder beside the row's switch.
 
 ## Connectors
 

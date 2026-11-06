@@ -14,6 +14,7 @@ import {
   Text,
   toast,
 } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { Progress } from "../ui-primitives";
 import { BotComputerBaseScreen } from "./bot-computer-base-screen";
 import { botComputersApi } from "../../lib/ipc";
@@ -90,7 +91,7 @@ function PermissionsStep({
     <Field
       orientation="vertical"
       label={BOT_COMPUTER_PERMISSIONS_TITLE}
-      description="In the base computer below, choose Open System Settings on each prompt (or go to Privacy & Security) and turn on cua-driver for both. Bots can then read apps' buttons and fields and click them by name. Every Bot computer made from this base gets the same permissions."
+      description="In the base computer below, choose Open System Settings on each prompt (or go to Privacy & Security) and turn on cua-driver for both. Every Bot computer made from this base gets the same permissions."
     >
       <div className="flex flex-col gap-3">
         <BotComputerBaseScreen />
@@ -250,7 +251,7 @@ export function BotComputersSettings() {
               {offerSetUp ? <span className="mt-1 block text-tertiary">{botComputersSetupDisclosure(status.requirements)}</span> : null}
               {setup.kind === "ready" ? (
                 <span className="mt-1 block text-tertiary">
-                  Give a Bot its own computer from the Bot's profile. Each one starts as a copy of the base and grows as the Bot uses it.
+                  Give a Bot its own computer from its profile. Each one starts as a copy of this base.
                 </span>
               ) : null}
             </>
@@ -310,8 +311,8 @@ export function BotComputersSettings() {
             label="Element control"
             description={
               setup.elementControl
-                ? "On. Bots read apps' buttons and fields in their computers and click them by name, as well as acting on the screen."
-                : `${setup.elementControlNote ?? "Off: Bots act on the screen only."} Set it up to let Bots read apps' buttons and fields and click them by name. Computers given before then get it after a Reset.`
+                ? "On. Bots click apps' buttons and fields by name, as well as acting on the screen."
+                : `${setup.elementControlNote ?? "Off: Bots act on the screen only."} Set it up to let Bots click controls by name. Computers given before then get it after a Reset.`
             }
           >
             {setup.elementControl ? (
@@ -335,7 +336,8 @@ export function BotComputersSettings() {
         <FieldSet title="Running">
           <Field
             label="Computers running at once"
-            description={`Each running computer uses about ${memory} of memory. At the limit, the computer used longest ago stops, or the next Bot waits its turn.`}
+            hint={<InfoHint topic="running limit">At the limit, the computer used longest ago stops, or the next Bot waits its turn.</InfoHint>}
+            description={`Each running computer uses about ${memory} of memory.`}
           >
             <Select
               value={String(status.settings.maxRunning)}
@@ -356,7 +358,7 @@ export function BotComputersSettings() {
           </Field>
           <Field
             label="Stop when idle"
-            description="A computer nobody has used for this long stops. It starts again when its Bot needs it."
+            description="An unused computer stops after this long, and starts again when its Bot needs it."
           >
             <Select
               value={String(status.settings.idleStopMinutes)}

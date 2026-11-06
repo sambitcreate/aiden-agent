@@ -12,3 +12,10 @@ Implementation branch `feature/settings-reorg` (plan and prototype came from `re
 - Telegram: `enabled` is the setting and `polling` is the service. After a polling failure `polling` is false with `enabled` true, so Disconnect is gated on `enabled`, and the Enable switch is gone (commit `d26b8edf6`, droppable).
 - Compaction must not use `LimitsSettings.save`; its one `saving` flag drops a second change.
 - Telegram's future is unresolved: the security remediation plan says it's being removed, but #747 is open and the feature is on main.
+
+## Phase 4 landed (2026-11-05)
+- `ProviderInfo` and `RemoteAccessInfo` are gone, replaced by `InfoHint`; `assistant-settings.tsx` is deleted; Text to Speech has three groups; Skills search shares `list-search-field.tsx` with workspace settings at the same 8-row threshold.
+- The Aiden Live Operate Aiden row is gone. Its Scheduled tasks and Global shortcut rows stay.
+- `routeRecipientSummary` stays beside the current search route, not in Privacy as the prototype shows, because it changes with selection.
+- Context & Limits: only the override detail moved to a hint. The "may be sent to your chat model" footer and the model-token footer stay visible.
+- `InfoHint` rules now live in `docs/settings-design-system.md`.

@@ -81,6 +81,12 @@ test("provider rows show key status and offer Set up or Manage by connection", a
   assert.equal(screen.queryByRole("button", { name: "Fetch latest OpenRouter models" }) === null, true);
 });
 
+test("the Providers group says image and chat keys stay separate", async () => {
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "About separate image keys" }));
+  assert.match((await screen.findByRole("tooltip")).textContent ?? "", /Chat keys never make images, and image keys never run chats\./u);
+});
+
 test("Manage opens the provider dialog with its key and model list, and closing returns focus", async () => {
   mount();
   const trigger = await screen.findByRole("button", { name: "Manage OpenRouter" });

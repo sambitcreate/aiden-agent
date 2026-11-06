@@ -18,6 +18,7 @@ import {
   toast,
 } from "../ui";
 import { InfoHint } from "../ui-info-hint";
+import { LIST_SEARCH_THRESHOLD, ListSearchField } from "../list-search-field";
 import { FolderGit2, Plus, Trash2 } from "lucide-react";
 import { skillsApi, settingsApi } from "../../lib/ipc";
 import {
@@ -29,6 +30,7 @@ import {
 } from "../../lib/queries";
 import type { Skill, AppSettings } from "../../lib/types";
 import { resolveSkillCatalogWorkspaceId } from "../../lib/skill-catalog-workspace";
+import { filterSkillsByQuery } from "../../lib/workspace-settings-view";
 
 /** Active workspace id from localStorage (settings sits outside WorkspaceProvider). */
 function useActiveWorkspaceId(): string | undefined {
@@ -56,6 +58,7 @@ export function SkillsSettings() {
   const globallyEnabled = settings.data?.skillsEnabled !== false;
   const [editing, setEditing] = React.useState<Skill | null>(null);
   const [removing, setRemoving] = React.useState<Skill | null>(null);
+  const [discoveredQuery, setDiscoveredQuery] = React.useState("");
 
   const workspaceId = useActiveWorkspaceId();
   const discovered = useDiscoveredSkills(workspaceId);
@@ -87,6 +90,11 @@ export function SkillsSettings() {
 
   const list = skills.data ?? [];
   const discoveredList = (discovered.data ?? []).filter((skill) => skill.source !== "configured");
+  const showDiscoveredSearch = discoveredList.length > LIST_SEARCH_THRESHOLD;
+  // A query left over from a longer list must not hide rows once the field is gone.
+  const visibleDiscovered = showDiscoveredSearch
+    ? filterSkillsByQuery(discoveredList, discoveredQuery)
+    : discoveredList;
 
   return (
     <div className="flex flex-col gap-4">
@@ -175,14 +183,28 @@ export function SkillsSettings() {
 
       {globallyEnabled && discoveredList.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2">
-          <div className="flex items-center gap-1.5">
-            <Text variant="strong">Built-in and discovered skills</Text>
-            <InfoHint topic="discovered skills">
-              Aiden includes the aiden-app skill. Others come from SKILL.md files in .agents, .claude and .aiden folders, plus enabled Claude Code plugins.
-            </InfoHint>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <Text variant="strong">Built-in and discovered skills</Text>
+              <InfoHint topic="discovered skills">
+                Aiden includes the aiden-app skill. Others come from SKILL.md files in .agents, .claude/skills and .aiden/skills folders, plus enabled Claude Code plugins named plugin:name.
+              </InfoHint>
+            </div>
+            {showDiscoveredSearch ? (
+              <ListSearchField
+                noun="discovered skills"
+                value={discoveredQuery}
+                onChange={setDiscoveredQuery}
+              />
+            ) : null}
           </div>
+          {visibleDiscovered.length === 0 ? (
+            <Text variant="small" color="tertiary" className="block px-1">
+              No skills match “{discoveredQuery.trim()}”.
+            </Text>
+          ) : (
           <div className="settings-card rounded-card">
-            {discoveredList.map((s, i) => (
+            {visibleDiscovered.map((s, i) => (
               <React.Fragment key={s.invocationId}>
                 {i > 0 ? <Separator /> : null}
                 <div className="flex items-center gap-3 px-3.5 py-3">
@@ -207,6 +229,7 @@ export function SkillsSettings() {
               </React.Fragment>
             ))}
           </div>
+          )}
         </div>
       ) : null}
 

@@ -3,7 +3,6 @@ import { LiveAudioSettings } from "./live-audio-settings";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  AudioWaveform,
   CheckCircle2,
   Clock3,
   Mic,
@@ -128,12 +127,12 @@ export function AidenLiveSettings(): React.ReactElement {
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <Text variant="strong">Aiden Live is Aiden’s voice and action layer</Text>
+              <Text variant="strong">Aiden Live</Text>
               <Badge color="blue">Beta</Badge>
             </div>
             <Text as="p" variant="small" color="secondary" className="mt-0.5">
               Speak naturally and let Aiden act on your screen during Live. Stop Live to end
-              session access. Availability and supported actions may change during beta.
+              session access.
             </Text>
           </div>
         </div>
@@ -191,15 +190,6 @@ export function AidenLiveSettings(): React.ReactElement {
         <LiveAudioSettings />
 
         <FieldSet title="Actions">
-          <Field
-            label="Operate Aiden"
-            description="Aiden Live can use the screen and accessibility tree to focus the composer, choose the current model or actions, send prompts, and navigate Aiden."
-          >
-            <Badge color="blue">
-              <AudioWaveform />
-              Direct actions during Live
-            </Badge>
-          </Field>
           <Field
             label="Scheduled tasks"
             description="Create or review one-time and recurring work through Aiden’s existing scheduled-task interface."

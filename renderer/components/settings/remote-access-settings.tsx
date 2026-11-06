@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronDown,
   Folder,
-  Info,
   Loader2,
   Network,
   Plus,
@@ -28,9 +27,6 @@ import {
   DropdownMenuTrigger,
   Field,
   FieldSet,
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
   Input,
   Select,
   SelectContent,
@@ -44,6 +40,7 @@ import {
   toast,
 } from "../ui";
 import { CopyButton } from "../copy-button";
+import { InfoHint } from "../ui-info-hint";
 import { AcceptConnectionRequestsField } from "./remote-connection-requests-field";
 import { aidenRemoteApi } from "../../lib/ipc";
 import { queryKeys, useAidenRemoteSettings } from "../../lib/queries";
@@ -181,30 +178,6 @@ function Disclosure({
       </summary>
       <div className="border-t border-separator">{children}</div>
     </details>
-  );
-}
-
-function RemoteAccessInfo() {
-  return (
-    <HoverCard openDelay={250} closeDelay={100}>
-      <HoverCardTrigger asChild>
-        <Button
-          iconOnly
-          size="small"
-          variant="transparent"
-          aria-label="About Remote Access security"
-          className="size-7"
-        >
-          <Info />
-        </Button>
-      </HoverCardTrigger>
-      <HoverCardContent align="start" className="w-80">
-        <Text variant="small-strong">Aiden stays in control</Text>
-        <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
-          Aiden On The Go can use only capabilities and folders approved on this desktop. Provider keys never leave Aiden, and the desktop app must be running. Tailscale is optional.
-        </Text>
-      </HoverCardContent>
-    </HoverCard>
   );
 }
 
@@ -597,11 +570,12 @@ export function RemoteAccessSettings() {
 
       <Disclosure title={`This ${hostLabel} settings`} summary={`${snapshot.displayName} · ${summary}`}>
         <Field
-          label={(
-            <span className="flex items-center gap-1.5">
-              This desktop
-              <RemoteAccessInfo />
-            </span>
+          label="This desktop"
+          hint={(
+            <InfoHint topic="Remote Access security">
+              Aiden On The Go uses only the capabilities and folders approved on this desktop.
+              Provider keys never leave Aiden.
+            </InfoHint>
           )}
           description="Connect Aiden On The Go while Aiden is running."
         >

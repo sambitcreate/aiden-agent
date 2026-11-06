@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Field, FieldSet, RadioGroup, RadioGroupItem, Switch, Text, toast } from "../ui";
+import { InfoHint } from "../ui-info-hint";
 import { providersApi, settingsApi } from "../../lib/ipc";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
 import type { AppSettings } from "../../lib/types";
@@ -41,7 +42,14 @@ export function AutomaticCompactionGroup() {
   };
 
   return (
-    <FieldSet title="Automatic compaction">
+    <FieldSet
+      title="Automatic compaction"
+      hint={(
+        <InfoHint topic="automatic compaction">
+          Applies to new runs and /compact. Try /compact-LLM or /compact-VCC in an idle chat for a one-time override.
+        </InfoHint>
+      )}
+    >
       <RadioGroup
         orientation="vertical"
         aria-label="Automatic compaction engine"
@@ -71,10 +79,9 @@ export function AutomaticCompactionGroup() {
         ))}
       </RadioGroup>
       <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
-        Applies to new runs. Try /compact-LLM or /compact-VCC in an idle chat for a one-time
-        override; /compact uses this preference. Local compaction can omit details, which Aiden
-        can retrieve from the current chat. That context may be sent to your chat model when the
-        conversation continues. Current-chat recall works even when Memory is off.
+        Local compaction can omit details, which Aiden can retrieve from the current chat. That
+        context may be sent to your chat model when the conversation continues. Current-chat
+        recall works even when Memory is off.
       </Text>
       <Text as="p" variant="small" color="secondary" className="px-4 pb-4 text-pretty">
         When you come back to a chat over 100K tokens after its prompt cache expired, pi-vcc

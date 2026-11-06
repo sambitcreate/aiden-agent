@@ -10,7 +10,6 @@ import {
   AlertDialog,
   Badge,
   Button,
-  Callout,
   Dialog,
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +31,7 @@ import {
 import { imageGenerationApi } from "../../lib/ipc";
 import { formatRelativeTime } from "../../lib/relative-time";
 import { ImageModelLogo, ImageProviderLogo } from "../image-model-logo";
+import { InfoHint } from "../ui-info-hint";
 import { ProviderSetupRow } from "./provider-setup-row";
 import {
   FAL_REFERENCE_FIELDS,
@@ -239,15 +239,15 @@ export function ImageGenerationSettings() {
 
   return (
     <div>
-      <Callout className="mb-7">
-        <Text variant="small-strong">Separate keys for images</Text>
-        <Text variant="small" color="secondary" className="text-pretty">
-          Image generation uses only the keys on this page. They’re encrypted on this Mac and never
-          used for chat, and your chat provider keys are never used for images.
-        </Text>
-      </Callout>
-
-      <FieldSet title="Providers">
+      <FieldSet
+        title="Providers"
+        hint={
+          <InfoHint topic="separate image keys">
+            Images use their own keys, stored encrypted on this device. Chat keys never make images,
+            and image keys never run chats.
+          </InfoHint>
+        }
+      >
         {state.providers.map((provider, index) => {
           const action = provider.key.connected ? "Manage" : "Set up";
           return (
