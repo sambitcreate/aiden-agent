@@ -11,6 +11,7 @@ import {
 } from "./live-chat-tools";
 import { LiveSessionBus } from "./live-session-bus";
 import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
+import { LIVE_UNTRUSTED_VOICE_START } from "./live-speech-onsets";
 import { liveChatToolProviderFactory } from "../../main/services/gemini-live/live-chat-tools.js";
 import { LiveRendererToolBroker, LiveToolRegistry } from "../../main/services/gemini-live/live-tools.js";
 import type { RendererDocumentOwner } from "../../main/services/renderer-document-owner.js";
@@ -42,8 +43,8 @@ function harness(overrides: Partial<LiveChatToolDeps> = {}) {
   const registry = new LiveChatControlRegistry();
   const log: string[] = [];
   let enabled = true;
-  let voiceId = 0;
-  const requests = new LiveChatRequestGate(() => voiceId);
+  const voice = new LiveSessionBus();
+  const requests = new LiveChatRequestGate(voice);
   const deps: LiveChatToolDeps = {
     enabled: () => enabled,
     controller: () => registry.current(),
@@ -83,7 +84,8 @@ function harness(overrides: Partial<LiveChatToolDeps> = {}) {
     handlers,
     commits,
     /** The person says something: a new finalized voice input. */
-    speak: () => (voiceId += 1),
+    speak: () => voice.publishVoiceInput("Do it"),
+    voice,
     setEnabled: (value: boolean) => (enabled = value),
   };
 }
@@ -168,17 +170,55 @@ test("chat content cannot make Live send, stop or start a chat with text: only n
   assert.deepEqual(open.sent, ["auto:Run the tests"]);
 });
 
-test("a note counts as chat content too, and a new session ignores earlier speech", () => {
-  let voice = 4;
-  const gate = new LiveChatRequestGate(() => voice);
-  assert.equal(gate.allows(), false, "speech before the gate existed does not count");
-  voice += 1;
-  assert.equal(gate.allows(), true);
-  gate.exposed();
-  assert.equal(gate.allows(), false);
-  voice += 1;
+test("speech already under way when Live read the chat does not authorize a send, however late it finishes", async () => {
+  const { registry, run, voice } = harness();
+  const open = controller();
+  registry.register(Symbol(), open);
+  // The person starts talking; the chat's text reaches Live; then the words are finalized.
+  const started = voice.beginVoiceInput();
+  await run("read_open_chat");
+  voice.publishVoiceInput("Send ship it", started);
+  assert.equal(code(await run("send_to_open_chat", { text: "ship it", mode: "auto" })), "needs_user_request");
+  // Speech the microphone can't place never counts, even after the read.
+  voice.publishVoiceInput("Send ship it", LIVE_UNTRUSTED_VOICE_START);
+  assert.equal(code(await run("stop_open_chat")), "needs_user_request");
+  // Speech that starts after the read does.
+  voice.publishVoiceInput("Send the release notes");
+  assert.equal((await run("send_to_open_chat", { text: "the release notes", mode: "auto" })).ok, true);
+  assert.deepEqual(open.sent, ["auto:the release notes"]);
+});
+
+test("a note moves the fence only once Live has it; a dropped note does not", async () => {
+  const bus = new LiveSessionBus();
+  const deliveries: Array<{ text: string; awaitDelivery?: boolean; deliver: (ok: boolean) => void }> = [];
+  bus.setSession("s1", {
+    toolResult: async () => true,
+    note: (_session, text, options) =>
+      new Promise<boolean>((deliver) => deliveries.push({ text, awaitDelivery: options?.awaitDelivery, deliver })),
+  });
+  const gate = new LiveChatRequestGate(bus);
+  const note = (text: string) => gate.deliverNote((options) => bus.note(text, options));
+
+  const queued = note("The chat “Deploy” finished its reply.");
+  assert.equal(deliveries[0]?.awaitDelivery, true, "the note waits for delivery");
+  // The person speaks while the note is still queued (Live is resuming).
+  bus.publishVoiceInput("Send it");
+  assert.equal(gate.allows(), true, "Live hasn't seen the note yet");
+  deliveries[0].deliver(true);
+  assert.equal(await queued, true);
+  assert.equal(gate.allows(), false, "speech from before delivery doesn't answer what the note said");
+  bus.publishVoiceInput("Yes, send it");
+  assert.equal(gate.allows(), true, "speech after delivery does");
+
+  const dropped = note("The chat “Deploy” is waiting for an approval.");
+  deliveries[1].deliver(false);
+  assert.equal(await dropped, false);
+  assert.equal(gate.allows(), true, "a note Live never got moves nothing");
+
+  bus.setSession(null, null);
+  bus.setSession("s2", { toolResult: async () => true, note: async () => true });
   gate.reset();
-  assert.equal(gate.allows(), false);
+  assert.equal(gate.allows(), false, "a new session ignores earlier speech");
 });
 
 test("a send goes through the open chat's controller, commits first, and its chat is watched", async () => {
@@ -348,7 +388,7 @@ test("handlers registered on the session bus answer main's requests", async () =
     },
     note: async () => true,
   });
-  const gate = new LiveChatRequestGate(() => bus.latestVoiceInputId());
+  const gate = new LiveChatRequestGate(bus);
   const { handlers, registry } = harness({ requests: gate });
   registry.register(Symbol(), controller());
   bus.registerTool("stop_open_chat", handlers.stop_open_chat);

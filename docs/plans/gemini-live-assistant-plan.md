@@ -111,8 +111,8 @@ Live's sends carry `inputSource: "voice"` and show a "By voice" label (Remote
 revision 60, provisional). Settings → Aiden Live → **Let Live use the open
 chat** (on by default) and `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0` turn the
 tools off. No chat tool can answer an approval. Chat text and titles reach
-Live as untrusted data, and a send, stop or new chat with text needs a new
-finalized user voice input since Live last read a chat or got a chat note.
+Live as untrusted data, and a send, stop or new chat with text needs speech
+that started after Live last read a chat or received a chat note.
 
 ## Evidence and architecture decision
 

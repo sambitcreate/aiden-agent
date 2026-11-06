@@ -2,8 +2,9 @@
 // arguments and forwards each call here through the Live session bus; these
 // handlers check them again, use the open chat's controller for read, send and
 // stop, and the app shell's navigation for find and start. Chat text comes back
-// only in `untrusted_chat_content`, a send or Stop needs fresh speech from the
-// person (LiveChatRequestGate), and none of them can answer a tool approval.
+// only in `untrusted_chat_content`, a send or Stop needs speech the person
+// began after Live last saw chat content (LiveChatRequestGate), and none of
+// them can answer a tool approval.
 
 import {
   LIVE_CHAT_ERRORS,
@@ -22,34 +23,72 @@ import {
 } from "../shared/live-chat-tools";
 import { isUserVisibleChat, type ChatSurfaceInput } from "../shared/chat-visibility";
 import type { LiveChatController } from "./live-chat-control";
-import type { LiveRendererToolContext, LiveRendererToolHandler, LiveRendererToolResult } from "./live-session-bus";
+import type {
+  LiveRendererToolContext,
+  LiveRendererToolHandler,
+  LiveRendererToolResult,
+  LiveVoiceInput,
+} from "./live-session-bus";
+import { LIVE_UNTRUSTED_VOICE_START } from "./live-speech-onsets";
+
+/** What the gate reads from the Live session bus. */
+export interface LiveChatVoiceSource {
+  /** Latest utterance start mark (`LiveSessionBus.voiceInputFence`). */
+  voiceInputFence(): number;
+  onVoiceInput(listener: (input: LiveVoiceInput) => void): () => void;
+}
 
 /**
- * Whether the person has spoken since Live last saw chat content. Text in a
- * chat (or a chat title, or a note about a chat) is data that could ask Live
- * to send something; only fresh speech from the person authorizes a send,
- * steer, queue, Stop or a new chat with a message.
+ * Whether the person started speaking after Live last saw chat content. Text
+ * in a chat (or a chat title, or a note about a chat) is data that could ask
+ * Live to send something; only speech that began after that content reached
+ * Live authorizes a send, steer, queue, Stop or a new chat with a message.
+ *
+ * It compares start marks, never input ids: an utterance already under way
+ * when content arrived keeps its earlier mark however late it is finalized,
+ * and one whose start the microphone can't vouch for
+ * (`LIVE_UNTRUSTED_VOICE_START`) never counts.
  */
 export class LiveChatRequestGate {
-  private seenAt: number;
+  private fence: number;
+  private newestStart = LIVE_UNTRUSTED_VOICE_START;
 
-  constructor(private readonly latestVoiceInputId: () => number) {
-    this.seenAt = latestVoiceInputId();
+  constructor(private readonly voice: LiveChatVoiceSource) {
+    this.fence = voice.voiceInputFence();
+    // Lives as long as the window's chat tools host, like the bus itself.
+    voice.onVoiceInput((input) => {
+      if (input.startedAt > this.newestStart) this.newestStart = input.startedAt;
+    });
   }
 
-  /** Live just received chat content: a read_open_chat result or a note. */
+  /** Chat content has just reached Live (a read result it is being handed, a delivered note). */
   exposed(): void {
-    this.seenAt = this.latestVoiceInputId();
+    this.fence = Math.max(this.fence, this.voice.voiceInputFence());
   }
 
   /** A new session starts: speech from before it does not count. */
   reset(): void {
-    this.seenAt = this.latestVoiceInputId();
+    this.exposed();
   }
 
-  /** The person said something after the latest chat content Live saw. */
+  /**
+   * Sends a note and moves the fence only once main confirms Live got it. A
+   * note that was dropped never reached Live, so it can't have asked for anything.
+   */
+  async deliverNote(send: (options: { awaitDelivery: true }) => Promise<boolean>): Promise<boolean> {
+    let delivered = false;
+    try {
+      delivered = await send({ awaitDelivery: true });
+    } catch {
+      delivered = false;
+    }
+    if (delivered) this.exposed();
+    return delivered;
+  }
+
+  /** A finalized utterance began after the latest chat content Live saw. */
   allows(): boolean {
-    return this.latestVoiceInputId() > this.seenAt;
+    return this.newestStart > LIVE_UNTRUSTED_VOICE_START && this.newestStart > this.fence;
   }
 }
 
@@ -158,7 +197,7 @@ export function createLiveChatToolHandlers(
           ? Math.min(LIVE_CHAT_MAX_READ_MESSAGES, Math.max(1, Math.floor(args.limit)))
           : undefined;
       const snapshot = controller.read(limit);
-      // From here on, a send needs the person to speak again.
+      // The result goes to Live now: from here on, a send needs speech that starts later.
       deps.requests.exposed();
       return {
         ok: true,

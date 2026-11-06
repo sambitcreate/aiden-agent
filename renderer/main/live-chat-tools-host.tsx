@@ -47,17 +47,13 @@ export function LiveChatToolsHost({
   const noticeShownRef = React.useRef(preferences.chatAccessNoticeShown);
   noticeShownRef.current = preferences.chatAccessNoticeShown;
 
-  // Chat content Live sees (a read, a note) needs fresh speech before a send.
-  const requests = React.useMemo(
-    () => new LiveChatRequestGate(() => liveSessionBus.latestVoiceInputId()),
-    [],
-  );
+  // Chat content Live sees (a read, a note) needs speech that starts later before a send.
+  const requests = React.useMemo(() => new LiveChatRequestGate(liveSessionBus), []);
   const watcher = React.useMemo(
     () =>
       new LiveChatNoteWatcher({
         note: (text) => {
-          requests.exposed();
-          void liveSessionBus.note(text);
+          void requests.deliverNote((options) => liveSessionBus.note(text, options));
         },
         turn: async (chatId) => {
           const chat = await chatsApi.get(chatId);
