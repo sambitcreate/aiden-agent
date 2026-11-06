@@ -7,7 +7,6 @@ struct AidenAppSettingsView: View {
     @Bindable var appearance: AidenAppearanceStore
     let addInstallation: () -> Void
 
-    @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var readAloudStatus: AidenReadAloudStatus?
@@ -59,6 +58,13 @@ struct AidenAppSettingsView: View {
         }
     }
 
+    /// "3 of 4 online", read from the connections, so it never writes anything.
+    private var machinesSummary: String {
+        let connections = coordinator.hosts.ordered
+        let online = connections.filter { !$0.isRevoked && $0.connectionState == .connected }.count
+        return String(localized: "\(online) of \(connections.count) online")
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -67,10 +73,18 @@ struct AidenAppSettingsView: View {
                         "Connected desktop",
                         value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
                     )
-                    Button {
-                        isShowingInstallations = true
+                    NavigationLink {
+                        AidenMachinesView(
+                            coordinator: coordinator,
+                            preferences: .shared,
+                            addMachine: addInstallation
+                        )
                     } label: {
-                        Label("Paired Installations", systemImage: "desktopcomputer")
+                        LabeledContent {
+                            Text(machinesSummary)
+                        } label: {
+                            Label("Machines", systemImage: "desktopcomputer")
+                        }
                     }
                 }
 
@@ -181,15 +195,6 @@ struct AidenAppSettingsView: View {
         .task { await loadMemorySettings(); await loadReadAloudStatus() }
         .task(id: scenePhase) { if scenePhase == .active { await loadReadAloudStatus() } }
         .task(id: coordinator.server?.instanceId) { readAloudStatus = nil; await loadReadAloudStatus() }
-        .sheet(isPresented: $isShowingInstallations) {
-            AidenInstallationsView(
-                coordinator: coordinator,
-                addInstallation: {
-                    isShowingInstallations = false
-                    addInstallation()
-                }
-            )
-        }
         .sheet(isPresented: $isShowingAppearance) {
             AidenAppearanceSettingsView(appearance: appearance)
         }

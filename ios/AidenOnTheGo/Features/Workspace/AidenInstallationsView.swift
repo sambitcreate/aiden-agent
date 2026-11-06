@@ -167,6 +167,10 @@ struct AidenInstallationsView: View {
                     Task {
                         let operationID = UUID()
                         let outcome = await coordinator.removeInstallationOutcome(installationToRemove.id)
+                        // The phone-local name, symbol and colour go with the pairing.
+                        if !coordinator.installationStore.installations.contains(where: { $0.id == installationToRemove.id }) {
+                            AidenMachinePreferencesStore.shared.remove(installationToRemove.id)
+                        }
                         switch outcome {
                         case .success:
                             coordinator.haptics.play(
