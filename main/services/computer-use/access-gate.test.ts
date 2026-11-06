@@ -9,6 +9,7 @@ import { createChatStore } from "../chat-store-core.js";
 import { ToolApprovalCoordinator, type ToolApprovalPrompt } from "../tool-approval.js";
 import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import {
+  COMPUTER_USE_ACCESS_CHANGED_REASON,
   COMPUTER_USE_DECLINED_REASON,
   COMPUTER_USE_RESETTING_REASON,
   COMPUTER_USE_SETUP_REASON,
@@ -302,6 +303,59 @@ test("Stop during a setup card clears the continue marker", async (t) => {
   assert.equal(stored?.computerUseAllowed, undefined);
 });
 
+test("finishing setup clears the continue marker when the next call passes on the saved grant", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  await d.chatStore.setComputerUseAllowed(chat.id, true);
+  d.setStatus(NEEDS_PERMISSIONS);
+  const { gate } = d.stream(chat.id);
+
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, true);
+
+  d.setStatus(READY);
+  assert.deepEqual(await gate.authorize("call-2"), { allowed: true });
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, undefined);
+});
+
+test("a deny after setup finished clears the marker an earlier call in the response set", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  d.setStatus(NEEDS_PERMISSIONS);
+  d.willAnswer(true);
+  const { gate } = d.stream(chat.id);
+  // The bare allow lapses for the next call once this revocation lands.
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, true);
+
+  revokeComputerUseGrants();
+  d.setStatus(READY);
+  d.willAnswer(false);
+  assert.deepEqual(await gate.authorize("call-2"), {
+    allowed: false,
+    reason: COMPUTER_USE_DECLINED_REASON,
+  });
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, undefined);
+});
+
+test("Stop on a later card clears the marker even though setup has since finished", async (t) => {
+  const d = await desktop(t);
+  const chat = await d.chatStore.create({ title: "Notes" });
+  d.setStatus(NEEDS_PERMISSIONS);
+  d.willAnswer(true);
+  const { gate, streamId } = d.stream(chat.id);
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+
+  revokeComputerUseGrants();
+  d.setStatus(READY);
+  d.willWait();
+  const pending = gate.authorize("call-2");
+  while (d.cards.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  d.cancel(streamId, "user_stop");
+  assert.equal((await pending).allowed, false);
+  assert.equal((await d.chatStore.get(chat.id))?.computerUsePendingContinue, undefined);
+});
+
 test("once a response runs Computer Use on a ready Mac, later calls skip the readiness probe", async (t) => {
   const d = await desktop(t);
   const chat = await d.chatStore.create({ title: "Notes" });
@@ -333,6 +387,225 @@ test("revoking grants makes a running response ask again on its next call", asyn
     reason: COMPUTER_USE_DECLINED_REASON,
   });
   assert.equal(d.cards.length, 2);
+});
+
+test("a revocation that lands while the grant is being read cannot pass on the stale read", async () => {
+  const cards: string[] = [];
+  let reads = 0;
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => {
+      reads += 1;
+      if (reads > 1) return false;
+      // The store answered with the old grant, then Always allow was turned off.
+      revokeComputerUseGrants();
+      return true;
+    },
+    status: async () => READY,
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "denied" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_DECLINED_REASON,
+  });
+  assert.deepEqual(cards, ["call-1"]);
+});
+
+test("a cached grant does not outlive a revocation that lands during the readiness probe", async () => {
+  let onStatus = () => {};
+  let granted = true;
+  let status = NEEDS_PERMISSIONS;
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => granted,
+    status: async () => {
+      onStatus();
+      return status;
+    },
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "denied" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  // The first call caches the grant. Setup is still missing, so it does not pass.
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  status = READY;
+  onStatus = () => {
+    onStatus = () => {};
+    granted = false;
+    revokeComputerUseGrants();
+  };
+  assert.equal((await gate.authorize("call-2")).allowed, false);
+  assert.deepEqual(cards, ["call-2"]);
+});
+
+function gateForCards(input: {
+  status: () => { ready: boolean; available: boolean; detail: string };
+  answer: (toolCallId: string) => { outcome: "allowed" | "denied"; scope?: ToolApprovalScope };
+  grantChat?: () => Promise<unknown>;
+}) {
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => false,
+    status: async () => input.status(),
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return input.answer(toolCallId);
+    },
+    grantChat: input.grantChat ?? (async () => undefined),
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  return { gate, cards };
+}
+
+test("a revocation during the readiness recheck after an allow sends the call back to a card", async () => {
+  let reads = 0;
+  const { gate, cards } = gateForCards({
+    status: () => {
+      reads += 1;
+      if (reads === 1) return NEEDS_PERMISSIONS;
+      if (reads === 2) revokeComputerUseGrants();
+      return READY;
+    },
+    answer: (toolCallId) => ({ outcome: toolCallId === "call-1" && cards.length === 1 ? "allowed" : "denied" }),
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_DECLINED_REASON,
+  });
+  assert.equal(cards.length, 2);
+});
+
+test("a revocation while a chat grant is saved does not let the allow pass unchecked", async () => {
+  let saves = 0;
+  const { gate, cards } = gateForCards({
+    status: () => READY,
+    answer: () => (cards.length === 1 ? { outcome: "allowed", scope: "chat" } : { outcome: "denied" }),
+    grantChat: async () => {
+      saves += 1;
+      revokeComputerUseGrants();
+    },
+  });
+  assert.equal((await gate.authorize("call-1")).allowed, false);
+  assert.equal(saves, 1);
+  assert.equal(cards.length, 2);
+});
+
+test("an allow given after a revocation is fresh and covers the rest of the response", async () => {
+  let revoked = false;
+  const { gate, cards } = gateForCards({
+    status: () => READY,
+    answer: () => {
+      if (!revoked) {
+        revoked = true;
+        revokeComputerUseGrants();
+      }
+      return { outcome: "allowed", scope: "once" };
+    },
+  });
+  assert.deepEqual(await gate.authorize("call-1"), { allowed: true });
+  assert.deepEqual(await gate.authorize("call-2"), { allowed: true });
+  assert.deepEqual(cards, ["call-1"]);
+});
+
+test("an allow answered during a reset is refused and saves no grant", async () => {
+  let finishClearing = () => {};
+  let reset: Promise<unknown> | undefined;
+  let saves = 0;
+  const { gate } = gateForCards({
+    status: () => READY,
+    answer: () => {
+      reset = resetComputerUseGrants({
+        cancelActivatedStreams: () => undefined,
+        clearAlwaysAllow: () => new Promise<void>((resolve) => { finishClearing = resolve; }),
+        clearChatGrants: async () => 0,
+      });
+      return { outcome: "allowed", scope: "chat" };
+    },
+    grantChat: async () => {
+      saves += 1;
+    },
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_RESETTING_REASON,
+  });
+  assert.equal(saves, 0);
+  finishClearing();
+  await reset;
+});
+
+test("grants revoked on every read end in a refusal, not an endless retry", async () => {
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => {
+      revokeComputerUseGrants();
+      return true;
+    },
+    status: async () => READY,
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "allowed" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_ACCESS_CHANGED_REASON,
+  });
+  assert.deepEqual(cards, []);
+});
+
+test("a reset that starts during the grant read refuses instead of passing or asking", async () => {
+  let finishClearing = () => {};
+  let startedReset: Promise<unknown> | undefined;
+  const cards: string[] = [];
+  const gate = createComputerUseAccessGate({
+    readGrant: async () => {
+      startedReset ??= resetComputerUseGrants({
+        cancelActivatedStreams: () => undefined,
+        clearAlwaysAllow: () => new Promise<void>((resolve) => { finishClearing = resolve; }),
+        clearChatGrants: async () => 0,
+      });
+      return true;
+    },
+    status: async () => READY,
+    requestAccess: async (toolCallId) => {
+      cards.push(toolCallId);
+      return { outcome: "allowed" };
+    },
+    grantChat: async () => undefined,
+    grantAlways: async () => undefined,
+    setPendingContinue: async () => undefined,
+    cancellationOrigin: () => undefined,
+    warn: () => undefined,
+  });
+  assert.deepEqual(await gate.authorize("call-1"), {
+    allowed: false,
+    reason: COMPUTER_USE_RESETTING_REASON,
+  });
+  assert.deepEqual(cards, []);
+  finishClearing();
+  await startedReset;
 });
 
 test("reset chat permissions clears every chat's grant and Always allow, and stops live Computer Use", async (t) => {

@@ -87,6 +87,12 @@ The first settlement is the linearization point, so the first answer across the 
 
 Fixed defect, reproduced by test: a prompt settled from inside its own publish callback was shown but never withdrawn, which left its attention row and run projection open.
 
+Also fixed, reproduced by test: a publish callback that synchronously re-asks its own id let the first prompt's deferred withdrawal remove the replacement, so a Bot approval left `pending` while it could still be answered. The replacement now owns the id and is withdrawn once, on its own settlement. The older prompt gets no separate withdrawal, because surfaces key prompts by id. Question prompts use random ids and cannot hit this.
+
+Recorded, not changed:
+
+- "Publish throws, unsettled" means never shown, and existing tests require that no withdrawal follows. A surface whose publish shows the prompt and then throws in a later step would break that assumption. `bot-approvals.ts` is the one known case: it stores the waiting entry before calling its own publish, so a throw leaves that entry behind. See `backend:M028`. No desktop path that throws after showing a prompt was established.
+
 ### `backend:M020` question coordinator — converted
 
 Same prompt phases as the approval coordinator, plus the deadline timer. `respondWithOutcome` treats a passed deadline as a timeout even if the timer has not fired.
@@ -109,3 +115,128 @@ Fixed defects, reproduced by test:
 ### `backend:M028` Bot approval wait registry — deferred
 
 PR #730 rewrites `bot-approvals.ts`, and #727 also edits it. Reconcile after those land.
+
+Open item for that reconciliation: #730's publish callback still sets `waiting` and then calls `options.publish`. If that throws, the coordinator settles `unavailable` without withdrawing, so the `waiting` entry stays. Clear it in that path or set it after publish returns.
+
+## P2b: Remote pairing and single-use capabilities
+
+### `backend:M057` nearby pairing requests — retained
+
+`AidenRemotePairingRequestService` already has one `InternalState` union and a synchronous `approving` claim. `delivered` and `withdrawn` stay independent of it. The linearization points are:
+
+- `respond` setting `approving`, which decides who may act.
+- `authorizeCommit` inside the device write, which decides whether a device can exist.
+- `stillApproving` after the write and again after sealing, which decide whether the envelope is published.
+
+Every path that loses after commit revokes, and a failed revocation stays in `orphanedDeviceIds` for `close()` to retry.
+
+### `backend:M056` pairing window — retained, one fix
+
+`consumed` is set synchronously before any awaited work, so the secret is burned even if persistence fails. `cancelled` and window identity fence the issue.
+
+Fixed defect, reproduced by test: `authorizeCommit` passes inside the state write, so a window closed or replaced during that write reached the post-await check with a committed device. `exchange` refused the client but left the device record active. No credential escaped, but a device nobody could use stayed in the paired list. `exchange` now revokes it. A failed revocation is swallowed: the client still sees `pairing_closed`, and the record is the same unusable one as before this fix.
+
+### `backend:M142` form-fill batch consent — retained, one fix
+
+`FormFillBatchLedger` has an explicit `pending/authorized/consumed/revoked/expired` status. Expiry was enforced at `authorize` and by `statusOf`, but not at `consume`.
+
+Fixed defect, reproduced at the ledger boundary: an authorized plan could be consumed after its deadline. `consume` now records the expiry, and a clock rollback cannot revive the plan. In the running app authorize and execute are close together, so this needs a slow tool dispatch to matter.
+
+### `backend:M182` Computer Use one-shot grant — retained
+
+`ComputerUseGrantLedger.consume` deletes the grant before validating it, so a rejected attempt also burns it. The fingerprint binds generation, target revision and bound target.
+
+### `backend:M066` file and selection handles — retained
+
+`resolve` and `consumeSelection` are synchronous, so nothing can interleave between the check and the removal. A consumed or wrong-kind handle is an unknown handle. `consumeSelection` spends the handle before its callback runs, so a failed callback fails closed. A save rebinds a handle only to the inode that save installed, and discards it otherwise.
+
+### `backend:M065` Remote attachments — retained
+
+`reserve` holds a record for one send, which then spends or restores it. Revocation removes the record from the map, so a later `restore` changes only a detached object and cannot bring it back.
+
+Chat uploads hold a lease across their awaited lookup. The Bot upload and the fork `stage` do not, so a record can land after its device was revoked or its chat deleted. It cannot be spent, because only that device could send it, and it expires with the attachment TTL. This costs temporary capacity, not authority, so no code changed.
+
+### `backend:M191` Git snapshots, `backend:M067` schedule script claims — retained
+
+Reusable until expiry, bounded, and bound to device and workspace. Code read only, no new tests.
+
+## P2c: provider and MCP auth
+
+No code changed in this slice. The owners already separate the proposed phases, and the required races already have tests.
+
+### `backend:M078` provider auth flow — retained
+
+`session.phase` is `authenticating` or `committing`. The synchronous move to `committing` is the linearization point: abort wins before it, commit wins after it, and `abortSession` is a no-op once committing. `cancel` reports `finishing` rather than a false cancellation. Logout is its own transaction with `logoutInProgress` and `logoutCompletion`, and `shutdown` waits for both. `provider-auth-flow-core.test.ts` covers late credentials, owner loss, timeout cleanup, commit and shutdown.
+
+### `backend:M082` MCP OAuth operation gate — retained
+
+Generations are per server, and an interactive operation also holds `interactive` and its signal. `invalidate`, `cancel` and `suspend` all move the generation, so a stale writer fails `canMutate` however it was started. A background snapshot is not current while an interactive sign-in owns the server.
+
+### `backend:M083` MCP OAuth tokens and commit — retained
+
+Sign-in fills a private `McpOAuthSessionTransaction`, and the old session stays durable until the single commit in `authorizeMcpServerWithRuntime`. Every store write passes the operation's currency check. A failed commit restores the previous session only while the operation is still current.
+
+### `backend:M084` OAuth loopback, `backend:M181` callback consumption — retained
+
+The loopback answers once and closes on every terminal path. The callback state is consumed by the authorization flow, and its tests cover rejection without consumption and issuer binding.
+
+### `backend:M085` MCP admission and cleanup — retained
+
+`createMcpAdmissionQueue` and `McpPendingJournalState` already hold the ordering and the `unknown/empty/pending` state in a pure module.
+
+### `backend:M163` configuration and credential migration — deferred
+
+Not reviewed in this pass. It is a persisted migration, so it overlaps P4d.
+
+## P2d: remaining consent adapters
+
+### `backend:M119` Computer Use access gate — retained, one fix
+
+`grantRevision` and `resetsInProgress` fence cached grants across streams.
+
+Fixed defects, reproduced by test:
+
+- `decide` captured the revision before its awaited status and grant reads and compared later state against that captured value, so a revocation during either read went unnoticed. Turning off Always allow, or starting a reset, while a read was in flight let that one call pass on the stale answer. `decide` now starts again when the revision has moved.
+- A revocation after an allow, during the grant save or the readiness recheck, also passed. The allow is now bound to the revision current when it arrived and checked again after those awaits, so the call goes back through the grant read and, if needed, a new card.
+- An allow answered after a revocation was cached under the old revision, so a `once` grant lapsed on the next call and the card came back within one response. It is now cached under the answer's revision, because that answer is the person's fresh decision.
+- An allow answered during a reset could save a grant that the reset had just cleared. It is now refused.
+
+- The continue marker was cleared only when the current call saw an unready Mac. When setup finished between calls, a later call that passed on the saved grant, was denied or was stopped left the marker behind, and the chat kept offering Continue. The gate now tracks whether it set the marker.
+
+`decide` retries at most three times, then refuses with `COMPUTER_USE_ACCESS_CHANGED_REASON`.
+
+A revocation after an Allow can raise a second card for the same call. That is intended: the revocation is newer than the answer, so the call fails closed and asks again.
+
+### `backend:M123` Bot computer takeover — retained
+
+`takeOver` aborts in-flight actions and `run` refuses while the person holds control. Both happen synchronously, so no await separates the check from the action starting.
+
+### `clients:N38` Android new-chat consent — retained
+
+`AidenNewChatLinkConsent` is target-scoped and consumes the approval before suspending. No change.
+
+### Client approval views (`clients:C20`, `clients:N14`, `clients:C33`, `clients:C53`, `clients:N02`) — retained
+
+These stay read-only projections of host authority. Nothing in P2 changed a wire shape, an approval projection or a host expiry, so the mobile suites were not affected and were not run.
+
+### `backend:M166` analytics consent — deferred
+
+PRs #732, #733 and #734 are changing analytics now.
+
+### Not reviewed in this pass — deferred
+
+Transition review was not done for these, and no claim is made about them: `backend:M009`, `M010`, `M031`, `M033`, `M076`, `M099`, `M109`, `M110`, `M127`, `M164`, `M171`, `M180`, `M189`, `M197`, and `clients:C10`, `C35`, `C56`, `C63`, `C64`, `C67`, `C71`, `C74`, `C50`, `C51`, `C52`, `N10`, `N12`, `N24`, `N26`, `N34`.
+
+`backend:M009` and `M010` also sit on Lane A's ownership vocabulary.
+
+## P6a: Bot pause and recovery
+
+Other P6 owners are not reviewed yet. This section makes no claim about them.
+
+### Bot pause store and steps — retained
+
+`bot-pause-store` fails closed: an unreadable file makes reads throw and refuses writes, so a Bot turn is refused instead of guessing that nothing is paused. Pause and unpause mutate through `DataStore.update`. `bot-pause-steps` is ordered sequencing with no state of its own.
+
+### Bot routine recovery — retained
+
+`fireOutcomes`, `failureStreak` and `retryPlan` are already pure. `afterRun` decides from a task snapshot, which cannot go stale: user pause and edits go through `withTaskLifecycle` and `cancelAndSettle`, which wait for the active run, and `afterRun` runs inside that run. `addRoutineRetry` re-reads the task inside the store update and dedupes by request id.

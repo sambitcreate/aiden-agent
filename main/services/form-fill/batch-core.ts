@@ -247,6 +247,9 @@ export class FormFillBatchLedger {
         "The form-fill plan changed after approval.",
       );
     }
+    if (entry.status === "authorized" && entry.plan.expiresAt <= this.now()) {
+      entry.status = "expired";
+    }
     if (entry.status !== "authorized") {
       const code =
         entry.status === "consumed"
