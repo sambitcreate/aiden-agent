@@ -15,3 +15,5 @@ Started 2026-11-04. Scope: `cli-native` C09, C10, C03, C01, C02, C11, C04, then 
 - The local shell is zsh: an unquoted `$files` is one argument, so a looped `node --test $files` silently runs nothing. Check that a pass count came back.
 - Control-socket chunks stop near 64 KiB, so a ceiling test needs a frame near the limit plus a later write, not one big write.
 - `createDaemonApprovals` reports each raised prompt once from the settled outcome, so it does not rely on the coordinator's published flag, on `main` or after Lane B's #738.
+- The two `JsonStore` instances on `daemon-chat-deletions.json` (daemon `tombstones`, remote `deleting`) do not share a queue, and `acquireLease` throws on contention rather than waiting. That is safe only because daemon recovery finishes before Remote serves its first delete; keep that order.
+- Under heavy host load `durable CLI Bots can message each other` in `tests/parity.test.mjs` can miss its 10-second reply deadline (seen 2026-11-06 at load 14, passes alone). The ledger showed the reply on its way, not lost.
