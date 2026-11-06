@@ -490,9 +490,10 @@ export class LiveChatVoiceApprovals {
       target.timer = null;
       if (this.current !== target) return;
       target.fence = this.deps.bus.voiceInputFence();
-      // Speech that opens in the guard after a fence sits at the fence (it may
-      // have been captured before it), so the card says Live is listening only
-      // once speech can actually answer.
+      // Speech captured just after a fence, within its capture slack, or (for
+      // audio without a capture time) in the handled-audio guard, still sits at
+      // the fence. The card says Live is listening only after that window, so
+      // an answer given once it shows can count.
       target.timer = this.schedule(() => {
         target.timer = null;
         if (this.current !== target) return;
