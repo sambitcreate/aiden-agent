@@ -14,6 +14,7 @@ import {
   geminiLiveScaledFrameSize,
   GeminiLivePcmPlaybackQueue,
   loadGeminiLivePcmWorklet,
+  GEMINI_LIVE_WORKLET_SAMPLE_RATE,
   measureGeminiLivePcmLevel,
   type DisplayMediaStream,
   type GeminiLiveDisplayFrameSource,
@@ -24,6 +25,7 @@ import type {
 } from "../../shared/assistant-live";
 import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
 import { liveSessionBus } from "../../lib/live-session-bus";
+import { LiveSpeechOnsets } from "../../lib/live-speech-onsets";
 import { LiveTimeStretcher } from "../../lib/live-time-stretch";
 
 export interface AssistantLiveCaption {
@@ -648,6 +650,8 @@ export function useAssistantLiveWithDependencies(
   >(null);
   /** Bus start mark of the utterance under way, taken on its first input caption, interim or final. */
   const utteranceStartedAt = React.useRef<number | null>(null);
+  /** Speech onsets heard at the microphone, which come before any caption. */
+  const [speechOnsets] = React.useState(() => new LiveSpeechOnsets(() => liveSessionBus.beginVoiceInput()));
   /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
   const liveReplyOpen = React.useRef(false);
   const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -778,6 +782,7 @@ export function useAssistantLiveWithDependencies(
       mediaCleanupRef.current = null;
       microphoneLevelRef.current = 0;
       microphoneLevelFrame.current = 0;
+      speechOnsets.reset();
       if (mounted.current) {
         setMicrophoneActive(false);
         setMicrophoneLevel(0);
@@ -901,10 +906,11 @@ export function useAssistantLiveWithDependencies(
         // The receipt id is assigned synchronously at IPC delivery time. React may defer
         // the caption render, but an immediately following approval notification must
         // still fence every utterance that began before the prompt.
-        // The bus start mark likewise: speech begun before an approval armed
-        // stays before its fence however late the utterance finishes.
+        // The bus start mark likewise, taken from when the microphone first
+        // heard this speech: speech begun before an approval armed stays
+        // before its fence however late its caption arrives or ends.
         if (event.direction === "input" && utteranceStartedAt.current === null) {
-          utteranceStartedAt.current = liveSessionBus.beginVoiceInput();
+          utteranceStartedAt.current = speechOnsets.claim() ?? liveSessionBus.beginVoiceInput();
         }
         if (event.direction === "input" && event.final) {
           continueUtterance(event.text);
@@ -1333,6 +1339,7 @@ export function useAssistantLiveWithDependencies(
           // rather than a cut-off stream.
           if (microphoneMutedRef.current) pcm.fill(0);
           const measured = measureGeminiLivePcmLevel(pcm);
+          speechOnsets.packet(measured, (pcm.byteLength / 2 / GEMINI_LIVE_WORKLET_SAMPLE_RATE) * 1_000);
           const previous = microphoneLevelRef.current;
           const smoothed =
             measured >= previous

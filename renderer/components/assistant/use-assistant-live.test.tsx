@@ -1641,6 +1641,33 @@ test("an utterance keeps the start mark of its first caption, so speech begun be
   await stop();
 });
 
+test("speech heard at the microphone before a fence keeps that start even when its first caption comes after", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  const packet = (sample: number) => {
+    // 20 ms of 16 kHz audio at a constant level.
+    const data = new ArrayBuffer(640);
+    const view = new DataView(data);
+    for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, sample, true);
+    fixture.worklets[0]!.emit({ type: "pcm", data });
+  };
+  for (let index = 0; index < 20; index += 1) packet(8_192);
+  // An approval arms here, after the person said "allow" but before Live transcribed it.
+  const fence = liveSessionBus.voiceInputFence();
+  for (let index = 0; index < 50; index += 1) packet(0);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  // Well after that speech, quiet, then a fresh "allow".
+  for (let index = 0; index < 300; index += 1) packet(0);
+  for (let index = 0; index < 20; index += 1) packet(8_192);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "spoken before the fence, captioned after it");
+  assert.ok(inputs[1]!.startedAt > fence, "spoken after the fence");
+  await stop();
+});
+
 test("a phrase split across pieces is heard whole and still matches", async () => {
   const { fixture, heard, stop } = await listenToVoiceInput();
   fixture.emit(hearUser("Allow"));

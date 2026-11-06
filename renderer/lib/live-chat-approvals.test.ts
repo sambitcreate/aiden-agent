@@ -10,6 +10,7 @@ import {
 } from "./live-chat-approvals.js";
 import { LiveOpenChatStore } from "./live-open-chat.js";
 import { LiveSessionBus } from "./live-session-bus.js";
+import { LiveSpeechOnsets } from "./live-speech-onsets.js";
 
 const runTests: ApprovalPrompt = {
   approvalId: "a1",
@@ -270,6 +271,21 @@ test("an “allow” the user began before voice armed answers nothing, even tho
   live.say("allow");
   await settle();
   assert.deepEqual(live.decisions, [{ approvalId: "a1", decision: "allow", extra: 0 }]);
+});
+
+test("an “allow” spoken before voice armed answers nothing, even when its first caption arrives after", async () => {
+  const live = harness();
+  const microphone = new LiveSpeechOnsets(() => live.bus.beginVoiceInput());
+  live.showChat("c1", "Fix login");
+  live.raise(runTests);
+  await settle();
+  for (let packet = 0; packet < 20; packet += 1) microphone.packet(0.4, 20);
+  await live.readOut();
+  assert.equal(live.controller.voiceHint("a1"), "voice");
+  // Transcription lags: the caption for that speech reaches the renderer now.
+  live.bus.publishVoiceInput("allow", microphone.claim() ?? undefined);
+  await settle();
+  assert.deepEqual(live.harnessDecisions(), [], "spoken before the fence");
 });
 
 test("a delayed read-out arms voice only after Live accepts it and the arm delay passes", async () => {
