@@ -38,7 +38,7 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
     gate: createBotDeliveryGate({
       settings: async (botId) => resolveBotInterruptions((await botStore.get(botId))?.interruptions),
       // Proactive notifications that reached the person today count; held
-      // rows count once they come due, suppressed ones never do.
+      // rows count once released, suppressed ones never do.
       sentToday: async (botId, dayStart, now) => countedToday(await botDeliveryLog.list(botId), dayStart, now),
       timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
