@@ -208,7 +208,7 @@ export class ChatPullRequestService {
       context.host = repo.repository.host;
       context.repository = repo.repository.nameWithOwner;
       // GitHub knows the branch by the name it pushes to, which can differ from the local one.
-      if (context.branch && repo.headBranch) context.branch = repo.headBranch;
+      if (repo.headBranch) context.branch = repo.headBranch;
     }
     return context;
   }
