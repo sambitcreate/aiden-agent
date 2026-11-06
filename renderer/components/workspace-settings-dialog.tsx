@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Folder, MoreHorizontal, Plug, Search, SlidersHorizontal, Wand2 } from "lucide-react";
+import { Folder, MoreHorizontal, Plug, SlidersHorizontal, Wand2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -29,6 +29,7 @@ import {
   Text,
   toast,
 } from "./ui";
+import { LIST_SEARCH_THRESHOLD, ListSearchField } from "./list-search-field";
 import { McpPresetIcon } from "./settings/mcp-preset-icons";
 import { MemoryCardIcon } from "./memory-card-icon";
 import { cn } from "../lib/ui-utils";
@@ -56,7 +57,6 @@ import {
 import type { Workspace, WorkspacePermission } from "../lib/types";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
-const SEARCH_THRESHOLD = 8;
 
 interface OpenRequest {
   workspaceId: string;
@@ -395,18 +395,7 @@ function ListHeader({
           {title} <span className="font-normal text-secondary">· {count}</span>
         </h3>
       </div>
-      {showSearch ? (
-        <label className="flex h-8 w-48 items-center gap-2 rounded-control border border-field bg-background px-2.5 focus-within:bg-input max-[640px]:w-full max-[640px]:order-last">
-          <Search aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
-          <input
-            aria-label={`Search ${noun}`}
-            value={query}
-            onChange={(event) => onQuery(event.target.value)}
-            placeholder="Search"
-            className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-tertiary"
-          />
-        </label>
-      ) : null}
+      {showSearch ? <ListSearchField noun={noun} value={query} onChange={onQuery} /> : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="transparent" size="small" iconOnly aria-label={`More ${noun} actions`} disabled={allDisabled}>
@@ -477,7 +466,7 @@ function SkillsTab({ workspace, onClose }: { workspace: Workspace; onClose: () =
         count={onCountLabel(onCount, switchable.length)}
         query={query}
         onQuery={setQuery}
-        showSearch={all.length > SEARCH_THRESHOLD}
+        showSearch={all.length > LIST_SEARCH_THRESHOLD}
         onAll={(turnOff) => setOff(switchable.map((skill) => skill.key), turnOff)}
         allDisabled={switchable.length === 0}
         noun="skills"
@@ -593,7 +582,7 @@ function ConnectorsTab({ workspace, onClose }: { workspace: Workspace; onClose: 
         count={onCountLabel(onCount, switchable.length)}
         query={query}
         onQuery={setQuery}
-        showSearch={all.length > SEARCH_THRESHOLD}
+        showSearch={all.length > LIST_SEARCH_THRESHOLD}
         onAll={(turnOff) => setOff(switchable.map(({ server }) => server.id), turnOff)}
         allDisabled={switchable.length === 0}
         noun="connectors"

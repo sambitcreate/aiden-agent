@@ -4,10 +4,10 @@
 import { toast } from "./ui";
 import { useCommandHandler, useShortcutBinding } from "../lib/command-system";
 import { prettyAccelerator } from "../shared/keybindings";
-import { focusRegion, useFocusRegionKeys } from "../lib/focus-regions";
+import { focusRegion, useReplyFocusKeys } from "../lib/focus-regions";
 
 export function KeyboardRegions() {
-  useFocusRegionKeys();
+  useReplyFocusKeys();
   const sidebarBinding = useShortcutBinding("sidebar.toggle");
   const sidebarShortcut = sidebarBinding ? prettyAccelerator(sidebarBinding) : null;
   useCommandHandler("focus.sidebar", () => {

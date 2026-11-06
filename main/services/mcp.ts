@@ -1,8 +1,14 @@
+import { withForegroundComposioSettingsClientCore, type ForegroundComposioSettingsClientPort } from "./foreground-composio-settings-client.js";
+import { assertBotConnectorModelEffectCurrent, botConnectorInventoryCacheOnly, botConnectorInventoryServer } from "./bot-connector-inventory-scope.js";
+import { composioServiceStatusTools, composioServiceToolDescriptor, createComposioServiceAgentTool, isComposioServiceServer, projectComposioServiceInventory } from "./composio-service-tool.js";
+import { bindMcpConnectorInventoryScope, existingOrConnectMcpClient, McpConnectorSourceAttestations, admitMcpConnectorDiscovery } from "./mcp-connector-client-boundary.js";
 import { mcpProviderAuthenticatedFetch } from "./mcp-provider-auth.js";
 import { admitMcpProviderAuthServers, withMcpProviderOperation, type McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import { inspectInitializedMcpStatus } from "./mcp-status.js";
 import { mcpLiveStatus, recordMcpConnectionLifecycle } from "./mcp-status-events.js";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
+import { boundedMcpToolPageReader, guardedMcpToolCall, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory, MCP_TOOL_INVENTORY_TTL_MS } from "./mcp-tool-inventory.js";
+import type { McpToolInventoryLimits } from "./mcp-tool-inventory.js";
+import { COMPOSIO_WATCH_INVENTORY_LIMITS } from "./mcp-tool-inventory.js";
 import { createHash } from "node:crypto";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { snapshotMcpServerInstructions } from "./mcp-server-instructions.js";
@@ -28,14 +34,14 @@ import {
 } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
-import { mcpServerExposure, mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
+import { mcpServerExposure, mcpServerOffersTools, mcpToolsOfferedToModel } from "../../renderer/shared/mcp-exposure.js";
 import { resolveMcpConnectionCredentials } from "./mcp-connection-credentials.js";
 import { mcpStdioApprovals, resolveStoredMcpFieldSecrets } from "./mcp-field-secrets.js";
 import { markMcpToolExposure, planMcpServerExposure } from "./mcp-exposure.js";
 import { executeMcpAgentTool, mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { markToolOutputSource } from "./tool-output-context.js";
 import { configStore } from "./config-store.js";
-import { mcpRuntimeConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
+import { mcpRuntimeConnectionSnapshot, sameMcpRuntimeConnection } from "./mcp-credential-cleanup-core.js";
 import {
   reconcilePendingMcpCredentialCleanup,
   withConfiguredMcp,
@@ -47,7 +53,7 @@ import {
 import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix, type McpToolNamingServer } from "./mcp-tool-identity.js";
 import {
   withIsolatedSubagentMcpClientCore,
-  type IsolatedSubagentMcpClient,
+  isolatedSubagentMcpClient,
 } from "./subagents/subagent-mcp-client-core.js";
 import { createBoundedSubagentMcpFetch } from "./subagents/subagent-mcp-bounded-fetch.js";
 import { resolveProductionSubagentMcpCredentialBoundary } from "./subagents/subagent-mcp-credential-production.js";
@@ -87,6 +93,8 @@ import {
 /** Cached connections with no activity for this long are closed. */
 const MCP_IDLE_CONNECTION_MS = 10 * 60_000;
 const MCP_IDLE_SWEEP_MS = 60_000;
+
+export { withBotConnectorInventoryScope } from "./bot-connector-inventory-scope.js";
 
 /**
  * Resolve a server record into connection-ready form. For built-in presets
@@ -136,9 +144,7 @@ function makeTransport(
   if (!server.url) throw new Error("This MCP server needs a URL.");
   assertMcpPresetServer(server);
   if (server.authProvider && options.forceNoRedirect) throw new Error("Provider-authenticated MCP is unavailable to child agents.");
-  const guardedFetch = options.forceNoRedirect
-    ? createBoundedSubagentMcpFetch()
-    : undefined;
+
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
   const observeOAuthTokens = options.registerCredentialRedactor
@@ -157,7 +163,9 @@ function makeTransport(
     serviceHeaders: server.headers,
     isCurrent,
     authProvider,
-    fetch: server.authProvider ? mcpProviderAuthenticatedFetch(server, isCurrent) : guardedFetch,
+    wrapFetch: server.authProvider
+      ? (send) => mcpProviderAuthenticatedFetch(server, isCurrent, send)
+      : options.forceNoRedirect ? (send) => createBoundedSubagentMcpFetch(send) : undefined,
     onTerminalFailure: options.onTerminalFailure,
   });
 }
@@ -196,15 +204,7 @@ export async function withIsolatedSubagentMcpClient<T>(
     configurationLease,
     operation,
     dependencies: {
-      createClient: () => {
-        const client = createMcpClient(AIDEN_MCP_CLIENT_NAME);
-        return {
-          connect: (transport, options) => connectMcpClient(client, transport as McpTransport, options),
-          close: () => client.close(),
-          listTools: (cursor, options) => listMcpToolPage(client, cursor, options, reportSkippedMcpTool),
-          callTool: (params, options) => callMcpTool(client, params, options),
-        } satisfies IsolatedSubagentMcpClient;
-      },
+      createClient: () => isolatedSubagentMcpClient(createMcpClient(AIDEN_MCP_CLIENT_NAME), reportSkippedMcpTool),
       resolveAuth,
       resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
       makeTransport,
@@ -254,6 +254,11 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
   signal: AbortSignal,
 ): Promise<readonly SubagentMcpRemoteTool[]> {
   if (server.authProvider) throw new Error("Provider-authenticated MCP is unavailable to Bots.");
+  const watchedServer = botConnectorInventoryServer();
+  if (watchedServer) {
+    if (watchedServer !== server.id) throw new Error("Unattended watch admission cannot discover another connector.");
+    return withBotConnectorMcpClient(server, signal, (client) => client.list());
+  }
   const lease = mcpConfigurationLeases.acquire(server.id);
   const operationSignal = AbortSignal.any([signal, lease.signal]);
   const isCurrent = () => {
@@ -345,39 +350,44 @@ class McpManager {
     server: McpServer,
     generation: number,
   ): Promise<McpClient> {
-    const client = await this.clients.getOrConnect(
-      server.id,
-      () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
-      async (client, connectionIsCurrent, onClosed) => {
-        // A closed client's inventory is never reused, even by a waiter that
-        // still holds the client.
-        const closed = () => {
-          this.toolInventories.forget(client);
-          onClosed();
-        };
-        // Register before connect: closure during initialization must also
-        // prevent a dead client from being published to the cache.
-        client.onClose(closed);
-        this.toolInventories.watch(client);
-        await connectMcpClient(
-          client,
-          makeTransport(
-            await resolveAuth(server, connectionIsCurrent),
-            connectionIsCurrent,
-            { onTerminalFailure: closed },
-          ),
-          mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
+    return existingOrConnectMcpClient({
+      peek: () => { this.assertGeneration(server.id, generation); return this.clients.peekConnected(server.id); },
+      connect: async () => {
+        const client = await this.clients.getOrConnect(
+          server.id,
+          () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
+          async (client, connectionIsCurrent, onClosed) => {
+            // A closed client's inventory is never reused, even by a waiter that
+            // still holds the client.
+            const closed = () => {
+              this.toolInventories.forget(client);
+              onClosed();
+            };
+            // Register before connect: closure during initialization must also
+            // prevent a dead client from being published to the cache.
+            client.onClose(closed);
+            this.toolInventories.watch(client);
+            await connectMcpClient(
+              client,
+              makeTransport(
+                await resolveAuth(server, connectionIsCurrent),
+                connectionIsCurrent,
+                { onTerminalFailure: closed },
+              ),
+              mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
+            );
+          },
+          async (client) => {
+            this.toolInventories.forget(client);
+            await client.close();
+          },
+          generation,
         );
+        this.activity.touch(server.id);
+        this.scheduleIdleSweep();
+        return client;
       },
-      async (client) => {
-        this.toolInventories.forget(client);
-        await client.close();
-      },
-      generation,
-    );
-    this.activity.touch(server.id);
-    this.scheduleIdleSweep();
-    return client;
+    });
   }
 
   /**
@@ -406,13 +416,13 @@ class McpManager {
     if (this.connectionGeneration(id) !== generation) throw new Error("The MCP connection was superseded.");
   }
 
-  private async readInventory(client: McpClient, assertCurrent: () => void, signal?: AbortSignal): Promise<McpInventory> {
-    const tools = client.serverCapabilities?.tools ? await listMcpToolInventory({
+  private async readInventory(client: McpClient, assertCurrent: () => void, signal?: AbortSignal, limits?: McpToolInventoryLimits): Promise<McpInventory> {
+    return readGuardedMcpInventory(client, async () => client.serverCapabilities?.tools ? await listMcpToolInventory({
       signal,
       assertCurrent,
-      listPage: boundedMcpToolPageReader(client, MCP_DISCOVERY_DEADLINES.listMs, reportSkippedMcpTool),
-    }) as McpToolInfo[] : [];
-    return { tools, guard: createMcpToolCallGuard(tools) };
+      limits,
+      listPage: limits ? (cursor, pageSignal) => listMcpToolPage(client, cursor, { signal: pageSignal, timeoutMs: MCP_DISCOVERY_DEADLINES.listMs }, reportSkippedMcpTool, limits.maxPageBytes) : boundedMcpToolPageReader(client, MCP_DISCOVERY_DEADLINES.listMs, reportSkippedMcpTool),
+    }) as McpToolInfo[] : [], assertCurrent);
   }
 
   /**
@@ -420,11 +430,18 @@ class McpManager {
    * caller's own revoked lease cannot fail other callers; each caller stops
    * waiting on its own signal and re-checks its lease afterwards.
    */
-  private cachedInventory(server: McpServer, generation: number, client: McpClient, signal?: AbortSignal): Promise<McpInventory> {
+  private cachedInventory(server: McpServer, generation: number, client: McpClient, signal?: AbortSignal, fresh = false, limits?: McpToolInventoryLimits): Promise<McpInventory> {
+    if(botConnectorInventoryCacheOnly()){
+      signal?.throwIfAborted();this.assertGeneration(server.id,generation);const inventory=this.toolInventories.peek(client);if(!inventory)return Promise.reject(new Error("Refresh this connector’s metadata in the foreground first."));inventory.guard.assertCurrent();return Promise.resolve(inventory);
+    }
     return this.toolInventories.load(
       client,
-      () => this.readInventory(client, () => this.assertGeneration(server.id, generation)),
+      (assertInventoryCurrent) => this.readInventory(client, () => {
+        assertInventoryCurrent();
+        this.assertGeneration(server.id, generation);
+      }, fresh ? signal : undefined, limits),
       signal,
+      fresh,
     );
   }
 
@@ -440,6 +457,48 @@ class McpManager {
   private stopIdleSweep(): void {
     if (this.idleSweep) clearInterval(this.idleSweep);
     this.idleSweep = undefined;
+  }
+
+  hasExistingConnector(id: string): boolean { return this.clients.peekConnected(id) !== undefined; }
+
+  /** An accepted watch may keep an existing approved session; it never reconnects it. */
+  retainExistingConnector(id: string): (() => void) | undefined {
+    if (!this.clients.peekConnected(id)) return undefined;
+    return this.activity.begin(id);
+  }
+
+  private readonly connectorFingerprints = new McpConnectorSourceAttestations();
+
+  async withExistingConnectorClient<T>(server: McpServer, signal: AbortSignal, operation: (port: BotConnectorMcpClientPort) => Promise<T>): Promise<T> {
+    const client = this.clients.peekConnected(server.id);
+    if (!client) throw new Error("Connect iMCP in the foreground first. Watches never create a new approval session.");
+    const generation = this.connectionGeneration(server.id);
+    const lease = mcpConfigurationLeases.acquire(server.id);
+    const currentSignal = AbortSignal.any([signal, lease.signal]);
+    const assertCurrent = () => { lease.assertCurrent(); currentSignal.throwIfAborted(); this.assertGeneration(server.id, generation); if (!this.clients.isConnected(server.id, client)) throw new Error("The approved connector session ended."); return true; };
+    const end = this.activity.begin(server.id);
+    try {
+      const operationOnExistingClient = async () => {
+        let inventory: McpInventory | undefined;
+        return operation({
+          assertCurrent:()=>{assertCurrent();inventory?.guard.assertCurrent();},
+          attestConnectionFingerprint: (fingerprint) => { this.connectorFingerprints.attest(client,lease.epoch,fingerprint,assertCurrent); },
+          connectionFingerprint: () => { return this.connectorFingerprints.get(client,lease.epoch,assertCurrent); },
+          list: async (limits) => { assertCurrent(); inventory = undefined; const publish=this.toolInventories.publisher(client); inventory = await this.cachedInventory(server, generation, client, currentSignal, true, limits); assertCurrent();publish(inventory); return inventory.tools.map(mcpRemoteToolDescriptor); },
+          cached:async()=>{assertCurrent();inventory=this.toolInventories.peek(client);if(!inventory)throw new Error("Refresh this connector’s metadata in the foreground first.");inventory.guard.assertCurrent();assertCurrent();return inventory.tools.map(mcpRemoteToolDescriptor);},
+          call: async (name, args) => { assertCurrent(); if (!inventory) throw new Error("Connector metadata was not checked."); return guardedMcpToolCall(inventory.guard, client, { name, arguments: args }, botMcpRequestOptions(currentSignal)); } });
+      };
+      if (botConnectorInventoryCacheOnly()) {
+        // A background source read must not enter generic admission's pending
+        // credential-cleanup/repair queue. Its existing client + attestation,
+        // configuration epoch and exact saved snapshot are independently fenced.
+        const configured=(await configStore.listMcpServers()).find(row=>row.id===server.id);
+        assertCurrent();
+        if(!configured||!sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(configured),mcpRuntimeConnectionSnapshot(server)))throw new Error("This approved connector's configuration changed.");
+        const result=await operationOnExistingClient();assertCurrent();return result;
+      }
+      return await withConfiguredMcp(server.id,mcpRuntimeConnectionSnapshot(server),operationOnExistingClient,assertCurrent);
+    } finally { end(); }
   }
 
   async closeIdleConnections(): Promise<void> {
@@ -531,6 +590,27 @@ class McpManager {
     void this.prewarmer.start(id, discover, onFailure);
   }
 
+  /** One disposable Settings connection for explicit metadata or typed Calendar acceptance reads; never an agent/watch cache entry. */
+  withForegroundComposioSettingsClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
+    return withForegroundComposioSettingsClientCore({
+      server, signal, operation, lease: mcpConfigurationLeases.acquire(server.id), attempts: this.statusClients,
+      configured: async () => (await configStore.listMcpServers()).find((entry) => entry.id === server.id),
+      create: () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
+      resolveAuth: (configured, isCurrent) => resolveMcpConnectionCredentials(configured, {
+        resolveFieldSecrets: resolveStoredMcpFieldSecrets,
+        presetKey: (saved, binding) => secrets.getProviderKey(presetSecretId(saved.id), binding),
+        isCurrent, missingKey: () => "Composio needs its saved, bound API key before metadata inspection.",
+      }),
+      connect: async (client, resolved, operationSignal, isCurrent) => {
+        await connectMcpWithinDeadline(
+          connectMcpClient(client, makeTransport(resolved, isCurrent, { signal: operationSignal, forceNoRedirect: true }), { signal: operationSignal, timeoutMs: 10_000 }),
+          () => client.close(), { signal: operationSignal },
+        );
+      },
+      close: (client) => client.close(),
+    });
+  }
+
   /** Connect and return status (used by the settings "test" action). */
   async status(
     server: McpServer,
@@ -552,8 +632,11 @@ class McpManager {
             mcpRequestDeadline(MCP_DISCOVERY_DEADLINES.connectMs),
           );
         },
-        (client, connectionIsCurrent) =>
-          inspectInitializedMcpStatus(client, () => isCurrent() && connectionIsCurrent()),
+        async (client, connectionIsCurrent) => {
+          const status = await inspectInitializedMcpStatus(client, () => isCurrent() && connectionIsCurrent());
+          const tools = composioServiceStatusTools(server, status.tools);
+          return { ...status, tools, toolCount: tools.length };
+        },
         async (client) => client.close(),
       );
     } catch (error) {
@@ -574,6 +657,7 @@ class McpManager {
     providerScope?: McpProviderExecutionScope,
     configured: readonly McpToolNamingServer[] = [server],
   ): Promise<McpAgentContext> {
+    const connectorScope = botConnectorInventoryServer();
     if (this.closed) throw new Error("MCP connections are shut down.");
     const lease = mcpConfigurationLeases.acquire(server.id);
     if (server.authProvider && !providerScope) throw new Error("Provider-authenticated MCP requires a live attended operation.");
@@ -583,7 +667,11 @@ class McpManager {
         signal: AbortSignal.any([providerScope!.signal, lease.signal, ...(callerSignal ? [callerSignal] : [])]),
         isCurrent: () => { lease.assertCurrent(); return providerScope!.isCurrent(); },
       },
-      create: () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
+      create: () => {
+        const client = createMcpClient(AIDEN_MCP_CLIENT_NAME);
+        this.toolInventories.watch(client);
+        return client;
+      },
       connect: async (client, signal, isCurrent) => {
         // The operation's own 60 s bound is far past the discovery budget.
         await connectMcpWithinDeadline(
@@ -606,42 +694,47 @@ class McpManager {
       inventory: await this.cachedInventory(server, generation, cachedClient, lease.signal),
       ...describe(cachedClient),
     } : await scoped(async (client, signal) => ({
-      inventory: await this.readInventory(client, () => { lease.assertCurrent(); assertGeneration(); }, AbortSignal.any([lease.signal, signal])),
+      inventory: await this.cachedInventory(server, generation, client, signal, true),
       ...describe(client),
     }));
     assertGeneration();
     lease.assertCurrent();
-    mcpLiveStatus.inventory(server.id, { toolCount: metadata.inventory.tools.length, resources: metadata.resources, tools: metadata.inventory.tools });
+    const composio = isComposioServiceServer(server);
+    const shownInventory = projectComposioServiceInventory(server, metadata.inventory.tools);
+    const publicInventory = composio && metadata.inventory.tools.length ? [composioServiceToolDescriptor()] : metadata.inventory.tools;
+    mcpLiveStatus.inventory(server.id, { toolCount: publicInventory.length, resources: !composio && metadata.resources, tools: publicInventory });
     // Tool names depend on the configured servers only through this prefix.
     const toolPrefix = mcpServerToolPrefix(server, configured);
     const key = JSON.stringify([server.id, server.name, server.description ?? null, toolPrefix, mcpServerExposure(server), server.hiddenTools ?? []]);
     const { tools, guard: callGuard } = metadata.inventory;
     // Hidden tools are never built; a server whose every tool is hidden (or
     // that is switched off for the model) offers nothing, resources included.
-    const exposure = planMcpServerExposure(server, tools);
-    if (!exposure) return { tools: [] };
+    const exposure = planMcpServerExposure(server, shownInventory);
+    if (!exposure || (composio && shownInventory.length === 0)) return { tools: [] };
+    const callLive = (live: McpClient, params: Parameters<typeof callMcpTool>[1], options?: McpToolCallOptions) => {
+      const signal = AbortSignal.any([lease.signal, ...(options?.signal ? [options.signal] : [])]);
+      const needsFreshList = live.serverCapabilities?.tools?.listChanged !== true;
+      return callMcpToolOnLiveClient(
+        callGuard, live, (client) => this.cachedInventory(server, generation, client, signal, needsFreshList),
+        params, { ...options, signal },
+      );
+    };
     const client: Parameters<typeof createMcpResourceTool>[1] & {
       callTool(params: Parameters<typeof callMcpTool>[1], options?: McpToolCallOptions): ReturnType<typeof callMcpTool>;
     } = cachedClient ? {
-      callTool: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) =>
-        callMcpToolOnLiveClient(
-          { client: cachedClient, guard: callGuard },
-          live,
-          (reconnected) => this.cachedInventory(server, generation, reconnected, options?.signal),
-          params,
-          options,
-        )),
-      listResources: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourcesPage(live, params, options)),
-      listResourceTemplates: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourceTemplatesPage(live, params, options)),
-      readResource: (params, options) => this.withLiveClient(server, generation, cachedClient, (live) => readMcpResource(live, params, options)),
+      callTool: bindMcpConnectorInventoryScope((params, options) => this.withLiveClient(server, generation, cachedClient, (live) =>
+        callLive(live, params, options))),
+      listResources: bindMcpConnectorInventoryScope((params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourcesPage(live, params, options))),
+      listResourceTemplates: bindMcpConnectorInventoryScope((params, options) => this.withLiveClient(server, generation, cachedClient, (live) => listMcpResourceTemplatesPage(live, params, options))),
+      readResource: bindMcpConnectorInventoryScope((params, options) => this.withLiveClient(server, generation, cachedClient, (live) => readMcpResource(live, params, options))),
     } : {
-      callTool: (params, options) => scoped((connection, signal) => guardedMcpToolCall(callGuard, connection, params, { ...options, signal }), options?.signal),
+      callTool: (params, options) => scoped((connection, signal) => callLive(connection, params, { ...options, signal }), options?.signal),
       listResources: (params, options) => scoped((connection, signal) => listMcpResourcesPage(connection, params, { ...options, signal }), options?.signal),
       listResourceTemplates: (params, options) => scoped((connection, signal) => listMcpResourceTemplatesPage(connection, params, { ...options, signal }), options?.signal),
       readResource: (params, options) => scoped((connection, signal) => readMcpResource(connection, params, { ...options, signal }), options?.signal),
     };
     // The resource tool keeps a per-turn resource listing, so it is always new.
-    const resourceTool = metadata.resources ? createMcpResourceTool(server, client, lease) : undefined;
+    const resourceTool = !composio && metadata.resources ? createMcpResourceTool(server, client, lease) : undefined;
     const withResources = (built: BuiltMcpTools): McpAgentContext => {
       if (resourceTool) markMcpToolExposure(resourceTool, built.discovery, exposure);
       return { tools: resourceTool ? [...built.tools, resourceTool] : built.tools };
@@ -649,7 +742,7 @@ class McpManager {
     // Same client, same inventory, same server identity and a still-current
     // lease: reuse the very same tool objects, so per-tool work (name hashing,
     // schema normalization, provider validator caches) is not redone.
-    const dependencies = [cachedClient, metadata.inventory, key, Boolean(resourceTool)];
+    const dependencies = [cachedClient, metadata.inventory, key, Boolean(resourceTool), connectorScope,botConnectorInventoryCacheOnly()];
     const reused = cachedClient ? this.built.get(server.id, dependencies) : undefined;
     if (reused) return withResources(reused);
     // Named against the full inventory, so hiding one tool never renames another.
@@ -660,7 +753,23 @@ class McpManager {
     };
     // Each tool carries its MCP identity (for grant joins) and the exact
     // tools/list entry it was built from (for live schema/effect checks).
-    const agentTools = exposure.tools.map((t): AgentTool => tagMcpAgentTool(markMcpAgentTool(markToolOutputSource({
+    const agentTools = composio ? [createComposioServiceAgentTool({
+      server,
+      inspect: bindMcpConnectorInventoryScope(async (signal) => {
+        lease.assertCurrent(); signal?.throwIfAborted();
+        return this.withLiveClient(server, generation, cachedClient!, async (live) => {
+          const current = await this.cachedInventory(server, generation, live, signal, true);
+          lease.assertCurrent(); signal?.throwIfAborted();
+          return { tools: current.tools.map(mcpRemoteToolDescriptor), call: async (name, args, callSignal) => {
+            await assertBotConnectorModelEffectCurrent();
+            lease.assertCurrent(); this.assertGeneration(server.id, generation);
+            const currentSignal = AbortSignal.any([lease.signal, ...(callSignal ? [callSignal] : [])]);
+            currentSignal.throwIfAborted();
+            return guardedMcpToolCall(current.guard, live, { name, arguments: args }, { signal: currentSignal, timeoutMs: MCP_TOOL_CALL_TIMEOUT_MS });
+          } };
+        });
+      }),
+    })] : mcpToolsOfferedToModel(server, tools).map((t): AgentTool => tagMcpAgentTool(markMcpAgentTool(markToolOutputSource({
       name: toolNames.get(t.name)!,
       // Bounded description (title fallback), `server/tool` label, structured-content schema.
       ...presentation(t),
@@ -750,16 +859,14 @@ function discoverMcpServer(
     if (recent) return Promise.reject(new McpRecentFailureError(recent.error, recent.retryInMs));
   }
   let generation = 0;
-  return withConfiguredMcp(
-    server.id,
-    mcpRuntimeConnectionSnapshot(server),
-    () => mcpManager.agentContextFor(server, generation, options.providerScope, options.configured),
-    () => true,
-    () => {
-      generation = mcpManager.connectionGeneration(server.id);
-      generations.set(server.id, generation);
-    },
-  ).then(
+  const lease=mcpConfigurationLeases.acquire(server.id);
+  const admit=()=>{generation=mcpManager.connectionGeneration(server.id);generations.set(server.id,generation);};
+  return admitMcpConnectorDiscovery({serverId:server.id,
+    assertExisting:()=>{lease.assertCurrent();if(!mcpManager.hasExistingConnector(server.id)||server.authProvider)throw new Error("Connect this selected app in the foreground before using the watch.");},
+    assertConfigured:async()=>{const current=(await configStore.listMcpServers()).find(row=>row.id===server.id);lease.assertCurrent();if(!current||!sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(current),mcpRuntimeConnectionSnapshot(server)))throw new Error("This selected connector's configuration changed.");},
+    runExisting:async()=>{admit();const context=await mcpManager.agentContextFor(server,generation,options.providerScope,options.configured);lease.assertCurrent();return context;},
+    normalAdmission:()=>withConfiguredMcp(server.id,mcpRuntimeConnectionSnapshot(server),()=>mcpManager.agentContextFor(server,generation,options.providerScope,options.configured),()=>true,admit),
+  }).then(
     (context) => {
       mcpManager.clearFailure(server.id);
       mcpDiagnostics.recovered(server);
@@ -848,7 +955,10 @@ export async function collectMcpAgentTools(
 ): Promise<AgentTool[]> {
   // Servers switched off for the model are never discovered, strict runs included.
   const enabled = admitMcpProviderAuthServers(servers, options.allowProviderAuth === true && options.providerScope !== undefined, options.strict === true)
-    .filter((server) => server.enabled && mcpServerOffersTools(server));
+    .filter((server) => server.enabled && mcpServerOffersTools(server))
+    // A stale catalog may still name a disconnected app. It is unavailable
+    // for this watch turn; other already approved live apps can still work.
+    .filter((server) => !botConnectorInventoryServer() || mcpManager.hasExistingConnector(server.id));
   const generations = new Map<string, number>();
   const configured = await configuredMcpToolNamingServers(servers);
   const discover = (server: McpServer) => discoverMcpServer(server, { ...options, configured }, generations);
@@ -869,4 +979,33 @@ export async function collectMcpAgentTools(
     strict: options.strict,
     onUnavailable,
   });
+}
+
+export interface BotConnectorMcpClientPort {
+  /** Synchronous client/configuration/current-inventory revision fence, no I/O. */
+  assertCurrent?():void;
+  /** Host-only attestation bound to this actual live client, never diagnostics. */
+  attestConnectionFingerprint?(fingerprint: string): void;
+  connectionFingerprint?(): string | undefined;
+  /** Completed current live metadata only, with no RPC or pending-read join. */
+  cached?():Promise<readonly SubagentMcpRemoteTool[]>;
+  list(limits?: McpToolInventoryLimits): Promise<readonly SubagentMcpRemoteTool[]>;
+  call(name: string, args: Record<string, unknown>): Promise<unknown>;
+}
+/** An approved live session only: no child creation, reconnect, credential resolution or sign-in. */
+export function withBotConnectorMcpClient<T>(server: McpServer, signal: AbortSignal, operation: (port: BotConnectorMcpClientPort) => Promise<T>): Promise<T> {
+  if (!isComposioServiceServer(server) && (server.presetId !== "imcp" || server.authProvider || server.transport !== "stdio")) throw new Error("Unsupported connector watch transport.");
+  return mcpManager.withExistingConnectorClient(server, signal, (raw) => operation(isComposioServiceServer(server)
+    ? { ...raw, list: () => raw.list(COMPOSIO_WATCH_INVENTORY_LIMITS) } : raw));
+}
+
+/** Background reads never refresh inventory or create/repair an MCP connection. */
+export function withCachedBotConnectorMcpClient<T>(server:McpServer,signal:AbortSignal,operation:(port:BotConnectorMcpClientPort)=>Promise<T>):Promise<T>{
+  if(!isComposioServiceServer(server))throw new Error("Unsupported cached connector transport.");
+  return mcpManager.withExistingConnectorClient(server,signal,raw=>operation({...raw,list:async()=>{if(!raw.cached)throw new Error("Cached connector metadata is unavailable.");return raw.cached();}}));
+}
+
+/** Explicit foreground Settings checks only; no agent-cache warming or background repair. */
+export function withForegroundComposioSettingsMcpClient<T>(server: McpServer, signal: AbortSignal, operation: (port: ForegroundComposioSettingsClientPort) => Promise<T>): Promise<T> {
+  return mcpManager.withForegroundComposioSettingsClient(server, signal, operation);
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import {
   AIDEN_REMOTE_MAX_PCM16_BASE64_LENGTH,
   AIDEN_REMOTE_MAX_PCM16_BYTES,
@@ -247,4 +248,33 @@ test("remote speech status reports the model Automatic actually uses", async () 
   // Nothing installed: nothing selected.
   models = [model("parakeet-v3", false)];
   assert.equal((await service.status()).selectedModelId, null);
+});
+
+test("a phone transcription counts once as local dictation; a failed or silent one counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  let failing = true;
+  let spoken = "   ";
+  const service = new AidenRemoteSpeechServiceCore({
+    configStore: { getSettings: async () => ({ localVoiceModel: "parakeet-v3" }), setSettings: async () => {} },
+    listModels: () => [{ id: "parakeet-v3", name: "Parakeet", description: "", sizeLabel: "", quant: "int8", languagesLabel: "", accuracy: 1, speed: 1, recommended: true, installed: true,
+      languages: ["en"], capabilities: { autoDetect: true, languageHint: false, translateToEnglish: false, maxWindowSeconds: null },
+      license: { name: "CC-BY-4.0", url: "https://creativecommons.org/licenses/by/4.0/" } }],
+    localModelDownloadStates: () => [],
+    downloadModel: async () => {}, cancelDownload: () => false, deleteModel: async () => {},
+    releaseRecognizer: async () => {}, engineStatus: async () => ({ ready: true, error: null }),
+    transcribePcm16Base64: async () => {
+      if (failing) throw new Error("recognizer failed");
+      return spoken;
+    },
+    recordUsage: async () => {},
+  });
+  const request = { encoding: "pcm_s16le", sampleRate: 16000, channels: 1, modelId: "parakeet-v3", pcmBase64: "AAA=" };
+  await assert.rejects(service.transcribe(request), /recognizer failed/u);
+  assert.deepEqual(sent, []);
+  failing = false;
+  await service.transcribe(request);
+  assert.deepEqual(sent, [], "silence is not a dictation");
+  spoken = "Hello";
+  await service.transcribe(request);
+  assert.deepEqual(sent, [{ event: "voice_used", props: { mode: "dictation", engine: "local" } }]);
 });

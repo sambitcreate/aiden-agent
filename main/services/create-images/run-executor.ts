@@ -70,6 +70,10 @@ function observer(callback: (() => void) | undefined): () => void {
   };
 }
 
+// All concurrent workflows using the same asset store share its in-flight output reservations.
+type OutputCapacity = { assets: number; bytes: number };
+const storeReservations = new WeakMap<RunExecutorDependencies["assets"], Set<OutputCapacity>>();
+
 const DEFAULT_FAULT_WAIT_MS = 10_000;
 const FAULT_MESSAGE = "Aiden hit an internal error while running this step.";
 
@@ -146,6 +150,13 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
   };
   /** Assets this run already holds, so a fault on one attempt never releases another's hold. */
   const held = new Set<string>();
+  const reserved = storeReservations.get(deps.assets) ?? new Set<OutputCapacity>();
+  storeReservations.set(deps.assets, reserved);
+  const runReservations = new Set<OutputCapacity>();
+  function release(room: OutputCapacity) {
+    reserved.delete(room);
+    runReservations.delete(room);
+  }
   const attemptLive = (step: PlannedStep) =>
     guarded(() => deps.ledger.snapshot(run.runId), null)?.attempts.some(
       (attempt) => attempt.nodeId === step.nodeId && attempt.variant === step.variant && attempt.state === "running",
@@ -155,29 +166,39 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
    * Refuses locally when the store cannot keep one more request's worst-case output. Usage counts
    * unheld assets past their grace until they are collected, so collect once before refusing.
    */
-  async function storageRefusal(): Promise<Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined> {
-    const refusal = storageRefusalNow();
+  async function reserveStorage(room: OutputCapacity): Promise<Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined> {
+    const refusal = tryReserveStorage(room);
     if (refusal?.errorCode !== "storage-full" || !deps.assets.collectGarbage) return refusal;
     try {
       await deps.assets.collectGarbage();
     } catch {
       return refusal;
     }
-    return storageRefusalNow();
+    return tryReserveStorage(room);
   }
 
-  function storageRefusalNow(): Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined {
-    if (!deps.assets.usage) return undefined;
+  function tryReserveStorage(room: OutputCapacity): Pick<AttemptFinish, "errorCode" | "errorMessage"> | undefined {
     const limits = deps.storageLimits ?? STUDIO_ASSET_LIMITS;
-    let usage: { assets: number; bytes: number };
-    try {
-      usage = deps.assets.usage();
-    } catch {
-      return { errorCode: "storage-failed", errorMessage: STORAGE_FAILED_UNSENT };
+    if (deps.assets.usage) {
+      let usage: OutputCapacity;
+      try {
+        usage = deps.assets.usage();
+      } catch {
+        return { errorCode: "storage-failed", errorMessage: STORAGE_FAILED_UNSENT };
+      }
+      let assets = usage.assets + room.assets;
+      let bytes = usage.bytes + room.bytes;
+      for (const pending of reserved) {
+        assets += pending.assets;
+        bytes += pending.bytes;
+      }
+      if (assets > limits.maxAssets || bytes > limits.maxTotalBytes) {
+        return { errorCode: "storage-full", errorMessage: STORAGE_FULL_UNSENT };
+      }
     }
-    return usage.assets + WORST_CASE_OUTPUT.assets > limits.maxAssets || usage.bytes + WORST_CASE_OUTPUT.bytes > limits.maxTotalBytes
-      ? { errorCode: "storage-full", errorMessage: STORAGE_FULL_UNSENT }
-      : undefined;
+    reserved.add(room);
+    runReservations.add(room);
+    return undefined;
   }
 
   async function generateStep(step: PlannedStep, inputs: StepInputs, signal: AbortSignal): Promise<StepOutcome> {
@@ -206,21 +227,37 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       finish(step, update);
       return { ok: false, state: update.state };
     }
-    const noRoom = await storageRefusal();
+    const room = { ...WORST_CASE_OUTPUT };
+    const noRoom = await reserveStorage(room);
+    if (noRoom) {
+      const update = signal.aborted ? stopped() : { state: "failed" as const, ...noRoom };
+      finish(step, update);
+      return { ok: false, state: update.state };
+    }
+    try {
+      return await generateWithRoom(step, inputs.prompt, references, signal, room);
+    } finally {
+      release(room);
+    }
+  }
+
+  async function generateWithRoom(
+    step: PlannedStep,
+    prompt: string,
+    references: { mimeType: string; bytes: Uint8Array }[],
+    signal: AbortSignal,
+    room: OutputCapacity,
+  ): Promise<StepOutcome> {
     if (signal.aborted) {
       const update = stopped();
       finish(step, update);
       return { ok: false, state: update.state };
     }
-    if (noRoom) {
-      finish(step, { state: "failed", ...noRoom });
-      return { ok: false, state: "failed" };
-    }
     // Every check the port can make without the network, before anything is claimed.
     const checked = await deps.port.preflight({
       provider: step.provider!.provider,
       model: step.provider!.model,
-      prompt: inputs.prompt,
+      prompt,
       references,
       signal,
     });
@@ -230,45 +267,43 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       finish(step, update ?? { state: "failed", errorCode: checked.code, errorMessage: checked.message });
       return { ok: false, state: update?.state ?? "failed" };
     }
-    if (!guarded(() => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant, inputs.prompt), false)) {
-      // The ledger also refuses a claim once a cancel was requested; that is a cancel, not a spent budget.
-      if (signal.aborted) {
+    let claimed = false;
+    let claimFault = false;
+    const claim = () => {
+      if (signal.aborted) return false;
+      try {
+        claimed = guarded(() => deps.ledger.claimProviderRequest(run.runId, step.nodeId, step.variant, prompt), false);
+      } catch {
+        claimFault = true;
+        return false;
+      }
+      if (claimed) {
+        changed();
+        requestStarted();
+      }
+      return claimed;
+    };
+    let result: ImageGenerationResult | undefined;
+    try {
+      try {
+        result = await checked.send(claim);
+      } finally {
+        if (claimed) requestEnded();
+      }
+      if (claimFault) throw new Error("Image request claim failed.");
+      if (!claimed && signal.aborted) {
         const update = stopped();
         finish(step, update);
         return { ok: false, state: update.state };
       }
-      finish(step, {
-        state: "failed",
-        errorCode: "request-limit",
-        errorMessage: "This run already used every request it was approved for.",
-      });
-      return { ok: false, state: "failed" };
-    }
-    changed();
-    requestStarted();
-    // Once the claim is spent the request may have been billed: a fault from here on is recorded
-    // against this attempt, with whatever cost the provider reported, instead of escaping the step.
-    let reported: Usage | undefined;
-    try {
-      return await sendAndStore(step, checked.send, (usage) => (reported = usage));
+      return await storeResult(step, result, room);
     } catch {
-      finish(step, { state: "failed", errorCode: "executor-fault", errorMessage: FAULT_MESSAGE, ...cost(reported) });
+      finish(step, { state: "failed", errorCode: "executor-fault", errorMessage: FAULT_MESSAGE, ...cost(result?.usage) });
       return { ok: false, state: "failed" };
     }
   }
 
-  async function sendAndStore(
-    step: PlannedStep,
-    send: () => Promise<ImageGenerationResult>,
-    reportUsage: (usage: Usage | undefined) => void,
-  ): Promise<StepOutcome> {
-    let result: ImageGenerationResult;
-    try {
-      result = await send();
-    } finally {
-      requestEnded();
-    }
-    reportUsage(result.usage);
+  async function storeResult(step: PlannedStep, result: ImageGenerationResult, room: OutputCapacity): Promise<StepOutcome> {
     if (result.kind === "failed") {
       if (result.code === "aborted") {
         const update = stopped();
@@ -279,11 +314,18 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
       finish(step, { state: "failed", errorCode: result.code, errorMessage: result.message, ...cost(result.usage) });
       return { ok: false, state: "failed" };
     }
+
     const output: OutputRef[] = [];
     let storageFailure: Exclude<PutFailure, "invalid"> | undefined;
     for (const image of result.images) {
+      if (!runReservations.has(room)) {
+        report(new Error(`An image for run ${run.runId} arrived after the run ended and was not kept.`));
+        return { ok: false, state: "failed" };
+      }
       try {
         const record = await deps.assets.put({ bytes: image.bytes, declaredMimeType: image.mimeType });
+        room.assets--;
+        room.bytes -= image.bytes.byteLength;
         output.push({ assetId: record.assetId, width: record.width, height: record.height, mediaType: record.mediaType });
       } catch (error) {
         // An image the store rejects as invalid is dropped. A full or failing store is not the
@@ -366,6 +408,7 @@ export async function executeRun(deps: RunExecutorDependencies, run: RunExecutio
     // (a paid request keeps its cost), and only then end every live attempt.
     internal.abort("executor-fault");
     await settleOrGiveUp([...outstanding], deps.faultWaitMs ?? DEFAULT_FAULT_WAIT_MS);
+    for (const room of runReservations) release(room);
     try {
       guarded(() => deps.ledger.terminateRun(run.runId, "failed", "executor-fault"), undefined);
     } catch (secondary) {

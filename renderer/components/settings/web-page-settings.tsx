@@ -58,6 +58,23 @@ export function WebPageSettingsView({
   const draftChanged = (normalizeWebExtractAccountId(accountDraft) ?? accountDraft.trim()) !== savedAccountId;
   const status = webExtractStatus(snapshot);
   const reading = snapshot.settings.enabled;
+  // Anything saved, or a paused switch, keeps the form visible; removing the last piece doesn't fold it away.
+  const configured =
+    snapshot.extract.hasAccountId || snapshot.extract.keyCount > 0 || snapshot.settings.extract.enabled;
+  const [setupOpen, setSetupOpen] = React.useState(configured);
+  if (configured && !setupOpen) setSetupOpen(true);
+  // Opening and cancelling swap the control under the keyboard, so focus follows.
+  const pendingFocus = React.useRef(false);
+  const takeFocus = (element: HTMLElement | null) => {
+    if (!element || !pendingFocus.current) return;
+    pendingFocus.current = false;
+    element.focus();
+  };
+  const toggleSetup = (open: boolean) => {
+    pendingFocus.current = true;
+    if (!open) setAccountDraft(savedAccountId);
+    setSetupOpen(open);
+  };
 
   return (
     <FieldSet title="Web pages">
@@ -91,87 +108,118 @@ export function WebPageSettingsView({
                 ? "When the agent needs a few facts, such as a price or a date, it gets just those values, each with the line of the page it came from. Values that are not on the page come back as guesses."
                 : snapshot.settings.extract.enabled
                   ? `Paused until you add your ${model.accountIdLabel} and an API key below.`
-                  : `Add your ${model.accountIdLabel} and an API key below to turn this on.`
+                  : setupOpen
+                    ? `Add your ${model.accountIdLabel} and an API key below to turn this on.`
+                    : `Gets just the values the agent asks for, through your own ${model.vendor} account.`
             }
           >
-            {/* Shows the saved choice, so a switch left on after its key is removed can still be turned off. */}
-            <Switch
-              checked={snapshot.settings.extract.enabled}
-              onCheckedChange={onSetExtractEnabled}
-              disabled={busy || (!snapshot.extract.ready && !snapshot.settings.extract.enabled)}
-              aria-label="Extract only the values asked for"
-            />
-          </Field>
-
-          <Field
-            label={model.accountIdLabel}
-            description={
-              <>
-                Extract mode runs {model.label} on your own Cloudflare account. The account ID is
-                the 32-character ID on your Cloudflare dashboard.{" "}
-                <a
-                  href={model.keyHelpUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 hover:text-primary"
+            <div className="flex items-center gap-3">
+              {setupOpen ? null : (
+                <Button
+                  ref={takeFocus}
+                  variant="muted"
+                  size="small"
+                  disabled={busy}
+                  onClick={() => toggleSetup(true)}
                 >
-                  How to get an ID and a key <ExternalLink aria-hidden="true" className="size-3.5" />
-                </a>
-              </>
-            }
-            orientation="vertical"
-          >
-            <form
-              className="grid gap-2 min-[540px]:grid-cols-[minmax(0,1fr)_auto]"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!draftValid || !draftChanged) return;
-                void onSaveAccountId(accountDraft.trim() ? accountDraft.trim() : null);
-              }}
-            >
-              <Input
-                value={accountDraft}
-                onChange={(event) => setAccountDraft(event.target.value)}
-                placeholder="0123456789abcdef0123456789abcdef"
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={64}
-                aria-label={model.accountIdLabel}
-                aria-invalid={!draftValid || undefined}
-                disabled={busy}
-                className="h-10 w-full font-mono"
+                  Set up {model.vendor}…
+                </Button>
+              )}
+              {/* Shows the saved choice, so a switch left on after its key is removed can still be turned off. */}
+              <Switch
+                checked={snapshot.settings.extract.enabled}
+                onCheckedChange={onSetExtractEnabled}
+                disabled={busy || (!snapshot.extract.ready && !snapshot.settings.extract.enabled)}
+                aria-label="Extract only the values asked for"
               />
-              <Button
-                type="submit"
-                variant="accent"
-                size="small"
-                className="h-10"
-                disabled={busy || !draftValid || !draftChanged}
-              >
-                {accountDraft.trim() || !savedAccountId ? "Save" : "Remove"}
-              </Button>
-            </form>
-            {!draftValid ? (
-              <Text as="p" variant="small" color="red">
-                An account ID is 32 letters and digits (0–9, a–f).
-              </Text>
-            ) : null}
+            </div>
           </Field>
 
-          <div className="relative after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator">
-            <WebSearchKeyPoolEditor
-              providerId={model.credentialId}
-              providerLabel={model.vendor}
-              use="extraction"
-              onChanged={onKeysChanged}
-            />
-          </div>
+          {setupOpen ? (
+            <>
+              <Field
+                label={model.accountIdLabel}
+                description={
+                  <>
+                    Extract mode runs {model.label} on your own Cloudflare account. The account ID is
+                    the 32-character ID on your Cloudflare dashboard.{" "}
+                    <a
+                      href={model.keyHelpUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-secondary underline decoration-primary/20 underline-offset-2 hover:text-primary"
+                    >
+                      How to get an ID and a key <ExternalLink aria-hidden="true" className="size-3.5" />
+                    </a>
+                  </>
+                }
+                orientation="vertical"
+              >
+                <form
+                  className="grid gap-2 min-[540px]:grid-flow-col min-[540px]:grid-cols-[minmax(0,1fr)]"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!draftValid || !draftChanged) return;
+                    void onSaveAccountId(accountDraft.trim() ? accountDraft.trim() : null);
+                  }}
+                >
+                  <Input
+                    ref={takeFocus}
+                    value={accountDraft}
+                    onChange={(event) => setAccountDraft(event.target.value)}
+                    placeholder="0123456789abcdef0123456789abcdef"
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={64}
+                    aria-label={model.accountIdLabel}
+                    aria-invalid={!draftValid || undefined}
+                    disabled={busy}
+                    className="h-10 w-full font-mono"
+                  />
+                  <Button
+                    type="submit"
+                    variant="accent"
+                    size="small"
+                    className="h-10"
+                    disabled={busy || !draftValid || !draftChanged}
+                  >
+                    {accountDraft.trim() || !savedAccountId ? "Save" : "Remove"}
+                  </Button>
+                  {configured ? null : (
+                    <Button
+                      variant="muted"
+                      size="small"
+                      className="h-10"
+                      disabled={busy}
+                      onClick={() => toggleSetup(false)}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </form>
+                {!draftValid ? (
+                  <Text as="p" variant="small" color="red">
+                    An account ID is 32 letters and digits (0–9, a–f).
+                  </Text>
+                ) : null}
+              </Field>
 
-          <Field
-            label="What leaves this device"
-            description={`In extract mode the page's text and the field names go to ${model.vendor}; your chat does not. Keys stay encrypted on this device and are never passed to the model.`}
-            orientation="vertical"
-          />
+              <div className="relative after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator">
+                <WebSearchKeyPoolEditor
+                  providerId={model.credentialId}
+                  providerLabel={model.vendor}
+                  use="extraction"
+                  onChanged={onKeysChanged}
+                />
+              </div>
+
+              <Field
+                label="What leaves this device"
+                description={`In extract mode the page's text and the field names go to ${model.vendor}; your chat does not. Keys stay encrypted on this device and are never passed to the model.`}
+                orientation="vertical"
+              />
+            </>
+          ) : null}
         </>
       ) : null}
 

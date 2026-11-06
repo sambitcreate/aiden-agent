@@ -77,12 +77,12 @@ export function createSubagentMcpMutationHost(readHost: SubagentMcpReadHost): Su
     };
     return {
       inspect,
-      dispatchRaw(toolName, argumentsValue, currentSignal, beforeRawBytes) {
+      dispatchRaw(toolName, argumentsValue, currentSignal, beforeRawBytes, beforeRetry) {
         if (closed || dispatched || toolName !== binding.tool.toolName || !client.callToolRaw) {
           throw new Error("MCP mutation raw dispatch is unavailable.");
         }
         dispatched = true;
-        return client.callToolRaw(toolName, argumentsValue, currentSignal, beforeRawBytes);
+        return client.callToolRaw(toolName, argumentsValue, currentSignal, beforeRawBytes, beforeRetry);
       },
       redactCredentialText: client.redactCredentialText,
       async close() {

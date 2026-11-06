@@ -5,12 +5,14 @@ import { McpClient, McpSessionExpiredError } from "@earendil-works/pi-mcp";
 import { authorizeMcp, type OAuthClientProvider, type OAuthTokens } from "@earendil-works/pi-mcp/oauth";
 import { GenerationBoundConnectionCache } from "./generation-bound-connection-cache.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
-import { callMcpTool } from "./mcp-tool-inventory.js";
+import { isolatedSubagentMcpClient, withIsolatedSubagentMcpClientCore } from "./subagents/subagent-mcp-client-core.js";
+import { callMcpTool, guardedMcpToolCall, readGuardedMcpInventory } from "./mcp-tool-inventory.js";
 import { mcpAuthorizationBinding, sessionAfterTokenInvalidation, sessionWithSavedMcpTokens, type McpOAuthSession } from "./mcp-oauth-session.js";
 import { createBackgroundMcpOAuthProvider, McpOAuthRefreshUnavailableError, type McpOAuthRuntime } from "./mcp-oauth-provider-core.js";
 import { McpOAuthOperationGate } from "./mcp-oauth-operation.js";
 import { McpLiveStatusRegistry } from "./mcp-status-events.js";
 import type { McpServer } from "./types.js";
+import { createMcpProviderAuthenticatedFetch, mcpProviderGrantBinding } from "./mcp-provider-auth-core.js";
 import { createMcpFetchPolicy } from "./mcp-fetch-policy.js";
 
 const serviceUrl = "https://mcp.example/mcp";
@@ -466,4 +468,136 @@ test("a request cancelled while its 401 refresh is pending is never re-sent", as
   assert.equal(store.session.tokens?.access_token, authority.valid(), "refreshed tokens persist");
   // The connection itself remains usable after the refresh.
   assert.deepEqual((await client.callTool("example", {})).content, []);
+});
+
+for (const path of ["read", "mutation"] as const) {
+  for (const stage of ["headers", "refresh"] as const) {
+    for (const change of (stage === "refresh" ? ["unchanged", "withdrawn", "revoked"] : ["unchanged", "withdrawn"])) {
+      const withdraw = change === "withdrawn";
+      test(`${path} HTTP call with ${change} authority during OAuth ${stage}`, async () => {
+        const authority = rotatingAuthority(`${path}-${stage}-${change}`);
+        const store = { session: { authorizationBinding: mcpAuthorizationBinding(serviceUrl), tokens: authority.initialTokens() } };
+        const provider = storeBackedProvider(store);
+        const tokens = provider.tokens.bind(provider);
+        let tokenPaused = false;
+        let holdTokens = false;
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        provider.tokens = async () => {
+          if (holdTokens) { holdTokens = false; tokenPaused = true; await gate; }
+          return tokens();
+        };
+        let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+        let changed = false;
+        let charges = 0;
+        let grantCurrent = true;
+        const rpcIds: number[] = [];
+        const pi = new McpClient({ name: "send-fence", version: "1" });
+        const client = isolatedSubagentMcpClient(pi);
+        pi.onNotification("notifications/tools/list_changed", () => { changed = true; });
+        const transport = createMcpRemoteTransport({
+          serviceUrl, authProvider: provider,
+          fetch: async (url, init) => {
+            const oauth = await authority.fetch(url, init);
+            if (oauth) return oauth;
+            if (init?.method === "GET") return new Response(new ReadableStream({
+              start(controller) { stream = controller; },
+            }), { headers: { "content-type": "text/event-stream" } });
+            const request = JSON.parse(String(init?.body));
+            if (request.id === undefined) return new Response(null, { status: 202 });
+            if (request.method === "tools/call") {
+              rpcIds.push(request.id);
+              if (!authority.accepts(init)) return new Response(null, { status: 401, headers: { "www-authenticate": "Bearer" } });
+            }
+            return Response.json({ jsonrpc: "2.0", id: request.id, result: request.method === "initialize"
+              ? { ...initialized, capabilities: { tools: { listChanged: true } } }
+              : request.method === "tools/list" ? { tools: changed ? [] : tools } : { content: [] } },
+            { headers: { "mcp-session-id": "send-fence" } });
+          },
+        });
+        const signal = AbortSignal.timeout(5000);
+        await withIsolatedSubagentMcpClientCore({
+          server: oauthServer, signal, configurationLease: { signal, assertCurrent() {} },
+          dependencies: {
+            createClient: () => client, makeTransport: () => transport,
+            withConfigured: (_server, use) => use(), resolveAuth: async server => server,
+            resolveCredentialBoundary: async () => ({ revision: "fixture", redactText: text => text }),
+          },
+          operation: async port => {
+            await port.listTools(signal);
+            await until(() => stream !== undefined);
+            if (stage === "refresh") { authority.expire(); authority.hold(); }
+            else holdTokens = true;
+            const charge = () => { charges++; };
+            const checkGrant = () => { if (!grantCurrent) throw new Error("Grant expired"); };
+            const call = path === "read"
+              ? port.callTool("example", {}, signal, charge, checkGrant)
+              : port.callToolRaw!("example", {}, signal, charge, checkGrant);
+            try {
+              await until(() => stage === "headers" ? tokenPaused : authority.refreshPosts() === 1);
+              assert.equal(charges, stage === "refresh" ? 1 : 0);
+              assert.equal(rpcIds.length, stage === "refresh" ? 1 : 0);
+              if (change === "revoked") grantCurrent = false;
+              if (withdraw) {
+                stream!.enqueue(new TextEncoder().encode('event: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n'));
+                await until(() => changed);
+              }
+            } finally { release(); authority.release(); }
+            if (withdraw) await assert.rejects(call, /inventory changed/u);
+            else if (!grantCurrent) await assert.rejects(call, /Grant expired/u);
+            else await call;
+            const expected = (stage === "refresh" ? 1 : 0) + (change === "unchanged" ? 1 : 0);
+            assert.equal(rpcIds.length, expected);
+            assert.equal(charges, Math.min(expected, 1));
+            if (stage === "refresh" && change === "unchanged") assert.equal(rpcIds[0], rpcIds[1]);
+            if (stage === "refresh") assert.equal(store.session.tokens.access_token, authority.valid());
+          },
+        });
+      });
+    }
+  }
+}
+
+test("a newer listing on a non-notifying server withdraws a provider-key call held during credential lookup", async (t) => {
+  const server: McpServer = { id: "custom", name: "Custom", transport: "http", enabled: true, url: serviceUrl, authProvider: "openai" };
+  const pi = new McpClient({ name: "provider-send", version: "1" });
+  t.after(() => pi.close());
+  let offered = ["withdrawn", "current"];
+  let hold = false;
+  let paused = false;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const received: string[] = [];
+  await pi.connect(createMcpRemoteTransport({
+    serviceUrl,
+    wrapFetch: send => createMcpProviderAuthenticatedFetch({
+      server, fetch: send, readGrant: async () => mcpProviderGrantBinding(server), assertCurrent() {},
+      async resolveToken() {
+        if (hold) { hold = false; paused = true; await gate; }
+        return "fixture";
+      },
+    }),
+    fetch: async (_url, init) => {
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer fixture");
+      if (init?.method === "GET") return new Response(null, { status: 405 });
+      const request = JSON.parse(String(init?.body));
+      if (request.id === undefined) return new Response(null, { status: 202 });
+      if (request.method === "tools/call") received.push(request.params.name);
+      return Response.json({ jsonrpc: "2.0", id: request.id, result: request.method === "initialize"
+        ? initialized : request.method === "tools/list" ? { tools: offered.map(name => ({ name, inputSchema: { type: "object" } })) } : { content: [] } },
+      { headers: { "mcp-session-id": "provider-send" } });
+    },
+  }));
+  const list = () => readGuardedMcpInventory(pi, () => pi.listTools(), () => {});
+  const original = await list();
+  hold = true;
+  const stale = guardedMcpToolCall(original.guard, pi, { name: "withdrawn" });
+  try {
+    await until(() => paused);
+    offered = ["current"];
+    const latest = await list();
+    await guardedMcpToolCall(latest.guard, pi, { name: "current" });
+  } finally { release(); }
+  await assert.rejects(stale);
+  assert.deepEqual(received, ["current"]);
 });

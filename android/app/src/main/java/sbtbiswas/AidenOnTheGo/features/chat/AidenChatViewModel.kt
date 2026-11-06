@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -7,7 +8,9 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -37,6 +40,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
@@ -73,7 +77,8 @@ class AidenChatViewModel(
     private val networkAvailability: AidenNetworkAvailability = AidenNetworkAvailability.AlwaysAvailable,
     private val visualSnapshotRefresh: AidenVisualSnapshotRefreshPolicy = AidenVisualSnapshotRefreshPolicy(),
     private val clock: () -> Instant = Instant::now,
-    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy()
+    private val foreignRunAttach: AidenForeignRunAttachPolicy = AidenForeignRunAttachPolicy(),
+    private val recoveryClock: () -> Long = SystemClock::elapsedRealtime
 ) : ViewModel() {
     enum class ProgressConnectionState {
         IDLE, CONNECTING, LIVE, LAST_KNOWN, UNAVAILABLE
@@ -844,7 +849,7 @@ class AidenChatViewModel(
     }
 
     private suspend fun observeProgressUntilBackground(observationToken: Long) {
-        val recovery = AidenStreamNetworkRecovery(networkAvailability)
+        val recovery = AidenStreamNetworkRecovery(networkAvailability, nowMilliseconds = recoveryClock)
         var cursor = 0
         var cursorEpoch: String? = null
         while (progressForeground && progressObservationToken == observationToken && coroutineContext.isActive) {
@@ -1351,20 +1356,19 @@ class AidenChatViewModel(
         )
 
     /**
-     * Reads [recording] from the bound Mac into the cache for the player. Any
-     * recording saved for an earlier Play is dropped first, so at most one video
-     * waits on disk. A 404 means the Mac no longer has it.
+     * Reads [recording] from the bound Mac into a file owned by this Play.
+     * Other downloads and players keep their files until they close. A 404
+     * means the Mac no longer has it.
      */
     suspend fun browserRecording(recording: AidenBrowserRecordingRecap): AidenBrowserRecordingLoad {
         val client = activeClient() ?: return AidenBrowserRecordingLoad.Failed
-        withContext(ioDispatcher) { coordinator.purgeBrowserRecordings() }
         return try {
             val saved = client.browserRecording(chatId, recording.id, coordinator.browserRecordingDir)
             if (activeClient() === client) {
                 AidenBrowserRecordingLoad.Ready(saved)
             } else {
                 // The pairing changed while the video downloaded: it is not this chat's to show.
-                withContext(ioDispatcher) { saved.file.delete() }
+                withContext(NonCancellable + ioDispatcher) { saved.file.delete() }
                 AidenBrowserRecordingLoad.Failed
             }
         } catch (error: CancellationException) {
@@ -1377,8 +1381,11 @@ class AidenChatViewModel(
     }
 
     /** The player closed: its video leaves the cache. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun releaseBrowserRecording(recording: AidenBrowserRecordingFile) {
-        viewModelScope.launch(ioDispatcher) { recording.file.delete() }
+        // onDispose can follow ViewModel clearing. This finite, non-suspending
+        // cleanup must start even when that scope has already been cancelled.
+        viewModelScope.launch(ioDispatcher, start = CoroutineStart.ATOMIC) { recording.file.delete() }
     }
 
     /**
@@ -1527,7 +1534,8 @@ class AidenChatViewModel(
             selectedModelId = _selectedModelId.value,
             selectedThinkingLevel = _selectedThinkingLevel.value,
             remembered = if (hasExplicitModelSelection || instanceId.isEmpty()) null
-            else modelPreferenceStore.selection(instanceId)
+            else modelPreferenceStore.selection(instanceId),
+            hasExplicitSelection = hasExplicitModelSelection
         )
         _selectedProviderId.value = selection.providerId
         _selectedModelId.value = selection.modelId
@@ -2021,7 +2029,7 @@ class AidenChatViewModel(
         streamJob = viewModelScope.launch {
             var stream = originalStream
             val terminalReplayGate = AidenTerminalReplayGate()
-            val recovery = AidenStreamNetworkRecovery(networkAvailability)
+            val recovery = AidenStreamNetworkRecovery(networkAvailability, nowMilliseconds = recoveryClock)
             val onWaiting: (Boolean) -> Unit = { waiting -> setWaitingForNetwork(waiting, stream.streamId) }
 
             while (activeStreamId == stream.streamId) {
@@ -2918,8 +2926,12 @@ class AidenChatViewModel(
                             is AidenForeignRunProjection.Effect.ReasoningAppended -> buffer.appendReasoning(outputDelta.text)
                             else -> {
                                 // Controls and terminal state see every accepted byte first.
-                                if (AidenForeignRunProjection.Effect.Reconcile in effects) buffer.reset()
-                                else buffer.flush()
+                                if (event.kind is AidenRemoteRunEvent.Kind.Snapshot) {
+                                    buffer.reset()
+                                    buffer.appendText(event.kind.snapshot.replyText.orEmpty())
+                                    buffer.appendReasoning(event.kind.snapshot.replyReasoning.orEmpty())
+                                }
+                                buffer.flush()
                                 if (foreignProjection === current) liveReveal.flush()
                             }
                         }

@@ -1,3 +1,8 @@
+import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { publicBotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals.js";
+import type { AppSettings } from "../../../main/services/types.js";
+import { parseBotSend } from "../../../main/handlers/bot-params.js";
+import { createBotOpenWorkRoutineOrigin, createBotRoutineOriginSender } from "../../../main/services/bot-open-work-host-origin.js";
 import { createBotRoutineService } from "../../../main/services/scheduled-bot-routines.js";
 import type { createCliScheduler } from "./schedules.ts";
 import { cliDurableBotMarker, enableCliDurableBots } from "./bot-durable-migration.ts";
@@ -80,6 +85,7 @@ function checkpointFile<T>(agentDir: string, name: string) {
 export const CLI_BOT_OWNER_AUDIENCE_ID = "cli:local";
 
 export async function createCliBots(agentDir: string, daemon: ReturnType<typeof createDaemonChats>) {
+  const settings = new JsonStore<AppSettings>(join(agentDir, "aiden.json"), {});
   const cliEntry = process.env.AIDEN_CLI_ENTRY;
   const fileMutatorBinary = cliEntry
     ? join(dirname(cliEntry), "native", "aiden-subagent-file-mutator")
@@ -253,6 +259,7 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
   const marker = cliDurableBotMarker(agentDir);
   const durable = marker?.state === "enabled" ? await createCliDurableBots(agentDir, {
     application, botStore, capabilities, authority, tools, pauses,
+    messagingEnabled: async () => botMessagingEnabled(await settings.load()),
     instructions: async (admission) => {
       await admission.revalidateBeforeEffect();
       const bot = await botStore.get(admission.authority.botId);
@@ -271,7 +278,13 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     setScheduler(scheduler: ReturnType<typeof createCliScheduler>) {
       if (!durable) return;
       routineScheduler = scheduler;
-      scheduler.setBotPorts(durable.runtime);
+      const runtime = durable.runtime;
+      const resolveOrigin = createBotOpenWorkRoutineOrigin({
+        task: (id) => scheduler.store.get(id).then((task) => task ?? undefined),
+        run: (id, requestId) => scheduler.store.runById(id, requestId),
+        events: async () => [],
+      });
+      scheduler.setBotPorts({ ...runtime, send: createBotRoutineOriginSender({ resolveOrigin, send: (botId, input) => runtime.send(botId, input) }) });
       routines = createBotRoutineService({ store: scheduler.store, service: scheduler.service,
         botExists: async (botId) => Boolean(await botStore.get(botId)), isPaused,
         defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},
@@ -291,18 +304,23 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
       try { assertBotRuntimeProviderSelection(lease.authority.provider, input); await lease.revalidateBeforeEffect(); return { supportsCompanionImages: Boolean(lease.authority.visionProvider) }; }
       finally { lease.release(); }
     },
-    async stop() { await durable?.runtime.shutdown(); watcher.close(); inventoryLeases.invalidate("inventory_changed"); await mcp.close(); },
+    async stop() { await durable?.messages.dispose(); await durable?.runtime.shutdown(); watcher.close(); inventoryLeases.invalidate("inventory_changed"); await mcp.close(); },
     async command(args: string[]) {
       const [action = "list", id, input] = args, audienceId = CLI_BOT_OWNER_AUDIENCE_ID;
       switch (action) {
         case "enable-durable": return enableCliDurableBots(agentDir, daemon);
         case "session": if (!durable) throw new Error("Run bots enable-durable, then restart the daemon."); return durable.runtime.state(id);
-        case "send": if (!durable || !input) throw new Error("Usage: bots send <bot-id> <JSON file with text and requestId>"); return durable.runtime.send(id, readJson(input, undefined!));
+        case "send": {
+          if (!durable || !input) throw new Error("Usage: bots send <bot-id> <JSON file with text and requestId>");
+          const fields = readJson<Record<string, unknown>>(input, {});
+          const { botId, ...message } = parseBotSend({ ...fields, botId: id });
+          return durable.runtime.send(botId, message);
+        }
         case "resume": if (!durable || !input) throw new Error("Provide a Bot id and request UUID."); return durable.runtime.resume(id, input);
         case "dismiss": if (!durable || !input) throw new Error("Provide a Bot id and request UUID."); return durable.runtime.dismiss(id, input);
         case "stop": if (!durable) throw new Error("Durable sessions are not enabled."); return durable.runtime.stop(id);
         case "delete": if (!durable) throw new Error("Durable sessions are not enabled."); return durable.runtime.deleteBot(id);
-        case "approvals": return durable?.approvals.pending(id) ?? [];
+        case "approvals": return durable?.approvals.pending(id).map(publicBotApprovalPrompt) ?? [];
         case "approve": if (!durable || !["allow", "deny"].includes(input)) throw new Error("Usage: bots approve <wait-id> allow|deny"); return durable.approvals.decide(id, input as "allow" | "deny");
         case "list": return application.list();
         case "get": return application.get(id);

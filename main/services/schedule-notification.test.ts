@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
+import * as analyticsFeatureReports from "./analytics/analytics-feature-reports.js";
+import * as analyticsIds from "./analytics/analytics-ids.js";
+import * as analyticsReport from "./analytics/analytics-report.js";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import * as crypto from "node:crypto";
+import * as nodeModule from "node:module";
 import { mkdtempSync, promises as fsPromises, rmSync } from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
@@ -183,6 +188,8 @@ async function executionHarness(
     notificationFailure?: "create" | "show";
     scriptFailure?: boolean;
     output?: string;
+    peerOwnsFinal?: boolean;
+    duringScript?: () => void;
   } = {},
 ) {
   const records: ScheduledRun[] = [];
@@ -195,6 +202,8 @@ async function executionHarness(
   const notificationFailure = new Error("synthetic notification failure: PRIVATE_DETAIL");
   // Only a Bot delivery reads userData; the directory is created on first use.
   let profile: string | undefined;
+  const peerOwnershipChecks: Array<{ botId: string; requestId: string }> = [];
+  const syntheticSinks: string[] = [];
   const telegramDeliveries: Array<{ botId: string; requestId: string; routineName: string; text: string }> = [];
   const ports: Record<string, unknown> = {
     "node:path": path,
@@ -241,6 +250,7 @@ async function executionHarness(
     "./schedule-script.js": {
       resolveScheduledScript: async () => "/synthetic/script.sh",
       runScheduledScript: async () => {
+        options.duringScript?.();
         if (options.scriptFailure) throw new Error("synthetic script failure");
         return { stdout: output, stderr: "", exitCode: 0 };
       },
@@ -257,6 +267,11 @@ async function executionHarness(
       get: async () => ({ name: "Planner", interruptions: { quietHours: { enabled: false, start: "22:00", end: "07:00" }, dailyLimit: 20 } }),
     },
   };
+  ports["./analytics/analytics-report.js"] = analyticsReport;
+  ports["./analytics/analytics-ids.js"] = analyticsIds;
+  ports["./analytics/analytics-feature-reports.js"] = analyticsFeatureReports;
+  // Bot routines bundle the id helpers, whose sanitizer reads the module list on load.
+  ports["node:module"] = nodeModule;
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
@@ -281,9 +296,33 @@ async function executionHarness(
               markSilent: async () => {},
             });`,
           }));
+          // The ownership read is an external host-service port, not part of
+          // scheduled delivery. Keep the real funnel but never bundle the
+          // Electron application/runtime graph merely to answer this read.
+          const peerSink = `__aidenPeerOwnership_${crypto.randomUUID().replace(/-/gu, "")}`;
+          syntheticSinks.push(peerSink);
+          (globalThis as Record<string, unknown>)[peerSink] = (botId: string, requestId: string) => {
+            peerOwnershipChecks.push({ botId, requestId });
+            return options.peerOwnsFinal === true;
+          };
+          builder.onResolve({ filter: /^\.\.\/bot-peers\/host-main\.js$/ }, (args) =>
+            args.importer.endsWith("/bot-delivery/funnel-main.ts")
+              ? { path: "peer-final-ownership", namespace: "synthetic-peer" }
+              : undefined,
+          );
+          builder.onLoad({ filter: /^peer-final-ownership$/, namespace: "synthetic-peer" }, () => ({
+            loader: "js",
+            contents: `export const botPeerHost = new Proxy({
+              ownsFinal: async (botId, requestId) => globalThis[${JSON.stringify(peerSink)}](botId, requestId),
+            }, { get(target, name) {
+              if (name === "ownsFinal") return target[name];
+              throw new Error("Unexpected peer host operation in scheduled notification: " + String(name));
+            }});`,
+          }));
           // Telegram is a dynamic import in the funnel; keep it synthetic and
           // hand each delivery to this harness.
           const telegramSink = `__aidenTelegramDeliveries_${crypto.randomUUID().replace(/-/gu, "")}`;
+          syntheticSinks.push(telegramSink);
           (globalThis as Record<string, unknown>)[telegramSink] = (delivery: unknown) =>
             void telegramDeliveries.push(delivery as (typeof telegramDeliveries)[number]);
           builder.onResolve({ filter: /^\.\.\/telegram\/telegram-service\.js$/ }, () => ({
@@ -344,8 +383,10 @@ async function executionHarness(
     clicks,
     navigations,
     telegramDeliveries,
+    peerOwnershipChecks,
     profile: () => profile,
     cleanup: () => {
+      for (const name of syntheticSinks) delete (globalThis as Record<string, unknown>)[name];
       if (profile) rmSync(profile, { recursive: true, force: true });
     },
   };
@@ -362,14 +403,16 @@ test("clicking a Bot routine's notification opens that Bot's chat", async (t) =>
   assert.equal(telegram?.routineName, "Daily brief");
   assert.match(telegram?.requestId ?? "", /^routine:task-1:manual-/u, "Telegram dedupes by the routine fire");
   assert.equal(telegram?.text, "Your week looks calm.");
+  assert.deepEqual(h.peerOwnershipChecks, [{ botId: "bot:planner", requestId: telegram!.requestId }]);
   h.clicks[0]!();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(h.navigations, ["/bots/bot%3Aplanner/chat"]);
 });
 
 for (const failure of ["create", "show"] as const) {
-  test(`real execution preserves completed run and broadcast after notification ${failure} failure`, async () => {
+  test(`real execution preserves completed run and broadcast after notification ${failure} failure`, async (t) => {
     const h = await executionHarness({ notificationFailure: failure });
+    t.after(h.cleanup);
     const run = await h.execution.run(
       task({ mode: "script", permission: "full", script: "/synthetic/script.sh" }),
     );
@@ -386,20 +429,67 @@ for (const failure of ["create", "show"] as const) {
     await h.execution.run(task({ mode: "script", permission: "full", notify: false }));
     assert.equal(h.records.length, 2);
     assert.equal(h.warnings.length, 1);
+    assert.deepEqual(h.peerOwnershipChecks, []);
   });
 }
 
-test("real execution preserves task errors and silent results independently of delivery", async () => {
+test("real execution preserves task errors and silent results independently of delivery", async (t) => {
   const failed = await executionHarness({ scriptFailure: true, notificationFailure: "show" });
+  t.after(failed.cleanup);
   const run = await failed.execution.run(task({ mode: "script", permission: "full" }));
   assert.equal(run.result, "error");
   assert.equal(run.error, "synthetic script failure");
   assert.equal(failed.records.length, 1);
   assert.equal(failed.warnings.length, 1);
   const silent = await executionHarness({ output: "", notificationFailure: "create" });
+  t.after(silent.cleanup);
   const silentRun = await silent.execution.run(task({ mode: "script", permission: "full" }));
   assert.equal(silentRun.result, "silent");
   assert.equal(silent.records.length, 1);
   assert.equal(silent.warnings.length, 0);
   assert.equal(silent.broadcasts.filter(({ channel }) => channel === "schedule:updated").length, 1);
+});
+
+test("a peer-owned routine final preserves run completion without an initial notification or delivery-log read", async (t) => {
+  const h = await executionHarness({ peerOwnsFinal: true });
+  t.after(h.cleanup);
+  assert.equal(h.profile(), undefined, "constructing the scheduler does not open a profile");
+  assert.equal(h.peerOwnershipChecks.length, 0);
+  const run = await h.execution.run(task({ botId: "bot:planner", prompt: "Check my week." }));
+  assert.equal(run.result, "success", run.error);
+  assert.equal(run.output, "Your week looks calm.");
+  assert.equal(h.records.length, 1);
+  assert.deepEqual(h.broadcasts.filter(({ channel }) => channel === "bots:changed"), [
+    { channel: "bots:changed", payload: { taskId: "task-1", botId: "bot:planner", run } },
+  ]);
+  assert.equal(h.peerOwnershipChecks.length, 1);
+  assert.equal(h.peerOwnershipChecks[0]!.botId, "bot:planner");
+  assert.match(h.peerOwnershipChecks[0]!.requestId, /^routine:task-1:manual-/u);
+  assert.deepEqual(h.telegramDeliveries, []);
+  assert.deepEqual(h.clicks, []);
+  assert.equal(h.profile(), undefined, "the reserved peer final suppresses delivery before reading its log");
+});
+
+test("a finished task run counts once by its result and what started it", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const script = task({ mode: "script", permission: "full", script: "/synthetic/script.sh" });
+  await (await executionHarness({})).execution.run(script);
+  await (await executionHarness({ scriptFailure: true })).execution.run(script, undefined, { kind: "automatic", fireTime: 1 });
+  await (await executionHarness({ output: "" })).execution.run(script, undefined, { kind: "manual", key: "run-3" });
+  assert.deepEqual(sent, [
+    { event: "scheduled_task_ran", props: { trigger: "manual", result: "success" } },
+    { event: "scheduled_task_ran", props: { trigger: "automatic", result: "failed" } },
+    { event: "scheduled_task_ran", props: { trigger: "manual", result: "silent" } },
+  ]);
+});
+
+test("a cancelled task run is not counted", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const script = task({ mode: "script", permission: "full", script: "/synthetic/script.sh" });
+  let cancel = () => {};
+  const h = await executionHarness({ scriptFailure: true, duringScript: () => cancel() });
+  cancel = () => void h.execution.cancel(script.id);
+  const run = await h.execution.run(script);
+  assert.equal(run.result, "blocked");
+  assert.deepEqual(sent, []);
 });

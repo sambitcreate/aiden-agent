@@ -29,6 +29,11 @@ export interface AnalyticsMessage {
   readonly distinctId: string;
   readonly event: string;
   readonly properties: Record<string, unknown>;
+  // A crash sent twice (at the time, then again on the next launch because no
+  // acknowledgement arrived) keeps one id, so the server keeps one copy.
+  readonly uuid?: string;
+  // When a replayed crash happened, not when it was sent.
+  readonly timestamp?: string;
 }
 
 export interface AnalyticsTransport {
@@ -53,6 +58,8 @@ export interface ExceptionContext {
   // A crash replayed on the next launch is reported against the version that
   // crashed, not the one sending it.
   readonly appVersion?: string;
+  readonly eventId?: string;
+  readonly occurredAt?: string;
 }
 
 export interface AnalyticsCoreOptions {
@@ -81,7 +88,8 @@ function exceptionList(exception: SanitizedException, context: ExceptionContext)
   return buildExceptionList(
     exception.errors,
     context.source === "renderer" ? "web:javascript" : "node:javascript",
-    context.level !== "fatal",
+    // Only crashes and uncaught errors are reported, so none was handled.
+    false,
   );
 }
 
@@ -120,7 +128,11 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
     }
   }
 
-  function send(event: string, properties: Record<string, unknown>, overrides?: { appVersion?: string }): boolean {
+  function send(
+    event: string,
+    properties: Record<string, unknown>,
+    overrides?: { appVersion?: string; eventId?: string; occurredAt?: string },
+  ): boolean {
     if (!superProperties) return false;
     const distinctId = options.getDistinctId();
     if (!distinctId) return false;
@@ -132,6 +144,8 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
       distinctId,
       event,
       properties: { ...properties, ...superProperties, app_version: appVersion, ...PERSONLESS },
+      ...(overrides?.eventId === undefined ? {} : { uuid: overrides.eventId }),
+      ...(overrides?.occurredAt === undefined ? {} : { timestamp: overrides.occurredAt }),
     });
     return true;
   }
@@ -164,7 +178,7 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
         $exception_list: exceptionList(exception, context),
         $exception_level: context.level,
         $exception_fingerprint: exception.fingerprint,
-      }, { appVersion: context.appVersion });
+      }, { appVersion: context.appVersion, eventId: context.eventId, occurredAt: context.occurredAt });
     } catch (error) {
       reportInternal(error);
       return false;

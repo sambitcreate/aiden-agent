@@ -5,6 +5,7 @@ import {
   type JsonRpcMessage,
   type McpTransportSendOptions,
 } from "@earendil-works/pi-mcp";
+import { mcpToolSendGuard } from "./mcp-client.js";
 import { adaptOAuthProvider, type OAuthClientProvider } from "@earendil-works/pi-mcp/oauth";
 import { createMcpFetchPolicy, MAX_MCP_RESPONSE_BYTES, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
 
@@ -87,6 +88,7 @@ class AidenStreamableHttpTransport extends StreamableHttpTransport {
   constructor(
     options: ConstructorParameters<typeof StreamableHttpTransport>[0],
     private readonly lifetime: AbortController,
+    private readonly toolSends: Map<string | number, () => void>,
     private readonly onTerminalFailure?: () => void,
   ) {
     super(options);
@@ -99,11 +101,19 @@ class AidenStreamableHttpTransport extends StreamableHttpTransport {
   }
 
   override async send(message: JsonRpcMessage, options?: McpTransportSendOptions): Promise<void> {
+    const id = "method" in message && message.method === "tools/call" && "id" in message ? message.id : undefined;
+    const guard = mcpToolSendGuard.getStore();
+    if (id !== undefined && guard) this.toolSends.set(id, () => {
+      options?.signal?.throwIfAborted();
+      guard();
+    });
     try {
       await super.send(message, options);
     } catch (error) {
       if (error instanceof McpSessionExpiredError) this.retire();
       throw error;
+    } finally {
+      if (id !== undefined) this.toolSends.delete(id);
     }
   }
 
@@ -134,11 +144,25 @@ class AidenStreamableHttpTransport extends StreamableHttpTransport {
  * up meanwhile is never re-sent.
  */
 export function createMcpRemoteTransport(
-  options: McpRemoteFetchOptions & { onTerminalFailure?: () => void },
+  options: McpRemoteFetchOptions & { onTerminalFailure?: () => void; wrapFetch?: (send: typeof globalThis.fetch) => typeof globalThis.fetch },
 ): StreamableHttpTransport {
   const lifetime = new AbortController();
+  const toolSends = new Map<string | number, () => void>();
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const serviceUrl = new URL(options.serviceUrl).href;
+  const send: typeof globalThis.fetch = (input, init) => {
+    // Only the matching service RPC carries tool authority. The same client
+    // can concurrently send OAuth, SSE, cancellation and other tool requests.
+    if (toolSends.size && init?.method === "POST" && typeof init.body === "string" &&
+        String(input) === serviceUrl && new Headers(init.headers).get("content-type") === "application/json") {
+      const rpc = JSON.parse(init.body);
+      if (rpc?.method === "tools/call") toolSends.get(rpc.id)?.();
+    }
+    return fetchImpl(input, init);
+  };
   const fetch = createMcpRemoteFetch({
     ...options,
+    fetch: options.wrapFetch ? options.wrapFetch(send) : send,
     signal: options.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal,
   });
   return new AidenStreamableHttpTransport({
@@ -146,5 +170,5 @@ export function createMcpRemoteTransport(
     fetch,
     maxMessageBytes: MAX_MCP_RESPONSE_BYTES,
     ...(options.authProvider ? { authProvider: adaptRemoteOAuthProvider(options.authProvider) } : {}),
-  }, lifetime, options.onTerminalFailure);
+  }, lifetime, toolSends, options.onTerminalFailure);
 }

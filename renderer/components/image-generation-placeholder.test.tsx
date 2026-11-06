@@ -376,6 +376,40 @@ test("a saved reply whose images do not pair one for one with its calls keeps th
   assert.ok(screen.getByText(/Third\./u).compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
+test("adjacent image and recording calls keep media in call order, live and saved", () => {
+  for (const imageFirst of [false, true]) {
+    const imageStep = displayStep("image", imageFirst ? "call-1" : "call-2", imageFirst ? 0 : 1, 0);
+    const recordingStep: AgentToolStep = {
+      ...displayStep("recording", imageFirst ? "call-2" : "call-1", imageFirst ? 1 : 0, 0, "browser_recording_stop"),
+      recording: { id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", mimeType: "video/mp4", sizeBytes: 100, durationMs: 2000 },
+    };
+    const steps = imageFirst ? [imageStep, recordingStep] : [recordingStep, imageStep];
+    const artifact = imageArtifact("photo", "Ordered.png");
+    const view = render(list({ timeline: multiTimeline(steps), artifacts: [artifact], placements: new Map([["photo", imageStep.toolCallId]]), text: "After both calls." }));
+    const checkOrder = () => {
+      const photo = screen.getByRole("button", { name: "Open Ordered.png preview" });
+      const video = screen.getByRole("region", { name: "Browser recording, 0:02" });
+      const [first, second] = imageFirst ? [photo, video] : [video, photo];
+      assert.ok(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING, "the timeline, not media type, determines order");
+      return { photo, video };
+    };
+    const before = checkOrder();
+    view.rerender(list({ timeline: null, text: "", messages: [{ ...settledReply(steps, [image("photo", "Ordered.png")], "After both calls."), timeline: { ...multiTimeline(steps), status: "completed", finishedAt: 2 }, imagePlacements: [{ attachmentId: "photo", toolCallId: imageStep.toolCallId }] }] }));
+    const after = checkOrder();
+    assert.equal(after.photo, before.photo, "the picture keeps its element across settlement");
+    assert.equal(after.video, before.video, "the recording keeps its player across settlement");
+    view.unmount();
+  }
+});
+
+test("same-offset shown, shared and generated images follow call order rather than attachment order", () => {
+  const steps = [displayStep("shown", "call-1", 0, 0), displayStep("shared", "call-2", 1, 0, "share_image"), displayStep("generated", "call-3", 2, 0, "generate_image")];
+  const message = settledReply(steps, [image("generated", "Generated.png"), image("shared_1", "Shared.png"), image("shown", "Shown.png")], "After all images.");
+  message.imagePlacements = [{ attachmentId: "shown", toolCallId: "call-1" }, { attachmentId: "shared_1", toolCallId: "call-2" }, { attachmentId: "generated", toolCallId: "call-3" }];
+  render(list({ timeline: null, text: "", messages: [message] }));
+  assert.deepEqual(screen.getAllByRole("img").map((node) => node.getAttribute("alt")), ["Shown.png", "Shared.png", "Generated.png"]);
+});
+
 test("elapsed time counts from the step's own start, so a remount keeps it", () => {
   const startedAt = Date.now() - 12_000;
   render(list({ timeline: timeline(generateStep("running", { startedAt, updatedAt: startedAt })) }));

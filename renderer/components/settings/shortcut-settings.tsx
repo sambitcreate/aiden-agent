@@ -86,8 +86,8 @@ function ShortcutRow({
 
   return (
     <div className="px-4 py-3.5 after:mt-3.5 after:block after:h-px after:bg-separator last:after:hidden">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-48 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Text variant="strong">{command.title}</Text>
             <RuntimeBadge command={command} snapshot={snapshot} />
@@ -97,53 +97,53 @@ function ShortcutRow({
             {command.description}
           </Text>
         </div>
-        <Switch
-          checked={binding !== null}
-          disabled={saving || !canEnable}
-          onCheckedChange={(enabled) =>
-            void onApply({ commandId: command.id, disabled: !enabled })
-          }
-          aria-label={`${binding ? "Disable" : "Enable"} ${command.title}`}
-        />
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button
-          ref={recorderRef}
-          data-shortcut-recorder={recording ? "true" : undefined}
-          aria-label={
-            recording
-              ? `Recording shortcut for ${command.title}`
-              : `Change shortcut for ${command.title}`
-          }
-          variant={recording ? "accent" : "filled"}
-          disabled={saving}
-          onClick={() => (recording ? onCancelRecord() : onRecord())}
-          onBlur={() => {
-            if (recording) onCancelRecord();
-          }}
-          onKeyDown={onKeyDown}
-          className="min-w-28 font-normal"
-        >
-          <Keyboard className="size-4" />
-          {recording ? "Press keys…" : prettyAccelerator(binding)}
-        </Button>
-        {overridden ? (
+        <div className="flex shrink-0 items-center gap-2">
+          {overridden ? (
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={saving}
+              onClick={() => void onApply({ commandId: command.id, reset: true })}
+            >
+              <RotateCcw className="size-3.5" />
+              Reset
+            </Button>
+          ) : null}
           <Button
-            size="small"
-            variant="transparent"
+            ref={recorderRef}
+            data-shortcut-recorder={recording ? "true" : undefined}
+            aria-label={
+              recording
+                ? `Recording shortcut for ${command.title}`
+                : `Change shortcut for ${command.title}`
+            }
+            variant={recording ? "accent" : "filled"}
             disabled={saving}
-            onClick={() => void onApply({ commandId: command.id, reset: true })}
+            onClick={() => (recording ? onCancelRecord() : onRecord())}
+            onBlur={() => {
+              if (recording) onCancelRecord();
+            }}
+            onKeyDown={onKeyDown}
+            className="min-w-28 font-normal"
           >
-            <RotateCcw className="size-3.5" />
-            Reset
+            <Keyboard className="size-4" />
+            {recording ? "Press keys…" : prettyAccelerator(binding)}
           </Button>
-        ) : null}
-        {recording ? (
-          <Text role="status" variant="small" color="secondary">
-            Press a modifier and key. Escape cancels; Tab moves on.
-          </Text>
-        ) : null}
+          <Switch
+            checked={binding !== null}
+            disabled={saving || !canEnable}
+            onCheckedChange={(enabled) =>
+              void onApply({ commandId: command.id, disabled: !enabled })
+            }
+            aria-label={`${binding ? "Disable" : "Enable"} ${command.title}`}
+          />
+        </div>
       </div>
+      {recording ? (
+        <Text as="p" role="status" variant="small" color="secondary" className="mt-2">
+          Press a modifier and key. Escape cancels; Tab moves on.
+        </Text>
+      ) : null}
       {status?.state === "unavailable" && status.message ? (
         <div className="mt-2 flex items-start gap-1.5 text-small text-red" role="alert">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />

@@ -74,13 +74,15 @@ export interface SubagentMcpClientPort {
     signal: AbortSignal,
     /** Synchronous authority/budget fence invoked after all awaited host checks. */
     beforeEffect?: () => void,
+    beforeRetry?: () => void,
   ): Promise<unknown>;
-  /** Mutation-only raw boundary. The callback and SDK invocation are synchronous. */
+  /** Charge only at the first service POST; recheck live authority on an OAuth retry. */
   callToolRaw?(
     toolName: string,
     args: Record<string, unknown>,
     signal: AbortSignal,
     beforeRawBytes: () => void,
+    beforeRetry?: () => void,
   ): Promise<unknown>;
 }
 
@@ -949,6 +951,8 @@ export async function createReadOnlySubagentMcpTools(input: {
   host: SubagentMcpReadHost;
   /** Atomic per-authority budget charge. Charges persist when the remote call fails. */
   consumeNetworkOperation: () => void;
+  /** Recheck a live grant without spending the logical operation twice. */
+  assertRetryAuthority?: () => void;
   signal?: AbortSignal;
   policy?: SubagentMcpReadPolicy;
   /** Every server the child is scoped to (reads and mutations); defaults to `scopes`. */
@@ -1012,6 +1016,7 @@ export async function createReadOnlySubagentMcpTools(input: {
                         safeArgs,
                         operationSignal,
                         input.consumeNetworkOperation,
+                        input.assertRetryAuthority,
                       ),
                       redactCredentialText: client.redactCredentialText,
                     };

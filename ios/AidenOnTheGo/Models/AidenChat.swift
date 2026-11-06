@@ -861,7 +861,7 @@ enum AidenBrowserRecordingFile {
         in root: URL = FileManager.default.temporaryDirectory
     ) -> URL {
         directory(in: root).appending(
-            path: "\(recording.id).\(recording.mimeType.fileExtension)",
+            path: "\(recording.id)-\(UUID().uuidString).\(recording.mimeType.fileExtension)",
             directoryHint: .notDirectory
         )
     }
@@ -3899,13 +3899,14 @@ struct AidenForeignRunProjection: Equatable, Sendable {
             guard wasPending, !locallyAnswered.contains(promptId) else { return [] }
             return [.answeredElsewhere(.init(prompt: .question(outcome), resolvedAt: event.timestamp))]
         case let .snapshot(snapshot):
-            liveText = ""
-            reasoning = ""
+            liveText = snapshot.replyText ?? ""
+            reasoning = snapshot.replyReasoning ?? ""
             tools = []
-            timeline = nil
+            timeline = snapshot.timeline
             approvals = snapshot.approvals.filter { !locallyAnswered.contains($0.approvalId) }
             questions = snapshot.questions.filter { !locallyAnswered.contains($0.promptId) }
-            state = .reconciling
+            let hasCheckpoint = snapshot.replyText != nil || snapshot.replyReasoning != nil || snapshot.timeline != nil
+            state = snapshot.state == "working" && hasCheckpoint ? .running : .reconciling
             refreshWaitingState()
             return [.reconcile]
         case let .ended(_, endState):

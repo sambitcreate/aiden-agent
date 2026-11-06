@@ -180,12 +180,12 @@ function onboardingSnapshot(outcome: OnboardingSnapshot["outcome"]): OnboardingS
   return { version: 2, outcome, lastSatisfiedStep: outcome === "incomplete" ? "none" : "tour", profileReady: true, providerReady: true };
 }
 
-function renderOnboarding(outcome: OnboardingSnapshot["outcome"]) {
+function renderOnboarding(outcome: OnboardingSnapshot["outcome"], readStatus = () => status({ noticePending: true }) as AnalyticsStatusView | Promise<AnalyticsStatusView>) {
   const calls = installBotTestIpc({
     "app:getOnboardingState": () => onboardingSnapshot(outcome),
     "app:setOnboardingOutcome": () => onboardingSnapshot("incomplete"),
     "profile:get": () => ({ name: "Ada" }),
-    "analytics:status": () => status({ noticePending: true }),
+    "analytics:status": readStatus,
     "analytics:markNoticeShown": () => status(),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
@@ -232,3 +232,21 @@ test("a new install sees onboarding instead of the notice, and reopening onboard
   await flush();
   assert.equal(screen.queryByRole("region", NOTICE), null);
 });
+
+for (const [label, read, displayed] of [
+  ["loaded on", () => status({ noticePending: true }), true],
+  ["still loading", () => new Promise<AnalyticsStatusView>(() => {}), false],
+  ["failed read", () => Promise.reject(new Error("read failed")), false],
+  ["saved off", () => status({ enabled: false }), false],
+] as const) {
+  test(`finishing onboarding with usage data ${label} acknowledges only a displayed on switch`, async () => {
+    const calls = renderOnboarding("incomplete", read);
+    const finish = await screen.findByRole("button", { name: "Start using Aiden" });
+    await flush();
+    assert.equal(screen.getByRole("switch", SWITCH).getAttribute("aria-checked"), String(displayed));
+    fireEvent.click(finish);
+    await flush();
+    assert.equal(channelCalls(calls, "app:setOnboardingOutcome").length, 1);
+    assert.deepEqual(channelCalls(calls, "analytics:markNoticeShown"), displayed ? [["ok"]] : []);
+  });
+}

@@ -1,0 +1,18 @@
+import { createModels, fauxProvider, fauxAssistantMessage, Type } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { Harness, createRegistry, defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createBotExecutionRegistry, botExecutionScope, type BotExecutionPort } from "../bot-execution.js";
+import { botExecutionSpendingOwner } from "../bot-execution-spending.js";
+import type { BotRoutineModelService } from "../../bot-routine-models.js";
+/** Real Pi/SQLite with host-authenticated synthetic grants and no external transport. */
+export async function openModelExecutionFixture(file: string, service: BotRoutineModelService, holdTool: boolean) {
+  const faux = fauxProvider({ provider: "fixture", models: [{ id: "A" }, { id: "B" }] }), models = createModels(); models.setProvider(faux.provider);
+  const calls: { model: string; requestId?: string }[] = []; let toolEntered = false;
+  const streams = new Proxy(models, { get(target, key) { if (key === "streamSimple") return ((model, context, options) => { calls.push({ model: model.id, requestId: botExecutionScope()?.claim.requestId }); return target.streamSimple(model, context, options); }) as typeof models.streamSimple; const value = Reflect.get(target, key, target) as unknown; return typeof value === "function" ? value.bind(target) : value; } });
+  const port: BotExecutionPort = { verifyResponse: async (facts) => Boolean(await service.responseEvidence(facts)), claim: (botId, input) => service.claim(botId, input), getClaim: (botId, id, request) => service.getClaim(botId, id, request), selectFallback: (botId, id, reason) => service.selectFallback(botId, id, reason), resolve: async (botId, claim, signal) => { const token = await service.grant(botId, claim.id, claim.requestId); const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary; return { model: models.getModel("fixture", selected.binding.sourceModelId)!, models: streams, imageInput: false, reserveResponse: (slot) => service.reserveResponseEvidence(slot, { dispatchId: slot.dispatchId, owner: botExecutionSpendingOwner(claim), providerId: "fixture", modelId: selected.binding.sourceModelId, counts: false }), sealResponse: (facts) => service.recordResponseEvidence(facts, { dispatchId: facts.dispatchId, owner: botExecutionSpendingOwner(claim), providerId: "fixture", modelId: selected.binding.sourceModelId, counts: false }), revalidate: async () => { signal.throwIfAborted(); const fresh = await service.grant(botId, token.claimId, claim.requestId); void fresh; }, release() {} }; } };
+  const registry = createRegistry(); registry.install(defineExtension({ name: "hold", tools: [defineTool({ name: "hold", description: "Synthetic process barrier", parameters: Type.Object({}), replay: "safe", async execute(_args, _api, context) { toolEntered = true; if (holdTool) await new Promise<void>((resolve) => context.abortSignal?.addEventListener("abort", () => resolve(), { once: true })); return { output: [{ type: "text", text: "done" }] }; } })] }));
+  const adapted = createBotExecutionRegistry("bot:one", registry, port), harness = await Harness.open(await openNodeSqliteStorage(file), { models, registry: adapted, settings: { restartLimit: Infinity, compaction: { enabled: false } } }, BACKGROUND_CONTEXT); adapted.attachHarness(harness);
+  const root = await harness.root(BACKGROUND_CONTEXT, { agent: { model: { provider: "fixture", modelId: "A" } } });
+  return { harness, root, faux, calls, toolEntered: () => toolEntered, answer: fauxAssistantMessage };
+}

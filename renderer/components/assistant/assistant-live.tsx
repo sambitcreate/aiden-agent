@@ -162,7 +162,7 @@ export function AssistantLiveSetupDialog({
         <ReadinessRow
           icon={<Mic className="size-4" />}
           title="Microphone"
-          detail={`${live.microphonePermissionDetail} Choose input and output devices in Settings → Aiden Live.`}
+          detail={`${live.microphonePermissionDetail} Choose input and output devices in Settings → Voice & Speech → Aiden Live.`}
           ready={live.microphonePermission === "granted"}
           action="Allow"
           onAction={() => void live.requestMicrophonePermission()}

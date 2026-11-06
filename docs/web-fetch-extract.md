@@ -53,9 +53,10 @@ The structured result is `{ url, title, mode: "read", text, truncated }` for a r
 
 Extract mode runs Cloudflare Workers AI's Clairic model (`@cf/cloudflare/clairic`) on your own Cloudflare account.
 
-1. Find your 32-character account ID on the Cloudflare dashboard and save it in **Cloudflare account ID**.
-2. Create a Workers AI API token and add it to the key list below it. This is the same write-only key pool Web Search uses: you can add several keys, and a key that is rejected or rate-limited cools down while the next one is tried.
-3. Turn on **Extract only the values asked for**.
+1. In Settings → Web Search → Web pages, choose **Set up Cloudflare…**. The form stays open once anything is saved.
+2. Find your 32-character account ID on the Cloudflare dashboard and save it in **Cloudflare account ID**.
+3. Create a Workers AI API token and add it to the key list below it. This is the same write-only key pool Web Search uses: you can add several keys, and a key that is rejected or rate-limited cools down while the next one is tried.
+4. Turn on **Extract only the values asked for**.
 
 The model is pluggable. Adding one means a definition in `renderer/shared/web-fetch-settings.ts` and an adapter in `main/services/web-extract-models.ts`; the tool and the page checks don't change.
 
