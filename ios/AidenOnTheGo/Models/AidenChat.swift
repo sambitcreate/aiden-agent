@@ -861,7 +861,7 @@ enum AidenBrowserRecordingFile {
         in root: URL = FileManager.default.temporaryDirectory
     ) -> URL {
         directory(in: root).appending(
-            path: "\(recording.id).\(recording.mimeType.fileExtension)",
+            path: "\(recording.id)-\(UUID().uuidString).\(recording.mimeType.fileExtension)",
             directoryHint: .notDirectory
         )
     }

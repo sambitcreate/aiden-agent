@@ -132,7 +132,7 @@ When a Bot shares an image (a chart it drew, a screenshot it took), the paired M
 
 ## Browser recordings
 
-When the agent records a browser tab, the paired Mac (contract revision 46) lets Aiden On The Go for iPhone and Android show the recording under the "Stopped browser recording" line, with its length and size. Tap **Play** to download it from the Mac and watch it full screen. The phone reads the video only when you tap Play. A recording deleted from the Mac says "This recording is no longer on the Mac." On iPhone, a recording the Mac saved as WebM (only when its H.264 encoder is unavailable) says to watch it on the Mac. Older phones and Macs show the activity line without the card.
+When the agent records a browser tab, the paired Mac (contract revision 46) lets Aiden On The Go for iPhone and Android show the recording under the "Stopped browser recording" line, with its length and size. Tap **Play** to download it from the Mac and watch it full screen. The phone reads the video only when you tap Play. Each Play owns a separate temporary file: another download, a cancellation or a missing recording does not delete an active download or player. Closing the player, replacing its recording card or leaving the chat removes that Play's file, including when the download finishes before the player appears or after the card has gone. Android startup also clears playback files abandoned by the previous process. A recording deleted from the Mac says "This recording is no longer on the Mac." On iPhone, a recording the Mac saved as WebM (only when its H.264 encoder is unavailable) says to watch it on the Mac. Older phones and Macs show the activity line without the card.
 
 ## Values read from a web page
 

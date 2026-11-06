@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
@@ -1301,57 +1302,67 @@ class AidenRemoteClient(
     /**
      * Revision 46 (`chat-browser-recordings-v1`): the video a completed
      * `browser_recording_stop` step in [chatId] names, streamed to
-     * `<recordingId>.mp4` or `.webm` in [directory] rather than held in memory.
+     * a unique `.mp4` or `.webm` in [directory] for each Play, rather than held in memory.
      * Only MP4 or WebM with `no-store` and `nosniff`, non-empty and at most
      * 128 MiB, is accepted; a refused body leaves no file behind. A recording
      * the Mac no longer has answers 404, thrown as [AidenRemoteClientException.Server].
      */
-    suspend fun browserRecording(chatId: String, recordingId: String, directory: File): AidenBrowserRecordingFile =
-        withContext(Dispatchers.IO) {
-            if (!AidenVisualDocumentRequest.isValidIdentifier(chatId) || !AidenBrowserRecordingRecap.isValidId(recordingId)) {
-                throw AidenRemoteClientException.InvalidResponse("Invalid browser recording request.")
-            }
-            if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
-            // Both ids are limited to unreserved path characters above.
-            val request = Request.Builder()
-                .url("$endpoint/chats/$chatId/recordings/$recordingId")
-                .addHeader("Aiden-Protocol-Version", "1")
-                .addHeader("Accept", "video/mp4, video/webm")
-                .addHeader("Authorization", "Bearer $credential")
-                .get()
-                .build()
-            httpClient.newCall(request).await().use { response ->
-                if (!response.isSuccessful) {
-                    val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
-                    throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+    suspend fun browserRecording(chatId: String, recordingId: String, directory: File): AidenBrowserRecordingFile {
+        var savedFile: File? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                if (!AidenVisualDocumentRequest.isValidIdentifier(chatId) || !AidenBrowserRecordingRecap.isValidId(recordingId)) {
+                    throw AidenRemoteClientException.InvalidResponse("Invalid browser recording request.")
                 }
-                val mimeType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
-                if (mimeType == null || mimeType !in AidenBrowserRecordingRecap.MIME_TYPES ||
-                    response.header("Cache-Control")?.lowercase() != "no-store" ||
-                    response.header("X-Content-Type-Options")?.lowercase() != "nosniff"
-                ) {
-                    AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
-                    throw AidenRemoteClientException.InvalidResponse()
-                }
-                if (!directory.isDirectory && !directory.mkdirs()) throw IOException("recording directory unavailable")
-                val target = File(directory, "$recordingId.${AidenBrowserRecordingRecap.extension(mimeType)}")
-                val partial = File(directory, "$recordingId.part")
-                try {
-                    val written = try {
-                        response.body.writeBounded(partial, AidenBrowserRecordingRecap.MAX_BYTES) { isActive }
-                    } catch (_: ResponseBodyLimitExceededException) {
+                if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
+                // Both ids are limited to unreserved path characters above.
+                val request = Request.Builder()
+                    .url("$endpoint/chats/$chatId/recordings/$recordingId")
+                    .addHeader("Aiden-Protocol-Version", "1")
+                    .addHeader("Accept", "video/mp4, video/webm")
+                    .addHeader("Authorization", "Bearer $credential")
+                    .get()
+                    .build()
+                httpClient.newCall(request).await().use { response ->
+                    if (!response.isSuccessful) {
+                        val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                        throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+                    }
+                    val mimeType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
+                    if (mimeType == null || mimeType !in AidenBrowserRecordingRecap.MIME_TYPES ||
+                        response.header("Cache-Control")?.lowercase() != "no-store" ||
+                        response.header("X-Content-Type-Options")?.lowercase() != "nosniff"
+                    ) {
                         AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
                         throw AidenRemoteClientException.InvalidResponse()
                     }
-                    if (written == 0L) throw AidenRemoteClientException.InvalidResponse()
-                    target.delete()
-                    if (!partial.renameTo(target)) throw IOException("recording could not be saved")
-                } finally {
-                    partial.delete()
+                    if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+                        throw IOException("recording directory unavailable")
+                    }
+                    val target = File(directory, "$recordingId-${UUID.randomUUID()}.${AidenBrowserRecordingRecap.extension(mimeType)}")
+                    val partial = File(directory, "${target.name}.part")
+                    try {
+                        val written = try {
+                            response.body.writeBounded(partial, AidenBrowserRecordingRecap.MAX_BYTES) { isActive }
+                        } catch (_: ResponseBodyLimitExceededException) {
+                            AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                            throw AidenRemoteClientException.InvalidResponse()
+                        }
+                        if (written == 0L) throw AidenRemoteClientException.InvalidResponse()
+                        if (!partial.renameTo(target)) throw IOException("recording could not be saved")
+                    } finally {
+                        partial.delete()
+                    }
+                    AidenBrowserRecordingFile(target, mimeType).also { savedFile = target }
                 }
-                AidenBrowserRecordingFile(target, mimeType)
             }
+        } catch (error: Throwable) {
+            // withContext may discard a successfully saved result when its
+            // caller is cancelled before resuming. That file has no player.
+            withContext(NonCancellable + Dispatchers.IO) { savedFile?.delete() }
+            throw error
         }
+    }
 
     suspend fun startTurn(
         chatId: String,
