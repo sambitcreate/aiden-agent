@@ -746,10 +746,11 @@ export function TerminalDrawer() {
               <div
                 key={session.id}
                 className={cn(
-                  "min-h-0 min-w-0 bg-(--terminal-background)",
-                  // Like Ghostty's unfocused splits: only the text dims, so the
-                  // panes keep one background and the active one still stands out.
-                  visibleSessions.length > 1 && activeId !== session.id && "[&_canvas]:opacity-70",
+                  "relative min-h-0 min-w-0 bg-(--terminal-background)",
+                  // The cue sits in the screen's padding, outside the canvas: dimming the
+                  // canvas would take its text below the terminal contrast guarantees.
+                  visibleSessions.length > 1 && activeId === session.id &&
+                    "after:pointer-events-none after:absolute after:inset-x-0 after:top-0 after:h-0.5 after:bg-focus-ring",
                 )}
               >
                 <TerminalViewport
