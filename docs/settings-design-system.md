@@ -75,7 +75,9 @@ While Inbox is the chosen view, and only on a host with the `badgeCount` capabil
 
 ## Aiden Live
 
-Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the Live readiness, Audio devices and Actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the Live readiness, Audio devices, Approvals and Actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+
+The Approvals group (`live-voice-approval-settings.tsx`) has one trailing switch, **Answer approvals by voice** (`aidenLiveVoiceApprovals`, omitted means on), whose description names the 11 phrase languages. While it is on, a **What to say** `SettingsDisclosure` under it lists the allow-once and deny phrases for each language from `liveVoicePhrases`.
 
 ## Page notes
 
