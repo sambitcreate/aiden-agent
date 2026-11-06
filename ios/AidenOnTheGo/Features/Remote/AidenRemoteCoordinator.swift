@@ -159,6 +159,8 @@ final class AidenRemoteCoordinator {
 
     let installationStore: AidenInstallationStore
     let haptics: any AidenHapticEmitting
+    /// The phone-local machine names, symbols and colours. A machine that leaves takes its entry with it.
+    private let machinePreferences: AidenMachinePreferencesStore
     private let clientFactory: ClientFactory
     /// One connection per paired machine, the selected one included.
     let hosts: AidenHostRegistry
@@ -232,6 +234,7 @@ final class AidenRemoteCoordinator {
     init(haptics: (any AidenHapticEmitting)? = nil) {
         let installationStore = AidenInstallationStore()
         self.installationStore = installationStore
+        machinePreferences = .shared
         self.haptics = haptics ?? AidenHapticCenter()
         workspaceArchiveStore = AidenWorkspaceArchiveStore()
         chatCache = .shared
@@ -260,10 +263,12 @@ final class AidenRemoteCoordinator {
         scheduledTaskCache: AidenScheduledTaskCache = .shared,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache = .shared,
         haptics: (any AidenHapticEmitting)? = nil,
+        machinePreferences: AidenMachinePreferencesStore = .shared,
         clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) },
         probeClientFactory: ClientFactory? = nil
     ) {
         self.installationStore = installationStore
+        self.machinePreferences = machinePreferences
         self.haptics = haptics ?? AidenHapticCenter()
         self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
         self.chatCache = chatCache
@@ -1098,6 +1103,11 @@ final class AidenRemoteCoordinator {
         AidenBotSessionCache.shared.purge(instanceId: installationId)
         await AidenBotOutboxStore.shared.purge(instanceId: installationId)
         AidenModelPreferenceStore.shared.purge(instanceID: installationId)
+        // A machine that is still paired, such as one pairing again with a new device ID, keeps
+        // the name, symbol and colour the person gave it.
+        if !installationStore.installations.contains(where: { $0.id == installationId }) {
+            machinePreferences.remove(installationId)
+        }
         await chatCache.purge(instanceId: installationId)
         await scheduledTaskCache.purge(instanceId: installationId)
         await workspaceEnvironmentCache.purge(

@@ -129,8 +129,10 @@ struct AidenAppShellView: View {
             AidenBotsRootView(availability: AidenBotsAvailability.resolve(installation))
         case .workspace:
             AidenTabPlaceholderView(title: "Workspace", systemImage: "folder")
-        case .machines, .machine:
-            AidenTabPlaceholderView(title: "Machines", systemImage: "desktopcomputer")
+        case .machines:
+            AidenMachinesRouteView(coordinator: coordinator)
+        case .machine(let instanceId):
+            AidenMachineDetailView(instanceId: instanceId, coordinator: coordinator, preferences: .shared)
         case .settings:
             AidenTabPlaceholderView(title: "Settings", systemImage: "gearshape")
         case .scheduled:
