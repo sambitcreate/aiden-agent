@@ -2,10 +2,12 @@
 // accepted and refused turns, what a provider and the chat store actually saw,
 // what a client was told, and which resources stay held.
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import * as api from "../dist/parity-test-api.js";
 
@@ -345,6 +347,24 @@ async function awaitingApproval(f, chatId, { tool = "ls", args = { path: "." }, 
   await until(() => owner.of("chat:approval").length > 0, "the approval prompt");
   return { ...turn, approval: owner.of("chat:approval")[0] };
 }
+test("every raised approval reports one decision, and it matches the outcome", async () => {
+  const run = async ({ raised = () => {}, publish }) => {
+    const decisions = [];
+    const approvals = api.createDaemonApprovals({ raised, resolved: (id, decision) => decisions.push(decision) });
+    const outcome = await approvals.request({ streamId: "stream", toolCallId: "call", toolName: "ls", summary: "List" }, new AbortController().signal, "owner", (prompt) => publish(approvals, prompt));
+    return { outcome, decisions };
+  };
+  const allow = (approvals, prompt) => assert.equal(approvals.approve(prompt.approvalId, "allow", "owner"), true);
+  assert.deepEqual(await run({ publish: allow }), { outcome: "allowed", decisions: ["allow"] }, "answered during delivery");
+  assert.deepEqual(await run({ publish: (approvals, prompt) => { allow(approvals, prompt); throw new Error("send failed"); } }),
+    { outcome: "allowed", decisions: ["allow"] }, "answered, then delivery failed");
+  assert.deepEqual(await run({ publish: () => { throw new Error("send failed"); } }), { outcome: "unavailable", decisions: ["cancelled"] });
+  assert.deepEqual(await run({ raised: () => { throw new Error("attention failed"); }, publish: () => assert.fail("never delivered") }),
+    { outcome: "unavailable", decisions: ["cancelled"] }, "attention may have changed before it threw");
+  assert.deepEqual(await run({ publish: (approvals, prompt) => { setImmediate(() => approvals.approve(prompt.approvalId, "deny", "owner")); } }),
+    { outcome: "denied", decisions: ["deny"] }, "the ordinary path reports once too");
+});
+
 const toolResult = (owner) => owner.of("chat:tool").find((event) => event.phase !== "call")?.phase;
 const toolResultSeen = (request) => JSON.stringify(request.messages.filter((message) => message.role === "tool"));
 
@@ -499,6 +519,106 @@ test("a run whose session lease cannot be removed still reports idle", { skip: p
     await Promise.race([waiting, new Promise((_, reject) => setTimeout(() => reject(new Error("the idle waiter never woke")), 5_000))]);
     assert.equal(f.daemon.llmClient.isChatBusy("stuck-release"), false);
   } finally { chmodSync(journals, 0o700); }
+});
+
+// C14: a chat deletion that a crash interrupted.
+
+test("an interrupted chat deletion blocks new turns and finishes when the server starts without Remote", async (t) => {
+  const f = await fixture(t), { dir, daemon, workspace } = f;
+  await daemon.chatStore.create({ id: "half-deleted", title: "Half deleted", workspaceId: workspace.id });
+  await daemon.chatStore.create({ id: "kept", title: "Kept", workspaceId: workspace.id });
+  mkdirSync(dirname(daemon.sessionPath("half-deleted")), { recursive: true });
+  writeFileSync(daemon.sessionPath("half-deleted"), "{}\n");
+  api.atomicJson(join(dir, "daemon-chat-deletions.json"), ["half-deleted"]);
+  const restarted = api.createDaemonChats(dir);
+  t.after(() => restarted.stop());
+  assert.equal(restarted.llmClient.beginChatTurn("half-deleted", "stream", "owner"), null, "the deletion already committed");
+  const controller = new AbortController(), ready = Promise.withResolvers();
+  const serving = api.serve(dir, controller.signal, { onReady: ready.resolve });
+  void serving.catch(ready.reject);
+  await ready.promise;
+  controller.abort(); await serving;
+  const after = api.createDaemonChats(dir);
+  t.after(() => after.stop());
+  assert.equal(await after.chatStore.get("half-deleted"), null);
+  assert.equal(existsSync(after.sessionPath("half-deleted")), false);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "daemon-chat-deletions.json"), "utf8")), []);
+  assert.ok(await after.chatStore.get("kept"));
+  const lease = after.llmClient.beginChatTurn("kept", "stream", "owner"); assert.ok(lease);
+  lease.settleAsyncWork(); lease.release();
+});
+
+for (const [name, record] of [["malformed", "{ not json"], ["a non-list", "{}"], ["a list of non-ids", "[123]"]]) test(`a deletion record that is ${name} closes every chat and refuses to start`, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-tombstones-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "daemon-chat-deletions.json"), record);
+  const daemon = api.createDaemonChats(dir);
+  t.after(() => daemon.stop());
+  assert.equal(daemon.llmClient.beginChatTurn("maybe-deleted", "stream", "owner"), null, "any chat may be one whose deletion committed");
+  await assert.rejects(daemon.recoverChatDeletions(), /deletion/u);
+  const controller = new AbortController();
+  await assert.rejects(api.serve(dir, controller.signal, { remote: false }), /deletion/u);
+  assert.equal(existsSync(join(dir, "serve.lock")), false);
+});
+
+test("a deletion that cannot finish keeps its chat closed without stopping the rest of the daemon", async (t) => {
+  const f = await fixture(t), { dir, daemon, workspace } = f;
+  await daemon.chatStore.create({ id: "stuck", title: "Stuck", workspaceId: workspace.id });
+  const { rm } = fsPromises;
+  fsPromises.rm = async (path, ...rest) => { if (String(path) === daemon.sessionPath("stuck")) throw new Error("disk fault"); return rm(path, ...rest); };
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.rm = rm; syncBuiltinESMExports(); });
+  api.atomicJson(join(dir, "daemon-chat-deletions.json"), ["stuck"]);
+  const restarted = api.createDaemonChats(dir);
+  t.after(() => restarted.stop());
+  await assert.rejects(restarted.recoverChatDeletions(), /disk fault/u);
+  assert.equal(restarted.llmClient.beginChatTurn("stuck", "stream", "owner"), null);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "daemon-chat-deletions.json"), "utf8")), ["stuck"], "the tombstone stays for the next start");
+  fsPromises.rm = rm; syncBuiltinESMExports();
+  await restarted.recoverChatDeletions();
+  assert.equal(await restarted.chatStore.get("stuck"), null);
+  const lease = restarted.llmClient.beginChatTurn("stuck", "stream", "owner"); assert.ok(lease, "a finished deletion frees the id");
+  lease.settleAsyncWork(); lease.release();
+});
+
+function approvalsFixture(options = {}) {
+  const raised = [], resolved = [];
+  const approvals = api.createDaemonApprovals({ raised: (prompt) => raised.push(prompt.approvalId), resolved: (id, decision) => resolved.push([id, decision]), ...options });
+  const prompt = { streamId: "stream", toolCallId: "call", toolName: "ls", summary: "List" };
+  return { approvals, prompt, raised, resolved };
+}
+
+test("an unanswered approval expires, is journaled as expired, and cannot be answered late", async () => {
+  const { approvals, prompt, resolved } = approvalsFixture({ expiryMs: 10 });
+  let published;
+  const outcome = await approvals.request(prompt, new AbortController().signal, "owner", (value) => { published = value; });
+  assert.notEqual(outcome, "allowed");
+  assert.deepEqual(resolved, [[published.approvalId, "expired"]]);
+  assert.equal(approvals.approve(published.approvalId, "allow", "owner"), false);
+});
+
+test("an approval is never published to a run that is already stopping, and a failed publish fails closed", async () => {
+  const stopped = approvalsFixture(), controller = new AbortController();
+  controller.abort();
+  assert.notEqual(await stopped.approvals.request(stopped.prompt, controller.signal, "owner", () => assert.fail("published")), "allowed");
+  assert.deepEqual([stopped.raised, stopped.resolved], [[], []], "nobody saw it, so nothing is withdrawn");
+  const broken = approvalsFixture();
+  assert.notEqual(await broken.approvals.request(broken.prompt, new AbortController().signal, "owner", () => { throw new Error("owner gone"); }), "allowed");
+  assert.deepEqual(broken.resolved.map(([id]) => id), broken.raised, "an undelivered prompt leaves no attention behind");
+});
+
+test("the journal records how a published approval really ended", async () => {
+  const { approvals, prompt, resolved } = approvalsFixture(), controller = new AbortController();
+  const answered = [];
+  const allowed = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
+  const denied = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
+  const stopped = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
+  assert.equal(approvals.approve(answered[0], "allow", "owner"), true);
+  assert.equal(approvals.approveAsHost(answered[1], "deny"), true);
+  controller.abort();
+  assert.deepEqual(await Promise.all([allowed, denied]), ["allowed", "denied"]);
+  assert.notEqual(await stopped, "allowed");
+  assert.deepEqual(resolved, [[answered[0], "allow"], [answered[1], "deny"], [answered[2], "cancelled"]]);
 });
 
 // The custody owner on its own: legal and refused events, stale leases, and

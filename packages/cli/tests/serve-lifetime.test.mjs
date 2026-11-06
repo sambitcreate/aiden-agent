@@ -158,13 +158,24 @@ test("the control socket answers one framed request per connection and refuses m
   const status = `${JSON.stringify({ command: "serve", args: ["status"] })}\n`;
   // A request may arrive in pieces; only its newline frames it.
   assert.deepEqual(JSON.parse(await exchange(box.socket, status.slice(0, 5), status.slice(5))), { result: { remote: { on: false } } });
-  // Anything after the first frame is ignored, not run as a second request.
-  const pipelined = await exchange(box.socket, status + status);
-  assert.equal(pipelined.trim().split("\n").length, 1);
+  // Anything after the first frame is ignored, however the bytes were split.
+  assert.deepEqual(JSON.parse(await exchange(box.socket, status + status)), { result: { remote: { on: false } } });
   assert.match(await exchange(box.socket, "not json\n"), /"error"/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "shell", args: [] })}\n`), /Invalid daemon command/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "serve", args: [1] })}\n`), /Invalid daemon command/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "remote", args: ["status"] })}\n`), /Remote is off/u);
+  // The ceiling is on the frame, so bytes after a request that fits cannot push it over.
+  const full = `${JSON.stringify({ command: "serve", args: ["status"], padding: "x".repeat(65_000) })}\n`;
+  const fits = await new Promise((resolveReply, rejectReply) => {
+    const socket = createConnection(box.socket);
+    let reply = "";
+    socket.setEncoding("utf8").on("data", (part) => { reply += part; }).on("close", () => resolveReply(reply)).on("error", rejectReply);
+    socket.on("connect", () => {
+      socket.write(full.slice(0, 60_000));
+      setTimeout(() => socket.write(`${full.slice(60_000)}${"y".repeat(10_000)}`), 100);
+    });
+  });
+  assert.deepEqual(JSON.parse(fits), { result: { remote: { on: false } } });
   // A request with no newline inside the byte ceiling is cut off, with no reply.
   assert.equal(await exchange(box.socket, "x".repeat(70_000)), "");
   assert.deepEqual(JSON.parse(await exchange(box.socket, status)), { result: { remote: { on: false } } }, "the server is still healthy");
@@ -249,6 +260,72 @@ test("serve phases only move forward and draining waits for every accepted comma
   assert.equal(settled, true);
 });
 
+test("a daemon PID that stops being ours before the stop deadline is never killed or blamed", posix, async (t) => {
+  const box = sandbox(t), script = join(box.agentDir, "becomes-foreign.sh");
+  // Ignores TERM like a stuck daemon, then its PID stops being a daemon at all.
+  writeFileSync(script, "trap '' TERM\nsleep 0.5\nexec sleep 30\n");
+  const child = spawn("/bin/sh", [script, "serve"], { stdio: "ignore" });
+  t.after(() => { child.kill("SIGKILL"); });
+  mkdirSync(box.lock, { mode: 0o700 });
+  writeFileSync(join(box.lock, "owner.json"), JSON.stringify({ pid: child.pid, argv: ["/bin/sh", script, "serve"], startedAt: 1, token: "legacy" }));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+  assert.deepEqual(await api.stopDaemon(box.agentDir, 1_000), { stopped: true, pid: child.pid });
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null, "the unrelated process was left alone");
+  assert.equal(existsSync(box.lock), false, "its stale lease is gone");
+});
+
+test("a stop that cannot confirm its owner at the deadline signals nothing and advises no kill", posix, async (t) => {
+  const box = sandbox(t), script = join(box.agentDir, "becomes-command.sh"), entry = join(box.agentDir, "entry.js");
+  writeFileSync(entry, "setInterval(() => {}, 1000);\n");
+  // Ignores TERM like a stuck daemon, then its PID shows another Aiden command.
+  writeFileSync(script, `trap '' TERM\nsleep 0.5\nexec "${process.execPath}" "${entry}" schedule\n`);
+  const previous = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = entry;
+  const child = spawn("/bin/sh", [script, "serve"], { stdio: "ignore" });
+  t.after(() => {
+    child.kill("SIGKILL");
+    if (previous === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = previous;
+  });
+  mkdirSync(box.lock, { mode: 0o700 });
+  writeFileSync(join(box.lock, "owner.json"), JSON.stringify({ pid: child.pid, argv: ["/bin/sh", script, "serve"], startedAt: 1, token: "legacy" }));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+  await assert.rejects(api.stopDaemon(box.agentDir, 1_000), (error) => {
+    assert.match(error.message, /could not confirm/iu);
+    assert.doesNotMatch(error.message, /kill/u);
+    return true;
+  });
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, null, "the process was left alone");
+  assert.equal(existsSync(box.lock), true, "its lease is not ours to clear");
+});
+
+test("stop signals only a verified daemon, at the start and at the deadline", () => {
+  assert.equal(api.decideServeStopStart("daemon"), "signal");
+  for (const owner of ["gone", "foreign"]) assert.equal(api.decideServeStopStart(owner), "clear_stale");
+  assert.equal(api.decideServeStopStart("aiden"), "refuse_aiden");
+  assert.equal(api.decideServeStopStart("unknown"), "refuse_unverified");
+  assert.equal(api.decideServeStopDeadline("daemon", true), "force");
+  assert.equal(api.decideServeStopDeadline("daemon", false), "stopped", "a replacement daemon is not the one asked to stop");
+  for (const owner of ["gone", "foreign"]) assert.equal(api.decideServeStopDeadline(owner, true), "clear_stale");
+  for (const owner of ["aiden", "unknown"]) assert.equal(api.decideServeStopDeadline(owner, true), "unconfirmed");
+});
+
+test("two daemon starts cannot both spawn", posix, async (t) => {
+  const box = sandbox(t);
+  box.stopServer = true;
+  const release = api.acquireLease(join(box.agentDir, "serve-start"));
+  const refused = run(["serve", "--daemon", "--no-remote"], box.env);
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /Another daemon start is already in progress/u);
+  release();
+  assert.equal(existsSync(box.lock), false, "the refused start spawned nothing");
+  assert.equal(run(["serve", "--daemon", "--no-remote"], box.env).status, 0);
+  const again = run(["serve", "--daemon", "--no-remote"], box.env);
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /already running/u);
+});
+
 /** A fake daemon that answers every connection with the given bytes. */
 async function fakeDaemon(t, answer) {
   const box = sandbox(t);
@@ -265,6 +342,41 @@ test("the command client settles once for every way a daemon can answer", posix,
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => socket.end('{"partial"')), "serve", ["status"]), /closed without a response/u);
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => socket.end("not json\n")), "serve", ["status"]), SyntaxError);
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => { socket.write("x".repeat(9 * 1024 * 1024)); }), "serve", ["status"]), /too large/u);
+  // The ceiling holds even when the chunk that crosses it also completes the frame.
+  const oversized = JSON.stringify({ result: "x".repeat(8 * 1024 * 1024 - 8) });
+  const crossing = await fakeDaemon(t, (socket) => {
+    socket.write(oversized.slice(0, -16));
+    setTimeout(() => socket.end(`${oversized.slice(-16)}\n`), 100);
+  });
+  await assert.rejects(api.remoteDaemonCommand(crossing, "serve", ["status"]), /too large/u);
+  // The ceiling is on the frame, so bytes after a reply that fits cannot push it over.
+  const fits = "x".repeat(8 * 1024 * 1024 - 64), framed = JSON.stringify({ result: fits });
+  const padded = await fakeDaemon(t, (socket) => {
+    socket.write(framed.slice(0, -16));
+    setTimeout(() => socket.end(`${framed.slice(-16)}\n${"y".repeat(1024)}`), 100);
+  });
+  assert.equal((await api.remoteDaemonCommand(padded, "serve", ["status"])).length, fits.length);
+  // Once the first frame settles the command, a peer that keeps writing is cut off.
+  const peer = sandbox(t), peerClosed = Promise.withResolvers();
+  let accepted;
+  const talkative = createServer({ allowHalfOpen: true }, (socket) => {
+    accepted = socket;
+    socket.on("error", () => {});
+    socket.once("data", () => {
+      socket.write('{"result":"ok"}\n');
+      const flood = setInterval(() => socket.write("y".repeat(1024)), 5);
+      socket.once("close", () => { clearInterval(flood); peerClosed.resolve("closed"); });
+    });
+  });
+  await new Promise((resolveListen) => talkative.listen(peer.socket, resolveListen));
+  // A failed assertion must not leave cleanup waiting on a peer that is still writing.
+  t.after(() => new Promise((resolveClose) => { accepted?.destroy(); talkative.close(resolveClose); }));
+  assert.equal(await api.remoteDaemonCommand(peer.agentDir, "serve", ["status"]), "ok");
+  const timedOut = new Promise((resolveWait) => setTimeout(resolveWait, 1_000, "still connected").unref());
+  assert.equal(await Promise.race([peerClosed.promise, timedOut]), "closed");
+  // The reply is its first frame: bytes after the newline do not turn it into an error.
+  const trailing = await fakeDaemon(t, (socket) => { socket.end(`${JSON.stringify({ result: "ok" })}\nleftover`); });
+  assert.equal(await api.remoteDaemonCommand(trailing, "serve", ["status"]), "ok");
   const missing = sandbox(t);
   await assert.rejects(api.remoteDaemonCommand(missing.agentDir, "serve", ["status"]), (error) => error.code === "ENOENT" && /not running/u.test(error.message));
 });

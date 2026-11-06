@@ -10,7 +10,8 @@ import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import { assertBotRuntimeProviderSelection } from "../../../main/services/bot-runtime-authority.js";
 import { mkdirSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -26,8 +27,10 @@ import { ChatTurnAdmission } from "../../../main/services/chat-turn-admission.js
 import { ChatDeletionGate } from "../../../main/services/chat-deletion-gate.js";
 import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
 import { createCliModelRuntime } from "./providers.ts";
-import { acquireLease } from "./state.ts";
+import { acquireLease, JsonStore, readJson } from "./state.ts";
+import { deleteCliBotSubagentHistory } from "./bot-subagents.ts";
 import { DaemonGenerationRun, DaemonTurnOwner } from "./daemon-turn-lifecycle.ts";
+import { createDaemonApprovals } from "./daemon-approvals.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
@@ -67,13 +70,24 @@ export function createDaemonChats(agentDir: string) {
   const recorders = createHostRunRecorders((_scope, message) => process.stderr.write(`aiden: ${message}\n`));
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
-  const turns = new DaemonTurnOwner<DaemonGenerationRun<AgentSession>>({ admission, isDeleting: (id) => deletion.isDeleting(id) });
-  const approvals = new Map<string, { ownerId: string; resolve(allowed: boolean): void }>();
-  const settleApproval = (id: string, decision: "allow" | "deny", ownerId?: string) => {
-    const pending = approvals.get(id); if (!pending || (ownerId !== undefined && pending.ownerId !== ownerId)) return false;
-    recorders.recordRunAttentionResolved(runs, id, { kind: "approval", decision });
-    approvals.delete(id); pending.resolve(decision === "allow"); return true;
-  };
+  // A journal deletion is a durable roll-forward checkpoint, including after a crash:
+  // its chat stays closed from here until recoverChatDeletions finishes the job.
+  const tombstones = new JsonStore<string[]>(join(agentDir, "daemon-chat-deletions.json"), []);
+  const interrupted = new Map<string, () => void>();
+  // Without this record any chat may be one whose deletion committed, so all of them stay closed.
+  let deletionRecordFailure: Error | undefined;
+  try {
+    const ids = readJson<string[]>(tombstones.file, []);
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) throw new Error(`${tombstones.file} is not a list of chat ids.`);
+    for (const id of new Set(ids)) interrupted.set(id, deletion.begin(id));
+  } catch (error) {
+    deletionRecordFailure = new Error(`Could not read unfinished chat deletions: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+  const turns = new DaemonTurnOwner<DaemonGenerationRun<AgentSession>>({ admission, isDeleting: (id) => deletionRecordFailure !== undefined || deletion.isDeleting(id) });
+  const approvals = createDaemonApprovals({
+    raised: (prompt) => activity.requestAttention(prompt.approvalId, prompt.streamId, "approval"),
+    resolved: (id, decision) => { recorders.recordRunAttentionResolved(runs, id, { kind: "approval", decision }); activity.resolveAttention(id); },
+  });
   const sessionPath = (id: string) => join(root, "journals", `${createHash("sha256").update(id).digest("hex")}.jsonl`);
   const llmClient = {
     beginChatTurn: (chatId: string, streamId: string, ownerId: string) => turns.begin(chatId, streamId, ownerId),
@@ -85,9 +99,8 @@ export function createDaemonChats(agentDir: string) {
     },
     /** A Bot the person paused: its reply ends as their Stop, and the chat is kept. */
     async stopChatWork(id: string) { await llmClient.cancelChat(id, "user_stop"); return llmClient.waitForChatIdle(id); },
-    approve: (id: string, decision: "allow" | "deny", ownerId: string) => settleApproval(id, decision, ownerId),
-    /** A paired desktop holding `runs:control` answers any run's approval, as the desktop host's own controls do. */
-    approveAsHost: (id: string, decision: "allow" | "deny") => settleApproval(id, decision),
+    approve: approvals.approve,
+    approveAsHost: approvals.approveAsHost,
     cancel(streamId: string, ownerId: string) {
       const found = turns.findRun((run) => run.streamId === streamId && run.ownerId === ownerId);
       if (!found) return false;
@@ -234,22 +247,10 @@ export function createDaemonChats(agentDir: string) {
               const original = JSON.stringify(event.input);
               if (Buffer.byteLength(original) > 1_700) return { block: true, reason: "The tool request exceeds the remote approval display budget." };
               timeline.toolAwaitingApproval(event.toolCallId);
-              const approvalId = `approval_${randomUUID()}`;
-              const allowed = await new Promise<boolean>((resolve) => {
-                const settle = (result: boolean) => { clearTimeout(expiry); entry.abort.signal.removeEventListener("abort", cancel); approvals.delete(approvalId); activity.resolveAttention(approvalId); resolve(result); };
-                const lapse = (decision: "expired" | "cancelled") => { if (approvals.has(approvalId)) recorders.recordRunAttentionResolved(runs, approvalId, { kind: "approval", decision }); settle(false); };
-                const cancel = () => lapse("cancelled");
-                const expiry = setTimeout(() => lapse("expired"), 300_000);
-                approvals.set(approvalId, { ownerId: owner.documentId, resolve: settle });
-                entry.abort.signal.addEventListener("abort", cancel, { once: true });
-                if (entry.abort.signal.aborted) cancel();
-                else {
-                  activity.requestAttention(approvalId, streamId, "approval");
-                  send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
-                }
-              });
+              const outcome = await approvals.request({ streamId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) }, entry.abort.signal, owner.documentId,
+                ({ approvalId, toolCallId, toolName, summary }) => send("chat:approval", { streamId, approvalId, toolCallId, toolName, summary }));
               await assertAuthority();
-              if (!allowed || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
+              if (outcome !== "allowed" || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
             }
             catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
           }); } }],
@@ -324,6 +325,19 @@ export function createDaemonChats(agentDir: string) {
   }
   return { chatStore, llmClient, activity, runs, admission, deletion, sessionPath,
     /** Every activity change (a run began or ended, an approval was raised or settled). */
+    /** Finishes deletions a crash interrupted. Repeatable: a failure leaves its tombstone and its chat closed. */
+    /** Unlike a deletion that fails to finish, a lost record cannot be scoped to its chats. */
+    assertChatDeletionsReadable() { if (deletionRecordFailure) throw deletionRecordFailure; },
+    async recoverChatDeletions() {
+      if (deletionRecordFailure) throw deletionRecordFailure;
+      for (const [id, reopen] of [...interrupted]) {
+        await deleteCliBotSubagentHistory(agentDir, id);
+        await rm(sessionPath(id), { force: true });
+        if (await chatStore.get(id)) await chatStore.remove(id);
+        await tombstones.update((values) => { for (let index = values.indexOf(id); index >= 0; index = values.indexOf(id)) values.splice(index, 1); });
+        interrupted.delete(id); reopen();
+      }
+    },
     onActivityChange(listener: (snapshot: ChatActivitySnapshot) => void) { activityListeners.add(listener); return () => { activityListeners.delete(listener); }; },
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
     /** Closes intake before its first await, so no ingress stopping alongside it can begin a turn. */
