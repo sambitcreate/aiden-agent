@@ -124,9 +124,35 @@ internal fun aidenShouldRequestBotImages(server: AidenServer, installation: Aide
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_IMAGES, server, installation)
 
 /**
- * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
- * in a call of its own after every other negotiation, unless [installation] already holds it.
+ * Revision 57: allow lists are offered and negotiated alone, preserving the existing grants.
  */
+internal suspend fun aidenRequestBotAllowed(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ALLOWED, server, installation)) listOf(AidenRemoteCapability.BOT_ALLOWED) else emptyList(),
+    client, stillCurrent
+)
+
+internal suspend fun aidenRequestBotPlans(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PLANS, server, installation)) listOf(AidenRemoteCapability.BOT_PLANS) else emptyList(),
+    client, stillCurrent
+)
+
+internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
+
+internal suspend fun aidenRequestBotAccessRequests(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestBotAccessRequests(server, installation)) listOf(AidenRemoteCapability.BOT_ACCESS_REQUESTS) else emptyList(),
+    client, stillCurrent
+)
+
 internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
 
@@ -143,6 +169,13 @@ internal fun aidenShouldRequestChatJobs(server: AidenServer, installation: Aiden
  */
 internal fun aidenShouldRequestRawUploads(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.ATTACHMENTS_RAW, server, installation)
+
+/**
+ * Revision 53: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
+ * call of its own after `attachments:raw`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_NEW_WORKTREE, server, installation)
 
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
@@ -205,6 +238,34 @@ internal suspend fun aidenRequestBotImages(
         stillCurrent
     )
 
+internal suspend fun aidenRequestBotPeers(client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PEERS, server, installation))
+        listOf(AidenRemoteCapability.BOT_PEERS) else emptyList(), client, stillCurrent)
+
+/** Revision 59: routine-only model choices negotiate separately; no feature token. */
+internal suspend fun aidenRequestBotRoutineModels(client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ROUTINE_MODELS, server, installation))
+        listOf(AidenRemoteCapability.BOT_ROUTINE_MODELS) else emptyList(), client, stillCurrent)
+
+/** Revision 59: task text is exposed only after this isolated capability negotiation. */
+internal suspend fun aidenRequestBotOpenWork(client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_OPEN_WORK, server, installation))
+        listOf(AidenRemoteCapability.BOT_OPEN_WORK) else emptyList(), client, stillCurrent)
+
+/** Revision 59: watches are negotiated alone only when the host offers them. */
+internal suspend fun aidenRequestBotWatches(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_WATCHES, server, installation))
+        listOf(AidenRemoteCapability.BOT_WATCHES) else emptyList(), client, stillCurrent
+)
+
 /**
  * Revision 42: asks [server] for `bot:issues` alone, exactly as
  * [aidenRequestScheduleCards] asks for `schedule:cards`. A Mac that refuses it (400 or 404)
@@ -254,6 +315,33 @@ internal suspend fun aidenRequestRawUploads(
         client,
         stillCurrent
     )
+
+/**
+ * Revision 53: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
+ * asks for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its
+ * new chats then show no New worktree chip on this phone.
+ */
+internal suspend fun aidenRequestChatNewWorktree(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestChatNewWorktree(server, installation)) listOf(AidenRemoteCapability.CHAT_NEW_WORKTREE) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+internal suspend fun aidenRequestBotMessaging(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_MESSAGING, server, installation))
+        listOf(AidenRemoteCapability.BOT_MESSAGING) else emptyList(), client, stillCurrent
+)
 
 private suspend fun aidenRequestCapabilitiesAlone(
     missing: List<AidenRemoteCapability>,
@@ -321,6 +409,10 @@ class AidenRemoteCoordinator(
     val scheduledCache = AidenScheduledTaskCache(File(storageDir, "scheduled_tasks_cache"))
     val usageCache = AidenUsageCache(File(storageDir, "usage_cache"))
     val botCache = AidenBotCache(storageDir)
+    val botWatchJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore)
+    val botPeerJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore, "bot-peers", 1088)
+    val botRoutineControlJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore, "bot-routine-controls", 1088)
+    val botOpenWorkJournals = sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournalStore(installationStore.secureStore, "bot-open-work")
     /** Bot chats' last transcripts and unsent messages (R14, R17), purged with the pairing. */
     val botSessionStore = File(botOutboxDir, "BotOutbox-v1").let { dir ->
         botOutboxIo?.let { AidenBotSessionStore(dir, io = it) } ?: AidenBotSessionStore(dir)
@@ -459,6 +551,19 @@ class AidenRemoteCoordinator(
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> pairingMemo(key: String, create: () -> T): T =
         pairingMemos.getOrPut(activePairing to key) { create() } as T
+
+    /** Both delete entry points keep cleanup bound to the pairing that accepted the deletion. */
+    suspend fun deleteBot(client: AidenRemoteClient, botId: String, deleter: sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleter) {
+        val pairing=activePairing ?: throw AidenRemoteClientException.InstallationChanged
+        if(pairedClient(pairing) !== client) throw AidenRemoteClientException.InstallationChanged
+        deleter.delete(client,botId)
+        botPeerJournals.purgeBot(pairing.instanceId,pairing.deviceId,pairing.pairedAt,botId)
+        botRoutineControlJournals.purgeBot(pairing.instanceId,pairing.deviceId,pairing.pairedAt,botId)
+        pairingMemos.entries.removeAll { entry ->
+            entry.key.first==pairing && ((entry.value as? sbtbiswas.AidenOnTheGo.features.bots.AidenBotRoutineModelsController)?.botId==botId ||
+                (entry.value as? sbtbiswas.AidenOnTheGo.features.bots.AidenBotPeersController)?.botId==botId)
+        }
+    }
 
     /**
      * Whether the active pairing's Mac last announced `bot-activity-v1` and this phone holds
@@ -605,21 +710,56 @@ class AidenRemoteCoordinator(
                     request = ::aidenRequestBotIssues
                 )
                 // Revision 49: `chat:jobs` goes alone too.
+                val accessServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = issuesServer, request = ::aidenRequestBotAccessRequests
+                )
+                val plansServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = accessServer, request = ::aidenRequestBotPlans
+                )
                 val jobsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
-                    server = issuesServer,
+                    server = plansServer,
                     request = ::aidenRequestChatJobs
                 )
-                // Revision 50: `attachments:raw` goes alone too, last.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 50: `attachments:raw` goes alone too.
+                val rawUploadsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = jobsServer,
                     request = ::aidenRequestRawUploads
                 )
+                // Revision 53: `chat:new-worktree` goes alone too.
+                val worktreeServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = rawUploadsServer,
+                    request = ::aidenRequestChatNewWorktree
+                )
+                // Revision 59: `bot:watches` goes alone, without another feature token.
+                val watchesServer = negotiateSoloCapability(
+                    generation = generation, installation = installation, client = newClient,
+                    server = worktreeServer, request = ::aidenRequestBotWatches
+                )
+                val openWorkServer = negotiateSoloCapability(generation = generation, installation = installation,
+                    client = newClient, server = watchesServer, request = ::aidenRequestBotOpenWork)
+                val modelServer = negotiateSoloCapability(generation = generation, installation = installation,
+                    client = newClient, server = openWorkServer, request = ::aidenRequestBotRoutineModels)
+                val peersServer = negotiateSoloCapability(generation = generation, installation = installation,
+                    client = newClient, server = modelServer, request = ::aidenRequestBotPeers)
+                val messagingServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = peersServer,
+                    request = ::aidenRequestBotMessaging
+                )
+                val negotiatedServer = negotiateSoloCapability(generation, installation, newClient, messagingServer, ::aidenRequestBotAllowed)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,
@@ -693,7 +833,9 @@ class AidenRemoteCoordinator(
             // explicit revocation response should invalidate this pairing.
             if (error.statusCode == 401 ||
                 error.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CREDENTIAL_REVOKED
-            ) throw error
+            ) {
+                throw error
+            }
             server
         } catch (_: Exception) {
             server
@@ -779,6 +921,10 @@ class AidenRemoteCoordinator(
         scheduledCache.purge(installation.instanceId)
         usageCache.purge(installation.instanceId)
         readSnapshotCache.purge(installation.instanceId)
+        botWatchJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
+        botPeerJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
+        botRoutineControlJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
+        botOpenWorkJournals.purge(installation.instanceId, installation.deviceId, installation.createdAt)
         botCache.purge(installation.instanceId, installation.deviceId)
         botSessionStore.purgeInstance(installation.instanceId)
         chatCache.purge(installation.instanceId)

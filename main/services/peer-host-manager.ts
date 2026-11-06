@@ -971,6 +971,7 @@ export class PeerHostManager {
               ? `/runs/${encodeURIComponent(stream.runId!)}/events`
               : `/chats/${encodeURIComponent(stream.chatId!)}/runs/current/events`,
             signal: link.controller.signal,
+            runCheckpoint: true,
             ...(resume && stream.cursor > 0 ? { lastEventId: String(stream.cursor) } : {}),
             onOpen: () => {
               if (alive() && this.current(sup, generation)) this.setStreamState(stream, "streaming");

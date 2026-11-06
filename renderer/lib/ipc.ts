@@ -1,4 +1,12 @@
+import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-directory";
+import { createBotPeerApi } from "./bot-peers-api";
+import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
+import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave } from "../shared/bot-routine-models";
 import type { PeerProjectSource } from "../shared/peer-project-clone";
+import { BOT_CONNECTOR_WATCH_CHANNELS as watchChannels } from "../shared/bot-connector-watches";
+import type * as ConnectorWatch from "../shared/bot-connector-watches";
+import { BOT_OPEN_WORK_CHANNELS as openWorkChannels, parseBotOpenWorkSnapshot, parseBotOpenWorkResult, parseBotOpenWorkEvidence, type BotOpenWorkMutation } from "../shared/bot-open-work";
+import { BOT_PLAN_CHANNELS, type BotPlanDecision } from "../shared/bot-plans.js";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
@@ -139,6 +147,7 @@ import type {
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import type { WebFetchRendererSnapshot } from "../shared/web-fetch-settings";
+import type { TranscriptImage } from "../shared/transcript-images";
 import type {
   WebKeyPoolId,
   WebSearchKeyPoolRendererState,
@@ -618,7 +627,7 @@ function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
   };
 }
 
-/** Usage-data consent (Settings → Diagnostics, onboarding and the one-time notice). */
+/** Usage-data consent (Settings → About, onboarding and the one-time notice). */
 export const analyticsApi = {
   status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
   setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
@@ -717,6 +726,10 @@ export const skillsApi = {
 
 // ── MCP servers ───────────────────────────────────────────────────────
 export const mcpApi = {
+  /** Explicit Settings metadata check; never changes a Bot's grants. */
+  inspectComposioWatch: () => invoke<import("../../main/services/bot-routine-events/connector-watch-composio-probe").ComposioWatchProbePublicResult>("mcp:composioWatch:inspect"),
+  /** Explicit foreground Calendar read acceptance, separate from metadata inspection. */
+  checkComposioCalendarReads: () => invoke<{ message: string }>("mcp:composioWatch:inspect", { calendarRead: true }),
   list: () => invoke<McpServer[]>("mcp:list"),
   /** Built-in provider catalog plus per-preset connection state. */
   presets: () => invoke<McpPresetState[]>("mcp:presets"),
@@ -830,6 +843,10 @@ export const webFetchApi = {
     invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractAccountId", accountId),
 };
 
+export const transcriptImagesApi = {
+  load: (url: string) => invoke<TranscriptImage>("chat:loadTranscriptImage", url),
+};
+
 // ── Telegram remote control ──────────────────────────────────────────
 export interface TelegramStatus {
   enabled: boolean;
@@ -839,6 +856,7 @@ export interface TelegramStatus {
   model?: string;
   workspaceId?: string;
   polling: boolean;
+  botUsername?: string;
   queuedCount: number;
   thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
   draftPreviews: boolean;
@@ -1165,7 +1183,7 @@ async function botComputer(channel: string, botId: string): Promise<BotComputerS
   return computer;
 }
 
-/** Settings → Bot computers and the profile's Computer section (Apple silicon only). */
+/** Settings → Computers & VMs → Bot computers and the profile's Computer section (Apple silicon only). */
 export const botComputersApi = {
   status: () => botComputersStatus(BOT_COMPUTER_CHANNELS.status),
   setUp: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUp),
@@ -1465,10 +1483,10 @@ export const chatsApi = {
     invoke<ChatTriageResult>("chats:setTriage", id, patch, ifRevision),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
-    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));
+    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id), id);
     if (!response) throw new Error("The chat read response was invalid.");
     if (response.reconciliation) {
-      rememberChatReadReconciliation(response.reconciliation);
+      rememberChatReadReconciliation(response.reconciliation, id);
     }
     return response.chat
       ? {
@@ -1756,8 +1774,8 @@ export const botsApi = {
     whenBusy?: "steer" | "followUp";
     attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
   }) => invoke<{ submissionId: string; deduped: boolean }>("bots:send", input),
-  resume: (botId: string, requestId: string) =>
-    invoke<BotSessionState>("bots:resume", { botId, requestId }),
+  resume: (botId: string, requestId: string, options?: { acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string }) =>
+    invoke<BotSessionState>("bots:resume", { botId, requestId, ...(options?.acknowledgeUnknownCost ? { acknowledgeUnknownCost: true, expectedSubmissionId: options.expectedSubmissionId, expectedCostReceiptId: options.expectedCostReceiptId } : {}) }),
   dismiss: (botId: string, requestId: string) =>
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
@@ -1773,14 +1791,26 @@ export const botsApi = {
       submissionId,
     }),
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
-  approve: (waitId: string, decision: "allow" | "deny") =>
-    invoke<{ decided: boolean }>("bots:approve", { waitId, decision }),
+  approve: (waitId: string, decision: "allow" | "deny", scope?: "always") =>
+    invoke<{ decided: boolean }>("bots:approve", { waitId, decision, ...(scope === undefined ? {} : { scope }) }),
+  allowedList: (botId?: string) =>
+    invoke<import("../shared/tool-approval-scope").BotAllowedEntry[]>("bots:allowed:list", botId === undefined ? {} : { botId }),
+  removeAllowed: (botId: string, entryId: string) =>
+    invoke<{ removed: boolean }>("bots:allowed:remove", { botId, entryId }),
+  onAllowedChanged: (handler: (payload: { botId: string }) => void) =>
+    onNotification("bots:allowed:changed", handler),
   /**
    * Answer the Bot's A–E question by its wait id; `answered` is false once the
    * question is no longer waiting (answered elsewhere or withdrawn).
    */
   answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
     invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  /** Answer only the offered choice for this live authorization attempt. */
+  answerAccessRequest: (botId: string, waitId: string, choice: import("../shared/bot-access-requests").BotAccessChoice) =>
+    invoke<{ answered: boolean; savedForFuture?: true }>("bots:answerAccessRequest", { botId, waitId, choice }),
+  /** Answer or stop the exact plan shown by the host. */
+  respondPlan: (input: { botId: string; planId: string; decision: BotPlanDecision }) =>
+    invoke<{ result: "done" | "not_waiting" }>(BOT_PLAN_CHANNELS.respond, input),
   /**
    * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
    * optional note; `answered` is false once the card is no longer waiting.
@@ -1898,6 +1928,51 @@ export const botsApi = {
     /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
     onChanged: (listener: (botId: string) => void) =>
       onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
+  },
+  confirmedRetiredPendingBots: async (ids: string[]) => {
+    const result = await invoke<unknown>("bots:pendingChanges:retired", ids);
+    if (!Array.isArray(result) || result.some((id) => typeof id !== "string" || !ids.includes(id)) || new Set(result).size !== result.length) throw new Error("Invalid saved-change retirement proof.");
+    return result as string[];
+  },
+  peers: {
+    ...createBotPeerApi(invoke),
+    onChanged: (listener: (botId: string) => void) => onNotification<{ botId?: unknown }>("bots:peers:changed", (payload) => {
+      if (typeof payload?.botId === "string") listener(payload.botId);
+    }),
+  },
+  routineModels: {
+    directory: async (botId: string) => parseBotRoutineModelDirectory(await invoke<unknown>("bots:routineModels:directory", { botId })),
+    resumeStatus: async (botId: string) => parseBotExecutionResumeStatus(await invoke<unknown>("bots:routineModels:resumeStatus", { botId })),
+    read: async (botId: string, routineId: string) => parseBotRoutineModelSettings(await invoke<unknown>("bots:routineModels:read", { botId, routineId })),
+    catalog: async (botId: string, routineId: string) => parseBotRoutineModelCatalog(await invoke<unknown>("bots:routineModels:catalog", { botId, routineId })),
+    save: async (input: BotRoutineModelSave) => parseBotRoutineModelResult(await invoke<unknown>("bots:routineModels:save", input)),
+    readRuns: async (botId: string, routineId: string) => parseBotRoutineModelRuns(await invoke<unknown>("bots:routineModels:runs", { botId, routineId })),
+  },
+  openWork: {
+    snapshot: async (botId: string) => parseBotOpenWorkSnapshot(await invoke<unknown>(openWorkChannels.snapshot, { botId })),
+    mutate: async (botId: string, mutation: BotOpenWorkMutation) => parseBotOpenWorkResult(await invoke<unknown>(openWorkChannels.mutate, { botId, mutation })),
+    evidence: async (botId: string, id: string, kind: "source" | "result") => {
+      const result = await invoke<unknown>(openWorkChannels.evidence, { botId, id, kind });
+      return result === null ? null : parseBotOpenWorkEvidence(result);
+    },
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>(openWorkChannels.changed, (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
+  },
+  connectorWatches: {
+    list: (botId: string) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchList>>(watchChannels.list, { botId }),
+    discoverSources: (botId: string) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchSourceList>>(watchChannels.discoverSources, { botId }),
+    create: (input: ConnectorWatch.BotConnectorWatchCreateInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.create, input),
+    update: (input: ConnectorWatch.BotConnectorWatchUpdateInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.update, input),
+    setEnabled: (input: ConnectorWatch.BotConnectorWatchEnableInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchView>>(watchChannels.setEnabled, input),
+    remove: (input: ConnectorWatch.BotConnectorWatchIdentityInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRemoval>>(watchChannels.remove, input),
+    testCheck: (input: ConnectorWatch.BotConnectorWatchTestInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchTestResult>>(watchChannels.testCheck, input),
+    runNow: (input: ConnectorWatch.BotConnectorWatchIdentityInput) => invoke<ConnectorWatch.BotConnectorWatchReply<ConnectorWatch.BotConnectorWatchRunResult>>(watchChannels.runNow, input),
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>(watchChannels.changed, (payload) => {
         if (typeof payload?.botId === "string") listener(payload.botId);
       }),
   },

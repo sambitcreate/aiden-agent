@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import { ComputerUseSettingsCoordinator } from "./settings-core.js";
 
 function deferred<T>() {
@@ -234,4 +235,27 @@ test("a stale enable cannot reopen runtime or cancel durability after a failed d
   assert.deepEqual(runtime, [false, false]);
   await coordinator.shutdown();
   assert.equal(durable, false);
+});
+
+test("turning Computer Use on counts once, not when it was already on and not when the write fails", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  let persisted = false;
+  let failWrite = true;
+  const coordinator = new ComputerUseSettingsCoordinator({
+    readPersisted: async () => persisted,
+    persist: async (enabled) => {
+      if (failWrite) throw new Error("disk full");
+      persisted = enabled;
+    },
+    setRuntimeEnabled: () => {},
+    cancelComputerUseGenerations: () => {},
+  });
+
+  await assert.rejects(coordinator.setEnabled(true, () => true), /disk full/u);
+  assert.deepEqual(sent, []);
+
+  failWrite = false;
+  await coordinator.setEnabled(true, () => true);
+  await coordinator.setEnabled(true, () => true);
+  assert.deepEqual(sent, [{ event: "computer_use_enabled", props: {} }]);
 });

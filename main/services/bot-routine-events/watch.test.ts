@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { fork } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { readFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
@@ -14,7 +17,7 @@ import {
 import { botRoutineEventBlock } from "../scheduled-bot-routines.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotEventRoutineStore, viewOf, type BotEventRoutine } from "./store.js";
-import { botWatchDiff, botWatchEventPayload, botWatchHash, createBotWatches } from "./watch.js";
+import { botWatchDiff, botWatchEventPayload, botWatchHash, createBotWatches, type BotWatchDependencies } from "./watch.js";
 import { fetchBotWatchUrl, runBotWatchScript, type BotWatchCheck } from "./watch-sources.js";
 
 const roots: string[] = [];
@@ -127,7 +130,9 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
   const issues: Array<{ kind: "paused" | "recovered"; id: string; error?: string }> = [];
   /** What each saved check told the profile: its result and whether the watch is on. */
   const announced: Array<{ lastResult: string | undefined; enabled: boolean }> = [];
-  const watches = createBotWatches({
+  const watchInstances: ReturnType<typeof createBotWatches>[] = [];
+  const makeWatches = (overrides: Partial<BotWatchDependencies> = {}) => {
+    const instance = createBotWatches({
     routines: () => store.all(),
     store,
     check: async () => {
@@ -145,9 +150,15 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
     checked: (routine) => announced.push({ lastResult: routine.watch?.lastResult, enabled: routine.enabled }),
     now: () => clock.at,
     setTimer,
-  });
+    ...overrides,
+    });
+    watchInstances.push(instance);
+    return instance;
+  };
+  const watches = makeWatches();
   const settle = async () => {
-    for (let round = 0; round < 10; round += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await Promise.all(watchInstances.map((instance) => instance.idle()));
+    await dispatcher.idle();
   };
   /** Moves the clock and fires every timer that is due, in order. */
   const advance = async (by: number) => {
@@ -164,8 +175,11 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
     await settle();
   };
   return {
+    root,
     store,
     watches,
+    makeWatches,
+    dispatcher,
     modelRuns,
     checks,
     issues,
@@ -357,6 +371,422 @@ test("editing a watch's address starts over with a fresh baseline; the view neve
   assert.ok(!view.includes("hash") && !view.includes("snapshot") && !view.includes("other: fine"), view);
   assert.match(view, /"lastResult":"baseline"/u);
 });
+
+test("a change survives a missed dispatch and restart without rereading or losing its diff", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  h.clock.at += 15 * MIN;
+  const interrupted = h.makeWatches({ dispatcher: { emit: async () => { throw new Error("process lost before dispatch"); } } });
+  await interrupted.checkNow("bot-a", routine.id);
+  const saved = await h.routine();
+  assert.ok(saved.watch?.pending);
+  const eventId = saved.watch.pending.eventId;
+  assert.equal(saved.watch.hash, botWatchHash(new TextEncoder().encode("status: red")));
+  assert.equal(h.modelRuns.length, 0);
+  assert.ok(!JSON.stringify(viewOf(saved)).includes("status: red"), "pending data stays host-only");
+  interrupted.dispose();
+  const recovered = h.makeWatches({ check: async () => { throw new Error("recovery must use the saved transition"); } });
+  await recovered.checkNow("bot-a", routine.id);
+  await h.dispatcher.idle();
+  assert.deepEqual(h.modelRuns.map((run) => run.eventId), [eventId]);
+  assert.match(h.modelRuns[0]!.payload, /^-status: green$/mu);
+  assert.match(h.modelRuns[0]!.payload, /^\+status: red$/mu);
+  assert.equal((await h.routine()).watch?.pending, undefined);
+  recovered.dispose();
+});
+
+test("a dispatcher commit followed by a lost acknowledgement is replayed without another run", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  h.clock.at += 15 * MIN;
+  const interrupted = h.makeWatches({ dispatcher: { emit: async (...args) => {
+    await h.dispatcher.emit(...args);
+    throw new Error("lost response after commit");
+  } } });
+  await interrupted.checkNow("bot-a", routine.id);
+  await h.dispatcher.idle();
+  assert.equal(h.modelRuns.length, 1);
+  assert.ok((await h.routine()).watch?.pending);
+  interrupted.dispose();
+  const recovered = h.makeWatches();
+  await recovered.checkNow("bot-a", routine.id);
+  await h.dispatcher.idle();
+  assert.equal(h.modelRuns.length, 1);
+  assert.equal((await h.routine()).watch?.pending, undefined);
+  recovered.dispose();
+});
+
+test("pausing retains an owed change without a poll burst; resume delivers it once", async () => {
+  let paused = false;
+  const h = harness({ paused: () => paused });
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  h.clock.at += 15 * MIN;
+  const failed = h.makeWatches({ dispatcher: { emit: async () => { throw new Error("offline"); } } });
+  await failed.checkNow("bot-a", routine.id);
+  failed.dispose();
+  paused = true;
+  const resumed = h.makeWatches();
+  await resumed.rearm();
+  await h.advance(60_000);
+  assert.equal(h.modelRuns.length, 0);
+  assert.equal(h.checks.length, 2);
+  paused = false;
+  await h.advance(15 * MIN);
+  await h.dispatcher.idle();
+  assert.equal(h.modelRuns.length, 1);
+  assert.ok(h.checks.length <= 3, "catch-up performs at most one fresh source read");
+  resumed.dispose();
+});
+
+test("editing a source while its saved transition is being admitted cannot wake the Bot", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  const stale = h.makeWatches({ dispatcher: { emit: async (...args) => {
+    await h.store.update("bot-a", routine.id, { trigger: urlWatch("https://other.example") });
+    return h.dispatcher.emit(...args);
+  } } });
+  await stale.checkNow("bot-a", routine.id);
+  await h.dispatcher.idle();
+  assert.equal(h.modelRuns.length, 0);
+  assert.equal((await h.routine()).watch?.hash, undefined);
+  stale.dispose();
+});
+
+test("shutdown aborts a source read and fences its result even after resume", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  h.watches.dispose();
+  let reading!: () => void;
+  const started = new Promise<void>((resolve) => { reading = resolve; });
+  let finish!: (value: BotWatchCheck) => void;
+  let signal!: AbortSignal;
+  const watches = h.makeWatches({ check: async (_routine, currentSignal) => {
+    signal = currentSignal;
+    reading();
+    return new Promise<BotWatchCheck>((resolve) => { finish = resolve; });
+  } });
+  const running = watches.checkNow("bot-a", routine.id);
+  await started;
+  watches.dispose();
+  assert.equal(signal.aborted, true);
+  watches.resume();
+  finish({ ok: true, bytes: new TextEncoder().encode("stale result") });
+  assert.equal(await running, "skipped");
+  assert.equal((await h.routine()).watch?.hash, undefined);
+  assert.deepEqual(h.modelRuns, []);
+  watches.dispose();
+});
+
+test("saved source output cannot reach the model after its source authority is revoked", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  const missed = h.makeWatches({ dispatcher: { emit: async () => { throw new Error("lost dispatch"); } } });
+  await missed.checkNow("bot-a", routine.id);
+  missed.dispose();
+  const denied = h.makeWatches({ authorizeDispatch: async () => ({ error: "Shell access was revoked." }) });
+  await denied.checkNow("bot-a", routine.id);
+  assert.equal(h.modelRuns.length, 0);
+  assert.equal((await h.routine()).enabled, false);
+  assert.ok((await h.routine()).watch?.pending, "pausing retains the owed event for an explicit resume");
+  assert.equal(h.issues.length, 1);
+  denied.dispose();
+});
+
+test("revocation between source admission and dispatcher claim refuses the event", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  const authority = new AbortController();
+  let released = false;
+  const watches = h.makeWatches({
+    authorizeDispatch: async () => ({ signal: authority.signal, release: () => { released = true; } }),
+    dispatcher: { emit: async (...args) => { authority.abort(); return h.dispatcher.emit(...args); } },
+  });
+  await watches.checkNow("bot-a", routine.id);
+  await h.dispatcher.idle();
+  assert.equal(h.modelRuns.length, 0);
+  assert.equal(released, true);
+  assert.ok((await h.routine()).watch?.pending);
+  watches.dispose();
+});
+
+test("a denied change after a failed check keeps its Needs you card until an authorized resume", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.fail();
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  const denied = h.makeWatches({ authorizeDispatch: async () => ({ error: "Source access changed." }) });
+  await denied.checkNow("bot-a", routine.id);
+  assert.deepEqual(h.issues.map((issue) => issue.kind), ["paused"]);
+  assert.equal((await h.routine()).enabled, false);
+  denied.dispose();
+  await h.store.update("bot-a", routine.id, { enabled: true });
+  const resumed = h.makeWatches();
+  await resumed.checkNow("bot-a", routine.id);
+  await h.dispatcher.idle();
+  assert.deepEqual(h.issues.map((issue) => issue.kind), ["paused", "recovered"]);
+  assert.equal(h.modelRuns.length, 1);
+  resumed.dispose();
+});
+
+test("revocation during the durable claim save starts no model; replay rechecks source authority", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  const authority = new AbortController();
+  const store = {
+    ...h.store,
+    async mutate<T>(botId: string, id: string, change: (value: BotEventRoutine, routines: readonly BotEventRoutine[]) => { next?: BotEventRoutine; result: T }) {
+      const result = await h.store.mutate(botId, id, change);
+      authority.abort();
+      return result;
+    },
+  };
+  let models = 0;
+  const dependencies = {
+    store,
+    run: async () => { models += 1; },
+    isPaused: async () => false,
+    now: () => h.clock.at,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel() {} }),
+  };
+  const dispatcher = createBotRoutineEventDispatcher(dependencies);
+  const watches = h.makeWatches({ dispatcher,
+    authorizeDispatch: async () => ({ signal: authority.signal, release() {} }),
+  });
+  await watches.checkNow("bot-a", routine.id);
+  await dispatcher.idle();
+  assert.equal(models, 0);
+  assert.equal((await h.routine()).running?.length, 1, "the committed obligation survives revocation");
+  watches.dispose();
+  dispatcher.dispose();
+  const denied = createBotRoutineEventDispatcher({ ...dependencies, store: h.store,
+    authorizeRun: async () => ({ error: "Source access changed." }),
+  });
+  await denied.rearm(await h.store.all());
+  await denied.idle();
+  assert.equal(models, 0);
+  assert.equal((await h.routine()).running?.length, 1);
+  denied.dispose();
+  const allowed = createBotRoutineEventDispatcher({ ...dependencies, store: h.store,
+    authorizeRun: async () => ({ signal: new AbortController().signal, release() {} }),
+  });
+  await allowed.rearm(await h.store.all());
+  await allowed.idle();
+  assert.equal(models, 1);
+  assert.equal((await h.routine()).running, undefined);
+  allowed.dispose();
+});
+
+for (const stage of ["before", "after"]) {
+  test(`SIGKILL ${stage} dispatcher ownership replays a saved change once`, { timeout: 20_000 }, async () => {
+    const h = harness();
+    const routine = await addWatch(h);
+    await h.watches.checkNow("bot-a", routine.id);
+    h.watches.dispose();
+    h.clock.at += 15 * MIN;
+    const child = fork(new URL("./test-support/watch-handoff-child.ts", import.meta.url),
+      [h.root, routine.id, stage, String(h.clock.at)],
+      { execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "pipe", "ipc"], env: { ...process.env, AIDEN_ANALYTICS: "0" } });
+    let errors = "";
+    child.stderr?.on("data", (chunk) => { errors += String(chunk); });
+    try {
+      const ready = await Promise.race([
+        once(child, "message"),
+        once(child, "exit").then(() => { throw new Error(`Child exited before staging: ${errors}`); }),
+      ]);
+      assert.equal(ready[0], "staged");
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+      const pending = (await h.routine()).watch?.pending;
+      assert.ok(pending, "baseline and event obligation reached disk before the process died");
+      const restartedStore = createBotEventRoutineStore({ profileDir: () => h.root, now: () => h.clock.at });
+      const dispatcher = createBotRoutineEventDispatcher({
+        store: restartedStore,
+        run: async (_r, event) => {
+          const { appendFile } = await import("node:fs/promises");
+          await appendFile(path.join(h.root, "delivered.txt"), `${event.eventId}\n`);
+        },
+        isPaused: async () => false,
+        now: () => h.clock.at,
+        timeZone: () => "UTC",
+        setTimer: () => ({ cancel() {} }),
+      });
+      const watches = h.makeWatches({ store: restartedStore, dispatcher });
+      await watches.checkNow("bot-a", routine.id);
+      await dispatcher.idle();
+      assert.deepEqual((await readFile(path.join(h.root, "delivered.txt"), "utf8")).trim().split("\n"), [pending.eventId]);
+      assert.equal((await restartedStore.list("bot-a"))[0]!.watch?.pending, undefined);
+      watches.dispose();
+      dispatcher.dispose();
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+}
+
+for (const edit of ["source", "prompt", "name"] as const) {
+  test(`${edit} edits during source admission preserve only work for the current configuration`, async () => {
+    const h = harness();
+    const routine = await addWatch(h);
+    await h.watches.checkNow("bot-a", routine.id);
+    h.watches.dispose();
+    h.set("status: red");
+    let admit!: () => void;
+    let entered!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const admission = new Promise<void>((resolve) => { admit = resolve; });
+    let models = 0;
+    const dispatcher = createBotRoutineEventDispatcher({
+      store: h.store,
+      run: async () => { models += 1; },
+      authorizeRun: async () => { entered(); await admission; return { signal: new AbortController().signal, release() {} }; },
+      isPaused: async () => false,
+      now: () => h.clock.at,
+      timeZone: () => "UTC",
+      setTimer: () => ({ cancel() {} }),
+    });
+    const watches = h.makeWatches({ dispatcher });
+    const checking = watches.checkNow("bot-a", routine.id);
+    await entering;
+    await h.store.update("bot-a", routine.id, edit === "source" ? { trigger: urlWatch("https://other.example") } :
+      edit === "prompt" ? { prompt: "A different task." } : { name: "Renamed status page" });
+    admit();
+    await checking;
+    await dispatcher.idle();
+    assert.equal(models, edit === "name" ? 1 : 0);
+    watches.dispose();
+    dispatcher.dispose();
+  });
+}
+
+test("a newer startup denial cannot be erased by the pending-output acknowledgement", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.fail();
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  const dispatcher = createBotRoutineEventDispatcher({
+    store: h.store,
+    run: async () => { assert.fail("a denied source must not start a model"); },
+    authorizeRun: async () => {
+      await h.store.mutate("bot-a", routine.id, (fresh) => ({
+        next: { ...fresh, enabled: false, watch: { ...fresh.watch!, failures: 1, unsettledFailure: true,
+          lastResult: "error", lastError: "Access changed at startup." } }, result: undefined,
+      }));
+      h.issues.push({ kind: "paused", id: routine.id });
+      return { error: "Access changed at startup." };
+    },
+    isPaused: async () => false,
+    now: () => h.clock.at,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel() {} }),
+  });
+  const watches = h.makeWatches({ dispatcher: { emit: async (...args) => {
+    const result = await dispatcher.emit(...args);
+    await dispatcher.idle();
+    return result;
+  } } });
+  await watches.checkNow("bot-a", routine.id);
+  const fresh = await h.routine();
+  assert.equal(fresh.enabled, false);
+  assert.equal(fresh.watch?.failures, 1);
+  assert.equal(fresh.watch?.unsettledFailure, true);
+  assert.equal(fresh.watch?.lastError, "Access changed at startup.");
+  assert.deepEqual(h.issues.map((issue) => issue.kind), ["paused"]);
+  watches.dispose();
+  dispatcher.dispose();
+});
+
+test("live receipt rearming retries restored access and never starts the same active event twice", async () => {
+  const h = harness();
+  const routine = await addWatch(h);
+  await h.watches.checkNow("bot-a", routine.id);
+  h.watches.dispose();
+  h.set("status: red");
+  let allowed = false;
+  let finish!: () => void;
+  const running = new Promise<void>((resolve) => { finish = resolve; });
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => { started = resolve; });
+  let models = 0;
+  const dispatcher = createBotRoutineEventDispatcher({
+    store: h.store,
+    run: async () => { models += 1; started(); await running; },
+    authorizeRun: async () => allowed ? { signal: new AbortController().signal, release() {} } : { error: "Source unavailable." },
+    isPaused: async () => false,
+    now: () => h.clock.at,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel() {} }),
+  });
+  const watches = h.makeWatches({ dispatcher });
+  await watches.checkNow("bot-a", routine.id);
+  await dispatcher.idle();
+  assert.equal(models, 0);
+  allowed = true;
+  await dispatcher.rearm(await h.store.all());
+  await ready;
+  await dispatcher.rearm(await h.store.all());
+  await dispatcher.rearm(await h.store.all());
+  assert.equal(models, 1);
+  finish();
+  await dispatcher.idle();
+  assert.equal((await h.routine()).running, undefined);
+  watches.dispose();
+  dispatcher.dispose();
+});
+
+for (const legacy of [false, true]) {
+  for (const edit of ["source", "prompt"] as const) {
+    test(`${edit} changes retire ${legacy ? "legacy" : "versioned"} queued output across later rename and resume`, async () => {
+      const h = harness();
+      const routine = await addWatch(h);
+      h.watches.dispose();
+      await h.store.mutate("bot-a", routine.id, (fresh) => ({
+        next: { ...fresh,
+          held: { eventId: "held-old", payload: "old source output", at: h.clock.at, ...(legacy ? {} : { watchRevision: fresh.updatedAt }) },
+          running: [{ eventId: "running-old", payload: "old source output", at: h.clock.at, ...(legacy ? {} : { watchRevision: fresh.updatedAt }) }],
+        }, result: undefined,
+      }));
+      await h.store.update("bot-a", routine.id, edit === "source" ? { trigger: urlWatch("https://new.example") } : { prompt: "A different task." });
+      await h.store.update("bot-a", routine.id, { name: "Renamed" });
+      await h.store.update("bot-a", routine.id, { enabled: false });
+      await h.store.update("bot-a", routine.id, { enabled: true });
+      await h.dispatcher.rearm(await h.store.all());
+      await h.dispatcher.idle();
+      assert.deepEqual(h.modelRuns, []);
+      assert.equal((await h.routine()).held, undefined);
+      assert.equal((await h.routine()).running, undefined);
+      h.dispatcher.dispose();
+    });
+  }
+}
 
 // --- Sources: a real local server and real scripts. ---
 

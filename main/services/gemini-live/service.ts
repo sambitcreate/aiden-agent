@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import type {
@@ -471,6 +472,7 @@ export class GeminiLiveService {
         this.closeSession(session);
         throw new Error("The Assistant Live owner was invalidated.");
       }
+      reportAnalyticsEvent("voice_used", { mode: "live", engine: "cloud" });
       return this.snapshot(session, "available");
     } catch (error) {
       this.closeSession(session, false, "failed");

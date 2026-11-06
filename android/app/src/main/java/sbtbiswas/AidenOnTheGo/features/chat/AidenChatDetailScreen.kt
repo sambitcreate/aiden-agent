@@ -267,6 +267,21 @@ fun AidenChatDetailScreen(
             backgroundJobs.refresh(chatId, backgroundJobsTransport)
         }
     }
+    // Revision 53: New worktree beside the composer until the chat's first message.
+    val startsInNewWorktree by viewModel.startsInNewWorktree.collectAsStateWithLifecycle()
+    val isSettingUpWorktree by viewModel.isSettingUpWorktree.collectAsStateWithLifecycle()
+    val workspaceHasCommits by viewModel.workspaceHasCommits.collectAsStateWithLifecycle()
+    val knownWorkspaces by coordinator.workspaces.collectAsStateWithLifecycle()
+    val showsNewWorktreeChip = !viewModel.isReadOnlyPresentation && !isSettingUpWorktree &&
+        AidenNewWorktreeAvailability.isOffered(
+            chat = chat,
+            workspace = knownWorkspaces.firstOrNull { it.id == chat?.workspaceId },
+            server = serverInfo,
+            hasCommits = workspaceHasCommits
+        )
+    LaunchedEffect(chatId, chat?.workspaceId, serverInfo?.supportsNewWorktrees, readAloudClient) {
+        viewModel.refreshNewWorktreeRepository()
+    }
     val readAloud = remember(readAloudClient, chatId) {
         AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
             readAloudClient != null && coordinator.client.value === readAloudClient
@@ -488,7 +503,7 @@ fun AidenChatDetailScreen(
                 scope.launch {
                     isDeletingBot = true
                     try {
-                        deleter.delete(cl, botIdentity.botId)
+                        coordinator.deleteBot(cl,botIdentity.botId,deleter)
                         confirmingBotDelete = false
                         onNavigateBack()
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -762,6 +777,20 @@ fun AidenChatDetailScreen(
                     )
                 }
 
+                if (isSettingUpWorktree) {
+                    AidenNewWorktreeSetupRow(
+                        onCancel = { viewModel.cancelWorktreeSetup() },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                if (showsNewWorktreeChip) {
+                    AidenNewWorktreeChip(
+                        isOn = startsInNewWorktree,
+                        onToggle = { viewModel.setStartsInNewWorktree(it) },
+                        enabled = !isStartingSend,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 if (simulatorDevices.isNotEmpty()) {
                     AidenSimulatorDeviceButton(
                         count = simulatorDevices.size,

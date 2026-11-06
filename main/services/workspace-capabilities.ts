@@ -14,23 +14,23 @@ const MAX_ENTRY_LENGTH = 256;
 export type WorkspaceCapabilityFields = Pick<Workspace, "disabledSkills" | "disabledMcpServerIds">;
 
 /**
- * Cleans a stored or renderer-supplied off-list: strings only, trimmed,
+ * Cleans a stored or renderer-supplied off-list: nonblank strings,
  * de-duplicated, bounded and sorted so equal lists compare equal. Anything
  * else becomes "nothing is off" rather than invalidating the workspace.
  */
 export function normalizeWorkspaceOffList(
   value: unknown,
-  canonicalize: (entry: string) => string = (entry) => entry,
+  canonicalize?: (entry: string) => string,
 ): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const entries = new Set<string>();
   for (const raw of value) {
     if (typeof raw !== "string") continue;
-    const trimmed = raw.trim();
-    if (!trimmed || trimmed.length > MAX_ENTRY_LENGTH) continue;
+    const candidate = canonicalize ? raw.trim() : raw;
+    if (!candidate.trim() || candidate.length > MAX_ENTRY_LENGTH) continue;
     let entry: string;
     try {
-      entry = canonicalize(trimmed);
+      entry = canonicalize ? canonicalize(candidate) : candidate;
     } catch {
       continue;
     }

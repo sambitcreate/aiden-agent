@@ -1035,6 +1035,32 @@ class AidenRemoteClient(
     }
 
     /**
+     * Revision 53 (`chat:new-worktree`, with `git:write`): the Mac makes a worktree named from
+     * [text], the chat's first message, and moves the still-empty chat [id] into it. It sends
+     * nothing; the turn follows as usual. The same key and chat find the worktree an earlier
+     * attempt made.
+     */
+    suspend fun moveChatToNewWorktree(
+        id: String,
+        revision: String,
+        text: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatNewWorktree {
+        AidenBotWire.validateIdentifier(id, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        // A long message sends only its first 4,000 characters for the name.
+        val seed = AidenChatNewWorktree.branchSeed(text)
+        return executeRequest(
+            "/chats/$id/worktree",
+            method = "POST",
+            ifMatchRevision = revision,
+            idempotencyKey = idempotencyKey,
+            bodyJson = json.encodeToString(ChatNewWorktreeRequest(text = seed)),
+            // Fetching the base branch and checking it out can take a while.
+            requestTimeoutSeconds = 120
+        ) { bytes -> AidenChatNewWorktree.decode(String(bytes, Charsets.UTF_8), id) }
+    }
+
+    /**
      * Forks [id] at [messageId] (contract revision 21, `chat-fork-v1`).
      * [summaryFocus] is only sent with [withSummary], which needs
      * `chat-fork-summary-v1`; a blank focus asks for an unfocused summary.
@@ -1494,13 +1520,15 @@ class AidenRemoteClient(
      * the run identity; a frame naming any other run ends the feed. */
     fun currentRunEvents(chatId: String): Flow<AidenRemoteRunEvent> = rawSseEvents(
         path = "/chats/$chatId/runs/current/events",
-        after = 0
+        after = 0,
+        runCheckpoint = true
     ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = null) }
 
     /** One run's feed, resumed after [after] with `?after` and `Last-Event-ID`. */
     fun runEvents(runId: String, after: Int = 0): Flow<AidenRemoteRunEvent> = rawSseEvents(
         path = "/runs/$runId/events",
-        after = after
+        after = after,
+        runCheckpoint = true
     ) { stream -> AidenRunSSEParser.parseStream(stream, expectedRunId = runId) }
 
     /** Stop a run this phone did not start. Control writes never auto-retry. */
@@ -1618,6 +1646,7 @@ class AidenRemoteClient(
         after: Int,
         epoch: String? = null,
         onOpen: suspend (Boolean) -> Unit = {},
+        runCheckpoint: Boolean = false,
         parse: (java.io.InputStream) -> Flow<T>
     ): Flow<T> = callbackFlow {
         if (credential.isNullOrEmpty()) {
@@ -1639,6 +1668,7 @@ class AidenRemoteClient(
             requestBuilder.addHeader("Last-Event-ID", after.toString())
         }
 
+        if (runCheckpoint) requestBuilder.header("Aiden-Run-Checkpoint", "1")
         epoch?.let { requestBuilder.header("Aiden-Progress-Epoch", it) }
         val call = httpClient.newCall(requestBuilder.build())
         val readerJob = launch(Dispatchers.IO) {
@@ -1702,6 +1732,11 @@ class AidenRemoteClient(
         throw AidenBotContractException.InvalidField("bot response")
     }
 
+    suspend fun setBotMessaging(enabled: Boolean): AidenBotMessagingSettings = executeRequest(
+        "/bots/messaging", method = "PUT",
+        bodyJson = botJson.encodeToString(AidenBotMessagingSettings.serializer(), AidenBotMessagingSettings(enabled))
+    ) { bytes -> decodeBotWire(AidenBotMessagingSettings.serializer(), String(bytes, Charsets.UTF_8)) }
+
     suspend fun bots(): AidenBotList = executeRequest(
         "/bots",
         botScope = AidenBotPrivateResponseScope.Root("botList")
@@ -1741,14 +1776,15 @@ class AidenRemoteClient(
         id: String,
         revision: String,
         patch: AidenBotIdentityPatch,
-        supportsBotActivity: Boolean = false
+        supportsBotActivity: Boolean = false,
+        supportsBotMessaging: Boolean = false
     ): AidenBotDetail = executeRequest(
         "/bots/$id",
         method = "PATCH",
         ifMatchRevision = revision,
         bodyJson = botJson.encodeToString(
             AidenBotIdentityPatch.serializer(),
-            patch.forHost(supportsBotActivity) ?: throw AidenBotContractException.InvalidCombination("chat activity unsupported")
+            patch.also { if (it.botMessaging != null && !supportsBotMessaging) throw AidenBotContractException.InvalidCombination("bot messaging unsupported") }.forHost(supportsBotActivity) ?: throw AidenBotContractException.InvalidCombination("chat activity unsupported")
         ),
         botScope = AidenBotPrivateResponseScope.Root("botDetail")
     ) { bytes ->
@@ -1822,8 +1858,15 @@ class AidenRemoteClient(
         }
     }
 
-    suspend fun resumeBotSession(botId: String, idempotencyKey: UUID): AidenBotSessionStateView =
-        botSessionControl(botId, "resume", idempotencyKey)
+    suspend fun resumeBotSession(botId: String, idempotencyKey: UUID, request: AidenBotResumeRequest = AidenBotResumeRequest()): AidenBotSessionStateView {
+        AidenRoutineModelWire.id(botId)
+        return executeRequest("/bots/$botId/resume", method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotResumeRequest.serializer(), request),
+            idempotencyKey = idempotencyKey, retryConnectionFailure = false, acceptedStatus = setOf(200,202),
+            botScope = AidenBotPrivateResponseScope.Root("botSessionResume")) { bytes ->
+            decodeBotWire(AidenBotSessionStateView.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
 
     suspend fun dismissBotSession(botId: String, idempotencyKey: UUID): AidenBotSessionStateView =
         botSessionControl(botId, "dismiss", idempotencyKey)
@@ -1863,6 +1906,34 @@ class AidenRemoteClient(
      * makes a retried answer replay the same receipt; `handoff_expired` means the card was
      * already answered or closed.
      */
+    suspend fun respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID): AidenBotPlanRespondReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotPlanWire.id(planId)
+        return executeRequest(
+            "/bots/$botId/plans/$planId/respond", method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotPlanRespondRequest.serializer(), request),
+            idempotencyKey = idempotencyKey, retryConnectionFailure = false, acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botPlans")
+        ) { bytes ->
+            val receipt = decodeBotWire(AidenBotPlanRespondReceipt.serializer(), String(bytes, Charsets.UTF_8))
+            if (receipt.planId != planId) throw AidenRemoteClientException.InvalidResponse()
+            receipt
+        }
+    }
+
+    suspend fun answerBotAccessRequest(
+        botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID
+    ): AidenBotAccessAnswerReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotHandoffWire.validateWaitId(waitId)
+        return executeRequest(
+            "/bots/$botId/access-requests/$waitId/answer", method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotAccessAnswerRequest.serializer(), request),
+            idempotencyKey = idempotencyKey, retryConnectionFailure = false, acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botAccessAnswer")
+        ) { bytes -> decodeBotWire(AidenBotAccessAnswerReceipt.serializer(), String(bytes, Charsets.UTF_8)) }
+    }
+
     suspend fun answerBotHandoff(
         botId: String,
         waitId: String,
@@ -2029,6 +2100,207 @@ class AidenRemoteClient(
         ) { }
     }
 
+    private fun peerPath(botId:String,exchangeId:String?=null):String {
+        AidenPeerWire.id(botId);exchangeId?.let(AidenPeerWire::id)
+        return "/bots/$botId/"+(exchangeId?.let{"peer-exchanges/$it"} ?: "peers")
+    }
+    suspend fun botPeers(botId:String):AidenPeerSettings=executeRequest(peerPath(botId),maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+        botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+        AidenPeerWire.decode(AidenPeerSettings.serializer(),String(bytes,Charsets.UTF_8)).also{if(it.botId!=botId)throw AidenRemoteClientException.InvalidResponse()}
+    }
+    suspend fun botPeerCatalog(botId:String):AidenPeerCatalog=executeRequest(peerPath(botId)+"/catalog",maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+        botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+        AidenPeerWire.decode(AidenPeerCatalog.serializer(),String(bytes,Charsets.UTF_8)).also{if(it.botId!=botId)throw AidenRemoteClientException.InvalidResponse()}
+    }
+    suspend fun mutateBotPeers(request:AidenPeerMutation):AidenPeerMutationResult {
+        val body=botJson.encodeToString(AidenPeerMutation.serializer(),request)
+        require(body.toByteArray(Charsets.UTF_8).size<=AidenPeerWire.MUTATION_BYTES)
+        return executeRequest(peerPath(request.botId),method="POST",bodyJson=body,retryConnectionFailure=false,maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerMutationResult.serializer(),String(bytes,Charsets.UTF_8)).also{
+                if(it.snapshot?.botId?.let{it!=request.botId}==true || it.ok && it.mutationId!=request.mutationId)throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botPeerExchanges(botId:String):AidenPeerExchangeList {
+        AidenPeerWire.id(botId)
+        return executeRequest("/bots/$botId/peer-exchanges",maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerExchangeList.serializer(),String(bytes,Charsets.UTF_8)).also{if(it.botId!=botId)throw AidenRemoteClientException.InvalidResponse()}
+        }
+    }
+    suspend fun botPeerExchange(botId:String,exchangeId:String):AidenPeerExchange=executeRequest(peerPath(botId,exchangeId),maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+        botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+        AidenPeerWire.decode(AidenPeerExchange.serializer(),String(bytes,Charsets.UTF_8)).detail().also{if(it.id!=exchangeId || !it.belongsTo(botId))throw AidenRemoteClientException.InvalidResponse()}
+    }
+    suspend fun stopBotPeerExchange(request:AidenPeerStopMutation):AidenPeerStopResult {
+        val body=botJson.encodeToString(AidenPeerStopMutation.serializer(),request)
+        return executeRequest(peerPath(request.botId,request.exchangeId)+"/stop",method="POST",bodyJson=body,retryConnectionFailure=false,maximumResponseBytes=AidenPeerWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerStopResult.serializer(),String(bytes,Charsets.UTF_8)).also{
+                if(it.exchange?.let{row->row.id!=request.exchangeId || !row.belongsTo(request.botId)}==true || it.ok && it.mutationId!=request.mutationId)throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botPeerEvidence(botId:String,exchange:AidenPeerExchange,kind:AidenOpenWorkEvidenceKind):AidenPeerEvidence {
+        require(exchange.belongsTo(botId))
+        return executeRequest(peerPath(botId,exchange.id)+"/evidence/"+kind.name.lowercase(),maximumResponseBytes=256*1024,
+            botScope=AidenBotPrivateResponseScope.Root("botPeers")){bytes->
+            AidenPeerWire.decode(AidenPeerEvidence.serializer(),String(bytes,Charsets.UTF_8)).also{
+                val owner=if(kind==AidenOpenWorkEvidenceKind.SOURCE)exchange.sender.botId else exchange.recipient.botId
+                if(it.exchangeId!=exchange.id || it.kind!=kind || it.botId!=owner)throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+
+    private fun routineModelPath(botId: String, routineId: String? = null): String {
+        AidenRoutineModelWire.id(botId); routineId?.let(AidenRoutineModelWire::id)
+        return "/bots/$botId/routine-models" + (routineId?.let { "/$it" } ?: "")
+    }
+    suspend fun botRoutineModelDirectory(botId: String): AidenRoutineModelDirectory = executeRequest(
+        routineModelPath(botId), maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.decode(AidenRoutineModelDirectory.serializer(), String(bytes, Charsets.UTF_8)).also {
+            if(it.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+        }
+    }
+    suspend fun botRoutineModelSettings(botId: String, routineId: String): AidenRoutineModelSettings = executeRequest(
+        routineModelPath(botId,routineId), maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.decode(AidenRoutineModelSettings.serializer(), String(bytes, Charsets.UTF_8)).also {
+            if(it.botId != botId || it.routineId != routineId) throw AidenRemoteClientException.InvalidResponse()
+        }
+    }
+    suspend fun botRoutineModelCatalog(botId: String, routineId: String): AidenRoutineModelCatalog = executeRequest(
+        routineModelPath(botId,routineId)+"/catalog", maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.decode(AidenRoutineModelCatalog.serializer(), String(bytes, Charsets.UTF_8))
+    }
+    suspend fun botRoutineModelRuns(botId: String, routineId: String): List<AidenRoutineModelRun> = executeRequest(
+        routineModelPath(botId,routineId)+"/runs", maximumResponseBytes = AidenRoutineModelWire.PUBLIC_BYTES,
+        botScope = AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+        AidenRoutineModelWire.runs(AidenRoutineModelWire.decode(kotlinx.serialization.builtins.ListSerializer(AidenRoutineModelRun.serializer()), String(bytes, Charsets.UTF_8)))
+    }
+    suspend fun saveBotRoutineModel(request: AidenRoutineModelSave): AidenRoutineModelResult {
+        val body = botJson.encodeToString(AidenRoutineModelSave.serializer(),request)
+        require(body.toByteArray(Charsets.UTF_8).size <= AidenRoutineModelWire.MUTATION_BYTES)
+        return executeRequest(routineModelPath(request.botId,request.routineId),method="POST",bodyJson=body,
+            retryConnectionFailure=false,maximumResponseBytes=AidenRoutineModelWire.PUBLIC_BYTES,
+            botScope=AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+            AidenRoutineModelWire.decode(AidenRoutineModelResult.serializer(),String(bytes,Charsets.UTF_8)).also {
+                if(it.settings?.let { row -> row.botId != request.botId || row.routineId != request.routineId } == true ||
+                    it.ok && it.mutationId != request.mutationId) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botRoutineResumeStatus(botId: String): AidenBotResumeStatus {
+        AidenRoutineModelWire.id(botId)
+        return executeRequest("/bots/$botId/routine-resume-status",maximumResponseBytes=1024,
+            botScope=AidenBotPrivateResponseScope.Root("botRoutineModels")) { bytes ->
+            AidenRoutineModelWire.decode(AidenBotResumeStatus.serializer(),String(bytes,Charsets.UTF_8))
+        }
+    }
+
+    private fun openWorkPath(botId: String): String {
+        AidenOpenWorkWire.id(botId)
+        return "/bots/$botId/open-work"
+    }
+    suspend fun botOpenWork(botId: String): AidenOpenWorkSnapshot = executeRequest(
+        openWorkPath(botId), maximumResponseBytes = 900 * 1024,
+        botScope = AidenBotPrivateResponseScope.Root("botOpenWork")
+    ) { bytes -> decodeBotWire(AidenOpenWorkSnapshot.serializer(), String(bytes, Charsets.UTF_8)).also {
+        if (it.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+    } }
+    suspend fun mutateBotOpenWork(botId: String, mutation: AidenOpenWorkMutation): AidenOpenWorkResult {
+        val body = botJson.encodeToString(AidenOpenWorkMutation.serializer(), mutation)
+        AidenOpenWorkWire.check(body.toByteArray(Charsets.UTF_8).size <= 16 * 1024)
+        return executeRequest(openWorkPath(botId), method = "POST", bodyJson = body,
+            retryConnectionFailure = false, maximumResponseBytes = 900 * 1024,
+            botScope = AidenBotPrivateResponseScope.Root("botOpenWorkResult")) { bytes ->
+            decodeBotWire(AidenOpenWorkResult.serializer(), String(bytes, Charsets.UTF_8)).also {
+                if (it.snapshot?.botId?.let { id -> id != botId } == true || it.ok &&
+                    (it.mutationId != mutation.mutationId || it.stop?.mutationId?.let { id -> id != mutation.mutationId } == true ||
+                        mutation.id != null && it.itemId?.let { id -> id != mutation.id } == true)) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+    suspend fun botOpenWorkEvidence(botId: String, itemId: String, kind: AidenOpenWorkEvidenceKind): AidenOpenWorkEvidence {
+        AidenOpenWorkWire.id(itemId)
+        val token = if (kind == AidenOpenWorkEvidenceKind.SOURCE) "source" else "result"
+        return executeRequest(openWorkPath(botId) + "/$itemId/evidence/$token", maximumResponseBytes = 256 * 1024,
+            botScope = AidenBotPrivateResponseScope.Root("botOpenWorkEvidence")) { bytes ->
+            decodeBotWire(AidenOpenWorkEvidence.serializer(), String(bytes, Charsets.UTF_8)).also {
+                if (it.itemId != itemId || it.kind != kind) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+
+    // Connector watches: all bodies are bounded person-facing DTOs, never connector arguments.
+    private fun botWatchPath(botId: String, id: String? = null): String {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        id?.let(AidenBotWatchWire::uuid)
+        return "/bots/$botId/watches" + (id?.let { "/$it" } ?: "")
+    }
+
+    suspend fun botWatches(botId: String): AidenBotWatchList = executeRequest(
+        botWatchPath(botId), botScope = AidenBotPrivateResponseScope.Root("botWatches")
+    ) { bytes ->
+        decodeBotWire(AidenBotWatchList.serializer(), String(bytes, Charsets.UTF_8)).also { list ->
+            if (list.watches.any { it.botId != botId }) throw AidenRemoteClientException.InvalidResponse()
+        }
+    }
+
+    suspend fun botWatchSources(botId: String): AidenBotWatchSourceList = executeRequest(
+        botWatchPath(botId) + "/sources", method = "POST", bodyJson = "{}", retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botWatchSources")
+    ) { bytes -> decodeBotWire(AidenBotWatchSourceList.serializer(), String(bytes, Charsets.UTF_8)) }
+
+    suspend fun saveBotWatch(botId: String, id: String?, request: AidenBotWatchSaveRequest): AidenBotWatch {
+        if ((id == null && (request.sourceChoiceId == null || request.expectedRevision != null)) ||
+            (id != null && request.expectedRevision == null)) throw AidenBotContractException.InvalidField("watch.revision")
+        return executeRequest(
+            botWatchPath(botId, id), method = if (id == null) "POST" else "PATCH",
+            bodyJson = botJson.encodeToString(AidenBotWatchSaveRequest.serializer(), request),
+            retryConnectionFailure = false, acceptedStatus = setOf(200, 201),
+            botScope = AidenBotPrivateResponseScope.Root("botWatch")
+        ) { bytes ->
+            decodeBotWire(AidenBotWatch.serializer(), String(bytes, Charsets.UTF_8)).also {
+                if (it.botId != botId || it.id != (id ?: request.mutationId)) throw AidenRemoteClientException.InvalidResponse()
+            }
+        }
+    }
+
+    suspend fun enableBotWatch(botId: String, id: String, request: AidenBotWatchMutation): AidenBotWatch {
+        if (request.enabled == null) throw AidenBotContractException.InvalidField("enabled")
+        return executeRequest(
+            botWatchPath(botId, id) + "/enabled", method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotWatchMutation.serializer(), request), retryConnectionFailure = false,
+            botScope = AidenBotPrivateResponseScope.Root("botWatch")
+        ) { bytes -> decodeBotWire(AidenBotWatch.serializer(), String(bytes, Charsets.UTF_8)).also {
+            if (it.id != id || it.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+        } }
+    }
+
+    suspend fun deleteBotWatch(botId: String, id: String, request: AidenBotWatchMutation): AidenBotWatchRemoval = executeRequest(
+        botWatchPath(botId, id), method = "DELETE",
+        bodyJson = botJson.encodeToString(AidenBotWatchMutation.serializer(), request), retryConnectionFailure = false,
+        botScope = AidenBotPrivateResponseScope.Root("botWatchRemoval")
+    ) { bytes -> decodeBotWire(AidenBotWatchRemoval.serializer(), String(bytes, Charsets.UTF_8)).also {
+        if (it.id != id) throw AidenRemoteClientException.InvalidResponse()
+    } }
+
+    suspend fun testBotWatch(botId: String, request: AidenBotWatchTestRequest): AidenBotWatchTestResult = executeRequest(
+        botWatchPath(botId) + "/test", method = "POST", bodyJson = botJson.encodeToString(AidenBotWatchTestRequest.serializer(), request),
+        retryConnectionFailure = false, botScope = AidenBotPrivateResponseScope.Root("botWatchTest")
+    ) { bytes -> decodeBotWire(AidenBotWatchTestResult.serializer(), String(bytes, Charsets.UTF_8)) }
+
+    suspend fun runBotWatch(botId: String, id: String, request: AidenBotWatchMutation): AidenBotWatchRunResult = executeRequest(
+        botWatchPath(botId, id) + "/run", method = "POST", bodyJson = botJson.encodeToString(AidenBotWatchMutation.serializer(), request),
+        retryConnectionFailure = false, acceptedStatus = setOf(200, 202), botScope = AidenBotPrivateResponseScope.Root("botWatchRun")
+    ) { bytes -> decodeBotWire(AidenBotWatchRunResult.serializer(), String(bytes, Charsets.UTF_8)).also {
+        if (it.id != id) throw AidenRemoteClientException.InvalidResponse()
+    } }
+
     // --- Revision 25: connection requests (`bot-connection-requests-v1`) ---
 
     suspend fun requestBotConnection(
@@ -2075,6 +2347,27 @@ class AidenRemoteClient(
     }
 
     // --- Revision 27: memory (`bot-memory-v1`) ---
+
+    suspend fun botAllowed(botId: String, cursor: String? = null): AidenBotAllowedList {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        require(cursor == null || AidenBotAllowedList.validCursor(cursor))
+        val query = cursor?.let { "?cursor=$it" } ?: ""
+        return executeRequest("/bots/$botId/allowed$query", botScope = AidenBotPrivateResponseScope.Root("botAllowed")) { bytes ->
+            val view = AidenBotAllowedList.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8)))
+            if (view.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+            view
+        }
+    }
+    suspend fun removeBotAllowed(botId: String, entryId: String): AidenBotAllowedList {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        require(AidenBotAllowedList.validId(entryId))
+        return executeRequest("/bots/$botId/allowed/$entryId/remove", method = "POST", retryConnectionFailure = false,
+            bodyJson = "{}", botScope = AidenBotPrivateResponseScope.Root("botAllowed")) { bytes ->
+            val view = AidenBotAllowedList.parse(json.parseToJsonElement(String(bytes, Charsets.UTF_8)))
+            if (view.botId != botId) throw AidenRemoteClientException.InvalidResponse()
+            view
+        }
+    }
 
     suspend fun botMemory(botId: String): AidenBotMemory {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -2645,7 +2938,7 @@ class AidenRemoteClient(
     suspend fun gitReview(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/review"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2654,14 +2947,14 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitDiffRequest(snapshotId = snapshotId, fileId = fileId))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
     suspend fun gitBranches(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/branches"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2677,7 +2970,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2693,7 +2986,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2716,7 +3009,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2743,7 +3036,7 @@ class AidenRemoteClient(
     suspend fun gitPushCapability(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/push-capability"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2760,7 +3053,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2769,7 +3062,7 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitCompareRequest(baseRef = baseRef))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2778,14 +3071,14 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitComparisonDiffRequest(comparisonId = comparisonId, fileId = fileId))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
     suspend fun gitWorktrees(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/worktrees"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2801,7 +3094,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2817,7 +3110,7 @@ class AidenRemoteClient(
         bodyJson = json.encodeToString(AidenForegroundConfirmation()),
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -3010,6 +3303,9 @@ class AidenRemoteClient(
     /** Encodes to `{}` for an unfocused summary. */
     @Serializable
     private data class ChatForkSummaryRequest(val focus: String? = null)
+
+    @Serializable
+    private data class ChatNewWorktreeRequest(val text: String)
 
     @Serializable
     private data class ChatMoveRequest(

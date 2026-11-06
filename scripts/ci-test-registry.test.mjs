@@ -21,6 +21,7 @@ test("CI registry assigns the complete deduplicated serial test union", () => {
   );
   assert.deepEqual(Object.keys(validation.laneCounts).toSorted(), [
     "core-git",
+    "macos",
     "renderer-other",
     "runtime-subagents",
   ]);

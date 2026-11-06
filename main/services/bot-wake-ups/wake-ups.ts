@@ -43,7 +43,7 @@ export interface BotWakeUpDependencies {
   /** The zone wake-ups are set and shown in (the host's, like every Bot routine). */
   timezone(): string;
   /** The per-Bot switch ("Let <Bot> set its own wake-ups"); read at call time. */
-  enabled(botId: string): Promise<boolean>;
+  generation(botId: string): Promise<string | null>;
   now?: () => number;
 }
 
@@ -181,7 +181,8 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
       return serial(botId, async () => {
         // Read inside the queue: a switch turned off before this runs wins, and
         // one turned off after it is followed by `cancelAll` in the same queue.
-        if (!(await dependencies.enabled(botId))) {
+        const generation = await dependencies.generation(botId);
+        if (generation === null) {
           return { ok: false, code: "off", message: "The person turned off wake-ups for this Bot." };
         }
         const zone = dependencies.timezone();
@@ -212,7 +213,7 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
             schedule: resolved.schedule,
             prompt: note,
             timezone: zone,
-            wakeUp: { setAt: at },
+            wakeUp: { setAt: at, ...(generation && { generation }) },
           });
         } catch {
           // The minute passed while the routine was saved (an `at` set for the next minute).

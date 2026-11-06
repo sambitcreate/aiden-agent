@@ -166,15 +166,34 @@ class AidenModelPreferenceTest {
         )
         assertEquals(remembered, newChat)
 
-        // A pick in this chat (no remembered value passed) still wins.
+        // A pick explicitly made in this chat still wins.
         val picked = AidenChatModelAuthority.resolvedSelection(
             chat = existingChat("google", "gemini-flash"),
             catalog = catalog(fullCatalog),
             selectedProviderId = "openai",
             selectedModelId = "gpt-5.6",
-            selectedThinkingLevel = "low"
+            selectedThinkingLevel = "low",
+            hasExplicitSelection = true
         )
         assertEquals(AidenChatModelSelection("openai", "gpt-5.6", "low"), picked)
+    }
+
+    @Test
+    fun refreshedDesktopModelWinsOverCachedSelectionWithoutARememberedDefault() {
+        for (hostModel in listOf("gpt-5.6", "gpt-hidden")) {
+            val resolved = AidenChatModelAuthority.resolvedSelection(
+                chat = existingChat("openai", hostModel), catalog = catalog(fullCatalog),
+                selectedProviderId = "google", selectedModelId = "gemini-flash",
+                selectedThinkingLevel = null, remembered = null
+            )
+            assertEquals("openai", resolved.providerId)
+            assertEquals(hostModel, resolved.modelId)
+            val beforeCatalog = AidenChatModelAuthority.resolvedSelection(
+                chat = existingChat("openai", hostModel), catalog = null,
+                selectedProviderId = "google", selectedModelId = "gemini-flash", selectedThinkingLevel = "high"
+            )
+            assertEquals(AidenChatModelSelection("openai", hostModel, null), beforeCatalog)
+        }
     }
 
     @Test
@@ -381,7 +400,7 @@ class AidenModelPreferenceTest {
                     val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
                         scope = CoroutineScope(main + Job().apply { cancel() }))
                     coordinator.refreshClient()
-                    return AidenChatViewModel(chat.id, coordinator, cache, drafts, chat).also {
+                    return AidenChatViewModel(chat.id, coordinator, cache, drafts, chat, recoveryClock = { System.nanoTime() / 1_000_000 }).also {
                         viewModels.put(key, it)
                         withTimeout(5_000) { it.catalog.first { catalog -> catalog != null } }
                     }
@@ -461,7 +480,7 @@ class AidenModelPreferenceTest {
                 coordinator.modelPreferenceStore.remember("instance-models", AidenChatModelSelection("google", "gemini-flash", null))
 
                 suspend fun open(chat: AidenChat, key: String = chat.id): AidenChatViewModel =
-                    AidenChatViewModel(chat.id, coordinator, cache, drafts, chat).also {
+                    AidenChatViewModel(chat.id, coordinator, cache, drafts, chat, recoveryClock = { System.nanoTime() / 1_000_000 }).also {
                         viewModels.put(key, it)
                         withTimeout(5_000) { it.catalog.first { catalog -> catalog != null } }
                     }

@@ -482,6 +482,27 @@ struct AidenServer: Codable, Equatable, Sendable {
         offersBotIssues && capabilities.contains(.botIssues)
     }
 
+    var supportsBotWatches: Bool {
+        serverCapabilities?.contains(.botWatches) == true
+            && capabilities.contains(.botWatches) && capabilities.contains(.botRead)
+    }
+
+    var supportsBotPeers: Bool {
+        let required: Set<AidenRemoteCapability> = [.botRead, .botPeers]
+        return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
+    }
+    var supportsBotPeerExchanges: Bool { supportsBotPeers && capabilities.contains(.chatRead) && serverCapabilities?.contains(.chatRead) == true }
+
+    var supportsBotRoutineModels: Bool {
+        let required: Set<AidenRemoteCapability> = [.botRead, .chatRead, .botRoutineModels]
+        return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
+    }
+
+    var supportsBotOpenWork: Bool {
+        let required: Set<AidenRemoteCapability> = [.botRead, .chatRead, .botOpenWork]
+        return required.isSubset(of: Set(capabilities)) && required.isSubset(of: Set(serverCapabilities ?? []))
+    }
+
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
     var announcesBotActivity: Bool {
         features.contains(Self.botActivityFeature)
@@ -842,6 +863,53 @@ struct AidenSpending: Codable, Equatable, Sendable {
     }
 }
 
+/// Contract revision 53 (`chat:new-worktree`): the empty chat, now in its
+/// new worktree's workspace, and the worktree's branch.
+struct AidenChatNewWorktree: Decodable, Equatable, Sendable {
+    /// The server's `AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT`.
+    static let maxTextLength = 4_000
+    static let maxBranchLength = 200
+
+    let chat: AidenChat
+    let branch: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case chat, branch }
+
+    init(chat: AidenChat, branch: String) {
+        self.chat = chat
+        self.branch = branch
+    }
+
+    /// A first message with no words (attachments only) names the branch
+    /// `aiden/new-chat`, as on the desktop.
+    static let untitledSeed = "New chat"
+
+    /// What the Mac names the branch from: the message without its outer
+    /// whitespace, cut to the server's limit in Unicode scalars (the Mac
+    /// counts code points), or `untitledSeed` when it has no words. Only its
+    /// first words make the name.
+    static func branchSeed(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return untitledSeed }
+        guard trimmed.unicodeScalars.count > maxTextLength else { return trimmed }
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: trimmed.unicodeScalars.prefix(maxTextLength))
+        return String(scalars)
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        chat = try values.decode(AidenChat.self, forKey: .chat)
+        branch = try values.decode(String.self, forKey: .branch)
+        guard chat.messages.isEmpty, chat.botId == nil,
+              !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              branch.count <= Self.maxBranchLength else {
+            throw DecodingError.dataCorruptedError(forKey: .branch, in: values, debugDescription: "Invalid new worktree.")
+        }
+    }
+}
+
 struct AidenSpendingStatus: Codable, Equatable, Sendable {
     /// Nil: no limit applies to this chat or Bot.
     let spending: AidenSpending?
@@ -1152,6 +1220,10 @@ final class AidenRemoteClient: @unchecked Sendable {
     private struct ChatMoveRequest: Encodable {
         let workspaceId: String
         let confirmedForeground = true
+    }
+
+    private struct ChatNewWorktreeRequest: Encodable {
+        let text: String
     }
 
     private struct ChatForkRequest: Encodable {
@@ -1514,7 +1586,9 @@ final class AidenRemoteClient: @unchecked Sendable {
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw,
+            .botWatches, .botOpenWork, .botRoutineModels, .botPeers,
+            .botMessaging, .botAccessRequests, .botPlans, .botAllowed,
+            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs, .attachmentsRaw, .chatNewWorktree,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -2167,11 +2241,43 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    /// Revision 53 (`chat:new-worktree`, with `git:write`): the Mac makes a
+    /// worktree named from `text`, the chat's first message, and moves the
+    /// still-empty chat into it. It sends nothing; the turn follows as usual.
+    /// A long message sends only its first 4,000 characters for the name.
+    func moveChatToNewWorktree(
+        id: String,
+        revision: String,
+        text: String,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> AidenChatNewWorktree {
+        let seed = AidenChatNewWorktree.branchSeed(from: text)
+        let moved: AidenChatNewWorktree = try await send(
+            method: "POST",
+            path: ["chats", id, "worktree"],
+            body: ChatNewWorktreeRequest(text: seed),
+            headers: [
+                "If-Match": revision,
+                "Idempotency-Key": idempotencyKey.uuidString.lowercased(),
+            ],
+            // Fetching the base branch and checking it out can take a while.
+            timeoutInterval: 120
+        )
+        guard moved.chat.id == id, moved.chat.messages.isEmpty else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return moved
+    }
+
     func modelCatalog() async throws -> AidenModelCatalog {
         try await send(method: "GET", path: ["models"])
     }
 
     // MARK: - Bots
+
+    func setBotMessaging(enabled: Bool) async throws -> AidenBotMessagingSettings {
+        try await send(method: "PUT", path: ["bots", "messaging"], body: AidenBotMessagingSettings(enabled: enabled))
+    }
 
     func bots() async throws -> AidenBotList {
         try await send(method: "GET", path: ["bots"])
@@ -2457,6 +2563,27 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     // MARK: Contract revision 37: Bot hand-offs and pause (`bot:handoffs`)
 
+    /// Revision 56. A receipt acknowledges the operation; only the session feed settles its card.
+    func respondBotPlan(botId: String, planId: String, request: AidenBotPlanRespondRequest, idempotencyKey: UUID) async throws -> AidenBotPlanRespondReceipt {
+        try validateBotIdentifier(botId)
+        try AidenBotHandoffWire.validateWaitID(planId)
+        let receipt: AidenBotPlanRespondReceipt = try await send(
+            method: "POST", path: ["bots", botId, "plans", planId, "respond"], body: request,
+            headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200])
+        guard receipt.planId == planId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    /// Answers an offered access choice. Only the opaque wait ID and choice leave the phone.
+    func answerBotAccessRequest(
+        botId: String, waitId: String, request: AidenBotAccessAnswerRequest, idempotencyKey: UUID
+    ) async throws -> AidenBotAccessAnswerReceipt {
+        try validateBotIdentifier(botId)
+        try validateBotWaitIdentifier(waitId)
+        return try await send(method: "POST", path: ["bots", botId, "access-requests", waitId, "answer"],
+                              body: request, headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200])
+    }
+
     /// Answers the hand-off the Bot waits on: Done or Skip, with an optional
     /// note. The request UUID is the idempotency key, so a retried answer
     /// replays the same receipt. `409 handoff_expired` means nothing waits.
@@ -2551,6 +2678,188 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
     }
 
+    // MARK: Approved Bot pairs (`bot:peers`)
+    func botPeerSettings(botId: String) async throws -> AidenPeerSettings {
+        try AidenPeerWire.id(botId)
+        let value: AidenPeerSettings = try await send(method: "GET", path: ["bots", botId, "peers"], maximumResponseBytes: 900 * 1024)
+        guard value.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func botPeerCatalog(botId: String) async throws -> AidenPeerCatalog {
+        try AidenPeerWire.id(botId)
+        let value: AidenPeerCatalog = try await send(method: "GET", path: ["bots", botId, "peers", "catalog"], maximumResponseBytes: 900 * 1024)
+        guard value.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func mutateBotPeers(_ request: AidenPeerMutation) async throws -> AidenPeerMutationResult {
+        try request.validate(); let body = try JSONEncoder().encode(request)
+        guard body.count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let value: AidenPeerMutationResult = try await send(method: "POST", path: ["bots", request.botId, "peers"], encodedBody: body, maximumResponseBytes: 900 * 1024)
+        if let snapshot = value.snapshot { guard snapshot.botId == request.botId else { throw AidenRemoteClientError.invalidResponse } }
+        if case let .accepted(_, nonce, _) = value { guard nonce == request.mutationId else { throw AidenRemoteClientError.invalidResponse } }; return value
+    }
+    func botPeerExchanges(botId: String) async throws -> AidenPeerExchangeList {
+        try AidenPeerWire.id(botId)
+        let value: AidenPeerExchangeList = try await send(method: "GET", path: ["bots", botId, "peer-exchanges"], maximumResponseBytes: 900 * 1024)
+        guard value.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func botPeerExchange(botId: String, exchangeId: String) async throws -> AidenPeerExchangeDetail {
+        try AidenPeerWire.id(botId); try AidenPeerWire.id(exchangeId)
+        let value: AidenPeerExchangeDetail = try await send(method: "GET", path: ["bots", botId, "peer-exchanges", exchangeId], maximumResponseBytes: 900 * 1024)
+        guard value.id == exchangeId, AidenPeerWire.owns(value.summary, botID: botId) else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+    func stopBotPeerExchange(_ request: AidenPeerStopMutation) async throws -> AidenPeerStopResult {
+        try request.validate(); let body = try JSONEncoder().encode(request)
+        guard body.count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let value: AidenPeerStopResult = try await send(method: "POST", path: ["bots", request.botId, "peer-exchanges", request.exchangeId, "stop"], encodedBody: body, maximumResponseBytes: 900 * 1024)
+        if let exchange = value.exchange { guard exchange.id == request.exchangeId, AidenPeerWire.owns(exchange.summary, botID: request.botId) else { throw AidenRemoteClientError.invalidResponse } }
+        if case let .accepted(_, nonce, _) = value { guard nonce == request.mutationId else { throw AidenRemoteClientError.invalidResponse } }; return value
+    }
+    func botPeerEvidence(botId: String, exchangeId: String, kind: AidenOpenWorkEvidenceKind) async throws -> AidenPeerEvidence {
+        try AidenPeerWire.id(botId); try AidenPeerWire.id(exchangeId)
+        let value: AidenPeerEvidence = try await send(method: "GET", path: ["bots", botId, "peer-exchanges", exchangeId, "evidence", kind.rawValue], maximumResponseBytes: 256 * 1024)
+        guard value.exchangeId == exchangeId, value.kind == kind else { throw AidenRemoteClientError.invalidResponse }; return value
+    }
+
+    // MARK: Routine-only model choices (`bot:routine-models`)
+
+    func routineModelDirectory(botId: String) async throws -> AidenRoutineModelDirectory {
+        try AidenRoutineModelWire.id(botId)
+        let directory: AidenRoutineModelDirectory = try await send(method: "GET", path: ["bots", botId, "routine-models"], maximumResponseBytes: 900 * 1024)
+        guard directory.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return directory
+    }
+
+    func routineModelSettings(botId: String, routineId: String) async throws -> AidenRoutineModelSettings {
+        try AidenRoutineModelWire.id(botId); try AidenRoutineModelWire.id(routineId)
+        let settings: AidenRoutineModelSettings = try await send(method: "GET", path: ["bots", botId, "routine-models", routineId], maximumResponseBytes: 900 * 1024)
+        guard settings.botId == botId, settings.routineId == routineId else { throw AidenRemoteClientError.invalidResponse }
+        return settings
+    }
+    func routineModelCatalog(botId: String, routineId: String) async throws -> AidenRoutineModelCatalog {
+        try AidenRoutineModelWire.id(botId); try AidenRoutineModelWire.id(routineId)
+        return try await send(method: "GET", path: ["bots", botId, "routine-models", routineId, "catalog"], maximumResponseBytes: 900 * 1024)
+    }
+    func routineModelRuns(botId: String, routineId: String) async throws -> [AidenRoutineModelRun] {
+        try AidenRoutineModelWire.id(botId); try AidenRoutineModelWire.id(routineId)
+        let runs: [AidenRoutineModelRun] = try await send(method: "GET", path: ["bots", botId, "routine-models", routineId, "runs"], maximumResponseBytes: 900 * 1024)
+        guard runs.count <= 64, Set(runs.map(\.runId)).count == runs.count else { throw AidenRemoteClientError.invalidResponse }
+        return runs
+    }
+    func saveRoutineModel(_ request: AidenRoutineModelSave) async throws -> AidenRoutineModelResult {
+        try request.validate()
+        guard try JSONEncoder().encode(request).count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let result: AidenRoutineModelResult = try await send(method: "POST", path: ["bots", request.botId, "routine-models", request.routineId], body: request, maximumResponseBytes: 900 * 1024)
+        if let settings = result.settings { guard settings.botId == request.botId, settings.routineId == request.routineId else { throw AidenRemoteClientError.invalidResponse } }
+        if case let .accepted(_, nonce, _) = result, nonce != request.mutationId { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+    func botRoutineResumeStatus(botId: String) async throws -> AidenBotResumeStatus {
+        try AidenRoutineModelWire.id(botId)
+        return try await send(method: "GET", path: ["bots", botId, "routine-resume-status"], maximumResponseBytes: 1024)
+    }
+    func resumeBotSession(botId: String, idempotencyKey: UUID, acknowledgeUnknownCost: Bool, expectedSubmissionId: String? = nil, expectedCostReceiptId: String? = nil) async throws -> AidenBotSessionStateView {
+        try validateBotIdentifier(botId)
+        return try await send(method: "POST", path: ["bots", botId, "resume"], body: AidenBotResumeRequest(acknowledgeUnknownCost: acknowledgeUnknownCost, expectedSubmissionId: expectedSubmissionId, expectedCostReceiptId: expectedCostReceiptId), headers: idempotencyHeaders(idempotencyKey), acceptedStatus: [200, 202])
+    }
+
+    // MARK: Open work (`bot:open-work`)
+
+    func botOpenWork(botId: String) async throws -> AidenOpenWorkSnapshot {
+        try AidenOpenWorkWire.id(botId)
+        let snapshot: AidenOpenWorkSnapshot = try await send(method: "GET", path: ["bots", botId, "open-work"],
+            maximumResponseBytes: 900 * 1024)
+        guard snapshot.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        return snapshot
+    }
+
+    func mutateBotOpenWork(botId: String, mutation: AidenOpenWorkMutation) async throws -> AidenOpenWorkResult {
+        try AidenOpenWorkWire.id(botId)
+        try mutation.validate()
+        let data = try JSONEncoder().encode(mutation)
+        guard data.count <= 16 * 1024 else { throw AidenRemoteContractError.payloadTooLarge }
+        let result: AidenOpenWorkResult = try await send(method: "POST", path: ["bots", botId, "open-work"], encodedBody: data,
+            maximumResponseBytes: 900 * 1024)
+        guard result.snapshot == nil || result.snapshot?.botId == botId else { throw AidenRemoteClientError.invalidResponse }
+        if case let .accepted(receipt) = result {
+            guard receipt.mutationId == mutation.mutationId,
+                  receipt.itemId == nil || mutation.id == nil || receipt.itemId == mutation.id,
+                  receipt.stop == nil || mutation.action.isStop else { throw AidenRemoteClientError.invalidResponse }
+        }
+        return result
+    }
+
+    func botOpenWorkEvidence(botId: String, itemId: String, kind: AidenOpenWorkEvidenceKind) async throws -> AidenOpenWorkEvidence {
+        try AidenOpenWorkWire.id(botId)
+        try AidenOpenWorkWire.id(itemId)
+        let evidence: AidenOpenWorkEvidence = try await send(method: "GET",
+            path: ["bots", botId, "open-work", itemId, "evidence", kind.rawValue], maximumResponseBytes: 256 * 1024)
+        guard evidence.itemId == itemId, evidence.kind == kind else { throw AidenRemoteClientError.invalidResponse }
+        return evidence
+    }
+
+    // MARK: Connector watches (`bot:watches`)
+
+    func botWatches(botId: String) async throws -> AidenBotWatchList {
+        try validateBotIdentifier(botId)
+        let list: AidenBotWatchList = try await send(method: "GET", path: ["bots", botId, "watches"])
+        guard list.watches.allSatisfy({ $0.botId == botId }) else { throw AidenRemoteClientError.invalidResponse }
+        return list
+    }
+
+    /// Foreground only: loading the list never discovers connector resources.
+    func discoverBotWatchSources(botId: String) async throws -> AidenBotWatchSources {
+        try validateBotIdentifier(botId)
+        return try await send(method: "POST", path: ["bots", botId, "watches", "sources"], body: [String: String]())
+    }
+
+    func saveBotWatch(botId: String, id: String?, request: AidenBotWatchSaveRequest) async throws -> AidenBotWatch {
+        try validateBotIdentifier(botId)
+        try request.validate(isCreate: id == nil)
+        if let id { try AidenBotWatchWire.uuid(id) }
+        let path = ["bots", botId, "watches"] + (id.map { [$0] } ?? [])
+        let watch: AidenBotWatch = try await send(method: id == nil ? "POST" : "PATCH", path: path,
+                                                body: request, acceptedStatus: [200, 201])
+        guard watch.botId == botId,
+              UUID(uuidString: watch.id) == (id.flatMap(UUID.init(uuidString:)) ?? request.mutationId) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        return watch
+    }
+
+    func setBotWatchEnabled(botId: String, id: String, request: AidenBotWatchActionRequest) async throws -> AidenBotWatch {
+        try validateBotWatchAction(botId: botId, id: id, request: request)
+        guard request.enabled != nil else { throw AidenRemoteClientError.invalidResponse }
+        let watch: AidenBotWatch = try await send(method: "POST", path: ["bots", botId, "watches", id, "enabled"], body: request)
+        guard watch.botId == botId, watch.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return watch
+    }
+
+    func removeBotWatch(botId: String, id: String, request: AidenBotWatchActionRequest) async throws -> AidenBotWatchRemoval {
+        try validateBotWatchAction(botId: botId, id: id, request: request)
+        guard request.enabled == nil else { throw AidenRemoteClientError.invalidResponse }
+        let result: AidenBotWatchRemoval = try await send(method: "DELETE", path: ["bots", botId, "watches", id], body: request)
+        guard result.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+
+    func testBotWatch(botId: String, request: AidenBotWatchTestRequest) async throws -> AidenBotWatchTestResult {
+        try validateBotIdentifier(botId)
+        return try await send(method: "POST", path: ["bots", botId, "watches", "test"], body: request)
+    }
+
+    func runBotWatch(botId: String, id: String, request: AidenBotWatchActionRequest) async throws -> AidenBotWatchRunResult {
+        try validateBotWatchAction(botId: botId, id: id, request: request)
+        guard request.enabled == nil else { throw AidenRemoteClientError.invalidResponse }
+        let result: AidenBotWatchRunResult = try await send(method: "POST", path: ["bots", botId, "watches", id, "run"], body: request)
+        guard result.id == id else { throw AidenRemoteClientError.invalidResponse }
+        return result
+    }
+
+    private func validateBotWatchAction(botId: String, id: String, request: AidenBotWatchActionRequest) throws {
+        try validateBotIdentifier(botId)
+        try AidenBotWatchWire.uuid(id)
+        try AidenBotWatchWire.revision(request.expectedRevision)
+    }
+
     // MARK: Routines (`bot-routines-v1`)
 
     func botRoutines(botId: String) async throws -> [AidenBotRoutine] {
@@ -2628,6 +2937,19 @@ final class AidenRemoteClient: @unchecked Sendable {
     }
 
     // MARK: Memory (`bot-memory-v1`) and proactivity (`bot-proactive-v1`)
+
+    func botAllowed(botId: String, cursor: String? = nil) async throws -> AidenBotAllowedList {
+        try validateBotIdentifier(botId)
+        if let cursor, !AidenBotAllowedList.validCursor(cursor) { throw AidenRemoteClientError.invalidResponse }
+        let view: AidenBotAllowedList = try await send(method: "GET", path: ["bots", botId, "allowed"], query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return view
+    }
+    func removeBotAllowed(botId: String, entryId: String) async throws -> AidenBotAllowedList {
+        try validateBotIdentifier(botId)
+        guard AidenBotAllowedEntry.validID(entryId) else { throw AidenRemoteClientError.invalidResponse }
+        let view: AidenBotAllowedList = try await send(method: "POST", path: ["bots", botId, "allowed", entryId, "remove"], body: [String: String]())
+        guard view.botId == botId else { throw AidenRemoteClientError.invalidResponse }; return view
+    }
 
     func botMemory(botId: String) async throws -> AidenBotMemory {
         try validateBotIdentifier(botId)
@@ -3387,7 +3709,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         return sseStream(
             path: ["chats", chatId, "runs", "current", "events"],
             after: 0,
-            parser: AidenRunSSEParser()
+            parser: AidenRunSSEParser(),
+            headers: ["Aiden-Run-Checkpoint": "1"]
         ) { event in
             try identity.check(event)
         }
@@ -3399,7 +3722,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         return sseStream(
             path: ["runs", runId, "events"],
             after: sequence,
-            parser: AidenRunSSEParser()
+            parser: AidenRunSSEParser(),
+            headers: ["Aiden-Run-Checkpoint": "1"]
         ) { event in
             try identity.check(event)
         }
@@ -4093,7 +4417,7 @@ struct AidenReadAloudStatus: Codable, Sendable {
     let settingsRevision: String
     let source: AidenReadAloudSource?
     let job: AidenReadAloudJob?
-    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
+    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Voice & Speech → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
 }
 struct AidenReadAloudAudio: Codable, Sendable {
     let bytesBase64: String

@@ -204,6 +204,28 @@ data class AidenServer(
     val supportsBotImages: Boolean
         get() = offersBotImages && capabilities.contains(AidenRemoteCapability.BOT_IMAGES)
 
+    /** Open-work text requires both Bot visibility and chat visibility, plus negotiation. */
+    val supportsBotOpenWork: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_OPEN_WORK) == true &&
+            capabilities.containsAll(listOf(AidenRemoteCapability.BOT_OPEN_WORK, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))
+
+    /** Pair metadata does not require chat content permission. */
+    val supportsBotPeers: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_PEERS) == true &&
+            capabilities.containsAll(listOf(AidenRemoteCapability.BOT_PEERS,AidenRemoteCapability.BOT_READ))
+    val supportsBotPeerExchanges: Boolean
+        get() = supportsBotPeers && capabilities.contains(AidenRemoteCapability.CHAT_READ)
+
+    /** Routine configuration and run facts require Bot and chat visibility (revision 59). */
+    val supportsBotRoutineModels: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ROUTINE_MODELS) == true &&
+            capabilities.containsAll(listOf(AidenRemoteCapability.BOT_ROUTINE_MODELS, AidenRemoteCapability.BOT_READ, AidenRemoteCapability.CHAT_READ))
+
+    /** Offered and held (revision 59): this phone can inspect connector watches. */
+    val supportsBotWatches: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_WATCHES) == true &&
+            capabilities.contains(AidenRemoteCapability.BOT_WATCHES) && capabilities.contains(AidenRemoteCapability.BOT_READ)
+
     /**
      * The Mac offers `bot:issues` (revision 42). There is no `/server` feature token: the offer
      * in `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
@@ -224,6 +246,16 @@ data class AidenServer(
     val supportsRawUploads: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.ATTACHMENTS_RAW) == true &&
             capabilities.contains(AidenRemoteCapability.ATTACHMENTS_RAW)
+
+    /**
+     * Offered and held (revision 53), with `git:write` and `chat:write`: an empty Workspace chat
+     * may start in a new worktree on the Mac.
+     */
+    val supportsNewWorktrees: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_NEW_WORKTREE) == true &&
+            capabilities.contains(AidenRemoteCapability.CHAT_NEW_WORKTREE) &&
+            capabilities.contains(AidenRemoteCapability.GIT_WRITE) &&
+            capabilities.contains(AidenRemoteCapability.CHAT_WRITE)
 
     /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:

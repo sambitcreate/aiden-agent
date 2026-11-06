@@ -1,7 +1,7 @@
 import { isCompactionEngine } from "../../renderer/shared/compaction.js";
 // Chat history CRUD IPC handlers.
 
-import { BrowserWindow, dialog, ipcMain, logger } from "../platform.js";
+import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { chatTitleService } from "../services/chat-title.js";
@@ -25,19 +25,14 @@ import {
 import { asString, createRendererChatMutationHandlers } from "./chat-renderer-mutations.js";
 import { closeDeviceSessionsForChat } from "./devices.js";
 import { parseUiVisualStateUpdate } from "./chat-ui-visual-state.js";
+import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
 import { parseChatFirstMessage } from "./chat-first-message-params.js";
 import {
   createFirstMessageCommitter,
   createWorktreeFirstMessageCommitter,
 } from "../services/chat-first-message-commit.js";
-import {
-  createFileFirstMessageWorktreeLedger,
-  createFirstMessageWorktreeCoordinator,
-} from "../services/first-message-worktree.js";
-import { workspaceWorktreeApplicationService } from "../services/workspace-worktree-application-service-main.js";
-import { ensureUserDataDir } from "../services/data-store.js";
+import { firstMessageWorktrees } from "../services/first-message-worktree-main.js";
 import type { Chat } from "../services/types.js";
-import path from "node:path";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import {
@@ -125,20 +120,8 @@ export function registerChatHistoryHandlers(): void {
         throw error;
       }
     },
-    workspaceExists: async (workspaceId) => Boolean(await configStore.getWorkspace(workspaceId)),
-    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
-  });
-  const firstMessageWorktrees = createFirstMessageWorktreeCoordinator({
-    ledger: createFileFirstMessageWorktreeLedger({
-      filePath: async () => path.join(await ensureUserDataDir(), "first-message-worktrees.json"),
-      logError: (message, error) => logger.error("git", message, error),
-    }),
-    createFromBase: (owner, sourceWorkspaceId, request) =>
-      workspaceWorktreeApplicationService.createFromBase(owner, sourceWorkspaceId, request),
-    discardInterruptedWorktree: (owner, sourceWorkspaceId, attempt) =>
-      workspaceWorktreeApplicationService.discardInterruptedWorktree(owner, sourceWorkspaceId, attempt),
     getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-    logError: (message, error) => logger.error("git", message, error),
+    resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
   });
   const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
     commit: commitFirstMessage,
@@ -342,13 +325,15 @@ export function registerChatHistoryHandlers(): void {
       }
     };
     try {
-      return chatForRenderer(
+      const chat = chatForRenderer(
         await chatStore.create({
           ...parsed,
           workspaceId: ASSISTANT_WORKSPACE_ID,
           assertCurrent,
         }),
       );
+      reportAnalyticsEvent("chat_created", { workspace_kind: "none" });
+      return chat;
     } catch (error) {
       if (isChatCreateReconciliationRequiredError(error)) {
         llmClient.markAppendReconciliationRequired(owner.documentId);

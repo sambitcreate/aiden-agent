@@ -83,8 +83,9 @@ test("a first run with no Bots stops on Meet your first Bot before the tour", as
   assert.ok(await screen.findByRole("heading", { name: "Meet your first Bot" }));
   const stepper = screen.getByRole("list", { name: "Setup progress" });
   assert.ok(within(stepper).getByText("Your first Bot"));
-  // The step says what a Bot hands back to the person and that it follows their rules.
-  assert.ok(screen.getByText("Bots hand you the steps only you should do, and follow rules you set."));
+  // Explain hand-offs, rules, and whole-plan approval at the first Bot setup.
+  assert.ok(screen.getByText("Bots track accepted tasks in Open work, follow your rules, hand you the steps only you should do, and can ask you to approve a whole plan."));
+  assert.ok(screen.getByText("Bots can message each other when it helps; turn it off in Settings → Bots & Approvals."));
 });
 
 test("Start chat creates exactly one starter Bot and moves on to the tour", async () => {

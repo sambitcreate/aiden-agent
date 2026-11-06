@@ -65,6 +65,9 @@ export interface RemoteRunView {
    * replaces it when the run ends.
    */
   incomplete: boolean;
+  reasoningIncomplete: boolean;
+  /** Already visible on the host when this reader joined, in UTF-16 code units. */
+  replayedTextLength: number;
 }
 
 export interface RemoteRunStep {
@@ -92,6 +95,8 @@ export function initialRemoteRunView(runId: string | null = null, chatId: string
     doneMessageId: null,
     handedOff: false,
     incomplete: false,
+    reasoningIncomplete: false,
+    replayedTextLength: 0,
   };
 }
 
@@ -288,25 +293,29 @@ export function applyRemoteRunEvent(current: RemoteRunView, event: PeerRunEvent)
         const questions = (Array.isArray(payload.questions) ? payload.questions : [])
           .map((entry) => questionPrompt(entry, runId))
           .reduce<AskUserQuestionPromptV1[]>(withQuestion, []);
+        const timeline = parseGenerationTimeline(payload.timeline);
         const status = statusFromHostState(payload.state, view.status === "idle" ? "running" : view.status);
         return {
           view: {
             ...view,
             status,
-            text: "",
-            reasoning: "",
+            text: typeof payload.replyText === "string" ? payload.replyText : "",
+            reasoning: typeof payload.replyReasoning === "string" ? payload.replyReasoning : "",
+            replayedTextLength: typeof payload.replyText === "string" ? payload.replyText.length : 0,
+            timeline: timeline ? withoutHostLocalRecaps(timeline) : null,
             textStreaming: false,
             tool: null,
             approvals: isTerminal(status) ? [] : approvals,
             questions: isTerminal(status) ? [] : questions,
-            incomplete: !isTerminal(status),
+            incomplete: !isTerminal(status) && typeof payload.replyText !== "string",
+            reasoningIncomplete: !isTerminal(status) && typeof payload.replyReasoning !== "string",
           },
           refetch: true,
         };
       }
       // `reset`: the provider restarted this reply; the text starts over.
       return {
-        view: { ...view, text: "", reasoning: "", textStreaming: false, incomplete: false },
+        view: { ...view, text: "", reasoning: "", textStreaming: false, incomplete: false, reasoningIncomplete: false, replayedTextLength: 0, timeline: null, tool: null },
         refetch: false,
       };
     }
@@ -353,8 +362,8 @@ export function applyRemoteRunEvents(current: RemoteRunView, events: readonly Pe
 
 /**
  * Applies a fresh subscription (or a resubscription). A different run starts
- * over; a truncated buffer means the live text cannot be rebuilt, so the view
- * waits for the persisted window instead.
+ * over. A truncated buffer may begin with a checkpoint covering the missing
+ * prefix. Keep the current view if it already consumed that prefix.
  */
 export function applyRemoteRunSubscription(current: RemoteRunView, subscription: PeerRunSubscription): RemoteRunStep {
   let view = current;
@@ -364,12 +373,13 @@ export function applyRemoteRunSubscription(current: RemoteRunView, subscription:
   if (subscription.runId !== view.runId) {
     view = initialRemoteRunView(subscription.runId, view.chatId);
   }
-  if (subscription.truncated) {
-    view = { ...view, text: "", reasoning: "", textStreaming: false, incomplete: true };
+  const first = subscription.events[0];
+  if (subscription.truncated && (!first || view.cursor < first.sequence)) {
+    view = { ...view, text: "", reasoning: "", textStreaming: false, incomplete: true, reasoningIncomplete: true, replayedTextLength: 0, timeline: null, tool: null };
     refetch = true;
   }
   const folded = applyRemoteRunEvents(view, subscription.events);
-  view = folded.view;
+  view = { ...folded.view, replayedTextLength: folded.view.incomplete ? 0 : folded.view.text.length };
   refetch ||= folded.refetch;
   const state = applyRemoteRunStreamState(view, subscription.state);
   return { view: state.view, refetch: refetch || state.refetch };
@@ -385,7 +395,8 @@ export function handOffRemoteRun(view: RemoteRunView): RemoteRunView {
 
 /** A main-side stream state change for the observed key. */
 export function applyRemoteRunStreamState(current: RemoteRunView, state: PeerRunStreamState): RemoteRunStep {
-  if ((state === "ended" || state === "gone") && current.runId !== null && !current.ended) {
+  // A chat subscription parks idle when the host no longer has a current run.
+  if ((state === "ended" || state === "gone" || state === "idle") && current.runId !== null && !current.ended) {
     return {
       view: {
         ...settledPrompts(current),
@@ -423,7 +434,9 @@ export function remoteRunTranscript(view: RemoteRunView, messages: readonly Chat
   const active = view.status === "running" && !view.ended;
   const persisted =
     view.handedOff || (view.doneMessageId !== null && messages.some((message) => message.id === view.doneMessageId));
-  const handoff = view.status === "done" && !persisted && !view.incomplete && view.text.length > 0;
+  const hasContent = (!view.incomplete && view.text.length > 0) ||
+    (!view.reasoningIncomplete && view.reasoning.length > 0) || view.timeline !== null;
+  const handoff = view.status === "done" && !persisted && hasContent;
   const showRow = active || handoff;
   const streamingText = showRow ? (view.incomplete ? "" : view.text) : null;
   const pendingQuestion = view.questions.length > 0 && view.approvals.length === 0;
@@ -448,8 +461,8 @@ export function remoteRunTranscript(view: RemoteRunView, messages: readonly Chat
   }
   return {
     streamingText,
-    streamingReasoning: showRow && !view.incomplete && view.reasoning ? view.reasoning : null,
-    timeline: showRow && !view.incomplete ? view.timeline : null,
+    streamingReasoning: showRow && !view.reasoningIncomplete && view.reasoning ? view.reasoning : null,
+    timeline: showRow ? view.timeline : null,
     agentActivity,
     error: view.status === "error" && !failureIsPersisted(messages) ? view.errorMessage : null,
     streamComplete: handoff,

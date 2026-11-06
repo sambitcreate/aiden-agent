@@ -1,3 +1,4 @@
+import { McpToolCallNotSentError } from "./subagent-effect-v2.js";
 import { createHash, randomUUID } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import type {
@@ -72,14 +73,15 @@ export interface SubagentMcpMutationInspectionV2 {
 export interface SubagentMcpMutationRemoteSessionV2 {
   inspect(signal: AbortSignal): Promise<SubagentMcpMutationInspectionV2>;
   /**
-   * Must synchronously call `beforeRawBytes` immediately before invoking the
-   * raw SDK call and return that one call's promise. It must never retry.
+   * One logical call. Charge before the first service POST and check live
+   * authority again before resending that request after an OAuth challenge.
    */
   dispatchRaw(
     toolName: string,
     argumentsValue: Record<string, unknown>,
     signal: AbortSignal,
     beforeRawBytes: () => void,
+    beforeRetry?: () => void,
   ): Promise<unknown>;
   redactCredentialText(text: string): string;
   close(): Promise<void>;
@@ -96,7 +98,7 @@ export interface SubagentMcpMutationJournalV2 {
   prepareEffect(input: PrepareDurableSubagentEffectV2Input): Promise<unknown>;
   authorizeEffect(input: DurableSubagentEffectOwnerV2): Promise<unknown>;
   markEffectDispatchStarted(input: DurableSubagentEffectOwnerV2): Promise<unknown>;
-  cancelEffectBeforeDispatch(input: DurableSubagentEffectOwnerV2): Promise<unknown>;
+  cancelEffectBeforeDispatch(input: DurableSubagentEffectOwnerV2, unsent?: McpToolCallNotSentError): Promise<unknown>;
   finishEffect(input: FinishDurableSubagentEffectV2Input): Promise<unknown>;
 }
 
@@ -442,10 +444,10 @@ export function createSubagentMcpMutationBrokerV2(
     return current;
   };
 
-  const cancelPrepared = async (prepared: PendingMutation): Promise<void> => {
+  const cancelPrepared = async (prepared: PendingMutation, unsent?: McpToolCallNotSentError): Promise<void> => {
     prepared.approval.deny(prepared.approvalId, input.authority.ownerDocumentId);
     try {
-      await input.journal.cancelEffectBeforeDispatch(prepared.owner);
+      await input.journal.cancelEffectBeforeDispatch(prepared.owner, unsent);
     } catch {
       // A failed cancellation cannot authorize dispatch. The durable store
       // retains conservative recovery authority.
@@ -631,6 +633,7 @@ export function createSubagentMcpMutationBrokerV2(
     );
     let session: SubagentMcpMutationRemoteSessionV2 | undefined;
     let dispatchStarted = false;
+    let firstSendAuthorized = false;
     let cancelledBeforeDispatch = false;
     let terminal = false;
     const cancelBeforeDispatch = async () => {
@@ -678,42 +681,38 @@ export function createSubagentMcpMutationBrokerV2(
         throw new Error(CANCELLED_BEFORE_DISPATCH);
       }
       dispatchStarted = true;
-      let finalFenceCrossed = false;
-      const raw = activeSession.dispatchRaw(
-        prepared.binding.tool.toolName,
-        prepared.argumentsValue,
-        operationSignal,
-        () => {
-          if (finalFenceCrossed) {
-            throw new Error("MCP mutation dispatch fence was reused.");
-          }
-          finalFenceCrossed = true;
-          const current = liveAuthority(prepared.binding);
-          if (
-            operationSignal.aborted ||
-            prepared.expiresAt <= now() ||
+      const checkAuthority = () => {
+        const current = liveAuthority(prepared.binding);
+        if (operationSignal.aborted || prepared.expiresAt <= now() ||
             subagentAuthorityDigestV2(current) !== prepared.authorityDigest ||
-            activeSession.redactCredentialText(prepared.canonicalArguments) !==
-              prepared.canonicalArguments ||
-            !prepared.approval.consume(prepared.approvalId, prepared.approvalInput) ||
-            input.consumeNetworkOperation(current) !== true
-          ) {
-            throw new Error(UNKNOWN_OUTCOME);
-          }
+            activeSession.redactCredentialText(prepared.canonicalArguments) !== prepared.canonicalArguments) {
+          throw new Error(CANCELLED_BEFORE_DISPATCH);
+        }
+        return current;
+      };
+      const raw = activeSession.dispatchRaw(
+        prepared.binding.tool.toolName, prepared.argumentsValue, operationSignal,
+        () => {
+          const current = checkAuthority();
+          if (firstSendAuthorized ||
+              !prepared.approval.consume(prepared.approvalId, prepared.approvalInput) ||
+              input.consumeNetworkOperation(current) !== true) throw new Error(CANCELLED_BEFORE_DISPATCH);
+          firstSendAuthorized = true;
         },
+        checkAuthority,
       );
-      if (!finalFenceCrossed) {
-        void raw.catch(() => undefined);
-        throw new Error(UNKNOWN_OUTCOME);
-      }
       const aborted = new Promise<never>((_resolve, reject) => {
-        const rejectAbort = () => reject(operationSignal.reason ?? timeoutReason);
+        // An aborted operation can never pass checkAuthority on a later send.
+        const rejectAbort = () => reject(firstSendAuthorized
+          ? operationSignal.reason ?? timeoutReason
+          : new McpToolCallNotSentError(CANCELLED_BEFORE_DISPATCH));
         if (operationSignal.aborted) rejectAbort();
         else operationSignal.addEventListener("abort", rejectAbort, { once: true });
       });
       void aborted.catch(() => undefined);
       void raw.catch(() => undefined);
       const rawResult = await Promise.race([raw, aborted]);
+      if (!firstSendAuthorized) throw new Error(UNKNOWN_OUTCOME);
       const postInspection = await activeSession.inspect(operationSignal);
       if (!exactInspection(prepared.binding, postInspection)) {
         throw new Error(UNKNOWN_OUTCOME);
@@ -733,7 +732,11 @@ export function createSubagentMcpMutationBrokerV2(
       }
       terminal = true;
       return result(bounded.text);
-    } catch {
+    } catch (error) {
+      if (dispatchStarted && !firstSendAuthorized && error instanceof McpToolCallNotSentError) {
+        await cancelPrepared(prepared, error);
+        throw new Error(CANCELLED_BEFORE_DISPATCH);
+      }
       if (dispatchStarted) {
         await finishUnknown();
         throw new Error(UNKNOWN_OUTCOME);

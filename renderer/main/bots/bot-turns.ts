@@ -12,7 +12,7 @@ import { botStepFromCall, type BotRecapStep } from "./bot-activity-steps";
 
 type BotTurnStart = Extract<
   BotTranscriptEntry,
-  { type: "user" | "question_answer" | "handoff_result" | "routine" | "assistant" }
+  { type: "user" | "question_answer" | "handoff_result" | "routine" | "bot_message" | "assistant" }
 >;
 
 export interface BotTurn {
@@ -38,8 +38,8 @@ interface BotTurnVisitor {
 
 const startsTurn = (
   entry: BotTranscriptEntry,
-): entry is Extract<BotTurnStart, { type: "user" | "question_answer" | "handoff_result" | "routine" }> =>
-  entry.type === "user" || entry.type === "question_answer" || entry.type === "handoff_result" || entry.type === "routine";
+): entry is Extract<BotTurnStart, { type: "user" | "question_answer" | "handoff_result" | "routine" | "bot_message" }> =>
+  entry.type === "user" || entry.type === "question_answer" || entry.type === "handoff_result" || entry.type === "routine" || entry.type === "bot_message";
 
 /** Walks `entries` as turns; the turn still open at the end is live when `running`. */
 export function walkBotTurns(entries: readonly BotTranscriptEntry[], running: boolean, visitor: BotTurnVisitor): void {

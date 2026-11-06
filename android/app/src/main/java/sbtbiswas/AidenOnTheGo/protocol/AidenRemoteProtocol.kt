@@ -282,7 +282,8 @@ object AidenBotPrivateResponseValidator {
         "botRoutineNotifications", "botSessionCards",
         // Contract revision 37.
         "botHandoffs",
-        "botIssues"
+        "botAccessRequests", "botPlans", "botAllowed",
+        "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification"
     )
     private val botSessionRoots = setOf("botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionCards")
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
@@ -459,6 +460,8 @@ object AidenBotPrivateResponseValidator {
         parent: kotlinx.serialization.json.JsonObject
     ): Boolean {
         if (key != "prompt") return false
+        if (root == "botWatch") return parentPath.isEmpty()
+        if (root == "botWatches") return parentPath == listOf("watches", "[]")
         if (root == "botRoutineSuggestions") return parentPath == listOf("suggestions", "[]")
         if (root !in botSessionRoots) return false
         val type = (parent["type"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
@@ -478,13 +481,18 @@ object AidenBotPrivateResponseValidator {
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
+        if (root == "botPeers" && key == "result" && parentPath in listOf(emptyList(),listOf("exchange"))) return true
+        if (root == "botWatchTest" && key == "result" && parentPath.isEmpty()) return true
+        // Open-work completion result is an owned pair of opaque numeric transcript IDs.
+        if (key == "result" && root in listOf("botOpenWork", "botOpenWorkResult") &&
+            parentPath in listOf(listOf("items", "[]", "completion"), listOf("snapshot", "items", "[]", "completion"))) return true
         // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
         if (root == "botIssues" && key == "result") {
             return parentPath.isEmpty() ||
                 (parentPath + key).joinToString(".") in listOf("act.response.result", "notOpen.result")
         }
         if (key != "instructions" && key != "openingGreeting") return false
-        if (root == "botDetail") {
+        if (root == "botDetail" || root == "botMessagingDetail") {
             return parentPath.isEmpty()
         }
         // Revision 37: the hand-off fixture's paused Bot detail carries its own instructions.
@@ -533,6 +541,10 @@ data class AidenRemoteCapability(val rawValue: String) {
         val SCHEDULE_WRITE = AidenRemoteCapability("schedule:write")
         val BOT_READ = AidenRemoteCapability("bot:read")
         val BOT_WRITE = AidenRemoteCapability("bot:write")
+        val BOT_WATCHES = AidenRemoteCapability("bot:watches")
+        val BOT_OPEN_WORK = AidenRemoteCapability("bot:open-work")
+        val BOT_ROUTINE_MODELS = AidenRemoteCapability("bot:routine-models")
+        val BOT_PEERS = AidenRemoteCapability("bot:peers")
         val TASKS_READ = AidenRemoteCapability("tasks:read")
         val AGENTS_READ = AidenRemoteCapability("agents:read")
         val QUESTIONS_RESPOND = AidenRemoteCapability("questions:respond")
@@ -554,6 +566,7 @@ data class AidenRemoteCapability(val rawValue: String) {
          * Contract revision 30: this phone receives the activity and queued session frames and
          * Bot detail `chatActivity`. It grants no authority.
          */
+        val BOT_MESSAGING = AidenRemoteCapability("bot:messaging")
         val BOT_ACTIVITY = AidenRemoteCapability("bot:activity")
         /**
          * Contract revision 37: this phone receives a Bot's hand-offs, the `paused` session
@@ -562,6 +575,12 @@ data class AidenRemoteCapability(val rawValue: String) {
          * `serverCapabilities`, and it is asked for in a call of its own.
          */
         val BOT_HANDOFFS = AidenRemoteCapability("bot:handoffs")
+        /** Revision 57: the allow list and repeated-approval offers, negotiated alone. */
+        val BOT_ALLOWED = AidenRemoteCapability("bot:allowed")
+        /** Revision 56: host-owned plan cards, negotiated alone. */
+        val BOT_PLANS = AidenRemoteCapability("bot:plans")
+        /** Revision 55: access cards and folder-access issues, negotiated alone. */
+        val BOT_ACCESS_REQUESTS = AidenRemoteCapability("bot:access-requests")
         /**
          * Contract revision 40: a hand-off card that takes no note says so (`takesNote`). It
          * grants no authority. A Mac on an earlier revision refuses the name, so this phone asks
@@ -616,6 +635,14 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val ATTACHMENTS_RAW = AidenRemoteCapability("attachments:raw")
 
+        /**
+         * Contract revision 53: with `git:write`, this phone may move an empty Workspace chat into
+         * a new worktree made from its first message (`POST /chats/{chatId}/worktree`, with
+         * `chat:write`). The Mac offers it only in `serverCapabilities`, and it is asked for in a
+         * call of its own.
+         */
+        val CHAT_NEW_WORKTREE = AidenRemoteCapability("chat:new-worktree")
+
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
@@ -637,6 +664,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val PHONE_BOT_CARDS = listOf(BOT_CARDS)
 
         /** Negotiable behind `bot-activity-v1`. */
+        val PHONE_BOT_MESSAGING = listOf(BOT_MESSAGING)
         val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
 
         /** Negotiable when the Mac lists them in `serverCapabilities`, in a call of their own. */
@@ -654,18 +682,23 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 49: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_CHAT_JOBS = listOf(CHAT_JOBS)
 
-        /** Revision 50: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 53: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_ATTACHMENTS_RAW = listOf(ATTACHMENTS_RAW)
+
+        /** Revision 53: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_CHAT_NEW_WORKTREE = listOf(CHAT_NEW_WORKTREE)
 
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING +
+            listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
-            PHONE_ATTACHMENTS_RAW
+            PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_BOT_MESSAGING +
+            listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED)
     }
 }
 
@@ -734,6 +767,8 @@ data class AidenRemoteErrorCode(val rawValue: String) {
         val ROUTINE_PROPOSAL_NOT_FOUND = AidenRemoteErrorCode("routine_proposal_not_found")
         /** Contract revision 37: only `bot:handoffs` devices see these. */
         val BOT_PAUSED = AidenRemoteErrorCode("bot_paused")
+        val PLAN_EXPIRED = AidenRemoteErrorCode("plan_expired")
+        val ACCESS_REQUEST_EXPIRED = AidenRemoteErrorCode("access_request_expired")
         val HANDOFF_EXPIRED = AidenRemoteErrorCode("handoff_expired")
 
         val V1_KNOWN = setOf(
@@ -749,7 +784,7 @@ data class AidenRemoteErrorCode(val rawValue: String) {
             SERVER_INTERRUPTED, INTERNAL_ERROR, QUESTION_ALREADY_RESOLVED, QUESTION_EXPIRED,
             SKILL_UNAVAILABLE, RUN_GONE, APPROVAL_RESOLVED,
             MEMORY_ENTRY_NOT_FOUND, MEMORY_OVER_BUDGET, MEMORY_BLOCKED, ROUTINE_PROPOSAL_NOT_FOUND,
-            BOT_PAUSED, HANDOFF_EXPIRED
+            BOT_PAUSED, HANDOFF_EXPIRED, ACCESS_REQUEST_EXPIRED, PLAN_EXPIRED
         )
     }
 }

@@ -1,3 +1,4 @@
+import { isDraftChatId, isLocalChatOwnerId } from "../../renderer/shared/chat-identity.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import {
   CHAT_PENDING_ATTENTION_MAX_IDS,
@@ -29,7 +30,7 @@ function chatIds(value: unknown): string[] {
   if (!Array.isArray(value)) throw new Error("Invalid chat identifiers.");
   if (value.length > CHAT_PENDING_ATTENTION_MAX_IDS) throw new Error("Too many chat identifiers.");
   for (const id of value) {
-    if (!isSafeSubagentIdentifier(id)) throw new Error("Invalid chat identifier.");
+    if (!isLocalChatOwnerId(id)) throw new Error("Invalid chat identifier.");
   }
   return [...new Set(value as string[])];
 }
@@ -61,8 +62,11 @@ export function registerChatPendingAttentionHandlers<Event>(
     });
   });
 
-  handle("chats:dismissDetachedAttention", (_event, id) => {
-    if (!isSafeSubagentIdentifier(id)) throw new Error("Invalid chat identifier.");
+  handle("chats:dismissDetachedAttention", async (_event, id) => {
+    if (!isSafeSubagentIdentifier(id)) {
+      if (!isDraftChatId(id)) throw new Error("Invalid chat identifier.");
+      if (!(await dependencies.knownChatIds([id])).has(id)) return;
+    }
     if (dependencies.detached.clearChat(id)) dependencies.onChange?.();
   });
 }

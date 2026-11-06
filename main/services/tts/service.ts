@@ -7,6 +7,7 @@
 // so late events can never resurrect a cancelled job.
 
 import { randomUUID } from "node:crypto";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { emptyUsageTokens, type UsageRequestRecord } from "../usage-store-core.js";
 import {
   TTS_LIMITS,
@@ -619,6 +620,7 @@ export function createTtsService(deps: TtsServiceDeps) {
         voice,
         style: deliveryStyle(settings),
       });
+      reportAnalyticsEvent("voice_used", { mode: "read_aloud", engine: "cloud" });
       return job.snapshot();
     } catch (error) {
       reservation.release();

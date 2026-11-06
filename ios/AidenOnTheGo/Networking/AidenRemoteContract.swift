@@ -675,21 +675,41 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 45 adds `bot:images`, asked for alone.
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
     /// Contract revision 50 adds `attachments:raw`, asked for alone.
+    /// Contract revision 53 adds `chat:new-worktree`, asked for alone.
+    /// Contract revision 59 adds `bot:watches`, asked for alone.
+    /// Contract revision 59 adds `bot:open-work`, asked for alone.
+    /// Contract revision 59 adds `bot:routine-models`, asked for alone.
+    /// Contract revision 59 adds `bot:peers`, asked for alone.
+
+    /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
         Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
-        Self(rawValue: "bot:issues"),
+        Self(rawValue: "bot:issues"), Self(rawValue: "bot:messaging"), Self(rawValue: "bot:access-requests"), Self(rawValue: "bot:plans"), Self(rawValue: "bot:allowed"),
         Self(rawValue: "bot:handoff-on-mac"),
         Self(rawValue: "bot:images"),
         Self(rawValue: "chat:jobs"),
         Self(rawValue: "attachments:raw"),
+        Self(rawValue: "chat:new-worktree"),
+        Self(rawValue: "bot:watches"),
+        Self(rawValue: "bot:open-work"),
+        Self(rawValue: "bot:routine-models"),
+        Self(rawValue: "bot:peers"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
     /// Bot session entries. It grants no authority.
     static let botCards = Self(rawValue: "bot:cards")
+
+    /// Revision 57: the allow list and repeated-approval offers, negotiated alone.
+    static let botAllowed = Self(rawValue: "bot:allowed")
+    /// Revision 56: host-owned plan cards, negotiated alone.
+    static let botPlans = Self(rawValue: "bot:plans")
+    /// Revision 55: access cards and folder-access issues, negotiated alone.
+    static let botAccessRequests = Self(rawValue: "bot:access-requests")
+    static let botMessaging = Self(rawValue: "bot:messaging")
 
     /// Revision 30: the device receives activity and queued frames and Bot
     /// detail `chatActivity`. It grants no authority.
@@ -738,6 +758,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// device asks for it alone.
     static let attachmentsRaw = Self(rawValue: "attachments:raw")
 
+    /// Revision 53: with `git:write`, the device may move an empty Workspace
+    /// chat into a new worktree made from its first message
+    /// (`POST /chats/{chatId}/worktree`). A Mac on an earlier revision refuses
+    /// the name, so the device asks for it alone.
+    static let chatNewWorktree = Self(rawValue: "chat:new-worktree")
+
     /// Revision 42: the device receives the Bot session `issues` list and
     /// `issues` frames, a summary `issueCount`, and issue items in the routine
     /// notification feed, and may answer a card through
@@ -745,6 +771,17 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// It grants no authority. A Mac on an earlier revision refuses the name,
     /// so the device asks for it alone, after any other negotiation.
     static let botIssues = Self(rawValue: "bot:issues")
+
+    /// Connector-watch management; reads also need bot:read, changes need bot:write.
+    static let botWatches = Self(rawValue: "bot:watches")
+
+    /// Open work metadata and owned evidence; also needs Bot and chat read.
+    static let botOpenWork = Self(rawValue: "bot:open-work")
+
+    /// Revision 59: routine-only models, run facts and explicit unknown-cost Resume.
+    static let botRoutineModels = Self(rawValue: "bot:routine-models")
+    /// Revision 59: approved pairs and bounded linked exchanges.
+    static let botPeers = Self(rawValue: "bot:peers")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -855,6 +892,8 @@ struct AidenRemoteErrorCode: RawRepresentable, Codable, Hashable, Sendable {
         // Contract revision 37: only a `bot:handoffs` device is sent these.
         Self(rawValue: "bot_paused"),
         Self(rawValue: "handoff_expired"),
+        Self(rawValue: "access_request_expired"),
+        Self(rawValue: "plan_expired"),
     ]
 
     init(from decoder: Decoder) throws {
@@ -2783,7 +2822,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
-        "botSessionCards", "botHandoffs", "botIssues",
+        "botSessionCards", "botHandoffs", "botAccessRequests", "botPlans", "botAllowed", "botIssues", "botMessagingDetail", "botMessagingPatch", "botMessagingSettings", "botMessageNotification",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -2834,6 +2873,8 @@ private enum AidenBotPrivateResponseValidator {
             for (key, child) in object {
                 let normalizedKey = normalize(key)
                 if (normalizedPrivateKeys.contains(normalizedKey)
+                    || (root.hasPrefix("botOpenWork") && ["url", "filepath", "sourcepath", "resultpath", "transcript", "rawresponse", "rawentries", "messages", "binding", "bindings", "toolname"].contains(normalizedKey))
+                    || (root.hasPrefix("botWatch") && ["accountid", "resourceid", "serverid", "toolname", "binding", "bindings", "sourceid", "fingerprint"].contains(normalizedKey))
                     || isPrivateChildProjectionKey(normalizedKey)
                     || (root == "chatSummaries" && chatSummaryForbiddenKeys.contains(normalizedKey))),
                    !isAllowedKnownIdentityKey(key, root: root, parentPath: path),
@@ -2936,8 +2977,16 @@ private enum AidenBotPrivateResponseValidator {
             return parentPath.isEmpty
                 || ["act.response.result", "notOpen.result"].contains((parentPath + [key]).joined(separator: "."))
         }
+        if key == "prompt", (root == "botWatch" && parentPath.isEmpty
+            || root == "botWatches" && parentPath == ["watches", "[]"]) { return true }
+        if key == "result", root == "botWatchTest", parentPath.isEmpty { return true }
+        if key == "result" {
+            if root == "botOpenWork", parentPath == ["items", "[]", "completion"] { return true }
+            if root == "botOpenWorkResult", parentPath == ["snapshot", "items", "[]", "completion"] { return true }
+            if root == "botOpenWorkItem", parentPath == ["completion"] { return true }
+        }
         guard key == "instructions" || key == "openingGreeting" else { return false }
-        if root == "botDetail" {
+        if root == "botDetail" || root == "botMessagingDetail" {
             return parentPath.isEmpty
         }
         // Revision 37: the paused Bot detail a `bot:handoffs` device reads.
@@ -3888,6 +3937,9 @@ struct AidenRemoteRunQuestion: Decodable, Equatable, Sendable {
 struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
     let runId: String
     let chatId: String
+    let replyText: String?
+    let replyReasoning: String?
+    let timeline: AidenGenerationTimeline?
     let reason: String
     let state: String?
     let approvals: [AidenRemoteRunApproval]
@@ -3901,6 +3953,10 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
         runId = try values.decode(String.self, forKey: .runId)
         chatId = try values.decode(String.self, forKey: .chatId)
         reason = try boundedString(values, forKey: .reason, maxLength: 32, field: "reason", required: true)!
+        replyText = try boundedString(values, forKey: .replyText, maxLength: 32_768, field: "replyText", allowEmpty: true)
+        replyReasoning = try boundedString(values, forKey: .replyReasoning, maxLength: 32_768, field: "replyReasoning", allowEmpty: true)
+        timeline = try decodeOptionalNonNull(values, AidenGenerationTimeline.self, forKey: .timeline)
+        guard timeline?.isRendererSafe != false else { throw AidenRemoteContractError.unsafePayloadField("timeline") }
         state = try boundedString(values, forKey: .state, maxLength: 32, field: "state")
         if values.contains(.pendingApprovalIds) {
             _ = try values.decode([String].self, forKey: .pendingApprovalIds)
@@ -3923,7 +3979,7 @@ struct AidenRemoteRunSnapshot: Decodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case runId, chatId, reason, epoch, state, pendingApprovalIds, pendingQuestionIds
-        case approvals, questions, nextSequence
+        case approvals, questions, nextSequence, replyText, replyReasoning, timeline
     }
 }
 

@@ -9,19 +9,24 @@ import { createAnalyticsService } from "../services/analytics/analytics-service.
 import type { AnalyticsRegistryView } from "../../renderer/shared/analytics.js";
 import { registerAnalyticsHandlers } from "./analytics.js";
 
-function register(initial: AnalyticsState = { enabled: true }) {
+function register(initial: AnalyticsState = { enabled: true }, current = () => true, beforePublish = async () => {}) {
   const runDirectory = mkdtempSync(join(tmpdir(), "aiden-analytics-ipc-"));
   let stored = initial;
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   const analytics = createAnalyticsService({
-    store: { read: async () => stored, update: async (mutate) => (stored = mutate(stored)) },
+    store: { read: async () => stored, update: async (mutate, isCurrent) => {
+      const next = mutate(stored);
+      await beforePublish();
+      if (isCurrent && !isCurrent()) throw new Error("Owner lost");
+      return stored = next;
+    } },
     env: {},
     superProperties: { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "dev" },
     appRoots: [],
     runDirectory,
     isBuiltinProvider: () => true,
   });
-  registerAnalyticsHandlers({ handle: (channel, handler) => void handlers.set(channel, handler), analytics });
+  registerAnalyticsHandlers({ handle: (channel, handler) => void handlers.set(channel, handler), analytics, owner: () => ({ isDestroyed: () => !current() }) });
   const invoke = async (channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     assert.ok(handler, channel);
@@ -74,4 +79,41 @@ test("the What's sent list comes from the registry, with allowed values and ever
   // Nothing that could carry content is described as free text.
   const kinds = new Set([...registry.events.flatMap((event) => event.properties), ...registry.superProperties].map((p) => p.kind));
   assert.equal(kinds.has("string" as never), false);
+});
+
+test("a replaced document cannot change the switch or answer the notice from the consent queue", async (t) => {
+  for (const [channel, choice] of [
+    ["analytics:setEnabled", true], ["analytics:markNoticeShown", "ok"],
+    ["analytics:setEnabled", false], ["analytics:markNoticeShown", "turn-off"],
+  ] as const) {
+    let current = true;
+    const h = register({ enabled: false }, () => current);
+    t.after(h.cleanup);
+    const pending = h.invoke(channel, choice);
+    current = false;
+    await assert.rejects(pending);
+    assert.deepEqual(h.stored(), { enabled: false });
+    await assert.rejects(h.invoke(channel, choice));
+  }
+});
+
+test("replacement while settings publication is pending preserves the saved consent", async (t) => {
+  for (const [channel, choice] of [
+    ["analytics:setEnabled", true], ["analytics:markNoticeShown", "ok"],
+    ["analytics:setEnabled", false], ["analytics:markNoticeShown", "turn-off"],
+  ] as const) {
+    let current = true;
+    let started!: () => void, release!: () => void;
+    const writing = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const initial = { enabled: choice === false || choice === "turn-off" };
+    const h = register(initial, () => current, async () => { started(); await gate; });
+    t.after(h.cleanup);
+    const pending = h.invoke(channel, choice);
+    await writing;
+    current = false;
+    release();
+    await assert.rejects(pending);
+    assert.deepEqual(h.stored(), initial);
+  }
 });

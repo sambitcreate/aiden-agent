@@ -587,7 +587,7 @@ async function closeMockLmStudio(mock: MockLmStudio): Promise<void> {
   await withTimeout(closed, "deterministic LM Studio server shutdown", PROCESS_EXIT_TIMEOUT_MS);
 }
 
-function isolatedAppEnvironment(): Record<string, string> {
+export function isolatedAppEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};
   const passthrough =
     process.platform === "linux"
@@ -885,7 +885,13 @@ async function terminateOwnedProcess(child: ChildProcess): Promise<void> {
 /** Close Electron and fail observably if its test-owned main process leaks. */
 export async function closeAiden(app: ElectronApplication | undefined): Promise<void> {
   if (!app) return;
-  const child = app.process();
+  let child: ReturnType<ElectronApplication["process"]>;
+  try {
+    child = app.process();
+  } catch {
+    // Playwright drops the process handle of an app a test crashed on purpose.
+    return;
+  }
   const pid = child.pid;
   let closeError: unknown;
   try {

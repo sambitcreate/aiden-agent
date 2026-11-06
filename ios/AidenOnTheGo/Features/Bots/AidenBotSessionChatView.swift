@@ -11,10 +11,13 @@ struct AidenBotSessionChatView: View {
     var initialSummary: AidenBotSummary?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isChatVisible = false
     @Environment(\.aidenPalette) private var palette
     @State private var model: AidenBotSessionModel?
     @State private var summary: AidenBotSummary?
     @State private var draft = ""
+    @State private var peerExchangeID: String?
     @State private var isShowingProfile = false
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
@@ -51,6 +54,11 @@ struct AidenBotSessionChatView: View {
     @State private var isFileImporterPresented = false
     @State private var attachButtonCenter: CGPoint?
     @Namespace private var attachmentMotionNamespace
+
+    private var resumeVisitIsActive: Bool {
+        isChatVisible && scenePhase == .active && !isShowingProfile && !isShowingAdvanced
+            && peerExchangeID == nil && presentedFilesGrant == nil && !isFileImporterPresented && !attachmentPicker.isPresented
+    }
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
@@ -130,7 +138,19 @@ struct AidenBotSessionChatView: View {
         ) { result in
             attachFiles(result)
         }
-        .onDisappear { attachmentPicker.reset() }
+        .onAppear {
+            isChatVisible = true
+            model?.setResumeForegroundVisit(active: resumeVisitIsActive)
+        }
+        .onDisappear {
+            isChatVisible = false
+            model?.setResumeForegroundVisit(active: false)
+            attachmentPicker.reset()
+        }
+        .onChange(of: resumeVisitIsActive) { _, active in
+            // The feed remains alive for background hand-offs (G24).
+            model?.setResumeForegroundVisit(active: active)
+        }
         .background(palette.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -154,6 +174,14 @@ struct AidenBotSessionChatView: View {
                                 Button("Done") { presentedFilesGrant = nil }
                             }
                         }
+                }
+            }
+        }
+        .sheet(isPresented: Binding(get: { peerExchangeID != nil }, set: { if !$0 { peerExchangeID = nil } })) {
+            if let peerExchangeID {
+                NavigationStack {
+                    AidenBotPeerExchangeView(coordinator: coordinator, botID: botID, exchangeID: peerExchangeID)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { self.peerExchangeID = nil } } }
                 }
             }
         }
@@ -185,6 +213,13 @@ struct AidenBotSessionChatView: View {
                 onSaveFailed: { advancedSaveError = $0 }
             )
         }
+        .alert("Resume with an unconfirmed cost?", isPresented: Binding(
+            get: { model?.resumeModel?.needsConsent == true },
+            set: { _ in }
+        )) {
+            Button("Resume and acknowledge possible charge") { Task { await model?.confirmUnknownCostResume() } }
+            Button("Cancel", role: .cancel) { model?.resumeModel?.cancelConsent() }
+        } message: { Text(AidenBotResumeModel.confirmation) }
         .alert(
             "Something Went Wrong",
             isPresented: Binding(
@@ -229,6 +264,8 @@ struct AidenBotSessionChatView: View {
         .onChange(of: aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)) { _, grants in
             guard let model, grants != feedOpenedWith else { return }
             feedOpenedWith = grants
+            model.allowedSupported = grants.contains(.botAllowed)
+            model.plansSupported = grants.contains(.botPlans)
             model.reopenFeed()
         }
         // A first load that failed is a quiet hint while the chat keeps
@@ -390,7 +427,9 @@ struct AidenBotSessionChatView: View {
                         ForEach(model.outgoing) { message in
                             outgoingBubble(message, model: model)
                         }
-                        ForEach(model.openIssues) { issue in
+                        ForEach(model.openIssues.filter { issue in
+                            issue.isAvailable(accessRequests: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true)
+                        }) { issue in
                             // Revision 42: a "Needs you" card from the host.
                             AidenBotIssueCardView(
                                 issue: issue,
@@ -556,6 +595,10 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .peer(peer):
+            if coordinator.server?.supportsBotPeerExchanges == true {
+                AidenBotPeerTranscriptRow(peer: peer) { peerExchangeID = peer.exchangeId }
+            }
         case let .sharedImage(image):
             // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
             AidenMessageImageAttachmentsView(
@@ -710,6 +753,12 @@ struct AidenBotSessionChatView: View {
                 .id(question.waitId)
             }
             if let approval = model.approval {
+                if let count = approval.alwaysCount, model.allowedSupported {
+                    Text("You’ve allowed this \(count) times in the last 2 weeks.").font(.footnote).foregroundStyle(palette.secondary)
+                    Button("Always allow for \(bot?.name ?? "Bot")") { Task { await model.answerApproval(.allow, scope: .always) } }
+                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                        .disabled(!canRespondToApprovals || !model.canAnswerApproval)
+                }
                 // The workspace chat's approval card. Allow is hidden when the
                 // Mac says this tool can only be denied from a phone.
                 AidenApprovalCard(
@@ -725,6 +774,27 @@ struct AidenBotSessionChatView: View {
                 )
                 .disabled(!canRespondToApprovals || !model.canAnswerApproval)
                 .id(approval.waitId)
+            }
+            if let notice = model.approvalSuccessNotice { Text(notice).font(.footnote).foregroundStyle(palette.secondary) }
+            if let plan = model.plan, model.plansSupported {
+                AidenBotPlanCard(plan: plan, botName: bot?.name ?? "Bot",
+                    canAnswer: canWrite && model.canRespondToPlan(plan), error: model.planError,
+                    onRespond: { decision in Task { await model.respondToPlan(decision) } })
+                    .id(plan.planId)
+            }
+            if let request = model.accessRequest,
+               coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true {
+                AidenBotAccessRequestCard(request: request, botName: bot?.name ?? "Bot",
+                    showsApprovalCount: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
+                    canAnswer: canWrite && model.canAnswerAccessRequest,
+                    onAnswer: { choice in Task { await model.answerAccessRequest(choice) } })
+                    .id(request.waitId)
+            }
+            if let notice = model.accessSuccessNotice {
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(palette.success)
+                    .accessibilityIdentifier("bot_access_success_notice")
             }
             if let handoff = model.handoff {
                 // Revision 37: the step the Bot handed back. A sign-in is
@@ -766,7 +836,7 @@ struct AidenBotSessionChatView: View {
             } else if model.isInterrupted {
                 AidenBotInterruptedCard(
                     isAccessBlocked: model.isAccessBlocked,
-                    isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss),
+                    isBusy: model.inFlight.contains(.resume) || model.inFlight.contains(.dismiss) || model.resumeModel?.busy == true,
                     canAct: canWrite,
                     onResume: { Task { await model.resume() } },
                     onDismiss: { Task { await model.dismiss() } },
@@ -819,6 +889,7 @@ struct AidenBotSessionChatView: View {
     /// is its note instead and Send marks the step done, when the card's own
     /// Done could (connected); staged photos or files say to wait.
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
+        guard !model.composerHeldForPlan else { return }
         if model.composerAnswersHandoff {
             let note = draft
             let connected = canWrite
@@ -842,7 +913,7 @@ struct AidenBotSessionChatView: View {
     /// name sends in that mode; touch and hold for the menu, which works with an
     /// empty draft too, so the mode can be picked before typing.
     private func busyPill(_ model: AidenBotSessionModel) -> some View {
-        let available = canCompose && model.canSend
+        let available = canCompose && model.canSend && !model.composerHeldForPlan
         let enabled = available && hasMessage(model) && !model.isAttaching
         return Menu {
             ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
@@ -942,6 +1013,7 @@ struct AidenBotSessionChatView: View {
     }
 
     private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
+        if model.composerHeldForPlan { return "Review the plan to continue" }
         if model.isPaused { return AidenBotSessionCopy.pausedPlaceholder(bot?.name ?? "This Bot") }
         switch model.handoff?.kind {
         case .action:
@@ -1117,7 +1189,7 @@ struct AidenBotSessionChatView: View {
         }
         .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
         .disabled(
-            !canCompose || !model.canSend || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
+            !canCompose || !model.canSend || model.composerHeldForPlan || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
                 || (model.composerAnswersHandoff && !(canWrite && model.canAnswerHandoff))
         )
         .accessibilityLabel(model.composerAnswersHandoff ? "Send and mark done" : "Send")
@@ -1137,8 +1209,23 @@ struct AidenBotSessionChatView: View {
         let model = AidenBotSessionModel(
             botID: botID,
             transport: client,
-            cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID)
+            cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID),
+            allowedSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
+            plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true
         )
+        model.setResumeForegroundVisit(active: resumeVisitIsActive)
+        model.routineModelsSupported = { coordinator.server?.supportsBotRoutineModels == true }
+        do {
+            model.resumeModel = AidenBotResumeModel(botID: botID, transport: client,
+                mayResume: { [weak model] in
+                    resumeVisitIsActive && UIApplication.shared.applicationState == .active
+                        && coordinator.isCurrent(context) && coordinator.server?.supportsBotRoutineModels == true
+                        && coordinator.connectionState == .connected
+                        && coordinator.installationStore.activeInstallation?.canWriteBots == true
+                        && model?.canResumeExecution == true
+                }, version: { [weak model] in model?.resumeConfirmationVersion ?? "released" },
+                store: .shared, scope: .init(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID))
+        }
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
         model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
         feedOpenedWith = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
@@ -1452,6 +1539,7 @@ struct AidenBotIssueCardView: View {
         case .routineFailed: "clock.badge.exclamationmark"
         case .routinePaused: "pause.circle"
         case .runStalled: "hourglass"
+        case .accessNeeded: "folder"
         }
     }
 

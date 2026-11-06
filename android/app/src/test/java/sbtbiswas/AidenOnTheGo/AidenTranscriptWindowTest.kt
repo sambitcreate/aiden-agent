@@ -389,7 +389,7 @@ class AidenTranscriptWindowTest {
                 val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
                 coordinator.refreshClient()
                 withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial.takeIf { seedsChat })
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial.takeIf { seedsChat }, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("window", model)
                 try {
                     body(mac, model)

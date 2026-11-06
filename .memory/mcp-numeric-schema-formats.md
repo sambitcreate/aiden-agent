@@ -19,3 +19,9 @@ Draft-07 schema-valued dependencies now normalize too; property-name dependency 
 Independent review identified a silent 64-level cutoff that could leave numeric formats unnormalized. Traversal now uses an iterative worklist and weak object-copy map, preserving raw identity and schema-keyword boundaries while normalizing deep schemas fully; a 2,000-level regression covers this case.
 
 Status (2026-10-01): merged in PR #264 (on main after 0.51.0); plan moved to `docs/plans/completed/`.
+
+## Connector authority, 2026-11-02
+
+Desktop execution checks the live inventory on the executing client, including provider-authenticated scoped connections. Servers without change notifications are listed again for execution. List changes invalidate pending reads and guards, and changed titles, descriptions, input or output schemas, and effect annotations require refreshing the tool. This keeps exact Bot output-schema grants valid through dispatch. Workspace connector IDs are opaque strings. Child discovery filters their exact IDs before credential lookup or a connection. Previously trimmed IDs have no recoverable provenance.
+
+Remote tool calls now recheck the captured inventory revision after credential lookup and on each OAuth retry. On servers without notifications, a differing complete listing on the same client also revokes the earlier guard. A child rechecks its foreground grant before a retry. The isolated subagent spends its network operation on the first authorized send. For a mutation, the durable dispatch marker still precedes any network attempt. If the live transport proves that the first send never occurred, the journal records cancellation. Failures after a send, or a restart with only the dispatch marker, retain an unknown outcome.

@@ -13,6 +13,7 @@ import {
   peerText,
   type PeerPairing,
 } from "./peer-pairing.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type https from "node:https";
 import { isIPv4 } from "node:net";
 import {
@@ -723,6 +724,16 @@ export class PeerHostRegistry {
     signal?: AbortSignal,
     options: PeerPairingOptions = {},
   ): Promise<PeerHostView> {
+    const host = await this.exchangePairing(pairing, signal, options);
+    reportAnalyticsEvent("peer_mac_paired", { method: "link" });
+    return host;
+  }
+
+  private async exchangePairing(
+    pairing: PeerPairing,
+    signal: AbortSignal | undefined,
+    options: PeerPairingOptions,
+  ): Promise<PeerHostView> {
     const attempt = this.attempt(signal);
     let reserved = false;
     try {
@@ -789,7 +800,7 @@ export class PeerHostRegistry {
       const instanceId = hostIdentifier(target.instanceId);
       await this.reserve(instanceId, attempt, options);
       reserved = true;
-      return await requestPeerPairing({
+      const host = await requestPeerPairing({
         session: this.bootstrap({
           endpoint: target.endpoint,
           mode: target.route === "tailscale" ? "webpki" : "unverified",
@@ -829,6 +840,8 @@ export class PeerHostRegistry {
           );
         },
       });
+      reportAnalyticsEvent("peer_mac_paired", { method: "discovery" });
+      return host;
     } catch (error) {
       if (!attempt.current())
         throw new PeerPairingOutcomeError({ status: "cancelled" });
@@ -889,7 +902,9 @@ export class PeerHostRegistry {
       // found at. The exchange still verifies the sealed name, CA and key.
       const address = input.instanceId === undefined ? undefined : endpointIPv4(input.endpoint);
       if (address) this.lanAddresses.remember(pairing.instanceId, address);
-      return await this.pair(pairing, signal, options);
+      const host = await this.exchangePairing(pairing, signal, options);
+      reportAnalyticsEvent("peer_mac_paired", { method: "code" });
+      return host;
     } catch (error) {
       if (signal?.aborted || this.closed)
         throw new PeerPairingOutcomeError({ status: "cancelled" });

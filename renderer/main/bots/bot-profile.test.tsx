@@ -438,3 +438,16 @@ test("a Bot already in the list opens its Profile without a loading skeleton", a
   assert.ok(await screen.findByRole("textbox", { name: "Name" }));
   assert.equal(screen.queryByRole("status", { name: "Loading Bot" }), null);
 });
+
+test("Allowed without asking shows the count and opens the encoded Bot deep link", async () => {
+  botStoreIpc(botFixture({ id: "bot:a" }), { "bots:allowed:list": () => [
+    { kind: "rule", id: "r1", botId: "bot:a", what: "Calendar · Create event", createdAt: "2026-11-03T15:00:00Z", uses: 12 },
+    { kind: "folder", id: "folder_team", botId: "bot:a", what: "Folder · ~/Team", createdAt: "2026-11-03T15:00:00Z" },
+  ] });
+  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot%3Aa" });
+  const row = await screen.findByRole("button", { name: "Allowed without asking" });
+  await within(row).findByText("2");
+  fireEvent.click(row);
+  await screen.findByRole("heading", { name: "Allowed without asking", level: 1 });
+  assert.equal(router.state.location.href, "/bots/bot%3Aa?page=allowed");
+});

@@ -1,4 +1,5 @@
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
@@ -101,6 +102,8 @@ import {
   parseAidenRemoteChatProjection,
   parseAidenRemoteSkillCatalog,
   parseAidenRemoteChatContextPressure,
+  parseAidenRemoteChatNewWorktreeRequest,
+  type AidenRemoteChatNewWorktreeRequest,
   projectAidenRemoteContextPressure,
   type AidenRemoteChatContextPressure,
   type AidenRemoteContextPressure,
@@ -120,6 +123,7 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 import {
   prepareSkillInvocationForAppend,
+  reportSkillUsed,
   requireSkillInvocationWorkspace,
   type PreparedSkillInvocation,
 } from "./skill-invocation-turn.js";
@@ -929,7 +933,7 @@ export function projectAidenRemoteChatMessagesWindow(
       chatId: chat.id,
       revision: chatRevision(chat),
       messages,
-      hasOlder: true,
+      hasOlder: first > 0,
       workspaceId: persistedChatWorkspaceId(chat.workspaceId),
       ...(chat.botId ? { botId: chat.botId } : {}),
       title: boundedUnicodeScalarPrefix(chat.title, 1_024),
@@ -941,16 +945,22 @@ export function projectAidenRemoteChatMessagesWindow(
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
       ...(forkedFrom ? { forkedFrom } : {}),
     };
-    const size = () => Buffer.byteLength(JSON.stringify(window), "utf8");
-    let bytes = size();
-    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages.length > 1) {
-      messages.shift();
-      first += 1;
-      bytes = size();
+    let bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
+    let dropped = 0;
+    while (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && dropped < messages.length - 1) {
+      // Each removed leading message also removes its following comma.
+      bytes -= Buffer.byteLength(JSON.stringify(messages[dropped]), "utf8") + 1;
+      if (dropped === 0 && !window.hasOlder) bytes -= 1; // false becomes true.
+      dropped += 1;
+    }
+    if (dropped) {
+      window.hasOlder = true;
+      messages.splice(0, dropped);
+      first += dropped;
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES && messages[0]) {
       withoutReasoning(messages[0]);
-      bytes = size();
+      bytes = Buffer.byteLength(JSON.stringify(window), "utf8");
     }
     if (bytes > AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES) {
       throw new AidenRemoteServiceError(
@@ -1416,6 +1426,23 @@ export class AidenRemoteChatService {
        */
       spendingRefusal?: (chat: Pick<Chat, "id" | "botId">) => Promise<string | undefined>;
       attachments?: AidenRemoteAttachmentStore;
+      /**
+       * Contract revision 53: makes (or, for the same chat, finds again) the
+       * managed worktree a phone's first message asked for, from the chat's
+       * workspace. Absent: `chat:new-worktree` is neither offered nor served.
+       * Errors it throws as `AidenRemoteServiceError` reach the phone as they
+       * are, so they must never carry a path.
+       */
+      newWorktrees?: {
+        create(
+          deviceId: string,
+          sourceWorkspaceId: string,
+          text: string,
+          chatId: string,
+        ): Promise<{ workspaceId: string; branch: string }>;
+        /** The branch of the worktree New worktree made for this chat, when the chat is in it. */
+        worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined>;
+      };
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       /**
@@ -1440,6 +1467,10 @@ export class AidenRemoteChatService {
         target(workspaceId: string): Promise<string>;
         release(workspaceId: string): Promise<void>;
       };
+      /** For usage data: a real workspace record, not a hidden folder or a default. */
+      isFolderWorkspace?: (workspaceId: string) => Promise<boolean>;
+      /** For usage data: this device is another paired Mac or Linux host, not a phone. */
+      deviceIsPeer?: (deviceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -2208,6 +2239,106 @@ export class AidenRemoteChatService {
     }
   }
 
+  /** Whether this host makes worktrees for phones' first messages (`chat:new-worktree`). */
+  get supportsNewWorktrees(): boolean {
+    return this.options.newWorktrees !== undefined;
+  }
+
+  /**
+   * Contract revision 53: put an empty chat in a new managed worktree made
+   * from its workspace, named from the message about to be sent, so that
+   * message runs there. The worktree is keyed by the chat, so a retry never
+   * makes a second one. An empty chat that is already in the worktree made
+   * for it (an earlier attempt finished after the phone stopped waiting)
+   * answers with that worktree, whatever revision or key the retry carries. A chat that
+   * already has messages stays where it is.
+   */
+  async moveToNewWorktree(
+    deviceId: string,
+    chatId: string,
+    revision: string,
+    key: string,
+    input: unknown,
+  ): Promise<{ chat: AidenRemoteChatProjection; branch: string }> {
+    const newWorktrees = this.options.newWorktrees;
+    if (!newWorktrees) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    let parsed: AidenRemoteChatNewWorktreeRequest;
+    try {
+      parsed = parseAidenRemoteChatNewWorktreeRequest(input);
+    } catch {
+      throw new AidenRemoteServiceError("invalid_request", "The new worktree request is invalid.", 400);
+    }
+    const notEmpty = () =>
+      new AidenRemoteServiceError(
+        "operation_stale",
+        "This chat already has messages, so it stays in its workspace.",
+        409,
+      );
+    try {
+      return await this.executeIdempotent(
+        { deviceId, route: "POST /chats/{id}/worktree", resourceId: safeId(chatId, "chat"), key },
+        // The revision stays out of the digest: a phone that kept its key after
+        // a lost answer retries with the chat's newer revision, and must get
+        // the worktree rather than a refusal. The action checks the revision.
+        { text: parsed.text },
+        async () => {
+          const chat = await this.chat(chatId);
+          if (chat.messages.length === 0 && chat.workspaceId) {
+            const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId);
+            if (branch) return { chat: projectAidenRemoteChat(chat), branch };
+          }
+          // Messages first: appending one changes the revision, and a chat that
+          // has them must answer operation_stale, not a revision conflict.
+          if (chat.messages.length > 0) throw notEmpty();
+          requireRevision(revision, chat);
+          if (!chat.workspaceId) {
+            throw new AidenRemoteServiceError("workspace_unavailable", "This chat has no workspace to make a worktree from.", 409);
+          }
+          const sourceWorkspaceId = chat.workspaceId;
+          let created: { workspaceId: string; branch: string };
+          try {
+            created = await newWorktrees.create(deviceId, sourceWorkspaceId, parsed.text, chatId);
+          } catch (error) {
+            if (error instanceof AidenRemoteServiceError) throw error;
+            throw new AidenRemoteServiceError(
+              "git_capability_denied",
+              "Aiden couldn't make the worktree on your Mac. Try again, or send without New worktree.",
+              409,
+            );
+          }
+          let moved: Chat;
+          try {
+            moved = await this.options.application.moveEmptyToWorkspace(chatId, created.workspaceId, {
+              assertCurrent: (current) => {
+                if (current.messages.length > 0) throw notEmpty();
+                // Moved elsewhere while the worktree was being made: that choice stands.
+                requireRevision(revision, current);
+              },
+            }) as Chat;
+          } catch (error) {
+            if (error instanceof AidenRemoteServiceError) throw error;
+            const current = await this.chat(chatId).catch(() => undefined);
+            if (current && current.messages.length > 0) throw notEmpty();
+            throw new AidenRemoteServiceError(
+              "operation_in_progress",
+              "The chat is busy. Try again in a moment.",
+              409,
+              true,
+            );
+          }
+          this.options.notifyChanged?.(chatId);
+          return { chat: projectAidenRemoteChat(moved), branch: created.branch };
+        },
+      );
+    } catch (error) {
+      return this.mapOperationError(error);
+    }
+  }
+
   /** Whether this host serves visuals to the phone viewer (`chat-visual-viewer-v1`). */
   get supportsVisualViewer(): boolean {
     return this.options.visualViewer !== undefined;
@@ -2800,6 +2931,7 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            if (preparedSkill) reportSkillUsed(preparedSkill.provenance);
             // The person wrote in it, so a snoozed chat is back. Never blocks
             // or fails the send; Pin and Done are left alone.
             void this.options.triage?.wake?.(chatId).catch(() => undefined);
@@ -2810,6 +2942,18 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
+            if (started) {
+              reportChatMessageSent({
+                providerId: selection.providerId,
+                model: selection.modelId,
+                thinkingLevel: parsed.thinkingLevel,
+                origin: authoritative.botId
+                  ? "bot"
+                  : async () => ((await this.options.deviceIsPeer?.(deviceId)) === true ? "peer" : "phone"),
+                inWorkspace: async () =>
+                  !authoritative.botId && (await this.options.isFolderWorkspace?.(workspaceId)) === true,
+              });
+            }
             if (!started && !accepted) {
               turn.release();
               this.options.streams.markStartError(

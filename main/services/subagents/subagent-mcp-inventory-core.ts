@@ -1,3 +1,4 @@
+import { withoutWorkspaceDisabledMcpServers } from "../workspace-capabilities.js";
 import type { McpServer } from "../types.js";
 import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
 import {
@@ -96,6 +97,7 @@ export interface SubagentMcpInventoryCoreDependencies {
   now?: () => number;
   discoveryDeadlineMs?: number;
   bypassCache?: boolean;
+  disabledMcpServerIds?: readonly string[];
 }
 
 function abortReason(signal: AbortSignal): unknown {
@@ -170,7 +172,7 @@ export async function resolveBoundedSubagentMcpInventory(
       controller.abort(new Error("MCP inventory discovery deadline elapsed."));
       return [];
     }
-    const servers = listed.servers
+    const servers = withoutWorkspaceDisabledMcpServers(listed.servers, dependencies.disabledMcpServerIds)
       .filter((server) => server.enabled && server.transport !== "stdio" && !server.authProvider && mcpServerOffersTools(server))
       .slice(0, MAX_SUBAGENT_MCP_SCOPES);
     const byId = new Map(servers.map((server) => [server.id, server] as const));
