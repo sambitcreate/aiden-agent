@@ -15,6 +15,7 @@ import type { ApprovalPrompt } from "./ipc";
 import { liveActivity, type LiveActivity } from "./live-activity";
 import { liveOpenChat, type LiveOpenChatSnapshot } from "./live-open-chat";
 import { liveSessionBus, type LiveNoteOptions, type LiveVoiceInput } from "./live-session-bus";
+import { LIVE_SPEECH_FENCE_GUARD_MS } from "./live-speech-onsets";
 import { matchLiveVoicePhrase } from "../shared/live-voice-phrases";
 import { aidenLivePreferences, type AidenLiveSettingsFields } from "../shared/aiden-live-settings";
 
@@ -488,9 +489,16 @@ export class LiveChatVoiceApprovals {
     target.timer = this.schedule(() => {
       target.timer = null;
       if (this.current !== target) return;
-      target.armed = true;
       target.fence = this.deps.bus.voiceInputFence();
-      this.publish(target);
+      // Speech that opens in the guard after a fence sits at the fence (it may
+      // have been captured before it), so the card says Live is listening only
+      // once speech can actually answer.
+      target.timer = this.schedule(() => {
+        target.timer = null;
+        if (this.current !== target) return;
+        target.armed = true;
+        this.publish(target);
+      }, LIVE_SPEECH_FENCE_GUARD_MS);
     }, LIVE_APPROVAL_ARM_DELAY_MS);
   }
 

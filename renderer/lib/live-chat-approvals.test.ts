@@ -108,10 +108,10 @@ function harness(options: { session?: boolean; enabled?: boolean } = {}) {
     list = list.map((candidate) => (candidate.approvalId === prompt.approvalId ? prompt : candidate));
     approvals.publish(pane, { chatId, approvals: list, decide });
   };
-  /** Lets the read-out settle and the arm delay pass. */
+  /** Lets the read-out settle, the arm delay and the fence guard pass. */
   const readOut = async () => {
     await settle();
-    for (const run of timers.splice(0)) run();
+    while (timers.length > 0) for (const run of timers.splice(0)) run();
     await settle();
   };
   const say = (text: string) => bus.publishVoiceInput(text);
@@ -286,6 +286,26 @@ test("an “allow” spoken before voice armed answers nothing, even when its fi
   live.bus.publishVoiceInput("allow", microphone.claim() ?? undefined);
   await settle();
   assert.deepEqual(live.harnessDecisions(), [], "spoken before the fence");
+});
+
+test("the card says Live is listening only once speech after the fence can answer", async () => {
+  const live = harness();
+  live.showChat("c1", "Fix login");
+  live.raise(runTests);
+  await settle();
+  // The arm delay passes: the fence is taken, but the guard after it has not.
+  for (const run of live.timers.splice(0)) run();
+  await settle();
+  assert.equal(live.controller.voiceHint("a1"), null, "not listening while new speech would sit at the fence");
+  assert.equal(shown(live)?.voice, false);
+  // The guard passes: now the card says so, and fresh speech answers.
+  for (const run of live.timers.splice(0)) run();
+  await settle();
+  assert.equal(live.controller.voiceHint("a1"), "voice");
+  assert.equal(shown(live)?.voice, true);
+  live.say("allow");
+  await settle();
+  assert.deepEqual(live.decisions, [{ approvalId: "a1", decision: "allow", extra: 0 }]);
 });
 
 test("a delayed read-out arms voice only after Live accepts it and the arm delay passes", async () => {
