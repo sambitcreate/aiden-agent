@@ -1,12 +1,24 @@
-// Words on the canvas that are edited in place: a text item, or a shape's
-// label. Double-click or Enter starts editing; leaving the field or Escape
-// stops. Each round of editing is one undo step. A text item grows to fit
-// its words; one left empty goes away.
+// Words on the canvas that are edited in place: a text item (rich, with the
+// format bar) or a shape's label (plain). Double-click or Enter starts
+// editing; leaving the field or Escape stops. Each round of editing is one
+// undo step. A text item grows to fit its words; one left empty goes away.
 
 import * as React from "react";
 import { cn } from "../../lib/ui-utils";
+import { richTextPlain } from "../../shared/design-canvas/rich-text";
 import { DESIGN_CANVAS_LIMITS, type DesignFrame } from "../../shared/design-canvas/schema";
 import { useDesignNodeContext } from "./design-node-context";
+import { focusInFormatBar, richEditorKeyDown } from "./format-bar";
+import { RichTextEditor, type RichTextEditorHandle } from "./rich-text-editor";
+import { RichTextView } from "./rich-text-view";
+
+/** What a text item's words need to be rich: its editor's handle and the format bar's hooks. */
+export type CanvasRichText = {
+  editorRef: React.MutableRefObject<RichTextEditorHandle | null>;
+  /** The editor mounted and took the focus. */
+  onReady(): void;
+  onSelectionChange(): void;
+};
 
 export function CanvasText({
   frame,
@@ -16,6 +28,7 @@ export function CanvasText({
   style,
   grow = false,
   removeWhenEmpty = false,
+  rich,
 }: {
   frame: DesignFrame;
   /** The editing field's accessible name. */
@@ -26,6 +39,8 @@ export function CanvasText({
   /** The frame grows taller to fit its words (it never shrinks on its own). */
   grow?: boolean;
   removeWhenEmpty?: boolean;
+  /** Formatted words (Markdown subset) with the format bar, instead of plain ones. */
+  rich?: CanvasRichText;
 }) {
   const canvas = useDesignNodeContext();
   const editing = canvas.editing === frame.id;
@@ -40,6 +55,11 @@ export function CanvasText({
     if (needed > frame.h + 0.5) update(frame.id, { h: needed }, { record: false });
   }, [grow, text, frame.w, frame.h, frame.id, editing, update]);
 
+  const onReady = rich?.onReady;
+  React.useEffect(() => {
+    if (editing) onReady?.();
+  }, [editing, onReady]);
+
   if (!editing) {
     return (
       <div
@@ -53,8 +73,46 @@ export function CanvasText({
           canvas.edit(frame.id);
         }}
       >
-        {text || <span className="text-tertiary">{placeholder}</span>}
+        {!text ? (
+          <span className="text-tertiary">{placeholder}</span>
+        ) : rich ? (
+          <RichTextView value={text} />
+        ) : (
+          text
+        )}
       </div>
+    );
+  }
+
+  if (rich) {
+    return (
+      <RichTextEditor
+        ref={(handle) => {
+          rich.editorRef.current = handle;
+          box.current = handle?.element ?? null;
+        }}
+        value={text}
+        label={label}
+        placeholder={placeholder}
+        maxLength={DESIGN_CANVAS_LIMITS.noteChars}
+        autoFocus
+        className={className}
+        style={style}
+        onFocus={() => {
+          startsUndoStep.current = true;
+        }}
+        onChange={(next) => {
+          update(frame.id, { text: next }, { record: startsUndoStep.current });
+          startsUndoStep.current = false;
+        }}
+        onBlur={(event) => {
+          if (focusInFormatBar(event.relatedTarget)) return;
+          canvas.edit(null);
+          if (removeWhenEmpty && !richTextPlain(frame.text ?? "").trim()) canvas.remove(frame.id);
+        }}
+        onKeyDown={richEditorKeyDown}
+        onSelectionChange={rich.onSelectionChange}
+      />
     );
   }
 

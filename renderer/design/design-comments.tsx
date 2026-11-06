@@ -299,6 +299,19 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
     return true;
   };
 
+  // The Comment button on a note's or text item's format bar: a pin at the frame's top right.
+  const startDraftRef = React.useRef(startDraft);
+  startDraftRef.current = startDraft;
+  const commentOn = React.useCallback((id: string) => {
+    const frame = docRef.current.frames.find((entry) => entry.id === id);
+    if (!frame) return;
+    startDraftRef.current({
+      id: crypto.randomUUID(),
+      place: { frameId: frame.id, x: Math.max(0, frame.w - 8), y: 8 },
+      label: frame.title,
+    });
+  }, []);
+
   const hoverFrame = React.useRef<number | null>(null);
   const onNodeMouseMove = (event: React.MouseEvent, node: Node) => {
     if (!active || draft) return;
@@ -528,6 +541,7 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
     onNodeMouseLeave: clearHover,
     escape,
     open,
+    commentOn,
     layer,
   };
 }

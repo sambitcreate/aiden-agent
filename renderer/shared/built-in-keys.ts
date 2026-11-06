@@ -155,6 +155,14 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     requiresCapability: "designMode",
   },
   {
+    id: "canvas-format",
+    title: "Bold / Italic / Underline",
+    description: "Formats the selected words in a note or text item; links, lists, size and colours are on its formatting bar.",
+    keys: ["Command+B", "Command+I", "Command+U"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
     id: "canvas-comment",
     title: "Comment tool",
     description: "Click an element of a page, a frame or the canvas to comment. Alt picks the element's parent; Esc leaves.",

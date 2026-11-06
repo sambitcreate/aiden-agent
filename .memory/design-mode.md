@@ -158,3 +158,11 @@ Deviations from the P1 plan:
 - Input: `renderer/design/design-drawing.tsx` listens in the capture phase on the canvas wrapper and stops the event so React Flow doesn't pan or select; drafts render in a `ViewportPortal`. Line kinds get `style.pointerEvents: "none"` (node `style` beats xyflow's wrapper) and an SVG hit band with `pointer-events: stroke`.
 - Text is plain for now (`nodes/canvas-text.tsx`); P4c adds formatting. Colours: `DesignColor` palette, blue..pink map to `--chart-1..7`, fills via `color-mix`.
 - After Delete, focus goes back to `.studio-canvas` (else ⌘Z lands on the body). Known: the ResizeObserver loop warning on node drag/resize is reported as an uncaught error (predates P4b).
+
+## P4c rich notes (2026-11-06)
+
+- Notes and text store a Markdown subset (`renderer/shared/design-canvas/rich-text.ts`): `**b**`, `*i*`, `<u>u</u>`, `[t](url)` (http/https/mailto only), `- ` / `1. ` lists, one paragraph per line. The serializer nests bold > italic > underline; the parser's star-run rules match it (randomized round-trip test guards this).
+- Editor: `nodes/rich-text-editor.tsx` (contenteditable + execCommand; paste/drop plain text; re-seeds innerHTML only when the stored value differs from what it last emitted). `rich-text-dom.ts` reads the DOM back. View mode: `rich-text-view.tsx` (React elements, links open on ⌘/Ctrl-click).
+- Format bar `nodes/format-bar.tsx` in an xyflow `NodeToolbar`; its menus/popover carry `data-design-format-bar` so the editor's blur into them keeps editing, and `onCloseAutoFocus` restores the editor selection.
+- Gotchas: the app's command system listens on document capture, so ⌘K (palette) and ⌘B (sidebar) win even in editable fields. The editor takes ⌘B/I/U in a window capture listener and preventDefaults (the command system skips defaultPrevented). No ⌘K for links.
+- Notes gained size (default small), color, fill (note colour via `designFillVar`); `CanvasNodeChrome` got a `tint` prop. Shape labels stay plain.

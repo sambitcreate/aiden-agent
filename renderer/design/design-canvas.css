@@ -103,3 +103,24 @@
   stroke-width: 1.5px;
   vector-effect: non-scaling-stroke;
 }
+
+/* Words in notes and text items: lists and links from the Markdown subset. */
+.studio-canvas .design-rich-text ul,
+.studio-canvas .design-rich-text ol {
+  margin: 0;
+  padding-left: 1.3em;
+}
+.studio-canvas .design-rich-text ul {
+  list-style: disc;
+}
+.studio-canvas .design-rich-text ol {
+  list-style: decimal;
+}
+.studio-canvas .design-rich-text a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.studio-canvas .design-rich-text b {
+  font-weight: 600;
+}

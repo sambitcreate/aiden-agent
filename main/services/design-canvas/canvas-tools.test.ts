@@ -372,3 +372,19 @@ test("a shape placed in an artboard sits in it, and moving the artboard moves it
   const moved = (await store.get("chat-1")).frames.find((frame) => frame.id === card.frame.id)!;
   assert.equal(moved.x, card.frame.box.x + 1000);
 });
+
+test("Aiden writes a formatted note in a colour, and canvas_read gives the formatting back", async (t) => {
+  const { store, call } = await setup(t);
+  const words = "**Launch plan**\n- Draft the *pricing* page\n- Check [the brief](https://example.com/brief)\n1. <u>Ship</u>";
+  const note = await call("canvas_place_frame", { kind: "note", title: "Plan", text: words, fill: "yellow", size: "medium", color: "blue" });
+  assert.equal(note.status, "placed");
+  const saved = (await store.get("chat-1")).frames.find((frame) => frame.id === note.frame.id)!;
+  assert.deepEqual([saved.text, saved.fill, saved.size, saved.color], [words, "yellow", "medium", "blue"]);
+  const read = await call("canvas_read");
+  assert.ok(JSON.stringify(read).includes(JSON.stringify(words).slice(1, -1)), "canvas_read carries the Markdown as written");
+  const recolored = await call("canvas_update_frame", { id: note.frame.id, fill: "green", size: "large" });
+  assert.deepEqual([recolored.status, recolored.frame.fill], ["updated", "green"]);
+  const text = await call("canvas_place_frame", { kind: "text", title: "Heading", text: "**Hi**" });
+  const filled = await call("canvas_update_frame", { id: text.frame.id, fill: "red" });
+  assert.equal(filled.status, "error", "a text item has no fill");
+});

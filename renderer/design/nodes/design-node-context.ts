@@ -24,8 +24,14 @@ export type DesignNodeContextValue = {
   enter(id: string): void;
   markMissing(id: string, version: number): void;
   remove(id: string): void;
-  /** Edits one frame. `record` adds an undo step. */
-  update(id: string, patch: Partial<Pick<DesignFrame, "text" | "title" | "h">>, options: { record: boolean }): void;
+  /** Edits one frame; a key set to undefined is taken off. `record` adds an undo step. */
+  update(
+    id: string,
+    patch: Partial<Pick<DesignFrame, "text" | "title" | "h" | "size" | "color" | "fill">>,
+    options: { record: boolean },
+  ): void;
+  /** Opens a new comment on a frame, as the Comment tool would. */
+  comment(id: string): void;
   /** Puts one end of an arrow or line at `point`, on the frame there if there is one. */
   moveEnd(id: string, index: 0 | 1, point: DesignPoint): void;
   /** The text item or shape whose words are being edited. */

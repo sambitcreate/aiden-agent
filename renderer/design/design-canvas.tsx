@@ -638,7 +638,12 @@ function LoadedDesignCanvas({
             const keys = Object.keys(patch) as (keyof typeof patch)[];
             if (keys.every((key) => frame[key] === patch[key])) return frame;
             changed = true;
-            return { ...frame, ...patch };
+            const next: Record<string, unknown> = { ...frame };
+            for (const key of keys) {
+              if (patch[key] === undefined) delete next[key];
+              else next[key] = patch[key];
+            }
+            return next as DesignFrame;
           });
           return changed ? { ...current, frames } : current;
         },
@@ -666,8 +671,9 @@ function LoadedDesignCanvas({
       moveEnd,
       editing,
       edit: setEditing,
+      comment: comments.commentOn,
     }),
-    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming, moveEnd, editing],
+    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming, moveEnd, editing, comments.commentOn],
   );
 
   return (

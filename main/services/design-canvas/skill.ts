@@ -28,6 +28,7 @@ export const AIDEN_DESIGN_SKILL = Object.freeze({
     "Flows and diagrams:",
     "- For a user flow, sitemap or diagram, draw it on the canvas instead of writing a page: place an artboard (kind frame) to hold it, shapes (kind shape, shape rect or oval, with the label in text) and text, then connectors between them with from and to set to the shapes' frameIds. A connector follows its shapes when they move, so move the shapes, not the connector.",
     "- Keep to the colour palette (ink, gray, blue, green, yellow, red, purple, teal, pink) and use colour to mean something, not to decorate.",
+    "- Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists. Keep the person's formatting when you edit their notes.",
     "",
     "Editing:",
     "- Make small edits to one file at a time, and keep the rest of the page as it is.",

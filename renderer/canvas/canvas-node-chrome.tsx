@@ -9,6 +9,7 @@ export function CanvasNodeChrome({
   titleSlot,
   toolbar,
   flush = false,
+  tint,
   children,
 }: React.PropsWithChildren<{
   title: string;
@@ -19,6 +20,8 @@ export function CanvasNodeChrome({
   toolbar?: React.ReactNode;
   /** Fill the node's box and give the body no padding, for content drawn edge to edge. */
   flush?: boolean;
+  /** A background colour in place of the card's own, such as a coloured note. */
+  tint?: string;
 }>) {
   return (
     <div
@@ -28,8 +31,9 @@ export function CanvasNodeChrome({
       className={cn(
         "flex min-w-40 flex-col overflow-visible rounded-button bg-popover shadow-control",
         flush && "h-full w-full min-w-0 overflow-hidden",
-        selected && "bg-list-selection",
+        selected && !tint && "bg-list-selection",
       )}
+      style={tint ? { background: tint } : undefined}
     >
       <div className="flex min-h-9 items-center gap-2 px-3">
         {titleSlot ?? <span className="min-w-0 flex-1 truncate text-strong text-primary">{title}</span>}

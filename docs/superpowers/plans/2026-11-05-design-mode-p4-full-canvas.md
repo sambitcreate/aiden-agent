@@ -1,6 +1,6 @@
 # Design mode P4: the full canvas
 
-Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 and approved by the owner; P4e built 2026-11-06 ([P4e plan](2026-11-05-design-mode-p4e-comments.md)) and approved; P4b built 2026-11-06, awaiting the owner's screenshot OK. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
+Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 and approved by the owner; P4e built 2026-11-06 ([P4e plan](2026-11-05-design-mode-p4e-comments.md)) and approved; P4b built and approved 2026-11-06; P4c built 2026-11-06, awaiting the owner's screenshot OK. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
 
 **Goal:** the canvas does everything in the owner's 2026-11-05 reference screenshots of a design canvas (owner chose "add everything shown"). That is the original P4 (point, comment, draw, and send comments to Aiden) plus:
 - drawing tools;
@@ -110,6 +110,13 @@ As built (2026-11-06):
 
 - A formatting bar on the selected note or text: size (Small, Medium, Large), text colour, bold, italic, underline, link, bullet and numbered list, note colour, and Comment (P4e).
 - It is built on the composer's existing rich text stack where possible, and stores the Markdown subset.
+
+As built (2026-11-06):
+- The composer turned out to be a plain textarea, so there was no rich text stack to reuse. Notes and text items use a small contenteditable editor (`renderer/design/nodes/rich-text-editor.tsx`) on the browser's own editing commands. It starts from the stored Markdown and hands Markdown back after each change; pasted and dropped content comes in as plain words.
+- The Markdown subset (`renderer/shared/design-canvas/rich-text.ts`): `**bold**`, `*italic*`, `<u>underline</u>`, `[links](…)`, and `- ` or `1. ` lines for lists; every other line is a paragraph. Links keep only http, https and mailto addresses. Reading the editor back (`renderer/design/rich-text-dom.ts`) keeps only what the subset holds, so pasted markup, scripts and other tags never reach the document. Notes and text read back the same after a reload, and Aiden reads and writes the same Markdown.
+- The bar appears above a selected note or text item and while its words are edited: Text size (Small, Medium, Large), Text colour, Bold, Italic, Underline, Link, Bulleted list, Numbered list, Note colour (notes only) and Comment, which opens a comment on that note or text. Marks and lists apply to the selected words, or to all of them when nothing is being edited. Size and colours apply to the whole note or text item, not to single words.
+- ⌘B, ⌘I and ⌘U (Ctrl on Windows and Linux) format inside an editor; the editor takes them before the app's own ⌘B (sidebar). ⌘K stays the command palette, so links come from the bar's Link button.
+- Notes gained `size`, `color` and `fill`; a note's default size is Small. Shape labels stay plain words.
 
 ### P4d: frame actions, Present and export
 

@@ -245,7 +245,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   });
   await expect(noteText).toBeFocused();
   await page.keyboard.type(NOTE_TEXT);
-  await expect(noteText).toHaveValue(NOTE_TEXT);
+  await expect(noteText).toHaveText(NOTE_TEXT);
 
   await addFromMenu(page, "Group");
   await expect(frame(page, "Group")).toBeVisible();
@@ -319,7 +319,7 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await expect.poll(() => framePositions(page)).toEqual(before);
   await expect(
     frame(page, "Note").getByRole("textbox", { name: "Note text" }),
-  ).toHaveValue(NOTE_TEXT);
+  ).toHaveText(NOTE_TEXT);
   await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText(
     "Ship faster",
   );
@@ -560,6 +560,9 @@ type SavedFrame = {
   ends?: Array<{ x: number; y: number; frameId?: string }>;
   points?: unknown[];
   handles?: unknown[];
+  size?: string;
+  color?: string;
+  fill?: string;
 };
 
 async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
@@ -707,3 +710,102 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
     .toBe(rect!.id);
 });
 
+
+test("notes and text take formatting from the bar above them: marks, a link, a list, size and colours", async ({ aiden }) => {
+  const { app, page, userDataDir } = aiden;
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+
+  // A new note: type three lines, then format them.
+  await addNote(page);
+  const note = frame(page, "Note").getByRole("textbox", { name: "Note text" });
+  await expect(note).toBeFocused();
+  await page.keyboard.type("Launch plan");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Draft pricing");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Check brief");
+  const bar = page.getByRole("toolbar", { name: "Note formatting" });
+  await expect(bar).toBeVisible();
+
+  // Link on the selected word opens the link field; a bare address gets https://.
+  for (let index = 0; index < "brief".length; index += 1) await page.keyboard.press("Shift+ArrowLeft");
+  await bar.getByRole("button", { name: "Link" }).click();
+  const linkField = page.getByRole("textbox", { name: "Link address" });
+  await expect(linkField).toBeFocused();
+  await linkField.fill("example.com/brief");
+  await capture(page, "1440-notes-link");
+  await linkField.press("Enter");
+  await expect(note).toBeFocused();
+
+  // The second and third lines become a bulleted list from the bar.
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+End");
+  await bar.getByRole("button", { name: "Bulleted list" }).click();
+
+  // The first line goes bold with the keyboard, and the bar shows it.
+  await page.keyboard.press(`${mod}+Home`);
+  await page.keyboard.press("Shift+End");
+  await page.keyboard.press(`${mod}+b`);
+  await expect(bar.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "note")?.text)
+    .toBe("**Launch plan**\n- Draft pricing\n- Check [brief](https://example.com/brief)");
+
+  // Size and note colour apply to the whole note.
+  await bar.getByRole("button", { name: /^Text size/u }).click();
+  await page.getByRole("menuitemradio", { name: "Medium" }).click();
+  await bar.getByRole("button", { name: /^Note colour/u }).click();
+  await page.getByRole("menuitemradio", { name: "Yellow" }).click();
+  await expect
+    .poll(async () => {
+      const saved = (await savedFrames(userDataDir)).find((entry) => entry.kind === "note");
+      return [saved?.size, saved?.fill];
+    })
+    .toEqual(["medium", "yellow"]);
+  await expect(note).toBeFocused();
+  await expect(note.locator("b")).toHaveText("Launch plan");
+  await expect(note.locator("ul li")).toHaveCount(2);
+  await capture(page, "1440-notes-format-bar");
+  await page.keyboard.press("Escape");
+
+  // A text item: the bar works on all of it when nobody is editing it.
+  await page.keyboard.press("t");
+  await clickOnCanvas(page, { x: 60, y: 660 });
+  const textField = canvas.getByRole("textbox", { name: "Text", exact: true });
+  await expect(textField).toBeFocused();
+  await textField.pressSequentially("Checkout");
+  await textField.press("Escape");
+  await canvas.getByRole("group", { name: "Text: Checkout" }).click();
+  const textBar = page.getByRole("toolbar", { name: "Text formatting" });
+  await textBar.getByRole("button", { name: "Italic" }).click();
+  await textBar.getByRole("button", { name: /^Text colour/u }).click();
+  await page.getByRole("menuitemradio", { name: "Blue" }).click();
+  await expect
+    .poll(async () => {
+      const saved = (await savedFrames(userDataDir)).find((entry) => entry.kind === "text");
+      return [saved?.text, saved?.color];
+    })
+    .toEqual(["*Checkout*", "blue"]);
+  await page.keyboard.press("End");
+  await capture(page, "1440-text-format-bar");
+  await page.keyboard.press("Escape");
+
+  // Comment opens a comment box on the text item.
+  await canvas.getByRole("group", { name: "Text: Checkout" }).click();
+  await textBar.getByRole("button", { name: "Comment on this text" }).click();
+  const commentBox = canvas.getByRole("dialog", { name: "New comment" });
+  await expect(commentBox).toContainText("Text");
+  await commentBox.getByRole("textbox", { name: "Comment" }).press("Escape");
+  await clickEmptyCanvas(page);
+
+  // After a reload the note reads back formatted, link and all.
+  await page.reload();
+  const reloaded = frame(aiden.page, "Note").getByRole("textbox", { name: "Note text" });
+  await expect(reloaded.locator("b")).toHaveText("Launch plan");
+  await expect(reloaded.locator('a[href="https://example.com/brief"]')).toHaveText("brief");
+  await expect(designCanvas(aiden.page).getByRole("group", { name: "Text: Checkout" }).locator("i")).toHaveText("Checkout");
+});

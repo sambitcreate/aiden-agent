@@ -342,3 +342,18 @@ test("items sit in a group or an artboard, but those never sit in each other", (
   assert.equal(byId.get("g")!.groupId, undefined);
   assert.equal(byId.get("inner")!.groupId, undefined);
 });
+
+test("a note keeps its formatted words, size, text colour and note colour; a page frame takes none of them", () => {
+  const words = "**Bold** and [a link](https://example.com)\n- item";
+  const { doc } = parsed(
+    canvas({
+      frames: [
+        frame({ id: "n", kind: "note", text: words, size: "large", color: "purple", fill: "yellow" }),
+        frame({ id: "f", kind: "file", path: "design/a.html", size: "large", color: "purple", fill: "yellow" }),
+      ],
+    }),
+  );
+  const [note, page] = doc.frames;
+  assert.deepEqual([note!.text, note!.size, note!.color, note!.fill], [words, "large", "purple", "yellow"]);
+  assert.deepEqual([page!.size, page!.color, page!.fill], [undefined, undefined, undefined]);
+});

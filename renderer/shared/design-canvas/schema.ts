@@ -61,15 +61,15 @@ export type DesignFrame = {
   path?: string;
   /** artifact. */
   mediaId?: string;
-  /** note, text, and a shape's label. */
+  /** note and text: the Markdown subset in rich-text.ts; a shape's label: plain words. */
   text?: string;
-  /** text: how large its type is (medium when left out). */
+  /** text and note: how large its type is (medium for text and small for a note when left out). */
   size?: DesignTextSize;
   /** shape. */
   shape?: DesignShapeKind;
-  /** shape: its fill (none when left out). */
+  /** shape: its fill (none when left out); note: its colour (the plain card when left out). */
   fill?: DesignColor;
-  /** shape outline, connector, stroke and text colour. */
+  /** shape outline, connector, stroke, and the words of text and notes. */
   color?: DesignColor;
   /** connector and stroke, and a shape's outline: in canvas units. */
   strokeWidth?: number;
@@ -422,7 +422,7 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     frame.text =
       typeof value.text === "string" ? value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : "";
   }
-  if (frame.kind === "text" && typeof value.size === "string" && TEXT_SIZES.has(value.size)) {
+  if ((frame.kind === "text" || frame.kind === "note") && typeof value.size === "string" && TEXT_SIZES.has(value.size)) {
     frame.size = value.size as DesignTextSize;
   }
   if (frame.kind === "shape") {
@@ -431,7 +431,8 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     if (typeof value.text === "string" && value.text) frame.text = value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars);
     if (isColor(value.fill)) frame.fill = value.fill;
   }
-  if (frame.kind === "shape" || frame.kind === "text" || isDesignLine(frame.kind)) {
+  if (frame.kind === "note" && isColor(value.fill)) frame.fill = value.fill;
+  if (frame.kind === "shape" || frame.kind === "text" || frame.kind === "note" || isDesignLine(frame.kind)) {
     if (isColor(value.color)) frame.color = value.color;
   }
   if (frame.kind === "shape" || isDesignLine(frame.kind)) {

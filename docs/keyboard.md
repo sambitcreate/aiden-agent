@@ -90,6 +90,9 @@ The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
 dragging for a square box or a 45° line; `↩`, `Esc` or a double-click
 finishes a pen path). `↩` or a double-click on selected text or a shape edits
 its words; `Esc` or `⌘↩` finishes. `Esc` turns a drawing tool off.
+Inside a note or text item, `⌘B`, `⌘I` and `⌘U` make the selected words bold,
+italic or underlined (the editor takes `⌘B` before the sidebar does); links,
+lists, size and colours are on the formatting bar above it.
 The ⌘/ list shows these under **Design canvas** while design mode is
 available. `↩` or a double-click enters the selected page;
 `Esc` with the canvas focused, or a click on the canvas, leaves. Keys typed

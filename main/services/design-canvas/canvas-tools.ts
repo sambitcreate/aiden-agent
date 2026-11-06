@@ -356,7 +356,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Write the file first with your file tools; path is workspace-relative. It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view. Boxes are in canvas units.",
+          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Notes and text items take a small Markdown subset: **bold**, *italic*, <u>underline</u>, [links](https://…), and lines starting \"- \" or \"1. \" for lists; size and color apply to the whole note or text, and fill gives a note its colour. Write the file first with your file tools; path is workspace-relative. It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view. Boxes are in canvas units.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           kind: Type.Union(PLACED_KINDS.map((kind) => Type.Literal(kind))),
@@ -390,15 +390,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const y = optionalNumber(p.y, "y");
             const words = typeof p.text === "string" ? p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : undefined;
             if (kind === "text" && !words?.trim()) throw new CanvasToolError("A text item needs text.");
-            const size = kind === "text" ? (textSize(p.size) ?? "medium") : undefined;
+            const size = kind === "text" ? (textSize(p.size) ?? "medium") : kind === "note" ? textSize(p.size) : undefined;
             const box = kind === "connector" ? { w: 1, h: 1 } : DEFAULT_BOX[kind];
             const lines = words ? words.split("\n").length : 1;
             const w = optionalNumber(p.w, "w") ?? box.w;
-            const h = optionalNumber(p.h, "h") ?? (size ? TEXT_LINE[size] * lines : box.h);
+            const h = optionalNumber(p.h, "h") ?? (kind === "text" && size ? TEXT_LINE[size] * lines : box.h);
             const width = kind === "file" ? (designWidth(p.designWidth) ?? DEFAULT_DESIGN_WIDTH) : undefined;
-            const fill = kind === "shape" ? (color(p.fill, "fill") ?? "blue") : undefined;
+            const fill = kind === "shape" ? (color(p.fill, "fill") ?? "blue") : kind === "note" ? color(p.fill, "fill") : undefined;
             const outline =
-              kind === "shape" || kind === "text" || kind === "connector"
+              kind === "shape" || kind === "text" || kind === "note" || kind === "connector"
                 ? (color(p.color, "color") ?? (kind === "shape" ? "blue" : kind === "connector" ? "gray" : undefined))
                 : undefined;
             const id = newId();
@@ -449,7 +449,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_update_frame",
         label: "Update design canvas frame",
         description:
-          "Move, resize, retitle or regroup a frame on the design canvas, change the words of a note, text item or shape, a drawn item's colours, or where a connector's ends are. Pass groupId \"\" to take a frame out of its group. Moving a connector moves its free ends. Boxes are in canvas units.",
+          "Move, resize, retitle or regroup a frame on the design canvas, change the words of a note, text item or shape (notes and text keep the same Markdown subset as canvas_place_frame), a note's or drawn item's colours and size, or where a connector's ends are. Pass groupId \"\" to take a frame out of its group. Moving a connector moves its free ends. Boxes are in canvas units.",
         parameters: Type.Object({
           id: Type.String(),
           title: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars })),
@@ -484,11 +484,15 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               const worded = frame.kind === "note" || frame.kind === "text" || frame.kind === "shape";
               if (p.text !== undefined && !worded) throw new CanvasToolError("Only a note, a text item or a shape has text.");
               if (width !== undefined && frame.kind !== "file") throw new CanvasToolError("Only a file frame has a design width.");
-              if (fill !== undefined && frame.kind !== "shape") throw new CanvasToolError("Only a shape has a fill.");
-              if (outline !== undefined && !["shape", "text", "connector", "stroke"].includes(frame.kind)) {
-                throw new CanvasToolError("Only a shape, text, connector or drawing has a color.");
+              if (fill !== undefined && frame.kind !== "shape" && frame.kind !== "note") {
+                throw new CanvasToolError("Only a shape or a note has a fill.");
               }
-              if (size !== undefined && frame.kind !== "text") throw new CanvasToolError("Only a text item has a size.");
+              if (outline !== undefined && !["shape", "text", "note", "connector", "stroke"].includes(frame.kind)) {
+                throw new CanvasToolError("Only a shape, text, note, connector or drawing has a color.");
+              }
+              if (size !== undefined && frame.kind !== "text" && frame.kind !== "note") {
+                throw new CanvasToolError("Only a text item or a note has a size.");
+              }
               const connector = frame.kind === "connector";
               if (!connector && (p.from !== undefined || p.to !== undefined || p.arrow !== undefined)) {
                 throw new CanvasToolError("Only a connector has from, to and arrow.");
