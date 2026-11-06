@@ -478,6 +478,33 @@ test("re-asking an id from inside its publication leaves the replacement pending
   assert.deepEqual(withdrawn, [["second", "allowed"]]);
 });
 
+test("a same-id replacement that settles during its own publication is withdrawn exactly once", async () => {
+  for (const settleFirst of [false, true]) {
+    const withdrawn: Array<[string, string]> = [];
+    let replacement: Promise<string> | undefined;
+    const ask = (toolCallId: string) =>
+      coordinator.request(
+        { streamId: "s-same", approvalId: "same", toolCallId, toolName: "write", summary: "x" },
+        undefined,
+        "document-one",
+      );
+    const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(
+      (prompt) => {
+        if (prompt.toolCallId === "second") {
+          coordinator.decide("same", true, "document-one");
+          return;
+        }
+        if (settleFirst) coordinator.decide("same", false, "document-one");
+        replacement = ask("second");
+      },
+      (approvalId, outcome) => withdrawn.push([approvalId, outcome]),
+    );
+    assert.equal(await ask("first"), settleFirst ? "denied" : "cancelled");
+    assert.equal(await replacement, "allowed");
+    assert.deepEqual(withdrawn, [["same", "allowed"]]);
+  }
+});
+
 test("a publication that throws after settling its own prompt keeps the outcome and still withdraws", async () => {
   const withdrawn: string[] = [];
   const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(

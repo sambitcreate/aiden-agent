@@ -82,6 +82,8 @@ export function toolApprovalBlockReason(
  * every settlement path removes both the map entry and signal listener.
  */
 export class ToolApprovalCoordinator {
+  /** Prompts inside their publish callback, by id, so a re-ask can claim the id. */
+  private readonly publications = new Map<string, { replaced: boolean }>();
   private readonly pending = new Map<string, PendingApproval>();
   private readonly closedStreams = new Map<string, "cancelled" | "detached">();
   /** Payloads from settled approvals, consumed once by the tool caller. */
@@ -130,6 +132,8 @@ export class ToolApprovalCoordinator {
       if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
       return Promise.resolve(closedOutcome);
     }
+    const publishingPrompt = this.publications.get(approvalId);
+    if (publishingPrompt) publishingPrompt.replaced = true;
     this.pending.get(approvalId)?.settle("cancelled");
     return new Promise<ToolApprovalOutcome>((resolve) => {
       let phase: ApprovalPromptPhase = "admitted";
@@ -172,6 +176,9 @@ export class ToolApprovalCoordinator {
         return;
       }
       phase = "publishing";
+      const enclosing = this.publications.get(approvalId);
+      const publication = { replaced: false };
+      this.publications.set(approvalId, publication);
       try {
         this.publish({ ...descriptor, approvalId });
       } catch {
@@ -181,11 +188,14 @@ export class ToolApprovalCoordinator {
           finish("unavailable");
           return;
         }
+      } finally {
+        if (enclosing) this.publications.set(approvalId, enclosing);
+        else this.publications.delete(approvalId);
       }
       if (settledWhilePublishing === undefined) phase = "published";
       // Withdrawal goes by id, so a same-id replacement asked during publication
-      // would be removed in this prompt's place. That replacement owns the id.
-      else if (!this.pending.has(approvalId)) withdrawPrompt(settledWhilePublishing);
+      // owns the id from then on, even if it has already settled and withdrawn.
+      else if (!publication.replaced) withdrawPrompt(settledWhilePublishing);
     });
   }
 
