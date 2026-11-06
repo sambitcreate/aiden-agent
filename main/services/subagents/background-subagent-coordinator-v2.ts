@@ -240,8 +240,12 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       this.stopInstalling(installation, new Error("Background subagent could not start."));
       throw error;
     }
-    // The read may predate an invalidation that already released the child.
-    if (installation.invalidated) throw installation.invalidated;
+    // The read may predate an invalidation that already released the child. If
+    // its scan missed this run, nothing else would take it out of queued.
+    if (installation.invalidated) {
+      await this.recordLaunchFailed(prepared, acceptedRevision).catch(() => undefined);
+      throw installation.invalidated;
+    }
     const entry: ActiveBackgroundRunV2<Child> = {
       prepared,
       child,

@@ -370,6 +370,41 @@ test("an invalidation that beats durable acceptance leaves no queued run behind"
   assert.equal(children.has("run-late-accept"), false, "No child is created for a dead run");
 });
 
+test("a run accepted after an invalidation read the store is not left queued", async () => {
+  const { store, order, coordinator } = harness();
+  const list = store.list.bind(store);
+  const scanned = deferred();
+  const releaseScan = deferred();
+  store.list = async () => {
+    const runs = await list();
+    scanned.resolve();
+    await releaseScan.promise;
+    return runs;
+  };
+  const statusRead = deferred();
+  const releaseStatus = deferred();
+  const get = store.get.bind(store);
+  let armed = true;
+  store.get = async (runId) => {
+    const answer = await get(runId);
+    if (armed && order.includes(`create:${runId}`)) {
+      armed = false;
+      statusRead.resolve();
+      await releaseStatus.promise;
+    }
+    return answer;
+  };
+  const invalidating = coordinator.chatDeleted("chat-background");
+  await scanned.promise;
+  const launching = coordinator.launch(prepared("run-after-scan"));
+  await statusRead.promise;
+  releaseScan.resolve();
+  await invalidating;
+  releaseStatus.resolve();
+  await assert.rejects(launching, /chat was deleted/u);
+  assert.equal(store.records.get("run-after-scan")?.snapshot.state, "failed");
+});
+
 test("two launches of one run cannot both own it", async () => {
   const { children, coordinator } = harness();
   const first = coordinator.launch(prepared("run-twice"));
