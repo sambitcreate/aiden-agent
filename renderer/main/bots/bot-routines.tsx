@@ -10,6 +10,7 @@ import type { BotRoutine } from "../../../main/services/scheduled-bot-routines";
 import type { BotDefinition } from "../../shared/bots";
 import { formatBotRoutineLabel } from "../../shared/bot-routine-label";
 import { BOT_DAILY_CHECKIN_SUGGESTION } from "../../shared/bot-routine-proposals";
+import { BotRoutineModelButton } from "./bot-routine-models";
 import { BotRoutineEditor } from "./bot-routine-editor";
 
 export const botRoutinesKey = queryKeys.botRoutines;
@@ -130,7 +131,7 @@ export function BotRoutines({
         ) : (
           <ul aria-label="Routines">
             {list.map((routine) => (
-              <li key={routine.id}>
+              <li key={routine.id} className="flex min-w-0 items-center">
                 {routine.wakeUp ? (
                   <div className="relative flex w-full min-w-0 items-center gap-3 px-4 py-3 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator">
                     <AlarmClock aria-hidden="true" className="size-4 shrink-0 text-secondary" />
@@ -164,6 +165,7 @@ export function BotRoutines({
                     <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
                   </button>
                 )}
+                {!routine.wakeUp && <BotRoutineModelButton botId={bot.id} routineId={routine.id} routineName={routine.name} />}
               </li>
             ))}
           </ul>

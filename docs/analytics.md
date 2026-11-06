@@ -21,7 +21,7 @@ Lifecycle events:
 | `app_updated` | First launch on a new version | `from_version`, `to_version` |
 | `analytics_disabled` | When you turn usage data off (the last event sent) | none |
 
-Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`. An action in the first moments of a launch waits in memory, up to 100 events, until usage data has started, and is dropped if sending isn't allowed.
+Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`. An action in the first moments of a launch waits in memory, up to 100 events, until usage data has started, and is dropped if sending isn't allowed. Delayed metadata lookups keep the action's original consent: a later disclosure or opt-in cannot authorize an earlier action, and a consent change or shutdown discards its unfinished report. New feature reports stop as soon as that change or shutdown is requested, including while an earlier settings write finishes.
 
 | Event | When | Extra fields |
 | --- | --- | --- |
@@ -51,6 +51,8 @@ How the values are limited:
 - `preset_id` is a bundled Bot preset or connector, otherwise `custom`. `search_provider` is one of Aiden's own search routes.
 - `in_workspace` is true only for a real workspace. Messages to a Bot always report false, and report `origin: bot` whichever surface sent them.
 - `trigger` is automatic, manual, catch_up, retry, file_change, webhook or watch. `thinking` is the level chosen for the turn, or other when Aiden doesn't know it, as for a message to a Bot.
+
+Bot continuity integration: host-issued watch/routine and approved-peer task/result inputs do not count as a person’s `chat_message_sent`, including routines without display labels. A person’s accepted durable input reports only allowlisted IDs from its admitted execution model; analytics never resolves the Bot’s unrelated current default or changes its saved model/fallback choice. Duplicates and Resume do not add message events.
 
 ## Crash reports
 

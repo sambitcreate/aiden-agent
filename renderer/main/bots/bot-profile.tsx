@@ -25,6 +25,9 @@ import { BotCharacterCard } from "./bot-character-card";
 import { BotComputerSection } from "./bot-computer-section";
 import { BotHealthSection } from "./bot-health-section";
 import { BotEventRoutines } from "./bot-event-routines";
+import { BotConnectorWatches } from "./bot-connector-watches";
+import { BotOpenWorkRow } from "./bot-open-work-page";
+import { BotPeersSection } from "./bot-peers";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -160,6 +163,7 @@ export function BotProfile({
   onOpenAdvanced,
   onOpenMemory,
   onOpenLearning,
+  onOpenWork,
   onOpenAllowed,
   onDelete,
 }: {
@@ -170,6 +174,7 @@ export function BotProfile({
   onOpenAdvanced(): void;
   onOpenMemory(): void;
   onOpenLearning?(): void;
+  onOpenWork?(): void;
   onOpenAllowed(): void;
   onDelete(): void;
 }) {
@@ -319,6 +324,7 @@ export function BotProfile({
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
         <MemoryRow botId={bot.id} onOpen={onOpenMemory} />
+        {onOpenWork && <BotOpenWorkRow botId={bot.id} onOpen={onOpenWork} />}
         {onOpenLearning ? (
           <button type="button" aria-label="What I've learned" className={PROFILE_ROW_CLASS} onClick={onOpenLearning}>
             <span className="min-w-0 flex-1">
@@ -332,6 +338,8 @@ export function BotProfile({
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />
       <BotEventRoutines bot={bot} />
+      <BotConnectorWatches bot={bot} />
+      <BotPeersSection key={bot.id} botId={bot.id} botName={bot.name} />
       <BotHealthSection bot={bot} />
       <BotSpendingSection bot={bot} />
       <BotRules bot={bot} />

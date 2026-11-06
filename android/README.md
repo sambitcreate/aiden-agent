@@ -31,3 +31,5 @@ ANDROID_HOME=/Users/sambitbiswas/Library/Android/sdk \
 ```
 
 `./gradlew --offline :app:lintDebug :app:compileDebugAndroidTestKotlin` checks lint and instrumented-test compilation without claiming an emulator UI run.
+
+Bot notification polls retain the fetch's original negotiated visibility through system permission and notification posting. Losing Bot/chat read, messaging, issue, access-request or peer visibility keeps the cursor and delivered IDs unchanged until a fresh authorized poll; issue rows do not expose their private subtype. Host support alone never grants visibility. Older hosts without a separate support inventory retain the existing Bot/chat read baseline for routine notifications only. A system banner already accepted before access changed cannot be withdrawn by this notifier.

@@ -554,6 +554,8 @@ export interface ScheduledTask {
   /** A claimed Bot fire awaiting a durable run receipt and delivery handoff. */
   pendingRoutineFires?: Array<{
     fireTime: number;
+    /** Original occurrence facts; retry fireTime is only the retry's due time. */
+    routineTiming?: import("./bot-routines-port.js").BotRoutineTiming;
     /** Reconcile an admitted retry without starting a new turn. */
     observeOnly?: true;
     requestId: string;
@@ -613,6 +615,8 @@ export interface ScheduledRun {
   taskId: string;
   startedAt: number;
   finishedAt: number;
+  /** Private host occurrence facts; old Remote projections must omit these. */
+  routineTiming?: import("./bot-routines-port.js").BotRoutineTiming;
   result: ScheduledRunResult;
   /** Present only when `result` is "skipped". */
   reason?: ScheduledRunSkipReason;

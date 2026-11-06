@@ -10,6 +10,7 @@ import {
 } from "./analytics-feature-reports.js";
 import { analyticsModelId, analyticsProviderId, analyticsRunTrigger, analyticsWorkspaceKind } from "./analytics-ids.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./test-support.js";
+import { setAnalyticsReporter } from "./analytics-report.js";
 
 test("a built-in provider and its catalog model are sent, folded to the registry's lowercase", () => {
   assert.equal(analyticsProviderId("anthropic"), "anthropic");
@@ -102,4 +103,31 @@ test("a connector from the catalog sends its preset id, and a person's own sends
     { event: "connector_added", props: { preset_id: preset.id.toLowerCase(), transport: "http" } },
     { event: "connector_added", props: { preset_id: "custom", transport: "stdio" } },
   ]);
+});
+
+
+test("a delayed message cannot move to a replacement analytics sender", async t => {
+  const first = captureAnalyticsEvents(t);
+  let finish!: (value: boolean) => void;
+  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
+  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => workspace });
+  const replacement = captureAnalyticsEvents(t);
+  finish(true);
+  await analyticsSettled();
+  assert.deepEqual(first, []);
+  assert.deepEqual(replacement, []);
+  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => false });
+  await analyticsSettled();
+  assert.equal(replacement.length, 1);
+});
+
+test("an action before any sender exists cannot be reported by a sender registered later", async t => {
+  setAnalyticsReporter(undefined);
+  let finish!: (value: boolean) => void;
+  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
+  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => workspace });
+  const later = captureAnalyticsEvents(t);
+  finish(true);
+  await analyticsSettled();
+  assert.deepEqual(later, []);
 });

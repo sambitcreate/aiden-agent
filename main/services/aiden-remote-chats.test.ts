@@ -3401,4 +3401,3 @@ test("a phone's message to a Bot counts as a Bot message, outside any workspace"
   await analyticsSettled();
   assert.deepEqual(sent.map(({ props }) => [props?.origin, props?.in_workspace]), [["bot", false]]);
 });
-

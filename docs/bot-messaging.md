@@ -22,7 +22,7 @@ The recipient still follows its rules. An uncovered Ask first rule still asks; a
 
 Only a final answer is forwarded. Silence, failure and an unanswered deadline produce a status row instead of another model turn. If the sender is paused, interrupted, over budget or unable to use its model, the saved answer stays visible without resuming it. A failed or stopped reply turn also keeps the answer as a display row.
 
-The normal final result and status notifications follow the Bot's configured delivery channels. A nested child's answer is relayed into its sender's chat, or shown there as saved text; its answer is never delivered separately through the delivery funnel. Text-free child status notifications can still say that it is waiting or could not finish.
+The normal final result and status notifications follow the Bot's configured delivery channels. Phone polls retain their cursor and delivered-ID progress if the pairing changes or any original notification projection grant is lost before posting completes. A nested child's answer is relayed into its sender's chat, or shown there as saved text; its answer is never delivered separately through the delivery funnel. Text-free child status notifications can still say that it is waiting or could not finish.
 
 ## Nesting and limits
 
@@ -47,3 +47,7 @@ Refused attempts do not spend a quota slot; an accepted exchange that later fail
 The serve-only CLI daemon supports the same tool, bounded exchange, controls and durable recovery for its Bots. Paired phones use the same capability-gated Remote contract. The CLI records paid Bot response costs in its profile-local spending ledger and enforces configured monthly and routine-run limits. It does not wait out provider usage limits or offer a spending settings editor. The CLI has no terminal chat interface. See [durable CLI Bots](cli-durable-bots.md).
 
 For storage, recovery and implementation details, see [Bot messaging core](bot-messaging-core.md). The [implementation plan](plans/bot-messaging-plan.md) tracks review and acceptance; source tests and simulator checks do not establish physical-device or live-model acceptance.
+
+## Approved Bot pairs
+
+[Bot peers](bot-peers.md) provides a separate named-pair delegation contract through `message_peer`. Its exchange, spending and recipient-rule authority remains separate from `message_bot` messaging.

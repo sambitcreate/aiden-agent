@@ -2,6 +2,7 @@ import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
 import { publicBotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals.js";
 import type { AppSettings } from "../../../main/services/types.js";
 import { parseBotSend } from "../../../main/handlers/bot-params.js";
+import { createBotOpenWorkRoutineOrigin, createBotRoutineOriginSender } from "../../../main/services/bot-open-work-host-origin.js";
 import { createBotRoutineService } from "../../../main/services/scheduled-bot-routines.js";
 import type { createCliScheduler } from "./schedules.ts";
 import { cliDurableBotMarker, enableCliDurableBots } from "./bot-durable-migration.ts";
@@ -277,7 +278,13 @@ export async function createCliBots(agentDir: string, daemon: ReturnType<typeof 
     setScheduler(scheduler: ReturnType<typeof createCliScheduler>) {
       if (!durable) return;
       routineScheduler = scheduler;
-      scheduler.setBotPorts(durable.runtime);
+      const runtime = durable.runtime;
+      const resolveOrigin = createBotOpenWorkRoutineOrigin({
+        task: (id) => scheduler.store.get(id).then((task) => task ?? undefined),
+        run: (id, requestId) => scheduler.store.runById(id, requestId),
+        events: async () => [],
+      });
+      scheduler.setBotPorts({ ...runtime, send: createBotRoutineOriginSender({ resolveOrigin, send: (botId, input) => runtime.send(botId, input) }) });
       routines = createBotRoutineService({ store: scheduler.store, service: scheduler.service,
         botExists: async (botId) => Boolean(await botStore.get(botId)), isPaused,
         defaultTimezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone, notifyChanged: () => {},

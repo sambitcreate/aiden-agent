@@ -186,4 +186,3 @@ test("the desktop binding connects shared services to the analytics service", as
   analyticsReport.reportAnalyticsEvent("terminal_opened", {});
   assert.deepEqual(tracked, ["terminal_opened"]);
 });
-
