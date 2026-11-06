@@ -36,8 +36,10 @@ struct AidenUnifiedInboxRow: Identifiable, Equatable {
 
 /// Every machine's chats merged into the Inbox sections (spec, "Inbox").
 /// Each machine's rows are placed by `AidenInboxProjection` on the phone's
-/// clock, then merged: tier, then `placement.sortAt`, then the host-scoped
-/// key, so the order is the same whatever order the snapshots arrive in.
+/// clock, then merged: tier, then `placement.sortAt`, then the host-scoped id
+/// (instance, device, chat id, each compared as a plain string, as the old
+/// single-machine projection compares chat ids), so the order is the same
+/// whatever order the snapshots arrive in.
 struct AidenUnifiedInbox: Equatable {
     var needsYou: [AidenUnifiedInboxRow] = []
     /// Pinned rows first, then replies, each newest first.
@@ -53,7 +55,10 @@ struct AidenUnifiedInbox: Equatable {
 
     /// A machine that is blocked, or hidden from the Inbox, contributes
     /// nothing, whatever the filter says. A duplicate snapshot of one
-    /// machine (same instance and device) counts once, the first wins.
+    /// machine (same instance and device) counts once, the first wins. A chat
+    /// id repeated within one snapshot is one row: the copy placed first, in
+    /// section order (Needs you, Pinned, Updates, Earlier, Running), is kept
+    /// and `needsYouCount` counts each such chat once.
     static func make(
         snapshots: [AidenHostInboxSnapshot],
         filter: AidenMachineFilter,
@@ -70,13 +75,12 @@ struct AidenUnifiedInbox: Equatable {
         var updates: [Entry] = []
         var earlier: [Entry] = []
         var running: [Entry] = []
-        var seenHosts = Set<String>()
-        var seenRows = Set<String>()
+        var seenHosts = Set<HostKey>()
+        var seenRows = Set<AidenHostObjectID>()
 
         for snapshot in snapshots {
             guard !snapshot.isBlocked, !hiddenMachines.contains(snapshot.instanceId) else { continue }
-            let hostKey = AidenHostObjectID(instanceId: snapshot.instanceId, deviceId: snapshot.deviceId, objectId: "").storageKey
-            guard seenHosts.insert(hostKey).inserted else { continue }
+            guard seenHosts.insert(HostKey(instanceId: snapshot.instanceId, deviceId: snapshot.deviceId)).inserted else { continue }
             let listed: Bool
             switch filter {
             case .all: listed = true
@@ -102,15 +106,16 @@ struct AidenUnifiedInbox: Equatable {
             }
             let projection = project(searchText: searchText)
             if snapshot.isOnline {
-                inbox.needsYouCount += (searching ? project(searchText: "") : projection).needsYou.count
+                // Distinct chats, to agree with the deduped rows.
+                let counted = searching ? project(searchText: "") : projection
+                inbox.needsYouCount += Set(counted.needsYou.map(\.id)).count
             }
             guard listed else { continue }
 
             func entries(_ rows: [AidenInboxProjection.Row], isPinned: Bool = false) -> [Entry] {
                 rows.compactMap { row in
                     let id = AidenHostObjectID(instanceId: snapshot.instanceId, deviceId: snapshot.deviceId, objectId: row.id)
-                    let key = id.storageKey
-                    guard seenRows.insert(key).inserted else { return nil }
+                    guard seenRows.insert(id).inserted else { return nil }
                     return Entry(
                         row: AidenUnifiedInboxRow(
                             id: id,
@@ -118,7 +123,6 @@ struct AidenUnifiedInbox: Equatable {
                             isOnline: snapshot.isOnline,
                             isPinned: isPinned
                         ),
-                        key: key,
                         tier: row.placement.tier,
                         sortAt: row.placement.sortAt
                     )
@@ -154,20 +158,30 @@ struct AidenUnifiedInbox: Equatable {
         return inbox
     }
 
-    /// A row with its sort inputs, computed once so the sort never rebuilds
-    /// a key.
+    private struct HostKey: Hashable {
+        let instanceId: String
+        let deviceId: String
+    }
+
+    /// A row with its sort inputs, read once.
     private struct Entry {
         let row: AidenUnifiedInboxRow
-        let key: String
         let tier: Int
         let sortAt: Date
     }
 
     private static func newestFirst(_ left: Entry, _ right: Entry) -> Bool {
-        left.sortAt == right.sortAt ? left.key < right.key : left.sortAt > right.sortAt
+        left.sortAt == right.sortAt ? precedes(left.row.id, right.row.id) : left.sortAt > right.sortAt
     }
 
     private static func oldestFirst(_ left: Entry, _ right: Entry) -> Bool {
-        left.sortAt == right.sortAt ? left.key < right.key : left.sortAt < right.sortAt
+        left.sortAt == right.sortAt ? precedes(left.row.id, right.row.id) : left.sortAt < right.sortAt
+    }
+
+    /// Instance, then device, then chat id, as plain strings.
+    private static func precedes(_ left: AidenHostObjectID, _ right: AidenHostObjectID) -> Bool {
+        if left.instanceId != right.instanceId { return left.instanceId < right.instanceId }
+        if left.deviceId != right.deviceId { return left.deviceId < right.deviceId }
+        return left.objectId < right.objectId
     }
 }

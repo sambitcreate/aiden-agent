@@ -151,10 +151,16 @@ final class AidenUnifiedInboxTests: XCTestCase {
             let shuffled = make(order.map { all[$0] })
             XCTAssertEqual(shuffled, forward)
         }
-        let key = { (row: AidenUnifiedInboxRow) in row.id.storageKey }
-        XCTAssertEqual(forward.needsYou.map(key), forward.needsYou.map(key).sorted())
-        XCTAssertEqual(forward.updates.map(key), forward.updates.map(key).sorted())
-        XCTAssertEqual(forward.earlier.map(key), forward.earlier.map(key).sorted())
+        // Ties go by (instance, device, chat id), compared as plain strings.
+        XCTAssertEqual(labels(forward.needsYou), ["mac-a:x", "mac-b:x", "mac-c:x"])
+        XCTAssertEqual(labels(forward.updates), ["mac-a:x2", "mac-b:x2", "mac-c:x2"])
+        XCTAssertEqual(labels(forward.earlier), ["mac-a:x3", "mac-b:x3", "mac-c:x3"])
+        // Same instance, two paired devices: the device id breaks the tie next.
+        let devices = make([
+            snapshot("mac-a", [reply("x", minutesAgo: 3)], deviceId: "phone-2"),
+            snapshot("mac-a", [reply("x", minutesAgo: 3)], deviceId: "phone-1"),
+        ])
+        XCTAssertEqual(devices.updates.map(\.id.deviceId), ["phone-1", "phone-2"])
     }
 
     // MARK: Ordering
@@ -356,6 +362,51 @@ final class AidenUnifiedInboxTests: XCTestCase {
         let merged = make([snapshot("mac-a", chats, names: names)], open: hostID("mac-a", "c24"))
         XCTAssertEqual(merged.earlier.map(\.id.objectId), old.earlier.map(\.id))
         XCTAssertEqual(merged.earlierOverflow, old.earlierOverflow)
+    }
+
+    func testOneMachineTiesOrderLikeTheOldProjectionWhateverTheIDLength() {
+        // Equal times, ids of different lengths: "aa" sorts before "b" as a plain id,
+        // but a length-prefixed key would put "b" first.
+        let chats = [
+            approval("b", waitingMinutes: 10), approval("aa", waitingMinutes: 10),
+            reply("b2", minutesAgo: 4), reply("a22", minutesAgo: 4), reply("a3", minutesAgo: 4),
+            earlier("z", minutesAgo: 90), earlier("yy", minutesAgo: 90), earlier("x10", minutesAgo: 90), earlier("x9", minutesAgo: 90),
+            running("r", startedMinutesAgo: 8), running("qq", startedMinutesAgo: 8),
+        ]
+        let names = ["default": "Project"]
+        let old = AidenInboxProjection.make(chats: chats, workspaceNames: names, openChatID: nil, now: now)
+        let merged = make([snapshot("mac-a", chats, names: names)])
+        XCTAssertEqual(old.needsYou.map(\.id), ["aa", "b"])
+        XCTAssertEqual(merged.needsYou.map(\.id.objectId), old.needsYou.map(\.id))
+        XCTAssertEqual(merged.updates.map(\.id.objectId), old.updates.map(\.id))
+        XCTAssertEqual(merged.earlier.map(\.id.objectId), old.earlier.map(\.id))
+        XCTAssertEqual(merged.running.map(\.id.objectId), old.working.map(\.id))
+    }
+
+    func testOfflineRunningRowsStayRunningAndAreMarkedOffline() {
+        let inbox = make([
+            snapshot("mac-a", [running("a-run", startedMinutesAgo: 5)]),
+            snapshot("mac-off", [running("off-run", startedMinutesAgo: 15)], online: false),
+        ])
+        XCTAssertEqual(labels(inbox.running), ["mac-off:off-run", "mac-a:a-run"])
+        XCTAssertEqual(inbox.running.map(\.isOnline), [false, true])
+    }
+
+    func testAChatIDDuplicatedWithinOneSnapshotIsOneRowAndOneCount() {
+        let dup = [approval("dup", waitingMinutes: 9), approval("dup", waitingMinutes: 4), reply("other", minutesAgo: 2)]
+        let snapshots = [snapshot("mac-a", dup), snapshot("mac-b", [approval("b1", waitingMinutes: 3)])]
+        let inbox = make(snapshots)
+        XCTAssertEqual(labels(inbox.needsYou), ["mac-a:dup", "mac-b:b1"])
+        XCTAssertEqual(inbox.needsYouCount, inbox.needsYou.count)
+        // The count ignores the filter, so it must dedupe on machines the filter hides too.
+        let narrowed = make(snapshots, filter: .machine("mac-b"))
+        XCTAssertEqual(labels(narrowed.needsYou), ["mac-b:b1"])
+        XCTAssertEqual(narrowed.needsYouCount, 2)
+        // A copy in Needs you wins over a copy placed lower.
+        let mixed = make([snapshot("mac-a", [reply("m", minutesAgo: 1), approval("m", waitingMinutes: 5)])])
+        XCTAssertEqual(labels(mixed.needsYou), ["mac-a:m"])
+        XCTAssertTrue(mixed.updates.isEmpty)
+        XCTAssertEqual(mixed.needsYouCount, 1)
     }
 
     func testNoSnapshotsIsAnEmptyInbox() {
