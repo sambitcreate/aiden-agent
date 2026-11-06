@@ -77,7 +77,9 @@ test("the row says what the update contacts and sends, and the hint what the dat
   const row = await screen.findByRole("group", { name: "Model catalog" });
   // What leaves the device stays readable without opening anything.
   assert.match(row.textContent ?? "", /contacts built-in catalog services and models\.dev/u);
-  assert.match(row.textContent ?? "", /sends no prompts, chats,\s+keys or device identifier/u);
+  assert.match(row.textContent ?? "", /sends no prompts, chats or device identifier/u);
+  // A provider's own catalog service can use that provider's sign-in, so keys are not ruled out.
+  assert.match(row.textContent ?? "", /may use your sign-in for that provider; models\.dev gets no credentials/u);
   fireEvent.click(await screen.findByRole("button", { name: "About model catalogs" }));
   const hint = (await screen.findByRole("tooltip")).textContent ?? "";
   assert.match(hint, /display details only, never which models can run/u);
