@@ -24,6 +24,7 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 - P5b: Computer Use host (#766). P5c: MCP stdio (#767); Bot VM, ACP and subagent runtime kept as they are.
 - P5d: update-install withdrawal (#769). Everything else in P5 is listed under "Not done in this slice" in `docs/state-machines/physical-teardown.md`, with reasons.
 - Landing review found one bug, fixed in #744: a run accepted after an invalidation's `store.list()` scan stayed queued until the next startup. `install()` now rechecks `invalidated` after its status read.
+- Pullfrog found the sibling on #744: a run that reached `running` after that scan was aborted in memory only, and `execute` skips persistence after an abort, so it stayed `running` on disk. The four invalidators now go through `invalidate()`, which scans again after aborting. Fixed on the #735 head because #744 was already folded.
 - Blocked: the shutdown and restart trace across P1 to P4 needs Lanes B and C merged.
 
 ## Lane overlap

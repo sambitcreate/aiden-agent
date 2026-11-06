@@ -315,44 +315,53 @@ export class BackgroundSubagentCoordinatorV2<Child> {
   }
 
   async chatDeleted(chatId: string): Promise<number> {
-    const count = await this.lifecycle.chatDeleted(chatId);
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.chatDeleted(chatId),
       (entry) => entry.prepared.authority.chatId === chatId,
       new Error("Background subagent chat was deleted."),
       "stopped",
     );
-    return count;
   }
 
   async workspaceRevoked(workspaceId: string): Promise<number> {
-    const count = await this.lifecycle.workspaceRevoked(workspaceId);
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.workspaceRevoked(workspaceId),
       (entry) => entry.prepared.authority.workspaceId === workspaceId,
       new Error("Background subagent workspace access was revoked."),
       "stopped",
     );
-    return count;
   }
 
   async shutdown(): Promise<number> {
-    const count = await this.lifecycle.shutdown();
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.shutdown(),
       () => true,
       new Error("Background subagent runtime is shutting down."),
       "interrupted",
     );
-    return count;
   }
 
   /** Startup is reconciliation-only: persisted work is never recreated. */
   async reconcileStartup(): Promise<number> {
-    const count = await this.lifecycle.reconcileStartup();
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.reconcileStartup(),
       () => true,
       new Error("Background subagent was interrupted at startup."),
       "interrupted",
     );
-    return count;
+  }
+
+  private async invalidate(
+    scan: () => Promise<number>,
+    matches: (entry: { prepared: PreparedBackgroundSubagentRunV2 }) => boolean,
+    reason: Error,
+    state: "stopped" | "interrupted",
+  ): Promise<number> {
+    const count = await scan();
+    this.abortMatching(matches, reason, state);
+    // The scan reads one snapshot, and aborting only ends a run in memory. A run
+    // that went live after that read is durably terminal only after a second pass.
+    return count + await scan();
   }
 
   private async execute(entry: ActiveBackgroundRunV2<Child>): Promise<void> {

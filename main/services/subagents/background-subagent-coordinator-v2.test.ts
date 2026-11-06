@@ -403,7 +403,43 @@ test("a run accepted after an invalidation read the store is not left queued", a
   await invalidating;
   releaseStatus.resolve();
   await assert.rejects(launching, /chat was deleted/u);
-  assert.equal(store.records.get("run-after-scan")?.snapshot.state, "failed");
+  assert.equal(store.records.get("run-after-scan")?.snapshot.state, "stopped");
+});
+
+test("a run already running when a stale invalidation scan resumes still ends durably", async () => {
+  const invalidations = [
+    ["chat deletion", "stopped", (c: Coordinator) => c.chatDeleted("chat-background")],
+    ["workspace revocation", "stopped", (c: Coordinator) => c.workspaceRevoked("workspace-background")],
+    ["shutdown", "interrupted", (c: Coordinator) => c.shutdown()],
+    ["startup reconciliation", "interrupted", (c: Coordinator) => c.reconcileStartup()],
+  ] as const;
+  for (const [name, state, invalidate] of invalidations) {
+    const { store, children, coordinator } = harness();
+    const list = store.list.bind(store);
+    const scanned = deferred();
+    const releaseScan = deferred();
+    let held = false;
+    store.list = async () => {
+      const runs = await list();
+      if (!held) {
+        held = true;
+        scanned.resolve();
+        await releaseScan.promise;
+      }
+      return runs;
+    };
+    const invalidating = invalidate(coordinator);
+    await scanned.promise;
+    await coordinator.launch(prepared("run-after-stale-scan"));
+    await until(`${name}: the child to start`, () => Boolean(children.get("run-after-stale-scan")?.start));
+    assert.equal(store.records.get("run-after-stale-scan")?.snapshot.state, "running", name);
+    releaseScan.resolve();
+    await invalidating;
+    assert.equal(store.records.get("run-after-stale-scan")?.snapshot.state, state, name);
+    assert.ok(children.get("run-after-stale-scan")?.stopped, `${name} stops the child`);
+    children.get("run-after-stale-scan")?.done.resolve();
+    await until(`${name} to settle`, () => coordinator.activeCount === 0);
+  }
 });
 
 test("two launches of one run cannot both own it", async () => {
