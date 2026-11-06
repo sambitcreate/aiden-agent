@@ -33,6 +33,17 @@ enum AidenDemoScenario: String, CaseIterable {
         }
         return scenario
     }
+
+    static let tabShellArgument = "-AidenDemoTabShell"
+
+    /// What a demo run asks of the tab shell flag. Nil unless it's a demo run that
+    /// asks. Only a clear yes turns the shell on.
+    static func tabShellOverride(in arguments: [String]) -> Bool? {
+        guard arguments.contains(launchArgument),
+              let flag = arguments.firstIndex(of: tabShellArgument) else { return nil }
+        let value = arguments.indices.contains(flag + 1) ? arguments[flag + 1] : nil
+        return AppConfig.isFlagEnabled(value)
+    }
 }
 
 /// Answers every request the demo clients make. Register answers with `reply`,

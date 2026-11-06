@@ -114,6 +114,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
+  "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
+  "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnection.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostRegistry.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
@@ -238,6 +240,7 @@ const testSources = [
   "AidenBotAllowedTests.swift",
   "AidenDemoHostsTests.swift",
   "AidenHostConnectionTests.swift",
+  "AidenAppShellTests.swift",
   "AidenHostConnectSchedulerTests.swift",
   "AidenHostRegistryTests.swift",
   "AidenOwnerScopeTests.swift",
@@ -353,6 +356,13 @@ test("the Bot-first mobile rollout flag fails closed across pairing and product 
   assert.match(
     appConfig,
     /botFirstMobileEnabled:[\s\S]*?guard let value = Bundle\.main\.object[\s\S]*?return false/u,
+  );
+  // The tab shell ships off until the rollout turns it on.
+  assert.equal([...project.matchAll(/AIDEN_TAB_SHELL_ENABLED = NO;/gu)].length, 2);
+  assert.doesNotMatch(project, /AIDEN_TAB_SHELL_ENABLED = YES;/u);
+  assert.match(
+    info,
+    /<key>AidenTabShellEnabled<\/key>\s*<string>\$\(AIDEN_TAB_SHELL_ENABLED\)<\/string>/u,
   );
   assert.match(
     remoteClient,

@@ -263,6 +263,8 @@ enum AidenChatForkPrefillHandoff {
 struct AidenForkableChatDetailView: View {
     let coordinator: AidenRemoteCoordinator
     let chat: AidenChat
+    /// The machine the chat belongs to. Nil means the selected one.
+    var owner: AidenRemoteRequestContext?
     var autoStartVoice = false
     var onChatUpdated: @MainActor (AidenChat) -> Void = { _ in }
     var onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
@@ -275,6 +277,7 @@ struct AidenForkableChatDetailView: View {
             coordinator: coordinator,
             depth: 0,
             chat: chat,
+            owner: owner,
             autoStartVoice: autoStartVoice,
             trail: $trail,
             onChatUpdated: onChatUpdated,
@@ -290,6 +293,7 @@ private struct AidenChatForkLevel: View {
     let coordinator: AidenRemoteCoordinator
     let depth: Int
     let chat: AidenChat
+    let owner: AidenRemoteRequestContext?
     let autoStartVoice: Bool
     @Binding var trail: AidenChatForkTrail
     let onChatUpdated: @MainActor (AidenChat) -> Void
@@ -300,6 +304,7 @@ private struct AidenChatForkLevel: View {
         AidenChatDetailView(
             coordinator: coordinator,
             chat: chat,
+            owner: owner,
             autoStartVoice: autoStartVoice,
             onChatUpdated: { updated in
                 if trail.forks.contains(where: { $0.id == updated.id }) { trail.accept(updated) }
@@ -321,12 +326,14 @@ private struct AidenChatForkLevel: View {
                     coordinator: coordinator,
                     depth: depth + 1,
                     chat: fork,
+                    owner: owner,
                     autoStartVoice: false,
                     trail: $trail,
                     onChatUpdated: onChatUpdated,
                     onChatActivityChanged: onChatActivityChanged,
                     onForkOpened: onForkOpened
                 )
+                .toolbar(.hidden, for: .tabBar)
             }
         }
     }

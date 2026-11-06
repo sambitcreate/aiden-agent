@@ -3,8 +3,9 @@ import XCTest
 /// Launches the real app shell against the demo machines and captures screens.
 ///
 /// A UI test cannot import the app, so this file knows the launch contract only
-/// by name: `-AidenDemoScenario` (Debug builds), the appearance keys the app
-/// reads from `UserDefaults`, and the system content size override. Launch
+/// by name: `-AidenDemoScenario` and `-AidenDemoTabShell` (Debug builds), the
+/// appearance keys the app reads from `UserDefaults`, and the system content size
+/// override. Launch
 /// arguments of the form `-key value` land in the app's argument domain, so the
 /// app reads them like any stored preference and nothing is written to disk.
 enum AidenStateMatrix {
@@ -17,6 +18,16 @@ enum AidenStateMatrix {
     enum Appearance: String, CaseIterable {
         case light, dark
     }
+
+    /// Which shell a launch opens. Both exist while `AIDEN_TAB_SHELL_ENABLED` does.
+    enum Shell: CaseIterable {
+        /// The Aiden menu that switches between Bots and Workspaces. The default.
+        case menu
+        /// The four tabs.
+        case tabs
+    }
+
+    private static let tabShellArgument = "-AidenDemoTabShell"
 
     /// The content sizes the matrix covers. `UICTContentSizeCategory…` is the
     /// spelling `UIPreferredContentSizeCategoryName` expects.
@@ -36,6 +47,7 @@ enum AidenStateMatrix {
     /// to both appearances; nil keeps the app default.
     static func launch(
         scenario: Scenario,
+        shell: Shell = .menu,
         appearance: Appearance = .light,
         contentSize: ContentSize = .large,
         theme: String? = nil
@@ -51,10 +63,14 @@ enum AidenStateMatrix {
             // app stores its navigation as Data, so a string here reads as "nothing
             // saved" and the stored value from an earlier launch is ignored.
             "-aiden.product-navigation.v1", "reset",
+            "-aiden.app-navigation.v1", "reset",
             // Keep the simulator in the same language as the strings the tests look for.
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]
+        if shell == .tabs {
+            arguments += [tabShellArgument, "YES"]
+        }
         if let theme {
             arguments += ["-aiden.appearance.lightPreset", theme, "-aiden.appearance.darkPreset", theme]
         }
@@ -63,10 +79,36 @@ enum AidenStateMatrix {
         return app
     }
 
-    /// The Aiden menu button every connected screen of the current shell shows.
-    /// Its label names the area, so it doubles as "the first screen is up".
+    private static func shell(of app: XCUIApplication) -> Shell {
+        app.launchArguments.contains(tabShellArgument) ? .tabs : .menu
+    }
+
+    /// What shows once the first screen is up, in either shell.
+    static func firstScreen(in app: XCUIApplication) -> XCUIElement {
+        switch shell(of: app) {
+        case .menu: areaSwitcher(in: app)
+        case .tabs: tab("Inbox", in: app)
+        }
+    }
+
+    /// The Aiden menu button every connected screen of the menu shell shows.
+    /// Its label names the area.
     static func areaSwitcher(in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden. Current area:")).firstMatch
+    }
+
+    /// A tab, in a bottom bar or a sidebar.
+    static func tab(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        let inBar = app.tabBars.buttons[title].firstMatch
+        return inBar.exists ? inBar : app.buttons[title].firstMatch
+    }
+
+    /// The Search tab folds the tab bar away while its field is up, and Close
+    /// brings it back.
+    static func leaveSearch(in app: XCUIApplication) {
+        guard app.searchFields.firstMatch.exists else { return }
+        let close = app.buttons["Close"].firstMatch
+        if close.exists { close.tap() }
     }
 
     /// Closes the one-time "Bots or Workspaces" tip when it is showing.
@@ -75,8 +117,14 @@ enum AidenStateMatrix {
         if gotIt.waitForExistence(timeout: 2) { gotIt.tap() }
     }
 
-    /// Switches to an area through the Aiden menu (`Bots` or `Workspaces`).
+    /// Switches to an area: a tab, or an entry in the Aiden menu (`Bots` or `Workspaces`).
     static func openArea(_ title: String, in app: XCUIApplication) {
+        if shell(of: app) == .tabs {
+            leaveSearch(in: app)
+            let tab = tab(title, in: app)
+            if tab.waitForExistence(timeout: 10) { tab.tap() }
+            return
+        }
         dismissTipIfPresent(in: app)
         let switcher = areaSwitcher(in: app)
         guard switcher.waitForExistence(timeout: 10) else { return }
