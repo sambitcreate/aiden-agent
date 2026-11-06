@@ -209,6 +209,10 @@ enum AidenBotDeletion {
                 deviceId: context.deviceId,
                 botId: botID
             )
+            await AidenChatDraftStore.shared.remove(
+                instanceId: context.instanceId,
+                chatId: AidenBotChatRoute.pathValue(botID: botID)
+            )
         }
     }
 }
