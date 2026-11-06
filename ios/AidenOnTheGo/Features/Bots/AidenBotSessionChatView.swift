@@ -12,10 +12,11 @@ struct AidenBotSessionChatView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenBotSessionModel?
     @State private var summary: AidenBotSummary?
     /// Lives here, not in the composer: the composer leaves while the Bot needs a model.
-    @State private var composerSession = AidenComposerSession()
+    @State private var composerSession: AidenComposerSession
     @State private var isShowingProfile = false
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
@@ -53,6 +54,18 @@ struct AidenBotSessionChatView: View {
     /// Runs once the sheet has closed, so what it opens has the screen to itself.
     @State private var pendingSessionAction: AidenSessionAction?
 
+    init(
+        coordinator: AidenRemoteCoordinator,
+        botID: String,
+        initialSummary: AidenBotSummary? = nil,
+        composerSession: AidenComposerSession? = nil
+    ) {
+        self.coordinator = coordinator
+        self.botID = botID
+        self.initialSummary = initialSummary
+        _composerSession = State(initialValue: composerSession ?? AidenComposerSession())
+    }
+
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
     /// The machine this chat belongs to. Before the chat starts, that's the selection.
@@ -79,12 +92,7 @@ struct AidenBotSessionChatView: View {
         ].joined(separator: "|")
     }
 
-    /// Messages are taken while the Mac is still connecting: they wait in the
-    /// outbox and go out on connect (R14).
-    private var canCompose: Bool {
-        guard let ownerConnection, !ownerConnection.isRevoked else { return false }
-        return ownerConnection.installation.canWriteBots
-    }
+    private var canCompose: Bool { AidenBotSessionModel.canCompose(on: ownerConnection) }
 
     /// Answering a Bot's tool approval needs `approval:respond` beside Bot write.
     private var canRespondToApprovals: Bool {
@@ -125,7 +133,19 @@ struct AidenBotSessionChatView: View {
         ) { result in
             attachFiles(result)
         }
-        .onDisappear { attachmentPicker.reset() }
+        .onChange(of: scenePhase) { _, phase in
+            if AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: phase) {
+                composerSession.stopVoice()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
+            composerSession.stopVoice()
+        }
+        .onDisappear {
+            attachmentPicker.reset()
+            composerSession.stopVoice()
+            composerSession.discardAttachments()
+        }
         .background(palette.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -921,6 +941,9 @@ struct AidenBotSessionChatView: View {
     /// Done could (connected); staged photos or files say to wait.
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
         guard !model.composerHeldForPlan else { return }
+        // The busy pill and the held Send come here without the surface's own
+        // Send, so dictation ends here too: nothing may land after the words go.
+        composerSession.stopVoice()
         if model.composerAnswersHandoff {
             let note = composerSession.text
             let connected = canWrite
@@ -979,14 +1002,7 @@ struct AidenBotSessionChatView: View {
         AidenComposerSurface(
             session: composerSession,
             config: config,
-            controls: AidenComposerControls(
-                canSend: canSendFromComposer(model),
-                sendLabel: sendLabel(model),
-                canStop: canWrite && !model.isStopping && !model.inFlight.contains(.stop),
-                stopLabel: String(localized: "Stop"),
-                fieldIsDisabled: !canCompose || composerIsHeld(model),
-                micIsEnabled: canCompose
-            ),
+            controls: model.composerControls(connection: ownerConnection, hasContent: composerSession.hasContent),
             focus: $composerFocused,
             onSend: { submit(model, whenBusy: nil) },
             onStop: model.isRunning ? { Task { await model.stop() } } : nil,
@@ -1001,10 +1017,13 @@ struct AidenBotSessionChatView: View {
             },
             attachButton: { attachButton(model) },
             busyControl: {
-                if model.composerAnswersHandoff || composerIsHeld(model) {
+                if model.composerAnswersHandoff || model.composerIsHeld {
                     // A waiting step's note goes with a plain Send, never Steer or Queue,
                     // and a held composer offers neither.
-                    AidenComposerSendButton(label: sendLabel(model), isEnabled: canSendFromComposer(model)) {
+                    AidenComposerSendButton(
+                        label: model.composerSendLabel,
+                        isEnabled: model.canSendFromComposer(connection: ownerConnection, hasContent: composerSession.hasContent)
+                    ) {
                         submit(model, whenBusy: nil)
                     }
                 } else if model.offersBusyModes {
@@ -1012,13 +1031,6 @@ struct AidenBotSessionChatView: View {
                 }
             }
         )
-    }
-
-    /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
-    /// finished on the Mac or skipped, so the composer waits for either.
-    /// Revision 40: so does a password-or-code card, which takes no note.
-    private func composerIsHeld(_ model: AidenBotSessionModel) -> Bool {
-        model.isPaused || model.handoff?.kind == .signIn || model.composerHeldForNoNote
     }
 
     private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
@@ -1137,16 +1149,6 @@ struct AidenBotSessionChatView: View {
         }
     }
 
-    private func canSendFromComposer(_ model: AidenBotSessionModel) -> Bool {
-        canCompose && model.canSend && !model.composerHeldForPlan && !composerIsHeld(model)
-            && composerSession.hasContent && !model.isAttaching
-            && (!model.composerAnswersHandoff || (canWrite && model.canAnswerHandoff))
-    }
-
-    private func sendLabel(_ model: AidenBotSessionModel) -> String {
-        model.composerAnswersHandoff ? String(localized: "Send and mark done") : String(localized: "Send")
-    }
-
     @MainActor
     private func start() async {
         guard let context = try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? ""),
@@ -1165,7 +1167,9 @@ struct AidenBotSessionChatView: View {
             isOwnerLive: { [coordinator] in coordinator.isLive(context) },
             cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID),
             allowedSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
-            plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true
+            plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true,
+            isOwnerRetained: { [coordinator] in coordinator.isRetained(context) },
+            speech: client
         )
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
         model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
@@ -1187,7 +1191,11 @@ struct AidenBotSessionChatView: View {
                 )
             }
         }
+        // A model already here is this screen's last visit, or another machine's
+        // chat. A late transcript must reach neither.
+        if self.model != nil { composerSession.stopVoice() }
         self.model = model
+        composerSession.draftOwner = model
         composerSession.attachmentOwner = model
         // Nothing waits on another: the first snapshot, the Bot's detail and the
         // stream (with the outbox it sends) start together.
@@ -1223,6 +1231,55 @@ func aidenBotSessionConversationChatID(
     conversations: [AidenBotConversationItem]
 ) -> String? {
     aidenCanonicalBotConversations(conversations.filter { $0.botId == botID }).first?.chatId
+}
+
+extension AidenBotSessionModel {
+    /// Messages are taken while the Mac is still connecting: they wait in the
+    /// outbox and go out on connect (R14).
+    static func canCompose(on connection: AidenHostConnection?) -> Bool {
+        guard let connection, !AidenDockInput.isRevoked(connection) else { return false }
+        return connection.installation.canWriteBots
+    }
+
+    /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
+    /// finished on the Mac or skipped, so the composer waits for either.
+    /// Revision 40: so does a password-or-code card, which takes no note.
+    var composerIsHeld: Bool {
+        isPaused || handoff?.kind == .signIn || composerHeldForNoNote
+    }
+
+    var composerSendLabel: String {
+        composerAnswersHandoff ? String(localized: "Send and mark done") : String(localized: "Send")
+    }
+
+    func canSendFromComposer(connection: AidenHostConnection?, hasContent: Bool) -> Bool {
+        let canCompose = Self.canCompose(on: connection)
+        return canCompose && canSend && !composerHeldForPlan && !composerIsHeld && hasContent && !isAttaching
+            && (!composerAnswersHandoff || (connection?.connectionState == .connected && canAnswerHandoff))
+    }
+
+    /// `connection` is the owner's. The mic follows the chat's: never into a field
+    /// that takes nothing, and off while a reply runs. An offline machine can't
+    /// hear a recording made for it, though its outbox will take typed words.
+    func composerControls(
+        connection: AidenHostConnection?,
+        hasContent: Bool,
+        voiceMode: AidenVoiceInputMode = .selected
+    ) -> AidenComposerControls {
+        let canCompose = Self.canCompose(on: connection)
+        let fieldIsDisabled = !canCompose || composerIsHeld
+        let machineCanHear = voiceMode == .onDevice || AidenDockInput.isOnline(connection)
+        return AidenComposerControls(
+            canSend: canSendFromComposer(connection: connection, hasContent: hasContent),
+            sendLabel: composerSendLabel,
+            canStop: canCompose && connection?.connectionState == .connected && !isStopping && !inFlight.contains(.stop),
+            stopLabel: String(localized: "Stop"),
+            fieldIsDisabled: fieldIsDisabled,
+            // The busy pill takes the mic's place, as in a chat.
+            offersMic: !offersBusyModes,
+            micIsEnabled: !fieldIsDisabled && !isRunning && machineCanHear
+        )
+    }
 }
 
 extension AidenBotSessionCopy {

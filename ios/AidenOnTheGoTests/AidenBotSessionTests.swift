@@ -1,3 +1,5 @@
+import Darwin
+import Observation
 import SwiftUI
 import XCTest
 @testable import AidenOnTheGo
@@ -5764,3 +5766,819 @@ final class AidenBotAccessRequestsTests: XCTestCase {
         XCTAssertEqual(transport.accessAnswers.count, 1)
     }
 }
+
+#if DEBUG
+// MARK: - Drafts and voice
+
+/// A machine that can transcribe. Its speech status is the shape `/speech` answers.
+private final class FakeMachineSpeech: AidenMacSpeechTransport, @unchecked Sendable {
+    let gate = TestGate()
+    private let transcript: String
+    init(transcript: String) { self.transcript = transcript }
+
+    func speechStatus() async throws -> AidenSpeechStatus {
+        try JSONDecoder().decode(AidenSpeechStatus.self, from: Data(#"{"engine":{"ready":true,"error":null},"selectedModelId":"parakeet-v3","models":[{"id":"parakeet-v3","name":"Parakeet","description":"Local speech","sizeLabel":"620 MB","languagesLabel":"25 languages","recommended":true,"installed":true}],"input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}}"#.utf8))
+    }
+
+    func selectSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus { try await speechStatus() }
+
+    func transcribeSpeech(pcm16: Data, modelId: String) async throws -> AidenSpeechTranscription {
+        await gate.pass()
+        return AidenSpeechTranscription(text: transcript, modelId: modelId)
+    }
+}
+
+/// A recording that has just ended: what was said goes to the machine, and its
+/// text lands in the draft. The way `ComposerVoiceInputController` ends one.
+@MainActor
+private final class FakeMachineDictation: AidenComposerVoiceCapture {
+    var isListening = false
+    var isBusy = false
+    var errorMessage: String?
+    private(set) var failure: Error?
+
+    func toggle(
+        currentDraft: String,
+        updateDraft: @escaping (String) -> Void,
+        macTranscriber: @escaping (Data) async throws -> String
+    ) async {
+        do { updateDraft(currentDraft + (try await macTranscriber(Data([0, 0])))) } catch { failure = error }
+    }
+
+    func cancelDiscardingRecording() {}
+}
+
+@MainActor
+@Observable
+private final class AidenBotViewHost {
+    let session: AidenComposerSession
+    var showsBot = true
+    var scenePhase = ScenePhase.active
+    var selectedTab = 0
+
+    init(session: AidenComposerSession) { self.session = session }
+}
+
+/// The real Bot screen, over the demo machines.
+private struct AidenBotViewHostView: View {
+    let host: AidenBotViewHost
+    let coordinator: AidenRemoteCoordinator
+    let botID: String
+
+    var body: some View {
+        NavigationStack {
+            if host.showsBot {
+                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session)
+            } else {
+                Text("Bots")
+            }
+        }
+        .environment(\.scenePhase, host.scenePhase)
+    }
+}
+
+/// A Bot screen another tab can cover. The tab switch ends its load, as a return
+/// from another area of the app does, while its state stays.
+private struct AidenBotTabHostView: View {
+    @Bindable var host: AidenBotViewHost
+    let coordinator: AidenRemoteCoordinator
+    let botID: String
+
+    var body: some View {
+        TabView(selection: $host.selectedTab) {
+            NavigationStack {
+                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session)
+            }
+            .tag(0)
+            Text("Elsewhere").tag(1)
+        }
+    }
+}
+
+extension AidenBotSessionTests {
+    private static let demoBot = "bot_scout"
+
+    private func temporaryDrafts() -> AidenChatDraftStore {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "bot-drafts-\(UUID().uuidString)", directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return AidenChatDraftStore(root: root)
+    }
+
+    private func draftModel(
+        on instanceId: String = "studio",
+        drafts: AidenChatDraftStore,
+        transport: FakeBotSessionTransport = FakeBotSessionTransport(),
+        isOwnerLive: @escaping @MainActor () -> Bool = { true },
+        isOwnerRetained: @escaping @MainActor () -> Bool = { true },
+        outboxStore: AidenBotOutboxStore? = nil,
+        speech: (any AidenMacSpeechTransport)? = nil
+    ) -> AidenBotSessionModel {
+        let key = AidenBotSessionKey(instanceId: instanceId, deviceId: "phone", botID: botID)
+        return AidenBotSessionModel(
+            botID: botID,
+            transport: transport,
+            owner: botOwner(of: key),
+            isOwnerLive: isOwnerLive,
+            cacheKey: key,
+            cache: AidenBotSessionCache(),
+            outboxStore: outboxStore,
+            isOwnerRetained: isOwnerRetained,
+            draftStore: drafts,
+            speech: speech
+        )
+    }
+
+    /// The draft a new visit to this chat would open with.
+    private func savedDraft(on instanceId: String = "studio", in drafts: AidenChatDraftStore) async -> String {
+        let model = draftModel(on: instanceId, drafts: drafts)
+        await model.load()
+        model.release()
+        return model.draft
+    }
+
+    private func composer(for model: AidenBotSessionModel, voice: (any AidenComposerVoiceCapture)? = nil) -> AidenComposerSession {
+        AidenComposerSession(draftOwner: model, voice: voice ?? AidenComposerFakeVoice())
+    }
+
+    // MARK: The draft
+
+    func testABotDraftSurvivesLeavingAndComingBack() async throws {
+        let drafts = temporaryDrafts()
+        let first = draftModel(drafts: drafts)
+        await first.load()
+        composer(for: first).text = "Ask about the invoice"
+
+        first.release()
+        await first.waitForDraftPersistence()
+
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "Ask about the invoice")
+    }
+
+    func testABotDraftLeftInOneBreathStillSaves() async throws {
+        let drafts = temporaryDrafts()
+        var model: AidenBotSessionModel? = draftModel(drafts: drafts)
+        await model?.load()
+        model?.draft = "Typed as the back button went down"
+
+        // The screen owns its model, so leaving lets go of it mid-delay.
+        model?.release()
+        model = nil
+        try await Task.sleep(for: .milliseconds(400))
+
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "Typed as the back button went down")
+    }
+
+    func testABotDraftOnOneMachineDoesNotShowOnAnother() async throws {
+        let drafts = temporaryDrafts()
+        let studio = draftModel(on: "studio", drafts: drafts)
+        await studio.load()
+        studio.draft = "For the studio only"
+        await studio.waitForDraftPersistence()
+
+        let laptop = draftModel(on: "laptop", drafts: drafts)
+        await laptop.load()
+        XCTAssertEqual(laptop.draft, "", "The same Bot id on another machine is another Bot")
+
+        laptop.draft = "For the laptop only"
+        await laptop.waitForDraftPersistence()
+        let studioDraft = await savedDraft(on: "studio", in: drafts)
+        let laptopDraft = await savedDraft(on: "laptop", in: drafts)
+        XCTAssertEqual(studioDraft, "For the studio only")
+        XCTAssertEqual(laptopDraft, "For the laptop only")
+    }
+
+    func testABotDraftIsNotAChatDraftOfTheSameID() async throws {
+        let drafts = temporaryDrafts()
+        let chat = await drafts.beginSession(instanceId: "studio", chatId: botID)
+        _ = try await drafts.save("Words for a chat", session: chat)
+
+        let saved = await savedDraft(in: drafts)
+
+        XCTAssertEqual(saved, "")
+    }
+
+    func testADraftKeepsSavingWhileTheMachineIsOffline() async throws {
+        let drafts = temporaryDrafts()
+        let model = draftModel(drafts: drafts, isOwnerLive: { false })
+        await model.load()
+
+        model.draft = "Written on the train"
+        await model.waitForDraftPersistence()
+
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "Written on the train")
+    }
+
+    func testAForgottenMachineTakesNoNewDraft() async throws {
+        let drafts = temporaryDrafts()
+        var isRetained = true
+        let model = draftModel(drafts: drafts, isOwnerRetained: { isRetained })
+        await model.load()
+        model.draft = "Kept"
+        await model.waitForDraftPersistence()
+
+        isRetained = false
+        model.draft = "Written after the machine was forgotten"
+        await model.waitForDraftPersistence()
+
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "Kept")
+    }
+
+    func testAForgottenMachinesDraftDoesNotComeBackFromALateWrite() async throws {
+        let drafts = temporaryDrafts()
+        let model = draftModel(drafts: drafts)
+        await model.load()
+        model.draft = "On its way to disk"
+
+        await drafts.purge(instanceId: "studio")
+        await model.waitForDraftPersistence()
+
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "")
+    }
+
+    func testWordsTypedBeforeTheSavedDraftArrivesWin() async throws {
+        let drafts = temporaryDrafts()
+        let first = draftModel(drafts: drafts)
+        await first.load()
+        first.draft = "The old draft"
+        await first.waitForDraftPersistence()
+
+        let second = draftModel(drafts: drafts)
+        second.draft = "New words"
+        await second.load()
+        await second.waitForDraftPersistence()
+
+        XCTAssertEqual(second.draft, "New words")
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "New words", "Typed before the store opened, and still saved")
+    }
+
+    func testSendingClearsTheSavedDraft() async throws {
+        let drafts = temporaryDrafts()
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(seq: 1, entries: [])))
+        let model = draftModel(drafts: drafts, transport: transport)
+        await model.load()
+        let composer = composer(for: model)
+        composer.text = "Send this once"
+        await model.waitForDraftPersistence()
+
+        composer.text = ""
+        let taken = await model.send("Send this once")
+        await model.waitForDraftPersistence()
+
+        XCTAssertTrue(taken)
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "")
+    }
+
+    func testLosingAccessDropsTheOutboxButNotTheWordsBeingWritten() async throws {
+        let drafts = temporaryDrafts()
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.failure(AidenRemoteClientError.unexpectedStatus(403)))
+        let model = draftModel(drafts: drafts, transport: transport)
+        model.draft = "Not sent, not lost"
+
+        await model.load()
+        await model.waitForDraftPersistence()
+
+        XCTAssertEqual(model.draft, "Not sent, not lost")
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "Not sent, not lost")
+    }
+
+    // MARK: The outbox
+
+    func testOfflineBotOutboxStillAcceptsAMessage() async throws {
+        let drafts = temporaryDrafts()
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "bot-outbox-\(UUID().uuidString)", directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let transport = FakeBotSessionTransport()
+        // No snapshot queued: the machine doesn't answer.
+        let model = draftModel(drafts: drafts, transport: transport, outboxStore: AidenBotOutboxStore(root: root))
+        await model.load()
+        let composer = composer(for: model)
+        composer.text = "Waits for the machine"
+        await model.waitForDraftPersistence()
+
+        let words = composer.text
+        composer.text = ""
+        let taken = await model.send(words)
+        await model.waitForDraftPersistence()
+
+        XCTAssertTrue(taken)
+        XCTAssertEqual(model.outgoing.map(\.text), ["Waits for the machine"])
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "", "The words are in the outbox, so the draft mustn't offer them too")
+
+        transport.queueSession(.success(try session(seq: 1, entries: [])))
+        await model.load()
+        XCTAssertEqual(transport.sendTexts, ["Waits for the machine"])
+    }
+
+    // MARK: Voice
+
+    func testVoiceInputFillsTheBotComposer() async throws {
+        let drafts = temporaryDrafts()
+        let model = draftModel(drafts: drafts, speech: FakeMachineSpeech(transcript: " and book the table"))
+        await model.load()
+        let voice = FakeMachineDictation()
+        let composer = composer(for: model, voice: voice)
+        composer.text = "Call Sam"
+
+        await composer.toggleVoice()
+        await model.waitForDraftPersistence()
+
+        XCTAssertNil(voice.failure)
+        XCTAssertEqual(composer.text, "Call Sam and book the table")
+        let saved = await savedDraft(in: drafts)
+        XCTAssertEqual(saved, "Call Sam and book the table", "Spoken words are saved like typed ones")
+    }
+
+    func testATranscriptOfAMachineThatWentAwayIsDropped() async throws {
+        var isLive = true
+        let speech = FakeMachineSpeech(transcript: "Too late")
+        speech.gate.hold()
+        let model = draftModel(drafts: temporaryDrafts(), isOwnerLive: { isLive }, speech: speech)
+        let voice = FakeMachineDictation()
+        let composer = composer(for: model, voice: voice)
+
+        let dictation = Task { await composer.toggleVoice() }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !speech.gate.isHolding, ContinuousClock.now < deadline { await Task.yield() }
+        isLive = false
+        speech.gate.release()
+        await dictation.value
+
+        XCTAssertTrue(voice.failure is CancellationError)
+        XCTAssertEqual(composer.text, "")
+    }
+
+    func testATranscriptArrivingAfterLeavingIsDropped() async throws {
+        let speech = FakeMachineSpeech(transcript: "Too late")
+        speech.gate.hold()
+        let model = draftModel(drafts: temporaryDrafts(), speech: speech)
+        let voice = FakeMachineDictation()
+        let composer = composer(for: model, voice: voice)
+
+        let dictation = Task { await composer.toggleVoice() }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !speech.gate.isHolding, ContinuousClock.now < deadline { await Task.yield() }
+        model.release()
+        speech.gate.release()
+        await dictation.value
+
+        XCTAssertTrue(voice.failure is CancellationError)
+        XCTAssertEqual(composer.text, "")
+    }
+
+    // MARK: Who may dictate
+
+    private func demoCoordinator(_ installation: AidenInstallation? = nil) -> (AidenRemoteCoordinator, AidenDemoResponder) {
+        let responder = AidenDemoResponder()
+        if let installation {
+            return (AidenDemoHosts.coordinator(installations: [installation], responder: responder), responder)
+        }
+        return (AidenDemoHosts.coordinator(.four, responder: responder), responder)
+    }
+
+    private func demoModel(
+        _ coordinator: AidenRemoteCoordinator,
+        transport: FakeBotSessionTransport = FakeBotSessionTransport()
+    ) throws -> AidenBotSessionModel {
+        AidenBotSessionModel(
+            botID: botID,
+            transport: transport,
+            owner: try coordinator.ownerContext(for: "studio"),
+            outboxStore: nil,
+            draftStore: nil
+        )
+    }
+
+    func testABotComposerOffersTheMicButNoModelChip() {
+        let config = AidenComposerConfig.bot()
+
+        XCTAssertTrue(config.showsMic)
+        XCTAssertFalse(config.showsModelChip)
+    }
+
+    func testARevokedMachineCannotDictateIntoABot() throws {
+        let (coordinator, _) = demoCoordinator()
+        let connection = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        let model = try demoModel(coordinator)
+        XCTAssertTrue(model.composerControls(connection: connection, hasContent: false).micIsEnabled)
+
+        connection.markRevokedWithPurgePending()
+
+        let controls = model.composerControls(connection: connection, hasContent: true)
+        XCTAssertFalse(controls.micIsEnabled, "Dictating into a Bot that can't take the message")
+        XCTAssertTrue(controls.fieldIsDisabled)
+    }
+
+    func testAMachineWaitingToPairAgainCannotTakeDictation() throws {
+        let (coordinator, _) = demoCoordinator()
+        let connection = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        let model = try demoModel(coordinator)
+
+        connection.adopt(connectionState: .needsPairing)
+
+        let controls = model.composerControls(connection: connection, hasContent: true)
+        XCTAssertFalse(controls.micIsEnabled)
+        XCTAssertTrue(controls.fieldIsDisabled)
+    }
+
+    func testAPhoneWithoutBotWriteCannotDictateIntoABot() throws {
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.deviceCapabilities.removeAll { $0 == .botWrite }
+        let (coordinator, _) = demoCoordinator(installation)
+        let connection = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        let model = try demoModel(coordinator)
+
+        let controls = model.composerControls(connection: connection, hasContent: true)
+
+        XCTAssertFalse(controls.micIsEnabled)
+        XCTAssertTrue(controls.fieldIsDisabled)
+    }
+
+    func testAnOfflineBotTakesDictationOnThisPhoneButNotThroughItsMachine() throws {
+        let (coordinator, _) = demoCoordinator()
+        let connection = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        connection.adopt(connectionState: .offline(message: "Not reachable"))
+        let model = try demoModel(coordinator)
+
+        XCTAssertTrue(
+            model.composerControls(connection: connection, hasContent: false, voiceMode: .onDevice).micIsEnabled,
+            "The outbox takes the message, so the words can be spoken"
+        )
+        XCTAssertFalse(
+            model.composerControls(connection: connection, hasContent: false, voiceMode: .pairedMac).micIsEnabled,
+            "What was said would have nowhere to go, and the recording would be lost"
+        )
+    }
+
+    func testAMicFollowsTheChatWhileABotWorks() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let connection = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(seq: 1, state: .running, entries: [])))
+        let model = try demoModel(coordinator, transport: transport)
+        model.activitySupported = true
+        await model.load()
+
+        let controls = model.composerControls(connection: connection, hasContent: false)
+
+        XCTAssertTrue(model.isRunning)
+        XCTAssertFalse(controls.micIsEnabled, "Dictation is off while a reply runs, as in a chat")
+        XCTAssertEqual(controls.offersMic, !model.offersBusyModes, "The busy pill takes the mic's place")
+    }
+
+    func testAHeldBotComposerTakesNoDictation() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let connection = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(seq: 1, state: .paused, entries: [])))
+        let model = try demoModel(coordinator, transport: transport)
+        await model.load()
+
+        let controls = model.composerControls(connection: connection, hasContent: false)
+
+        XCTAssertTrue(controls.fieldIsDisabled)
+        XCTAssertFalse(controls.micIsEnabled, "The field takes nothing, so nor does the mic")
+    }
+
+    // MARK: The real screen
+
+    /// A started demo machine, and a screen on it with its model loaded.
+    private func showBot(
+        _ session: AidenComposerSession,
+        coordinator: AidenRemoteCoordinator,
+        tabs: Bool = false
+    ) async throws -> (AidenBotViewHost, UIWindow) {
+        await coordinator.start()
+        await AidenChatDraftStore.shared.purge(instanceId: "studio")
+        await AidenChatDraftStore.shared.purge(instanceId: "laptop")
+        addTeardownBlock {
+            await AidenChatDraftStore.shared.purge(instanceId: "studio")
+            await AidenChatDraftStore.shared.purge(instanceId: "laptop")
+        }
+        Self.setAccessibilityAutomation(true)
+        addTeardownBlock { await MainActor.run { Self.setAccessibilityAutomation(false) } }
+        let host = AidenBotViewHost(session: session)
+        let window: UIWindow
+        if tabs {
+            window = try await show(AidenBotTabHostView(host: host, coordinator: coordinator, botID: Self.demoBot))
+        } else {
+            window = try await show(AidenBotViewHostView(host: host, coordinator: coordinator, botID: Self.demoBot))
+        }
+        // Read the screen only once this settles: the accessibility tree is built
+        // on first use, and doesn't follow what changes after it.
+        await assertSettles({ self.model(of: session)?.hasLoaded == true }, "The Bot never loaded", timeout: 15)
+        await settle()
+        return (host, window)
+    }
+
+    private func model(of session: AidenComposerSession) -> AidenBotSessionModel? {
+        session.draftOwner as? AidenBotSessionModel
+    }
+
+    func testTheBotScreenSavesAndBringsBackItsDraft() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (host, window) = try await showBot(session, coordinator: coordinator)
+        session.text = "Finish this later"
+        await model(of: session)?.waitForDraftPersistence()
+        host.showsBot = false
+        await settle()
+        close(window)
+
+        let returned = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let again = try await show(AidenBotViewHostView(
+            host: AidenBotViewHost(session: returned), coordinator: coordinator, botID: Self.demoBot
+        ))
+        defer { close(again) }
+
+        await assertSettles({ returned.text == "Finish this later" }, timeout: 15)
+    }
+
+    func testTheBotScreenShowsAWorkingMic() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let voice = AidenComposerFakeVoice()
+        let session = AidenComposerSession(voice: voice)
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+
+        _ = try XCTUnwrap(element("Start voice input", in: window)).accessibilityActivate()
+        await assertSettles({ session.isRecording })
+        voice.speak("Spoken into a Bot")
+
+        XCTAssertEqual(session.text, "Spoken into a Bot")
+    }
+
+    func testAPhoneWithoutBotWriteSeesAMicThatDoesNothing() async throws {
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.deviceCapabilities.removeAll { $0 == .botWrite }
+        let (coordinator, _) = demoCoordinator(installation)
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+
+        let mic = try XCTUnwrap(element("Start voice input", in: window))
+        XCTAssertTrue(mic.accessibilityTraits.contains(.notEnabled))
+        _ = mic.accessibilityActivate()
+        await settle()
+        XCTAssertFalse(session.isRecording)
+    }
+
+    func testTheBotScreenAsksItsOwnMachineForSpeech() async throws {
+        let (coordinator, responder) = demoCoordinator()
+        responder.reply(instanceId: "studio", path: "/speech", status: 200, json: Data(
+            #"{"engine":{"ready":true,"error":null},"selectedModelId":"parakeet-v3","models":[{"id":"parakeet-v3","name":"Parakeet","description":"Local speech","sizeLabel":"620 MB","languagesLabel":"25 languages","recommended":true,"installed":true}],"input":{"encoding":"pcm_s16le","sampleRate":16000,"channels":1,"maximumSeconds":60,"partialResults":false}}"#.utf8
+        ))
+        responder.reply(instanceId: "studio", method: "POST", path: "/speech/transcriptions", status: 200, json: Data(
+            #"{"text":"Heard by the studio","modelId":"parakeet-v3"}"#.utf8
+        ))
+        let voice = FakeMachineDictation()
+        let session = AidenComposerSession(voice: voice)
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+
+        await session.toggleVoice()
+
+        XCTAssertNil(voice.failure)
+        XCTAssertEqual(session.text, "Heard by the studio")
+    }
+
+    func testARevokedMachinesBotScreenShowsAMicThatDoesNothing() async throws {
+        // One machine, so nothing moves the selection off the one that's revoked.
+        let (coordinator, _) = demoCoordinator(AidenDemoHosts.installation(instanceId: "studio", name: "Studio"))
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+
+        try XCTUnwrap(coordinator.hosts.connection(for: "studio")).markRevokedWithPurgePending()
+        await settle()
+
+        let mic = try XCTUnwrap(element("Start voice input", in: window))
+        XCTAssertTrue(mic.accessibilityTraits.contains(.notEnabled))
+        _ = mic.accessibilityActivate()
+        await settle()
+        XCTAssertFalse(session.isRecording)
+    }
+
+    func testTheBusyPillEndsDictationBeforeItsWordsGo() async throws {
+        let (coordinator, responder) = demoCoordinator()
+        responder.reply(instanceId: "studio", path: "/bots/\(Self.demoBot)/session", status: 200, json: Data("""
+        {"botId":"\(Self.demoBot)","epoch":"epoch_demo_02","seq":9,"state":"running","interrupted":false,"entries":[],"hasOlder":false,"approval":null,"question":null}
+        """.utf8))
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+        let model = try XCTUnwrap(model(of: session))
+        model.activitySupported = true
+        session.text = "Steer it this way"
+        await session.toggleVoice()
+        await settle()
+
+        _ = try XCTUnwrap(element("Queue message", in: window)).accessibilityActivate()
+
+        await assertSettles({ !session.isRecording }, "A late transcript would land in the emptied draft")
+        XCTAssertEqual(session.text, "")
+    }
+
+    func testLeavingABotStopsVoiceAndDropsPreparation() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let owner = AidenComposerFakeAttachments()
+        owner.isPreparingAttachments = true
+        let session = AidenComposerSession(attachmentOwner: owner, voice: AidenComposerFakeVoice())
+        let (host, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+        await session.toggleVoice()
+        session.attachmentOwner = owner
+        XCTAssertTrue(session.isRecording)
+
+        host.showsBot = false
+
+        await assertSettles({ !session.isRecording }, "A hot mic must not outlive the Bot")
+        XCTAssertEqual(owner.cancellations, 1)
+    }
+
+    func testBackgroundingStopsVoiceOnABot() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (host, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+        await session.toggleVoice()
+
+        host.scenePhase = .inactive
+        await settle()
+        XCTAssertTrue(session.isRecording, "A passing inactive state keeps the recording")
+
+        host.scenePhase = .background
+        await assertSettles({ !session.isRecording })
+    }
+
+    func testReadAloudTakesTheMicFromABot() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+        await session.toggleVoice()
+
+        NotificationCenter.default.post(name: .aidenStopDictationForReadAloud, object: nil)
+
+        await assertSettles({ !session.isRecording })
+    }
+
+    func testTheListeningBarStaysWhenAQuestionReplacesTheBotComposer() async throws {
+        let (coordinator, responder) = demoCoordinator()
+        responder.reply(instanceId: "studio", path: "/bots/\(Self.demoBot)/session", status: 200, json: Data("""
+        {"botId":"\(Self.demoBot)","epoch":"epoch_demo_02","seq":9,"state":"idle","interrupted":false,"entries":[],"hasOlder":false,"approval":null,
+         "question":{"waitId":"wait_1","toolCallId":"call_1","questions":[{"question":"Pick one","header":"Choice","multiSelect":false,"options":[{"label":"First","description":"The first one"},{"label":"Second","description":"The second one"}]}]}}
+        """.utf8))
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        await session.toggleVoice()
+
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+
+        XCTAssertNotNil(model(of: session)?.question)
+        XCTAssertNil(element("Send", in: window), "The question has the composer's place")
+        _ = try XCTUnwrap(element("Stop voice input", in: window)).accessibilityActivate()
+        await assertSettles({ !session.isRecording })
+    }
+
+    func testSwitchingMachinesLeavesABotDraftWithItsMachine() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let voice = AidenComposerFakeVoice()
+        let session = AidenComposerSession(voice: voice)
+        let (_, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+        session.text = "For the studio"
+        await model(of: session)?.waitForDraftPersistence()
+        await session.toggleVoice()
+        XCTAssertTrue(session.isRecording)
+
+        await coordinator.switchInstallation(to: "laptop")
+
+        await assertSettles({ session.text.isEmpty }, "One machine's words on another's Bot", timeout: 10)
+        XCTAssertFalse(session.isRecording, "A late transcript would land on the other machine's Bot")
+
+        await coordinator.switchInstallation(to: "studio")
+        await assertSettles({ session.text == "For the studio" }, timeout: 10)
+    }
+
+    func testComingBackToABotScreenKeepsWordsJustTyped() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (host, window) = try await showBot(session, coordinator: coordinator, tabs: true)
+        defer { close(window) }
+        let firstVisit = model(of: session)
+        session.text = "Still here"
+        await firstVisit?.waitForDraftPersistence()
+
+        host.selectedTab = 1
+        await settle()
+        host.selectedTab = 0
+
+        await assertSettles({ self.model(of: session) !== firstVisit }, "The screen kept its first model", timeout: 10)
+        await assertSettles({ session.text == "Still here" }, timeout: 10)
+    }
+
+    func testDeletingABotForgetsItsDraft() async throws {
+        let (coordinator, responder) = demoCoordinator()
+        await coordinator.start()
+        let chatId = AidenBotChatRoute.pathValue(botID: Self.demoBot)
+        let writing = await AidenChatDraftStore.shared.beginSession(instanceId: "studio", chatId: chatId)
+        _ = try await AidenChatDraftStore.shared.save("Words for a Bot that's going", session: writing)
+        addTeardownBlock { await AidenChatDraftStore.shared.purge(instanceId: "studio") }
+        // Already gone from the machine, which forgets it here the same way.
+        responder.reply(instanceId: "studio", path: "/bots/\(Self.demoBot)", status: 404, json: Data(
+            #"{"error":{"code":"not_found","message":"No such Bot.","requestId":"req_1","retryable":false}}"#.utf8
+        ))
+
+        try await AidenBotDeletion.deleteListed(botID: Self.demoBot, coordinator: coordinator)
+
+        let reading = await AidenChatDraftStore.shared.beginSession(instanceId: "studio", chatId: chatId)
+        let saved = await AidenChatDraftStore.shared.load(session: reading)
+        XCTAssertNil(saved)
+    }
+
+    // MARK: Hosting
+
+    private static func setAccessibilityAutomation(_ isEnabled: Bool) {
+        typealias Setter = @convention(c) (Int32) -> Void
+        guard let library = dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW),
+              let symbol = dlsym(library, "_AXSSetAutomationEnabled") else {
+            XCTFail("_AXSSetAutomationEnabled is missing, so the accessibility tree can't be read")
+            return
+        }
+        unsafeBitCast(symbol, to: Setter.self)(isEnabled ? 1 : 0)
+    }
+
+    private func element(_ label: String, in window: UIWindow) -> NSObject? {
+        var found: NSObject?
+        func walk(_ object: NSObject) {
+            guard found == nil else { return }
+            if object.isAccessibilityElement {
+                if object.accessibilityLabel == label { found = object }
+                return
+            }
+            if let elements = object.accessibilityElements {
+                elements.compactMap { $0 as? NSObject }.forEach(walk)
+            }
+            (object as? UIView)?.subviews.forEach(walk)
+        }
+        walk(window)
+        return found
+    }
+
+    private func show(_ view: some View) async throws -> UIWindow {
+        func connectedScene() -> UIWindowScene? {
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        }
+        _ = await settles(until: { connectedScene() != nil }, timeout: 30)
+        let scene = try XCTUnwrap(connectedScene())
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
+        window.rootViewController = UIHostingController(rootView: view.environment(AidenHapticCenter()))
+        window.makeKeyAndVisible()
+        return window
+    }
+
+    private func close(_ window: UIWindow) {
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    /// Sleeps rather than spinning the run loop: the screen's `.task`s run on the
+    /// main actor, which a test spinning on it would keep from them.
+    private func settles(until condition: () -> Bool, timeout: TimeInterval = 5) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+
+    private func assertSettles(
+        _ condition: () -> Bool,
+        _ message: String = "It never happened",
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let settled = await settles(until: condition, timeout: timeout)
+        XCTAssertTrue(settled, message, file: file, line: line)
+    }
+
+    private func settle() async {
+        try? await Task.sleep(for: .milliseconds(200))
+    }
+}
+#endif

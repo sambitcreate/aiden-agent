@@ -1188,6 +1188,27 @@ final class AidenBotSessionModel {
     /// False once `owner`'s machine is forgotten or paired again. From then on
     /// nothing is applied, written or sent.
     @ObservationIgnored private let isOwnerLive: @MainActor () -> Bool
+    /// False once `owner`'s machine is forgotten. Unlike `isOwnerLive`, an offline
+    /// machine or one that reconnected still counts, so words go on being saved.
+    @ObservationIgnored private let isOwnerRetained: @MainActor () -> Bool
+
+    /// What the person is writing, the only copy in memory. It is saved as they
+    /// go, and `composerSession` reads and writes it here.
+    var draft = "" {
+        didSet {
+            guard draft != oldValue else { return }
+            draftEdits &+= 1
+            if !isRestoringDraft { scheduleDraftPersistence() }
+        }
+    }
+    @ObservationIgnored private let draftStore: AidenChatDraftStore?
+    /// Open once the store has been asked for this chat's saved draft.
+    @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
+    @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private var isRestoringDraft = false
+    @ObservationIgnored private var draftRestoreStarted = false
+    @ObservationIgnored private var draftEdits = 0
+    @ObservationIgnored private let speech: (any AidenMacSpeechTransport)?
 
     private(set) var entries: [AidenBotSessionEntry] = []
     /// The streamed answer so far, as the Mac last sent it.
@@ -1347,6 +1368,9 @@ final class AidenBotSessionModel {
         plansSupported: Bool = false,
         cache: AidenBotSessionCache? = nil,
         outboxStore: AidenBotOutboxStore? = .shared,
+        isOwnerRetained: @escaping @MainActor () -> Bool = { true },
+        draftStore: AidenChatDraftStore? = .shared,
+        speech: (any AidenMacSpeechTransport)? = nil,
         retryDelays: [Duration] = [.seconds(1), .seconds(4)],
         requestLimit: Duration = .seconds(12),
         sharedImageBudget: Int = AidenSharedImageBytes.defaultMaxBytes,
@@ -1359,6 +1383,9 @@ final class AidenBotSessionModel {
         self.botID = botID
         self.owner = owner
         self.isOwnerLive = isOwnerLive
+        self.isOwnerRetained = isOwnerRetained
+        self.speech = speech
+        self.draftStore = cacheKey == nil ? nil : draftStore
         self.allowedSupported = allowedSupported
         self.plansSupported = plansSupported
         self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
@@ -1409,6 +1436,61 @@ final class AidenBotSessionModel {
         backoffTask?.cancel()
         flushTask?.cancel()
         sharedImages.removeAll()
+    }
+
+    // MARK: The draft
+
+    /// Brings back what was being written, from this phone alone, so an offline
+    /// machine doesn't hold it up. Words already in the composer win.
+    private func restoreDraft() async {
+        guard let draftStore, !draftRestoreStarted else { return }
+        draftRestoreStarted = true
+        let edits = draftEdits
+        // The Bot's route, so it can't meet a chat's id, under the owner's machine,
+        // so the same Bot id on another machine has its own draft.
+        let session = await draftStore.beginSession(
+            instanceId: owner.instanceId,
+            chatId: AidenBotChatRoute.pathValue(botID: botID)
+        )
+        guard isOwnerRetained() else { return }
+        draftSession = session
+        let saved = await draftStore.load(session: session)
+        guard isOwnerRetained() else { return }
+        // Disk access yields the main actor while the composer stays editable.
+        guard draft.isEmpty, draftEdits == edits else {
+            scheduleDraftPersistence()
+            return
+        }
+        guard let saved else { return }
+        isRestoringDraft = true
+        draft = saved
+        isRestoringDraft = false
+    }
+
+    private func scheduleDraftPersistence() {
+        // Retained, not live: an offline machine is still paired, so its text stays.
+        guard let draftStore, isOwnerRetained(), let session = draftSession else { return }
+        let text = draft
+        draftPersistenceTask?.cancel()
+        // Holds the model: the screen owns it, and leaving must not drop the words.
+        draftPersistenceTask = Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, isOwnerRetained(), draft == text else { return }
+            _ = try? await draftStore.save(text, session: session)
+        }
+    }
+
+    // Await the already scheduled write without starting a new persistence owner.
+    func waitForDraftPersistence() async {
+        await draftPersistenceTask?.value
+    }
+
+    // MARK: Voice
+
+    /// What was said, as text from the machine that owns this chat.
+    func transcribeMacSpeech(_ pcm16: Data) async throws -> String {
+        guard let speech, !released, isOwnerLive() else { throw CancellationError() }
+        return try await aidenTranscribeSpeech(pcm16, on: speech) { !released && isOwnerLive() }
     }
 
     var state: AidenBotSessionStateKind? { stateView?.state }
@@ -1502,6 +1584,7 @@ final class AidenBotSessionModel {
     /// `GET /session`, after the outbox a previous launch left is restored;
     /// returns once what waits in the outbox has gone out.
     func load() async {
+        await restoreDraft()
         await restoreOutbox()
         _ = await fetchSnapshot()
         await runFlush()
@@ -2138,7 +2221,9 @@ final class AidenBotSessionModel {
         }
     }
 
-    /// Access ended: nothing unsent is kept for this chat, in memory or on disk.
+    /// Access ended: no unsent message is kept for this chat, in memory or on disk.
+    /// The draft isn't a message yet and stays, as a chat's does, until the
+    /// machine's pairing ends and its drafts go with it.
     private func purgeForAccessLoss() {
         let hadUnsent = outbox.contains { $0.submissionId == nil }
         backoffTask?.cancel()

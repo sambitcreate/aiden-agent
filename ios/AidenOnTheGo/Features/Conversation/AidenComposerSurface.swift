@@ -25,7 +25,7 @@ struct AidenComposerConfig: Equatable {
         Self(
             placeholder: "Message",
             showsModelChip: false,
-            showsMic: false,
+            showsMic: true,
             showsAttachments: true,
             maxLines: 6
         )
