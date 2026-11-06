@@ -176,7 +176,7 @@ export function useDesignMode(chatId: string | undefined) {
           // Cancelling puts that read's starting data back, so apply again.
           await qc.cancelQueries({ queryKey: queryKeys.chat(chatId), exact: true });
           if (isLatest()) applyDesignModeToCache(qc, chatId, enabled);
-          const saved = await chatsApi.setDesignMode(chatId, enabled);
+          const saved = await chatsApi.setDesignMode(chatId, enabled, source);
           if (isLatest() && saved) applyDesignModeToCache(qc, chatId, saved.designMode === true);
         } catch (error) {
           if (isLatest()) {

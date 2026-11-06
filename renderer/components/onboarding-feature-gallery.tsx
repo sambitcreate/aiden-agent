@@ -114,6 +114,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     size: "standard",
   },
   {
+    id: "designMode",
+    group: "create",
+    title: "Design Mode",
+    description:
+      "Turn a chat into a design canvas with the Design button or /design. Aiden places live pages beside your notes and sketches. Comment on any element, edit words in place, and send your comments back as precise edits.",
+    icon: Palette,
+    size: "standard",
+  },
+  {
     id: "filesEditor",
     group: "create",
     title: "Files & Text Editor",

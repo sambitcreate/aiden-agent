@@ -11,7 +11,7 @@ export const skillRegistry = new SkillRegistry({
   listBuiltin: async () => [
     { ...AIDEN_APP_SKILL, stableId: "builtin:aiden-app", source: "builtin", enabled: true },
     { ...AIDEN_ARTIFACTS_SKILL, stableId: AIDEN_ARTIFACTS_SKILL_ID, source: "builtin", enabled: true },
-    // Behind the design mode flag until it launches.
+    // Gone only while AIDEN_DESIGN_MODE=0 turns design mode off.
     ...(designModeEnabled()
       ? [{ ...AIDEN_DESIGN_SKILL, stableId: AIDEN_DESIGN_SKILL_ID, source: "builtin" as const, enabled: true }]
       : []),

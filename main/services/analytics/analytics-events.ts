@@ -68,6 +68,10 @@ export const ANALYTICS_EVENTS = {
   terminal_opened: {},
   git_commit: {},
   worktree_created: {},
+  design_mode_entered: { source: enumProp("toggle", "shortcut", "slash", "aiden") },
+  design_mode_exited: {},
+  design_mode_declined: {},
+  design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
 
   // Crashes without a JavaScript stack (process gone, unclean exit)
   app_crashed: {

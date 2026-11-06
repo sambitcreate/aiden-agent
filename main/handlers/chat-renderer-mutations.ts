@@ -27,6 +27,7 @@ import {
   commitSkillInvocationForAppend,
   requireSkillInvocationWorkspace,
 } from "../services/skill-invocation-turn.js";
+import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import type { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { parseChatAppend } from "./chat-append-params.js";
@@ -57,6 +58,11 @@ export interface ChatDesignModeChange {
 }
 
 /** The app singletons these handlers use; chats.ts passes the real ones. */
+/** How the person turned design mode on: the Design toggle, ⇧⌘L or `/design`. Anything else counts as the toggle. */
+function designModeEntrySource(source: unknown): "toggle" | "shortcut" | "slash" {
+  return source === "shortcut" || source === "slash" ? source : "toggle";
+}
+
 export interface RendererChatMutationDeps {
   chatStore: Pick<
     ReturnType<typeof createChatStore>,
@@ -66,7 +72,7 @@ export interface RendererChatMutationDeps {
     ReturnType<typeof createChatApplicationService>,
     "rename" | "setModelSelection" | "setDesignMode" | "remove"
   >;
-  /** AIDEN_EXPERIMENTAL_DESIGN_MODE; off means the design mode channel has no effect. */
+  /** Off only with AIDEN_DESIGN_MODE=0, when the design mode channel has no effect. */
   designModeEnabled(): boolean;
   /** Tells every window a chat's design mode changed (`chats:design-mode-changed`). */
   broadcastDesignModeChanged(change: ChatDesignModeChange): void;
@@ -129,13 +135,21 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       ),
 
     /** Turn design mode on or off for one chat, then tell every window. */
-    setDesignMode: async (_event: IpcMainInvokeEvent, id: unknown, enabled: unknown) => {
+    setDesignMode: async (_event: IpcMainInvokeEvent, id: unknown, enabled: unknown, source: unknown) => {
       const chatId = asString(id, "id");
       if (typeof enabled !== "boolean") throw new Error('Expected a boolean for "enabled".');
       if (!designModeEnabled()) throw new Error("Design mode is not available.");
-      const chat = await chatApplicationService.setDesignMode(chatId, enabled, { rejectFeatureOwned: true });
+      let wasOn: boolean | undefined;
+      const chat = await chatApplicationService.setDesignMode(chatId, enabled, {
+        rejectFeatureOwned: true,
+        assertCurrent: (current) => {
+          wasOn = current.designMode === true;
+        },
+      });
       // The store only resolves once the chat holds exactly this value.
       broadcastDesignModeChanged({ chatId, designMode: enabled });
+      if (wasOn === false && enabled) reportAnalyticsEvent("design_mode_entered", { source: designModeEntrySource(source) });
+      else if (wasOn === true && !enabled) reportAnalyticsEvent("design_mode_exited", {});
       return chat;
     },
 

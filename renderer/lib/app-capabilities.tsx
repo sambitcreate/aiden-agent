@@ -23,7 +23,7 @@ export interface AppCapabilities {
   geminiLive: boolean;
   devices: boolean;
   createImages: boolean;
-  /** Design mode: a chat column beside a design canvas (`AIDEN_EXPERIMENTAL_DESIGN_MODE`). */
+  /** Design mode: a chat column beside a design canvas (on unless `AIDEN_DESIGN_MODE=0`). */
   designMode: boolean;
 }
 

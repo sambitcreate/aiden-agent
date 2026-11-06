@@ -1,6 +1,6 @@
-// IPC for the per-chat design canvas. Registered only while
-// AIDEN_EXPERIMENTAL_DESIGN_MODE is on, and every handler re-checks the flag
-// the way `chats:setDesignMode` does.
+// IPC for the per-chat design canvas. Registered only while design mode is
+// on (it is, unless AIDEN_DESIGN_MODE=0), and every handler re-checks it the
+// way `chats:setDesignMode` does.
 
 import path from "node:path";
 import * as fs from "node:fs/promises";

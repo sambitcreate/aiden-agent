@@ -21,7 +21,6 @@ import {
 
 test.use({
   workspaceSeed: true,
-  appEnvironment: { AIDEN_EXPERIMENTAL_DESIGN_MODE: "1" },
 });
 
 const NOTE_TEXT = "Hero: a bigger headline and a softer call to action.";
