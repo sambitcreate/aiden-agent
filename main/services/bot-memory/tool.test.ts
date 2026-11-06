@@ -13,7 +13,8 @@ import { holdNextRead, recordingDeps } from "../bot-runtime/test-support/fixture
 import { createFauxModels, FAUX_MODEL_REF, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { createBotMemoryService } from "./service.js";
 import { createBotMemoryStore } from "./store.js";
-import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, createBotMemoryTool, withBotMemoryIngress } from "./tool.js";
+import { botRecallToolEntry } from "./recall.js";
+import { BOT_MEMORY_TOOL_NAME, botMemoryAllowed, botMemoryToolEntry, createBotMemoryTool, withBotMemoryIngress } from "./tool.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const BOT = "bot-1";
@@ -173,5 +174,76 @@ test("a call aborted while its save reads memory is not published", async () => 
     assert.throws(() => readFileSync(memoryFile, "utf8"), /ENOENT/u, "nothing reached memory");
   } finally {
     hold.restore();
+  }
+});
+
+test('Bot-message inputs cannot write memory', async () => {
+ const {botMemoryAllowed} = await import('./tool.js');
+ assert.equal(botMemoryAllowed(['bot:J:1:00112233-4455-4677-8899-aabbccddeeff']),false);
+ assert.equal(botMemoryAllowed(['botreply:00112233-4455-4677-8899-aabbccddeeff']),false);
+});
+
+test("recall defers to base ingress except for unknown inputs and Bot-message prefixes", () => {
+  const baseCalls: Array<readonly (string | undefined)[]> = [];
+  const ingress = withBotMemoryIngress((_name, requestIds) => {
+    baseCalls.push(requestIds);
+    return false;
+  });
+  assert.equal(ingress("bot_recall", ["routine:brief:1"]), false, "the wrapper must not bypass a base refusal");
+  assert.deepEqual(baseCalls, [["routine:brief:1"]]);
+  for (const requestIds of [[], ["bot:"], ["botreply:"], [undefined, "bot:malformed"], ["botreply:malformed"]]) {
+    assert.equal(withBotMemoryIngress(() => true)("bot_recall", requestIds), false);
+    assert.equal(botMemoryAllowed(requestIds), false);
+  }
+  assert.equal(botMemoryAllowed([undefined]), true, "one unnamed person input is known provenance");
+  assert.equal(withBotMemoryIngress(botIngressAllowsTool)("bot_recall", ["intro:hello"]), false);
+});
+
+test("a routine can recall person history while memory writes remain withheld", async () => {
+  const { memory } = memoryFor();
+  const offered: string[][] = [];
+  const faux = createFauxModels([
+    fauxAssistantMessage("I will remember the Lisbon trip."),
+    (context) => {
+      offered.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return fauxAssistantMessage([fauxToolCall("bot_recall", { query: "Lisbon" })], { stopReason: "toolUse" });
+    },
+    fauxAssistantMessage("Here is your brief."),
+  ]);
+  const registry = createBotRegistry(BOT, {
+    ...recordingDeps(),
+    currentTools: async () => [botMemoryToolEntry(BOT, memory), botRecallToolEntry()],
+    turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+  });
+  await registry.refresh();
+  const harness = await Harness.open(new MemoryStorage(), { models: faux.models, registry }, ctx);
+  registry.attachHarness(harness);
+  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  try {
+    await (await root.submit({ type: "input", content: "My Lisbon trip is next week." }, ctx)).wait(ctx);
+    await (
+      await root.submit({ type: "input", content: "Prepare my brief", requestId: "routine:brief:1" }, ctx)
+    ).wait(ctx);
+    assert.equal(offered.length, 1);
+    assert.ok(offered[0]!.includes("bot_recall"));
+    assert.ok(!offered[0]!.includes("bot_memory"));
+    const results = (await root.context(ctx)).entries
+      .filter((entry) => entry.kind === ToolResultEntry.kind)
+      .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);
+    assert.equal(results.length, 1);
+    assert.equal(results[0]!.toolName, "bot_recall");
+    assert.equal(results[0]!.isError, false);
+    const recalled = JSON.parse(results[0]!.content[0]!.text!) as {
+      ok: boolean;
+      results: Array<{ from: string; excerpt: string }>;
+    };
+    assert.equal(recalled.ok, true);
+    assert.ok(
+      recalled.results.some(
+        (result) => result.from === "person" && result.excerpt.includes("My Lisbon trip is next week."),
+      ),
+    );
+  } finally {
+    await harness.close(ctx);
   }
 });

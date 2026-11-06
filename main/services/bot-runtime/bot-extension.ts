@@ -1,4 +1,7 @@
+import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
+import { botExecutionScope } from "./bot-execution.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
 //
@@ -21,7 +24,8 @@ import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 //   hands to the person is refused, so the model makes it directly and the
 //   person gets the card. Scripts never reach cards, the Bot's own computer or
 //   browser, routines or subagents (those tools are `callers: ["model"]`).
-// - Ingress: the installed tools are the attended set. Each request and each
+// - Ingress: preparation installs the attended set because admission can race.
+//   Each request and each
 //   call reads which inputs its run serves (`pi.live.run`, durable, so a
 //   queued or restarted input keeps its own sender) and withholds what those
 //   inputs may not use (routine and Telegram turns get no question card), so a
@@ -44,8 +48,13 @@ import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 //   the flush by the current run; the compacted conversation is handed over
 //   too, so the flush also reads each historical entry's own ingress.
 
+import type { BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
 import type { BrowserApprovalTarget } from "../browser/approval.js";
-import { randomUUID } from "node:crypto";
+import type { BotPlanPermit, BotPlans } from "../bot-plans/plans.js";
+import type { BotApprovalDecision } from "./bot-approval-tallies.js";
+export type { BotApprovalAnswer, BotApprovalDecision } from "./bot-approval-tallies.js";
+import { botApprovalRuleKey } from "../../../renderer/shared/tool-approval-scope.js";
+import { createHash, randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
@@ -69,6 +78,9 @@ import {
   type Extension,
   type Harness,
   type Registry,
+  type HookApi,
+  type ToolHookCall,
+  type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type {
@@ -97,6 +109,11 @@ export const BOT_SECTION_KEYS = ["aiden-base", "aiden-persona", "aiden-authority
 /** The tool whose offer decides how the memory section reads. */
 const MEMORY_TOOL_NAME = "bot_memory";
 const APPROVAL_MEMO = "aiden.approval";
+export const BOT_EXECUTION_ID_MEMO = "aiden.execution.id";
+const EXECUTION_ID_MEMO = BOT_EXECUTION_ID_MEMO;
+const PLAN_EXECUTION_MEMO = "aiden.execution.plan";
+const NESTED_EXECUTION_MEMO = "aiden.execution.nested";
+const INPUT_IDENTITY_ENTRY = "aiden.bot-input-identity";
 /** The person's answer to a rule hand-off, kept until the call's block is recorded. */
 const HANDOFF_ANSWER_MEMO = "aiden.handoff.answer";
 export const BOT_CODEMODE_TOOL_NAME = "codemode";
@@ -118,7 +135,51 @@ export function scriptHandoffBlock(toolName: string): string {
   return `A rule hands ${toolName} to the person. Call ${toolName} directly, not from codemode, so they get the card.`;
 }
 
+/** Private authorization evidence. Never projected into renderer/Remote prompts. */
+export interface BotApprovalRequirements {
+  target: BotApprovalRuleTarget;
+  requirementsFingerprint: string;
+  consentRevision: string;
+  authorizationFingerprint: string;
+  matchedRuleId?: string;
+}
+
+export interface BotApprovalEvidence {
+  requirementsFingerprint: string;
+  authorizationFingerprint: string;
+}
+export interface BotAllowListRelease {
+  target: BotApprovalRuleTarget;
+  ruleId: string;
+  consentRevision: string;
+}
+/** Original prompt evidence is captured before waiting. Task 5 must compare its
+ * consentRevision atomically at first publication; current-book reads cannot replace it. */
+export interface BotApprovalSettlementInput {
+  botId: string;
+  /** Host-owned turn routing. Bot-message replies cannot deliver the nudge to the person. */
+  hintEligible?: boolean;
+  remember: NonNullable<BotApprovalRequirement["remember"]>;
+  requirements?: BotApprovalRequirements;
+  decision: BotApprovalDecision;
+}
+/** Ephemeral main-only guard. Invoke only for first publication, after exact
+ * prior-operation replay lookup and inside its atomic update. Never retain it
+ * or invoke it after publication has intentionally changed consentRevision. */
+export interface BotApprovalSettlementContext {
+  validatePublication?(): Promise<void>;
+}
+export interface BotApprovalSettlement {
+  hint?: string;
+  publication?: BotAllowListRelease;
+}
 export interface BotApprovalRequirement {
+  evidence?: BotApprovalEvidence;
+  allowFromList?(grant: BotAllowListRelease): Promise<void>;
+  /** Fresh ordinary policy only, never C coverage or D usage. */
+  revalidate?(): Promise<BotApprovalRequirement | undefined>;
+  remember?: { target: BotApprovalRuleTarget; title: string; offer?: { count: number } };
+  requirements?: BotApprovalRequirements;
   summary: string;
   /**
    * Runs after the person allows, before the tool executes (for example to
@@ -128,10 +189,15 @@ export interface BotApprovalRequirement {
   /** The rule that made (or also covers) this ask. */
   rule?: BotHandoffRule;
   /**
-   * The person's Settings → Bots lets this routine run go ahead: no card,
+   * The person's Settings → Bots & Approvals lets this routine run go ahead: no card,
    * `onAllow` still runs before the tool.
    */
   preapproved?: true;
+  /** Main-only reservation, held only for this invocation. Never memoize the permit. */
+  planPermit?: BotPlanPermit;
+  planOperation?(args: unknown): string | undefined;
+  /** A rule edit during onAllow requires an ordinary fresh decision. */
+  planRulesCurrent?(): Promise<boolean>;
 }
 
 /** A rule handed this call to the person: the call never runs. */
@@ -187,6 +253,18 @@ export interface BotRuleHandoffRowTarget {
 
 /** The call being checked. */
 export interface BotToolCallCheck {
+  /** Optional live owner fence for pure requirements reads; never hashed as a callback. */
+  assertCurrent?(): Promise<void>;
+  owner?: BotApprovalOwner;
+  executionId?: string;
+  /** Stable host-owned input identities for plan binding; ingress still uses requestIds. */
+  authorizationIds?: readonly string[];
+  /** Stale permits fall back to ordinary policy without reserving again. */
+  skipPlanCoverage?: true;
+  /** Internal ordinary-policy fallback after an unreadable or changed allow-list proof. */
+  skipAllowList?: true;
+  /** Internal pure ordinary-approval evidence read. */
+  approvalProbe?: true;
   callId: string;
   args: unknown;
   signal: AbortSignal | undefined;
@@ -197,7 +275,18 @@ export interface BotToolCallCheck {
 
 export type BotReadmission = { ok: true } | { ok: false; reason: "access_changed" | "bot_missing" };
 
+export interface BotApprovalOwner {
+  runId: string;
+  inputs: Array<{submissionId: string; entryId?: string; requestId?: string; botMessage?: BotMessageInputMetadata; invalidBotInput?: true}>;
+}
+
 export interface BotApprovalRequest {
+  authorizationFingerprint: string;
+  always?: { key: string; count: number };
+  allowList?: Pick<BotApprovalRequirements, "target" | "requirementsFingerprint" | "consentRevision">;
+  assertCurrent?(): Promise<void>;
+  prepareAllowListRelease?(grant: BotAllowListRelease): Promise<BotApprovalDecision | undefined>;
+  owner?: BotApprovalOwner;
   botId: string;
   /** Stable across restarts for the same tool call. */
   waitId: string;
@@ -215,6 +304,8 @@ export interface BotToolEntry {
   mcp?: boolean;
   /** Build the tool per call from the conversation it runs in (see `tool-adapter.ts`). */
   bind?: (call: BotToolCall) => AgentTool;
+  /** The assembly's optional main-only final plan admission port. */
+  admitPlan?: BotPlans["admit"];
 }
 
 /** What the next request offers, so the sections can describe it. */
@@ -232,6 +323,7 @@ export interface BotTurnContext {
 export type BotCompaction = Parameters<CompactionHooks["beforeCompact"]>[0];
 
 export interface BotExtensionDeps {
+  now?(): number;
   /** Re-read on every refresh. */
   loadBot(botId: string): Promise<BotDefinition>;
   /** Base, persona, authority and guidance sections, in this order. Built after `currentTools`. */
@@ -243,6 +335,8 @@ export interface BotExtensionDeps {
   memorySection?(botId: string, offer: { memoryOffered: boolean }): Promise<string>;
   /** The Bot gave a final answer. Called without waiting; must not throw. */
   afterReply?(botId: string): void;
+  /** Awaited host peer outcome observation; never creates a new model request. */
+  peerReply?(botId: string, message: AssistantMessage, taskId: string): Promise<void>;
   /**
    * A compaction is about to summarize. Return a summary to use instead of Pi
    * Durable's own, or `undefined` to let it summarize. Errors fall back too.
@@ -268,7 +362,10 @@ export interface BotExtensionDeps {
    * (the turn stopped or the app is quitting), so the call stays unanswered
    * and is re-asked with the same `waitId` after Resume.
    */
-  requestApproval(request: BotApprovalRequest): Promise<"allow" | "deny">;
+  requestApproval(request: BotApprovalRequest): Promise<BotApprovalDecision>;
+  settleApproval?(input: BotApprovalSettlementInput, context?: BotApprovalSettlementContext): Promise<BotApprovalSettlement>;
+  /** Optional adapter alias; both request ports return the same structured decision. */
+  requestApprovalOutcome?(request: BotApprovalRequest): Promise<BotApprovalDecision>;
   /**
    * Show a rule hand-off card. Resolves with the person's answer; rejects
    * when `signal` aborts, so the call stays unanswered and Resume asks again
@@ -332,6 +429,45 @@ export interface BotRegistry extends Registry {
    * aborts the generation task instead.
    */
   attachHarness(harness: Harness): void;
+  /** Independent prompt/tool closures for one task phase; shares only its sandbox. */
+  fork(): BotRegistry;
+}
+
+function approvalHash(value: unknown): string {
+  const canonical = (input: unknown): string => {
+    if (Array.isArray(input)) return `[${input.map(canonical).join(",")}]`;
+    if (input && typeof input === "object") return `{${Object.entries(input).filter(([, value]) => value !== undefined)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, value]) => `${JSON.stringify(key)}:${canonical(value)}`).join(",")}}`;
+    return JSON.stringify(input);
+  };
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
+function ordinaryEvidence(value: BotApprovalRequirement, executionId: string, toolName: string, args: unknown,
+  owner: BotApprovalOwner, requestIds: readonly (string | undefined)[]): BotApprovalEvidence {
+  if (value.evidence) return value.evidence;
+  const fingerprint = approvalHash({ version: "host-approval-v1", executionId, toolName, args, owner, requestIds,
+    rule: value.rule?.id, target: value.remember?.target });
+  return { requirementsFingerprint: fingerprint, authorizationFingerprint: fingerprint };
+}
+/** Revocation drops the probe closure and its live HookApi even if a consumer
+ * mistakenly keeps the context or its callback after settlement. */
+function publicationValidation(probe: (() => Promise<void>) | undefined) {
+  const context: BotApprovalSettlementContext = {
+    async validatePublication() {
+      const active = probe;
+      if (!active) throw new Error("This approval publication validation is no longer active.");
+      await active();
+      if (probe !== active) throw new Error("This approval publication validation is no longer active.");
+    },
+  };
+  return { context, revoke() { probe = undefined; context.validatePublication = undefined; } };
+}
+
+interface ApprovalSettlementMemo {
+  [key: string]: JsonValue;
+  id: string;
+  authorizationFingerprint: string;
+  result: { [key: string]: JsonValue };
 }
 
 interface ApprovalMemo {
@@ -397,6 +533,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   }
 
   let installedToolNames = new Set<string>();
+  let planAdmissionAvailable = false;
   /** Offered tools whose declarations wait until the model loads or calls them. */
   let onDemandNames: ReadonlySet<string> = new Set();
 
@@ -455,12 +592,87 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
     context: Context,
   ): Promise<(string | undefined)[]> {
+    const execution = botExecutionScope(botId); if (execution) return execution.requestIds;
+    return (await runOwner(api, context)).inputs.map(input => input.requestId);
+  }
+
+  async function runOwner(
+    api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context,
+  ): Promise<BotApprovalOwner> {
     const live = await api.snapshot(LiveDoc, api.conversationId, context);
-    const inputs = live?.run?.inputs ?? [];
-    if (inputs.length === 0) return [];
-    if (harness === undefined) throw new Error("The Bot harness is not attached.");
-    const { submissions } = await harness.inspect(context);
-    return inputs.map((id) => submissions.find((submission) => submission.id === id)?.requestId);
+    if (!harness) throw new Error("The Bot harness is not attached.");
+    const {submissions} = await harness.inspect(context);
+    const conversation = await harness.conversation(api.conversationId, context);
+    const inputs = await Promise.all((live?.run?.inputs ?? []).map(async id => {
+      const submission = submissions.find(s => s.id === id);
+      if (submission?.type !== "input") return undefined;
+      const entry = submission.entry !== undefined && conversation
+        ? await conversation.commit(tx => tx.entry(submission.entry!), context) : undefined;
+      const botMessage = entry?.kind === BOT_MESSAGE_INPUT_KIND ? botInputMetadata(submission.requestId, entry.data) : undefined;
+      return {submissionId: String(id), ...(entry ? { entryId: String(entry.id) } : {}), ...(submission?.requestId !== undefined ? {requestId: submission.requestId} : {}),
+        ...(botMessage ? { botMessage } : entry?.kind === BOT_MESSAGE_INPUT_KIND ? { invalidBotInput: true as const } : {})};
+    }));
+    return {runId: String(live?.run?.taskId ?? api.conversationId), inputs: inputs.some(input => input === undefined)
+      ? [] : inputs.filter((input): input is NonNullable<typeof input> => input !== undefined)};
+  }
+
+  function botInputMetadata(requestId: string | undefined, data: JsonValue | undefined): BotMessageInputMetadata | undefined {
+    const turn = botMessageTurnOf(requestId);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+    const { kind, deliveryId, botId: sender, botName, text, deadline } = data;
+    if ((turn.kind !== "message" && turn.kind !== "reply") || deliveryId !== turn.deliveryId ||
+        kind !== (turn.kind === "message" ? "request" : "reply") ||
+        typeof sender !== "string" || !sender.trim() || (turn.kind === "message" && sender !== turn.fromBotId) ||
+        typeof botName !== "string" || typeof text !== "string" || typeof deadline !== "number" || !Number.isFinite(deadline)) return undefined;
+    return { kind, deliveryId: turn.deliveryId, botId: sender, botName, text, deadline };
+  }
+
+  async function runInputIds(api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context): Promise<string[]> {
+    const owner = await runOwner(api, context);
+    if (!owner.inputs.length) throw new Error("This tool is not available without an active input.");
+    if (owner.inputs.every(input => input.requestId !== undefined)) return owner.inputs.map(input => input.requestId!);
+    const conversation = await harness!.conversation(api.conversationId, context);
+    if (!conversation) throw new Error("This Bot conversation is unavailable.");
+    // One transaction makes concurrent tools share the identity. A fresh
+    // recovered DB has no bookkeeping entry and therefore mints a new UUID.
+    return conversation.commit(async tx => {
+      const identities = new Map<string, string>();
+      let cursor: Parameters<typeof tx.scanEntries>[2];
+      do {
+        const page = await tx.scanEntries({ conversationId: api.conversationId }, 500, cursor);
+        for (const entry of page.items) {
+          if (entry.kind !== INPUT_IDENTITY_ENTRY || !entry.data || typeof entry.data !== "object" || Array.isArray(entry.data)) continue;
+          const { submissionId, entryId, identity } = entry.data;
+          if (typeof submissionId === "string" && typeof entryId === "string" && typeof identity === "string" && /^input:[0-9a-f-]{36}$/u.test(identity)) identities.set(JSON.stringify([submissionId, entryId]), identity);
+        }
+        cursor = page.next;
+      } while (cursor !== undefined);
+      const ids: string[] = [];
+      for (const input of owner.inputs) {
+        if (input.requestId !== undefined) { ids.push(input.requestId); continue; }
+        if (!input.entryId) throw new Error("This input has no committed entry.");
+        const key = JSON.stringify([input.submissionId, input.entryId]);
+        let identity = identities.get(key);
+        if (!identity) {
+          identity = `input:${randomUUID()}`;
+          await tx.appendEntry(api.conversationId, { kind: INPUT_IDENTITY_ENTRY, data: { submissionId: input.submissionId, entryId: input.entryId, identity } });
+          identities.set(key, identity);
+        }
+        ids.push(identity);
+      }
+      return ids;
+    }, context);
+  }
+
+  function expired(owner: BotApprovalOwner): boolean {
+    return owner.inputs.some(input => input.invalidBotInput || (isBotMessageRequestId(input.requestId) &&
+      (!input.botMessage || input.botMessage.deadline <= (deps.now?.() ?? Date.now()))));
+  }
+  async function assertLive(api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId }, context: Context, expectedOwner?: BotApprovalOwner): Promise<void> {
+    const owner = await runOwner(api, context);
+    if (owner.inputs.length === 0) throw new Error("This tool is not available without an active input.");
+    if (expired(owner)) throw new Error("This Bot message expired. No further actions can run.");
+    if (expectedOwner && approvalHash(owner) !== approvalHash(expectedOwner)) throw new Error("This tool's owning inputs changed. Ask again.");
   }
 
   /** Whether the run being served may use `bot_memory`. */
@@ -469,13 +681,276 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     context: Context,
   ): Promise<boolean> {
     if (!installedToolNames.has(MEMORY_TOOL_NAME)) return false;
+    const requestIds = await runRequestIds(api, context);
+    if (requestIds.length === 0) return false;
     if (deps.turnAllows === undefined) return true;
-    return deps.turnAllows(MEMORY_TOOL_NAME, await runRequestIds(api, context));
+    return deps.turnAllows(MEMORY_TOOL_NAME, requestIds);
+  }
+
+  // Invocation-local permits and callbacks are never durable/public metadata.
+  const executionApprovals = new Map<string, { approval: BotApprovalRequirement; invalid?: boolean; argsFingerprint?: string }>();
+  const ordinaryExecutions = new Set<string>();
+  const executedApprovals = new Map<string, { id: string; authorizationFingerprint: string; cacheKey: string }>();
+
+  async function authorizeTool(call: ToolHookCall, api: HookApi, context: Context, skipPlanCoverage = false, attempt = 0): Promise<{ block: string } | undefined> {
+    if (attempt > 3) return { block: "This action's approval requirements kept changing. Ask again." };
+    call = { ...call, arguments: structuredClone(call.arguments) };
+    const executionId = await api.memo(EXECUTION_ID_MEMO, randomUUID(), context);
+    await api.memo(NESTED_EXECUTION_MEMO, call.parent !== undefined, context);
+    executionApprovals.delete(String(api.taskId));
+    executedApprovals.delete(String(api.taskId));
+    const owner = await runOwner(api, context);
+    if (owner.inputs.length === 0) return {block: "This tool is not available without an active input."};
+    if (expired(owner)) return {block: "This Bot message expired. No further actions can run."};
+    // A rule hand-off the person already answered is applied as answered,
+    // whatever the rules say now: re-deciding could run a call the person
+    // already did themselves.
+    const answered = await api.memo<HandoffAnswerMemo>(HANDOFF_ANSWER_MEMO, context);
+    if (answered !== undefined) return applyHandoffAnswer(api, context, call.id, answered);
+    // A throw here blocks the call, so an unreadable run fails closed.
+    const requestIds = await runRequestIds(api, context);
+    if (deps.turnAllows !== undefined && !deps.turnAllows(call.name, requestIds)) {
+      return { block: "This tool is not available on this turn." };
+    }
+    // Codemode itself does nothing; every call its script makes is checked on its own.
+    if (call.name === BOT_CODEMODE_TOOL_NAME && scriptable.length > 0) return undefined;
+    // Loading only declares installed tools; each loaded tool is checked when called.
+    if (call.name === LOAD_TOOLS_TOOL_NAME && onDemandNames.size > 0) return undefined;
+    const check: BotToolCallCheck = {
+      executionId,
+      owner,
+      assertCurrent: () => assertLive(api, context, owner),
+      ...(planAdmissionAvailable ? { authorizationIds: await runInputIds(api, context) } : {}),
+      ...(skipPlanCoverage ? { skipPlanCoverage: true as const } : {}),
+      callId: call.id,
+      args: call.arguments,
+      signal: context.abortSignal,
+      requestIds,
+      hasRoutineInputs: async () => {
+        const conversation = await harness!.conversation(api.conversationId, context);
+        if (!conversation) return false;
+        return conversation.commit(async (tx) => {
+          for (const key of requestIds) {
+            if (!key) return false;
+            const input = await tx.submissionByRequest(api.conversationId, key);
+            if (input?.type !== "input" || input.entry === undefined ||
+                (await tx.entry(input.entry))?.kind !== BOT_ROUTINE_INPUT_KIND) return false;
+          }
+          return requestIds.length > 0;
+        }, context);
+      },
+    };
+    let decision = await deps.checkPolicy(botId, call.name, check);
+    if (!planAdmissionAvailable && decision.allowed && decision.approval?.evidence && !decision.approval.preapproved) {
+      // With no C port, harmless calls still avoid identity bookkeeping. An
+      // ordinary approval needs mapped unnamed inputs too; this second fresh
+      // classification cannot reserve coverage.
+      check.authorizationIds = await runInputIds(api, context);
+      decision = await deps.checkPolicy(botId, call.name, { ...check, skipPlanCoverage: true });
+    }
+    if (expired(await runOwner(api, context))) return {block: "This Bot message expired."};
+    if (!decision.allowed) return { block: decision.reason };
+    // A hand-off card belongs to a call in the transcript, which a script's call is not.
+    if (decision.handoff !== undefined && call.parent !== undefined) return { block: scriptHandoffBlock(call.name) };
+    if (decision.handoff !== undefined) {
+      const handoff = decision.handoff;
+      // Nobody can answer a card here: block with what is needed.
+      if (deps.requestHandoff === undefined) return { block: ruleUnattendedBlock(handoff.rule.label) };
+      const target = handoff.browserTarget;
+      // A resumed tool can probe a different current tab. Keep the first
+      // document identity with its wait, without persisting the page URL.
+      const browserDocument = target && JSON.stringify([target.workspaceId, target.tabId, target.documentRevision]);
+      const memo = await api.memo<ApprovalMemo>(
+        APPROVAL_MEMO,
+        {
+          waitId: randomUUID(), toolCallId: call.id, summary: handoff.summary, kind: "handoff", rule: handoff.rule.id,
+          ...(browserDocument && { browserDocument }),
+        },
+        context,
+      );
+      const answer = await deps.requestHandoff({
+        botId,
+        waitId: memo.waitId,
+        toolCallId: call.id,
+        toolName: call.name,
+        action: handoff.action,
+        why: handoff.why,
+        rule: handoff.rule,
+        ...(target && memo.browserDocument === browserDocument && { browserTarget: target }),
+        ...(handoff.open === undefined ? {} : { open: handoff.open }),
+        signal: context.abortSignal,
+      });
+      const stored = await api.memo<HandoffAnswerMemo>(
+        HANDOFF_ANSWER_MEMO,
+        {
+          outcome: answer.outcome,
+          note: answer.note ?? null,
+          summary: handoff.summary,
+          action: handoff.action,
+          rule: { id: handoff.rule.id, label: handoff.rule.label },
+        },
+        context,
+      );
+      return applyHandoffAnswer(api, context, call.id, stored);
+    }
+    if (decision.approval === undefined) return undefined;
+    if (decision.approval.planPermit) {
+      await api.memo(PLAN_EXECUTION_MEMO, true, context);
+      executionApprovals.set(String(api.taskId), { approval: decision.approval });
+    }
+    if (decision.approval.preapproved === true) {
+      try {
+        await assertLive(api, context);
+        await decision.approval.onAllow?.();
+        await assertLive(api, context);
+      } catch (error) {
+        // A beforeTool block never reaches execute/afterTool/settled.
+        executionApprovals.delete(String(api.taskId));
+        return { block: error instanceof Error ? error.message : "This action can no longer run." };
+      }
+      return undefined;
+    }
+    let approval = decision.approval;
+    const evidenceOf = (value: BotApprovalRequirement) => ordinaryEvidence(value, executionId, call.name, call.arguments, owner, requestIds);
+    const fresh = async () => {
+      await assertLive(api, context);
+      if (approval.revalidate) return approval.revalidate();
+      const current = await deps.checkPolicy(botId, call.name, { ...check, skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
+      return current.allowed ? current.approval : undefined;
+    };
+    const attemptMemo = async (value: BotApprovalRequirement) => {
+      const evidence = evidenceOf(value);
+      return api.memo<ApprovalMemo>(`aiden.approval.attempt:${evidence.authorizationFingerprint}`, {
+        waitId: randomUUID(), toolCallId: call.id, summary: value.summary, kind: "approval", rule: value.rule?.id ?? null,
+        authorizationFingerprint: evidence.authorizationFingerprint,
+      }, context);
+    };
+    let memo = await attemptMemo(approval);
+    let fingerprint = evidenceOf(approval).authorizationFingerprint;
+    let releaseProof: BotAllowListRelease | undefined;
+    let preparedRelease: { approval: BotApprovalRequirement; memo: ApprovalMemo; grant: BotAllowListRelease } | undefined;
+    const capturedRequirements = approval.requirements ? structuredClone(approval.requirements) : undefined;
+    const capturedRemember = approval.remember ? structuredClone(approval.remember) : undefined;
+    const request: BotApprovalRequest = {
+      botId, waitId: memo.waitId, toolCallId: memo.toolCallId, toolName: call.name, summary: approval.summary,
+      authorizationFingerprint: fingerprint, owner, signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
+      ...(capturedRemember?.offer && !approval.rule ? { always: { key: botApprovalRuleKey(capturedRemember.target), count: capturedRemember.offer.count } } : {}),
+      ...(capturedRequirements && capturedRemember && !approval.rule ? {
+        allowList: { target: capturedRequirements.target, requirementsFingerprint: capturedRequirements.requirementsFingerprint,
+          consentRevision: capturedRequirements.consentRevision },
+        prepareAllowListRelease: async (grant: BotAllowListRelease) => {
+          const current = await fresh(), proof = current?.requirements;
+          if (!current || !proof || current.rule || proof.requirementsFingerprint !== capturedRequirements.requirementsFingerprint ||
+              proof.consentRevision !== grant.consentRevision || proof.matchedRuleId !== grant.ruleId ||
+              botApprovalRuleKey(proof.target) !== botApprovalRuleKey(grant.target)) return undefined;
+          const replacement = await attemptMemo(current);
+          if (replacement.waitId === memo.waitId) return undefined;
+          await assertLive(api, context);
+          preparedRelease = { approval: current, memo: replacement, grant: structuredClone(grant) };
+          return { id: replacement.waitId, authorizationFingerprint: proof.authorizationFingerprint, answer: "allow" as const, source: "allow_list" as const };
+        },
+      } : {}),
+    };
+    const answer = deps.requestApprovalOutcome ? await deps.requestApprovalOutcome(request) : await deps.requestApproval(request);
+    if (answer.source === "allow_list" && preparedRelease && answer.id === preparedRelease.memo.waitId &&
+        answer.authorizationFingerprint === evidenceOf(preparedRelease.approval).authorizationFingerprint) {
+      approval = preparedRelease.approval; memo = preparedRelease.memo; releaseProof = preparedRelease.grant;
+      fingerprint = evidenceOf(approval).authorizationFingerprint;
+    }
+    if (answer.id !== memo.waitId || answer.authorizationFingerprint !== fingerprint) return { block: "This approval decision belongs to another authorization attempt." };
+    const settlementOwner = await runOwner(api, context);
+    if (expired(settlementOwner)) return { block: "This Bot message expired. The approval window ended." };
+    const cacheKey = `aiden.approval.settled:${answer.id}:${answer.authorizationFingerprint}`;
+    let settlement: BotApprovalSettlement = {};
+    if (capturedRemember && deps.settleApproval) {
+      let cache = await api.memo<ApprovalSettlementMemo>(cacheKey, context);
+      if (cache && (cache.id !== answer.id || cache.authorizationFingerprint !== answer.authorizationFingerprint))
+        return { block: "This approval settlement belongs to another authorization attempt." };
+      if (!cache) {
+        const mayPublish = answer.source === "person" && answer.answer === "allow_always";
+        const expectedFingerprint = answer.authorizationFingerprint;
+        const publicationRequirements = async () => {
+          await assertLive(api, context, owner);
+          const current = await fresh();
+          await assertLive(api, context, owner);
+          return current && evidenceOf(current).authorizationFingerprint === expectedFingerprint ? current : undefined;
+        };
+        // A stale human Always must not reach a service capable of publishing.
+        // Once/deny history remains the exact human event, even if policy moved.
+        if (mayPublish && !(await publicationRequirements())) return authorizeTool(call, api, context, true, attempt + 1);
+        let publicationChanged = false;
+        const validation = mayPublish ? publicationValidation(async () => {
+          try {
+            const current = await publicationRequirements();
+            if (!current?.requirements || !capturedRequirements || current.rule ||
+                current.requirements.authorizationFingerprint !== capturedRequirements.authorizationFingerprint) {
+              throw new Error("This action's approval requirements changed before publication. Ask again.");
+            }
+          } catch (error) { publicationChanged = true; throw error; }
+        }) : undefined;
+        const requirements = releaseProof ? approval.requirements : capturedRequirements;
+        let result: BotApprovalSettlement;
+        try {
+          result = await deps.settleApproval(structuredClone({ botId, remember: capturedRemember,
+            hintEligible: !settlementOwner.inputs.some(input => { const turn = botMessageTurnOf(input.requestId); return turn.kind === "message" || turn.kind === "reply"; }),
+            ...(requirements ? { requirements } : {}), decision: answer }), validation?.context);
+        } catch (error) {
+          if (publicationChanged) return authorizeTool(call, api, context, true, attempt + 1);
+          throw error;
+        } finally { validation?.revoke(); }
+        cache = await api.memo<ApprovalSettlementMemo>(cacheKey, { id: answer.id, authorizationFingerprint: answer.authorizationFingerprint,
+          result: JSON.parse(JSON.stringify(result)) as { [key: string]: JsonValue } }, context);
+      }
+      settlement = cache.result as BotApprovalSettlement;
+    }
+    if (answer.answer === "deny") return { block: answer.source === "expiry" ? "The approval window expired. Nobody approved this action."
+      : answer.source === "person" ? "The person declined this action." : "This action was not approved." };
+    const current = await fresh();
+    const publication = releaseProof ?? settlement.publication;
+    const same = current && evidenceOf(current).authorizationFingerprint === fingerprint;
+    const ownPublication = current?.requirements && publication && (answer.source === "allow_list" || answer.answer === "allow_always") &&
+      current.requirements.requirementsFingerprint === (releaseProof ? approval.requirements?.requirementsFingerprint : capturedRequirements?.requirementsFingerprint) &&
+      current.requirements.consentRevision === publication.consentRevision && current.requirements.matchedRuleId === publication.ruleId &&
+      botApprovalRuleKey(current.requirements.target) === botApprovalRuleKey(publication.target);
+    if (!current || (!same && !ownPublication)) return authorizeTool(call, api, context, true, attempt + 1);
+    try {
+      await assertLive(api, context);
+      if (answer.source === "allow_list" && publication) {
+        if (!current.allowFromList) throw new Error("This remembered approval is no longer available.");
+        await current.allowFromList(publication);
+      } else await current.onAllow?.();
+      await assertLive(api, context);
+      const afterBinding = current.revalidate ? await current.revalidate() : current;
+      if (!afterBinding || evidenceOf(afterBinding).authorizationFingerprint !== evidenceOf(current).authorizationFingerprint)
+        return authorizeTool(call, api, context, true, attempt + 1);
+      await api.memo("aiden.execution.approval", true, context);
+      executionApprovals.set(String(api.taskId), { approval: { summary: current.summary, evidence: evidenceOf(current) }, argsFingerprint: approvalHash(call.arguments) });
+      if (capturedRemember && deps.settleApproval) executedApprovals.set(String(api.taskId), { id: answer.id, authorizationFingerprint: answer.authorizationFingerprint, cacheKey });
+    } catch (error) {
+      executionApprovals.delete(String(api.taskId)); executedApprovals.delete(String(api.taskId));
+      return { block: error instanceof Error ? error.message : "This action can no longer run." };
+    }
+    return undefined;
+  }
+
+  async function currentExecutionApproval(toolName: string, api: HookApi, args: unknown, context: Context) {
+    const owner = await runOwner(api, context), requestIds = await runRequestIds(api, context);
+    const executionId = await api.memo<string>(EXECUTION_ID_MEMO, context);
+    if (!executionId || expired(owner) || !owner.inputs.length) return undefined;
+    const decision = await deps.checkPolicy(botId, toolName, { executionId, callId: (api as ToolExecutionApi).callId,
+      args, owner, requestIds, authorizationIds: await runInputIds(api, context),
+      signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
+      skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
+    if (!decision.allowed || !decision.approval || decision.approval.preapproved) return undefined;
+    return ordinaryEvidence(decision.approval, executionId, toolName, args, owner, requestIds);
   }
 
   const hooks = [
     hook(GenerationTask, {
       beforeRequest: async (request, api, context) => {
+        const owner = await runOwner(api, context);
+        const messageExpired = expired(owner);
+        if (messageExpired && owner.inputs.every(input => input.invalidBotInput || isBotMessageRequestId(input.requestId))) return failClosed(api.taskId, context, new Error("This Bot message expired."));
         if (!admitted) {
           const readmission = await deps.readmit(botId);
           if (!readmission.ok) {
@@ -491,7 +966,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           const refusal = await deps.spending.refusal(botId, await runRequestIds(api, context));
           if (refusal !== undefined) return failClosed(api.taskId, context, new BotSpendingLimitError(refusal));
         }
-        let messages = request.messages;
+        let messages = messageExpired || owner.inputs.length === 0 ? withoutTools(request.messages, () => true) : request.messages;
         const turnAllows = deps.turnAllows;
         if (turnAllows !== undefined) {
           const requestIds = await runRequestIds(api, context);
@@ -502,6 +977,12 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
+        const finalOwner = await runOwner(api, context);
+        const finalExpired = expired(finalOwner);
+        if (finalExpired || finalOwner.inputs.length === 0) {
+          if (finalExpired && finalOwner.inputs.every(input => input.invalidBotInput || isBotMessageRequestId(input.requestId))) return failClosed(api.taskId, context, new Error("This Bot message expired."));
+          messages = withoutTools(messages, () => true);
+        }
         return messages === request.messages ? undefined : { messages };
       },
       afterResponse: async (message, api, context) => {
@@ -512,10 +993,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           // Spending that cannot be attributed must never fail the reply.
         }
       },
-      onYield: () => {
+      onYield: async (message, api) => {
+        await deps.peerReply?.(botId, message, String(api.taskId));
         // The review decides later whether to run; the answer never waits on it.
         try {
-          deps.afterReply?.(botId);
+          if (!botExecutionScope(botId)?.claim.peer) deps.afterReply?.(botId);
         } catch {
           // A review that cannot be scheduled must never affect the reply.
         }
@@ -536,122 +1018,14 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       },
     }),
     hook(ToolTask, {
-      beforeTool: async (call, api, context) => {
-        // A rule hand-off the person already answered is applied as answered,
-        // whatever the rules say now: re-deciding could run a call the person
-        // already did themselves.
-        const answered = await api.memo<HandoffAnswerMemo>(HANDOFF_ANSWER_MEMO, context);
-        if (answered !== undefined) return applyHandoffAnswer(api, context, call.id, answered);
-        // A throw here blocks the call, so an unreadable run fails closed.
-        const requestIds = await runRequestIds(api, context);
-        if (deps.turnAllows !== undefined && !deps.turnAllows(call.name, requestIds)) {
-          return { block: "This tool is not available on this turn." };
-        }
-        // Codemode itself does nothing; every call its script makes is checked on its own.
-        if (call.name === BOT_CODEMODE_TOOL_NAME && scriptable.length > 0) return undefined;
-        // Loading only declares installed tools; each loaded tool is checked when called.
-        if (call.name === LOAD_TOOLS_TOOL_NAME && onDemandNames.size > 0) return undefined;
-        const decision = await deps.checkPolicy(botId, call.name, {
-          callId: call.id,
-          args: call.arguments,
-          signal: context.abortSignal,
-          requestIds,
-          hasRoutineInputs: async () => {
-            const conversation = await harness!.conversation(api.conversationId, context);
-            if (!conversation) return false;
-            return conversation.commit(async (tx) => {
-              for (const key of requestIds) {
-                if (!key) return false;
-                const input = await tx.submissionByRequest(api.conversationId, key);
-                if (input?.type !== "input" || input.entry === undefined ||
-                    (await tx.entry(input.entry))?.kind !== BOT_ROUTINE_INPUT_KIND) return false;
-              }
-              return requestIds.length > 0;
-            }, context);
-          },
-        });
-        if (!decision.allowed) return { block: decision.reason };
-        // A hand-off card belongs to a call in the transcript, which a script's call is not.
-        if (decision.handoff !== undefined && call.parent !== undefined) return { block: scriptHandoffBlock(call.name) };
-        if (decision.handoff !== undefined) {
-          const handoff = decision.handoff;
-          // Nobody can answer a card here: block with what is needed.
-          if (deps.requestHandoff === undefined) return { block: ruleUnattendedBlock(handoff.rule.label) };
-          const target = handoff.browserTarget;
-          // A resumed tool can probe a different current tab. Keep the first
-          // document identity with its wait, without persisting the page URL.
-          const browserDocument = target && JSON.stringify([target.workspaceId, target.tabId, target.documentRevision]);
-          const memo = await api.memo<ApprovalMemo>(
-            APPROVAL_MEMO,
-            {
-              waitId: randomUUID(), toolCallId: call.id, summary: handoff.summary, kind: "handoff", rule: handoff.rule.id,
-              ...(browserDocument && { browserDocument }),
-            },
-            context,
-          );
-          const answer = await deps.requestHandoff({
-            botId,
-            waitId: memo.waitId,
-            toolCallId: call.id,
-            toolName: call.name,
-            action: handoff.action,
-            why: handoff.why,
-            rule: handoff.rule,
-            ...(target && memo.browserDocument === browserDocument && { browserTarget: target }),
-            ...(handoff.open === undefined ? {} : { open: handoff.open }),
-            signal: context.abortSignal,
-          });
-          const stored = await api.memo<HandoffAnswerMemo>(
-            HANDOFF_ANSWER_MEMO,
-            {
-              outcome: answer.outcome,
-              note: answer.note ?? null,
-              summary: handoff.summary,
-              action: handoff.action,
-              rule: { id: handoff.rule.id, label: handoff.rule.label },
-            },
-            context,
-          );
-          return applyHandoffAnswer(api, context, call.id, stored);
-        }
-        if (decision.approval === undefined) return undefined;
-        if (decision.approval.preapproved === true) {
-          try {
-            await decision.approval.onAllow?.();
-          } catch (error) {
-            return { block: error instanceof Error ? error.message : "This action can no longer run." };
-          }
-          return undefined;
-        }
-        const memo = await api.memo<ApprovalMemo>(
-          APPROVAL_MEMO,
-          {
-            waitId: randomUUID(),
-            toolCallId: call.id,
-            summary: decision.approval.summary,
-            kind: "approval",
-            rule: decision.approval.rule?.id ?? null,
-          },
-          context,
-        );
-        // A wait first opened as a hand-off (the rules changed since) asks with
-        // today's summary under the same wait id.
-        const summary = memo.kind === "handoff" ? decision.approval.summary : memo.summary;
-        const answer = await deps.requestApproval({
-          botId,
-          waitId: memo.waitId,
-          toolCallId: memo.toolCallId,
-          toolName: call.name,
-          summary,
-          signal: context.abortSignal,
-        });
-        if (answer !== "allow") return { block: "The person declined this action." };
-        try {
-          await decision.approval.onAllow?.();
-        } catch (error) {
-          return { block: error instanceof Error ? error.message : "This action can no longer run." };
-        }
-        return undefined;
+      beforeTool: (call, api, context) => authorizeTool(call, api, context),
+      afterTool: async (_call, result, api, context) => {
+        const key = String(api.taskId), executed = executedApprovals.get(key);
+        executedApprovals.delete(key); executionApprovals.delete(key); ordinaryExecutions.delete(key);
+        if (!executed || result.isError || !Array.isArray(result.output)) return undefined;
+        const cache = await api.memo<ApprovalSettlementMemo>(executed.cacheKey, context);
+        if (!cache || cache.id !== executed.id || cache.authorizationFingerprint !== executed.authorizationFingerprint || typeof cache.result.hint !== "string") return undefined;
+        return { ...result, output: [...result.output, { type: "text", text: "\n\n" + cache.result.hint }] };
       },
     }),
   ];
@@ -702,6 +1076,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     async refresh(turn: BotTurnContext = {}) {
       const bot = await deps.loadBot(botId);
       const current = await deps.currentTools(bot, turn);
+      planAdmissionAvailable = current.some(entry => entry.admitPlan !== undefined);
       // Rarely used tools are installed but declared only once loaded (see `on-demand-tools.ts`).
       const loading = createOnDemandTools(current.map(({ tool }) => tool));
       onDemandNames = new Set(loading?.onDemand.map(({ name }) => name) ?? []);
@@ -716,8 +1091,70 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         ...(scriptable.length > 0 ? [BOT_CODEMODE_TOOL_NAME] : []),
       ]);
       const tools = offered.map((entry): DurableTool => {
-        const { tool, replay, mcp, bind } = entry;
-        const adapted = adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) });
+        const { tool, replay, mcp, bind, admitPlan } = entry;
+        // Rebuild call context using the current execution API, including recovery,
+        // because an unsafe tool's old HookApi is no longer live after intent.
+        const executionCall = async (api: HookApi & { callId: string }, args: unknown, context: Context): Promise<ToolHookCall> => ({
+          type: "toolCall", id: api.callId, name: tool.name, arguments: args as ToolHookCall["arguments"],
+          ...(await api.memo<boolean>(NESTED_EXECUTION_MEMO, context) ? { parent: { taskId: api.taskId, callId: api.callId } } : {}),
+        });
+        const adapted = adaptAidenTool(tool, {
+          assertRunActive: assertLive, replay: mcp ? "unsafe" : replay,
+          ...(bind === undefined ? {} : { bind, runRequestIds, runInputIds }),
+          ...{
+            prepareExecution: async (api, context, args) => {
+              const key = String(api.taskId);
+              if (!ordinaryExecutions.has(key) && !executionApprovals.has(key) && (await api.memo<boolean>(PLAN_EXECUTION_MEMO, context) || await api.memo<boolean>("aiden.execution.approval", context))) {
+                // Safe recovery skips beforeTool. Restore authorization before
+                // entering the fence, so authority is fresh after onAllow.
+                const result = await authorizeTool(await executionCall(api, args, context), api, context);
+                if (result?.block) throw new Error(result.block);
+                if (!executionApprovals.has(key)) ordinaryExecutions.add(key);
+              }
+              let authorization = executionApprovals.get(key);
+              if (authorization?.argsFingerprint && (authorization.argsFingerprint !== approvalHash(args) ||
+                  (await currentExecutionApproval(tool.name, api, args, context))?.authorizationFingerprint !== authorization.approval.evidence?.authorizationFingerprint)) {
+                const result = await authorizeTool(await executionCall(api, args, context), api, context, true);
+                if (result?.block) throw new Error(result.block);
+                authorization = executionApprovals.get(key);
+              }
+              if (authorization?.approval.planRulesCurrent && !(await authorization.approval.planRulesCurrent())) {
+                authorization.invalid = true;
+              }
+            },
+            admitEffect: async <T>(api: ToolExecutionApi, context: Context, args: unknown, start: () => Promise<T>) => {
+              const key = String(api.taskId);
+              const owner = await runOwner(api, context);
+              if (owner.inputs.length === 0) throw new Error("This tool is not available without an active input.");
+              if (deps.turnAllows && !deps.turnAllows(tool.name, owner.inputs.map(input => input.requestId))) {
+                throw new Error("This tool is not available on this turn.");
+              }
+              const guardedStart = () => {
+                context.abortSignal?.throwIfAborted();
+                if (expired(owner)) throw new Error("This Bot message expired. No further actions can run.");
+                return start();
+              };
+              const authorization = executionApprovals.get(key);
+              if (authorization?.invalid) return { admitted: false as const };
+              const approval = authorization?.approval;
+              if (authorization?.argsFingerprint && (authorization.argsFingerprint !== approvalHash(args) ||
+                  (await currentExecutionApproval(tool.name, api, args, context))?.authorizationFingerprint !== approval?.evidence?.authorizationFingerprint))
+                return { admitted: false as const };
+              if (approval?.planPermit) {
+                if (approval.planOperation?.(args) !== approval.planPermit.operationFingerprint) return { admitted: false as const };
+                if (!admitPlan) return { admitted: false as const };
+                return admitPlan(approval.planPermit, guardedStart);
+              }
+              return { admitted: true as const, started: guardedStart() };
+            },
+            reauthorize: async (api, context, args) => {
+              const result = await authorizeTool(await executionCall(api, args, context), api, context, true);
+              if (result?.block) throw new Error(result.block);
+              ordinaryExecutions.add(String(api.taskId));
+            },
+            settled: api => { executionApprovals.delete(String(api.taskId)); ordinaryExecutions.delete(String(api.taskId)); },
+          },
+        });
         // Only the scriptable tools resolve for a script's calls.
         return scriptable.includes(entry) ? adapted : { ...adapted, callers: ["model"] };
       });
@@ -730,6 +1167,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     },
     attachHarness(next: Harness) {
       harness = next;
+    },
+    fork() {
+      const child = createBotRegistry(botId, { ...deps, codemodeSandbox: () => sandbox ??= deps.codemodeSandbox?.() ?? new CodemodeSandbox({ memoryLimitBytes: BOT_SCRIPT_MEMORY_BYTES }) });
+      if (harness) child.attachHarness(harness);
+      return child;
     },
   });
 }

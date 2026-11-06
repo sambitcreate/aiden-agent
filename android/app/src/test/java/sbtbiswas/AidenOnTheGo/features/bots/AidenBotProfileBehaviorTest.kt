@@ -241,6 +241,57 @@ class AidenBotProfileBehaviorTest {
         assertFalse(draft.changesAccess(bot, catalog))
     }
 
+    private val composioServiceId = "conn_composio_service_v2"
+    private val staleComposioId = "conn_composio_partial_v1"
+    private fun composioCatalog() = fixture.botCapabilityCatalog.copy(
+        connections = listOf(
+            AidenBotCapabilityOption(staleComposioId, "Composio", false, "Saved connection access is no longer available."),
+            AidenBotCapabilityOption(composioServiceId, "Composio", true,
+                "One service allowance; manage enabled apps and tools in Composio.")
+        )
+    )
+    private fun botWithPartialComposio(): AidenBotDetail {
+        val saved = requireNotNull(fixture.botPolicyUpdate.response.custom).copy(connectionIds = listOf(staleComposioId))
+        return fixture.botDetail.copy(access = fixture.botPolicyUpdate.response.copy(custom = saved),
+            modelSelection = AidenBotModelSelection(saved.providerId, saved.modelId))
+    }
+
+    @Test
+    fun aSingleComposioCatalogChoiceRemainsOneConnectionAllowance() {
+        val draft = requireNotNull(AidenBotCustomAccessDraft.fromCatalog(composioCatalog()))
+        val update = aidenBotAccessUpdate(false, draft, composioCatalog())
+        assertEquals(listOf(composioServiceId), requireNotNull(update.custom).connectionIds)
+    }
+
+    @Test
+    fun unrelatedModelPickDoesNotReplaceAnOldPartialComposioSelection() {
+        val catalog = composioCatalog()
+        val original = requireNotNull(AidenBotAdvancedDraft.fromDetail(botWithPartialComposio(), catalog))
+        val changed = original.withRecommendedModel(catalog)
+        assertEquals(setOf(staleComposioId), changed.customAccess.connectionIDs)
+        assertFalse(changed.customAccess.connectionIDs.contains(composioServiceId))
+        assertTrue("old selected ID remains a known tombstone", catalog.contains(changed.customAccess.selection()))
+        assertFalse(changed.isSaveable(catalog))
+        assertTrue(runCatching { changed.accessUpdate(catalog) }.isFailure)
+    }
+
+    @Test
+    fun explicitlyReplacingStaleComposioWithTheServiceAllowsOnlyThatService() {
+        val catalog = composioCatalog()
+        val original = requireNotNull(AidenBotAdvancedDraft.fromDetail(botWithPartialComposio(), catalog))
+        // The retained unavailable row can be unchecked; the new service is a separate opt-in.
+        val removed = original.copy(customAccess = original.customAccess.copy(connectionIDs = original.customAccess.connectionIDs - staleComposioId))
+        assertTrue(removed.isSaveable(catalog))
+        assertTrue(requireNotNull(removed.accessUpdate(catalog).custom).connectionIds.isEmpty())
+        val explicit = removed.copy(customAccess = removed.customAccess.copy(connectionIDs = removed.customAccess.connectionIDs + composioServiceId))
+        assertTrue(explicit.isSaveable(catalog))
+        val update = requireNotNull(explicit.accessUpdate(catalog).custom)
+        assertEquals(listOf(composioServiceId), update.connectionIds)
+        assertFalse(update.connectionIds.contains(staleComposioId))
+        assertEquals(original.customAccess.fileScopeIDs, update.fileScopeIds.toSet())
+        assertEquals(original.customAccess.skillIDs, update.skillIds.toSet())
+    }
+
     // Routines: the daily check-in suggestion
 
     @Test
@@ -399,5 +450,92 @@ class AidenBotProfileBehaviorTest {
         transport.gate!!.complete(Unit)
         assertNotNull(first.await())
         assertEquals(6, transport.calls.size)
+    }
+
+    @Test
+    fun messagingGlobalAvailabilityRequiresNegotiationAndSettings() {
+        assertFalse(aidenBotMessagingAvailable(emptyList(), AidenBotMessagingSettings(true)))
+        assertFalse(aidenBotMessagingAvailable(listOf(AidenRemoteCapability.BOT_MESSAGING), null))
+        assertTrue(aidenBotMessagingAvailable(listOf(AidenRemoteCapability.BOT_MESSAGING), AidenBotMessagingSettings(false)))
+        assertFalse(aidenBotMessagingControlsEnabled(null, true, false))
+        assertFalse(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(false), true, false))
+        assertFalse(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(true), false, false))
+        assertFalse(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(true), true, true))
+        assertTrue(aidenBotMessagingControlsEnabled(AidenBotMessagingSettings(true), true, false))
+    }
+
+    @Test
+    fun messagingGlobalSaveShowsOptimismRollsBackAndAcceptsLostAnswer() = runTest {
+        val response = CompletableDeferred<AidenBotMessagingSettings>()
+        var authoritative = AidenBotMessagingSettings(true)
+        var writes = 0
+        val controller = AidenBotMessagingController(send = { writes++; response.await() }, read = { authoritative })
+        controller.adopt(authoritative)
+        val save = async { controller.save(false) }
+        runCurrent()
+        assertEquals(false, controller.state.value.settings?.enabled)
+        assertTrue(controller.state.value.saving)
+        controller.save(true)
+        assertEquals(1, writes)
+        response.completeExceptionally(IOException("response lost"))
+        save.await()
+        assertEquals(true, controller.state.value.settings?.enabled)
+        assertTrue(controller.state.value.failed)
+        val landed = AidenBotMessagingController(send = { throw IOException("response lost") }, read = { AidenBotMessagingSettings(false) })
+        landed.adopt(authoritative)
+        landed.save(false)
+        assertEquals(false, landed.state.value.settings?.enabled)
+        assertFalse(landed.state.value.failed)
+    }
+
+    @Test
+    fun messagingStaleListAndSwitchedPairingCannotOverwriteNewState() = runTest {
+        val oldRead = CompletableDeferred<AidenBotMessagingSettings?>()
+        var current = true
+        val controller = AidenBotMessagingController(send = { AidenBotMessagingSettings(it) }, read = { oldRead.await() }, current = { current })
+        controller.adopt(AidenBotMessagingSettings(true))
+        val refresh = async { controller.refresh() }
+        runCurrent()
+        controller.save(false)
+        oldRead.complete(AidenBotMessagingSettings(true))
+        refresh.await()
+        assertEquals(false, controller.state.value.settings?.enabled)
+        current = false
+        controller.adopt(AidenBotMessagingSettings(true))
+        controller.save(true)
+        assertEquals(false, controller.state.value.settings?.enabled)
+    }
+
+    @Test
+    fun messagingIdentitySaveKeepsOtherFieldAndLatestRevision() = runTest {
+        val original = fixture.botDetail.copy(botMessaging = AidenBotMessaging(true, true))
+        val revisions = mutableListOf<String>()
+        val patches = mutableListOf<AidenBotIdentityPatch>()
+        val editor = AidenBotIdentityEditor(original, save = { baseline, patch ->
+            revisions += baseline.revision
+            patches += patch
+            baseline.applying(patch).copy(revision = "new_revision")
+        })
+        editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(receive = false)))
+        assertEquals(AidenBotMessaging(false, true), editor.state.value.bot.botMessaging)
+        editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(send = false)))
+        assertEquals(listOf(original.revision, "new_revision"), revisions)
+        assertNull(patches.first().name)
+        assertNull(patches.first().botMessaging?.send)
+        assertNull(patches.last().botMessaging?.receive)
+        assertEquals(AidenBotMessaging(false, false), editor.state.value.bot.botMessaging)
+    }
+
+    @Test
+    fun messagingIdentityFailureRollsBackToLatestHostFields() = runTest {
+        val original = fixture.botDetail.copy(botMessaging = AidenBotMessaging(true, true))
+        val authority = original.copy(botMessaging = AidenBotMessaging(true, false), revision = "host_changed")
+        val editor = AidenBotIdentityEditor(original,
+            save = { _, _ -> throw IOException("response lost") }, refresh = { authority })
+        editor.edit(AidenBotIdentityPatch(botMessaging = AidenBotMessagingPatch(receive = false)))
+        assertEquals("host_changed", editor.state.value.bot.revision)
+        assertEquals(AidenBotMessaging(true, false), editor.state.value.bot.botMessaging)
+        assertNotNull(editor.state.value.failure)
+        assertFalse(editor.state.value.isSaving)
     }
 }

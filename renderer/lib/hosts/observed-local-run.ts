@@ -110,7 +110,7 @@ export function observeLocalRun(options: ObserveLocalRunOptions): ObservedLocalR
       // A run with undelivered text shows no partial reply; the persisted one replaces it.
       {
         text: view.incomplete ? "" : view.text,
-        reasoning: view.incomplete ? "" : view.reasoning,
+        reasoning: view.reasoningIncomplete ? "" : view.reasoning,
         timeline: view.timeline,
         textStreaming: view.textStreaming,
         doneMessageId: view.doneMessageId,

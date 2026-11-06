@@ -1,4 +1,3 @@
-import { AppControlSettings } from "./app-control-settings";
 import { handleRadioNavigation } from "./radio-navigation";
 import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
 import { LinksSettings } from "./links-settings";
@@ -520,7 +519,6 @@ export function AppearanceSettings() {
         <p>Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.</p>
       </div>
 
-      <AppControlSettings />
       {saveError ? (
         <div className="appearance-page-status" data-kind="error" role="alert">
           <div><strong>Appearance changes are not saved.</strong><div>{saveError}</div></div>

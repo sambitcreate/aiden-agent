@@ -13,9 +13,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
+  Field,
   Separator,
   Select,
   SelectContent,
@@ -27,6 +25,7 @@ import {
 } from "../ui";
 import { Check, Loader2, ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ProviderIcon } from "../provider-icon";
+import { InfoHint } from "../ui-info-hint";
 import { ProviderEditor } from "./provider-editor";
 import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
@@ -80,37 +79,6 @@ function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.
       return <Badge>Unavailable</Badge>;
   }
 }
-
-function ProviderInfo({
-  label,
-  title,
-  children,
-}: React.PropsWithChildren<{ label: string; title: string }>) {
-  return (
-    // Click/keyboard-opened so the explanation is reachable without a pointer and is announced as a dialog.
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button iconOnly size="small" variant="transparent" aria-label={label} className="size-7">
-          <span aria-hidden className="text-xs font-semibold leading-none">
-            i
-          </span>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" aria-label={title} className="w-80 p-3">
-        <Text variant="small-strong">{title}</Text>
-        <Text as="p" variant="small" color="secondary" className="mt-1 leading-relaxed">
-          {children}
-        </Text>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-const CHAT_TITLE_PROVIDER_LABELS: Record<ChatTitleProviderId, string> = {
-  automatic: "Automatic",
-  "apple-foundation-models": "On-device only",
-  "chat-model": "Selected chat model",
-};
 
 function BuiltinProviderRows({
   providers,
@@ -169,7 +137,6 @@ export function ProvidersSettings() {
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
   const [refreshingProviders, setRefreshingProviders] = React.useState(false);
   const [catalogOutcome, setCatalogOutcome] = React.useState<string | null>(null);
-  const [catalogDetailsOpen, setCatalogDetailsOpen] = React.useState(false);
   const [showMoreBuiltinProviders, setShowMoreBuiltinProviders] = React.useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.providers });
@@ -350,10 +317,10 @@ export function ProvidersSettings() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
             <Text as="h1" variant="heading1">Providers</Text>
-            <ProviderInfo label="About provider connections" title="Provider connections">
+            <InfoHint topic="provider connections">
               Aiden manages built-in provider endpoints and model catalogs. Use Add provider for a
               local, private, or vendor-compatible endpoint.
-            </ProviderInfo>
+            </InfoHint>
           </div>
           <Text variant="small" color="secondary" className="mt-0.5 block">
             Connect models to Aiden and manage the providers you already use.
@@ -445,13 +412,10 @@ export function ProvidersSettings() {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <Text variant="strong">Apple Foundation Models</Text>
-                <ProviderInfo
-                  label="About Apple Foundation Models in Aiden"
-                  title="Background title generation"
-                >
+                <InfoHint topic="Apple Foundation Models in Aiden">
                   This on-device connection is used only for background chat titles. It never
                   appears in the chat model picker.
-                </ProviderInfo>
+                </InfoHint>
                 <Badge color="blue">On-device</Badge>
                 {foundationModelsBadge(foundationModels.data)}
               </div>
@@ -472,21 +436,16 @@ export function ProvidersSettings() {
               <RefreshCw className={`size-4 ${refreshingFoundationModels ? "animate-spin" : ""}`} />
             </Button>
           </div>
-          <details className="group border-t border-separator">
-            <summary className="flex min-h-12 cursor-default list-none items-center gap-3 px-4 py-2.5 outline-none hover:bg-list-hover focus-visible:bg-list-selection [&::-webkit-details-marker]:hidden">
-              <span className="min-w-0 flex-1">
-                <span className="block text-small-strong text-primary">Chat title generation</span>
-                <span className="mt-0.5 block text-small text-tertiary">
-                  {CHAT_TITLE_PROVIDER_LABELS[titleProviderId]}
-                </span>
-              </span>
-              <ChevronDown className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-open:rotate-180" />
-            </summary>
-            <div className="flex flex-col gap-3 px-4 pb-4 pt-1 sm:flex-row sm:items-end sm:justify-between">
-              <Text variant="small" color="tertiary" as="p" className="max-w-md">
-                Automatic prefers this device, then uses the selected chat model only when Apple is
-                unavailable. On-device only never falls back to a network provider.
-              </Text>
+          <div className="border-t border-separator">
+            <Field
+              label="Chat title generation"
+              hint={
+                <InfoHint topic="chat title generation">
+                  Automatic uses the on-device model when it can, then your chat model. On-device
+                  only never sends your message to a network provider.
+                </InfoHint>
+              }
+            >
               <Select
                 value={titleProviderId}
                 disabled={savingTitleProvider}
@@ -505,8 +464,8 @@ export function ProvidersSettings() {
                   <SelectItem value="chat-model">Selected chat model</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-          </details>
+            </Field>
+          </div>
         </div>
       ) : !capabilities.appleFoundationModels ? (
         <div className="rounded-card bg-well px-3.5 py-3">
@@ -549,11 +508,10 @@ export function ProvidersSettings() {
         <div className="px-1">
           <div className="flex items-center gap-1">
             <Text variant="small-strong">Built into Aiden</Text>
-            <ProviderInfo label="About providers built into Aiden" title="Managed by Aiden">
-              Aiden maintains these providers’ endpoints, model catalogs, and connection transport.
-              You provide credentials when required; managed connection details stay locked to
-              prevent accidental misconfiguration.
-            </ProviderInfo>
+            <InfoHint topic="providers built into Aiden">
+              Aiden maintains these providers’ endpoints and connection transport. Managed
+              connection details stay locked to prevent accidental misconfiguration.
+            </InfoHint>
           </div>
           <Text variant="small" color="tertiary" className="mt-0.5 block">
             Connect with credentials when required; Aiden keeps their model catalogs current.
@@ -666,66 +624,48 @@ export function ProvidersSettings() {
         </div>
       ) : null}
 
-      <div className="grid min-w-0 grid-cols-1 gap-2">
-        <div className="px-1">
-          <Text as="h2" variant="small-strong">Model catalog</Text>
-          <Text variant="small" color="tertiary" className="mt-0.5 block">
-            Provider catalogs determine what can run; model details improve names and capability hints.
-          </Text>
-        </div>
-        <div className="settings-card rounded-card px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Text variant="small" color="secondary" aria-live="polite">
-              {catalogOutcome ??
-                `Model details: ${
-                  modelCatalogStatus.data?.source === "device-cache" ? "device cache" : "bundled snapshot"
-                }${
-                  modelCatalogStatus.data?.fetchedAt
-                    ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
-                    : ""
-                }`}
-            </Text>
-            <div className="flex flex-wrap items-center gap-1">
-              <Button
-                variant="transparent"
-                size="small"
-                aria-expanded={catalogDetailsOpen}
-                aria-controls="provider-catalog-details"
-                onClick={() => setCatalogDetailsOpen((open) => !open)}
-              >
-                Catalog details
-                <ChevronDown
-                  className={`size-3.5 transition-transform motion-reduce:transition-none ${catalogDetailsOpen ? "rotate-180" : ""}`}
-                />
-              </Button>
-              <Button
-                variant="filled"
-                size="small"
-                disabled={refreshingProviders}
-                aria-busy={refreshingProviders}
-                onClick={() => void refreshProviders()}
-              >
-                <RefreshCw
-                  className={`size-4 ${refreshingProviders ? "animate-spin motion-reduce:animate-none" : ""}`}
-                />
-                {refreshingProviders ? "Updating…" : "Update model catalogs"}
-              </Button>
-            </div>
-          </div>
-          <Text as="p" variant="small" color="tertiary" className="mt-1 leading-relaxed">
-            This foreground update contacts built-in catalog services and models.dev. It sends no
-            prompts, chats, provider keys, model selections, custom endpoints, cookies, or device
-            identifier.
-          </Text>
-          {catalogDetailsOpen ? (
-            <div id="provider-catalog-details" className="mt-2 border-t border-separator pt-2">
-              <Text as="p" variant="small" color="tertiary" className="leading-relaxed">
-                Downloaded models.dev data affects display details only, never which models can run or
-                their runtime limits.
-              </Text>
-            </div>
-          ) : null}
-        </div>
+      <div className="settings-card rounded-card">
+        <Field
+          label="Model catalog"
+          hint={
+            <InfoHint topic="model catalogs">
+              Downloaded models.dev data changes display details only, never which models can run or
+              their runtime limits.
+            </InfoHint>
+          }
+          description={
+            <>
+              <span aria-live="polite" className="block">
+                {catalogOutcome ??
+                  `Model details: ${
+                    modelCatalogStatus.data?.source === "device-cache" ? "device cache" : "bundled snapshot"
+                  }${
+                    modelCatalogStatus.data?.fetchedAt
+                      ? ` · updated ${new Date(modelCatalogStatus.data.fetchedAt).toLocaleString()}`
+                      : ""
+                  }`}
+              </span>
+              <span className="mt-0.5 block">
+                Updating contacts built-in catalog services and models.dev. It sends no prompts, chats
+                or device identifier. A provider&apos;s own catalog service may use your sign-in for
+                that provider; models.dev gets no credentials.
+              </span>
+            </>
+          }
+        >
+          <Button
+            variant="filled"
+            size="small"
+            disabled={refreshingProviders}
+            aria-busy={refreshingProviders}
+            onClick={() => void refreshProviders()}
+          >
+            <RefreshCw
+              className={`size-4 ${refreshingProviders ? "animate-spin motion-reduce:animate-none" : ""}`}
+            />
+            {refreshingProviders ? "Updating…" : "Update model catalogs"}
+          </Button>
+        </Field>
       </div>
 
       {editing ? (

@@ -32,6 +32,7 @@ export interface MessageBubbleProps {
   /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
+  replayedTextLength?: number;
   /** A later step has closed this text: it can no longer grow, though the turn runs on. */
   textClosed?: boolean;
   onStreamHandoffComplete?: () => void;
@@ -66,6 +67,7 @@ export function MessageBubble({
   skill,
   streaming,
   streamComplete,
+  replayedTextLength,
   textClosed,
   onStreamHandoffComplete,
   showCopy = true,
@@ -124,6 +126,7 @@ export function MessageBubble({
           <StreamingMarkdownReveal
             imageScope={imageScope}
             content={content}
+            replayedTextLength={replayedTextLength}
             // Text that settled or whose turn ended shows in full in the same
             // tree; text a tool step closed still joins at the next release.
             complete={streaming ? Boolean(streamComplete) : true}

@@ -21,8 +21,8 @@ import {
  * the host's stream, and the host's availability. Framework-free; the view
  * reads it through `useSyncExternalStore`.
  *
- * Window reads and stream events go through one queue, so a refetch asked
- * for by an event completes before the next event applies.
+ * Window reads are serialized. Live frames apply immediately, including while
+ * the host is still returning a refreshed page.
  *
  * With a `frame` scheduler, run-stream updates notify the view once per
  * frame however many tokens arrive in it; any other change notifies at once
@@ -73,6 +73,7 @@ export class RemoteChatSession {
   private queue: Promise<void> = Promise.resolve();
   private disposed = false;
   private started = false;
+  private refreshQueued = false;
   private lastMarked: string | null = null;
   private readonly cleanups: (() => void)[] = [];
   private readonly frame: FrameScheduler | undefined;
@@ -107,7 +108,7 @@ export class RemoteChatSession {
 
   readonly getSnapshot = (): RemoteChatSnapshot => this.snapshot;
 
-  /** Loads the newest window, then follows the chat's run stream. Idempotent. */
+  /** Starts the saved window read and live observation independently. Idempotent. */
   start(): void {
     if (this.started || this.disposed) return;
     this.started = true;
@@ -115,23 +116,17 @@ export class RemoteChatSession {
     this.cleanups.push(
       this.adapter.onChatChanged((chatId) => {
         // Reread rather than adopt a revision: the window's revision must match the messages shown.
-        if (chatId === this.chatId) this.enqueue(() => this.refreshNewest());
+        if (chatId === this.chatId) this.requestRefresh();
       }),
     );
-    this.enqueue(async () => {
-      await this.adapter.ready();
-      if (this.disposed) return;
-      const status = this.adapter.status();
-      this.update({ status, stale: status.availability !== "online" });
-      await this.refreshNewest();
-    });
+    this.requestRefresh();
     if (this.adapter.capabilities().has("observe")) {
       this.cleanups.push(
         this.adapter.observe(this.chatId, {
           onSubscription: (subscription) =>
-            this.enqueue(() => this.applyRun((run) => applyRemoteRunSubscription(run, subscription))),
-          onEvent: (event) => this.enqueue(() => this.applyRun((run) => applyRemoteRunEvent(run, event))),
-          onState: (state) => this.enqueue(() => this.applyRun((run) => applyRemoteRunStreamState(run, state))),
+            this.applyRun((run) => applyRemoteRunSubscription(run, subscription)),
+          onEvent: (event) => this.applyRun((run) => applyRemoteRunEvent(run, event)),
+          onState: (state) => this.applyRun((run) => applyRemoteRunStreamState(run, state)),
           onError: (error) => this.update({ error: error.message }),
         }),
       );
@@ -184,10 +179,24 @@ export class RemoteChatSession {
     return this.queue;
   }
 
-  private async applyRun(step: (run: RemoteRunView) => RemoteRunStep): Promise<void> {
+  private requestRefresh(): void {
+    if (this.disposed || this.refreshQueued) return;
+    this.refreshQueued = true;
+    void this.enqueue(async () => {
+      await this.adapter.ready();
+      this.refreshQueued = false;
+      if (this.disposed) return;
+      const status = this.adapter.status();
+      this.update({ status, stale: status.availability !== "online" });
+      await this.refreshNewest();
+    });
+  }
+
+  private applyRun(step: (run: RemoteRunView) => RemoteRunStep): void {
+    if (this.disposed) return;
     const next = step(this.snapshot.run);
     if (next.view !== this.snapshot.run) this.update({ run: next.view }, "frame");
-    if (next.refetch) await this.refreshNewest();
+    if (next.refetch) this.requestRefresh();
   }
 
   private acceptStatus(status: HostChatStatus): void {
@@ -197,7 +206,7 @@ export class RemoteChatSession {
     // A reconnect may have missed turns: reread the newest window. The first
     // known status is not a reconnect; `start` reads the window after it.
     if (previous.generation >= 0 && previous.availability !== "online" && status.availability === "online")
-      this.enqueue(() => this.refreshNewest());
+      this.requestRefresh();
   }
 
   private async refreshNewest(): Promise<void> {
@@ -205,6 +214,7 @@ export class RemoteChatSession {
       this.update({ error: "This host does not share chat transcripts with this Mac." });
       return;
     }
+    const atRequest = this.snapshot.run;
     this.update({ loading: true });
     const result = await this.adapter.getMessagesWindow(this.chatId);
     if (this.disposed) return;
@@ -215,8 +225,12 @@ export class RemoteChatSession {
       return;
     }
     this.setTranscript(mergeNewestWindow(this.snapshot.transcript, result.value));
-    const run = handOffRemoteRun(this.snapshot.run);
-    if (run !== this.snapshot.run) this.update({ run });
+    // Only a read started after settlement can own the completed reply.
+    const current = this.snapshot.run;
+    if (current.runId === atRequest.runId && current.status === atRequest.status) {
+      const run = handOffRemoteRun(current);
+      if (run !== current) this.update({ run });
+    }
     this.markNewestRead();
   }
 

@@ -64,7 +64,7 @@ export interface ComputerUseGrantResetDependencies {
 }
 
 /**
- * Settings → Computer Use → Reset chat permissions: every chat asks again and
+ * Settings → Computers & VMs → Computer Use → Reset chat permissions: every chat asks again and
  * Always allow turns off. Live streams drop their cached grant immediately,
  * and streams already using Computer Use are stopped.
  */

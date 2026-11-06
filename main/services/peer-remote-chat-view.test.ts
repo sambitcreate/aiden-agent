@@ -136,14 +136,23 @@ test("opening a chat whose run outgrew the host's journal recovers through the g
     toolCallId: "call-1",
     toolName: "write_file",
   });
+  host.runs.publish("run-1", "chat:reasoning-delta", { delta: "Checking the schema" });
+  host.runs.publish("run-1", "chat:timeline", { timeline: {
+    version: 3, generationId: "run-1", status: "running", startedAt: 1000, steps: [
+      { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "read_file",
+        label: "Inspect schema", status: "completed", startedAt: 1000, updatedAt: 1100, contentOffset: 0 },
+    ],
+  } });
   for (let index = 0; index < 20; index += 1) host.runs.publish("run-1", "chat:delta", { delta: `part ${index} ` });
   const harness = await setup(host);
   try {
     await harness.open();
     let view = harness.transcript();
     assert.deepEqual(view.transcript.messages.map((message) => message.id), ["m0", "m1", "u2"]);
-    assert.equal(view.run.incomplete, true, "the start of the reply is gone from the host's journal");
-    assert.equal(view.row.streamingText, "", "a reply missing its start is not shown mid-sentence");
+    const reply = Array.from({ length: 20 }, (_, index) => `part ${index} `).join("");
+    assert.equal(view.row.streamingText, reply);
+    assert.equal(view.row.streamingReasoning, "Checking the schema");
+    assert.equal(view.row.timeline?.steps[0]?.kind, "tool");
     assert.notEqual(view.row.agentActivity, null, "the run still reads as active");
     assert.deepEqual(
       view.run.approvals.map((prompt) => prompt.approvalId),
@@ -152,6 +161,8 @@ test("opening a chat whose run outgrew the host's journal recovers through the g
     );
 
     host.runs.publish("run-1", "chat:delta", { delta: "tail" });
+    await settle();
+    assert.equal(harness.transcript().row.streamingText, reply + "tail");
     host.append({ id: "a3", role: "assistant", content: "Migration written.", createdAt: 3_000 });
     host.runs.publish("run-1", "chat:done", { chat: { messages: [{ id: "a3", role: "assistant" }] } });
     await settle();
@@ -187,7 +198,8 @@ test("a window joining a run whose shared buffer overflowed still shows the pend
 
     another = await harness.openAnother();
     let joined = another.read();
-    assert.equal(joined.run.incomplete, true, "the reply's start is no longer buffered on this Mac");
+    assert.equal(joined.run.incomplete, false);
+    assert.equal(joined.run.text, "x".repeat(600));
     assert.deepEqual(
       joined.run.approvals.map((prompt) => [prompt.approvalId, prompt.canAllow]),
       [["ap-1", true]],
@@ -304,6 +316,35 @@ test("a page read across a reconnect is dropped and the newest page is read agai
     assert.equal(after.error, null);
     assert.ok(host.windowReads().length >= 3, "the newest page was read again under the new connection");
   } finally {
+    harness.close();
+  }
+});
+
+test("live output arrives while a saved page is in flight and settlement waits for a fresh page", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  let release!: () => void;
+  try {
+    await harness.open();
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    host.windowGate = () => pending;
+    await host.start("run-1");
+    await settle();
+    host.runs.publish("run-1", "chat:delta", { delta: "Result" });
+    await settle();
+    assert.equal(harness.transcript().loading, true);
+    assert.equal(harness.transcript().row.streamingText, "Result");
+    host.append({ id: "saved", role: "assistant", content: "Result", createdAt: 3000 });
+    host.runs.publish("run-1", "chat:done", {});
+    await settle();
+    assert.equal(harness.transcript().row.streamingText, "Result");
+    host.windowGate = undefined;
+    release();
+    await harness.session.idle();
+    assert.equal(last(harness.transcript().transcript.messages)?.id, "saved");
+    assert.equal(harness.transcript().row.streamingText, null);
+  } finally {
+    release?.();
     harness.close();
   }
 });

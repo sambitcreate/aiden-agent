@@ -204,3 +204,13 @@ test("a hand-off is the person's step, not the Bot's: the reply after it is titl
   );
   assert.equal(log[0]!.at, 300);
 });
+
+
+test("a Bot reply turn is titled COS replied and owns its own steps", () => {
+  const log = botActivityLog([
+    message("u", "Before"), working("a", [call("old", "read_file", "reading", "Read")]),
+    {id: "r", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Answer"},
+    working("b", [call("new", "read_file", "reading", "Read")]),
+  ], {running: false});
+  assert.deepEqual(log.map(r => [r.title, r.steps.map(s => s.id)]), [["COS replied", ["new"]], ["Before", ["old"]]]);
+});

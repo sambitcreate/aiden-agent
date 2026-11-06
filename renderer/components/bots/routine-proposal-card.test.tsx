@@ -99,7 +99,7 @@ test("a link card accepted while Aiden On The Go is off says how to turn it on",
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Add routine" }));
-  await waitFor(() => assert.ok(screen.getByText(/Turn on Aiden On The Go/u)));
+  await waitFor(() => assert.ok(screen.getByText(/Turn on remote access/u)));
   assert.equal(screen.queryByRole("button", { name: "Copy link" }), null);
 });
 
