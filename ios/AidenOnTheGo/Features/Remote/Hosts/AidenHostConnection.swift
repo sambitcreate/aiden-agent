@@ -218,6 +218,17 @@ final class AidenHostConnection {
         }
     }
 
+    /// Connected, or checking again after being connected. A machine that
+    /// hasn't answered since launch isn't known online, whatever its saved rows
+    /// say.
+    var isKnownOnline: Bool {
+        switch connectionState {
+        case .connected: true
+        case .connecting: settledState?.connectionState == .connected
+        default: false
+        }
+    }
+
     /// True while the newest attempt is running. `connectionState` can't say:
     /// it starts at `.connecting`, and `disconnect()` returns it there, with
     /// nothing in flight either time.
@@ -306,6 +317,38 @@ final class AidenHostConnection {
 
     func handleConnectionError(_ error: Error) async {
         await record(error, over: .interactive)
+    }
+
+    /// What a failed Inbox poll says about the machine. It counts as a probe: a
+    /// transport failure takes a machine that said it was connected offline, and
+    /// nothing reaches the app-wide error, because nobody was waiting on it.
+    /// `connectionGeneration` is where it stood when the poll began. A connect
+    /// since then, or one under way, knows better than a poll that was already
+    /// out, so the failure is dropped. Revocation always counts. False when
+    /// dropped.
+    func handlePollError(_ error: Error, sinceConnect generation: Int) async -> Bool {
+        let isRevocation = (error as? AidenRemoteClientError)?.isCredentialRevoked == true
+        guard isRevocation || (connectionGeneration == generation && !isConnectInFlight) else { return false }
+        await record(error, over: .probe)
+        return true
+    }
+
+    /// Reads the workspace list again for a poll that found a chat outside it.
+    /// A connect that ran meanwhile has answered with a newer list. A failure
+    /// after the lease ended is the old pairing's, so it surfaces as cancellation.
+    func refreshWorkspacesForPoll() async throws {
+        let context = try requestContext(scope: .owner)
+        let generation = connectionGeneration
+        let workspaces: [AidenWorkspace]
+        do {
+            workspaces = try await probeClient().workspaces()
+        } catch {
+            guard isLive(context) else { throw CancellationError() }
+            throw error
+        }
+        try Task.checkCancellation()
+        guard isLive(context), connectionGeneration == generation else { return }
+        applyWorkspaceSnapshot(workspaces)
     }
 
     func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace]) {

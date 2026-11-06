@@ -99,6 +99,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
   "AidenOnTheGo/Features/Conversation/AidenTranscriptScaffold.swift",
+  "AidenOnTheGo/Features/Shell/AidenMachinesView.swift",
+  "AidenOnTheGo/Features/Shell/AidenMachineDetailView.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
@@ -126,6 +128,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
   "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenProvidersView.swift",
+  "AidenOnTheGo/Features/Shell/AidenUnifiedInboxStore.swift",
   "AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift",
   "AidenOnTheGo/Features/Remote/AidenSceneRefreshGate.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift",
@@ -159,6 +162,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Models/AidenInbox.swift",
   "AidenOnTheGo/Models/AidenInstallation.swift",
   "AidenOnTheGo/Models/AidenMachinePreferences.swift",
+  "AidenOnTheGo/Models/AidenInboxPollPolicy.swift",
   "AidenOnTheGo/Models/AidenUnifiedInbox.swift",
   "AidenOnTheGo/Models/AidenSearchModel.swift",
   "AidenOnTheGo/Models/AidenScheduledTask.swift",
@@ -251,6 +255,8 @@ const testSources = [
   "AidenDesignTokenTests.swift",
   "AidenMachinePreferencesTests.swift",
   "AidenUnifiedInboxTests.swift",
+  "AidenUnifiedInboxStoreTests.swift",
+  "AidenMachineDetailTests.swift",
   "AidenBotContractTests.swift",
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotHomeProfileTests.swift",
@@ -277,6 +283,8 @@ const testSources = [
   "AidenNewWorktreeTests.swift",
   "AidenStreamingPerformanceTests.swift",
   "AidenToolStepGroupingTests.swift",
+  "AidenChatMarkdownTests.swift",
+  "AidenTranscriptPlaceTests.swift",
   "AidenVisualViewerTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
 ];
@@ -665,7 +673,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /loadingAttempt = attempt/u);
   assert.match(
     shell,
-    /guard loadingAttempt == attempt, coordinator\.isCurrent\(context\) else \{ return \}/u,
+    /guard loadingAttempt == attempt, host\.holdsHomeContext\(context\) else \{ return \}/u,
   );
   assert.match(shell, /if loadingAttempt == attempt \{[\s\S]{0,100}isLoading = false/u);
   assert.match(

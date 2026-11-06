@@ -215,6 +215,10 @@ final class AidenTranscriptFollowController {
     private(set) var isNearBottom = true
     private(set) var showsJumpButton = false
     private(set) var isStreaming = false
+    /// How many times the reader has decided where to be: a drag began, or Jump
+    /// to latest or a send reset follow. Something that waits (a page loading)
+    /// compares it with the count it started at to learn that the reader moved on.
+    @ObservationIgnored private var scrollDecisionCount = 0
 
     /// Runs between scheduling a follow scroll and performing it, so the
     /// transcript has laid out the change being followed. Hermex waits one
@@ -253,7 +257,28 @@ final class AidenTranscriptFollowController {
 
     var isFollowing: Bool { latch.isFollowing }
 
+    /// What the reader's place looked like when something started waiting.
+    struct PlaceTicket {
+        fileprivate let scrollDecisionCount: Int
+    }
+
+    func placeTicket() -> PlaceTicket {
+        PlaceTicket(scrollDecisionCount: scrollDecisionCount)
+    }
+
+    /// Whether rows that arrive above the reader should be scrolled back to. Not if
+    /// follow is on, because the reader is at the end or asked to go there (Jump to
+    /// latest, a send), and not if they have scrolled or asked since the ticket,
+    /// because a page that arrives later must not undo what they chose.
+    func keepsPlace(_ ticket: PlaceTicket) -> Bool {
+        !latch.isFollowing && scrollDecisionCount == ticket.scrollDecisionCount
+    }
+
     func handle(_ event: AidenChatScrollPolicy.FollowEvent) {
+        switch event {
+        case .userScrollBegin, .reset: scrollDecisionCount &+= 1
+        default: break
+        }
         if case .userScrollBegin = event {
             bottomArrivalGeneration &+= 1
             followGeneration &+= 1

@@ -52,6 +52,15 @@ final class AidenHostRegistryTests: XCTestCase {
         )
     }
 
+    private func revokedError() throws -> AidenRemoteClientError {
+        let json = Data("""
+        {"error":{"code":"credential_revoked","message":"Pair this device again.",
+        "requestId":"request-revoked","retryable":false}}
+        """.utf8)
+        let body = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: json).error
+        return .server(statusCode: 401, body: body)
+    }
+
     private func waitForRequest(_ request: String, instanceId: String) async throws {
         let deadline = Date().addingTimeInterval(30)
         while !responder.requests(instanceId: instanceId).contains(request), Date() < deadline {
@@ -65,14 +74,50 @@ final class AidenHostRegistryTests: XCTestCase {
     func testEveryPairedMachineHasOneConnectionInPairingOrder() throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
 
-        let expected = coordinator.installationStore.installations
-            .sorted { ($0.createdAt, $0.id) < ($1.createdAt, $1.id) }
-            .map(\.id)
-
         XCTAssertEqual(Set(coordinator.hosts.connections.keys), ["studio", "laptop", "mini", "build"])
-        XCTAssertEqual(coordinator.hosts.ordered.map(\.instanceId), expected)
         XCTAssertTrue(coordinator.selectedConnection === coordinator.hosts.connection(for: "studio"))
         XCTAssertNil(coordinator.hosts.connection(for: "nowhere"))
+    }
+
+    private func unconnectedRegistry(_ installations: [AidenInstallation]) -> AidenHostRegistry {
+        let factory: AidenRemoteCoordinator.ClientFactory = { _, _ in
+            throw AidenRemoteClientError.missingCredential
+        }
+        let registry = AidenHostRegistry(
+            credential: { _ in "credential" },
+            clientFactory: factory,
+            probeClientFactory: factory
+        )
+        registry.sync(with: installations)
+        return registry
+    }
+
+    private func installation(_ instanceId: String, pairedAt seconds: TimeInterval) -> AidenInstallation {
+        let demo = AidenDemoHosts.installation(instanceId: instanceId, name: instanceId)
+        return AidenInstallation(
+            exchange: exchange(demo),
+            pairingTrust: .init(mode: .system),
+            name: instanceId,
+            createdAt: Date(timeIntervalSince1970: seconds)
+        )
+    }
+
+    func testMachinesAreOrderedByWhenTheyWerePaired() {
+        let registry = unconnectedRegistry([
+            installation("first", pairedAt: 300),
+            installation("second", pairedAt: 100),
+            installation("third", pairedAt: 200),
+        ])
+
+        XCTAssertEqual(registry.ordered.map(\.instanceId), ["second", "third", "first"])
+    }
+
+    /// Enough machines that a dictionary's order can't land right by chance.
+    func testMachinesPairedAtTheSameMomentOrderByInstanceID() {
+        let ids = ["h", "c", "a", "g", "e", "b", "f", "d"]
+        let registry = unconnectedRegistry(ids.map { installation($0, pairedAt: 100) } + [installation("z", pairedAt: 50)])
+
+        XCTAssertEqual(registry.ordered.map(\.instanceId), ["z", "a", "b", "c", "d", "e", "f", "g", "h"])
     }
 
     func testEveryConnectionReachesTheCoordinatorEvenOnesPairedLater() throws {
@@ -159,6 +204,61 @@ final class AidenHostRegistryTests: XCTestCase {
     }
 
     // MARK: Contexts and clients
+
+    func testASecond401OnARevokedMachineStillCountsAsRevocation() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let laptop = try connection("laptop", in: coordinator)
+        let view = NSObject()
+        coordinator.setOnScreen(true, view: view, instanceId: "laptop")
+        let context = try coordinator.ownerContext(for: "laptop")
+        let revoked = try revokedError()
+
+        let first = await coordinator.handleCredentialRevocation(revoked, context: context)
+        let second = await coordinator.handleCredentialRevocation(revoked, context: context)
+
+        XCTAssertTrue(first)
+        XCTAssertTrue(second, "The second caller would keep the words it has to give back")
+        XCTAssertTrue(laptop.isPurgePending, "A second 401 must not start the purge under the view")
+        XCTAssertNotNil(coordinator.hosts.connection(for: "laptop"))
+    }
+
+    func testAnotherErrorOnARevokedMachineIsNotRevocation() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let view = NSObject()
+        coordinator.setOnScreen(true, view: view, instanceId: "laptop")
+        let context = try coordinator.ownerContext(for: "laptop")
+        _ = await coordinator.handleCredentialRevocation(
+            try revokedError(),
+            context: context
+        )
+
+        let handled = await coordinator.handleCredentialRevocation(URLError(.timedOut), context: context)
+
+        XCTAssertFalse(handled)
+    }
+
+    func testA401FromAForgottenPairingOfARevokedMachineIsNotRevocation() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let view = NSObject()
+        coordinator.setOnScreen(true, view: view, instanceId: "laptop")
+        let context = try coordinator.ownerContext(for: "laptop")
+        let revoked = try revokedError()
+        _ = await coordinator.handleCredentialRevocation(revoked, context: context)
+        let otherDevice = AidenRemoteRequestContext(
+            instanceId: "laptop",
+            deviceId: "another-device",
+            generation: context.generation,
+            hostGeneration: context.hostGeneration,
+            scope: .owner
+        )
+
+        let handled = await coordinator.handleCredentialRevocation(revoked, context: otherDevice)
+
+        XCTAssertFalse(handled)
+    }
 
     func testAContextForAnotherMachineIsLiveButNotCurrent() async throws {
         let c = AidenDemoHosts.coordinator(.four, responder: responder)

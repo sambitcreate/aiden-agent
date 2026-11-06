@@ -189,6 +189,41 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         }
     }
 
+    func testConnectingOneMachineStaysInsideTheLimit() async throws {
+        let coordinator = fourOnlineMachines()
+        let scheduler = scheduler(for: coordinator)
+        await scheduler.foregrounded()
+        let release = Dictionary(uniqueKeysWithValues: everyMachine.map {
+            ($0, responder.hold(instanceId: $0, path: "/server"))
+        })
+        defer { release.values.forEach { $0() } }
+
+        scheduler.connect(instanceId: "studio")
+        scheduler.connect(instanceId: "laptop")
+        scheduler.connect(instanceId: "mini")
+        try await waitUntil("the first two machines") {
+            self.serverRequests("studio") == 2 && self.serverRequests("laptop") == 2
+        }
+        try await settle()
+        XCTAssertEqual(serverRequests("mini"), 1)
+
+        release["studio"]?()
+        try await waitUntil("the machine that waited") { self.serverRequests("mini") == 2 }
+    }
+
+    func testConnectingOneMachineDoesNothingInTheBackground() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        let scheduler = scheduler(for: coordinator)
+        await scheduler.foregrounded()
+        scheduler.backgrounded()
+        let before = responder.requests(instanceId: "build").count
+
+        scheduler.connect(instanceId: "build")
+        try await settle()
+
+        XCTAssertEqual(responder.requests(instanceId: "build").count, before)
+    }
+
     func testTheSelectedMachineConnectsFirst() async throws {
         let coordinator = fourOnlineMachines()
         await coordinator.switchInstallation(to: "build")

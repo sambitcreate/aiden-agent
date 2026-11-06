@@ -7,6 +7,8 @@ import SwiftUI
 /// shows the structured schedule in place of the request.
 struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
+    @ScaledMetric(relativeTo: .headline) private var badgeGlyphSize: CGFloat = 20
+    @ScaledMetric(relativeTo: .headline) private var badgeSize: CGFloat = 44
     @Environment(\.locale) private var locale
     @Environment(\.calendar) private var calendar
     @Environment(\.timeZone) private var timeZone
@@ -55,9 +57,9 @@ struct AidenApprovalCard: View {
         let card = scheduleCard
         VStack(spacing: 0) {
             Image(systemName: card == nil ? AidenApprovalPresentation.symbol(toolName: toolName, kind: kind) : "calendar.badge.clock")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: min(badgeGlyphSize, 30), weight: .semibold))
                 .foregroundStyle(palette.onFillAccent)
-                .frame(width: 44, height: 44)
+                .frame(width: min(badgeSize, 64), height: min(badgeSize, 64))
                 .background(palette.fillAccent, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
                 .accessibilityHidden(true)
 
@@ -412,6 +414,10 @@ private struct AidenScheduleApprovalDetails: View {
 struct AidenQuestionCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .subheadline) private var headerGlyphSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .subheadline) private var headerBadgeSize: CGFloat = 32
+    @ScaledMetric(relativeTo: .callout) private var choiceGlyphSize: CGFloat = 16
+    @ScaledMetric(relativeTo: .callout) private var choiceGlyphWidth: CGFloat = 20
 
     /// The workspace chat whose run the card can stop.
     var model: AidenChatViewModel? = nil
@@ -467,9 +473,9 @@ struct AidenQuestionCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "questionmark.bubble")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: min(headerGlyphSize, 24), weight: .semibold))
                         .foregroundStyle(palette.accent)
-                        .frame(width: 32, height: 32)
+                        .frame(width: min(headerBadgeSize, 52), height: min(headerBadgeSize, 52))
                         .background(palette.accent.opacity(0.12), in: Circle())
                         .accessibilityHidden(true)
 
@@ -546,9 +552,9 @@ struct AidenQuestionCard: View {
                                     Image(systemName: question.multiSelect
                                           ? (selected ? "checkmark.square.fill" : "square")
                                           : (selected ? "checkmark.circle.fill" : "circle"))
-                                        .font(.system(size: 16))
+                                        .font(.system(size: min(choiceGlyphSize, 28)))
                                         .foregroundStyle(selected ? palette.accent : palette.secondary)
-                                        .frame(width: 20)
+                                        .frame(width: min(choiceGlyphWidth, 34))
                                         .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack(spacing: 6) {
