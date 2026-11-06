@@ -77,7 +77,7 @@ export interface BotDeliveryLog {
   /** Rows due at `now`, newest first, at most 100. `since` is exclusive. */
   due(since: number | undefined, now: number): Promise<BotDeliveryRow[]>;
   /** Makes held rows visible, or stops them when the day's budget is spent. */
-  releaseHeld(botId: string, ids: readonly string[], at: number, suppressed: ReadonlySet<string>): Promise<void>;
+  releaseHeld(botId: string, ids: readonly string[], at: number, suppressed: ReadonlySet<string>, publication?: {assertCurrent():Promise<void>}): Promise<void>;
   /** Records one channel's success; the first time sticks. */
   markChannel(botId: string, id: string, channel: BotDeliveryChannel, at: number, publication?: {assertCurrent():Promise<void>}): Promise<void>;
   /** Records that every channel went out; keeps the first time. */
@@ -266,14 +266,14 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
       return due.slice(0, BOT_DELIVERIES_DUE_MAX);
     },
 
-    releaseHeld(botId, ids, at, suppressed) {
+    releaseHeld(botId, ids, at, suppressed, publication) {
       return serial(botId, async () => {
         if (forgotten.has(botId)) return;
         const wanted = new Set(ids);
         const rows = await load(botId);
         const releasedAt = Math.max(at, now());
         await save(botId, rows.map((row) => wanted.has(row.id) && deliveryVisibleAt(row) === undefined
-          ? { ...row, releasedAt, ...(suppressed.has(row.id) && { suppressed: true }) } : row));
+          ? { ...row, releasedAt, ...(suppressed.has(row.id) && { suppressed: true }) } : row), publication);
       });
     },
 

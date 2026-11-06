@@ -1,7 +1,7 @@
 // Quiet hours and a daily cap on what a Bot sends unprompted (spec §6 P4).
 //
 // - Issues ignore the daily cap but wait out quiet hours.
-// - Routine results and proposals wait out quiet hours, and past the cap they
+// - Routine results, peer finals and proposals wait out quiet hours, and past the cap they
 //   are logged but not notified. The first such row of a day adds one digest
 //   ("More updates are in the chat").
 // - Digests are the funnel's own summaries and always go out.

@@ -385,6 +385,81 @@ test("quiet-hours peer results revalidate their protected original root after re
  live=true;await reopened.flush(NOW+HOUR);assert.deepEqual(channels,["mac","telegram"]);assert.equal((await log.list("bot:scout")).filter(row=>row.class==="digest").length,1);await reopened.flush(NOW+HOUR);assert.equal(channels.length,2);
 });
 
+test("a peer final held past quiet hours is stopped by a full budget, and its root stays protected until the limit note lands", async (t) => {
+  let now = Date.parse("2026-10-27T23:00:00Z");
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-held-budget-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
+  const gate = createBotDeliveryGate({
+    settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
+    sentToday: async (id, start, at) => countedToday(await log.list(id), start, at),
+    timeZone: () => "UTC",
+  });
+  const banners: string[] = [], settled: string[] = [];
+  let telegramDown = false;
+  const funnel = createBotDeliveryFunnel({
+    log, gate, now: () => now,
+    peerPublication: async () => ({ assertCurrent: async () => {} }),
+    peerSettled: async (_bot, root) => { settled.push(root); },
+    mac: async (input) => { banners.push(input.class); },
+    telegram: async () => { if (telegramDown) throw new Error("telegram is down"); },
+  });
+  const final: BotDeliveryInput = { botId: "bot:scout", class: "peer_result", dedupeKey: "held-final", requestId: "held-root", title: "Peer result", body: "Held result", status: "succeeded" };
+  assert.equal(await funnel.deliver(final), "deferred");
+  now += 10 * HOUR;
+  await funnel.deliver(routineResult({ dedupeKey: "first" }));
+  telegramDown = true;
+  await funnel.flush(now);
+  assert.deepEqual(banners, ["routine_result", "digest"], "the final itself never goes out over the cap");
+  assert.equal((await log.find("bot:scout", "held-final"))?.suppressed, true);
+  assert.ok(!(await log.due(undefined, now)).some((row) => row.dedupeKey === "held-final"));
+  const note = (await log.list("bot:scout")).find((row) => row.class === "digest");
+  assert.deepEqual(note?.peerRootIds, ["held-root"]);
+  await funnel.flush(now);
+  assert.deepEqual(settled, [], "the root waits for the note's owed Telegram channel");
+  telegramDown = false;
+  await funnel.flush(now);
+  assert.deepEqual(settled, ["held-root"]);
+  assert.equal(banners.filter((name) => name === "digest").length, 1);
+});
+
+for (const [name, review] of [
+  ["released", undefined],
+  ["stopped by the budget", { kind: "suppress", reason: "daily_limit", digestKey: "digest:limit:today" }],
+] as const) {
+  test(`a peer root retired during the flush's gate review cannot publish a held row ${name}`, async (t) => {
+    const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-held-retired-"));
+    t.after(() => rm(profile, { recursive: true, force: true }));
+    const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+    const channels: string[] = [];
+    let live = true, retireOnReview = true;
+    const funnel = createBotDeliveryFunnel({
+      log, now: () => NOW,
+      gate: {
+        decide: async () => ({ kind: "defer", until: NOW + HOUR }),
+        quietUntil: async () => undefined,
+        reviewHeld: async () => { if (retireOnReview) live = false; return review ?? { kind: "now" }; },
+      },
+      peerPublication: async () => live ? { assertCurrent: async () => { if (!live) throw new Error("retired root"); } } : undefined,
+      mac: async () => { channels.push("mac"); },
+      telegram: async () => { channels.push("telegram"); },
+    });
+    await funnel.deliver({ botId: "bot:scout", class: "peer_result", dedupeKey: "held-final", requestId: "held-root", title: "Peer result", body: "Private old result", status: "succeeded" });
+    await funnel.flush(NOW + HOUR);
+    const [row, ...others] = await log.list("bot:scout");
+    assert.deepEqual(others, [], "no limit note is published for the retired root");
+    assert.equal(row?.releasedAt, undefined);
+    assert.equal(row?.suppressed, undefined);
+    assert.deepEqual(await log.due(undefined, NOW + 2 * HOUR), []);
+    assert.deepEqual(channels, []);
+    // Nothing was published, so a root that is current again resumes normally.
+    live = true;
+    retireOnReview = false;
+    await funnel.flush(NOW + HOUR);
+    assert.notEqual((await log.find("bot:scout", "held-final"))?.releasedAt, undefined);
+  });
+}
+
 test("delivery history preserves 200 owed peer finals and admits a new row only after a delivery settles",async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),"aiden-peer-delivery-capacity-"));t.after(()=>rm(root,{recursive:true,force:true}));const log=createBotDeliveryLog({profileDir:()=>root});for(let n=0;n<200;n++)await log.append({botId:"bot:scout",class:n===0?"digest":"peer_result",peerRootIds:[`root-${n}`],requestId:`root-${n}`,dedupeKey:`root-${n}`,title:"Owed final",body:"Result",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR});const pending=await log.list("bot:scout"),oldest=pending[199]!;await assert.rejects(log.append({botId:"bot:scout",class:"peer_result",peerRootIds:["new-root"],requestId:"new-root",dedupeKey:"new-root",title:"New final",body:"New",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR}),/No owed result was discarded/u);assert.deepEqual((await log.list("bot:scout")).map(row=>row.dedupeKey),pending.map(row=>row.dedupeKey));await log.markChannel("bot:scout",oldest.id,"mac",NOW+HOUR);await log.markChannel("bot:scout",oldest.id,"telegram",NOW+HOUR);await log.markSent("bot:scout",oldest.id,NOW+HOUR);await log.settlePeerReferences("bot:scout",oldest.id,async facts=>{assert.deepEqual(facts.pending,[]);assert.deepEqual(facts.settled,["root-0"]);},NOW+HOUR);await log.append({botId:"bot:scout",class:"peer_result",peerRootIds:["new-root"],requestId:"new-root",dedupeKey:"new-root",title:"New final",body:"New",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR});assert.equal((await log.list("bot:scout")).length,200);assert.equal(await log.find("bot:scout",oldest.dedupeKey),undefined);assert.ok(await log.find("bot:scout","root-1"));assert.ok(await log.find("bot:scout","new-root"));
 });

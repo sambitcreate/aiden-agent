@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 import { createKeyedSerial } from "../bot-routine-notes.js";
 import type { ScheduledTask } from "../types.js";
+import { BOT_DELIVERY_COUNTED_CLASSES } from "./gate.js";
 import { BotDeliveryHistoryFullError, type BotDeliveryClass, type BotDeliveryLog, type BotDeliveryRow } from "./log.js";
 
 export interface BotDeliveryInput {
@@ -129,20 +130,21 @@ export function createBotDeliveryFunnel(deps: {
     };
   }
 
-  async function limitNote(botId: string, key: string | undefined, at: number, source?: BotDeliveryInput) {
+  /** `peerRootIds` keeps the suppressed finals' roots protected until this note's channels settle. */
+  async function limitNote(botId: string, key: string | undefined, at: number, peerRootIds: readonly string[], publication?: BotDeliveryInput["publication"]) {
     if (!key || await deps.log.find(botId, key)) return;
     const { row } = await deps.log.append({
       botId, class: "digest", dedupeKey: key, title: (await deps.botName?.(botId)) ?? "Your Bot",
       body: BOT_DELIVERY_LIMIT_NOTE, status: "info", createdAt: at, deliverAfter: at,
-      ...(source?.class === "peer_result" && source.requestId ? { peerRootIds: [source.requestId] } : {}),
-    }, source?.publication);
-    await send(row, { ...inputOf(row), publication: source?.publication }, at).catch(() => undefined);
+      ...(peerRootIds.length ? { peerRootIds: [...peerRootIds] } : {}),
+    }, publication);
+    await send(row, { ...inputOf(row), publication }, at).catch(() => undefined);
   }
 
   /** Asks the gate and stores the row it decided for. */
   async function record(input: BotDeliveryInput, at: number): Promise<{ row: BotDeliveryRow; now: boolean }> {
     const decision = input.quiet === true || input.routineTask?.notify === false ? {kind:"now" as const} : await deps.gate.decide(input, at);
-    if (decision.kind === "suppress") await limitNote(input.botId, decision.digestKey, at, input);
+    if (decision.kind === "suppress") await limitNote(input.botId, decision.digestKey, at, input.class === "peer_result" && input.requestId ? [input.requestId] : [], input.publication);
     await input.publication?.assertCurrent();
     const { row } = await deps.log.append({
       botId: input.botId,
@@ -186,12 +188,18 @@ export function createBotDeliveryFunnel(deps: {
     for(const row of rows.filter(row=>row.quiet===true&&row.sentAt===undefined)) await deps.log.markSent(row.botId,row.id,at,rootsPublication(botId,rowRoots(row)));
     if (quietUntil !== undefined) return Math.min(quietUntil, ...later);
     const unreleased = due.filter((row) => row.releasedAt === undefined && row.macSentAt === undefined && row.telegramSentAt === undefined);
-    const counted = unreleased.filter((row) => row.class === "proposal" || row.class === "routine_result");
+    const counted = unreleased.filter((row) => BOT_DELIVERY_COUNTED_CLASSES.has(row.class));
     const decision = counted.length ? await deps.gate.reviewHeld?.(inputOf(counted[0]!), at) : undefined;
     if (decision?.kind === "defer") return Math.min(decision.until, ...later);
-    if (decision?.kind === "suppress") await limitNote(botId, decision.digestKey, at);
+    // The root check above predates the gate's awaits, so every write that makes
+    // a held row or its note visible asserts the roots again. A failure aborts
+    // this Bot's flush with nothing published; the next one drops the retired row.
+    if (decision?.kind === "suppress") {
+      const roots = [...new Set(counted.flatMap(rowRoots))];
+      await limitNote(botId, decision.digestKey, at, roots, rootsPublication(botId, roots));
+    }
     const suppressed = new Set(decision?.kind === "suppress" ? counted.map((row) => row.id) : []);
-    if (unreleased.length) await deps.log.releaseHeld(botId, unreleased.map((row) => row.id), at, suppressed);
+    if (unreleased.length) await deps.log.releaseHeld(botId, unreleased.map((row) => row.id), at, suppressed, rootsPublication(botId, [...new Set(unreleased.flatMap(rowRoots))]));
     due = due.filter((row) => !suppressed.has(row.id));
     const issues = due.filter((row) => row.class === "issue");
     const others = due.filter((row) => row.class !== "issue");
