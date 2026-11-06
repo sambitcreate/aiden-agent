@@ -1661,7 +1661,8 @@ test("a fresh utterance right after a finished one lands after a fence taken bet
   fixture.emit(hearUser("What was that", { finished: true }));
   // An approval arms a moment later, well inside the caption lag window.
   const fence = liveSessionBus.voiceInputFence();
-  for (let index = 0; index < 20; index += 1) micPacket(fixture, 0);
+  // Past the guard for audio that may have been captured before the fence.
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0);
   for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
   fixture.emit(hearUser("Allow", { finished: true }));
   unsubscribe();
