@@ -1697,7 +1697,7 @@ export function useAssistantLive(
 function reportedInputLatencySeconds(stream: MediaStream): number {
   try {
     const latency = (stream.getTracks()[0]?.getSettings?.() as { latency?: unknown } | undefined)?.latency;
-    return typeof latency === "number" && Number.isFinite(latency) && latency > 0 ? Math.min(latency, 2) : 0;
+    return typeof latency === "number" && Number.isFinite(latency) && latency > 0 ? latency : 0;
   } catch {
     return 0;
   }
