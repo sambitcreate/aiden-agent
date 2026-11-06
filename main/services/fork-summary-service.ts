@@ -12,6 +12,7 @@ import {
   type ChatForkSummaryV1,
 } from "../../renderer/shared/chat-copy-contract.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
+import { withoutHookBlockedPrompts } from "./hook-blocked-prompt.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import { createPiCompactionModels } from "./pi-compaction-core.js";
 import type { PiSessionEntry } from "./pi-session-port.js";
@@ -73,7 +74,8 @@ export function sourceMessagesAfterCut(
   return { lastCopiedId: source.messages[start - 1]?.id, after: source.messages.slice(start) };
 }
 
-function visibleEntries(messages: readonly ChatMessage[], runtime: ResolvedModelRuntime): PiSessionEntry[] {
+function visibleEntries(visible: readonly ChatMessage[], runtime: ResolvedModelRuntime): PiSessionEntry[] {
+  const messages = withoutHookBlockedPrompts(visible);
   return messages.map((message, index) => ({
     type: "message",
     id: `fork-summary-visible-${message.id}`,

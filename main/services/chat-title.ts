@@ -18,6 +18,7 @@ import { resolveChatTitleRoute } from "./chat-title-routing.js";
 import { configStore } from "./config-store.js";
 import { foundationModelsConnection } from "./foundation-models-connection.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
 import { runtimeSupportsImages } from "./generation-runtime.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import {
@@ -199,7 +200,11 @@ async function generateFirstTurnTitle(input: {
   const chat = await chatStore.get(input.chatId);
   if (!chat) return;
 
-  const userMessages = chat.messages.filter((message) => message.role === "user");
+  // A prompt a hook refused never reached the model, so it neither earns a
+  // title nor stops the next accepted prompt from being the first turn.
+  const userMessages = chat.messages.filter(
+    (message) => message.role === "user" && !isHookBlockedPrompt(message),
+  );
   if (userMessages.length !== 1) return;
   const firstMessage = userMessages[0];
   if (!firstMessage) return;

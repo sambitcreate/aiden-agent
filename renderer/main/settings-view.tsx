@@ -24,6 +24,7 @@ import {
   TabletSmartphone,
   Hourglass,
   Bot,
+  Webhook,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -48,6 +49,7 @@ import { AppControlSettings } from "../components/settings/app-control-settings"
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import { LimitsSettings } from "../components/settings/limits-settings";
+import { HooksSettings } from "../components/settings/hooks-settings";
 import {
   availableSettingsPages,
   firstMatchingSettingsSection,
@@ -73,6 +75,7 @@ const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
   limits: <Hourglass className="size-5" />,
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
+  hooks: <Webhook className="size-5" />,
   websearch: <Globe className="size-5" />,
   imageGeneration: <ImageIcon className="size-5" />,
   memory: <MemoryCardIcon className="size-5" />,
@@ -92,6 +95,7 @@ const OWN_HEADING = new Set<SettingsPageId>([
   "providers",
   "skills",
   "mcp",
+  "hooks",
   "appearance",
   "websearch",
   "shortcut",
@@ -106,6 +110,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   remoteAccess: RemoteAccessSettings,
   peerHosts: PeerHostsSettingsPage,
   mcp: McpSettings,
+  hooks: HooksSettings,
   websearch: WebSearchSettings,
   imageGeneration: ImageGenerationSettings,
   approvals: ToolApprovalSettings,
@@ -131,6 +136,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   limits: "Choose how long chats stay manageable, how replies wait out usage limits, and how much chats and Bots may spend.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
+  hooks: "Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.",
   telegram: "Connect your Telegram bots and choose how they respond.",
   remoteAccess: "Use Aiden on this computer from your phone or another computer.",
   peerHosts: "Pair the other computers you control from here, and manage them.",

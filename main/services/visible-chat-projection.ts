@@ -10,6 +10,7 @@ import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseAgentNoticeV1, type AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { hookBlockedField, type HookBlockedPromptV1 } from "./hook-blocked-prompt.js";
 import {
   parseProviderFailureV1,
   type ProviderFailureV1,
@@ -45,6 +46,8 @@ export interface VisibleChatMessage {
   skill?: SkillProvenanceV1;
   /** A follow-up notice from a background job, followed pull request or check. */
   notice?: AgentNoticeV1;
+  /** A UserPromptSubmit hook blocked this prompt; copies keep it out of every model's context. */
+  hookBlocked?: HookBlockedPromptV1;
   providerFailure?: ProviderFailureV1;
 }
 
@@ -212,6 +215,7 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
       message.role === "user"
         ? parseAgentNoticeV1(message.notice)
         : undefined,
+    ...hookBlockedField(message),
     providerFailure:
       message.role === "assistant"
         ? parseProviderFailureV1(message.providerFailure)
