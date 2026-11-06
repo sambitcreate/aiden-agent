@@ -2072,8 +2072,8 @@ export function WebSearchSettings() {
               Privacy and access
             </Text>
             <Text as="p" variant="small" color="secondary" className="mt-1.5 leading-relaxed">
-              {routeRecipientSummary} Avoid private information. Provider keys remain encrypted on
-              this device and are never passed to the model.
+              Avoid private information. Provider keys remain encrypted on this device and are never
+              passed to the model.
             </Text>
             <Text as="p" variant="small" color="secondary" className="mt-1.5 leading-relaxed">
               Turning Web Search off preserves routes and credentials. {capabilities.bots ? "Bots and schedules" : "Schedules"} still

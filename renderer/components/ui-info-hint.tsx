@@ -34,6 +34,7 @@ export function InfoHint({
   const pinnedRef = React.useRef(false);
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
   const contentId = React.useId();
 
   const clearTimer = () => {
@@ -48,6 +49,8 @@ export function InfoHint({
   const hide = () => {
     clearTimer();
     pinnedRef.current = false;
+    // Pressing the hint's text moves focus into it. Hand focus back before the text goes.
+    if (contentRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
     setOpen(false);
   };
   const toggle = () => {
@@ -90,7 +93,10 @@ export function InfoHint({
           onFocus={() => {
             if (!open) show(false);
           }}
-          onBlur={hide}
+          onBlur={(event) => {
+            // Pressing the hint's own text moves focus into it; that isn't leaving.
+            if (!contentRef.current?.contains(event.relatedTarget)) hide();
+          }}
           onClick={toggle}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
@@ -104,6 +110,7 @@ export function InfoHint({
       </PopoverPrimitive.Anchor>
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
+          ref={contentRef}
           id={contentId}
           role="tooltip"
           side={side}
@@ -117,6 +124,10 @@ export function InfoHint({
           onInteractOutside={(event) => {
             // The button handles its own presses.
             if (triggerRef.current?.contains(event.target as Node)) event.preventDefault();
+          }}
+          onKeyDown={(event) => {
+            // The text holds nothing to tab to, so Tab carries on from the button.
+            if (event.key === "Tab") hide();
           }}
           onPointerEnter={clearTimer}
           onPointerLeave={() => {

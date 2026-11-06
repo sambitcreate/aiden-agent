@@ -1,3 +1,4 @@
+import { BotMessagingFields } from "./bot-messaging-fields";
 import * as React from "react";
 import { ChevronRight, Link2, RotateCcw, Unlink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -417,7 +418,7 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
           <EmptyState
             placement="inline"
             title="No Telegram chats yet"
-            description="Set up Telegram in Settings → Telegram first."
+            description="Set up Telegram in Settings → Connections → Telegram first."
           />
         ) : (
           <Select value={target} onValueChange={setTarget}>
@@ -661,6 +662,7 @@ export function BotAdvanced({
         </button>
         <SelfWakeUpsField bot={bot} />
       </FieldSet>
+      <BotMessagingFields bot={bot} />
       <TelegramSection bot={bot} />
       {guard.dialog}
       {chatActivityGuard.dialog}

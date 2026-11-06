@@ -108,6 +108,12 @@ fun AidenBotProfileScreen(
     onNavigateToChat: (String) -> Unit,
     onNavigateToEditBot: (String) -> Unit,
     onNavigateToMemory: (String) -> Unit = {},
+    onNavigateToWatches: (String) -> Unit = {},
+    onNavigateToPeers: (String) -> Unit = {},
+    onNavigateToRoutineModels: (String) -> Unit = {},
+    onNavigateToOpenWork: (String) -> Unit = {},
+
+    onNavigateToAllowed: (String) -> Unit = {},
     onBotMutated: () -> Unit = {},
     botDeleter: AidenBotDeleter? = null,
     onBotDeleted: () -> Unit = onNavigateBack
@@ -214,6 +220,27 @@ fun AidenBotProfileScreen(
             isLoading = false
         }
     }
+
+    val allowedInstallations by coordinator.installationStore.installations.collectAsStateWithLifecycle()
+    val allowedActiveId by coordinator.installationStore.activeInstallationId.collectAsStateWithLifecycle()
+    val allowedInstallation = allowedInstallations.firstOrNull { it.id == allowedActiveId }
+    val supportsAllowed = aidenBotAllowedSupported(allowedInstallation)
+    val allowedController = remember(botId, client, supportsAllowed, allowedInstallation?.id, allowedInstallation?.deviceCapabilities, allowedInstallation?.serverCapabilities) {
+        client?.takeIf { supportsAllowed }?.let { cl ->
+            val requestInstance = coordinator.activeInstanceId
+            val grants = allowedInstallation?.deviceCapabilities
+            val offered = allowedInstallation?.serverCapabilities
+            AidenBotAllowedController(botId, AidenRemoteBotAllowedTransport(cl)) {
+                coordinator.holdsReadAuthority(cl, requestInstance) && aidenBotAllowedSupported(coordinator.installationStore.activeInstallation) && coordinator.installationStore.activeInstallation?.deviceCapabilities == grants && coordinator.installationStore.activeInstallation?.serverCapabilities == offered
+            }
+        }
+    }
+    DisposableEffect(allowedController) { onDispose { allowedController?.invalidate() } }
+    LifecycleResumeEffect(allowedController) {
+        val job = scope.launch { allowedController?.load() }
+        onPauseOrDispose { job.cancel() }
+    }
+    val allowedState = allowedController?.state?.collectAsStateWithLifecycle()?.value
 
     // Profile → Memory's quiet count (revision 27). A failed read keeps the row without a count.
     val supportsMemory = serverInfo?.supportsBotMemory == true
@@ -500,6 +527,15 @@ fun AidenBotProfileScreen(
                     }
                 }
 
+                if (supportsAllowed) {
+                    Surface(onClick = { onNavigateToAllowed(current.id) }, color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.heightIn(min = 56.dp).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Allowed without asking",style = MaterialTheme.typography.bodyLarge,color = palette.foreground,modifier = Modifier.weight(1f))
+                            allowedState?.countSummary?.let { Text(it,color = palette.secondary) }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,null,tint = palette.secondary)
+                        }
+                    }
+                }
                 if (supportsMemory) {
                     Surface(
                         onClick = { onNavigateToMemory(current.id) },
@@ -532,6 +568,50 @@ fun AidenBotProfileScreen(
                     }
                 }
 
+                if (serverInfo?.supportsBotPeers == true) {
+                    Surface(onClick={onNavigateToPeers(current.id)},color=palette.raised,shape=MaterialTheme.shapes.large,modifier=Modifier.fillMaxWidth()) {
+                        Row(Modifier.heightIn(min=56.dp).padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
+                            Text(stringResource(R.string.bot_peers_title),style=MaterialTheme.typography.bodyLarge,modifier=Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight,contentDescription=null,tint=palette.secondary)
+                        }
+                    }
+                }
+                if (serverInfo?.supportsBotRoutineModels == true) {
+                    Surface(onClick = { onNavigateToRoutineModels(current.id) }, color = palette.raised,
+                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)) {
+                            Text(stringResource(R.string.bot_routine_models_title), style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground, modifier = Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
+                if (serverInfo?.supportsBotOpenWork == true) {
+                    Surface(onClick = { onNavigateToOpenWork(current.id) }, color = palette.raised,
+                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)) {
+                            Text(stringResource(R.string.bot_open_work_title), style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground, modifier = Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
+                if (serverInfo?.supportsBotWatches == true) {
+                    Surface(onClick = { onNavigateToWatches(current.id) }, color = palette.raised,
+                        shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.heightIn(min = 56.dp).padding(horizontal = 16.dp)) {
+                            Text(stringResource(R.string.bot_watches_title), style = MaterialTheme.typography.bodyLarge,
+                                color = palette.foreground, modifier = Modifier.weight(1f))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = palette.secondary)
+                        }
+                    }
+                }
+
                 if (serverInfo?.supportsBotRoutines == true) {
                     AidenBotRoutinesSection(
                         botId = current.id,
@@ -550,6 +630,7 @@ fun AidenBotProfileScreen(
     val current = bot
     if (showAdvanced && current != null) {
         AidenBotAdvancedSheet(
+            messagingCoordinator = coordinator,
             bot = current,
             client = client,
             onDismiss = { showAdvanced = false },
@@ -585,7 +666,7 @@ fun AidenBotProfileScreen(
                 scope.launch {
                     isDeleting = true
                     try {
-                        deleter.delete(cl, current.id)
+                        coordinator.deleteBot(cl,current.id,deleter)
                         confirmingDelete = false
                         onBotMutated()
                         onBotDeleted()

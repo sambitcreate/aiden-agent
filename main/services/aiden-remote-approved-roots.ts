@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -75,8 +76,19 @@ function displayLabel(folderPath: string): string {
 }
 
 export class AidenRemoteApprovedRootService {
+  private tail: Promise<unknown> = Promise.resolve();
+  private readonly inventoryOwner = new AsyncLocalStorage<boolean>();
+
+  /** Root creation, compensation, phone approval and Bot policy saves share this lock. */
+  withInventoryLock<T>(action: () => Promise<T>): Promise<T> {
+    if (this.inventoryOwner.getStore()) return action();
+    const result = this.tail.then(() => this.inventoryOwner.run(true, action), () => this.inventoryOwner.run(true, action));
+    this.tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   constructor(
-    private readonly state: Pick<AidenRemoteStateRegistry, "snapshot" | "addApprovedRoot" | "removeApprovedRoot">,
+    private readonly state: Pick<AidenRemoteStateRegistry, "snapshot" | "addApprovedRoot" | "removeApprovedRoot"> & Partial<Pick<AidenRemoteStateRegistry, "approveRootForPhones">>,
     private readonly dependencies: AidenRemoteApprovedRootDependencies = {
       now: Date.now,
       randomBytes,
@@ -86,14 +98,19 @@ export class AidenRemoteApprovedRootService {
 
   async addLocalFolder(
     selectedPath: string,
-    options: { confirmHomeDirectory?: boolean } = {},
+    options: { confirmHomeDirectory?: boolean; botsOnly?: true; operationId?: string; rootId?: string; expectedIdentity?: { device: string; inode: string }; assertCurrent?: () => void } = {},
   ): Promise<AidenRemoteApprovedRoot> {
+    return this.withInventoryLock(() => this.addFolderUnlocked(selectedPath, options));
+  }
+
+  private async addFolderUnlocked(selectedPath: string, options: { confirmHomeDirectory?: boolean; botsOnly?: true; operationId?: string; rootId?: string; expectedIdentity?: { device: string; inode: string }; assertCurrent?: () => void }): Promise<AidenRemoteApprovedRoot> {
     if (!path.isAbsolute(selectedPath) || Buffer.byteLength(selectedPath, "utf8") > 4_096) {
       throw new Error("Select an absolute local folder.");
     }
     const canonicalPath = await fs.realpath(selectedPath);
     const metadata = await fs.stat(canonicalPath, { bigint: true });
     if (!metadata.isDirectory()) throw new Error("The approved root must be a directory.");
+    if (options.expectedIdentity && (canonicalPath !== selectedPath || options.expectedIdentity.device !== String(metadata.dev) || options.expectedIdentity.inode !== String(metadata.ino))) throw new Error("That folder changed. Ask for access again.");
     if (canonicalPath === path.parse(canonicalPath).root) {
       throw new Error("The filesystem root cannot be approved for remote browsing.");
     }
@@ -103,27 +120,41 @@ export class AidenRemoteApprovedRootService {
     }
 
     const existing = (await this.state.snapshot()).approvedRoots;
-    if (existing.some((root) => isPathInside(root.folderPath, canonicalPath))) {
+    const exact = existing.find((root) => root.folderPath === canonicalPath);
+    if (exact) {
+      if (exact.device !== String(metadata.dev) || exact.inode !== String(metadata.ino)) throw new Error("That folder changed. Approve it again in Settings.");
+      options.assertCurrent?.();
+      if (!options.botsOnly && exact.botsOnly) {
+        if (!this.state.approveRootForPhones) throw new Error("Folder approval is unavailable.");
+        return this.state.approveRootForPhones(exact.id);
+      }
+      return exact;
+    }
+    const overlapping = existing.filter((root) => options.botsOnly || !root.botsOnly);
+    if (overlapping.some((root) => isPathInside(root.folderPath, canonicalPath))) {
       throw new Error("This folder is already covered by an approved root.");
     }
-    if (existing.some((root) => isPathInside(canonicalPath, root.folderPath))) {
+    if (overlapping.some((root) => isPathInside(canonicalPath, root.folderPath))) {
       throw new Error("This folder would overlap an existing approved root.");
     }
 
     const root: AidenRemoteApprovedRoot = {
-      id: `root_${this.dependencies.randomBytes(24).toString("base64url")}`,
+      id: options.rootId ?? `root_${this.dependencies.randomBytes(24).toString("base64url")}`,
       label: displayLabel(canonicalPath),
       folderPath: canonicalPath,
       device: metadata.dev.toString(),
       inode: metadata.ino.toString(),
       policyRevision: AIDEN_REMOTE_ROOT_POLICY_REVISION,
       createdAt: this.dependencies.now(),
+      ...(options.botsOnly ? { botsOnly: true as const } : {}),
+      ...(options.botsOnly && options.operationId ? { botGrantOperationId: options.operationId } : {}),
     };
-    await this.state.addApprovedRoot(root);
+    options.assertCurrent?.();
+    await this.state.addApprovedRoot(root, options.assertCurrent);
     return root;
   }
 
-  async removeLocalRoot(rootId: string): Promise<boolean> {
-    return this.state.removeApprovedRoot(rootId);
+  async removeLocalRoot(rootId: string, ownedBy?: string): Promise<boolean> {
+    return this.withInventoryLock(() => this.state.removeApprovedRoot(rootId, ownedBy));
   }
 }

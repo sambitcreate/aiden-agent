@@ -1,6 +1,6 @@
 # Usage data and crash reports
 
-Aiden's desktop app sends anonymous usage data so we can see how many people use it. This release sends only the app lifecycle events below; feature-use events and crash reports, which show which big features people use and what breaks, arrive in later releases. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
+Aiden's desktop app sends anonymous usage data so we can see how many people use it, which big features they use and what breaks. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
 
 ## What is sent
 
@@ -11,7 +11,7 @@ Every event carries:
 - a random install ID, created on this device and deleted when you turn usage data off;
 - the app version, platform, CPU architecture, OS major version (on Linux, the kernel major version), surface (`desktop`) and build channel.
 
-Lifecycle events in this release:
+Lifecycle events:
 
 | Event | When | Extra fields |
 | --- | --- | --- |
@@ -21,7 +21,77 @@ Lifecycle events in this release:
 | `app_updated` | First launch on a new version | `from_version`, `to_version` |
 | `analytics_disabled` | When you turn usage data off (the last event sent) | none |
 
-Feature-use events and crash reports are listed in the registry and arrive in later releases; the in-app sheet always shows the current list.
+Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`. An action in the first moments of a launch waits in memory, up to 100 events, until usage data has started, and is dropped if sending isn't allowed. Delayed metadata lookups keep the action's original consent: a later disclosure or opt-in cannot authorize an earlier action, and a consent change or shutdown discards its unfinished report. New feature reports stop as soon as that change or shutdown is requested, including while an earlier settings write finishes.
+
+| Event | When | Extra fields |
+| --- | --- | --- |
+| `chat_message_sent` | A person's message started a turn or was queued for one, including a scheduled run and a message to a Bot. A message that joins a running Bot turn, a message from another Bot, Telegram chats, Design runs and Aiden's own follow-up notices are not counted. | `provider_id`, `model_id`, `in_workspace`, `thinking`, `origin`: desktop, phone, peer (another paired Mac or Linux host), bot or schedule |
+| `chat_created` | A new chat from the sidebar, a phone, the first message of a draft, or the Assistant. Bots, schedules and forks are not counted. | `workspace_kind`: folder, scratch, worktree or none |
+| `provider_connected` | A sign-in or key was saved for a built-in provider, or a custom provider was added | `provider_id`, `auth`: key, oauth or local (a custom provider on this machine or one with no key) |
+| `workspace_added` | A folder, named or scratch workspace was added. A hidden No workspace folder is not. | `kind`: folder, scratch or path (a typed path or a clone) |
+| `bot_created` | A Bot was created | `preset_id`, `bot_count` bucket |
+| `bot_routine_ran` | A Bot routine finished with a result | `trigger`, `result`: success or failed |
+| `scheduled_task_ran` | A scheduled task finished with a result. A cancelled or skipped run is not counted; one blocked by a permission is `failed`. | `trigger`, `result`: success, silent or failed |
+| `subagent_launched` | A subagent started | `role` |
+| `skill_used` | A skill was run by name and its message was saved | `source`: builtin or user, and `skill_id` for a bundled skill only |
+| `connector_added` | A connector was added. Editing one is not counted. | `preset_id`, `transport`: stdio or http |
+| `web_search_used` | A search finished without an error, even with no results | `search_provider` |
+| `voice_used` | A Live session opened, a hotkey dictation delivered its text (pasted or copied), a phone transcribed speech, or read aloud started. The microphone in the Mac composer is not counted. | `mode`: live, dictation or read_aloud; `engine`: local or cloud |
+| `phone_paired` | An iPhone, iPad or Android phone finished pairing | `transport`: lan or tailscale; `device_count`: bucket of phones not revoked |
+| `peer_mac_paired` | Another Mac or Linux host was paired from this one | `method`: discovery, code or link |
+| `computer_use_enabled` | The global Computer Use switch went from off to on | none |
+| `bot_computer_set_up` | Bot computers finished Set up, or element control was added later | `element_control` |
+| `terminal_opened` | A terminal started | none |
+| `git_commit` | A commit was made from Aiden | none |
+| `worktree_created` | A managed worktree was created and saved as a workspace | none |
+
+How the values are limited:
+
+- `provider_id` and `model_id` are ids that ship in the app. A custom provider, a local model, or a model missing from the bundled catalog is sent as `custom`. Catalog ids are lowercased.
+- `preset_id` is a bundled Bot preset or connector, otherwise `custom`. `search_provider` is one of Aiden's own search routes.
+- `in_workspace` is true only for a real workspace. Messages to a Bot always report false, and report `origin: bot` whichever surface sent them.
+- `trigger` is automatic, manual, catch_up, retry, file_change, webhook or watch. `thinking` is the level chosen for the turn, or other when Aiden doesn't know it, as for a message to a Bot.
+
+Bot continuity integration: host-issued watch/routine and approved-peer task/result inputs do not count as a person’s `chat_message_sent`, including routines without display labels. A person’s accepted durable input reports only allowlisted IDs from its admitted execution model; analytics never resolves the Bot’s unrelated current default or changes its saved model/fallback choice. Duplicates and Resume do not add message events.
+
+## Crash reports
+
+Aiden reports crashes and uncaught errors only. A failure the app handles (a provider request that failed, a rejected key, a routine or tool error, an error an interface boundary caught) stays on your device.
+
+| What happened | Sent as | Fields |
+| --- | --- | --- |
+| Uncaught exception in the main process, or startup failing once crash capture has begun | `$exception`, `level: fatal` | `source: main`, `origin`, `process_type`, `uptime_bucket` |
+| Unhandled rejection in the main process (Aiden keeps running) | `$exception`, `level: error` | `source: main`, `origin`, `process_type`, `uptime_bucket` |
+| Uncaught error or rejection in the app window | `$exception`, `level: error` | `source: renderer`, `origin`, `process_type`, `uptime_bucket` |
+| The app window's process died | `app_crashed` | `kind: renderer`, `reason`, `exit_code` |
+| The app window kept crashing | `app_crashed` | `kind: renderer_loop` |
+| A web page's process in the in-app browser died | `app_crashed` | `kind: browser_tab`, `reason`, `exit_code` (never the page or its address) |
+| A GPU, utility or other helper process died | `app_crashed` | `kind: gpu`, `utility` or `other`, `reason`, `exit_code` |
+| The last run ended without JavaScript getting to run, for example a native crash | `app_crashed`, on the next launch | `kind: unclean_exit` |
+
+A process that exited with code zero, a helper Aiden stopped itself and a process that ended while Aiden was quitting are not crashes and are not sent. A crash that arrives on the next launch has `origin: pending_crash` and carries the version and time it happened.
+
+An `$exception` holds the error's type, a message and up to 30 stack frames, for the error and up to three causes. Every exception is rebuilt from scratch in the main process:
+
+- **Messages.** Only messages the JavaScript runtime, Node, Chromium or Electron write themselves are kept, and what is kept is fixed text. A name the runtime quotes becomes `[name]`, as in `Cannot read properties of undefined (reading '[name]')`, because it can be a value from data. Paths are redacted. Every other message becomes `[message withheld]`. An app-thrown message can quote a prompt or a reply, and no redactor can tell a sentence of chat from anything else, so the type and stack identify those errors instead.
+- **Stacks.** A frame inside the app bundle keeps its app-relative file (`app:///…`), function name and position. A frame in Node's own code keeps only the module (`node:fs`). Anything else becomes `<external>`, and a function name that is not a single code identifier becomes `?`. A function in the bundle that takes its name from a computed key shows that key.
+- **Types.** An error name is kept only if it is on the fixed list in `analytics-sanitize.ts` (the language's, Node's and the web platform's own names, plus `ZodError` and `PostHogFetchError`). Any other name becomes `Error`, because a name can be set from anything, so a custom class name is not reported.
+
+### Errors from the app window
+
+While usage data can be sent, the app window adds an uncaught error's raw name, message and stack (capped at 8 KiB) to the report it already gives the main process. The main process treats those fields as untrusted, runs them through the sanitizer above, and neither stores nor logs them; the local diagnostics journal keeps its content-free record. When sending is off, the report is exactly the content-free form. The window has no PostHog code and decides nothing about what is safe.
+
+### Crashes that end the process
+
+A fatal main-process exception may kill Aiden before anything reaches the network, so the sanitized exception is first written to `analytics-pending-crash.json` in the app's data folder, then sent at once. The file is deleted when the server confirms it. If it is still there on the next launch, it is sent then, under the same event ID so the server keeps one copy. A crash that could not be sent waits for a launch that can. Only the most recent unsent crash is kept, so a second fatal error replaces the first. Turning usage data off deletes the file; a record left by an earlier install ID, or found while sending is off, is deleted unsent.
+
+`analytics-run.marker` is a small file present while Aiden runs, holding a random ID for that run. If a launch finds it, and no pending crash from that same run explains why, the last run ended without JavaScript running and one `unclean_exit` is sent. Sending must have been allowed at that launch: a crash from before the notice or from before you opted in is never reported.
+
+### Limits
+
+At most 25 crash reports per app session, and at most three of the same non-fatal error (same type and top three frames). Fatal errors and `app_crashed` skip the per-error limit but count toward the 25. Quitting never waits longer than the existing usage-data shutdown deadline for a report to finish sending.
+
+A failure before crash capture starts, such as a module that cannot load, is not reported. Native crash dumps are not sent. They stay on your device and stay opt-in. Aiden does not upload source maps, so stacks from minified code show minified names.
 
 ## What is never sent
 
@@ -33,7 +103,7 @@ PostHog's US cloud, project "aiden", at the fixed host `https://us.i.posthog.com
 
 ## Turning it off
 
-- **Settings → About → Usage data**: turn off **Share anonymous usage and crash data**. Aiden drops the ordinary event queue immediately and deletes the install ID. It makes a separate, time-limited attempt to send one `analytics_disabled` event with the previous ID, even if you quit at the same time. Turning it back on starts a new ID.
+- **Settings → About → Usage data**: turn off **Share anonymous usage and crash data**. Aiden drops the ordinary event queue immediately and deletes the install ID and any pending crash report. It makes a separate, time-limited attempt to send one `analytics_disabled` event with the previous ID, even if you quit at the same time. Turning it back on starts a new ID.
 - **Environment**: `DO_NOT_TRACK=1` or `AIDEN_ANALYTICS=0` turns it off regardless of the setting; the switch shows "Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)".
 - **First run**: the last onboarding step has the same switch, on by default, with a **What's sent** link. Finishing setup acknowledges the row only when it displayed sharing as on. A missing or failed settings read leaves the notice pending.
 - **Existing installs**: the first launch after updating shows a one-time notice with **OK** and **Turn off**. Nothing is sent until the notice or the onboarding row has been shown; switching usage data on in Settings also answers the notice.

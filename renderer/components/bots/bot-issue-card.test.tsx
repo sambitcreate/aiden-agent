@@ -46,6 +46,15 @@ test("an open issue shows its title, body and action buttons and calls onAct", a
   assert.equal(actions.length, 1, "one answer per click");
 });
 
+test("an access issue offers Allow this folder and calls onAct with allow_folder", async () => {
+  const actions: BotIssueAction[] = [];
+  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{ kind: "allow_folder" }] }} status="open" onAct={(action) => { actions.push(action); }} />);
+  const button = screen.getByRole("button", { name: "Allow this folder" });
+  button.focus(); assert.equal(document.activeElement, button);
+  fireEvent.click(button);
+  await waitFor(() => assert.deepEqual(actions, [{ kind: "allow_folder" }]));
+});
+
 test("a resolved issue shows a quiet resolved line and no buttons", () => {
   for (const [status, line] of [
     ["fixed", "Fixed"],
@@ -73,4 +82,16 @@ test("buttons keep focus-visible styling", () => {
   }
   // The shared Button primitive owns the visible ring: it is not a div or a span.
   for (const button of buttons) assert.equal(button.tagName, "BUTTON");
+});
+
+
+test("an access issue has a Not now exit that sends only dismissal", async () => {
+  const actions: BotIssueAction[] = [];
+  render(<BotIssueCard issue={{ ...ISSUE, kind: "access_needed", actions: [{kind: "dismiss_access"}, {kind: "open_settings", section: "access"}] }} status="open" onAct={(action) => { actions.push(action); }} />);
+  assert.deepEqual(buttonNames(), ["Not now", "Review access"]);
+  const dismiss = screen.getByRole("button", {name: "Not now"});
+  dismiss.focus();
+  assert.equal(document.activeElement, dismiss);
+  fireEvent.click(dismiss);
+  await waitFor(() => assert.deepEqual(actions, [{kind: "dismiss_access"}]));
 });

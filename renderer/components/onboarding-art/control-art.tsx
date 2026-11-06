@@ -3,6 +3,7 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
+  Circle,
   Cpu,
   Ellipsis,
   Folder,
@@ -176,7 +177,7 @@ export function AidenLiveArt() {
   );
 }
 
-/** A Bot's single chat: name pill header, one exchange, and its weekly routine. */
+/** A Bot chat's approved plan, with bounded coverage, hand-off attention and a routine/reply. */
 export function BotsArt() {
   return (
     <>
@@ -193,17 +194,42 @@ export function BotsArt() {
           <ArtIcon icon={Ellipsis} />
         </div>
         <div className="oa-bots-body">
-          <div className="oa-bots-bubble">
-            <Bar width="100%" />
-          </div>
-          <div className="oa-stack" style={{ gap: 4, width: "84%", marginTop: 7 }}>
-            <Bar width="96%" tone="soft" className="oa-anim-type" />
-            <Bar width="62%" tone="soft" className="oa-anim-type" style={{ animationDelay: "0.2s" }} />
+          <div role="group" aria-label="Meal Planner's approved plan" className="oa-stack rounded-card bg-popover p-2 shadow-control">
+            <span>Approved · ends in 45 min</span>
+            <Bar width="70%" tone="ink" />
+            <ul aria-label="Plan steps" className="oa-stack m-0 list-none p-0">
+              <li className="oa-row">
+                <span role="img" aria-label="Done" className="rounded-full bg-status-green-surface text-status-green">
+                  <ArtIcon icon={Check} />
+                </span>
+                <Bar width="72%" tone="soft" />
+              </li>
+              <li className="oa-row">
+                <span role="img" aria-label="Pending"><ArtIcon icon={Circle} /></span>
+                <Bar width="60%" tone="soft" className="oa-anim-type" />
+              </li>
+            </ul>
+            <ul aria-label="Plan coverage" className="m-0 list-none p-0">
+              <li>
+                <span className="block">Calendar · create events (up to 5)</span>
+                <span className="block text-tertiary">1 of 5 used</span>
+              </li>
+            </ul>
+            <div className="oa-row">
+              <ArtButton variant="ghost">Stop plan</ArtButton>
+              <ArtButton variant="ghost">Show details</ArtButton>
+            </div>
           </div>
         </div>
       </ArtWindow>
-      <ArtChip icon={CalendarClock} className="oa-bots-routine" style={{ left: 20, top: 86 }}>
+      <ArtChip icon={ShieldQuestion} className="oa-bots-routine" style={{ left: 20, top: 158 }}>
+        Needs you
+      </ArtChip>
+      <ArtChip icon={CalendarClock} className="oa-bots-routine" style={{ left: 20, top: 182 }}>
         Every Sunday at 9:00 AM
+      </ArtChip>
+      <ArtChip icon={MessageSquare} className="oa-bots-routine" style={{ left: 20, top: 206 }}>
+        COS replied
       </ArtChip>
     </>
   );

@@ -1,3 +1,10 @@
+import { createBotPlans } from "../bot-plans/plans.js";
+import { botPlanProposalFingerprint, type BotPlanProposal } from "../bot-plans/validate.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createBotAccessRequests } from "./bot-access-requests.js";
+import { accessRequestPrompt } from "./test-support/access-request-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createBotApprovals } from "./bot-approvals.js";
@@ -30,10 +37,11 @@ function memoryIssueStore(): BotIssueStore {
   };
 }
 
-function setup() {
+function setup(plans: Pick<ReturnType<typeof createBotPlans>, "onChange"> = { onChange: () => () => {} }) {
   const questions = createBotQuestions();
   const approvals = createBotApprovals({ publish() {}, withdraw() {} });
   const handoffs = createBotHandoffs();
+  const accessRequests = createBotAccessRequests();
   const issues = createBotIssueService({
     store: memoryIssueStore(),
     appendEntry: async () => undefined,
@@ -48,13 +56,15 @@ function setup() {
   });
   const sent: Array<{ channel: string; payload: unknown }> = [];
   const stop = wireBotAttention({
+    plans,
     questions,
     approvals,
     handoffs,
+    accessRequests,
     issues,
     broadcast: (channel, payload) => void sent.push({ channel, payload }),
   });
-  return { questions, approvals, handoffs, issues, sent, stop };
+  return { questions, approvals, handoffs, accessRequests, issues, sent, stop };
 }
 
 function handOff(handoffs: ReturnType<typeof createBotHandoffs>, botId: string, waitId: string, signal?: AbortSignal) {
@@ -97,6 +107,7 @@ function approve(
   return approvals.request({
     botId,
     waitId,
+    authorizationFingerprint: `attention-${waitId}`,
     toolCallId: `call-${waitId}`,
     toolName: "write_file",
     summary: "Write secret-notes.txt",
@@ -144,7 +155,7 @@ test("an approval being asked and decided each tell the sidebar, with only the B
     { channel: "bots:attention", payload: { botId: "bot-a" } },
   ]);
   assert.equal(approvals.decide("a1", "allow"), true);
-  assert.equal(await decided, "allow");
+  assert.deepEqual(await decided, { id: "a1", authorizationFingerprint: "attention-a1", answer: "allow", source: "person" });
   assert.equal(sent.length, 2);
   assert.equal(
     JSON.stringify(sent).includes("secret-notes"),
@@ -215,4 +226,44 @@ test("an issue raised and settled each tell the sidebar, with only the Bot id", 
   stop();
   await issues.raise({ ...raised, dedupeKey: "routine:r2:failed", routineId: "r2" });
   assert.equal(sent.length, 2, "nothing is broadcast after the unsubscribe");
+});
+
+test("an access request opening, answer and withdrawal broadcast only the Bot id and cleanup stops it", async () => {
+  const { accessRequests, sent, stop } = setup();
+  const asked = accessRequests.request(accessRequestPrompt());
+  const waitId = accessRequests.pending()[0]!.waitId;
+  assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot:a" } }]);
+  await accessRequests.answer("bot:a", waitId, "not_now", async () => {});
+  await asked;
+  assert.deepEqual(sent[1], sent[0]);
+  const controller = new AbortController();
+  const withdrawn = accessRequests.request(accessRequestPrompt({ signal: controller.signal }));
+  controller.abort();
+  await assert.rejects(withdrawn);
+  assert.equal(sent.length, 4);
+  stop();
+  const later = accessRequests.request(accessRequestPrompt());
+  await accessRequests.answer("bot:a", accessRequests.pending()[0]!.waitId, "not_now", async () => {});
+  await later;
+  assert.equal(sent.length, 4);
+});
+
+
+test("plan opening and settlement broadcast only the Bot id, and teardown silences plan changes", async () => {
+  const profileDir = await mkdtemp(path.join(tmpdir(), "bot-plan-attention-"));
+  const plans = createBotPlans({ profileDir, knownBot: async () => true, revalidate: async () => {}, revokeAccess() {} });
+  const { sent, stop } = setup(plans);
+  const proposal: BotPlanProposal = { title: "Private calendar task", why: "Private reason", steps: ["Private step"], items: [{ id: "i1", kind: "shell" }], authorization: { policyRevision: "p", bindingRevision: "b", proposalFingerprint: "", rules: [] } };
+  proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
+  try {
+    const waiting = plans.request({ botId: "bot:a", planId: "p1", toolCallId: "call1", proposal, requestIds: ["private-request"], signal: undefined });
+    assert.equal((await plans.current("bot:a"))?.status, "pending");
+    assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot:a" } }]);
+    await plans.respond("bot:a", "p1", "approve");
+    await waiting;
+    assert.deepEqual(sent, Array.from({ length: 2 }, () => ({ channel: "bots:attention", payload: { botId: "bot:a" } })));
+    stop();
+    await plans.endRuns("bot:a", "stopped");
+    assert.equal(sent.length, 2);
+  } finally { stop(); await rm(profileDir, { recursive: true, force: true }); }
 });

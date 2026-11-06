@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { createBotMessageLedger, type BotMessageLedger } from "../bot-messages/ledger.js";
 // Bot delete and Bot data, end to end on real stores in a temp profile:
 // the durable session runtime, Bot identity, access, managed home, photo,
 // chat rows and lifecycle journal, wired the way production wires them.
@@ -151,7 +153,7 @@ async function sessionFor(
   opened: Profile,
   fauxModels: FauxModels,
   routines: Map<string, string[]>,
-  options: { quitAfterSessionDestroyed?: boolean; rules?: BotRuleStore } = {},
+  options: { quitAfterSessionDestroyed?: boolean; rules?: BotRuleStore; messages?: BotMessageLedger } = {},
 ): Promise<BotSessionRuntime> {
   return createBotSessionService({
     profileDir: profile,
@@ -166,6 +168,7 @@ async function sessionFor(
         routines.delete(botId);
       },
       async (botId) => options.rules?.forgetBot(botId),
+      async (botId) => { await options.messages?.forgetBot(botId); },
       (botId) => opened.app.deleteBot({ botId }),
     ],
   });
@@ -494,4 +497,19 @@ test("deleting a Bot erases its rules; a later edit is refused and never brings 
   } finally {
     await session.shutdown();
   }
+});
+
+
+test("deleting a Bot forgets its message envelopes on either side", async () => {
+ const profile=await tempProfile(),opened=openProfile(profile);await opened.app.initialize();
+ const a=await createBotWithData(opened,"A"),b=await createBotWithData(opened,"B");
+ const messages=createBotMessageLedger({file:()=>path.join(profile,"bots","bot-messages.json"),now:Date.now});
+ const ids:string[]=[];
+ for(const [from,to] of [[a.bot,b.bot],[b.bot,a.bot]]) {
+  const id=randomUUID();ids.push(id);const now=Date.now();
+  await messages.reserve({id,fromBotId:from!.id,toBotId:to!.id,fromName:from!.name,toName:to!.name,hop:1,targetRequestId:`bot:${from!.id}:1:${id}`,createdAt:now,deadline:now+60_000,status:"delivered",message:"help",waiting:[],effects:[{id:`${id}:target`,kind:"target",botId:to!.id,requestId:`bot:${from!.id}:1:${id}`,text:"help"}]});
+ }
+ const service=await sessionFor(profile,opened,createFauxModels(),new Map(),{messages});
+ try {await service.deleteBot(a.bot.id);for(const id of ids)assert.equal(await messages.get(id),undefined);}
+ finally {await service.shutdown();}
 });

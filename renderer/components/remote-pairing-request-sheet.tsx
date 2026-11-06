@@ -215,7 +215,7 @@ export function PairingRequestSheet() {
           {shown.deviceName} wants to control this {hostLabel}
         </span>
       )}
-      description={`Allow only if you started this connection and the intended computer shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Remote Access settings.`}
+      description={`Allow only if you started this connection and the intended computer shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Connections settings.`}
       cancelLabel="Deny"
       confirmLabel={busyAllowing ? "Allowing…" : "Allow"}
       onConfirm={() => respond("allow")}

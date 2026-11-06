@@ -67,7 +67,7 @@ test("a link routine shows its link once, with Copy; without Aiden On The Go it 
   fireEvent.click(screen.getByRole("radio", { name: "Its link is called" }));
   assert.equal(screen.queryByLabelText("Folder inside the Bot's folder"), null);
   fireEvent.click(screen.getByRole("button", { name: "Add routine" }));
-  await waitFor(() => assert.ok(screen.getByText(/Turn on Aiden On The Go/u)));
+  await waitFor(() => assert.ok(screen.getByText(/Turn on remote access/u)));
   assert.equal(screen.queryByRole("button", { name: /Copy link/u }), null);
 });
 
