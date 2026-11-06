@@ -151,6 +151,8 @@ export interface WorkspaceWorktreeApplicationDependencies {
   ): Promise<GitCreatedWorktree>;
   saveWorkspace(workspace: Workspace): Promise<Workspace>;
   removeWorkspace(workspaceId: string): Promise<void>;
+  /** Ends aiden-design grants that serve a removed worktree's folder. */
+  designGrants?: { revokeRoot(workspaceRoot: string): void };
   beginWorkspaceMutation(workspaceId: string): () => void;
   workspaceIsChanging(workspaceId: string): boolean;
   cancelWorkspaceOperations(workspaceId: string, exceptSignal: AbortSignal): Promise<void>;
@@ -351,7 +353,10 @@ export function createWorkspaceWorktreeApplicationService(
             throw new Error("The source workspace changed while Aiden was saving the worktree.");
           }
         },
-        removeWorkspaceRecord: (savedWorkspace) => dependencies.removeWorkspace(savedWorkspace.id),
+        removeWorkspaceRecord: async (savedWorkspace) => {
+          await dependencies.removeWorkspace(savedWorkspace.id);
+          if (savedWorkspace.folderPath) dependencies.designGrants?.revokeRoot(savedWorkspace.folderPath);
+        },
         rollbackWorktree: () =>
           dependencies.rollbackWorktree(resolved.folderPath, worktree, {
             provisionedIgnored: provisionedFiles,
@@ -695,7 +700,10 @@ export function createWorkspaceWorktreeApplicationService(
                 followThroughChange.committed = true;
                 keepPaused();
               },
-              removeWorkspaceRecord: () => dependencies.removeWorkspace(workspaceId),
+              removeWorkspaceRecord: async () => {
+                await dependencies.removeWorkspace(workspaceId);
+                if (workspace.folderPath) dependencies.designGrants?.revokeRoot(workspace.folderPath);
+              },
               reconciledResult: () => ({ branchDeleted: false }),
             });
             if (managed.worktreeGitDir && managed.ownershipToken) {

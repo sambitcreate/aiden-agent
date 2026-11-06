@@ -1,6 +1,6 @@
 // Owner-filtered notifications for one generation stream. ChatPane's
-// startGeneration and Design Studio both subscribe here before invoking main,
-// so no opening tokens are dropped (ADR-DS §5).
+// startGeneration subscribes here before invoking main, so no opening tokens
+// are dropped.
 import { parseAgentsInstructionNotices } from "../shared/agents-instructions-notice";
 import { parseAskUserQuestionPrompt, type AskUserQuestionPromptV1 } from "../shared/ask-user-question";
 import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";

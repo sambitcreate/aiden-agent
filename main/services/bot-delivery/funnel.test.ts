@@ -1,3 +1,5 @@
+import { DEFAULT_BOT_INTERRUPTIONS } from "../../../renderer/shared/bots.js";
+import { countedToday, createBotDeliveryGate } from "./gate.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -9,7 +11,7 @@ import {
   type BotDeliveryGate,
   type BotDeliveryInput,
 } from "./funnel.js";
-import { createBotDeliveryLog } from "./log.js";
+import { BotDeliveryHistoryFullError, createBotDeliveryLog } from "./log.js";
 import type { ScheduledTask } from "../types.js";
 
 const NOW = Date.parse("2026-10-27T09:00:00.000Z");
@@ -115,12 +117,11 @@ test("a deferred row is invisible to phones until it is due", async (t) => {
   assert.equal(await h.funnel.deliver(routineResult()), "deferred");
   assert.equal(await h.funnel.deliver(routineResult()), "deferred", "a held row stays held");
   assert.deepEqual(await h.log.due(undefined, NOW), []);
-  assert.deepEqual(
-    (await h.log.due(undefined, NOW + HOUR)).map(({ title }) => title),
-    ["Morning brief"],
-  );
+  assert.deepEqual(await h.log.due(undefined, NOW + HOUR), [], "release waits for the current quiet-hours check");
   assert.equal(h.calls.mac.length, 0);
-  assert.equal(h.calls.telegram.length, 0);
+  await h.funnel.flush(NOW + HOUR);
+  assert.deepEqual((await h.log.due(undefined, NOW + HOUR)).map(({ title }) => title), ["Morning brief"]);
+  assert.equal(h.calls.telegram.length, 1);
 });
 
 test("suppressed rows are logged but never notified", async (t) => {
@@ -303,6 +304,68 @@ test("a delivery after the Bot is forgotten writes nothing and sends nothing", a
   assert.deepEqual(await h.log.list("bot:scout"), []);
 });
 
+test("a slept-through morning does not release held results on the following quiet night", async (t) => {
+  let now = Date.parse("2026-10-27T23:00:00Z");
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-sleep-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
+  const gate = createBotDeliveryGate({ settings: async () => DEFAULT_BOT_INTERRUPTIONS, sentToday: async () => 0, timeZone: () => "UTC" });
+  const sends: string[] = [];
+  const open = () => createBotDeliveryFunnel({ log, gate, now: () => now, mac: async () => { sends.push("mac"); }, telegram: async () => { sends.push("telegram"); } });
+  const input = routineResult();
+  assert.equal(await open().deliver(input), "deferred");
+  now += 24 * HOUR;
+  const nextMorning = Date.parse("2026-10-29T07:00:00Z");
+  const restarted = open();
+  assert.deepEqual(await log.due(undefined, now), [], "a phone polling before the first flush stays quiet");
+  assert.equal(await restarted.deliver(input), "deferred", "a retried delivery also respects the new night");
+  assert.equal(await restarted.flush(now), nextMorning);
+  assert.deepEqual(sends, []);
+  const phoneCursor = now;
+  now = nextMorning;
+  await restarted.flush(now);
+  assert.deepEqual(sends, ["mac", "telegram"]);
+  assert.deepEqual((await log.due(phoneCursor, now)).map((row) => row.dedupeKey), [input.dedupeKey]);
+});
+
+test("several results competing for the last daily slot produce one result and one limit note", async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-limit-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+  const gate = createBotDeliveryGate({
+    settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
+    sentToday: async (botId, start, at) => countedToday(await log.list(botId), start, at),
+    timeZone: () => "UTC",
+  });
+  const banners: string[] = [];
+  const funnel = createBotDeliveryFunnel({ log, gate, now: () => NOW, mac: async (input) => { banners.push(input.class); }, telegram: async () => {} });
+  const results = await Promise.all(["a", "b", "c"].map((key) => funnel.deliver(routineResult({ dedupeKey: key }))));
+  assert.deepEqual(results.sort(), ["sent", "suppressed", "suppressed"]);
+  assert.deepEqual(banners, ["routine_result", "digest"]);
+});
+
+test("an overdue group released on a full-budget day still sends its issue", async (t) => {
+  let now = Date.parse("2026-10-27T23:00:00Z");
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-delivery-held-budget-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
+  const gate = createBotDeliveryGate({
+    settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
+    sentToday: async (id, start, at) => countedToday(await log.list(id), start, at),
+    timeZone: () => "UTC",
+  });
+  const banners: string[] = [];
+  const funnel = createBotDeliveryFunnel({ log, gate, now: () => now, mac: async (input) => { banners.push(input.class); }, telegram: async () => {} });
+  await funnel.deliver(routineResult({ dedupeKey: "held" }));
+  await funnel.deliver({ ...routineResult({ dedupeKey: "issue" }), class: "issue" });
+  now += 10 * HOUR;
+  await funnel.deliver(routineResult({ dedupeKey: "first" }));
+  await funnel.flush(now);
+  assert.deepEqual(banners, ["routine_result", "digest", "issue"]);
+  assert.equal((await log.find("bot:scout", "held"))?.suppressed, true);
+  assert.ok(!(await log.due(undefined, now)).some((row) => row.dedupeKey === "held"));
+});
+
 test("delegation suppresses the initial routine update and delivers one counted root final; quiet roots send no channels",async t=>{
  const h=await harness(ALWAYS_NOW_GATE,{ownsPeerFinal:async(_bot,request)=>request==="routine:routine-1:1761555600000"});t.after(h.cleanup);assert.equal(await h.funnel.deliver(routineResult()),"suppressed");assert.equal((await h.log.list("bot:scout")).length,0);const final={...routineResult(),class:"peer_result"as const,dedupeKey:"peer-root:accepted-root",routineTask:undefined,requestId:"accepted-root"};assert.equal(await h.funnel.deliver(final),"sent");assert.equal(await h.funnel.deliver(final),"duplicate");assert.equal(h.calls.mac.length,1);assert.equal(h.calls.telegram.length,1);assert.equal((await h.log.list("bot:scout"))[0]?.class,"peer_result");assert.equal(await h.funnel.deliver({...final,dedupeKey:"peer-root:quiet-root",quiet:true}),"suppressed");assert.equal(h.calls.mac.length,1);assert.equal(h.calls.telegram.length,1);const rows=await h.log.list("bot:scout");assert.equal(rows.find(row=>row.dedupeKey==="peer-root:quiet-root")?.quiet,true);
 });
@@ -321,6 +384,154 @@ test("quiet-hours peer results revalidate their protected original root after re
  for(const requestId of ["first-root","second-root"])assert.equal(await funnel.deliver({botId:"bot:scout",class:"peer_result",dedupeKey:requestId,requestId,title:"Peer result",body:"Private old result",status:"succeeded"}),"deferred");live=false;const reopened=createBotDeliveryFunnel({...ports,log:createBotDeliveryLog({profileDir:()=>root})});await reopened.flush(NOW+HOUR);assert.deepEqual(channels,[]);assert.equal((await log.list("bot:scout")).length,2,"no replacement digest is published");
  live=true;await reopened.flush(NOW+HOUR);assert.deepEqual(channels,["mac","telegram"]);assert.equal((await log.list("bot:scout")).filter(row=>row.class==="digest").length,1);await reopened.flush(NOW+HOUR);assert.equal(channels.length,2);
 });
+
+test("a peer final held past quiet hours is stopped by a full budget, and its root stays protected until the limit note lands", async (t) => {
+  let now = Date.parse("2026-10-27T23:00:00Z");
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-held-budget-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => now });
+  const gate = createBotDeliveryGate({
+    settings: async () => ({ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }),
+    sentToday: async (id, start, at) => countedToday(await log.list(id), start, at),
+    timeZone: () => "UTC",
+  });
+  const banners: string[] = [], settled: string[] = [];
+  let telegramDown = false;
+  const funnel = createBotDeliveryFunnel({
+    log, gate, now: () => now,
+    peerPublication: async () => ({ assertCurrent: async () => {} }),
+    peerSettled: async (_bot, root) => { settled.push(root); },
+    mac: async (input) => { banners.push(input.class); },
+    telegram: async () => { if (telegramDown) throw new Error("telegram is down"); },
+  });
+  const final: BotDeliveryInput = { botId: "bot:scout", class: "peer_result", dedupeKey: "held-final", requestId: "held-root", title: "Peer result", body: "Held result", status: "succeeded" };
+  assert.equal(await funnel.deliver(final), "deferred");
+  now += 10 * HOUR;
+  await funnel.deliver(routineResult({ dedupeKey: "first" }));
+  telegramDown = true;
+  await funnel.flush(now);
+  assert.deepEqual(banners, ["routine_result", "digest"], "the final itself never goes out over the cap");
+  assert.equal((await log.find("bot:scout", "held-final"))?.suppressed, true);
+  assert.ok(!(await log.due(undefined, now)).some((row) => row.dedupeKey === "held-final"));
+  const note = (await log.list("bot:scout")).find((row) => row.class === "digest");
+  assert.deepEqual(note?.peerRootIds, ["held-root"]);
+  await funnel.flush(now);
+  assert.deepEqual(settled, [], "the root waits for the note's owed Telegram channel");
+  telegramDown = false;
+  await funnel.flush(now);
+  assert.deepEqual(settled, ["held-root"]);
+  assert.equal(banners.filter((name) => name === "digest").length, 1);
+});
+
+for (const [path_, second] of [
+  ["held past quiet hours", "defer"],
+  ["stopped at admission", "suppress"],
+] as const) {
+  test(`a later final ${path_} stays protected until the day's shared limit note lands`, async (t) => {
+    const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-shared-note-"));
+    t.after(() => rm(profile, { recursive: true, force: true }));
+    const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+    const limit = { kind: "suppress", reason: "daily_limit", digestKey: "digest:limit:today" } as const;
+    const settled: string[] = [];
+    let telegramDown = true;
+    const funnel = createBotDeliveryFunnel({
+      log, now: () => NOW,
+      gate: {
+        decide: async (input) => input.dedupeKey === "first" || second === "defer"
+          ? { kind: "defer", until: NOW + (input.dedupeKey === "first" ? HOUR : 2 * HOUR) }
+          : limit,
+        quietUntil: async () => undefined,
+        reviewHeld: async () => limit,
+      },
+      peerPublication: async () => ({ assertCurrent: async () => {} }),
+      peerSettled: async (_bot, root) => { settled.push(root); },
+      mac: async () => {},
+      telegram: async () => { if (telegramDown) throw new Error("telegram is down"); },
+    });
+    const final = (key: string, root: string): BotDeliveryInput => ({ botId: "bot:scout", class: "peer_result", dedupeKey: key, requestId: root, title: "Peer result", body: "Held result", status: "succeeded" });
+    await funnel.deliver(final("first", "first-root"));
+    await funnel.flush(NOW + HOUR);
+    await funnel.deliver(final("second", "second-root"));
+    await funnel.flush(NOW + 2 * HOUR);
+    assert.equal((await log.find("bot:scout", "second"))?.suppressed, true);
+    await funnel.flush(NOW + 2 * HOUR);
+    assert.deepEqual(settled, [], "the shared note still owes Telegram");
+    telegramDown = false;
+    await funnel.flush(NOW + 2 * HOUR);
+    assert.deepEqual([...settled].sort(), ["first-root", "second-root"]);
+  });
+}
+
+test("a final suppressed after the day's limit note went out settles without waiting on it", async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-sent-note-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+  const settled: string[] = [], banners: string[] = [];
+  const funnel = createBotDeliveryFunnel({
+    log, now: () => NOW,
+    gate: { decide: async () => ({ kind: "suppress", reason: "daily_limit", digestKey: "digest:limit:today" }) },
+    peerPublication: async () => ({ assertCurrent: async () => {} }),
+    peerSettled: async (_bot, root) => { settled.push(root); },
+    mac: async (input) => { banners.push(input.class); },
+    telegram: async () => {},
+  });
+  const final = (key: string, root: string): BotDeliveryInput => ({ botId: "bot:scout", class: "peer_result", dedupeKey: key, requestId: root, title: "Peer result", body: "Result", status: "succeeded" });
+  await funnel.deliver(final("first", "first-root"));
+  await funnel.deliver(final("second", "second-root"));
+  await funnel.flush(NOW);
+  assert.deepEqual([...new Set(settled)].sort(), ["first-root", "second-root"]);
+  assert.deepEqual(banners, ["digest"], "one note for the day, never a second");
+  assert.deepEqual((await log.find("bot:scout", "digest:limit:today"))?.peerRootIds, ["first-root"]);
+});
+
+test("a note refuses a root past what a stored row can hold, and stays readable", async (t) => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-note-cap-"));
+  t.after(() => rm(profile, { recursive: true, force: true }));
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+  const roots = Array.from({ length: 200 }, (_, index) => `root-${index}`);
+  const { row } = await log.append({ botId: "bot:scout", class: "digest", dedupeKey: "digest:limit:today", title: "Scout", body: "More updates are in the chat.", status: "info", createdAt: NOW, deliverAfter: NOW, peerRootIds: roots });
+  await log.addPeerRoots("bot:scout", row.id, ["root-0"]);
+  await assert.rejects(log.addPeerRoots("bot:scout", row.id, ["root-200"]), BotDeliveryHistoryFullError);
+  const reopened = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+  assert.deepEqual((await reopened.find("bot:scout", "digest:limit:today"))?.peerRootIds, roots);
+});
+
+for (const [name, review] of [
+  ["released", undefined],
+  ["stopped by the budget", { kind: "suppress", reason: "daily_limit", digestKey: "digest:limit:today" }],
+] as const) {
+  test(`a peer root retired during the flush's gate review cannot publish a held row ${name}`, async (t) => {
+    const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-held-retired-"));
+    t.after(() => rm(profile, { recursive: true, force: true }));
+    const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
+    const channels: string[] = [];
+    let live = true, retireOnReview = true;
+    const funnel = createBotDeliveryFunnel({
+      log, now: () => NOW,
+      gate: {
+        decide: async () => ({ kind: "defer", until: NOW + HOUR }),
+        quietUntil: async () => undefined,
+        reviewHeld: async () => { if (retireOnReview) live = false; return review ?? { kind: "now" }; },
+      },
+      peerPublication: async () => live ? { assertCurrent: async () => { if (!live) throw new Error("retired root"); } } : undefined,
+      mac: async () => { channels.push("mac"); },
+      telegram: async () => { channels.push("telegram"); },
+    });
+    await funnel.deliver({ botId: "bot:scout", class: "peer_result", dedupeKey: "held-final", requestId: "held-root", title: "Peer result", body: "Private old result", status: "succeeded" });
+    await funnel.flush(NOW + HOUR);
+    const [row, ...others] = await log.list("bot:scout");
+    assert.deepEqual(others, [], "no limit note is published for the retired root");
+    assert.equal(row?.releasedAt, undefined);
+    assert.equal(row?.suppressed, undefined);
+    assert.deepEqual(await log.due(undefined, NOW + 2 * HOUR), []);
+    assert.deepEqual(channels, []);
+    // Nothing was published, so a root that is current again resumes normally.
+    live = true;
+    retireOnReview = false;
+    await funnel.flush(NOW + HOUR);
+    assert.notEqual((await log.find("bot:scout", "held-final"))?.releasedAt, undefined);
+  });
+}
 
 test("delivery history preserves 200 owed peer finals and admits a new row only after a delivery settles",async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),"aiden-peer-delivery-capacity-"));t.after(()=>rm(root,{recursive:true,force:true}));const log=createBotDeliveryLog({profileDir:()=>root});for(let n=0;n<200;n++)await log.append({botId:"bot:scout",class:n===0?"digest":"peer_result",peerRootIds:[`root-${n}`],requestId:`root-${n}`,dedupeKey:`root-${n}`,title:"Owed final",body:"Result",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR});const pending=await log.list("bot:scout"),oldest=pending[199]!;await assert.rejects(log.append({botId:"bot:scout",class:"peer_result",peerRootIds:["new-root"],requestId:"new-root",dedupeKey:"new-root",title:"New final",body:"New",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR}),/No owed result was discarded/u);assert.deepEqual((await log.list("bot:scout")).map(row=>row.dedupeKey),pending.map(row=>row.dedupeKey));await log.markChannel("bot:scout",oldest.id,"mac",NOW+HOUR);await log.markChannel("bot:scout",oldest.id,"telegram",NOW+HOUR);await log.markSent("bot:scout",oldest.id,NOW+HOUR);await log.settlePeerReferences("bot:scout",oldest.id,async facts=>{assert.deepEqual(facts.pending,[]);assert.deepEqual(facts.settled,["root-0"]);},NOW+HOUR);await log.append({botId:"bot:scout",class:"peer_result",peerRootIds:["new-root"],requestId:"new-root",dedupeKey:"new-root",title:"New final",body:"New",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR});assert.equal((await log.list("bot:scout")).length,200);assert.equal(await log.find("bot:scout",oldest.dedupeKey),undefined);assert.ok(await log.find("bot:scout","root-1"));assert.ok(await log.find("bot:scout","new-root"));

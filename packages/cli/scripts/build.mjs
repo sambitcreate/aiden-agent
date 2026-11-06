@@ -21,6 +21,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { analyticsBuildConfigPlugin, resolveAnalyticsBuildConfig } from "../../../scripts/analytics-build-config.mjs";
 import { patchPiOAuthBranding } from "../../../scripts/patch-pi-oauth-branding.mjs";
 import { vendorGenerativeUiLibraries } from "../../../scripts/vendor-generative-ui-libs.mjs";
 
@@ -67,6 +68,9 @@ const allowedExternalPackages = new Set([
 	// Optional Negotiate proxy auth (pi 0.87 proxy-agent-negotiate). Imported
 	// lazily inside try/catch and only reached behind a Negotiate proxy.
 	"kerberos",
+	// posthog-node's optional peer, imported lazily inside a try/catch for trace
+	// IDs on `$exception`. Without it the SDK carries on, and none are sent.
+	"@opentelemetry/api",
 ]);
 
 const lazyJitiPlugin = {
@@ -264,7 +268,7 @@ function commonBuildOptions() {
 		banner,
 		bundle: true,
 		define: { PI_BUNDLED_NODE: "true" },
-		external: ["@silvia-odwyer/photon-node"],
+		external: ["@silvia-odwyer/photon-node", "@opentelemetry/api"],
 		format: "esm",
 		charset: "utf8",
 		legalComments: "none",
@@ -388,8 +392,17 @@ const lazyEntryPoints = {
 	xai: join(piAiPkg, "dist", "auth", "oauth", "xai.js"),
 };
 
+// Only `npm run cli:dist` carries the project key. Every other build, the test
+// entry below included, keeps the committed keyless module and cannot send.
+const analytics = resolveAnalyticsBuildConfig({
+	env: process.env,
+	version: JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf-8")).version,
+});
+if (analytics?.warning) console.warn(`warning: ${analytics.warning}`);
+
 const mainResult = await build({
 	...commonBuildOptions(),
+	...(analytics ? { plugins: [...commonBuildOptions().plugins, analyticsBuildConfigPlugin(analytics.config)] } : {}),
 	entryNames: "[dir]/[name]",
 	entryPoints: {
 		cli: join(pkgDir, "src", "cli.ts"),

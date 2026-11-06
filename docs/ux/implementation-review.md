@@ -6,7 +6,7 @@ Approved from [Now vs proposed](now-vs-proposed.html). The [journey chart](../pl
 
 | Try this | Look for |
 | --- | --- |
-| First-run AI setup | ChatGPT, LM Studio, Ollama, Other Custom Provider; Other ways below. Custom setup cannot complete without an available default model. |
+| First-run AI setup | Choose an account, an API key, a local model or Set up later. Advanced connection opens custom setup. Custom setup cannot complete without an available default model. |
 | Settings → Aiden On The Go | Connect your phone / Scan to finish. Choose a method, acknowledge once, scan the code. |
 | Cancel the phone acknowledgement | Access stays off. No route changes. |
 | Interrupt or fail phone preparation | New access is rolled back when the result is known. Existing access and unrelated routes are preserved. Uncertain changes require explicit verification. |

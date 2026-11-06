@@ -13,7 +13,7 @@ export const WEB_EXTRACT_RECAP_VERSION = 1 as const;
 export const WEB_EXTRACT_MAX_FIELDS = 16;
 /** Letters, digits and underscores, not starting with a digit: a subset of what Clairic accepts. */
 export const WEB_EXTRACT_FIELD_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u;
-/** A source line is the matched page line, or a window of it, with ellipses. */
+/** Complete supporting page text, flattened/windowed with ellipses to fit one line. */
 export const WEB_EXTRACT_MAX_SOURCE_LINE_CHARS = 200;
 /** Display form of one value in the recap; scripts get the whole value. */
 export const WEB_EXTRACT_MAX_RECAP_VALUE_CHARS = 200;

@@ -152,7 +152,7 @@ function isolateExpandedArtifact(section: HTMLElement): () => void {
   };
 }
 
-function HtmlArtifactIframe({
+export function HtmlArtifactIframe({
   src,
   title,
   className,

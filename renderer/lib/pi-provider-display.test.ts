@@ -7,29 +7,9 @@ import { ProviderIcon } from "../components/provider-icon.js";
 import {
   FEATURED_PI_PROVIDER_IDS,
   PROVIDER_ICON_SLUGS,
-  canConfigureOnboardingBuiltinProvider,
-  getOnboardingMoreProviders,
-  isOnboardingBuiltinProviderReady,
-  onboardingBuiltinProviderSetupLabel,
-  onboardingChatGptSelection,
   resolveProviderIconSlug,
   splitPiBuiltinProviders,
 } from "./pi-provider-display.js";
-
-test("ChatGPT onboarding resumes current OpenAI without reconnecting or switching to legacy", () => {
-  const openai = { hasKey: true, models: ["current", "preferred"], defaultModel: "preferred" };
-  const legacy = { configured: true, needsAttention: false, models: [{ id: "legacy" }] };
-  assert.deepEqual(onboardingChatGptSelection(openai, undefined), { providerId: "openai", model: "preferred" });
-  assert.deepEqual(onboardingChatGptSelection(openai, legacy), { providerId: "openai", model: "preferred" });
-  assert.deepEqual(onboardingChatGptSelection({ ...openai, defaultModel: "removed" }, legacy), { providerId: "openai", model: "current" });
-  assert.deepEqual(onboardingChatGptSelection({ ...openai, hasKey: false }, legacy), { providerId: "openai-codex", model: "legacy" });
-  assert.equal(onboardingChatGptSelection({ ...openai, models: [] }, undefined), undefined);
-  assert.equal(onboardingChatGptSelection(undefined, { ...legacy, needsAttention: true }), undefined);
-});
-
-function occurrences(source: string, value: string): number {
-  return source.split(value).length - 1;
-}
 
 test("keeps the selected Pi providers first in product order and puts every other provider under More", () => {
   const providers = [
@@ -79,73 +59,6 @@ test("safely places a Pi provider added after this release under More", () => {
   assert.deepEqual(
     more.map((provider) => provider.id),
     ["future-pi-provider"],
-  );
-});
-
-test("onboarding reveals every other Pi provider in stable product order", () => {
-  const providers = [
-    { id: "custom:ollama", isBuiltin: false },
-    { id: "groq", isBuiltin: true },
-    { id: "openai-codex", isBuiltin: true },
-    { id: "google", isBuiltin: true },
-    { id: "future-pi-provider", isBuiltin: true },
-    { id: "anthropic", isBuiltin: true },
-    { id: "openai", isBuiltin: true },
-    { id: "deepseek", isBuiltin: true },
-  ];
-
-  assert.deepEqual(
-    getOnboardingMoreProviders(providers).map((provider) => provider.id),
-    ["google", "deepseek", "groq", "future-pi-provider"],
-  );
-});
-
-test("onboarding can configure every provider with an interactive credential method", () => {
-  const apiKeyProvider = {
-    hasKey: false,
-    models: ["chat-model"],
-    authMethods: [{ type: "api_key" as const, canLogin: true }],
-  };
-  const oauthProvider = {
-    ...apiKeyProvider,
-    authMethods: [{ type: "oauth" as const, canLogin: true }],
-  };
-  const flexibleProvider = {
-    ...apiKeyProvider,
-    authMethods: [
-      { type: "api_key" as const, canLogin: true },
-      { type: "oauth" as const, canLogin: true },
-    ],
-  };
-
-  assert.equal(canConfigureOnboardingBuiltinProvider(apiKeyProvider), true);
-  assert.equal(onboardingBuiltinProviderSetupLabel(apiKeyProvider), "Add your API key");
-  assert.equal(canConfigureOnboardingBuiltinProvider(oauthProvider), true);
-  assert.equal(onboardingBuiltinProviderSetupLabel(oauthProvider), "Sign in to connect");
-  assert.equal(canConfigureOnboardingBuiltinProvider(flexibleProvider), true);
-  assert.equal(onboardingBuiltinProviderSetupLabel(flexibleProvider), "Add an API key or sign in");
-});
-
-test("onboarding distinguishes ready providers from unavailable setup methods", () => {
-  const readyProvider = {
-    hasKey: true,
-    models: ["chat-model"],
-    authMethods: [{ type: "api_key" as const, canLogin: false }],
-  };
-  const unavailableProvider = {
-    hasKey: false,
-    models: ["chat-model"],
-    authMethods: [{ type: "api_key" as const, canLogin: false }],
-  };
-
-  assert.equal(isOnboardingBuiltinProviderReady(readyProvider), true);
-  assert.equal(canConfigureOnboardingBuiltinProvider(readyProvider), true);
-  assert.equal(onboardingBuiltinProviderSetupLabel(readyProvider), "Ready to use");
-  assert.equal(isOnboardingBuiltinProviderReady(unavailableProvider), false);
-  assert.equal(canConfigureOnboardingBuiltinProvider(unavailableProvider), false);
-  assert.equal(
-    onboardingBuiltinProviderSetupLabel(unavailableProvider),
-    "Available in Settings after onboarding",
   );
 });
 
@@ -224,14 +137,6 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     new URL("../components/provider-icon.tsx", import.meta.url),
     "utf8",
   );
-  // The built-in provider row lives in the shared ProviderSetupRow.
-  const providersSettingsSource = ["providers-settings.tsx", "provider-setup-row.tsx"]
-    .map((file) => readFileSync(new URL(`../components/settings/${file}`, import.meta.url), "utf8"))
-    .join("\n");
-  const codexProviderSettingsSource = readFileSync(
-    new URL("../components/settings/codex-provider-settings.tsx", import.meta.url),
-    "utf8",
-  );
   const multicolorProviderSlugs = providerIconSource.match(
     /const MULTICOLOR_PROVIDER_ICON_SLUGS[\s\S]*?\]\);/u,
   )?.[0];
@@ -254,19 +159,7 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     providerIconSource,
     /<ThemedProviderMark[\s\S]*mark="custom"/u,
   );
-  assert.doesNotMatch(
-    `${providersSettingsSource}\n${codexProviderSettingsSource}`,
-    /bg-surface-subtle/u,
-  );
-  assert.equal(occurrences(providersSettingsSource, "rounded-control bg-well text-secondary"), 3);
-  assert.equal(
-    occurrences(codexProviderSettingsSource, "rounded-control bg-well text-secondary"),
-    1,
-  );
-  assert.match(providersSettingsSource, />Built into Aiden</u);
-  assert.doesNotMatch(providersSettingsSource, /Built into Pi|Pi model|Pi-native/u);
-  assert.match(providersSettingsSource, /className="providers-settings flex flex-col gap-6"/u);
-  assert.match(providersSettingsSource, /customProviders\.length > 0/u);
+
 });
 
  test("Azure retains its provider artwork after the Pi identity rename", () => {
