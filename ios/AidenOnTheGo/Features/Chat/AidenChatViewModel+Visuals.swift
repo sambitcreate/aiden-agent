@@ -9,8 +9,8 @@ extension AidenChatViewModel {
     /// saved documents keeps them openable; a live answer always decides.
     var supportsVisualViewer: Bool {
         guard !isReadOnlyFixture, !isRemoved,
-              coordinator.activeInstanceId == instanceId else { return false }
-        if let server = coordinator.server { return server.supportsChatVisualViewer }
+              coordinator.isLive(owner) else { return false }
+        if let server = ownerServer { return server.supportsChatVisualViewer }
         return hasSavedVisualDocuments
     }
 
@@ -34,7 +34,7 @@ extension AidenChatViewModel {
             String(localized: "This visual can't be opened right now.")
         )
         guard supportsVisualViewer,
-              let context = try? coordinator.requestContext(for: instanceId) else { return unavailable }
+              let context = liveOwner else { return unavailable }
         let key = AidenVisualDocumentCache.Key(
             instanceId: instanceId,
             deviceId: context.deviceId,
@@ -49,12 +49,12 @@ extension AidenChatViewModel {
                 scheme: appearance.scheme.rawValue,
                 theme: appearance.theme.rawValue
             )
-            guard !isRemoved, coordinator.isCurrent(context) else { return unavailable }
+            guard !isRemoved, coordinator.isLive(context) else { return unavailable }
             if await visualDocumentCache.store(html, for: key) { hasSavedVisualDocuments = true }
             return .live(html)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return unavailable }
-            guard !isRemoved, coordinator.isCurrent(context) else { return unavailable }
+            guard !isRemoved, coordinator.isLive(context) else { return unavailable }
             if AidenVisualDocumentLoad.fallsBackToCache(after: error),
                let cached = await visualDocumentCache.load(key) {
                 return .cached(cached)

@@ -7,8 +7,8 @@ extension AidenChatViewModel {
     /// feature; old servers hide the palette and sends stay ordinary text.
     var canUseSkills: Bool {
         guard !isReadOnlyFixture,
-              coordinator.server?.supportsChatSkills == true,
-              let installation = coordinator.installationStore.activeInstallation else {
+              ownerServer?.supportsChatSkills == true,
+              let installation = ownerInstallation else {
             return false
         }
         return installation.hasNegotiatedAccess(to: .skillsInvoke)
@@ -22,7 +22,7 @@ extension AidenChatViewModel {
     /// use the bot-conversation index, workspace chats the workspace index.
     var canMentionFiles: Bool {
         guard !isReadOnlyFixture,
-              let installation = coordinator.installationStore.activeInstallation else {
+              let installation = ownerInstallation else {
             return false
         }
         return installation.hasNegotiatedAccess(to: .filesRead)
@@ -119,14 +119,14 @@ extension AidenChatViewModel {
 
     private func ensureSkillCatalog() {
         guard skillCatalogRetryPending, !skillCatalogLoaded, skillCatalogTask == nil,
-              let context = try? coordinator.requestContext(for: instanceId) else { return }
+              let context = liveOwner else { return }
         skillCatalogRetryPending = false
         skillCatalogTask = Task { [weak self] in
             guard let self else { return }
             defer { skillCatalogTask = nil }
             do {
                 let catalog = try await coordinator.remoteClient(for: context).chatSkills(chatId: chat.id)
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.isLive(context) else { return }
                 skillCatalog = catalog.skills
                 skillCatalogLoaded = true
             } catch let error where aidenIsCancellation(error) {
@@ -139,14 +139,14 @@ extension AidenChatViewModel {
     private func ensureMentionAgents() {
         guard canMentionAgents, mentionAgentsRetryPending, !mentionAgentsLoaded,
               mentionAgentsTask == nil, agentRoster == nil,
-              let context = try? coordinator.requestContext(for: instanceId) else { return }
+              let context = liveOwner else { return }
         mentionAgentsRetryPending = false
         mentionAgentsTask = Task { [weak self] in
             guard let self else { return }
             defer { mentionAgentsTask = nil }
             do {
                 let roster = try await coordinator.remoteClient(for: context).agentRoster(chatId: chat.id)
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.isLive(context) else { return }
                 mentionAgents = roster.isAvailable ? roster.agents : []
                 mentionAgentsLoaded = true
             } catch let error where aidenIsCancellation(error) {
@@ -159,7 +159,7 @@ extension AidenChatViewModel {
     private func ensureMentionFiles() {
         guard canMentionFiles, mentionFilesRetryPending, !mentionFilesLoaded,
               mentionFilesTask == nil,
-              let context = try? coordinator.requestContext(for: instanceId) else { return }
+              let context = liveOwner else { return }
         mentionFilesRetryPending = false
         mentionFilesTask = Task { [weak self] in
             guard let self else { return }
@@ -169,7 +169,7 @@ extension AidenChatViewModel {
                 let index = chat.isBotChat
                     ? try await client.botConversationFiles(chatId: chat.id)
                     : try await client.workspaceFiles(workspaceId: chat.workspaceId)
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.isLive(context) else { return }
                 mentionFiles = index.entries
                 mentionFilesLoaded = true
             } catch let error where aidenIsCancellation(error) {

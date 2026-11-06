@@ -7,8 +7,8 @@ extension AidenChatViewModel {
     /// browser recording can be read and played on the phone.
     var supportsBrowserRecordings: Bool {
         guard !isReadOnlyFixture, !isRemoved,
-              coordinator.activeInstanceId == instanceId,
-              let server = coordinator.server else { return false }
+              coordinator.isLive(owner),
+              let server = ownerServer else { return false }
         return server.supportsChatBrowserRecordings
     }
 
@@ -17,20 +17,20 @@ extension AidenChatViewModel {
     /// matches its recap is played.
     func browserRecording(_ recording: AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad {
         guard supportsBrowserRecordings, recording.playsOnPhone,
-              let context = try? coordinator.requestContext(for: instanceId) else { return .failed }
+              let context = liveOwner else { return .failed }
         do {
             let video = try await coordinator.remoteClient(for: context).browserRecording(
                 chatId: chat.id,
                 recordingId: recording.id
             )
-            guard !isRemoved, coordinator.isCurrent(context), video.mimeType == recording.mimeType else {
+            guard !isRemoved, coordinator.isLive(context), video.mimeType == recording.mimeType else {
                 return .failed
             }
             let data = video.data
             let file = try await Task.detached(priority: .userInitiated) {
                 try AidenBrowserRecordingFile.write(data, for: recording)
             }.value
-            guard !isRemoved, coordinator.isCurrent(context) else {
+            guard !isRemoved, coordinator.isLive(context) else {
                 AidenBrowserRecordingFile.remove(file)
                 return .failed
             }

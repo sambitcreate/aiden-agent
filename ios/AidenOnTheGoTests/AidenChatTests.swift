@@ -169,7 +169,7 @@ final class AidenChatTests: XCTestCase {
         await model.send()
         XCTAssertNotNil(model.pendingSend)
         XCTAssertFalse(model.canSend)
-        let restored = AidenChatViewModel(coordinator: coordinator, chat: model.chat, cache: cache,
+        let restored = AidenChatViewModel(coordinator: coordinator, chat: model.chat, owner: model.owner, cache: cache,
             draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")), onChatUpdated: { _ in })
         await restored.load(observeProgress: false)
         restored.draft = "Later edit"
@@ -2308,6 +2308,7 @@ final class AidenChatTests: XCTestCase {
         return AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
+            owner: try coordinator.ownerContext(for: coordinator.activeInstanceId ?? ""),
             cache: cache,
             draftStore: draftStore,
             modelPreferenceStore: modelPreferenceStore,
@@ -2393,6 +2394,7 @@ final class AidenChatTests: XCTestCase {
         let forkModel = AidenChatViewModel(
             coordinator: coordinator,
             chat: fork,
+            owner: model.owner,
             cache: cache,
             draftStore: draftStore,
             modelPreferenceStore: testModelPreferences,
@@ -6260,6 +6262,7 @@ final class AidenChatTests: XCTestCase {
         let model = AidenChatViewModel(
             coordinator: AidenRemoteCoordinator(),
             chat: chat,
+            owner: .noMachine,
             allowsMutations: true
         )
 

@@ -48,9 +48,9 @@ extension AidenChatViewModel {
         reason: ForeignRunAttachReason = .load
     ) {
         guard !isReadOnlyFixture, !isRemoved, foreignRunTask == nil,
-              activeStreamID == nil, !isStarting, coordinator.isCurrent(context),
-              coordinator.server?.canObserveForeignRuns == true,
-              let installation = coordinator.installationStore.activeInstallation,
+              activeStreamID == nil, !isStarting, coordinator.isLive(context),
+              ownerServer?.canObserveForeignRuns == true,
+              let installation = ownerInstallation,
               installation.instanceId == instanceId,
               installation.hasNegotiatedAccess(to: .runsObserve),
               installation.deviceCapabilities.contains(.chatRead),
@@ -72,7 +72,7 @@ extension AidenChatViewModel {
     /// may be the announced turn's run.
     func attachToAnnouncedTurn(reason: ForeignRunAttachReason) {
         guard !isReadOnlyFixture, !isRemoved, activeStreamID == nil, !isStarting,
-              let context = try? coordinator.requestContext(for: instanceId) else { return }
+              let context = liveOwner else { return }
         if foreignRunTask != nil || isRestoringStream {
             // A newer announced turn keeps the not-found retry.
             if turnAwaitingLookup != .announcedTurn { turnAwaitingLookup = reason }
@@ -92,7 +92,7 @@ extension AidenChatViewModel {
     /// which the chat ends when it leaves the screen or the app the foreground.
     func startForeignRunProbeIfNeeded() {
         guard !isReadOnlyFixture, !isRemoved, foreignRunProbeTask == nil, !canReadAgentRoster,
-              coordinator.server?.canObserveForeignRuns == true else { return }
+              ownerServer?.canObserveForeignRuns == true else { return }
         foreignRunProbeGeneration &+= 1
         let generation = foreignRunProbeGeneration
         foreignRunProbeTask = Task { [weak self] in
@@ -120,7 +120,7 @@ extension AidenChatViewModel {
             }
             guard generation == foreignRunProbeGeneration, !Task.isCancelled,
                   !isRemoved, !canReadAgentRoster,
-                  let context = try? coordinator.requestContext(for: instanceId) else { return }
+                  let context = liveOwner else { return }
             if activeStreamID != nil || isStarting || isRestoringStream || foreignRunTask != nil {
                 // A reply is already live here; check again soon after it ends.
                 idleProbes = 0
@@ -172,7 +172,7 @@ extension AidenChatViewModel {
 
     private func isCurrentForeignRun(_ generation: UInt64, context: AidenRemoteRequestContext) -> Bool {
         !Task.isCancelled && !isRemoved && generation == foreignRunGeneration
-            && coordinator.isCurrent(context) && activeStreamID == nil && !isStarting
+            && coordinator.isLive(context) && activeStreamID == nil && !isStarting
     }
 
     private func observeForeignRun(
@@ -401,9 +401,9 @@ extension AidenChatViewModel {
     }
 
     private func hasForeignRunControl(context: AidenRemoteRequestContext) -> Bool {
-        guard coordinator.isCurrent(context),
-              coordinator.server?.canControlForeignRuns == true,
-              let installation = coordinator.installationStore.activeInstallation,
+        guard coordinator.isLive(context),
+              ownerServer?.canControlForeignRuns == true,
+              let installation = ownerInstallation,
               installation.instanceId == context.instanceId,
               installation.deviceId == context.deviceId else { return false }
         return installation.hasNegotiatedAccess(to: .runsControl)
@@ -423,9 +423,9 @@ extension AidenChatViewModel {
 
     var canControlForeignRun: Bool {
         guard isObservingForeignRun, !isReadOnlyPresentation, isConnected, isStreaming,
-              let context = try? coordinator.requestContext(for: instanceId),
+              let context = liveOwner,
               hasForeignRunControl(context: context),
-              let installation = coordinator.installationStore.activeInstallation,
+              let installation = ownerInstallation,
               installation.deviceCapabilities.contains(.chatWrite) else { return false }
         return chat.botId == nil || (installation.hasNegotiatedAccess(to: .botRead)
             && installation.hasNegotiatedAccess(to: .botWrite))
@@ -549,18 +549,18 @@ extension AidenChatViewModel {
     /// A send, this phone's own stream, a newly live foreign run or a removed
     /// pairing owns the live state from then on.
     private func isForeignRunRecoveryFenced(context: AidenRemoteRequestContext) -> Bool {
-        Task.isCancelled || isRemoved || !coordinator.isCurrent(context) || activeStreamID != nil
+        Task.isCancelled || isRemoved || !coordinator.isLive(context) || activeStreamID != nil
             || isStarting || foreignRunIsLive
     }
 
     func stopForeignRun() async -> Bool {
         guard canControlForeignRun, !isStopping, let runId = foreignRun?.runId,
-              let context = try? coordinator.requestContext(for: instanceId) else { return false }
+              let context = liveOwner else { return false }
         isStopping = true
         defer { isStopping = false }
         do {
             let result = try await coordinator.remoteClient(for: context).cancelRun(id: runId)
-            guard coordinator.isCurrent(context), foreignRun?.runId == runId else { return false }
+            guard coordinator.isLive(context), foreignRun?.runId == runId else { return false }
             guard result.chatId == chat.id else {
                 presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
                 return false
@@ -571,7 +571,7 @@ extension AidenChatViewModel {
             return false
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return false }
-            guard coordinator.isCurrent(context), foreignRun?.runId == runId else { return false }
+            guard coordinator.isLive(context), foreignRun?.runId == runId else { return false }
             presentedError = String(localized: "Stop was not confirmed. Check the current run before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
             return false
@@ -584,7 +584,7 @@ extension AidenChatViewModel {
         scope: AidenApprovalScope
     ) async {
         guard let runId = foreignRun?.runId,
-              let context = try? coordinator.requestContext(for: instanceId) else { return }
+              let context = liveOwner else { return }
         let authorization = AidenApprovalResponseAuthorization.resolve(
             approval: approval, decision: decision,
             capabilities: foreignApprovalCapabilities(context: context)
@@ -615,7 +615,7 @@ extension AidenChatViewModel {
                 decision: decision,
                 scope: requestedScope
             )
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isLive(context) else { return }
             if result.decision == decision {
                 coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
             }
@@ -623,7 +623,7 @@ extension AidenChatViewModel {
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isLive(context) else { return }
             foreignRun?.answerUnconfirmed(approval.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)
@@ -640,7 +640,7 @@ extension AidenChatViewModel {
         idempotencyKey: UUID
     ) async {
         guard let runId = foreignRun?.runId,
-              let context = try? coordinator.requestContext(for: instanceId),
+              let context = liveOwner,
               canRespondToForeignQuestions(context: context) else { return }
         isRespondingToQuestion = true
         defer { isRespondingToQuestion = false }
@@ -653,13 +653,13 @@ extension AidenChatViewModel {
                 request: request,
                 idempotencyKey: idempotencyKey
             )
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isLive(context) else { return }
             coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "question-response:\(question.id)")
         } catch let error where aidenIsCancellation(error) {
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isLive(context) else { return }
             foreignRun?.answerUnconfirmed(question.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)

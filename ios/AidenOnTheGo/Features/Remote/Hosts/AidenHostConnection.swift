@@ -35,6 +35,17 @@ struct AidenRemoteRequestContext: Equatable, Hashable, Sendable {
     }
 }
 
+extension AidenRemoteRequestContext {
+    /// The owner of a model with no machine: a read-only fixture, or a screen
+    /// opened with nothing paired. It is never live.
+    static let noMachine = AidenRemoteRequestContext(
+        instanceId: "",
+        deviceId: "",
+        generation: 0,
+        scope: .owner
+    )
+}
+
 /// What a connection asks of whoever owns it: the saved pairing, the caches,
 /// and the app-wide error. A connection with no delegate is on its own, so it
 /// counts as selected, keeps its installation in memory, and has nothing to

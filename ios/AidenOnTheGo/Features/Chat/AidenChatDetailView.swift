@@ -83,6 +83,7 @@ struct AidenChatDetailView: View {
         _model = State(initialValue: AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
+            owner: (try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? "")) ?? .noMachine,
             allowsMutations: allowsMutations,
             onChatUpdated: onChatUpdated,
             onChatActivityChanged: onChatActivityChanged

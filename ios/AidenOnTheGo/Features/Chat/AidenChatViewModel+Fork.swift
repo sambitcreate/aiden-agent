@@ -7,8 +7,8 @@ extension AidenChatViewModel {
     /// are Workspace-only and wait for the current turn to settle.
     var forkAvailability: AidenChatForkAvailability? {
         guard !isReadOnlyPresentation, !isRemoved, !chat.isBotChat, isConnected,
-              coordinator.activeInstanceId == instanceId,
-              let server = coordinator.server, server.supportsChatFork,
+              coordinator.isLive(owner),
+              let server = ownerServer, server.supportsChatFork,
               !isForking, !isStarting, !isRestoringStream, activeStreamID == nil, !isStreaming else { return nil }
         return AidenChatForkAvailability(supportsSummary: server.supportsChatForkSummary)
     }
@@ -26,8 +26,8 @@ extension AidenChatViewModel {
                   for: chat.messages,
                   supportsSummary: availability.supportsSummary
               )[messageId]?.contains(action) == true,
-              let context = try? coordinator.requestContext(for: instanceId),
-              coordinator.isCurrent(context) else { return nil }
+              let context = liveOwner,
+              coordinator.isLive(context) else { return nil }
         isForking = true
         defer { isForking = false }
         let source = chat
@@ -54,7 +54,7 @@ extension AidenChatViewModel {
             )
             // The Mac answered: the next fork is a new request.
             if forkAttempt == attempt { forkAttempt = nil }
-            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
+            guard !isRemoved, coordinator.isLive(context) else { return nil }
             let forked = result.chat
             guard !forked.isBotChat, forked.workspaceId == source.workspaceId else {
                 presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
@@ -69,10 +69,10 @@ extension AidenChatViewModel {
                 workspaceId: forked.workspaceId,
                 writeToken: writeToken
             )
-            guard coordinator.isCurrent(context) else { return nil }
+            guard coordinator.isLive(context) else { return nil }
             if let prefill = result.prefill {
                 await seedForkComposer(prefill, forkId: forked.id, context: context)
-                guard coordinator.isCurrent(context) else { return nil }
+                guard coordinator.isLive(context) else { return nil }
             }
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-fork:\(forked.id)")
             return forked
@@ -84,7 +84,7 @@ extension AidenChatViewModel {
                 forkAttempt = nil
             }
             if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
-            guard !isRemoved, coordinator.isCurrent(context) else { return nil }
+            guard !isRemoved, coordinator.isLive(context) else { return nil }
             if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {
                 presentedError = String(localized: "This chat changed on your Mac. Try again.")
                 _ = await refreshForkChat(context: context)
@@ -105,10 +105,10 @@ extension AidenChatViewModel {
             // Unpairing purges the store and bumps every session generation,
             // so a save racing it is rejected; re-check before and after.
             let session = await draftStore.beginSession(instanceId: context.instanceId, chatId: forkId)
-            if coordinator.isCurrent(context) {
+            if coordinator.isLive(context) {
                 _ = try? await draftStore.save(prefill.text, session: session)
             }
-            if !coordinator.isCurrent(context) {
+            if !coordinator.isLive(context) {
                 await draftStore.remove(instanceId: context.instanceId, chatId: forkId)
                 return
             }
@@ -125,7 +125,7 @@ extension AidenChatViewModel {
     /// composer owns, so removing one also deletes it on the Mac.
     func adoptForkPrefillAttachments(context: AidenRemoteRequestContext) {
         guard let entry = AidenChatForkPrefillHandoff.take(instanceId: context.instanceId, chatId: chat.id),
-              entry.context == context, coordinator.isCurrent(context),
+              entry.context == context, coordinator.isLive(context),
               pendingAttachments.isEmpty, !isUploadingAttachment, !isPreparingAttachments, !isStarting else { return }
         let attachments = entry.attachments.filter { $0.isValid() }
         for reference in attachments {
@@ -151,13 +151,13 @@ extension AidenChatViewModel {
     /// Stop a running summary. It becomes failed, so reread the chat.
     func cancelForkSummary() async {
         guard canSettleForkSummary,
-              let context = try? coordinator.requestContext(for: instanceId),
-              coordinator.isCurrent(context) else { return }
+              let context = liveOwner,
+              coordinator.isLive(context) else { return }
         isSettlingForkSummary = true
         defer { isSettlingForkSummary = false }
         do {
             _ = try await coordinator.remoteClient(for: context).cancelForkSummary(chatId: chat.id)
-            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isLive(context) else { return }
             _ = await refreshForkChat(context: context)
         } catch {
             await handleForkSummaryError(error, context: context)
@@ -168,7 +168,7 @@ extension AidenChatViewModel {
     var canSettleForkSummary: Bool {
         !isSettlingForkSummary && !isReadOnlyPresentation && !isRemoved && !chat.isBotChat
             && chat.forkedFrom?.summary != nil
-            && coordinator.server?.supportsChatForkSummary == true
+            && ownerServer?.supportsChatForkSummary == true
     }
 
     private func settleForkSummary(
@@ -176,14 +176,14 @@ extension AidenChatViewModel {
         _ action: (AidenRemoteClient, String) async throws -> AidenChat
     ) async {
         guard canSettleForkSummary,
-              let context = try? coordinator.requestContext(for: instanceId),
-              coordinator.isCurrent(context) else { return }
+              let context = liveOwner,
+              coordinator.isLive(context) else { return }
         isSettlingForkSummary = true
         defer { isSettlingForkSummary = false }
         let writeToken = cache.reserveChatWrite()
         do {
             let updated = try await action(coordinator.remoteClient(for: context), chat.id)
-            guard !isRemoved, coordinator.isCurrent(context) else { return }
+            guard !isRemoved, coordinator.isLive(context) else { return }
             await acceptRemoteChat(updated, context: context, writeToken: writeToken, scheduleTitleRefresh: false)
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "fork-summary-\(dedupeKey):\(updated.revision)")
         } catch {
@@ -194,7 +194,7 @@ extension AidenChatViewModel {
     private func handleForkSummaryError(_ error: Error, context: AidenRemoteRequestContext) async {
         if aidenIsCancellation(error) { return }
         if await coordinator.handleCredentialRevocation(error, context: context) { return }
-        guard !isRemoved, coordinator.isCurrent(context) else { return }
+        guard !isRemoved, coordinator.isLive(context) else { return }
         if case AidenRemoteClientError.server(_, let body) = error,
            ["not_found", "revision_conflict", "operation_in_progress"].contains(body.code.rawValue) {
             // The summary moved on elsewhere (finished, retried, or skipped).
@@ -214,8 +214,8 @@ extension AidenChatViewModel {
             } catch {
                 return
             }
-            guard let context = try? coordinator.requestContext(for: instanceId),
-                  coordinator.isCurrent(context) else { return }
+            guard let context = liveOwner,
+                  coordinator.isLive(context) else { return }
             if isStarting || isLoading || isSettlingForkSummary { continue }
             _ = await refreshForkChat(context: context)
         }
@@ -228,7 +228,7 @@ extension AidenChatViewModel {
         let writeToken = cache.reserveChatWrite()
         do {
             let remote = try await coordinator.remoteClient(for: context).chat(id: chat.id)
-            guard !isRemoved, coordinator.isCurrent(context), generation == transcriptGeneration else { return false }
+            guard !isRemoved, coordinator.isLive(context), generation == transcriptGeneration else { return false }
             return await acceptRemoteChat(remote, context: context, writeToken: writeToken, scheduleTitleRefresh: false)
         } catch {
             _ = await coordinator.handleCredentialRevocation(error, context: context)
@@ -240,8 +240,8 @@ extension AidenChatViewModel {
     /// the Mac no longer has reads as deleted; any other failure hides the row.
     func resolveForkSource() async {
         guard !isReadOnlyFixture, let lineage = chat.forkedFrom,
-              let context = try? coordinator.requestContext(for: instanceId),
-              coordinator.isCurrent(context) else { return }
+              let context = liveOwner,
+              coordinator.isLive(context) else { return }
         let sourceId = lineage.chatId
         var title: String?
         if let cached = await cache.admittedChat(instanceId: context.instanceId, chatId: sourceId) {
@@ -250,18 +250,18 @@ extension AidenChatViewModel {
             .summaries.first(where: { $0.id == sourceId }) {
             title = summary.title
         }
-        guard coordinator.isCurrent(context), chat.forkedFrom?.chatId == sourceId else { return }
+        guard coordinator.isLive(context), chat.forkedFrom?.chatId == sourceId else { return }
         if let title {
             forkSource = .titled(title)
             return
         }
         do {
             let source = try await coordinator.remoteClient(for: context).chat(id: sourceId)
-            guard coordinator.isCurrent(context), chat.forkedFrom?.chatId == sourceId else { return }
+            guard coordinator.isLive(context), chat.forkedFrom?.chatId == sourceId else { return }
             forkSource = .titled(source.displayTitle)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context), chat.forkedFrom?.chatId == sourceId else { return }
+            guard coordinator.isLive(context), chat.forkedFrom?.chatId == sourceId else { return }
             if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "not_found" {
                 forkSource = .deleted
             }
