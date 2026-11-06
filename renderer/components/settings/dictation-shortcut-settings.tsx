@@ -11,9 +11,11 @@ import {
   Callout,
   Field,
   FieldSet,
-  Label,
-  RadioGroup,
-  RadioGroupItem,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Switch,
   Text,
   toast,
@@ -29,10 +31,23 @@ import {
 } from "../../lib/accessibility-permission-core";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import {
+  DICTATION_ACTIVATION_MODES,
   isDictationActivationMode,
   resolveDictationActivationMode,
   type DictationActivationMode,
 } from "../../shared/dictation-preferences";
+
+const ACTIVATION_LABEL: Record<DictationActivationMode, string> = {
+  hold: "Hold to dictate",
+  hybrid: "Tap or hold",
+  toggle: "Press to toggle",
+};
+
+const ACTIVATION_DESCRIPTION: Record<DictationActivationMode, string> = {
+  hold: "Hold the shortcut while speaking; release it to transcribe.",
+  hybrid: "Tap to start and tap again to stop, or hold while speaking and release to transcribe.",
+  toggle: "Press once to start; press again to stop and transcribe.",
+};
 
 async function openAccessibilitySettings(): Promise<void> {
   try {
@@ -230,6 +245,7 @@ export function DictationShortcutSettings() {
   const settings = useSettings();
   const [holdBusy, setHoldBusy] = React.useState(false);
   const canChooseHold = capabilities.dictationHoldToTalk || capabilities.dictationHoldSetup;
+  const setupOnly = capabilities.dictationHoldSetup && !capabilities.dictationHoldToTalk;
   const activationMode: DictationActivationMode = resolveDictationActivationMode(
     settings.data ?? {},
     capabilities.dictationHoldToTalk,
@@ -265,60 +281,43 @@ export function DictationShortcutSettings() {
           </Text>
         </Callout>
       )}
-      <Field
-        label="Shortcut behavior"
-        description={canChooseHold
-          ? "Choose how the global dictation shortcut starts and stops each recording."
-          : "Press the global dictation shortcut once to start and again to stop."}
-        orientation="vertical"
-      >
-        <RadioGroup
-          value={activationMode}
-          onValueChange={(value) =>
-            void patch({
-              dictationActivationMode:
-                canChooseHold && isDictationActivationMode(value) ? value : "toggle",
-            })
-          }
-          orientation="vertical"
-          aria-label="Dictation shortcut behavior"
-          disabled={holdBusy}
+      {canChooseHold ? (
+        <Field
+          label="Shortcut behavior"
+          description={[
+            ACTIVATION_DESCRIPTION[activationMode],
+            setupOnly ? "Choose Hold to dictate to let your desktop assign a hold shortcut for this session." : null,
+          ].filter(Boolean).join(" ")}
         >
-          {canChooseHold ? (
-          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
-            <RadioGroupItem value="hold" className="mt-0.5 shrink-0" />
-            <span className="min-w-0">
-              <span className="block text-regular text-primary">Hold to dictate</span>
-              <span className="mt-0.5 block text-small text-secondary">
-                {capabilities.dictationHoldSetup && !capabilities.dictationHoldToTalk
-                  ? "Choose this to let your desktop assign a hold shortcut for this session."
-                  : "Hold the shortcut while speaking; release it to transcribe."}
-              </span>
-            </span>
-          </Label>
-          ) : null}
-          {canChooseHold ? (
-          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
-            <RadioGroupItem value="hybrid" className="mt-0.5 shrink-0" />
-            <span className="min-w-0">
-              <span className="block text-regular text-primary">Tap or hold</span>
-              <span className="mt-0.5 block text-small text-secondary">
-                Tap to start and tap again to stop, or hold while speaking and release to transcribe.
-              </span>
-            </span>
-          </Label>
-          ) : null}
-          <Label className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection">
-            <RadioGroupItem value="toggle" className="mt-0.5 shrink-0" />
-            <span className="min-w-0">
-              <span className="block text-regular text-primary">Press to toggle</span>
-              <span className="mt-0.5 block text-small text-secondary">
-                Press once to start; press again to stop and transcribe.
-              </span>
-            </span>
-          </Label>
-        </RadioGroup>
-      </Field>
+          <Select
+            value={activationMode}
+            disabled={holdBusy}
+            onValueChange={(value) => {
+              if (isDictationActivationMode(value)) void patch({ dictationActivationMode: value });
+            }}
+          >
+            <SelectTrigger size="small" className="w-44 max-w-full" aria-label="Dictation shortcut behavior">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DICTATION_ACTIVATION_MODES.map((mode) => (
+                <SelectItem key={mode} value={mode}>
+                  {ACTIVATION_LABEL[mode]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      ) : (
+        <Field
+          label="Shortcut behavior"
+          description="Press the global dictation shortcut once to start and again to stop."
+        >
+          <Text as="p" variant="small" color="secondary" className="text-right max-[540px]:text-left">
+            {ACTIVATION_LABEL.toggle}
+          </Text>
+        </Field>
+      )}
       <Field
         label="Stop after silence"
         description={capabilities.dictationHoldToTalk

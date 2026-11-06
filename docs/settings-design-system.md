@@ -28,7 +28,7 @@ Write user-facing paths with page titles: `Settings → Voice & Speech → Text 
 | Content | Where it goes |
 |---|---|
 | One fact, two short sentences at most, nothing to click | `InfoHint` |
-| Longer steps or reference text | `Disclosure` on the page, open by default when the user needs it |
+| Longer steps or reference text | `SettingsDisclosure` on the page, open by default when the user needs it |
 | Any button, link or control | On the page |
 | Privacy disclosure, data leaving the device, charges or unattended authority | Visible on the page, shortened where possible |
 | Text that changes with the current selection or status | Next to that control |
@@ -36,6 +36,14 @@ Write user-facing paths with page titles: `Settings → Voice & Speech → Text 
 These stay on the page for those reasons: the Text to Speech cloud processing notice and **Clear generated audio**, the Computer Use data disclosure, "What leaves this device" for web pages, **Manage Bot grants** and **Manage schedule grants**, Always comes to you, the Telegram security notice, Aiden Live's state, Beta badge, Scheduled tasks and Global shortcut rows, and the connector exposure help. Context & Limits keeps "may be sent to your chat model" visible while the compaction override detail sits in a hint.
 
 Name a hint's `topic` so that "About <topic>" reads as a label for the trigger. Tests open it by that name and assert the `tooltip` text.
+
+## Folds and group actions
+
+`SettingsDisclosure` (`renderer/components/ui.tsx`) folds a group the user rarely needs behind a summary row. The `summary` states what's inside, so nobody has to open it to learn its state, and `badge` carries a status such as Update available. Set `defaultOpen` when the fold holds something that needs attention. If that turns true later the fold opens unless the user has already toggled it, and it stays open when the condition clears. Its children stay mounted, so a half-filled form survives closing it. Destructive actions stay outside the fold.
+
+A control that acts on a whole group goes in `FieldSet`'s `action`, at the end of the heading row. Image Generation opens **Add model by ID…** from there because the page heading is shared by every page and takes no controls.
+
+Web Search → Web pages folds its Cloudflare form behind **Set up Cloudflare…** until an account ID, a key or a paused Extract switch exists. It can't use the Extract switch as the trigger, because that switch stays disabled until setup is done. "What leaves this device" appears wherever the form does.
 
 ## Tokens and adaptation
 

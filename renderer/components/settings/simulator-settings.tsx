@@ -1,6 +1,6 @@
 import * as React from "react";
 import { LoaderCircle } from "lucide-react";
-import { AlertDialog, Badge, Button, Callout, Field, FieldSet, Switch, Text } from "../ui";
+import { AlertDialog, Badge, Button, Callout, Field, FieldSet, SettingsDisclosure, Switch, Text } from "../ui";
 import { devicesApi } from "../../lib/ipc";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import {
@@ -10,7 +10,7 @@ import {
   type DeviceServiceState,
   type DeviceToolchainState,
 } from "../../shared/devices";
-import { previousToolVersion, toolNeedsUpdate } from "../../shared/device-ssh-hosts";
+import { previousToolVersion, toolNeedsUpdate, type DeviceToolVersion } from "../../shared/device-ssh-hosts";
 import { DeviceHostUpdates, useDeviceHostRetry } from "../device-host-diagnostics";
 import { SimulatorSshHosts } from "./simulator-ssh-hosts";
 
@@ -79,6 +79,20 @@ const CONFIRM_COPY = {
   },
 } as const;
 
+/** The installed version a helper update would replace, if the pinned one is missing. */
+function toolUpdateFrom(versions: DeviceToolVersion | undefined): string | null {
+  return versions && toolNeedsUpdate(versions) ? previousToolVersion(versions) : null;
+}
+
+function helperToolsSummary(toolchain: DeviceToolchainState | null): string {
+  if (!toolchain) return "Pinned helper packages";
+  const total = toolchain.tools.length;
+  const installed = toolchain.tools.filter((tool) => tool.installed.includes(tool.pinned)).length;
+  if (installed === 0) return "No pinned packages installed";
+  const noun = total === 1 ? "pinned package" : "pinned packages";
+  return installed === total ? `${total} ${noun} installed` : `${installed} of ${total} ${noun} installed`;
+}
+
 function statusLabel(state: DeviceServiceState): string {
   if (state.unavailableReason) return state.unavailableReason;
   switch (state.hostStatus) {
@@ -142,6 +156,8 @@ export function SimulatorSettingsView({
     state.consent.streaming || state.consent.agentAccess || state.consent.peerSharing || state.consent.mobileSharing === true;
   const confirmCopy = confirming === "streaming" || confirming === "agentAccess" ? CONFIRM_COPY[confirming] : null;
   const localTools = state.hosts.find((host) => host.id === LOCAL_DEVICE_HOST_ID)?.tools;
+  const updateAvailable = toolchain?.tools.some((tool) => toolNeedsUpdate(localTools?.[tool.id])) ?? false;
+  const upToDate = (toolchain?.tools.length ?? 0) > 0 && toolchain?.tools.every((tool) => tool.installed.includes(tool.pinned));
 
   return (
     <>
@@ -181,14 +197,24 @@ export function SimulatorSettingsView({
         ) : null}
       </FieldSet>
 
-      <FieldSet title="Helper tools">
+      <SettingsDisclosure
+        title="Helper tools"
+        summary={helperToolsSummary(toolchain)}
+        badge={updateAvailable ? (
+          <Badge color="warning">Update available</Badge>
+        ) : upToDate ? (
+          <Badge color="green">Up to date</Badge>
+        ) : null}
+        defaultOpen={updateAvailable}
+        className="mb-3"
+      >
         {(toolchain?.tools ?? []).map((tool) => {
           const others = tool.installed.filter((version) => version !== tool.pinned);
           const current = tool.installed.includes(tool.pinned);
           const versions = localTools?.[tool.id];
           const running = versions?.runningVersion ?? null;
           // An older install with the matching permission granted updates here, or on the next Start.
-          const update = versions && toolNeedsUpdate(versions) ? previousToolVersion(versions) : null;
+          const update = toolUpdateFrom(versions);
           const permitted = tool.id === "hub" ? state.consent.streaming : state.consent.agentAccess;
           const notes = [
             running ? `Running ${running}.` : null,
@@ -243,6 +269,8 @@ export function SimulatorSettingsView({
             {pending === "prune" ? "Pruning…" : "Prune"}
           </Button>
         </Field>
+      </SettingsDisclosure>
+      <FieldSet>
         <Field
           label="Remove installed tools"
           description="Turn every simulator permission off, stop the helpers, and delete their files and screenshots."

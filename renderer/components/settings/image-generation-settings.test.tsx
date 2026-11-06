@@ -237,7 +237,17 @@ test("search and the provider filter narrow the rows; fetched models that are of
   assert.ok(screen.getByText("No image models match “nothing-like-this”."));
 });
 
-test("adding a model by ID surfaces the main process's error", async () => {
+const openAddModel = async () => {
+  fireEvent.click(await screen.findByRole("button", { name: "Add model by ID…" }));
+  return screen.findByRole("dialog", { name: "Add model by ID" });
+};
+
+const chooseProvider = async (name: string) => {
+  fireEvent.click(screen.getByRole("combobox", { name: "Provider for the new model" }));
+  fireEvent.click(await screen.findByRole("option", { name }));
+};
+
+test("adding a model by ID keeps the dialog open on the main process's error", async () => {
   const calls = mount({
     "imageGeneration:addCustomModel": () => ({
       ok: false,
@@ -245,7 +255,8 @@ test("adding a model by ID surfaces the main process's error", async () => {
       message: "Enter an OpenRouter model id such as vendor/model.",
     }),
   });
-  fireEvent.change(await screen.findByLabelText("Model ID"), { target: { value: "not-a-model" } });
+  await openAddModel();
+  fireEvent.change(screen.getByLabelText("Model ID"), { target: { value: "not-a-model" } });
   fireEvent.click(screen.getByRole("button", { name: "Add model" }));
   assert.equal(
     (await screen.findByRole("alert")).textContent,
@@ -255,6 +266,51 @@ test("adding a model by ID surfaces the main process's error", async () => {
     [{ provider: "openrouter", id: "not-a-model" }],
   ]);
   assert.equal((screen.getByLabelText("Model ID") as HTMLInputElement).value, "not-a-model");
+});
+
+test("the page keeps its model form behind the button until asked for", async () => {
+  mount();
+  await screen.findByRole("button", { name: "Add model by ID…" });
+  assert.equal(screen.queryByLabelText("Model ID") === null, true);
+  await openAddModel();
+  assert.equal(
+    (screen.getByRole("button", { name: "Add model" }) as HTMLButtonElement).disabled,
+    true,
+  );
+});
+
+test("each provider offers its own fields, and an added model closes the dialog", async () => {
+  const state = baseState();
+  const calls = mount({ "imageGeneration:addCustomModel": () => ok(state) }, state);
+  await openAddModel();
+  assert.ok(screen.getByRole("switch", { name: "Takes reference images" }));
+  assert.equal(screen.queryByLabelText("Edit endpoint (optional)") === null, true);
+
+  await chooseProvider("Replicate");
+  assert.equal(screen.queryByRole("switch", { name: "Takes reference images" }) === null, true);
+  assert.ok(screen.getByRole("combobox", { name: "Reference image input" }));
+
+  await chooseProvider("fal");
+  // fal asks which input takes references only once there is an edit endpoint to send them to.
+  assert.equal(screen.queryByRole("combobox", { name: "Reference image input" }) === null, true);
+  fireEvent.change(screen.getByLabelText("Model ID"), { target: { value: "fal-ai/new" } });
+  fireEvent.change(screen.getByLabelText("Name (optional)"), { target: { value: "New" } });
+  fireEvent.change(screen.getByLabelText("Edit endpoint (optional)"), {
+    target: { value: "fal-ai/new/edit" },
+  });
+  assert.ok(screen.getByRole("combobox", { name: "Reference image input" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("dialog", { name: "Add model by ID" }) === null, true),
+  );
+  assert.deepEqual(callsTo(calls, "imageGeneration:addCustomModel"), [
+    [{ provider: "fal", id: "fal-ai/new", name: "New", editEndpoint: "fal-ai/new/edit" }],
+  ]);
+
+  // A second visit starts from an empty form.
+  await openAddModel();
+  assert.equal((screen.getByLabelText("Model ID") as HTMLInputElement).value, "");
 });
 
 test("custom models can be removed from their row", async () => {

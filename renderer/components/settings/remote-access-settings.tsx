@@ -33,6 +33,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  SettingsDisclosure,
   Switch,
   RadioGroup,
   RadioGroupItem,
@@ -160,25 +161,6 @@ function friendlyTailscaleError(error: unknown): string {
   if (message.includes("tailscale_permission_denied")) return "On Linux, allow your user to manage Tailscale once with: sudo tailscale set --operator=$USER";
   if (message.includes("tailscale_route_busy")) return "Another Aiden profile is updating this desktop’s mobile route. Wait a moment and try again.";
   return message && !message.startsWith("tailscale_") ? message : "Aiden couldn’t safely update the Tailscale route.";
-}
-
-function Disclosure({
-  title,
-  summary,
-  children,
-}: React.PropsWithChildren<{ title: string; summary: string }>) {
-  return (
-    <details className="settings-card group mb-7 overflow-hidden rounded-card bg-well">
-      <summary className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection [&::-webkit-details-marker]:hidden">
-        <span className="min-w-0 flex-1">
-          <span className="block text-large-strong text-primary">{title}</span>
-          <span className="mt-0.5 block truncate text-small text-secondary">{summary}</span>
-        </span>
-        <ChevronDown className="size-4 shrink-0 text-tertiary transition-transform duration-150 group-open:rotate-180" />
-      </summary>
-      <div className="border-t border-separator">{children}</div>
-    </details>
-  );
 }
 
 function SettingsDeviceRow({
@@ -568,7 +550,7 @@ export function RemoteAccessSettings() {
         </Field>
       </FieldSet>
 
-      <Disclosure title={`This ${hostLabel} settings`} summary={`${snapshot.displayName} · ${summary}`}>
+      <SettingsDisclosure title={`This ${hostLabel} settings`} summary={`${snapshot.displayName} · ${summary}`}>
         <Field
           label="This desktop"
           hint={(
@@ -640,7 +622,7 @@ export function RemoteAccessSettings() {
             <span>{status.error}</span>
           </div>
         ) : null}
-      </Disclosure>
+      </SettingsDisclosure>
 
       <FieldSet title="Mobile devices">
         {hasSavedConnection ? <Field
@@ -730,7 +712,7 @@ export function RemoteAccessSettings() {
         ) : null}
       </FieldSet>
 
-      <Disclosure
+      <SettingsDisclosure
         title="Connection"
         summary={`${connectionModeLabel(status.connectionMode)} · ${connectionSummary}`}
       >
@@ -859,9 +841,9 @@ export function RemoteAccessSettings() {
             </Callout>
           </Field>
         ) : null}
-      </Disclosure>
+      </SettingsDisclosure>
 
-      <Disclosure
+      <SettingsDisclosure
         title="Workspace access"
         summary={snapshot.approvedRoots.length === 0
           ? "No folders approved"
@@ -891,7 +873,7 @@ export function RemoteAccessSettings() {
             </Button>
           </div>
         ))}
-      </Disclosure>
+      </SettingsDisclosure>
 
       <Dialog open={setupReview !== null} onOpenChange={(open) => { if (!open && !busy) setSetupReview(null); }}
         title={`Connect your phone to this ${hostLabel}?`}

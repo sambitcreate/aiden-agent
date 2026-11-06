@@ -497,6 +497,7 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
     await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Context & Limits", exact: true }).click();
   };
   await openContextAndLimits();
+  await page.getByText("Model compaction budgets", { exact: true }).click();
   await page.getByRole("combobox", { name: "Model for compaction budget" }).fill("fixture/exact-model");
   await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("-1");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
