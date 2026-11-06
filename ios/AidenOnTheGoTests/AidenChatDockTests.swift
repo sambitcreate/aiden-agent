@@ -333,6 +333,9 @@ final class AidenChatDockTests: XCTestCase {
         await model.load(observeProgress: false)
 
         XCTAssertEqual(AidenDockContent.resolve(model.dockInput), .cannotRespond(AidenDockCopy.machineRevoked))
+        let controls = AidenComposerView.controls(for: model)
+        XCTAssertTrue(controls.fieldIsDisabled)
+        XCTAssertFalse(controls.micIsEnabled, "Dictating into a field that can't send")
         model.setViewPresent(false)
     }
 
@@ -429,6 +432,30 @@ final class AidenChatDockTests: XCTestCase {
 
         XCTAssertFalse(changed, "A token changed something the dock reads")
         XCTAssertEqual(model.dockInput, before)
+    }
+
+    func testABotsTokensNeverTouchTheDockInput() async throws {
+        try makeCoordinator(.one)
+        await coordinator.start()
+        let session = #"{"botId":"bot_demo","epoch":"epoch_a","seq":4,"state":"running","interrupted":false,"entries":[],"hasOlder":false,"question":null,"approval":null}"#
+        responder.reply(instanceId: "studio", path: "/bots/bot_demo/session", status: 200, json: Data(session.utf8))
+        let model = try botModel(owner: "studio")
+        await model.load()
+        XCTAssertTrue(model.isRunning)
+        let connection = coordinator.hosts.connection(for: "studio")
+        var changed = false
+        let before = withObservationTracking {
+            model.dockInput(connection: connection, hasSpendingNotice: false)
+        } onChange: {
+            changed = true
+        }
+
+        _ = await model.apply(AidenBotSessionEvent(botId: "bot_demo", epoch: "epoch_a", seq: 5, kind: .partial("A token")))
+        _ = await model.apply(AidenBotSessionEvent(botId: "bot_demo", epoch: "epoch_a", seq: 6, kind: .partial("A token, then another")))
+
+        XCTAssertEqual(model.partial, "A token, then another")
+        XCTAssertFalse(changed, "A token changed something the dock reads")
+        XCTAssertEqual(model.dockInput(connection: connection, hasSpendingNotice: false), before)
     }
 
     // MARK: - The session sheet

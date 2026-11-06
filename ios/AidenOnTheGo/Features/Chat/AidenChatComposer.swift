@@ -42,7 +42,7 @@ struct AidenComposerView: View {
         AidenComposerSurface(
             session: session,
             config: config,
-            controls: controls,
+            controls: Self.controls(for: model),
             focus: composerFocus,
             onSend: { Task { await model.send() } },
             onStop: model.isStreaming ? { Task { await model.stop() } } : nil,
@@ -84,7 +84,7 @@ struct AidenComposerView: View {
         return config
     }
 
-    private var controls: AidenComposerControls {
+    static func controls(for model: AidenChatViewModel) -> AidenComposerControls {
         AidenComposerControls(
             canSend: model.canSend,
             canStop: model.canControlCurrentRun && !model.isStopping,
@@ -94,7 +94,7 @@ struct AidenComposerView: View {
             // Dictation is off while a response streams, so the busy Steer/Queue
             // pill takes the mic's place (as on Android).
             offersMic: !(model.isStreaming && model.showsRunInputOptions),
-            micIsEnabled: !model.isReadOnlyPresentation && !model.isStreaming,
+            micIsEnabled: !model.isReadOnlyPresentation && !model.isStreaming && !model.isOwnerRevoked,
             submitsOnReturn: true
         )
     }

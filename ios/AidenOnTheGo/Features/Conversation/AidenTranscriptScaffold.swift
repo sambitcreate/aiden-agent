@@ -144,6 +144,8 @@ struct AidenSessionSheet: View {
                     Label(config.title(for: action), systemImage: action.systemImage)
                 }
                 .disabled(config.unavailable.contains(action))
+                // A disabled row keeps the primary colour, which reads as live text.
+                .opacity(config.unavailable.contains(action) ? 0.5 : 1)
             }
             .navigationTitle(config.sheetTitle)
             .navigationBarTitleDisplayMode(.inline)
