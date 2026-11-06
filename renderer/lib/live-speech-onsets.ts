@@ -34,10 +34,14 @@ export const LIVE_SPEECH_CAPTION_LAG_MS = 5_000;
 /** Audio handled after a fence during which a new stretch still counts as begun before it. */
 export const LIVE_SPEECH_FENCE_GUARD_MS = 500;
 /**
- * Slack on the capture clock read at a fence, for how far the window's view
- * of the AudioContext's time can trail the audio thread's.
+ * Slack on the capture clock read at a fence. The clock is the AudioContext's
+ * render time, which runs behind the sound in the room by the microphone's
+ * input latency (more over Bluetooth), and the window's view of it can trail
+ * the audio thread. Audio rendered up to this long after the fence still
+ * counts as possibly spoken before it. Latency the browser reports for the
+ * microphone is added on top (see the Live hook).
  */
-export const LIVE_SPEECH_CAPTURE_SLACK_MS = 50;
+export const LIVE_SPEECH_CAPTURE_SLACK_MS = 350;
 /**
  * Start mark for an utterance whose onset the microphone cannot vouch for.
  * It is below every fence, so such speech never answers an approval.
