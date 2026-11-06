@@ -351,10 +351,6 @@ enum AidenVoiceCaptureLifecyclePolicy {
     }
 }
 
-/// Compact composer palette for `/` skills and `@` roster/file mentions. The
-/// panel is presentation only: skills hand the Mac an opaque lease, mentions
-/// insert display text. It inherits the composer glass surface rather than
-/// introducing a second floating container.
 /// The face of the model chip: the provider, the model and its thinking level.
 struct AidenComposerModelChipLabel: View {
     @Environment(\.aidenPalette) private var palette
@@ -397,6 +393,7 @@ struct AidenComposerModelChipLabel: View {
 struct AidenComposerRunInputPill<ModeMenu: View>: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let title: String
     let actionLabel: String
     let canSubmit: Bool
@@ -427,20 +424,25 @@ struct AidenComposerRunInputPill<ModeMenu: View>: View {
                     .font(.caption.weight(.bold))
                     .padding(.leading, 4)
                     .padding(.trailing, 12)
-                    .frame(minHeight: 44)
+                    .frame(minWidth: 44, minHeight: 44)
             }
             .accessibilityLabel(String(localized: "Choose message action"))
         }
         .foregroundStyle(canSubmit ? palette.onFillAccent : palette.secondary)
         .background(
             canSubmit ? palette.fillAccent : palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12),
-            in: Capsule().inset(by: 7)
+            // Large text fills the pill's height, so its tint gives back the inset.
+            in: Capsule().inset(by: dynamicTypeSize.isAccessibilitySize ? 0 : 7)
         )
         .menuStyle(.button)
         .buttonStyle(.plain)
     }
 }
 
+/// Compact composer palette for `/` skills and `@` roster/file mentions. The
+/// panel is presentation only: skills hand the Mac an opaque lease, mentions
+/// insert display text. It inherits the composer glass surface rather than
+/// introducing a second floating container.
 private struct AidenComposerSuggestionList: View {
     @Environment(\.aidenPalette) private var palette
     let suggestions: [AidenComposerSuggestion]

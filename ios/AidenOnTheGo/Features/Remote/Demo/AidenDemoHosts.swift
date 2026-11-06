@@ -608,7 +608,7 @@ private enum AidenDemoContent {
                     "defaultThinkingLevel": "medium",
                 ]],
             ]],
-            "defaults": ["provider": "anthropic", "model": "claude-sonnet-4-5"],
+            "defaults": ["providerId": "anthropic", "modelId": "claude-sonnet-4-5"],
         ])
     }
 

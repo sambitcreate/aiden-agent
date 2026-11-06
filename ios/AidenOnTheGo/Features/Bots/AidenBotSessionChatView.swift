@@ -42,7 +42,6 @@ struct AidenBotSessionChatView: View {
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
     @State private var ownSendScroll = 0
     @State private var spending = AidenSpendingNoticeModel()
-    @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @FocusState private var composerFocused: Bool
     /// The workspace chat's + picker (Files, Camera, Photos), reused as is (revision 33).
@@ -870,36 +869,28 @@ struct AidenBotSessionChatView: View {
     private func busyPill(_ model: AidenBotSessionModel) -> some View {
         let available = canCompose && model.canSend && !model.composerHeldForPlan
         let enabled = available && composerSession.hasContent && !model.isAttaching
-        return Menu {
-            ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
-                Button {
-                    busyMode = mode
-                } label: {
-                    if busyMode == mode {
-                        Label { Text(mode.busyLabel); Text(mode.busyDetail) } icon: { Image(systemName: "checkmark") }
-                    } else {
-                        Text(mode.busyLabel)
-                        Text(mode.busyDetail)
+        return AidenBotBusyPill(
+            title: busyMode.busyLabel,
+            actionLabel: busyMode.busyActionLabel,
+            isAvailable: available,
+            canSubmit: enabled,
+            onSubmit: { submit(model, whenBusy: busyMode) },
+            modeMenu: {
+                ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
+                    Button {
+                        busyMode = mode
+                    } label: {
+                        if busyMode == mode {
+                            Label { Text(mode.busyLabel); Text(mode.busyDetail) } icon: { Image(systemName: "checkmark") }
+                        } else {
+                            Text(mode.busyLabel)
+                            Text(mode.busyDetail)
+                        }
                     }
+                    .accessibilityAddTraits(busyMode == mode ? .isSelected : [])
                 }
-                .accessibilityAddTraits(busyMode == mode ? .isSelected : [])
             }
-        } label: {
-            Text(busyMode.busyLabel)
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 14)
-                .frame(minHeight: max(44, controlSize))
-                .foregroundStyle(enabled ? palette.onFillAccent : palette.secondary)
-                // Inside the glass pill a quiet tint, not a second raised surface.
-                .background(enabled ? palette.fillAccent : palette.foreground.opacity(0.08), in: Capsule())
-        } primaryAction: {
-            submit(model, whenBusy: busyMode)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .disabled(!available)
-        .accessibilityLabel(busyMode.busyActionLabel)
-        .accessibilityHint("Touch and hold to choose Steer or Queue")
+        )
     }
 
     /// The shared surface: the +, the field and the send controls on one row.
@@ -1704,5 +1695,38 @@ private struct AidenBotSendWait<Content: View>: View {
                 if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
                 if !Task.isCancelled { waited = true }
             }
+    }
+}
+
+/// The Bot's Steer or Queue control, the height of the composer's other controls.
+struct AidenBotBusyPill<ModeMenu: View>: View {
+    @Environment(\.aidenPalette) private var palette
+    @AidenComposerActionSize private var actionSize
+    let title: String
+    let actionLabel: String
+    let isAvailable: Bool
+    let canSubmit: Bool
+    let onSubmit: () -> Void
+    @ViewBuilder let modeMenu: () -> ModeMenu
+
+    var body: some View {
+        Menu {
+            modeMenu()
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .frame(minHeight: actionSize)
+                .foregroundStyle(canSubmit ? palette.onFillAccent : palette.secondary)
+                // Inside the glass pill a quiet tint, not a second raised surface.
+                .background(canSubmit ? palette.fillAccent : palette.foreground.opacity(0.08), in: Capsule())
+        } primaryAction: {
+            onSubmit()
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .disabled(!isAvailable)
+        .accessibilityLabel(actionLabel)
+        .accessibilityHint("Touch and hold to choose Steer or Queue")
     }
 }

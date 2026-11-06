@@ -53,6 +53,9 @@ enum AidenComposerLayout {
         min(max(44, scaled), 60)
     }
 
+    /// Below this a chip no longer names its model, so it moves to its own line.
+    static let shortestChip: CGFloat = 72
+
     /// The glyphs stop here so they stay inside a control that has stopped growing.
     static let largestGlyphSize = DynamicTypeSize.accessibility1
 
@@ -178,35 +181,18 @@ struct AidenComposerSurface<
         }
     }
 
-    /// One row. A chip that runs out of room there shortens, so a run starting
-    /// never changes the composer's height. At accessibility sizes shortening
-    /// isn't enough: the chip has its own line, and the run controls take another
-    /// if they need it.
+    /// One row, where a chip short of room shortens, so at the usual sizes a run
+    /// starting doesn't change the composer's height. When even a short chip won't
+    /// fit, and always at accessibility sizes, the chip takes its own line.
     @ViewBuilder
     private var stackedControls: some View {
         if dynamicTypeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: AidenSpacing.xs) {
-                chip
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: AidenSpacing.xs) {
-                        attachment
-                        Spacer(minLength: 0)
-                        actions
-                    }
-                    VStack(alignment: .leading, spacing: AidenSpacing.xs) {
-                        HStack(spacing: AidenSpacing.xs) {
-                            attachment
-                            mic
-                        }
-                        HStack(spacing: AidenSpacing.xs) {
-                            Spacer(minLength: 0)
-                            runControls
-                        }
-                    }
-                }
-            }
+            chipLineControls
         } else {
-            controlRow
+            ViewThatFits(in: .horizontal) {
+                controlRow
+                chipLineControls
+            }
         }
     }
 
@@ -214,8 +200,41 @@ struct AidenComposerSurface<
         HStack(spacing: AidenSpacing.xs) {
             attachment
             chip
+                .frame(
+                    minWidth: AidenComposerLayout.shortestChip,
+                    idealWidth: AidenComposerLayout.shortestChip,
+                    maxWidth: 180,
+                    alignment: .leading
+                )
+                .layoutPriority(1)
             Spacer(minLength: 0)
-            actions
+            // The chip is what shortens, never these.
+            HStack(spacing: AidenSpacing.xs) { actions }
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    /// The run controls take a further line of their own if they need it.
+    private var chipLineControls: some View {
+        VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+            chip
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: AidenSpacing.xs) {
+                    attachment
+                    Spacer(minLength: 0)
+                    actions
+                }
+                VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+                    HStack(spacing: AidenSpacing.xs) {
+                        attachment
+                        mic
+                    }
+                    HStack(spacing: AidenSpacing.xs) {
+                        Spacer(minLength: 0)
+                        runControls
+                    }
+                }
+            }
         }
     }
 

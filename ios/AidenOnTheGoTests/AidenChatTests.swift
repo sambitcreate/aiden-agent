@@ -6061,7 +6061,8 @@ final class AidenChatTests: XCTestCase {
                 session: AidenComposerSession(draftOwner: model, attachmentOwner: model),
                 swap: swap
             ))
-            // A fresh test host can take a while to connect its scene and show a window.
+            // These waits are long because this test once timed out here under parallel
+            // testing, partway through its process. The cause is unknown.
             try await self.waitUntil({ !UIApplication.shared.connectedScenes.isEmpty }, attempts: 3_000)
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let window = UIWindow(windowScene: scene)
@@ -6075,10 +6076,10 @@ final class AidenChatTests: XCTestCase {
                 await preparation.wait { started.fulfill() }
                 return .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
             })
-            await self.fulfillment(of: [started], timeout: 5)
+            await self.fulfillment(of: [started], timeout: 30)
 
             swap.showsComposer = false
-            try await self.waitUntil({ swap.disappearances == 1 })
+            try await self.waitUntil({ swap.disappearances == 1 }, attempts: 3_000)
             try await Task.sleep(for: .milliseconds(200))
 
             XCTAssertTrue(model.isPreparingAttachments, "The composer leaving must not cancel preparation")

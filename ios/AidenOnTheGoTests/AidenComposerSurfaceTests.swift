@@ -22,7 +22,10 @@ final class AidenComposerSurfaceTests: XCTestCase {
     private static func setAccessibilityAutomation(_ isEnabled: Bool) {
         typealias Setter = @convention(c) (Int32) -> Void
         guard let library = dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW),
-              let symbol = dlsym(library, "_AXSSetAutomationEnabled") else { return }
+              let symbol = dlsym(library, "_AXSSetAutomationEnabled") else {
+            XCTFail("_AXSSetAutomationEnabled is missing, so the accessibility tree can't be read")
+            return
+        }
         unsafeBitCast(symbol, to: Setter.self)(isEnabled ? 1 : 0)
     }
 
@@ -252,33 +255,90 @@ final class AidenComposerSurfaceTests: XCTestCase {
     // MARK: - The largest text size
 
     func testEveryControlFitsAtTheLargestTextSize() async throws {
+        try await assertEveryChatControlFits(at: .accessibility5)
+    }
+
+    /// The largest size that keeps one row of controls, and so the tightest row.
+    func testEveryControlFitsAtTheLargestStandardTextSize() async throws {
+        try await assertEveryChatControlFits(at: .xxxLarge)
+    }
+
+    func testABotsControlsFitAndARunLeavesItsHeightAlone() throws {
+        for textSize: DynamicTypeSize in [.accessibility5, .xxxLarge] {
+            for width: CGFloat in [390, 375] {
+                let context = "Bot at \(textSize), \(width)"
+                func surface(isBusy: Bool) throws -> CGRect {
+                    let host = AidenComposerBotFitHost(isBusy: isBusy, probe: AidenComposerFitProbe(), textSize: textSize)
+                    let window = try show(host, width: width)
+                    defer { close(window) }
+                    XCTAssertTrue(runMainLoop(until: { host.probe.surface != .zero }), context)
+                    drainMainLoop()
+                    if isBusy {
+                        try assertControlsFit(
+                            ["Add attachment", "Queue message", "Stop"],
+                            in: window,
+                            surface: host.probe.surface,
+                            width: width,
+                            context: context
+                        )
+                    }
+                    return host.probe.surface
+                }
+
+                let idle = try surface(isBusy: false)
+                let busy = try surface(isBusy: true)
+                XCTAssertEqual(busy.height, idle.height, accuracy: 1, "A run made the composer jump: \(context)")
+            }
+        }
+    }
+
+    private func assertEveryChatControlFits(at textSize: DynamicTypeSize) async throws {
         for width: CGFloat in [390, 375] {
             for state in AidenComposerFitHost.State.allCases {
-                let context = "\(state) at \(width)"
+                let context = "\(state) at \(textSize), \(width)"
                 let session = AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice())
                 if state == .busyWhileRecording { await session.toggleVoice() }
-                let host = AidenComposerFitHost(session: session, state: state, probe: AidenComposerFitProbe())
+                let host = AidenComposerFitHost(
+                    session: session,
+                    state: state,
+                    probe: AidenComposerFitProbe(),
+                    textSize: textSize
+                )
                 let window = try show(host, width: width)
                 defer { close(window) }
                 XCTAssertTrue(runMainLoop(until: { host.probe.surface != .zero }), context)
                 drainMainLoop()
-
-                let elements = accessibleElements(in: window)
-                let surface = host.probe.surface
-                XCTAssertLessThanOrEqual(surface.width, width - 32 + 0.5, "The surface outgrew its place: \(context)")
-                var frames: [CGRect] = []
-                for label in state.controls {
-                    let element = try XCTUnwrap(elements.first { $0.accessibilityLabel == label }, "No \(label): \(context)")
-                    let frame = element.accessibilityFrame
-                    XCTAssertTrue(surface.insetBy(dx: -0.5, dy: -0.5).contains(frame), "\(label) \(frame) leaves \(surface): \(context)")
-                    XCTAssertGreaterThanOrEqual(frame.height, 44, "\(label) is too short to tap: \(context)")
-                    XCTAssertGreaterThanOrEqual(frame.width, 44, "\(label) is too narrow to tap: \(context)")
-                    for other in frames {
-                        XCTAssertFalse(other.insetBy(dx: 1, dy: 1).intersects(frame), "\(label) overlaps a control: \(context)")
-                    }
-                    frames.append(frame)
-                }
+                try assertControlsFit(
+                    state.controls,
+                    in: window,
+                    surface: host.probe.surface,
+                    width: width,
+                    context: context
+                )
             }
+        }
+    }
+
+    private func assertControlsFit(
+        _ labels: [String],
+        in window: UIWindow,
+        surface: CGRect,
+        width: CGFloat,
+        context: String
+    ) throws {
+        let elements = accessibleElements(in: window)
+        XCTAssertLessThanOrEqual(surface.width, width - 32 + 0.5, "The surface outgrew its place: \(context)")
+        var frames: [CGRect] = []
+        for label in labels {
+            let element = try XCTUnwrap(elements.first { $0.accessibilityLabel == label }, "No \(label): \(context)")
+            let frame = element.accessibilityFrame
+            XCTAssertTrue(surface.insetBy(dx: -0.5, dy: -0.5).contains(frame), "\(label) \(frame) leaves \(surface): \(context)")
+            XCTAssertGreaterThanOrEqual(frame.height, 44, "\(label) is too short to tap: \(context)")
+            XCTAssertGreaterThanOrEqual(frame.width, 44, "\(label) is too narrow to tap: \(context)")
+            for other in frames {
+                XCTAssertFalse(other.insetBy(dx: 1, dy: 1).intersects(frame), "\(label) overlaps a control: \(context)")
+            }
+            frames.append(frame)
         }
     }
 
@@ -625,6 +685,54 @@ private struct AidenComposerFitHost: View {
                 AidenComposerRunInputPill(
                     title: "Queue",
                     actionLabel: "Queue message",
+                    canSubmit: true,
+                    onSubmit: {},
+                    modeMenu: { Button("Steer") {} }
+                )
+            }
+        )
+        .background {
+            GeometryReader { proxy in
+                Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, frame in
+                    probe.surface = frame
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .coordinateSpace(name: "fit")
+        .dynamicTypeSize(textSize)
+    }
+}
+
+/// A Bot's composer: no chip and no mic, with its own busy pill beside Stop.
+private struct AidenComposerBotFitHost: View {
+    let isBusy: Bool
+    let probe: AidenComposerFitProbe
+    let textSize: DynamicTypeSize
+    @State private var session = AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice())
+
+    var body: some View {
+        AidenComposerSurface(
+            session: session,
+            config: .bot(),
+            controls: AidenComposerControls(stopLabel: "Stop"),
+            onSend: {},
+            onStop: isBusy ? {} : nil,
+            attachButton: {
+                AidenComposerAttachButton(
+                    isOpen: false,
+                    isBusy: false,
+                    showsSpinner: true,
+                    hint: "",
+                    coordinateSpace: "fit",
+                    action: {}
+                )
+            },
+            busyControl: {
+                AidenBotBusyPill(
+                    title: "Queue",
+                    actionLabel: "Queue message",
+                    isAvailable: true,
                     canSubmit: true,
                     onSubmit: {},
                     modeMenu: { Button("Steer") {} }
