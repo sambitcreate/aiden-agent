@@ -112,6 +112,87 @@ test("a subagent snapshot reaches the projection only for its own generation", (
   }
 });
 
+test("only the first terminal event settles a run, even while its handler is still running", async () => {
+  const bridge = installFakeBridge();
+  try {
+    const terminals: string[] = [];
+    let finishDone = () => {};
+    subscribeGenerationStream("stream-1", { chatId: "chat-1" }, {
+      onDelta: () => {},
+      onDone: async () => {
+        terminals.push("done");
+        await new Promise<void>((resolve) => {
+          finishDone = resolve;
+        });
+      },
+      onError: (message) => terminals.push(`error:${message}`),
+    });
+    bridge.emit("chat:done", { streamId: "stream-1", content: "Saved" });
+    bridge.emit("chat:error", { streamId: "stream-1", message: "late failure" });
+    bridge.emit("chat:done", { streamId: "stream-1", content: "Saved again" });
+    assert.deepEqual(terminals, ["done"]);
+    assert.ok(bridge.listenerCount() > 0, "The handler is still settling");
+    finishDone();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(bridge.listenerCount(), 0);
+  } finally {
+    bridge.restore();
+  }
+});
+
+test("a done handler that fails still reports through onError exactly once", async () => {
+  const bridge = installFakeBridge();
+  try {
+    const errors: string[] = [];
+    subscribeGenerationStream("stream-1", { chatId: "chat-1" }, {
+      onDelta: () => {},
+      onDone: async () => {
+        throw new Error("could not settle");
+      },
+      onError: (message) => errors.push(message),
+    });
+    bridge.emit("chat:done", { streamId: "stream-1", content: "Saved" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(errors, ["could not settle"]);
+    assert.equal(bridge.listenerCount(), 0);
+  } finally {
+    bridge.restore();
+  }
+});
+
+test("a terminal handler that throws synchronously still releases every listener", async () => {
+  const bridge = installFakeBridge();
+  try {
+    const errors: string[] = [];
+    subscribeGenerationStream("stream-1", { chatId: "chat-1" }, {
+      onDelta: () => {},
+      onDone: () => {
+        throw new Error("could not settle");
+      },
+      onError: (message) => errors.push(message),
+    });
+    bridge.emit("chat:done", { streamId: "stream-1", content: "Saved" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(errors, ["could not settle"]);
+    assert.equal(bridge.listenerCount(), 0);
+
+    subscribeGenerationStream("stream-2", { chatId: "chat-1" }, {
+      onDelta: () => {},
+      onDone: () => {},
+      onError: () => {
+        throw new Error("could not report");
+      },
+    });
+    assert.throws(
+      () => bridge.emit("chat:error", { streamId: "stream-2", message: "failed" }),
+      /could not report/u,
+    );
+    assert.equal(bridge.listenerCount(), 0);
+  } finally {
+    bridge.restore();
+  }
+});
+
 test("dispose stops delivery before any terminal event", () => {
   const bridge = installFakeBridge();
   try {

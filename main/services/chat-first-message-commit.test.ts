@@ -233,6 +233,43 @@ test("workspace cancellation drains first-message preparation before releasing i
   assert.deepEqual(await f.store.list(), []);
 });
 
+test("an owner lost during the durable write keeps ownership until that write settles", async (t) => {
+  let reachedWrite = () => {};
+  let finishWrite = () => {};
+  const writing = new Promise<void>((resolve) => { reachedWrite = resolve; });
+  const held = new Promise<void>((resolve) => { finishWrite = resolve; });
+  const f = await fixture(t, {
+    syncFile: async (target) => {
+      if (target.endsWith(".chat-write.tmp")) { reachedWrite(); await held; }
+      const handle = await fs.open(target, "r");
+      try { await handle.sync(); } finally { await handle.close(); }
+    },
+  });
+  const input = parseChatFirstMessage(request());
+  const outcome = createFirstMessageCommitter(f.deps)(input, f.owner)
+    .then((chat) => ({ chat }), (error: unknown) => ({ error }));
+  await writing;
+  f.owner.invalidate();
+  let drained = false;
+  const drain = f.workspaces.cancelAndSettle("workspace").then(() => { drained = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(drained, false, "the workspace must wait for the write that is still running");
+
+  finishWrite();
+  const settled = await outcome;
+  await drain;
+  const durable = await f.store.get(input.chatId);
+  // The sender's answer and the disk agree, and the message exists at most once.
+  assert.equal(durable?.messages.length ?? 0, "chat" in settled ? 1 : 0);
+
+  const next = documentOwner();
+  t.after(() => next.invalidate());
+  const retry = createFirstMessageCommitter(f.deps);
+  const replayed = await retry(input, next);
+  assert.equal(replayed.messages.length, 1);
+  assert.deepEqual((await f.store.list()).map((chat) => chat.id), [input.chatId]);
+});
+
 test("payload failure keeps draft retryable; index uncertainty blocks retry and recovers a nonempty chat", async (t) => {
   for (const phase of ["chat-write", "index-write"] as const) {
     const f = await fixture(t, {
