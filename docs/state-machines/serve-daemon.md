@@ -126,4 +126,68 @@ Evidence of exit is `pidAlive`, never the signal.
 
 ## C04: local daemon command framing
 
-Owners: `remoteDaemonCommand` (`daemon-control.ts`) and the socket handler in `serve.ts`. One request per connection, framed by a newline, 64 KiB request ceiling, 8 MiB response ceiling, UTF-8 decoded across chunks. The client settles once for result, error, closed without a frame, oversized reply and transport error. It is a stream parser, not a product mode.
+Owners: `remoteDaemonCommand` (`daemon-control.ts`) and the socket handler in `serve.ts`. One request per connection, framed by a newline, 64 KiB request ceiling, 8 MiB response ceiling, UTF-8 decoded across chunks. The client settles once for result, error, closed without a frame, oversized reply and transport error. It is a stream parser, not a product mode. Retained as it was, with no state model: that would add nothing to a one-shot parser.
+
+**Defect fixed:** both ends parsed their whole buffer, so a frame followed by more bytes in the same chunk failed as bad JSON, while the same bytes in two chunks succeeded. Each end now reads only its first frame, and its ceiling applies to that frame alone. The client closes on that frame, so a peer that keeps writing can neither grow its buffer nor keep it alive.
+
+**Defect fixed:** when the chunk that crossed the 8 MiB ceiling also completed the frame, the client destroyed the socket and then parsed and returned the reply anyway, so the ceiling did not hold on the last chunk.
+
+## C14: interrupted chat deletion
+
+Owner: `recoverChatDeletions` in `daemon-chats.ts`, over the `daemon-chat-deletions.json` tombstones and `ChatDeletionGate`. The file format is unchanged.
+
+| Event | Prior | Next | Effect |
+|---|---|---|---|
+| daemon constructed | tombstone on disk | chat closed | `ChatDeletionGate` held, so `beginChatTurn` refuses |
+| recovery | closed | closed | bot history, journal, then chat record removed, each repeatable |
+| tombstone removed | closed | gone | gate released |
+| any step fails | closed | closed | tombstone kept, retried on the next start |
+| record unreadable | unknown | every chat closed | no server starts, Remote or not |
+
+Recovery runs in `serve` for every server. A failure there is logged and closes only those chats. `createCliRemoteChats` runs it again and still fails startup, because Remote must not list a chat whose deletion is stuck.
+
+**Defect fixed:** recovery lived only in `createCliRemoteChats`, so `aiden serve --no-remote` neither finished a committed deletion nor closed the chat to new turns.
+
+## C15: schedule consent publication
+
+Owner: `approvedMutation` in `createCliScheduler` (`schedules.ts`) over `assertScheduleApproval` (`schedule-tool-approval.ts`). Two booleans became one `phase`.
+
+| Event | Prior | Next | Effect |
+|---|---|---|---|
+| command with consent | none | `first_write` | snapshot, expiry and receipt verified at entry |
+| durable write verified | `first_write` | `follow_on` | receipt consumed just before the write publishes, task checked once; later writes check only expiry and the environment |
+| verification fails | `first_write` or `follow_on` | `closed` | abort, so the shared lifecycle rolls back |
+| command ends | any | `closed` | this context is finished, and its receipt is spent |
+
+A receipt is spent in memory as the command starts, removed at the first write, and removed when the command ends if no write happened. It works once even if the command fails, and neither another scheduler nor a restart after a crash can replay it. A crash between that removal and the write loses the consent, so the person reviews again. Revocation holds up to the first write. A `save` must also read back the input that was reviewed, because the file is read after consent.
+
+**Defects fixed:** a `save` trusted whatever the file held by then, and a new-task consent could be replayed until it expired, since only the retired producer ever removed the receipt.
+
+No producer of consent remains in `src` since the model-facing tool was retired; only this guard is live. It had no tests, so `tests/schedule-consent.test.mjs` covers valid, reused, expired, cancelled, mismatched, and environment or task changed after review, and revocation between the entry check and the write.
+
+## Triage of the remaining `cli-native` entries
+
+"Retained" means already explicit or fenced, with the listed coverage, and no conversion here would add a guarantee. None of these was reproduced as a defect.
+
+| Entry | On the serve path | Disposition |
+|---|---|---|
+| C05 service install | No, admin command | Deferred: #733 and the subagent upgrade branch both change `service.ts`. Covered by `tests/service.test.mjs`. |
+| C06 pairing presentation | Startup only | Retained: presentation, and #733 changes `serve-command.ts`. |
+| C07 Tailscale health wait | Startup only | Retained: single settlement and a byte bound, covered by `tests/reachability.test.mjs`. |
+| C08 Linux Bonjour | Yes, Linux | Retained: generation and child identity already fence late callbacks. Not exercised against real avahi here. |
+| C12 Bot pause | Yes | Deferred to P6: the shared pause store and durable runtime own it. It reuses `stopChatWork`, which now waits on C09 settlement. |
+| C13 durable Bot migration | Admin command | Retained: `preparing` and `enabled` are already an explicit durable marker. |
+| C16 scheduled execution | Yes | Deferred to P6: the shared scheduler owns timing and revisions; drain already awaits `stopAndSettle`. |
+| C17 inference metering | Yes | Retained: an algorithmic streaming counter, deferred after P6 by the plan. |
+| C18, C19 child inference and worker RPC | Yes, through Bot subagents | Blocked: the subagent upgrade branch rewrites `subagent-process.ts` and `subagent-worker.ts`. Revisit after it lands. |
+| C20 MCP connection incarnation | Yes | Retained: entry identity fences every await, covered by the MCP pool cases in `tests/parity.test.mjs`. |
+| C21 terminal provider auth | No | Skipped: interactive terminal only. |
+| C22 speech worker | Yes, through Remote | Retained: worker and client identity already fence late exits, and Remote stop awaits `speech.stop()`. |
+| C23 avatar decoder | Yes, through Remote Bots | Retained: bounded slots with `finally` cleanup, deferred after P6 by the plan. |
+| C24 lease and JSON publication | Yes | Retained: idempotent release and a failed publication that releases its guard. C03, C14 and C15 rely on it unchanged. |
+| C25, C30, C31 credentials | Reads only | Retained: per-file queue plus lease; migrations are explicit transactions outside the daemon's turn path. |
+| C26 todo restore | Yes, inside sessions | Retained: `restoreEpoch` fences late restores, covered by the todo cases in `tests/parity.test.mjs`. |
+| C27 advisor availability | Yes, inside sessions | Retained: the shared advisor runtime owns attempts, deferred after P6 by the plan. |
+| C28 Bot inventory invalidation | Yes | Deferred to P6 with the shared Bot authority owners. |
+| C29 MCP config migration | Store construction | Retained: an explicit publish-then-retire transaction. |
+| C32 usage accounting | Yes | Deferred to P6: receipt and aggregate already publish together. |

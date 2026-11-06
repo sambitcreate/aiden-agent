@@ -158,13 +158,24 @@ test("the control socket answers one framed request per connection and refuses m
   const status = `${JSON.stringify({ command: "serve", args: ["status"] })}\n`;
   // A request may arrive in pieces; only its newline frames it.
   assert.deepEqual(JSON.parse(await exchange(box.socket, status.slice(0, 5), status.slice(5))), { result: { remote: { on: false } } });
-  // Anything after the first frame is ignored, not run as a second request.
-  const pipelined = await exchange(box.socket, status + status);
-  assert.equal(pipelined.trim().split("\n").length, 1);
+  // Anything after the first frame is ignored, however the bytes were split.
+  assert.deepEqual(JSON.parse(await exchange(box.socket, status + status)), { result: { remote: { on: false } } });
   assert.match(await exchange(box.socket, "not json\n"), /"error"/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "shell", args: [] })}\n`), /Invalid daemon command/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "serve", args: [1] })}\n`), /Invalid daemon command/u);
   assert.match(await exchange(box.socket, `${JSON.stringify({ command: "remote", args: ["status"] })}\n`), /Remote is off/u);
+  // The ceiling is on the frame, so bytes after a request that fits cannot push it over.
+  const full = `${JSON.stringify({ command: "serve", args: ["status"], padding: "x".repeat(65_000) })}\n`;
+  const fits = await new Promise((resolveReply, rejectReply) => {
+    const socket = createConnection(box.socket);
+    let reply = "";
+    socket.setEncoding("utf8").on("data", (part) => { reply += part; }).on("close", () => resolveReply(reply)).on("error", rejectReply);
+    socket.on("connect", () => {
+      socket.write(full.slice(0, 60_000));
+      setTimeout(() => socket.write(`${full.slice(60_000)}${"y".repeat(10_000)}`), 100);
+    });
+  });
+  assert.deepEqual(JSON.parse(fits), { result: { remote: { on: false } } });
   // A request with no newline inside the byte ceiling is cut off, with no reply.
   assert.equal(await exchange(box.socket, "x".repeat(70_000)), "");
   assert.deepEqual(JSON.parse(await exchange(box.socket, status)), { result: { remote: { on: false } } }, "the server is still healthy");
@@ -331,6 +342,41 @@ test("the command client settles once for every way a daemon can answer", posix,
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => socket.end('{"partial"')), "serve", ["status"]), /closed without a response/u);
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => socket.end("not json\n")), "serve", ["status"]), SyntaxError);
   await assert.rejects(api.remoteDaemonCommand(await fakeDaemon(t, (socket) => { socket.write("x".repeat(9 * 1024 * 1024)); }), "serve", ["status"]), /too large/u);
+  // The ceiling holds even when the chunk that crosses it also completes the frame.
+  const oversized = JSON.stringify({ result: "x".repeat(8 * 1024 * 1024 - 8) });
+  const crossing = await fakeDaemon(t, (socket) => {
+    socket.write(oversized.slice(0, -16));
+    setTimeout(() => socket.end(`${oversized.slice(-16)}\n`), 100);
+  });
+  await assert.rejects(api.remoteDaemonCommand(crossing, "serve", ["status"]), /too large/u);
+  // The ceiling is on the frame, so bytes after a reply that fits cannot push it over.
+  const fits = "x".repeat(8 * 1024 * 1024 - 64), framed = JSON.stringify({ result: fits });
+  const padded = await fakeDaemon(t, (socket) => {
+    socket.write(framed.slice(0, -16));
+    setTimeout(() => socket.end(`${framed.slice(-16)}\n${"y".repeat(1024)}`), 100);
+  });
+  assert.equal((await api.remoteDaemonCommand(padded, "serve", ["status"])).length, fits.length);
+  // Once the first frame settles the command, a peer that keeps writing is cut off.
+  const peer = sandbox(t), peerClosed = Promise.withResolvers();
+  let accepted;
+  const talkative = createServer({ allowHalfOpen: true }, (socket) => {
+    accepted = socket;
+    socket.on("error", () => {});
+    socket.once("data", () => {
+      socket.write('{"result":"ok"}\n');
+      const flood = setInterval(() => socket.write("y".repeat(1024)), 5);
+      socket.once("close", () => { clearInterval(flood); peerClosed.resolve("closed"); });
+    });
+  });
+  await new Promise((resolveListen) => talkative.listen(peer.socket, resolveListen));
+  // A failed assertion must not leave cleanup waiting on a peer that is still writing.
+  t.after(() => new Promise((resolveClose) => { accepted?.destroy(); talkative.close(resolveClose); }));
+  assert.equal(await api.remoteDaemonCommand(peer.agentDir, "serve", ["status"]), "ok");
+  const timedOut = new Promise((resolveWait) => setTimeout(resolveWait, 1_000, "still connected").unref());
+  assert.equal(await Promise.race([peerClosed.promise, timedOut]), "closed");
+  // The reply is its first frame: bytes after the newline do not turn it into an error.
+  const trailing = await fakeDaemon(t, (socket) => { socket.end(`${JSON.stringify({ result: "ok" })}\nleftover`); });
+  assert.equal(await api.remoteDaemonCommand(trailing, "serve", ["status"]), "ok");
   const missing = sandbox(t);
   await assert.rejects(api.remoteDaemonCommand(missing.agentDir, "serve", ["status"]), (error) => error.code === "ENOENT" && /not running/u.test(error.message));
 });
