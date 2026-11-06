@@ -138,6 +138,18 @@ final class AidenAppNavigation {
         )
     }
 
+    /// The chat on screen: the top of the tab that's showing.
+    var openChat: AidenHostObjectID? {
+        let path = switch tab {
+        case .inbox: inboxPath
+        case .bots: botsPath
+        case .workspaces: workspacesPath
+        case .search: [AidenAppRoute]()
+        }
+        guard case .chat(let id)? = path.last else { return nil }
+        return id
+    }
+
     /// Selects the route's tab and shows the route there. A route already on
     /// that path is gone back to, so one chat never has two screens.
     func open(_ route: AidenAppRoute) {

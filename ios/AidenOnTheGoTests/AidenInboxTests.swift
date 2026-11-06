@@ -525,3 +525,592 @@ final class AidenInboxTests: XCTestCase {
         XCTAssertEqual(AidenInboxDuration.text(since: ago(minutes: 60 * 49), now: now), "2d")
     }
 }
+
+#if DEBUG
+/// The Inbox tab's store over demo machines, so every request is one the contract
+/// has. Nothing here waits for a poll to come due: each test reads once at `start()`.
+@MainActor
+private final class AidenInboxTabFixture {
+    static let doneAt = "2026-11-05T09:00:00.000Z"
+
+    let responder = AidenDemoResponder()
+    let now = Date(timeIntervalSince1970: 1_793_000_000)
+    let preferences = AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
+    let cache: AidenChatCache
+    let coordinator: AidenRemoteCoordinator
+    private let root: URL
+    private var scheduler: AidenHostConnectScheduler?
+
+    init(machines ids: [String]) {
+        root = FileManager.default.temporaryDirectory
+            .appending(path: "AidenInboxTabFixture-\(UUID().uuidString)", directoryHint: .isDirectory)
+        cache = AidenChatCache(root: root)
+        coordinator = AidenDemoHosts.coordinator(
+            installations: ids.map { AidenDemoHosts.installation(instanceId: $0, name: $0) },
+            responder: responder
+        )
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func connectAll() async {
+        let scheduler = AidenHostConnectScheduler(
+            registry: coordinator.hosts,
+            pathChanges: AsyncStream { _ in },
+            maxConcurrentConnects: 2,
+            probeTimeout: 30
+        )
+        self.scheduler = scheduler
+        await coordinator.start()
+        await scheduler.foregrounded()
+    }
+
+    func makeStore() -> AidenUnifiedInboxStore {
+        let fixedNow = now
+        let store = AidenUnifiedInboxStore(
+            hosts: coordinator.hosts,
+            preferences: preferences,
+            cache: cache,
+            clock: ContinuousClock(),
+            jitter: { 0 },
+            now: { fixedNow }
+        )
+        store.connectScheduler = scheduler
+        return store
+    }
+
+    func connection(_ instanceId: String) throws -> AidenHostConnection {
+        try XCTUnwrap(coordinator.hosts.connection(for: instanceId))
+    }
+
+    func id(_ chatID: String, on instanceId: String) throws -> AidenHostObjectID {
+        let installation = try connection(instanceId).installation
+        return AidenHostObjectID(instanceId: instanceId, deviceId: installation.deviceId, objectId: chatID)
+    }
+
+    /// `age` is minutes before `now`, so rows stay in canonical order as ages rise.
+    func row(_ id: String, age: Int, state: String = "idle", unread: Bool = false) -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let updated = formatter.string(from: now.addingTimeInterval(-Double(age) * 60))
+        var row: [String: Any] = [
+            "id": id, "workspaceId": "workspace_app", "title": id, "titlePending": false,
+            "createdAt": updated, "updatedAt": updated, "revision": "rev_" + String(format: "%043d", age + 1),
+            "activity": "idle", "rowState": state, "unread": unread,
+        ]
+        if state != "idle" {
+            row.merge(["activity": "active", "attentionSince": updated, "runStartedAt": updated]) { $1 }
+        }
+        return row
+    }
+
+    func serve(_ rows: [[String: Any]], next: String? = nil, on instanceId: String) {
+        responder.reply(instanceId: instanceId, path: "/chat-summaries", status: 200, json: page(rows, next: next))
+    }
+
+    func page(_ rows: [[String: Any]], next: String? = nil) -> Data {
+        var object: [String: Any] = ["summaries": rows]
+        if let next { object["nextCursor"] = next }
+        return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    func serveTriage(of chatID: String, on instanceId: String, revision: Int, doneAt: String?) {
+        let done = doneAt.map { "\"\($0)\"" } ?? "null"
+        responder.reply(instanceId: instanceId, method: "POST", path: "/chats/\(chatID)/triage", status: 200, json: Data("""
+        {"chatId":"\(chatID)","revision":\(revision),"updatedAt":"\(Self.doneAt)","pinnedAt":null,"doneAt":\(done),"snoozedUntil":null}
+        """.utf8))
+    }
+
+    func requests(_ request: String, on instanceId: String) -> Int {
+        responder.requests(instanceId: instanceId).filter { $0 == request }.count
+    }
+
+    /// For work on the main actor or a demo request to land.
+    func waitUntil(
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(60)
+        while !condition() {
+            guard Date() < deadline else {
+                XCTFail("Timed out waiting for \(what)", file: file, line: line)
+                return
+            }
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+}
+
+private extension AidenUnifiedInbox {
+    /// Every list the Inbox shows, by chat id.
+    var listedIDs: [String] { (needsYou + updates + earlier).map(\.id.objectId) }
+}
+
+// MARK: The Inbox tab
+
+extension AidenInboxTests {
+    @MainActor
+    func testHomeModelLoadsFromTheHostItWasGiven() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("on-laptop", age: 1)], on: "laptop")
+        let selectedBefore = fixture.requests("GET /chat-summaries", on: "studio")
+        let model = AidenHomeModel(chatCache: fixture.cache)
+
+        await model.load(host: try fixture.connection("laptop"))
+
+        XCTAssertEqual(model.chats.map(\.id), ["on-laptop"])
+        XCTAssertEqual(fixture.coordinator.activeInstanceId, "studio", "Reading a machine moved the selection")
+        XCTAssertEqual(fixture.requests("GET /chat-summaries", on: "studio"), selectedBefore)
+    }
+
+    @MainActor
+    func testPromptRowsOfferNeitherDoneNorSnooze() throws {
+        let prompts = [
+            summary("approval", minutesAgo: 3, activity: .active, rowState: .needsApproval, unread: true),
+            summary("question", minutesAgo: 4, activity: .active, rowState: .needsInput),
+        ]
+        let reply = summary("reply", minutesAgo: 5, unread: true, inbox: AidenChatInboxSignals(lastAssistantAt: ago(minutes: 5)))
+        let inbox = AidenUnifiedInbox.make(
+            snapshots: [AidenHostInboxSnapshot(
+                instanceId: "studio", deviceId: "phone", chats: prompts + [reply],
+                workspaceNames: ["alpha": "Alpha"], isOnline: true, isBlocked: false, fetchedAt: now,
+                supportsReadState: true, supportsTriage: true
+            )],
+            filter: .all, hiddenMachines: [], openChat: nil, now: now
+        )
+
+        XCTAssertEqual(inbox.needsYou.map(\.id.objectId), ["approval", "question"])
+        for row in inbox.needsYou {
+            let actions = AidenInboxRowActions(offer: row.offer, perform: { _ in }, chooseSnooze: {})
+            XCTAssertNil(actions.done, row.id.objectId)
+            XCTAssertNil(actions.snooze, row.id.objectId)
+        }
+        XCTAssertNotNil(AidenInboxRowActions(offer: inbox.needsYou[0].offer, perform: { _ in }, chooseSnooze: {}).markRead)
+
+        let replyRow = try XCTUnwrap(inbox.updates.first)
+        let actions = AidenInboxRowActions(offer: replyRow.offer, perform: { _ in }, chooseSnooze: {})
+        XCTAssertNotNil(actions.done, "An idle row lost Done")
+        XCTAssertNotNil(actions.snooze, "An idle row lost Snooze")
+    }
+
+    /// A row gives what its own machine can take: another machine's features
+    /// say nothing about it.
+    @MainActor
+    func testARowOffersOnlyWhatItsOwnMachineCanTake() throws {
+        let chat = summary("reply", minutesAgo: 5, unread: true, inbox: AidenChatInboxSignals(lastAssistantAt: ago(minutes: 5)))
+        func snapshot(_ instanceId: String, canWrite: Bool) -> AidenHostInboxSnapshot {
+            AidenHostInboxSnapshot(
+                instanceId: instanceId, deviceId: "phone", chats: [chat], workspaceNames: ["alpha": "Alpha"],
+                isOnline: true, isBlocked: false, fetchedAt: now, supportsReadState: canWrite, supportsTriage: canWrite
+            )
+        }
+
+        let rows = AidenUnifiedInbox.make(
+            snapshots: [snapshot("new", canWrite: true), snapshot("old", canWrite: false)],
+            filter: .all, hiddenMachines: [], openChat: nil, now: now
+        ).updates
+
+        let offers = Dictionary(uniqueKeysWithValues: rows.map { ($0.id.instanceId, $0.offer) })
+        XCTAssertEqual(offers["new"]?.done, true)
+        XCTAssertEqual(offers["old"], AidenInboxRowOffer(markRead: false, done: false, snooze: false, alsoMarkRead: false))
+    }
+
+    /// Each action reaches the row's own write, and the swipes and the menu are
+    /// built from the same list.
+    @MainActor
+    func testRowActionsMirrorTheOffer() throws {
+        var performed: [AidenInboxRowAction] = []
+        var choseSnooze = false
+        func actions(_ offer: AidenInboxRowOffer) -> AidenInboxRowActions {
+            AidenInboxRowActions(offer: offer, perform: { performed.append($0) }, chooseSnooze: { choseSnooze = true })
+        }
+
+        let idle = actions(AidenInboxRowOffer(markRead: true, done: true, snooze: true, alsoMarkRead: false))
+        try XCTUnwrap(idle.markRead)()
+        try XCTUnwrap(idle.done)()
+        try XCTUnwrap(idle.snooze)()
+        XCTAssertEqual(performed, [.markRead, .done])
+        XCTAssertTrue(choseSnooze, "Snooze asks until when before it writes")
+
+        performed = []
+        let held = actions(AidenInboxRowOffer(markRead: false, done: false, snooze: false, undone: true, wake: true, alsoMarkRead: false))
+        XCTAssertNil(held.markRead)
+        try XCTUnwrap(held.done)()
+        try XCTUnwrap(held.snooze)()
+        XCTAssertEqual(performed, [.undone, .wake])
+    }
+
+    @MainActor
+    func testUndoNoticeRestoresARow() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("row", age: 90)], on: "laptop")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the row") { store.inbox.listedIDs.contains("row") }
+        fixture.serveTriage(of: "row", on: "laptop", revision: 1, doneAt: AidenInboxTabFixture.doneAt)
+
+        await store.perform(.done, on: try fixture.id("row", on: "laptop"))
+
+        await fixture.waitUntil("the row to leave") { !store.inbox.listedIDs.contains("row") }
+        await fixture.waitUntil("the notice") { store.notice != nil }
+        let notice = try XCTUnwrap(store.notice)
+        XCTAssertEqual(notice.instanceId, "laptop")
+        XCTAssertNotNil(notice.notice.undo, "Done offered no Undo")
+        fixture.serveTriage(of: "row", on: "laptop", revision: 2, doneAt: nil)
+
+        await store.undo(notice)
+
+        await fixture.waitUntil("the row to come back") { store.inbox.listedIDs.contains("row") }
+        await fixture.waitUntil("the notice to go") { store.notice == nil }
+        XCTAssertEqual(fixture.requests("POST /chats/row/triage", on: "laptop"), 2)
+        XCTAssertEqual(fixture.requests("POST /chats/row/triage", on: "studio"), 0)
+    }
+
+    /// A swipe lands on the model the rows are drawn from, at once, whichever
+    /// machine is selected, so no second copy can say otherwise.
+    @MainActor
+    func testASwipeMovesTheRowBeforeTheMachineAnswers() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("selected", age: 90, unread: true)], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the row") { store.inbox.listedIDs.contains("selected") }
+        fixture.serveTriage(of: "selected", on: "studio", revision: 1, doneAt: AidenInboxTabFixture.doneAt)
+        let release = fixture.responder.hold(instanceId: "studio", path: "/chats/selected/triage")
+
+        let swipe = Task { await store.perform(.done, on: try! fixture.id("selected", on: "studio")) }
+
+        await fixture.waitUntil("the row to leave") { !store.inbox.listedIDs.contains("selected") }
+        XCTAssertEqual(store.homeModel(for: "studio")?.chats.first?.inbox.doneAt, fixture.now, "The edit is not on the store's model")
+        release()
+        await swipe.value
+    }
+
+    @MainActor
+    func testOnlyOneNoticeShowsAcrossMachines() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("first", age: 90)], on: "studio")
+        fixture.serve([fixture.row("second", age: 91)], on: "laptop")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the rows") { store.inbox.listedIDs.count == 2 }
+        fixture.serveTriage(of: "first", on: "studio", revision: 1, doneAt: AidenInboxTabFixture.doneAt)
+        fixture.serveTriage(of: "second", on: "laptop", revision: 1, doneAt: AidenInboxTabFixture.doneAt)
+
+        await store.perform(.done, on: try fixture.id("first", on: "studio"))
+        await store.perform(.done, on: try fixture.id("second", on: "laptop"))
+
+        await fixture.waitUntil("the second notice") { store.notice?.instanceId == "laptop" }
+        store.dismissNotice()
+        await fixture.waitUntil("the notice to go") { store.notice == nil }
+        XCTAssertNil(store.homeModel(for: "studio")?.inboxNotice, "An older notice was waiting underneath")
+    }
+
+    /// Spec, Shell: the badge is the online needs-you count, and nothing else.
+    @MainActor
+    func testTheBadgeMatchesNeedsYouCount() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop", "mini"])
+        await fixture.connectAll()
+        fixture.serve([
+            fixture.row("approval", age: 1, state: "needs_approval"),
+            fixture.row("reply", age: 2, unread: true),
+        ], on: "studio")
+        fixture.serve([fixture.row("question", age: 3, state: "needs_input")], on: "laptop")
+        fixture.serve([fixture.row("quiet", age: 4)], on: "mini")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+
+        await fixture.waitUntil("every machine's rows") { store.inbox.listedIDs.count == 4 }
+
+        XCTAssertEqual(store.inbox.needsYouCount, 2)
+        XCTAssertEqual(store.inbox.needsYouCount, store.inbox.needsYou.count)
+
+        store.filter = .machine("mini")
+        XCTAssertEqual(store.inbox.needsYouCount, 2, "The filter narrowed the badge")
+    }
+
+    /// Plan, Task 21: the count is "online, not hidden, ignores filter", and the
+    /// spec's "Hide from Inbox" takes the machine's rows out.
+    @MainActor
+    func testHidingAMachineRemovesItsRowsAndDropsItFromTheBadge() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("mine", age: 1, state: "needs_approval")], on: "studio")
+        fixture.serve([
+            fixture.row("theirs", age: 2, state: "needs_approval"),
+            fixture.row("theirs-too", age: 3),
+        ], on: "laptop")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the rows") { store.inbox.listedIDs.count == 3 }
+        XCTAssertEqual(store.inbox.needsYouCount, 2)
+
+        fixture.preferences.update("laptop") { $0.isHidden = true }
+
+        await fixture.waitUntil("the hidden rows to go") { store.inbox.listedIDs == ["mine"] }
+        XCTAssertEqual(store.inbox.needsYouCount, 1)
+
+        fixture.preferences.update("laptop") { $0.isHidden = false }
+
+        await fixture.waitUntil("the rows to come back") { store.inbox.listedIDs.count == 3 }
+        XCTAssertEqual(store.inbox.needsYouCount, 2)
+    }
+
+    @MainActor
+    func testEveryMachineHiddenSaysSoInsteadOfLoading() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("mine", age: 1)], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the row") { store.listState == .rows }
+
+        fixture.preferences.update("studio") { $0.isHidden = true }
+
+        await fixture.waitUntil("the hidden state") { store.listState == .allHidden }
+    }
+
+    // MARK: What an Inbox with no rows says
+
+    /// The spinner this replaces never ended: a machine that can't be reached
+    /// leaves the model `.unresolved`.
+    @MainActor
+    func testOfflineWithNothingSavedShowsAnOfflineStateNotASpinner() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        fixture.responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        fixture.responder.fail(instanceId: "laptop", path: "*", code: .notConnectedToInternet)
+        await fixture.connectAll()
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+
+        await fixture.waitUntil("the offline state") { store.listState == .offline(machines: 2) }
+        XCTAssertEqual(store.homeModel(for: "studio")?.chatListLoadState, .unresolved)
+    }
+
+    @MainActor
+    func testSavedRowsStayWhenTheMachineIsOffline() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("saved", age: 1, unread: true)], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        await fixture.waitUntil("the row") { store.inbox.listedIDs == ["saved"] }
+        store.stop()
+
+        fixture.responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        await fixture.coordinator.connectActiveInstallation()
+        store.start()
+        defer { store.stop() }
+
+        await fixture.waitUntil("the machine to go offline") { !(store.snapshots["studio"]?.isOnline ?? true) }
+        XCTAssertEqual(store.listState, .rows)
+    }
+
+    func testAnInboxWithNoRowsSaysWhy() {
+        func state(
+            hasRows: Bool = false,
+            _ machines: [AidenInboxMachineRead],
+            hidden: Bool = false
+        ) -> AidenInboxListState {
+            AidenInboxListState.make(hasRows: hasRows, machines: machines, hasHiddenMachines: hidden)
+        }
+        let content = AidenInboxMachineRead(presentation: .content)
+        let empty = AidenInboxMachineRead(presentation: .empty)
+        let reading = AidenInboxMachineRead(presentation: .skeleton)
+        let offline = AidenInboxMachineRead(presentation: .failed)
+        let refused = AidenInboxMachineRead(presentation: .failed, failure: "Refused")
+
+        XCTAssertEqual(state(hasRows: true, [offline]), .rows)
+        XCTAssertEqual(state([content, offline]), .caughtUp, "Chats that are all done are caught up, not missing")
+        XCTAssertEqual(state([reading, offline]), .loading, "A machine still reading may yet bring rows")
+        XCTAssertEqual(state([empty, offline]), .noChats)
+        XCTAssertEqual(state([offline, offline]), .offline(machines: 2))
+        XCTAssertEqual(state([offline, refused]), .failed("Refused"))
+        XCTAssertEqual(state([], hidden: true), .allHidden)
+        XCTAssertEqual(state([]), .noChats)
+    }
+
+    @MainActor
+    func testAConnectedMachineWithNoChatsSettlesOnNoChats() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([], on: "studio")
+        let store = fixture.makeStore()
+        XCTAssertNotEqual(store.listState, .noChats, "Empty before the machine has answered")
+        store.start()
+        defer { store.stop() }
+
+        await fixture.waitUntil("the empty state") { store.listState == .noChats }
+    }
+
+    @MainActor
+    func testAReadThatFailsOverSavedRowsSaysSoAndKeepsThem() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        let page = try AidenRemoteJSONDecoder.decode(
+            AidenChatSummaryPage.self,
+            from: fixture.page([fixture.row("saved", age: 1, unread: true)])
+        )
+        _ = try await fixture.cache.saveChatSummaries(
+            AidenChatCache.SummarySnapshot(summaries: page.summaries, nextCursor: nil),
+            instanceId: "studio",
+            writeToken: fixture.cache.reserveSummaryWrite(instanceId: "studio")
+        )
+        fixture.responder.reply(instanceId: "studio", path: "/chat-summaries", status: 500, json: Data("""
+        {"error":{"code":"internal_error","message":"The Mac stumbled.","requestId":"r","retryable":true}}
+        """.utf8))
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+
+        await fixture.waitUntil("the failed refresh") { store.refreshFailed }
+        XCTAssertEqual(store.inbox.listedIDs, ["saved"])
+        XCTAssertEqual(store.listState, .rows)
+    }
+
+    // MARK: What the list is given
+
+    @MainActor
+    func testTheOpenChatReachesTheList() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("same", age: 2, unread: true)], on: "studio")
+        fixture.serve([fixture.row("same", age: 3, unread: true)], on: "laptop")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the rows") { store.inbox.updates.count == 2 }
+
+        store.openChat = try fixture.id("same", on: "laptop")
+
+        XCTAssertEqual(store.inbox.updates.map(\.id.instanceId), ["studio"], "An open chat isn't news")
+        XCTAssertEqual(store.inbox.earlier.map(\.id.instanceId), ["laptop"])
+
+        store.openChat = nil
+        XCTAssertEqual(store.inbox.updates.count, 2)
+    }
+
+    @MainActor
+    func testSearchNarrowsTheRowsAndLeavesTheBadge() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([
+            fixture.row("needle", age: 1, unread: true),
+            fixture.row("approval", age: 2, state: "needs_approval"),
+        ], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the rows") { store.inbox.listedIDs.count == 2 }
+
+        store.searchText = "needle"
+
+        XCTAssertEqual(store.inbox.listedIDs, ["needle"])
+        XCTAssertEqual(store.inbox.needsYouCount, 1)
+    }
+
+    @MainActor
+    func testShowMoreListsEveryEarlierRow() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        let total = AidenInbox.earlierLimit + 3
+        fixture.serve((0..<total).map { fixture.row("row-\($0)", age: $0 + 1) }, on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the rows") { store.inbox.earlierOverflow == 3 }
+        XCTAssertEqual(store.inbox.earlier.count, AidenInbox.earlierLimit)
+
+        store.showsAllEarlier = true
+
+        XCTAssertEqual(store.inbox.earlier.count, total)
+        XCTAssertEqual(store.inbox.earlierOverflow, 0)
+    }
+
+    /// A snooze ends and Earlier ages out with nothing else changing.
+    @MainActor
+    func testRowsFollowThePhonesClock() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("ageing", age: 1)], on: "studio")
+        var clock = fixture.now
+        let store = AidenUnifiedInboxStore(
+            hosts: fixture.coordinator.hosts,
+            preferences: fixture.preferences,
+            cache: fixture.cache,
+            clock: ContinuousClock(),
+            jitter: { 0 },
+            now: { clock }
+        )
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the row") { store.inbox.listedIDs == ["ageing"] }
+
+        clock = clock.addingTimeInterval(AidenInbox.recentWindow + 3600)
+        store.refreshClock()
+
+        XCTAssertEqual(store.inbox.listedIDs, [])
+    }
+
+    @MainActor
+    func testLoadMoreAsksEachMachineWithAPageLeftOnce() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"])
+        await fixture.connectAll()
+        let cursor = "cur_next.\(String(repeating: "a", count: 43))"
+        fixture.serve([fixture.row("first", age: 1)], next: cursor, on: "studio")
+        fixture.serve([fixture.row("only", age: 2)], on: "laptop")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("a page left") { store.moreChats == .available }
+        fixture.responder.reply(
+            instanceId: "studio",
+            path: "/chat-summaries",
+            query: "limit=100&cursor=\(cursor)",
+            status: 200,
+            json: fixture.page([fixture.row("second", age: 5)])
+        )
+
+        await store.loadMoreChats()
+
+        await fixture.waitUntil("the next page") { store.inbox.listedIDs.contains("second") }
+        await fixture.waitUntil("nothing left") { store.moreChats == .none }
+        XCTAssertEqual(fixture.requests("GET /chat-summaries", on: "laptop"), 1, "A machine with no page left was asked")
+    }
+
+    /// `tab` decides visibility: the spec's fastest poll is for "the machine with
+    /// an open chat" while the Inbox is visible, and a chat is pushed on that tab.
+    @MainActor
+    func testOnlyAChatOnTheTabOnScreenIsOpen() {
+        let id = AidenHostObjectID(instanceId: "studio", deviceId: "phone", objectId: "chat")
+        let navigation = AidenAppNavigation()
+        XCTAssertNil(navigation.openChat)
+
+        navigation.open(.chat(id))
+        XCTAssertEqual(navigation.openChat, id)
+
+        navigation.open(.settings)
+        XCTAssertNil(navigation.openChat, "Settings is over the chat")
+
+        navigation.inboxPath = [.chat(id)]
+        navigation.tab = .bots
+        XCTAssertNil(navigation.openChat, "A chat on a tab nobody is looking at")
+    }
+}
+#endif

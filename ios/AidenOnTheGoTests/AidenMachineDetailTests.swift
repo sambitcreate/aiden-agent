@@ -417,7 +417,11 @@ final class AidenMachineDetailTests: XCTestCase {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
         store.save(AidenAppNavigationSnapshot(tab: .inbox, inboxPath: [.machines]))
-        let window = try show(AidenAppShellView(coordinator: coordinator, navigationStore: store))
+        let window = try show(AidenAppShellView(
+            coordinator: coordinator,
+            inboxStore: AidenUnifiedInboxStore(coordinator: coordinator),
+            navigationStore: store
+        ))
         defer { close(window) }
 
         XCTAssertTrue(
@@ -430,7 +434,11 @@ final class AidenMachineDetailTests: XCTestCase {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
         store.save(AidenAppNavigationSnapshot(tab: .inbox, inboxPath: [.machine(instanceId: "laptop")]))
-        let window = try show(AidenAppShellView(coordinator: coordinator, navigationStore: store))
+        let window = try show(AidenAppShellView(
+            coordinator: coordinator,
+            inboxStore: AidenUnifiedInboxStore(coordinator: coordinator),
+            navigationStore: store
+        ))
         defer { close(window) }
 
         XCTAssertTrue(
