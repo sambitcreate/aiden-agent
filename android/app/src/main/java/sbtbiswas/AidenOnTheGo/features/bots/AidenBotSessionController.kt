@@ -288,6 +288,38 @@ enum class AidenBotSessionNotice(@param:StringRes val text: Int) {
 /** A Bot session request that got no answer within its limit (FR-I3): it may have reached the Mac. */
 class AidenBotSessionTimeout : java.io.IOException("The Mac didn’t answer in time.")
 
+/**
+ * What a failed send does to a message in the outbox. Only a definite refusal gives up the key:
+ * anything that may have reached the Mac keeps it, so a retry can never become a second request.
+ */
+enum class AidenBotOutboxFailureStep {
+    /** The Mac answered without running it; Try again is a new request. */
+    REFUSED,
+
+    /** It keeps its place and key for the next connection or backoff. */
+    RETRY_LATER,
+
+    /** Out of tries, but an entry with no submission id already shows it. */
+    SETTLED_BY_ECHO,
+
+    /** Out of tries: "Couldn't send", and Try again keeps the key. */
+    OUT_OF_TRIES
+}
+
+/** [attempts] counts the tries before this failure. */
+fun aidenBotOutboxFailureStep(
+    ambiguous: Boolean,
+    attempts: Int,
+    maxAttempts: Int,
+    echoed: Boolean,
+    echoNamesSubmission: Boolean
+): AidenBotOutboxFailureStep = when {
+    !ambiguous -> AidenBotOutboxFailureStep.REFUSED
+    attempts + 1 < maxAttempts -> AidenBotOutboxFailureStep.RETRY_LATER
+    echoed && !echoNamesSubmission -> AidenBotOutboxFailureStep.SETTLED_BY_ECHO
+    else -> AidenBotOutboxFailureStep.OUT_OF_TRIES
+}
+
 /** True when a message request may have reached the Mac, so the next attempt must reuse its key. */
 fun aidenBotMessageFailureIsAmbiguous(error: Exception): Boolean = when (error) {
     is AidenRemoteClientException.Server -> error.statusCode >= 500 || error.statusCode == 408 || error.statusCode == 429 ||
@@ -1312,26 +1344,42 @@ class AidenBotSessionController(
                 purgeForAccessLoss()
                 return
             }
-            if (!aidenBotMessageFailureIsAmbiguous(error)) {
-                // Refused outright: it never reached the Mac, and Try again is a new request.
-                updateMessage(key) { it.copy(status = AidenBotOutgoingStatus.FAILED, keepsKey = false, echoed = false) }
-                return
-            }
             val attempts = latest.connectionAttempts + 1
-            if (attempts < MAX_CONNECTION_ATTEMPTS) {
-                // It keeps its place and key: the next connection, or a short wait while
-                // connected, tries again. Nothing behind it overtakes it.
-                updateMessage(key) { it.copy(keepsKey = true, connectionAttempts = attempts, deferred = true) }
-                scheduleBackoff(attempts)
-            } else {
-                updateMessage(key) {
-                    if (it.echoed && it.echoSubmissionId == null) {
-                        // An untagged entry of its text already shows it.
-                        null
-                    } else {
-                        // An entry naming another submission is not its echo: "Couldn't send · Try
-                        // again" with its key, and the entry goes back to whoever it belongs to.
-                        it.echoEntryId?.let { entry -> claimedEntries -= entry }
+            val step = aidenBotOutboxFailureStep(
+                ambiguous = aidenBotMessageFailureIsAmbiguous(error),
+                attempts = latest.connectionAttempts,
+                maxAttempts = MAX_CONNECTION_ATTEMPTS,
+                echoed = latest.echoed,
+                echoNamesSubmission = latest.echoSubmissionId != null
+            )
+            when (step) {
+                AidenBotOutboxFailureStep.REFUSED -> {
+                    // Refused outright: it never reached the Mac, Try again is a new request, and
+                    // any entry it waited on goes back to the others, as on iOS.
+                    latest.echoEntryId?.let { claimedEntries -= it }
+                    updateMessage(key) {
+                        it.copy(
+                            status = AidenBotOutgoingStatus.FAILED,
+                            keepsKey = false,
+                            echoed = false,
+                            echoEntryId = null,
+                            echoSubmissionId = null
+                        )
+                    }
+                }
+                AidenBotOutboxFailureStep.RETRY_LATER -> {
+                    // It keeps its place and key: the next connection, or a short wait while
+                    // connected, tries again. Nothing behind it overtakes it.
+                    updateMessage(key) { it.copy(keepsKey = true, connectionAttempts = attempts, deferred = true) }
+                    scheduleBackoff(attempts)
+                }
+                // An untagged entry of its text already shows it.
+                AidenBotOutboxFailureStep.SETTLED_BY_ECHO -> updateMessage(key) { null }
+                AidenBotOutboxFailureStep.OUT_OF_TRIES -> {
+                    // An entry naming another submission is not its echo: "Couldn't send · Try
+                    // again" with its key, and the entry goes back to whoever it belongs to.
+                    latest.echoEntryId?.let { claimedEntries -= it }
+                    updateMessage(key) {
                         it.copy(
                             status = AidenBotOutgoingStatus.FAILED,
                             keepsKey = true,
