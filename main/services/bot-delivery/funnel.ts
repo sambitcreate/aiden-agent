@@ -132,7 +132,12 @@ export function createBotDeliveryFunnel(deps: {
 
   /** `peerRootIds` keeps the suppressed finals' roots protected until this note's channels settle. */
   async function limitNote(botId: string, key: string | undefined, at: number, peerRootIds: readonly string[], publication?: BotDeliveryInput["publication"]) {
-    if (!key || await deps.log.find(botId, key)) return;
+    if (!key) return;
+    const note = await deps.log.find(botId, key);
+    if (note) {
+      if (peerRootIds.length) await deps.log.addPeerRoots(botId, note.id, peerRootIds, publication);
+      return;
+    }
     const { row } = await deps.log.append({
       botId, class: "digest", dedupeKey: key, title: (await deps.botName?.(botId)) ?? "Your Bot",
       body: BOT_DELIVERY_LIMIT_NOTE, status: "info", createdAt: at, deliverAfter: at,

@@ -20,6 +20,8 @@ export const BOT_DELIVERIES_FILE = "deliveries.json";
 /** Newest rows kept per Bot; older rows fall off as new ones arrive. */
 export const BOT_DELIVERIES_MAX = 200;
 export class BotDeliveryHistoryFullError extends Error {constructor(){super("Pending peer deliveries fill this Bot’s delivery history. No owed result was discarded.");this.name="BotDeliveryHistoryFullError";}}
+/** The most peer roots one stored row may carry; a row over this does not load. */
+const BOT_DELIVERY_PEER_ROOTS_MAX = 200;
 /** The phone feed serves at most this many due rows, newest first. */
 export const BOT_DELIVERIES_DUE_MAX = 100;
 
@@ -82,6 +84,12 @@ export interface BotDeliveryLog {
   markChannel(botId: string, id: string, channel: BotDeliveryChannel, at: number, publication?: {assertCurrent():Promise<void>}): Promise<void>;
   /** Records that every channel went out; keeps the first time. */
   markSent(botId: string, id: string, at: number, publication?: {assertCurrent():Promise<void>}): Promise<void>;
+  /**
+   * Ties more peer roots to a note that still owes a channel, so they wait for
+   * it. A note that went out owes nothing and is left alone. Refuses a root the
+   * stored row could not hold, since a row over the limit would not load back.
+   */
+  addPeerRoots(botId: string, id: string, roots: readonly string[], publication?: {assertCurrent():Promise<void>}): Promise<void>;
   settlePeerReferences(botId:string,id:string,apply:(facts:{settled:string[];pending:string[]})=>Promise<void>,at:number):Promise<void>;
   forgetBot(botId: string): Promise<void>;
   /** Every row this Bot kept, newest first. */
@@ -148,7 +156,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
   const coveredBy = optionalText(value.coveredBy, 160);
   const quiet = value.quiet === true;
   const peerRootIds=value.peerRootIds;
-  if(peerRootIds!==undefined&&(!Array.isArray(peerRootIds)||peerRootIds.length>200||peerRootIds.some(id=>typeof id!=="string"||!/^[-A-Za-z0-9._:]{1,160}$/u.test(id))))return undefined;
+  if(peerRootIds!==undefined&&(!Array.isArray(peerRootIds)||peerRootIds.length>BOT_DELIVERY_PEER_ROOTS_MAX||peerRootIds.some(id=>typeof id!=="string"||!/^[-A-Za-z0-9._:]{1,160}$/u.test(id))))return undefined;
   return {
     id,
     botId,
@@ -303,6 +311,24 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
         const next = [...rows];
         next[index] = { ...row, sentAt: at };
         await save(botId, next,publication);
+      });
+    },
+
+    addPeerRoots(botId, id, roots, publication) {
+      return serial(botId, async () => {
+        if (forgotten.has(botId)) return;
+        const rows = await load(botId);
+        const index = rows.findIndex((row) => row.id === id);
+        if (index < 0) return;
+        const row = rows[index]!;
+        if (row.sentAt !== undefined) return;
+        const known = row.peerRootIds ?? [];
+        const merged = [...new Set([...known, ...roots])];
+        if (merged.length === known.length) return;
+        if (merged.length > BOT_DELIVERY_PEER_ROOTS_MAX) throw new BotDeliveryHistoryFullError();
+        const next = [...rows];
+        next[index] = { ...row, peerRootIds: merged };
+        await save(botId, next, publication);
       });
     },
 
