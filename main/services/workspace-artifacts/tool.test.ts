@@ -74,7 +74,7 @@ test("create saves a page the Artifacts tab can show and tells that chat's windo
 test("update keeps what the call leaves out and bumps the revision", async (t) => {
   const { store, call } = await harness(t, { permission: "full" });
   await call("c1", { operation: "create", title: "Open PRs", markup: PAGE, sources: [PULLS] });
-  await store.saveState("ws1", "art1", { filter: "mine" });
+  await store.saveState("ws1", "art1", 1, { filter: "mine" });
   await call("c2", { operation: "update", id: "art1", description: "PRs waiting on review", layout: "wide" });
   let artifact = (await store.get("ws1", "art1"))!.artifact;
   // Without new markup, the declared state stays what the markup declared.

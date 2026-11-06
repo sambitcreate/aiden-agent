@@ -114,10 +114,11 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     return { removed };
   });
 
-  handle(WORKSPACE_ARTIFACT_CHANNELS.saveState, async (_event, workspaceId, artifactId, state) => {
+  handle(WORKSPACE_ARTIFACT_CHANNELS.saveState, async (_event, workspaceId, artifactId, revision, state) => {
     const workspace = await existingWorkspace(workspaceId);
+    if (!isWorkspaceArtifactRevision(revision)) throw new Error("Invalid revision.");
     // State saves are frequent and local to the page, so they notify nobody.
-    await store.saveState(workspace, asArtifactId(artifactId), parseUiVisualState(state));
+    await store.saveState(workspace, asArtifactId(artifactId), revision, parseUiVisualState(state));
   });
 
   handle(WORKSPACE_ARTIFACT_CHANNELS.approve, async (_event, workspaceId, artifactId, digest) => {

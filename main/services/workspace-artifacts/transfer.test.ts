@@ -43,7 +43,7 @@ async function roundTrip(t: test.TestContext, args: Record<string, unknown>, sav
     onChanged: () => undefined,
   });
   await tool.execute("call-1", { operation: "create", ...args } as never, undefined);
-  if (savedState) await made.saveState("ws1", "art1", savedState);
+  if (savedState) await made.saveState("ws1", "art1", 1, savedState);
   const original = (await made.get("ws1", "art1"))!.artifact;
   const text = `${JSON.stringify(workspaceArtifactPageFile(original), null, 2)}\n`;
   const imported = parseWorkspaceArtifactPageFileText(text);

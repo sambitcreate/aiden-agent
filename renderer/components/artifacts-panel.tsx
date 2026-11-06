@@ -500,7 +500,7 @@ function ArtifactView({
   onImport: StartImport;
   artifactsError: string | null;
   onRetry: () => void;
-  onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
+  onStateSaved: (artifactId: string, revision: number, state: Record<string, unknown>) => void;
 }) {
   const refresh = useArtifactRefresh(workspace, view, active);
   const pageRef = React.useRef<HTMLDivElement | null>(null);
@@ -1330,7 +1330,7 @@ function ArtifactPage({
   view: WorkspaceArtifactView;
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
   /** Keeps the list's copy current, so switching pages and back shows the page as it was left. */
-  onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
+  onStateSaved: (artifactId: string, revision: number, state: Record<string, unknown>) => void;
 }) {
   const onStateSavedRef = React.useRef(onStateSaved);
   React.useLayoutEffect(() => {
@@ -1338,6 +1338,7 @@ function ArtifactPage({
   }, [onStateSaved]);
   const visual = React.useMemo(() => workspaceArtifactPage(view), [view]);
   const artifactId = view.artifact.id;
+  const revision = view.artifact.revision;
   const pending = React.useRef<{ timer: ReturnType<typeof setTimeout>; save: () => void } | null>(null);
   const flush = React.useCallback(() => {
     const current = pending.current;
@@ -1346,22 +1347,24 @@ function ArtifactPage({
     clearTimeout(current.timer);
     current.save();
   }, []);
-  // A page switch or unmount saves what is still waiting.
-  React.useEffect(() => flush, [artifactId, flush]);
+  // A page switch, a new revision or an unmount saves what is still waiting.
+  React.useEffect(() => flush, [artifactId, revision, flush]);
   const onStateChange = React.useCallback(
     (state: Record<string, unknown>) => {
       if (pending.current) clearTimeout(pending.current.timer);
       const save = () => {
-        onStateSavedRef.current(artifactId, state);
-        void workspaceArtifactsApi.saveState(workspaceId, artifactId, state).catch(() => {
+        onStateSavedRef.current(artifactId, revision, state);
+        void workspaceArtifactsApi.saveState(workspaceId, artifactId, revision, state).catch(() => {
           // State is a convenience: the page still works, it just reopens as it was.
         });
       };
       pending.current = { save, timer: setTimeout(() => { pending.current = null; save(); }, STATE_SAVE_DELAY_MS) };
     },
-    [artifactId, workspaceId],
+    [artifactId, revision, workspaceId],
   );
   const handleAction = React.useCallback((action: AidenUiAction) => onAction?.(view, action), [onAction, view]);
   // AidenUiBlock contains its own render failures, falling back to the page's text.
-  return <AidenUiBlock key={artifactId} visual={visual} hideCaption onStateChange={onStateChange} onAction={handleAction} />;
+  // Each revision starts from its own state: a touched block would otherwise
+  // keep showing the old values over the state a restore brought back.
+  return <AidenUiBlock key={`${artifactId}:${revision}`} visual={visual} hideCaption onStateChange={onStateChange} onAction={handleAction} />;
 }

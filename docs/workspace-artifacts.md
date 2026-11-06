@@ -80,12 +80,12 @@ Aiden keeps the last 5 versions of each page (`WORKSPACE_ARTIFACT_LIMITS.history
 
 - **Earlier versions…** in the page menu lists them newest first, with when each was replaced and its name at the time if it differed. **Restore** makes that version the page again as a new version, so a restore can itself be undone the same way.
 - You can also ask Aiden, for example "undo the last change to the PR board". It uses the `workspace_artifact` tool's `restore` operation, and `list` shows each page's `earlierRevisions`.
-- A restore keeps the page's current name. It also brings back that version's page state (checked boxes, the chosen tab and similar), because the state is saved with the page. Changes to the state alone are not versions.
+- A restore keeps the page's current name. It also brings back that version's page state (checked boxes, the chosen tab and similar), because the state is saved with the page. Changes to the state alone are not versions. State saved from a version the page has since left is dropped, so a change made just before a restore or update can't overwrite the new version's state.
 - Under Ask, a version whose commands differ from the ones you allowed needs allowing again: the page menu marks it "Different commands — needs allowing again" (including while the current page is itself still waiting to be allowed), and Aiden's restore shows an approval card listing the commands, like an update. A version with the same commands as the allowed ones restores without asking.
 - In a workspace without folder access, Aiden can't restore a version that reads files or runs commands. **Restore** in the page menu still saves it, but nothing runs until the workspace has access.
 - After a restore from the page menu, the page re-reads its sources if it is allowed to.
 
-Earlier versions are stored on the device next to the pages (`<workspaceId>.history.json`), never with an approval. They are deleted with the page, and with the workspace, including when a delete lands while an update is still saving the version it replaced. If the history file is damaged it is replaced rather than repaired, and if it can't be written the page update or delete still goes through; the pages themselves are unaffected.
+Earlier versions are stored on the device next to the pages (`<workspaceId>.history.json`), never with an approval. They are deleted with the page, and with the workspace, including when a delete lands while an update is still saving the version it replaced. If the history file is damaged it is replaced rather than repaired, and if it can't be written the page update or delete still goes through; the pages themselves are unaffected. A restore is different: it keeps the current version first, and if that can't be written the restore is refused and the page stays as it was, so a restore can always be undone.
 
 ## Export and import
 

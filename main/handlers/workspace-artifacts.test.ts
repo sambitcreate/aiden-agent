@@ -103,9 +103,18 @@ test("approving needs the digest of the commands the person saw, and tells every
   assert.deepEqual(events, [{ workspaceId: "ws1", artifactId: "art1", reason: "updated" }]);
 });
 
+test("page state must name the revision it belongs to, and a stale one is dropped", async (t) => {
+  const { invoke } = await setup(t);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.saveState, "ws1", "art1", { tab: "mine" }), /Invalid revision/u);
+  await assert.rejects(invoke(WORKSPACE_ARTIFACT_CHANNELS.saveState, "ws1", "art1", "1", { tab: "mine" }), /Invalid revision/u);
+  await invoke(WORKSPACE_ARTIFACT_CHANNELS.saveState, "ws1", "art1", 9, { tab: "stale" });
+  const [view] = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.list, "ws1")) as WorkspaceArtifactView[];
+  assert.notDeepEqual(view!.artifact.visual.state, { tab: "stale" });
+});
+
 test("rename and delete announce the change; page state saves quietly", async (t) => {
   const { invoke, events } = await setup(t);
-  await invoke(WORKSPACE_ARTIFACT_CHANNELS.saveState, "ws1", "art1", { tab: "mine" });
+  await invoke(WORKSPACE_ARTIFACT_CHANNELS.saveState, "ws1", "art1", 1, { tab: "mine" });
   assert.equal(events.length, 0);
   await invoke(WORKSPACE_ARTIFACT_CHANNELS.rename, "ws1", "art1", "Open PRs");
   const [renamed] = (await invoke(WORKSPACE_ARTIFACT_CHANNELS.list, "ws1")) as WorkspaceArtifactView[];
@@ -166,7 +175,7 @@ test("an export writes only what makes the page: no approval, ids, workspace, ch
   const { invoke, store, text, dialogs, disk, suggestedNames, events } = await setup(t);
   const [view] = (await invoke(C.list, "ws1")) as WorkspaceArtifactView[];
   await invoke(C.approve, "ws1", "art1", view!.digest);
-  await invoke(C.saveState, "ws1", "art1", { tab: "mine" });
+  await invoke(C.saveState, "ws1", "art1", view!.artifact.revision, { tab: "mine" });
   await store.saveSnapshot("ws1", view!.artifact, { pulls: { status: "ok", at: 1, dataJson: '[{"number":12,"title":"Private"}]' } });
   events.length = 0;
 

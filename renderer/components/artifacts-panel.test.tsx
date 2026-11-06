@@ -901,7 +901,23 @@ test("a page keeps the state the person left it in across a page switch", async 
   fireEvent.click(screen.getByRole("button", { name: "Switch" }));
   await screen.findByRole("figure", { name: "Open PRs" });
   screen.getByText(paragraph(/Tab\s*mine/u));
-  assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:saveState")!.args, [WORKSPACE.id, "art1", { tab: "mine" }]);
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:saveState")!.args, [WORKSPACE.id, "art1", 1, { tab: "mine" }]);
+});
+
+test("a restored revision shows its own state, and a change just before it is saved against the old revision", async () => {
+  const calls = installBotTestIpc({ "workspaces:artifacts:saveState": () => undefined });
+  const panel = (revision: number) => (
+    <TooltipProvider>
+      <ArtifactsPanel workspace={WORKSPACE} active={false} artifacts={state([view("art1", "Open PRs", { approved: true, revision })])} selectedId="art1" onSelect={() => undefined} onAskAiden={() => undefined} />
+    </TooltipProvider>
+  );
+  const { rerender } = render(panel(1));
+  await screen.findByText(paragraph(/Tab\s*all/u));
+  fireEvent.click(screen.getByRole("button", { name: "Mine" }));
+  screen.getByText(paragraph(/Tab\s*mine/u));
+  rerender(panel(2));
+  await screen.findByText(paragraph(/Tab\s*all/u));
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:artifacts:saveState")!.args, [WORKSPACE.id, "art1", 1, { tab: "mine" }]);
 });
 
 function mountProvider(chatId = "chat-1") {

@@ -365,31 +365,40 @@ export class WorkspaceArtifactStore {
     return store;
   }
 
+  /** Writes one version into the page's history; a write that fails throws. */
+  private async writeRevision(
+    workspaceId: string,
+    pages: DataStore<WorkspaceArtifactsDocument>,
+    previous: WorkspaceArtifactV1,
+  ): Promise<void> {
+    const history = this.historyStore(workspaceId);
+    await history.update(async (draft) => {
+      // A workspace removed meanwhile must not get its history file back.
+      if (this.artifactStores.get(workspaceId) !== pages || this.historyStores.get(workspaceId) !== history) {
+        throw new HistoryDetachedError();
+      }
+      // Pages deleted meanwhile (their delete may have run first) keep no history.
+      const live = new Set((await pages.load()).artifacts.map((artifact) => artifact.id));
+      for (const id of Object.keys(draft.revisions)) {
+        if (!live.has(id)) delete draft.revisions[id];
+      }
+      if (!live.has(previous.id)) return;
+      const entries = (draft.revisions[previous.id] ?? []).filter((entry) => entry.revision !== previous.revision);
+      entries.push(historyEntryOf(previous, this.now()));
+      entries.sort((a, b) => a.revision - b.revision);
+      draft.revisions[previous.id] = entries.slice(-WORKSPACE_ARTIFACT_LIMITS.history);
+      trimHistoryToFit(draft, this.historyMaxBytes);
+    });
+  }
+
   /** Keeps the version an update replaced; never fails the update that called it. */
   private async recordRevision(
     workspaceId: string,
     pages: DataStore<WorkspaceArtifactsDocument>,
     previous: WorkspaceArtifactV1,
   ): Promise<void> {
-    const history = this.historyStore(workspaceId);
     try {
-      await history.update(async (draft) => {
-        // A workspace removed meanwhile must not get its history file back.
-        if (this.artifactStores.get(workspaceId) !== pages || this.historyStores.get(workspaceId) !== history) {
-          throw new HistoryDetachedError();
-        }
-        // Pages deleted meanwhile (their delete may have run first) keep no history.
-        const live = new Set((await pages.load()).artifacts.map((artifact) => artifact.id));
-        for (const id of Object.keys(draft.revisions)) {
-          if (!live.has(id)) delete draft.revisions[id];
-        }
-        if (!live.has(previous.id)) return;
-        const entries = (draft.revisions[previous.id] ?? []).filter((entry) => entry.revision !== previous.revision);
-        entries.push(historyEntryOf(previous, this.now()));
-        entries.sort((a, b) => a.revision - b.revision);
-        draft.revisions[previous.id] = entries.slice(-WORKSPACE_ARTIFACT_LIMITS.history);
-        trimHistoryToFit(draft, this.historyMaxBytes);
-      });
+      await this.writeRevision(workspaceId, pages, previous);
     } catch (error) {
       if (!(error instanceof HistoryDetachedError)) this.onHistoryError(error);
     }
@@ -436,7 +445,9 @@ export class WorkspaceArtifactStore {
    * Brings back an earlier version as a new revision, through the same rules
    * as an update: the current version becomes undoable in turn, and an
    * approval carries over only for the exact commands already approved. The
-   * page keeps its current name.
+   * page keeps its current name. The current version is written to history
+   * before the page changes: a person restoring is relying on being able to
+   * undo it, so a restore that can't keep that version doesn't happen.
    */
   async restore(
     workspaceId: string,
@@ -447,6 +458,17 @@ export class WorkspaceArtifactStore {
     const id = requireArtifactId(artifactId);
     const entry = await this.revision(workspaceId, id, revision);
     if (!entry) throw new Error(`Revision ${revision} of this artifact is no longer kept.`);
+    assertNoCredentialFiles(entry);
+    const pages = this.artifacts(workspaceId);
+    const current = (await pages.load()).artifacts.find((artifact) => artifact.id === id) ?? notFound();
+    try {
+      await this.writeRevision(workspaceId, pages, current);
+    } catch (error) {
+      if (error instanceof HistoryDetachedError) notFound();
+      this.onHistoryError(error);
+      throw new Error("Aiden could not keep the current version, so the page was not restored.");
+    }
+    // An update landing here is kept by replaceWith, which records whatever it replaces.
     return this.replaceWith(
       workspaceId,
       id,
@@ -648,10 +670,16 @@ export class WorkspaceArtifactStore {
     });
   }
 
-  async saveState(workspaceId: string, artifactId: string, state: Record<string, unknown>): Promise<void> {
+  /**
+   * Saves the state of the revision the person was looking at. State from a
+   * revision the page has since left is dropped: it belongs to a page that is
+   * gone, and would otherwise overwrite the state a restore just brought back.
+   */
+  async saveState(workspaceId: string, artifactId: string, revision: number, state: Record<string, unknown>): Promise<void> {
     const id = requireArtifactId(artifactId);
     await this.artifacts(workspaceId).update((draft) => {
       const artifact = draft.artifacts.find((entry) => entry.id === id) ?? notFound();
+      if (artifact.revision !== revision) return;
       const next = parseWorkspaceArtifactV1({ ...artifact, visual: { ...artifact.visual, state } });
       if (!next) throw new Error("The artifact's state is too large or uses a reserved key name.");
       artifact.visual = next.visual;

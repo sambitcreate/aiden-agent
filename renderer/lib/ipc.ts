@@ -1433,8 +1433,9 @@ export const workspaceArtifactsApi = {
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
   delete: (workspaceId: string, artifactId: string) =>
     invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
-  saveState: (workspaceId: string, artifactId: string, state: Record<string, unknown>) =>
-    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
+  /** `revision` is the one the person was looking at; state from a page since replaced is dropped. */
+  saveState: (workspaceId: string, artifactId: string, revision: number, state: Record<string, unknown>) =>
+    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, revision, state),
   approve: (workspaceId: string, artifactId: string, digest: string) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
   /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
