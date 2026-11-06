@@ -208,6 +208,8 @@ export function StorageSettings({
 
   const scanning = report?.scan.status === "scanning";
   const total = report?.totalBytes ?? 0;
+  // A first measurement still running or failed knows no total, which is not the same as zero.
+  const totalKnown = report !== null && (total > 0 || report.scan.status === "ready");
   const actionsDisabled = busy !== null || scanning || report?.scan.status !== "ready";
 
   const openPreview = async (request: StorageCleanupRequest, single: boolean) => {
@@ -379,13 +381,15 @@ export function StorageSettings({
         <div className="p-4">
           <div className="flex items-baseline gap-3">
             <span className="text-heading1 font-semibold tabular-nums text-primary">
-              {report ? formatStorageBytes(total) : "—"}
+              {totalKnown ? formatStorageBytes(total) : "—"}
             </span>
             <span className="text-small text-secondary">used by Aiden</span>
           </div>
-          <div className="mt-0.5 text-small text-secondary">
-            {report ? scanCaption(report.scan) : "Checking how much disk Aiden uses…"}
-          </div>
+          {report || !loadFailed ? (
+            <div className="mt-0.5 text-small text-secondary">
+              {report ? scanCaption(report.scan) : "Checking how much disk Aiden uses…"}
+            </div>
+          ) : null}
           {report && total > 0 ? (
             <div className="mt-4">
               <StorageBar report={report} />

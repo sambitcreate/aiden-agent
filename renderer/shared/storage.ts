@@ -363,8 +363,8 @@ export interface StorageCleanupRequest {
   inactiveDays: StorageInactiveDays;
   /**
    * Ids the preview showed. Cleanup removes only these, and only if they are
-   * still eligible when it runs. Required for `delete-threads`; omit for a
-   * worktree sweep to let Aiden rebuild the set from the inactivity window.
+   * still eligible when it runs, so a removal that names none removes nothing.
+   * Previews omit them to list everything the inactivity window covers.
    */
   targetIds?: string[];
 }

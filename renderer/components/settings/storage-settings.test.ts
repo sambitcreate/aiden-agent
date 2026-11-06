@@ -365,6 +365,7 @@ test("a scan that is still running says so and keeps cleanup off", async () => {
   await flush();
   await screen.findByText(/Measuring how much disk Aiden uses/u);
   assert.equal(screen.getByRole("button", { name: /Measuring/u }).hasAttribute("disabled"), true);
+  assert.equal(screen.queryAllByText("0 KB").length, 0, "nothing measured yet is not the same as nothing used");
 });
 
 test("a scan that stopped early says sizes are a minimum", async () => {
@@ -387,6 +388,7 @@ test("a scan that failed explains itself and offers no cleanup", async () => {
     }),
   });
   await screen.findByText("Aiden could not finish measuring local storage. Try again.");
+  assert.equal(screen.queryAllByText("0 KB").length, 0, "a failed measurement knows no total");
   // A failed measurement must not offer cleanup as if the numbers were known.
   for (const name of ["Review…", "Clear cache…", "Clear…"]) {
     assert.equal(screen.queryAllByRole("button", { name, hidden: true }).length, 0, name);
@@ -406,6 +408,7 @@ test("a read that throws says the files are unchanged", async () => {
   render(createElement(StorageSettings));
   await flush();
   assert.equal(await screen.findAllByText(/Nothing was changed/u).then((found) => found.length), 1);
+  assert.equal(screen.queryAllByText(/Checking how much disk/u).length, 0, "the page has stopped checking");
 });
 
 /** Opens the worktree review and answers cleanup with `result`, or by throwing it. */
