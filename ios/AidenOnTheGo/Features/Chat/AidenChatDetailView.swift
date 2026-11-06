@@ -44,6 +44,8 @@ struct AidenChatDetailView: View {
     @State private var composerSession: AidenComposerSession
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: false)
     @State private var chatLoadEpoch = 0
+    /// The message to scroll back to once a page of earlier messages is laid out.
+    @State private var keptPlaceID: String?
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
     @State private var isConfirmingBotDelete = false
@@ -402,6 +404,7 @@ struct AidenChatDetailView: View {
             )
             .scrollDismissesKeyboard(.interactively)
             .aidenReportsTranscriptFit(to: follow)
+            .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
@@ -454,7 +457,7 @@ struct AidenChatDetailView: View {
             }
             if model.hasOlderMessages {
                 AidenLoadEarlierMessagesButton(isLoading: model.isLoadingEarlierMessages) {
-                    loadEarlierMessages(proxy)
+                    loadEarlierMessages()
                 }
             }
             // Settled rows live in a child view that tracks only `chat`, so
@@ -940,15 +943,18 @@ struct AidenChatDetailView: View {
     }
 
     /// Prepending would otherwise leave the viewport at the same offset over
-    /// new content; re-anchor on the message that was first so the reader
-    /// stays where they were.
-    private func loadEarlierMessages(_ proxy: ScrollViewProxy) {
+    /// new content. Once the page is in, name the message that was first, and
+    /// the transcript scrolls back to it after the rows above it are laid out
+    /// (`aidenKeepsPlaceOnPrepend`). Scrolling in this same turn does nothing:
+    /// the stack has not laid out the new rows yet, so the old position still
+    /// answers.
+    private func loadEarlierMessages() {
         let anchorID = model.chat.messages.first?.id
         Task {
             await model.loadEarlierMessages()
             guard let anchorID, model.chat.messages.first?.id != anchorID,
                   model.chat.messages.contains(where: { $0.id == anchorID }) else { return }
-            proxy.scrollTo(model.renderID(forMessageID: anchorID), anchor: .top)
+            keptPlaceID = model.renderID(forMessageID: anchorID)
         }
     }
 

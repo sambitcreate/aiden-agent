@@ -556,6 +556,17 @@ extension View {
         }
     }
 
+    /// Rows added above the reader push them down the content. With `anchorID`
+    /// set, the next time the content grows the transcript scrolls that row to
+    /// the top again, so the reader stays on what they were reading. The scroll
+    /// waits for the growth because that is when the new rows have been laid
+    /// out; asked any sooner, the scroll resolves against the old layout and does
+    /// nothing. The request lapses after a second so later growth, such as a
+    /// streaming reply, never moves the reader.
+    func aidenKeepsPlaceOnPrepend(anchorID: Binding<String?>, proxy: ScrollViewProxy) -> some View {
+        modifier(AidenKeepsPlaceOnPrepend(anchorID: anchorID, proxy: proxy))
+    }
+
     /// The composer is the transcript's bottom inset, and an inset moving scrolls
     /// nothing: without this the latest words slide under a composer that grew.
     func aidenOnComposerInsetChange(_ action: @escaping () -> Void) -> some View {
@@ -564,5 +575,24 @@ extension View {
         } action: { _, bottomInset in
             if bottomInset != nil { action() }
         }
+    }
+}
+
+private struct AidenKeepsPlaceOnPrepend: ViewModifier {
+    @Binding var anchorID: String?
+    let proxy: ScrollViewProxy
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                guard let id = anchorID, new > old else { return }
+                anchorID = nil
+                proxy.scrollTo(id, anchor: .top)
+            }
+            .task(id: anchorID) {
+                guard anchorID != nil else { return }
+                try? await Task.sleep(for: .seconds(1))
+                if !Task.isCancelled { anchorID = nil }
+            }
     }
 }
