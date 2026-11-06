@@ -1094,6 +1094,7 @@
         "renderer/shared/design-canvas/frame-export.test.ts",
         "renderer/design/layers-core.test.ts",
         "renderer/shared/design-canvas/tweaks.test.ts",
+        "renderer/shared/design-canvas/text-edit.test.ts",
         "main/services/design-canvas/bridge-source.test.ts",
         "renderer/design/comment-geometry.test.ts",
         "renderer/design/design-mode-consent.test.tsx",

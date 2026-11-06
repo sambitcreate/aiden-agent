@@ -219,3 +219,83 @@ test("the page's address carries the same state, applied before the page draws",
   assert.equal(root.getAttribute("data-theme"), "light");
   assert.equal(root.style.getPropertyValue("--accent"), "#111111");
 });
+
+const EDITABLE_PAGE = `<!doctype html><html><head></head><body>
+  <main data-aiden-src="design/page.html:1">
+    <h1>Ship   faster</h1>
+    <p>Two <b>bold</b> words</p>
+  </main>
+</body></html>`;
+
+function dblclick(view: Page, selector: string): void {
+  const target = view.window.document.querySelector(selector)!;
+  target.dispatchEvent(new view.window.MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+}
+
+function key(view: Page, name: string): void {
+  view.window.document.dispatchEvent(new view.window.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+}
+
+test("a double-click edits an element's words only while the canvas allows it, and Enter reports each changed text", () => {
+  const view = page(EDITABLE_PAGE);
+  const heading = view.window.document.querySelector("h1")!;
+  dblclick(view, "h1");
+  assert.equal(heading.hasAttribute("contenteditable"), false, "outside the page, a double-click edits nothing");
+
+  view.send({ type: "aiden-design:edit-enable", on: true });
+  dblclick(view, "h1");
+  assert.equal(heading.getAttribute("contenteditable"), "true");
+  const started = last(view.sent);
+  assert.ok(started?.type === "edit-start");
+  assert.equal(started.element.tag, "h1");
+  assert.equal(started.element.sourcePath, "design/page.html:1");
+
+  (heading.firstChild as unknown as { data: string }).data = "Ship sooner";
+  // Chromium leaves an empty style attribute behind after select-all and typing.
+  heading.setAttribute("style", "");
+  key(view, "Enter");
+  assert.equal(heading.hasAttribute("contenteditable"), false);
+  const ended = last(view.sent);
+  assert.ok(ended?.type === "edit-end");
+  assert.equal(ended.cancelled, false);
+  assert.equal(ended.plain, true);
+  assert.deepEqual(ended.changes, [{ before: "Ship   faster", after: "Ship sooner" }], "a typed no-break space is a space");
+  assert.equal(heading.hasAttribute("style"), false, "an empty style is no style");
+});
+
+test("a bold word is edited with its paragraph, Esc puts the words back, and a new tag is not a plain change", () => {
+  const view = page(EDITABLE_PAGE);
+  view.send({ type: "aiden-design:edit-enable", on: true });
+  const paragraph = view.window.document.querySelector("p")!;
+  dblclick(view, "p b");
+  assert.equal(paragraph.getAttribute("contenteditable"), "true");
+  paragraph.querySelector("b")!.textContent = "loud";
+  key(view, "Escape");
+  assert.equal(paragraph.innerHTML, "Two <b>bold</b> words");
+  const cancelled = last(view.sent);
+  assert.ok(cancelled?.type === "edit-end" && cancelled.cancelled);
+
+  dblclick(view, "h1");
+  view.send({ type: "aiden-design:edit-command", command: "block", value: "h2" });
+  view.send({ type: "aiden-design:edit-finish", cancel: false });
+  const ended = last(view.sent);
+  assert.ok(ended?.type === "edit-end");
+  assert.equal(ended.plain, false);
+  assert.equal(ended.changes.length, 0);
+  assert.match(ended.beforeHtml, /^<h1>/u);
+  assert.match(ended.afterHtml, /^<h2>Ship {3}faster<\/h2>$/u);
+  assert.equal(view.window.document.querySelector("h2")?.hasAttribute("contenteditable"), false);
+});
+
+test("leaving the page keeps an edit in progress", () => {
+  const view = page(EDITABLE_PAGE);
+  view.send({ type: "aiden-design:edit-enable", on: true });
+  dblclick(view, "h1");
+  view.window.document.querySelector("h1")!.textContent = "Ship today";
+  view.send({ type: "aiden-design:edit-enable", on: false });
+  const ended = last(view.sent);
+  assert.ok(ended?.type === "edit-end");
+  assert.deepEqual(ended.changes, [{ before: "Ship   faster", after: "Ship today" }]);
+  dblclick(view, "h1");
+  assert.equal(view.window.document.querySelector("h1")!.hasAttribute("contenteditable"), false);
+});

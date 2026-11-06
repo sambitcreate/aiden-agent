@@ -10,7 +10,8 @@ import { FrameActions } from "./frame-actions";
 import { FrameTitle } from "./frame-title";
 import { LayoutGuide } from "./layout-guide";
 import { cn } from "../../lib/ui-utils";
-import { parseDesignBridgeMessage, postToDesignPage } from "../../shared/design-canvas/bridge-messages";
+import { parseDesignBridgeMessage, postToDesignPage, type DesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
+import { PageTextBar } from "./page-text-bar";
 import { designTweakState, withDesignTweakQuery, type DesignTweakState } from "../../shared/design-canvas/tweaks";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 import { designUrl } from "../../shared/design-canvas/url";
@@ -47,6 +48,8 @@ export type FileFrameProps = {
   titleSlot?: React.ReactNode;
   /** Buttons at the end of the title row. */
   actions?: React.ReactNode;
+  /** Editing words inside the entered page; without it, a double-click there edits nothing. */
+  onEditMessage?(message: Extract<DesignBridgeMessage, { type: "edit-start" | "edit-end" }>): void;
 };
 
 export function FileFrame({
@@ -61,6 +64,7 @@ export function FileFrame({
   onRemove,
   titleSlot,
   actions,
+  onEditMessage,
 }: FileFrameProps) {
   const designWidth = frame.designWidth ?? DESIGN_DEFAULT_WIDTH;
   const scale = frame.w / designWidth;
@@ -75,8 +79,11 @@ export function FileFrame({
   if (boot.address !== address) setBoot({ address, tweakKey });
   const src = address === null ? null : withDesignTweakQuery(address, JSON.parse(boot.tweakKey) as DesignTweakState);
   const tweaksRef = React.useRef(tweaks);
+  const editable = entered && onEditMessage !== undefined;
+  const editRef = React.useRef({ editable, onEditMessage });
   React.useLayoutEffect(() => {
     tweaksRef.current = tweaks;
+    editRef.current = { editable, onEditMessage };
   });
 
   const [docHeight, setDocHeight] = React.useState<number | null>(null);
@@ -109,10 +116,17 @@ export function FileFrame({
       // A detached frame has no window; a sourceless message must never match.
       if (!guest || event.source !== guest) return;
       const message = parseDesignBridgeMessage(event.data);
+      if (message && (message.type === "edit-start" || message.type === "edit-end")) {
+        editRef.current.onEditMessage?.(message);
+        return;
+      }
       if (!message || (message.type !== "ready" && message.type !== "resize")) return;
       reportedFor.current = iframeRef.current?.getAttribute("src") ?? null;
       clearMissingTimer();
-      if (message.type === "ready") postToDesignPage(guest, { type: "set-tweaks", ...tweaksRef.current });
+      if (message.type === "ready") {
+        postToDesignPage(guest, { type: "set-tweaks", ...tweaksRef.current });
+        postToDesignPage(guest, { type: "edit-enable", on: editRef.current.editable });
+      }
       setDocHeight(Math.round(message.docHeight));
     };
     window.addEventListener("message", receive);
@@ -123,6 +137,11 @@ export function FileFrame({
     if (!showIframe) return;
     postToDesignPage(iframeRef.current?.contentWindow, { type: "set-tweaks", ...(JSON.parse(tweakKey) as DesignTweakState) });
   }, [showIframe, tweakKey]);
+
+  React.useEffect(() => {
+    if (!showIframe) return;
+    postToDesignPage(iframeRef.current?.contentWindow, { type: "edit-enable", on: editable });
+  }, [showIframe, editable]);
 
   // A new address (a newer version, another grant) has to report in again.
   React.useEffect(() => {
@@ -219,7 +238,16 @@ export function FileNode({ id, data, selected }: NodeProps<DesignNode>) {
         onRemove={() => canvas.remove(id)}
         titleSlot={<FrameTitle frame={frame} />}
         actions={<FrameActions frame={frame} />}
+        onEditMessage={(message) => canvas.onPageEdit(id, message)}
       />
+      {canvas.pageEditing?.frameId === id ? (
+        <PageTextBar
+          tag={canvas.pageEditing.element.tag}
+          onCommand={canvas.pageEditCommand}
+          onDone={() => canvas.pageEditFinish(false)}
+          onComment={canvas.pageEditComment}
+        />
+      ) : null}
     </>
   );
 }

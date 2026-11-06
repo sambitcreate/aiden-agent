@@ -19,6 +19,12 @@ import {
 } from "../../renderer/shared/design-canvas/frame-export.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
 import { designTweakState, withDesignTweakQuery } from "../../renderer/shared/design-canvas/tweaks.js";
+import {
+  DESIGN_TEXT_EDIT_LIMITS,
+  planDesignTextEdit,
+  stampLine,
+  type DesignTextChange,
+} from "../../renderer/shared/design-canvas/text-edit.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
 import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
@@ -100,6 +106,11 @@ export type DesignCanvasSourceResult =
 
 /** The most of a file the Code tab shows. */
 export const DESIGN_SOURCE_MAX_BYTES = 512 * 1024;
+
+/** `designCanvas:editText` reply: the words were written into the page's file, or why not. */
+export type DesignCanvasEditTextResult =
+  | { ok: true }
+  | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" };
 
 /** What the hidden export window draws: a page at its width, as a picture or a PDF. */
 export type DesignFrameRenderRequest = {
@@ -365,6 +376,49 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     }
   });
 
+  // Editing a page's words in place: a plain text change is written into the
+  // page's own file, only where its old words are found exactly once (see
+  // text-edit.ts). Like export, the frame comes from the stored canvas and the
+  // file is written only while the chat may still frame its folder. The page
+  // reloads from the watcher, as for any change on disk.
+  deps.handle(
+    "designCanvas:editText",
+    async (_event, chatId, frameId, changes, stamp): Promise<DesignCanvasEditTextResult> => {
+      if (!deps.enabled()) throw new Error(UNAVAILABLE);
+      assertDesignCanvasChatId(chatId);
+      if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
+        throw new Error("Invalid design frame.");
+      }
+      const parsed = parseTextChanges(changes);
+      if (!parsed) throw new Error("Invalid text change.");
+      if (stamp !== undefined && (typeof stamp !== "string" || stamp.length > 1024)) throw new Error("Invalid stamp.");
+      const chat = await deps.getChat(chatId);
+      if (!chat || !attended(chat)) return { ok: false, reason: "unavailable" };
+      const doc = await deps.store.get(chat.id);
+      const frame = doc.frames.find((entry) => entry.id === frameId);
+      if (frame?.kind !== "file" || !frame.path) return { ok: false, reason: "unavailable" };
+      const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+      if (!root) return { ok: false, reason: "unavailable" };
+      const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
+      if (!resolved.ok) return { ok: false, reason: "missing" };
+      if (!resolved.mimeType.startsWith("text/html")) return { ok: false, reason: "unavailable" };
+      let source: string;
+      try {
+        source = await fs.readFile(resolved.absolute, "utf8");
+      } catch {
+        return { ok: false, reason: "missing" };
+      }
+      const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, frame.path));
+      if (!plan.ok) return plan;
+      try {
+        await fs.writeFile(resolved.absolute, plan.source, "utf8");
+      } catch {
+        return { ok: false, reason: "missing" };
+      }
+      return { ok: true };
+    },
+  );
+
   // Snapshots a frame's rectangle of the asking window's own page, so a frame
   // that leaves the live set keeps a picture instead of going blank. A window
   // can only ever capture itself.
@@ -444,4 +498,17 @@ async function validatePickedFile(
   );
   if (resolved.ok) return { path: relative };
   return resolved.status === 413 ? { error: "unsupported" } : { error: "outside-workspace" };
+}
+
+function parseTextChanges(value: unknown): DesignTextChange[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > DESIGN_TEXT_EDIT_LIMITS.changes) return null;
+  const changes: DesignTextChange[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") return null;
+    const { before, after } = entry as Record<string, unknown>;
+    if (typeof before !== "string" || typeof after !== "string") return null;
+    if (before.length > DESIGN_TEXT_EDIT_LIMITS.chars || after.length > DESIGN_TEXT_EDIT_LIMITS.chars) return null;
+    changes.push({ before, after });
+  }
+  return changes;
 }

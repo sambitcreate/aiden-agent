@@ -41,7 +41,8 @@ import { readDesignArtifactTheme } from "./artifact-theme";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
 import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
-import { useDesignComments } from "./design-comments";
+import { frameIframe, useDesignComments } from "./design-comments";
+import { usePageTextEdits } from "./page-text-edits";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
 import { DesignPanelButton, DesignSidePanel, type DesignPanelTab } from "./design-side-panel";
@@ -122,7 +123,29 @@ function LoadedDesignCanvas({
   doc: CanvasDocument;
   canvas: CanvasHandle;
 }) {
-  const { change, undo, redo, flush } = canvas;
+  const { undo, redo, flush } = canvas;
+  // A recorded change on the canvas comes after any words written into a
+  // page's file, so ⌘Z undoes the canvas change before those.
+  const forgetTextEdits = React.useRef<() => void>(() => undefined);
+  const changeDoc = canvas.change;
+  const change = React.useCallback<CanvasHandle["change"]>(
+    (mutate, options) => {
+      if (options?.record === false) {
+        changeDoc(mutate, options);
+        return;
+      }
+      // Only a change that alters the canvas counts, and only the first time
+      // it runs: a later save replays the same change.
+      let first = true;
+      changeDoc((current) => {
+        const next = mutate(current);
+        if (first && next !== current) forgetTextEdits.current();
+        first = false;
+        return next;
+      }, options);
+    },
+    [changeDoc],
+  );
   const [tool, setTool] = React.useState<CanvasTool>("select");
   const [minimap, setMinimap] = React.useState(false);
   const [selection, setSelection] = React.useState<ReadonlySet<string>>(() => new Set());
@@ -279,6 +302,9 @@ function LoadedDesignCanvas({
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
   const comments = useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf });
+  const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
+  const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush });
+  forgetTextEdits.current = textEdits.forget;
   const toggleComments = () => {
     const next = !comments.active;
     comments.setActive(next);
@@ -577,10 +603,10 @@ function LoadedDesignCanvas({
     if (!command) return false;
     switch (command.type) {
       case "undo":
-        undo();
+        if (!textEdits.undo()) undo();
         return true;
       case "redo":
-        redo();
+        if (!textEdits.redo()) redo();
         return true;
       case "duplicate":
         if (selection.size > 0) {
@@ -836,8 +862,37 @@ function LoadedDesignCanvas({
       comment: comments.commentOn,
       openFullWindow: (id) => presentRef.current(id, { single: true }),
       download,
+      pageEditing: textEdits.editing,
+      onPageEdit: textEdits.onMessage,
+      pageEditCommand: textEdits.command,
+      pageEditFinish: textEdits.finish,
+      pageEditComment: () => {
+        const current = textEdits.editing;
+        if (!current) return;
+        textEdits.finish(false);
+        comments.commentOnElement(current.frameId, current.element);
+      },
     }),
-    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming, moveEnd, editing, comments.commentOn, download],
+    [
+      chatId,
+      grant,
+      live,
+      entered,
+      versionOf,
+      autoFocusId,
+      removeFrames,
+      update,
+      renaming,
+      moveEnd,
+      editing,
+      comments.commentOn,
+      comments.commentOnElement,
+      download,
+      textEdits.editing,
+      textEdits.onMessage,
+      textEdits.command,
+      textEdits.finish,
+    ],
   );
 
   return (

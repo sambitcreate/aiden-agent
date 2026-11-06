@@ -102,7 +102,10 @@ While presenting (the **Present** button at the canvas's top right), `→`,
 The ⌘/ list shows these under **Design canvas** while design mode is
 available. `↩` or a double-click enters the selected page;
 `Esc` with the canvas focused, or a click on the canvas, leaves. Keys typed
-inside an entered page stay with that page.
+inside an entered page stay with that page. A double-click on words inside an
+entered page edits them: `↩` or **Done** finishes, `Esc` puts them back, and
+`⌘B`, `⌘I` and `⌘U` work while editing. Back on the canvas, `⌘Z` puts the
+page file's old words back and `⇧⌘Z` writes them again.
 
 `↑` works like **Edit in fork**: it forks the chat just before your last
 message and puts that message back in the box, so the original chat stays as

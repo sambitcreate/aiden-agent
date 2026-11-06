@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
-import type { ElectronApplication, Page } from "@playwright/test";
+import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import {
   capture,
   chooseWorkspace,
@@ -1191,4 +1191,90 @@ test("the Tweaks tab shows a page dark and changes the page's own controls, kept
   await panel.getByRole("switch", { name: "Dark" }).click();
   await expect(root).not.toHaveAttribute("data-theme", "dark");
   await expect.poll(() => styleOf("body", "background-color")).toBe("rgb(251, 250, 247)");
+});
+
+/**
+ * Double-clicks an element inside a scaled page the way a person would, at
+ * its centre on screen. (Playwright's own aim misses inside a CSS-scaled
+ * iframe.)
+ */
+async function dblclickInPage(page: Page, title: string, target: Locator): Promise<void> {
+  const iframe = designCanvas(page).locator(`iframe[title="${title}"]`);
+  const box = (await iframe.boundingBox())!;
+  const width = await iframe.evaluate((element) => (element as HTMLIFrameElement).offsetWidth);
+  const scale = box.width / width;
+  const rect = await target.evaluate((element) => {
+    const r = element.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  await page.mouse.dblclick(box.x + rect.x * scale, box.y + rect.y * scale);
+}
+
+test("words edited inside a page are written into its file and ⌘Z puts them back; a formatting change goes to Aiden", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const hero = path.join(designDir, "hero.html");
+  const original = page_("Hero", "Ship faster", "#3b6cf6");
+  await writeFile(hero, original);
+
+  await openDesignChat(app, page);
+  await answerNextPick(app, hero);
+  await addFromMenu(page, "File…");
+  const live = pageInFrame(page, "hero.html");
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+  const iframe = designCanvas(page).locator('iframe[title="hero.html"]');
+  await frame(page, "hero.html").dblclick();
+  await expect(iframe).toHaveAttribute("tabindex", "0");
+
+  // A double-click inside the entered page edits that heading's words.
+  const heading = live.getByRole("heading", { name: "Ship faster" });
+  await dblclickInPage(page, "hero.html", heading);
+  await expect(heading).toHaveAttribute("contenteditable", "true");
+  const bar = page.getByRole("toolbar", { name: "Page text formatting" });
+  await expect(bar).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Text style: Heading 1" })).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type("Ship sooner");
+  await capture(page, "1440-page-text-editing");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => readFile(hero, "utf8")).toBe(original.replace("Ship faster", "Ship sooner"));
+  await expect(live.getByRole("heading", { name: "Ship sooner" })).toBeVisible();
+  await expect(bar).toHaveCount(0);
+
+  // ⌘Z on the canvas writes the old words back.
+  await clickEmptyCanvas(page);
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
+  await expect.poll(async () => readFile(hero, "utf8")).toBe(original);
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+
+  // Bold is formatting, so it is queued for Aiden as a comment on that element and the file stays as it is.
+  await frame(page, "hero.html").dblclick();
+  await expect(iframe).toHaveAttribute("tabindex", "0");
+  const paragraph = live.locator("main p");
+  await dblclickInPage(page, "hero.html", paragraph);
+  await expect(paragraph).toHaveAttribute("contenteditable", "true");
+  await page.keyboard.press("ControlOrMeta+a");
+  await bar.getByRole("button", { name: "Bold" }).click();
+  await expect(paragraph.locator("b, strong")).toHaveCount(1);
+  await bar.getByRole("button", { name: "Done" }).click();
+  await expect
+    .poll(async () => (await savedComments(userDataDir)).map((comment) => ({ queued: comment.queued, tag: comment.anchor?.tag })))
+    .toEqual([{ queued: true, tag: "p" }]);
+  const [queued] = await savedComments(userDataDir);
+  expect(queued!.note).toContain("Make it:");
+  expect(queued!.note).toMatch(/<(b|strong)>Plan, build and ship/u);
+  expect(await readFile(hero, "utf8")).toBe(original);
+
+  // Esc throws an edit away.
+  await dblclickInPage(page, "hero.html", live.getByRole("heading", { name: "Ship faster" }));
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toHaveAttribute("contenteditable", "true");
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type("Never mind");
+  await page.keyboard.press("Escape");
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(await readFile(hero, "utf8")).toBe(original);
 });

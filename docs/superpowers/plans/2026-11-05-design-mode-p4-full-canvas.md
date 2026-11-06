@@ -195,6 +195,13 @@ As built (2026-11-06):
 - Undo restores the file.
 - It needs the source stamps from §5.5, so it lands after P4e's bridge.
 
+As built (2026-11-06):
+- A double-click inside an entered page makes the paragraph, heading, list item, link, button or cell under the pointer editable (a bold word or a span is edited with the block it sits in). `↩` or **Done** finishes, `Esc` puts the words back, and a click elsewhere in the page also finishes. Double-clicks do nothing until the page is entered.
+- The formatting bar above the page (`renderer/design/nodes/page-text-bar.tsx`) has Text style (Paragraph, Heading 1–3), Bold, Italic, Underline, Link, Bulleted list, three alignments, Comment and Done. Its buttons never take the focus, so the page keeps its selection.
+- A change is plain when only words changed: the same element, style and inline shape, and the same number of text runs. Each changed text run is written into the page's file (`designCanvas:editText`, planned by `renderer/shared/design-canvas/text-edit.ts`) only where its old words are found exactly once as a whole text run outside tags, scripts, styles, comments and the title, with any entity spelling and any run of whitespace. When the element carries a `data-aiden-src` stamp, only that line and the 30 after it count. New words are escaped. At most 20 runs of 4,000 characters each.
+- Anything else (a formatting change, or words found more than once or not at all) becomes a queued comment on that element for Aiden, with what it was and what it should be, and a toast says so.
+- `⌘Z` on the canvas puts the file's old words back (and `⇧⌘Z` writes them again) until the next change on the canvas itself, which `⌘Z` then undoes first.
+
 ## Order and size
 
 The order is P4a, then P4e (the core loop: point at something and Aiden changes it), then P4b, P4c, P4d, P4f, P4g and P4h, then P5 (launch). (Question 4: a.)

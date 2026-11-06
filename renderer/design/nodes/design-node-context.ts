@@ -4,6 +4,8 @@
 
 import * as React from "react";
 import type { DesignPoint } from "../../shared/design-canvas/connectors";
+import type { DesignBridgeMessage, DesignTextCommand } from "../../shared/design-canvas/bridge-messages";
+import type { DesignPageElement } from "../../shared/design-canvas/comments";
 import type { DesignExportFormat } from "../../shared/design-canvas/frame-export";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 
@@ -65,6 +67,16 @@ export type DesignNodeContextValue = {
   edit(id: string | null): void;
   /** The frame took the focus it was asked to; it is not focused again on a later mount. */
   autoFocusDone(id: string): void;
+  /** The page whose words are being edited, and the element. */
+  pageEditing: { frameId: string; element: DesignPageElement } | null;
+  /** What a page's bridge reported about editing its words. */
+  onPageEdit(frameId: string, message: Extract<DesignBridgeMessage, { type: "edit-start" | "edit-end" }>): void;
+  /** A command from the page text bar, for the element being edited. */
+  pageEditCommand(command: DesignTextCommand, value?: string): void;
+  /** Keeps (or throws away) the edit in progress. */
+  pageEditFinish(cancel: boolean): void;
+  /** Keeps the edit and opens a comment on the element. */
+  pageEditComment(): void;
   /** The frame whose title is being edited. */
   renaming: string | null;
   /** Starts editing a frame's title, or stops (null). */

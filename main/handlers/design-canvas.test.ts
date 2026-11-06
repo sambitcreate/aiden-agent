@@ -620,6 +620,46 @@ test("a dark, tweaked page exports with its tweaks on its address, and only a da
   });
 });
 
+test("a plain text change is written into the page's file only where it is found once, and never through a link out", async (t) => {
+  const { invoke, site } = await exportCanvas(t);
+  const file = path.join(site, "design", "hero page.html");
+  await fs.writeFile(file, "<h1>Hi</h1>\n<p>Hi</p>\n<p>Plan &amp; ship</p>\n");
+  assert.deepEqual(
+    await invoke("designCanvas:editText", "chat-1", "page", [{ before: "Plan & ship", after: "Plan, build & ship" }]),
+    { ok: true },
+  );
+  assert.equal(await fs.readFile(file, "utf8"), "<h1>Hi</h1>\n<p>Hi</p>\n<p>Plan, build &amp; ship</p>\n");
+  assert.deepEqual(await invoke("designCanvas:editText", "chat-1", "page", [{ before: "Hi", after: "Hey" }]), {
+    ok: false,
+    reason: "ambiguous",
+  });
+  assert.deepEqual(
+    await invoke("designCanvas:editText", "chat-1", "page", [{ before: "Hi", after: "Hey" }], "design/hero page.html:2"),
+    { ok: true },
+    "the element's stamp picks the line",
+  );
+  assert.equal(await fs.readFile(file, "utf8"), "<h1>Hi</h1>\n<p>Hey</p>\n<p>Plan, build &amp; ship</p>\n");
+
+  assert.deepEqual(await invoke("designCanvas:editText", "chat-1", "n", [{ before: "hi", after: "yo" }]), {
+    ok: false,
+    reason: "unavailable",
+  });
+  await assert.rejects(invoke("designCanvas:editText", "chat-1", "page", [{ before: 1, after: "x" }]));
+  await assert.rejects(invoke("designCanvas:editText", "chat-1", "page", []));
+
+  // A frame whose file is a link out of the workspace is never written.
+  const stored = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const linked: DesignCanvas = {
+    ...stored,
+    frames: [...stored.frames, { ...stored.frames[0]!, id: "link", path: "design/link.html" }],
+  };
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", linked, stored.revision), { ok: true, revision: stored.revision + 1 });
+  assert.deepEqual(await invoke("designCanvas:editText", "chat-1", "link", [{ before: "secret", after: "mine" }]), {
+    ok: false,
+    reason: "missing",
+  });
+});
+
 test("nothing is saved when the dialog is cancelled, the file is gone, or drawing fails", async (t) => {
   let destination: string | null = null;
   const { invoke, out, renders } = await exportCanvas(t, {

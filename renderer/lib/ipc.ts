@@ -2326,6 +2326,12 @@ export const designCanvasApi = {
   /** A page's file or an artifact's HTML, for the side panel's Code and Tweaks tabs. */
   designFrameSource: (chatId: string, frameId: string) =>
     invoke<{ text: string; truncated: boolean } | { error: "unavailable" | "missing" }>("designCanvas:source", chatId, frameId),
+  /** Writes a plain text change into a page's file, where its old words are found once. */
+  editDesignText: (chatId: string, frameId: string, changes: { before: string; after: string }[], stamp?: string) =>
+    invoke<
+      | { ok: true }
+      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" }
+    >("designCanvas:editText", chatId, frameId, changes, stamp),
   /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. `theme` draws a dark artifact. */
   exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source", theme?: unknown) =>
     invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
