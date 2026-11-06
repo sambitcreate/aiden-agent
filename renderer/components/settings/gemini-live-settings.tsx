@@ -1,5 +1,6 @@
 import * as React from "react";
 import { LiveAudioSettings } from "./live-audio-settings";
+import { LiveVoiceApprovalSettings } from "./live-voice-approval-settings";
 import { useNavigate } from "@tanstack/react-router";
 import { settingsLocation } from "../../lib/settings-section";
 import { useQueryClient } from "@tanstack/react-query";
@@ -191,6 +192,7 @@ export function AidenLiveSettings(): React.ReactElement {
         </FieldSet>
 
         <LiveAudioSettings />
+        <LiveVoiceApprovalSettings />
 
         <FieldSet title="Actions">
           <Field
