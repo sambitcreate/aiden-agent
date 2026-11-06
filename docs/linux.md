@@ -166,7 +166,7 @@ placement of the dictation pill, so exact bottom-center positioning may vary.
 Provider inventories may refresh only from the provider services the user has
 configured. Descriptive model metadata uses the bundled release snapshot or a validated
 device-local display cache. The explicit **Update model catalogs** action in
-Settings may refresh that cache; startup and ordinary reads stay offline.
+Settings → Providers → Advanced may refresh that cache; startup and ordinary reads stay offline.
 
 ## Updates and troubleshooting
 

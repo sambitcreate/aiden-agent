@@ -52,3 +52,9 @@ Branch `ux/chat-approvals-onboarding`. The finding IDs refer to the audit's rend
 ## Question countdown follow-up, 2026-10-26
 
 The chat footer's countdown and questionnaire card shared `questionnaire.promptId` as sibling React keys. With optional footer slots, parent updates could orphan countdown nodes and their timers, leaving repeated rows even after answering. The countdown now uses a distinct `countdown:` key. The mounted routed ChatPane test in `renderer/main/chat-transition.test.tsx` covers repeated prompt refreshes, selected-answer and custom-draft preservation, answering, active prompt replacement, and dismissal. No server, transcript, CLI or native-client contract changes.
+
+## Guided connection direction (2026-11-05)
+
+The owner selected Guided connection (Option 1) from the interactive desktop study. The implementation sequence, placement of Advanced, readiness rules, and acceptance journeys are in [the guided connection plan](../docs/plans/completed/guided-provider-connection-plan.md).
+
+Implemented the shared chooser in Settings and onboarding. Existing connections appear first in Settings. Local discovery retains custom addresses, manual models and model overrides. Onboarding confirms the usable model before Continue setup commits the provider checkpoint. Finish setup keeps usage data visible and makes the Bot and feature tour optional. Manual catalog and runtime actions retain their explicit controls. The mounted and Electron suites exercise both hosts with fixture providers.

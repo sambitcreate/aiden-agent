@@ -4,7 +4,7 @@ import {
   E2E_PROFILE_NAME,
   expect,
   readJsonFile,
-  skipBotsOnboardingStep,
+  connectOnboardingLmStudio,
   test,
 } from "./fixtures";
 
@@ -25,10 +25,7 @@ test.describe("usage data", () => {
     const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    const lmStudio = onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u });
-    await lmStudio.click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await skipBotsOnboardingStep(onboarding);
+    await connectOnboardingLmStudio(onboarding);
 
     await expect(onboarding.getByRole("switch", USAGE_SWITCH)).toBeChecked();
     await onboarding.getByRole("button", { name: "What’s sent" }).click();

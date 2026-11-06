@@ -2,13 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { OnboardingOpenAiLogin } from "./onboarding-openai-login.js";
 import {
   discoveredDefaultModel,
-  fieldsAfterProviderChoiceChange,
-  makeOnboardingProvider,
+  localProviderDraft,
   visibleOnboardingFeatures,
-  type OnboardingProviderChoice,
 } from "../lib/onboarding-provider.js";
 import type { Provider } from "../lib/types.js";
 import { BOT_AVATAR_COLORS } from "../shared/bots.js";
@@ -18,28 +15,6 @@ import { hostPlatformCapabilities } from "../../main/services/host-platform-capa
 
 const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8");
 
-test("OpenAI onboarding discloses login identity and waits for an available auth method", () => {
-  let calls = 0;
-  const enabled = renderToStaticMarkup(<OnboardingOpenAiLogin available disabled={false} onConnect={() => { calls++; }} />);
-  assert.match(enabled, /Sign in with OpenAI/u);
-  assert.match(enabled, /random installation/u);
-  assert.doesNotMatch(enabled, /disabled=""/u);
-  for (const props of [{ available: false, disabled: false }, { available: true, disabled: true }]) {
-    const markup = renderToStaticMarkup(<OnboardingOpenAiLogin {...props} onConnect={() => { calls++; }} />);
-    assert.match(markup, /disabled=""/u);
-  }
-  assert.equal(calls, 0, "rendering onboarding must never start login");
-});
-
-function sourceSection(startMarker: string, endMarker: string): string {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start);
-  assert.ok(start >= 0, `Missing source section start: ${startMarker}`);
-  assert.ok(end > start, `Missing source section end: ${endMarker}`);
-  return source.slice(start, end);
-}
-
-const providerPresentation = sourceSection("const providerChoices", "function OnboardingDialogShell");
 /** Rendered markup as the reader sees its text. */
 function markupText(markup: string): string {
   return markup
@@ -60,15 +35,6 @@ function tileMarkup(id: string): string {
   return tile;
 }
 
-test("onboarding uses the Aiden mark and the existing provider icon system", () => {
-  assert.match(source, /resources\/app-icon\.png/u);
-  assert.match(source, /<ProviderIcon/u);
-  for (const providerId of ["openai", "openai-codex", "anthropic", "lmstudio", "ollama", "tailscale"]) {
-    assert.match(providerPresentation, new RegExp(`iconProviderId: "${providerId}"`, "u"));
-  }
-  assert.match(source, /aria-pressed=\{choice === item\.id\}/u);
-});
-
 test("local onboarding reuses canonical intent and never applies another choice's hidden URL", () => {
   const existing: Provider = {
     id: "custom:lmstudio",
@@ -86,7 +52,7 @@ test("local onboarding reuses canonical intent and never applies another choice'
     legacyIds: ["old-studio"],
   };
 
-  assert.deepEqual(makeOnboardingProvider("lmstudio", "https://hidden.example/v1", [existing]), {
+  assert.deepEqual(localProviderDraft("lmstudio", [existing]), {
     id: existing.id,
     kind: existing.kind,
     label: existing.label,
@@ -100,40 +66,15 @@ test("local onboarding reuses canonical intent and never applies another choice'
     isBuiltin: existing.isBuiltin,
   });
   assert.equal(
-    makeOnboardingProvider("ollama", "https://hidden.example/v1")?.baseUrl,
+    localProviderDraft("ollama")?.baseUrl,
     "http://127.0.0.1:11434/v1",
   );
-  assert.equal(makeOnboardingProvider("lmstudio", "")?.id, "custom:lmstudio");
-  assert.equal(makeOnboardingProvider("ollama", "")?.id, "custom:ollama");
-});
-
-test("switching provider choices clears API-key and URL drafts before they become hidden", () => {
-  const populated = { apiKey: "secret", baseUrl: "https://gateway.example/v1" };
-  const choices: OnboardingProviderChoice[] = [
-    "openai-key",
-    "openai-signin",
-    "anthropic",
-    "lmstudio",
-    "ollama",
-    "tailscale",
-  ];
-  for (const current of choices) {
-    for (const next of choices) {
-      assert.deepEqual(
-        fieldsAfterProviderChoiceChange(current, next, populated),
-        current === next ? populated : { apiKey: "", baseUrl: "" },
-        `${current} -> ${next}`,
-      );
-    }
-  }
-  assert.deepEqual(fieldsAfterProviderChoiceChange("anthropic", null, populated), {
-    apiKey: "",
-    baseUrl: "",
-  });
+  assert.equal(localProviderDraft("lmstudio")?.id, "custom:lmstudio");
+  assert.equal(localProviderDraft("ollama")?.id, "custom:ollama");
 });
 
 test("local discovery preserves a still-usable default before transient recommendations", () => {
-  const provider = makeOnboardingProvider("lmstudio", "");
+  const provider = localProviderDraft("lmstudio");
   assert.ok(provider);
   provider.defaultModel = "already-selected";
   assert.equal(
@@ -153,35 +94,6 @@ test("local discovery preserves a still-usable default before transient recommen
   );
 });
 
-test("local onboarding discovers and selects a usable default model before continuing", () => {
-  const providerStep = source.slice(
-    source.indexOf('if (step === "provider")'),
-    source.indexOf("markOnboardingComplete()"),
-  );
-  const freshList = providerStep.indexOf("await providersApi.list()");
-  const providerBuild = providerStep.indexOf("makeOnboardingProvider(choice");
-  const discovery = providerStep.indexOf("await providersApi.test(providerToSave)");
-  const save = providerStep.indexOf("await providersApi.save(");
-  const cache = providerStep.indexOf("queryClient.setQueryData<Provider[]>");
-  const selection = providerStep.indexOf("persistModelSelection(saved.id");
-
-  assert.ok(freshList >= 0 && freshList < providerBuild, "resolve live intent before building");
-  assert.ok(providerBuild >= 0 && providerBuild < discovery, "reuse intent before discovery");
-  assert.ok(discovery >= 0 && discovery < save, "discover before saving a local provider");
-  assert.match(providerStep, /models: discovery\.models/u);
-  assert.match(providerStep, /modelMetadata: discovery\.modelMetadata/u);
-  assert.match(providerStep, /discoveredDefaultModel\(providerToSave, discovery\)/u);
-  assert.match(providerStep, /defaultModel,/u);
-  assert.match(providerStep, /if \(!defaultModel\)[\s\S]*?no chat models were found/u);
-  assert.ok(cache >= 0 && cache < selection, "publish the provider before selecting its model");
-  assert.match(
-    providerStep,
-    /persistModelSelection\(saved\.id, saved\.defaultModel \?\? providerToSave\.defaultModel!\)/u,
-  );
-  assert.match(source, /\{discovering[\s\S]*?Discovering models…/u);
-  assert.match(source, /providerError[\s\S]*?role="alert"/u);
-});
-
 test("onboarding keeps navigation fixed while its content scrolls", () => {
   assert.match(
     source,
@@ -199,65 +111,6 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
   );
 });
 
-test("provider setup progressively reveals configurable Pi providers and uses the dedicated Codex surface", () => {
-  assert.match(source, />\s*Other ways\s*</u);
-  assert.match(source, /aria-controls="onboarding-more-providers"/u);
-  assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
-  assert.match(source, /data-onboarding-more-providers/u);
-  assert.match(source, /getOnboardingMoreProviders\(providers\.data \?\? \[\]\)/u);
-  assert.match(source, /providers\.isLoading/u);
-  assert.match(source, /providers\.isError/u);
-  assert.match(source, /providers\.refetch\(\)/u);
-  assert.match(source, /disabled=\{!canChoose \|\| saving\}/u);
-  assert.match(source, /canConfigureOnboardingBuiltinProvider\(provider\)/u);
-  assert.match(source, /onboardingBuiltinProviderSetupLabel\(provider\)/u);
-  assert.match(
-    source,
-    /if \(!isOnboardingBuiltinProviderReady\(provider\)\)[\s\S]*?setSettingUpProvider\(provider\)/u,
-  );
-  assert.match(source, /<BuiltinProviderEditor[\s\S]*?layer="onboarding"/u);
-  assert.match(source, /<CodexProviderSettings/u);
-  assert.match(source, /<CodexProviderSettings layer="onboarding"/u);
-  assert.match(source, /useCodexProviderStatus\(\)/u);
-  assert.doesNotMatch(source, /chatGptProvider/u);
-  assert.doesNotMatch(source, /providersApi\.authStart/u);
-});
-
-test("Tailscale model setup advertises its supported HTTP transport", () => {
-  assert.match(source, /http:\/\/model\.tailnet\.ts\.net:11434\/v1/u);
-});
-
-test("onboarding is an application modal with an explicit provider deferral", () => {
-  assert.match(source, /<DialogPrimitive\.Root open>/u);
-  assert.match(source, /const \[open, setOpen\] = React\.useState\(true\)/u);
-  assert.match(source, /data-onboarding-active="true"/u);
-  assert.match(source, /<DialogPrimitive\.Content[\s\S]*?data-slot="dialog-content"/u);
-  assert.match(source, /onEscapeKeyDown=\{\(event\) => event\.preventDefault\(\)\}/u);
-  assert.match(source, /<DialogPrimitive\.Title className="sr-only">Set up Aiden/u);
-  assert.match(source, /if \(!canContinue \|\| savingRef\.current\) return/u);
-  assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
-  assert.match(source, /aria-current=\{itemIndex === index \? "step" : undefined\}/u);
-  assert.match(source, />\s*Skip provider\s*</u);
-  assert.match(source, /setProviderSkipped\(true\)/u);
-  assert.match(source, /providerSkipped \|\| !selectedProviderId \? "deferred" : "completed"/u);
-  assert.match(source, /Provider setup skipped/u);
-  assert.doesNotMatch(source, />\s*Set up later\s*</u);
-  assert.match(source, /setOpen\(shouldOpenOnboarding\(snapshot\.outcome\)\)/u);
-  assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
-});
-
-test("Other ways OpenAI, Anthropic, and Tailscale choices reuse ProviderIcon wells", () => {
-  const moreWays = sourceSection("data-onboarding-more-providers", "{moreProviders.map((provider) => {");
-  assert.match(
-    moreWays,
-    /\["openai-key", "anthropic", "tailscale"\][\s\S]*providerId=\{item\.iconProviderId\}/u,
-  );
-  assert.match(moreWays, /rounded-control bg-popover text-primary shadow-control/u);
-  assert.match(providerPresentation, /iconProviderId: "openai"/u);
-  assert.match(providerPresentation, /iconProviderId: "anthropic"/u);
-  assert.match(providerPresentation, /iconProviderId: "tailscale"/u);
-});
-
 test("profile onboarding keeps Web Search default-on without a first-run toggle", () => {
   const profileStep = source.slice(
     source.indexOf('step === "profile"'),
@@ -272,46 +125,6 @@ test("profile onboarding keeps Web Search default-on without a first-run toggle"
     featurePresentation,
     /Search the live web when needed—on by default with anonymous Exa, with a reviewed provider zoo in Settings\./u,
   );
-});
-
-test("hosted keys validate before selection and endpoint routes require discovered models", () => {
-  const hostedKeyFlow = source.slice(
-    source.indexOf("const validateHostedApiKey"),
-    source.indexOf("const skipProvider"),
-  );
-  const validate = hostedKeyFlow.indexOf("providersApi.validateOnboardingApiKey");
-  const publish = hostedKeyFlow.indexOf("queryClient.setQueryData<Provider[]>", validate);
-  const select = hostedKeyFlow.indexOf("persistModelSelection(saved.id", validate);
-  assert.ok(validate >= 0 && validate < publish && publish < select);
-  const providerStep = source.slice(
-    source.indexOf('if (step === "provider")'),
-    source.indexOf("  return (", source.indexOf('if (step === "provider")')),
-  );
-  assert.match(
-    providerStep,
-    /needsEndpointDiscovery = isLocalRuntime \|\| choice === "tailscale"/u,
-  );
-  assert.match(providerStep, /if \(!defaultModel\)[\s\S]*?no chat models were found/u);
-  assert.match(
-    source,
-    /title=\{`Connect \$\{apiKeyDialogChoice === "openai-key" \? "OpenAI" : "Anthropic"\}`\}/u,
-  );
-  assert.match(source, /confirmLabel=\{discovering \? "Validating…" : "Validate & continue"\}/u);
-  assert.match(source, /type="password"[\s\S]*?Paste your API key/u);
-  assert.doesNotMatch(source, /<Text variant="small-strong">API key<\/Text>/u);
-});
-
-test("onboarding presentation stays compact and free of decorative gradients", () => {
-  assert.doesNotMatch(source, /blur-3xl|backdrop-blur|bg-gradient/u);
-  assert.doesNotMatch(providerPresentation, /footnote|Default URL|127\.0\.0\.1/u);
-  assert.doesNotMatch(
-    providerPresentation,
-    /The key stays on this Mac and can be rotated later in Settings\./u,
-  );
-  assert.match(source, /shadow-onboarding/u);
-  assert.match(source, /px-4 pb-4 pt-11/u);
-  assert.doesNotMatch(source, /max-\[760px\]:rounded-none|max-\[760px\]:shadow-none/u);
-  assert.match(source, /border-transparent bg-input[\s\S]*?focus:border-transparent/u);
 });
 
 test("the final step is a complete grouped bento gallery with hover descriptions", () => {
@@ -463,20 +276,6 @@ test("the command palette tile draws the shortcuts of the platform it runs on", 
   assert.doesNotMatch(linux, /[⌘⇧⌥]/u);
 });
 
-test("primary AI choices include custom setup without opening advanced providers", () => {
-  assert.match(source, /\["openai-signin", "lmstudio", "ollama", "custom"\]/u);
-  for (const title of ["ChatGPT", "LM Studio", "Ollama", "Other Custom Provider"]) {
-    assert.ok(source.includes(`title: "${title}"`));
-  }
-  assert.match(source, /<ProviderEditor[\s\S]*?layer="onboarding"[\s\S]*?requireReady/u);
-  const editor = readFileSync(new URL("./settings/provider-editor.tsx", import.meta.url), "utf8");
-  assert.match(editor, /requireReady &&/u);
-  assert.match(editor, /models.length === 0/u);
-  assert.match(editor, /defaultModelIsHidden/u);
-  assert.match(editor, /await onSaved\(\)/u);
-});
-
-
 test("Connectors onboarding discloses service-supplied tool guidance", () => {
   assert.match(featurePresentation, /Connected services may also provide guidance for using those tools\./u);
 });
@@ -494,7 +293,6 @@ test("workspace tour discloses AGENTS instruction loading and refresh", () => {
   assert.match(featurePresentation, /global and workspace AGENTS\.md guidance, refreshing it between model turns/u);
 });
 
-
 test("provider onboarding explains separate opt-in and cloud speech privacy without network setup", () => {
   const disclosure = source.slice(source.indexOf("data-onboarding-tts-privacy"), source.indexOf("</Text>", source.indexOf("data-onboarding-tts-privacy")));
   assert.match(disclosure, /off by default/u);
@@ -509,7 +307,6 @@ test("feature tour introduces native folder browsing and source previews", () =>
   assert.match(featurePresentation, /On your phone, expand folders on demand and preview source before editing\./u);
 });
 
-
 test("platform feature filtering preserves classifier consent and unavailable-feature boundaries", () => {
   const features = [
     { id: "models", description: "Platform model choices" },
@@ -521,7 +318,7 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
   const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false, botComputers: false });
   assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
   assert.match(linux[0]!.description, /classifiers.*approve sending it; provider charges/u);
-  assert.match(linux[0]!.description, /Enable local llama.cpp classification.*More options/u);
+  assert.match(linux[0]!.description, /Enable local llama.cpp classification.*Advanced panel under Model options/u);
   assert.doesNotMatch(linux[0]!.description, /Apple/u);
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
@@ -529,7 +326,7 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
   assert.equal(mac.length, 5);
   assert.match(mac[0]!.description, /Apple models/u);
   assert.match(mac[0]!.description, /classifiers.*approve sending it; provider charges/u);
-  assert.match(mac[0]!.description, /Enable local llama.cpp classification.*More options/u);
+  assert.match(mac[0]!.description, /Enable local llama.cpp classification.*Advanced panel under Model options/u);
 });
 
 test("the Bot computers tile shows only where a Bot can have its own macOS computer", () => {

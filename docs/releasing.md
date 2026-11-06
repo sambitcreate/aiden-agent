@@ -23,7 +23,7 @@ commits the result through a normal pull request. A failed fetch leaves the know
 untouched.
 
 The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
-Providers. That foreground request uses the fixed anonymous endpoint and writes a validated,
+Providers → Advanced. That foreground request uses the fixed anonymous endpoint and writes a validated,
 same-app-version, device-local display cache. It cannot add selectable models or alter routing,
 context windows, output limits, or active turns. Provider inventory remains a separate Pi/provider
 authority. Ordinary model reads and application startup remain offline.

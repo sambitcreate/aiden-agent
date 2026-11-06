@@ -23,9 +23,7 @@ async function assertRenderedSettingsDestination(
   switch (section) {
     case "Providers":
       await expect(
-        page.getByText(
-          /Connect with credentials when required; Aiden keeps their model catalogs current/u,
-        ),
+        page.getByRole("button", { name: "Connect another AI" }),
       ).toBeVisible();
       return;
     case "Model Pad":

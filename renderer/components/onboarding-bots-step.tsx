@@ -11,13 +11,17 @@ import { Button, Text } from "./ui";
 export function OnboardingBotsStep({
   onStarted,
   onSkip,
+  onBusyChange,
+  busy,
 }: {
   onStarted(bot: BotDefinition): void;
   onSkip(): void;
+  busy?: boolean;
+  onBusyChange?(busy: boolean): void;
 }) {
   return (
     <div className="max-w-2xl">
-      <BotStarterCarousel onOpenChat={(bot) => onStarted(bot)} />
+      <BotStarterCarousel onBusyChange={onBusyChange} onOpenChat={(bot) => onStarted(bot)} />
       <Text as="p" variant="small" color="secondary" className="mt-4 text-pretty">
         Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once.
       </Text>
@@ -25,7 +29,7 @@ export function OnboardingBotsStep({
         Bots can message each other when it helps; turn it off in Settings → Bots.
       </Text>
       <div className="mt-4">
-        <Button variant="transparent" onClick={onSkip}>
+        <Button variant="transparent" disabled={busy} onClick={onSkip}>
           Skip
         </Button>
       </div>

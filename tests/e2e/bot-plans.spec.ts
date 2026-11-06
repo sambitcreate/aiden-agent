@@ -1,3 +1,4 @@
+import { connectOnboardingLmStudio } from "./fixtures";
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
 import type { BotPlanView } from "../../renderer/shared/bot-plans";
 import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
@@ -167,12 +168,13 @@ test("onboarding explains plan approvals and draws the checklist in its Bots til
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   const next = onboarding.getByRole("button", { name: /^Next/u });
   await next.click();
-  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-  await next.click();
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Choose your first Bot", { exact: true }).click();
   await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
   await expect(onboarding.getByText("Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once.", { exact: true })).toBeVisible();
   await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
-  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   const botsTile = onboarding.locator('article[data-onboarding-feature="bots"]');
   for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
     await page.evaluate(async scheme => {

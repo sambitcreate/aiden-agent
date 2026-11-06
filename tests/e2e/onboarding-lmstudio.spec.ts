@@ -56,15 +56,8 @@ test.describe("fresh portable config", () => {
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
 
-    await onboarding.getByRole("button", { name: /Other ways/u }).click();
-    const google = onboarding.getByRole("button", { name: "Google Add your API key" });
-    await expect(google).toBeEnabled();
-    await google.click();
-    // The setup dialog is modal, so the choice behind it leaves the accessibility tree.
-    await expect(
-      onboarding.getByRole("button", { name: "Google Add your API key", includeHidden: true }),
-    ).toHaveAttribute("aria-pressed", "true");
-
+    await onboarding.getByRole("button", { name: /I have an API key/u }).click();
+    await onboarding.getByRole("button", { name: "Google", exact: true }).click();
     const setup = aiden.page.getByRole("dialog", { name: "Set up Google" });
     await expect(setup).toBeVisible();
     await setup.getByRole("button", { name: "Gemini API key" }).click();
