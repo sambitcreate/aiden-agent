@@ -135,6 +135,7 @@ struct AidenBotRoutinesSection: View {
     @State private var pendingEnabled: [String: Bool] = [:]
     @State private var isLoaded = false
     @State private var editing: AidenBotRoutineEditorTarget?
+    @State private var modelRoutine: AidenBotRoutine?
     @State private var errorMessage: String?
     @State private var suggestion: AidenBotRoutineSuggestion?
 
@@ -174,6 +175,9 @@ struct AidenBotRoutinesSection: View {
             }
         }
         .task(id: botID) { await load() }
+        .sheet(item: $modelRoutine) { routine in
+            AidenBotRoutineModelsView(coordinator: coordinator, botID: botID, routineID: routine.id)
+        }
         .sheet(item: $editing) { target in
             AidenBotRoutineEditorView(
                 coordinator: coordinator,
@@ -214,6 +218,10 @@ struct AidenBotRoutinesSection: View {
             }
             .buttonStyle(.plain)
             .disabled(!canWrite)
+            if coordinator.server?.supportsBotRoutineModels == true {
+                Button("Model", systemImage: "slider.horizontal.3") { modelRoutine = routine }
+                    .labelStyle(.iconOnly).accessibilityLabel("Model for \(routine.name)")
+            }
             Toggle(routine.name, isOn: Binding(
                 get: { pendingEnabled[routine.id] ?? routine.enabled },
                 set: { enabled in

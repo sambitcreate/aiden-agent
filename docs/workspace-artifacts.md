@@ -60,6 +60,8 @@ A failed command fails the tool call with its output, and the page refreshes aft
 
 ## Access
 
+External Markdown images in the surrounding desktop transcript require **Load image** before any request. This is separate from a workspace page's own content policy. See [chat image privacy](transcript-images.md) for public-network checks, image limits and keyboard behavior.
+
 Pages follow the workspace's access setting, the same way chats do:
 
 - **No access**: nothing runs. The page shows its last saved data and says why it is not live.

@@ -177,7 +177,7 @@ interface Hop {
   readonly stream: http.IncomingMessage;
 }
 
-function request(url: URL, signal: AbortSignal, lookup: LookupFunction): Promise<Hop> {
+function request(url: URL, signal: AbortSignal, lookup: LookupFunction, accept: string): Promise<Hop> {
   const client = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
     const outgoing = client.request(
@@ -189,7 +189,7 @@ function request(url: URL, signal: AbortSignal, lookup: LookupFunction): Promise
         signal,
         headers: {
           "User-Agent": "Mozilla/5.0 (compatible; Aiden/1.0; +https://github.com/sambitcreate/aiden-agent)",
-          Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.5",
+          Accept: accept,
           "Accept-Encoding": "gzip, deflate, br",
           "Accept-Language": "en-US,en;q=0.9",
         },
@@ -246,18 +246,22 @@ async function readBody(hop: Hop, maxBytes: number, signal: AbortSignal): Promis
   return { bytes: Buffer.concat(chunks, total), truncated };
 }
 
-/** Fetch one public page as text. */
-export async function fetchPublicPage(target: URL, options: WebFetchOptions = {}): Promise<WebFetchResult> {
+/** Shared socket-time address policy and bounded body reader. Callers choose a closed media policy. */
+export async function fetchPublicBytes(
+  target: URL,
+  policy: { accept: string; readableMediaType: (mediaType: string) => boolean },
+  options: WebFetchOptions = {},
+): Promise<{ url: string; status: number; mediaType: string; contentType: string; bytes: Buffer; truncated: boolean }> {
   const allow = options.allowAddress ?? isPublicAddress;
   const lookup = guardedLookup(allow, options.lookup ?? dnsLookup);
   const timeout = AbortSignal.timeout(options.timeoutMs ?? WEB_FETCH_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  let url = target;
+  let url = normalizeWebFetchUrl(target.href);
   try {
     for (let redirects = 0; ; redirects++) {
       const literal = hostAddress(url);
       if (literal !== undefined && !allow(literal)) throw new WebFetchError("blocked-address");
-      const hop = await request(url, signal, lookup);
+      const hop = await request(url, signal, lookup, policy.accept);
       const location = hop.headers.location;
       if (hop.status >= 300 && hop.status < 400 && location) {
         hop.stream.destroy();
@@ -275,12 +279,12 @@ export async function fetchPublicPage(target: URL, options: WebFetchOptions = {}
       }
       const contentType = String(hop.headers["content-type"] ?? "text/html");
       const mediaType = contentType.split(";")[0]!.trim().toLowerCase();
-      if (!isReadableMediaType(mediaType)) {
+      if (!policy.readableMediaType(mediaType)) {
         hop.stream.destroy();
         throw new WebFetchError("unsupported-content");
       }
       const { bytes, truncated } = await readBody(hop, options.maxBytes ?? WEB_FETCH_MAX_BYTES, signal);
-      return { url: url.href, status: hop.status, mediaType, body: decoderFor(contentType).decode(bytes), truncated };
+      return { url: url.href, status: hop.status, mediaType, contentType, bytes, truncated };
     }
   } catch (error) {
     options.signal?.throwIfAborted();
@@ -292,4 +296,13 @@ export async function fetchPublicPage(target: URL, options: WebFetchOptions = {}
     }
     throw new WebFetchError("network");
   }
+}
+
+/** Fetch one public page as text. */
+export async function fetchPublicPage(target: URL, options: WebFetchOptions = {}): Promise<WebFetchResult> {
+  const { bytes, contentType, ...result } = await fetchPublicBytes(target, {
+    accept: "text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.5",
+    readableMediaType: isReadableMediaType,
+  }, options);
+  return { ...result, body: decoderFor(contentType).decode(bytes) };
 }

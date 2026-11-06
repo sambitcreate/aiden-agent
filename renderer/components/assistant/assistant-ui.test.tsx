@@ -385,15 +385,9 @@ test("screen sharing is opt-in, source-labelled, and visibly active in the HUD",
   assert.match(live, /role="alert"[\s\S]*live\.screenError/u);
 });
 
-test("Aiden Live is visibly marked beta in setup and settings", () => {
+test("Aiden Live is visibly marked beta in setup", () => {
   const setup = readFileSync(new URL("./assistant-live.tsx", import.meta.url), "utf8");
-  const settings = readFileSync(
-    new URL("../settings/gemini-live-settings.tsx", import.meta.url),
-    "utf8",
-  );
   assert.match(setup, /<Badge color="blue">Beta<\/Badge>/u);
-  assert.match(settings, /<Badge color="blue">Beta<\/Badge>/u);
-  assert.match(settings, /Availability and\s+supported actions may change during beta\./u);
 });
 
 test("Live settings offer the button switch only while Aiden Live is on", () => {

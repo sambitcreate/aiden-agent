@@ -3,6 +3,7 @@
 // credential-cleanup journal covers real credential changes, and local
 // (stdio) launch approval follows the save.
 
+import { reportConnectorAdded } from "./analytics/analytics-feature-reports.js";
 import { confirmMcpLaunch } from "./mcp-launch-review.js";
 import { configStore } from "./config-store.js";
 import { logger } from "../platform.js";
@@ -50,7 +51,17 @@ export async function saveConfiguredMcpServer(
   isCurrent: () => boolean,
   options: SaveConfiguredMcpServerOptions = {},
 ): Promise<McpServer> {
-  const saved = await saveWithFieldSecrets(server.id, () => server, isCurrent, options);
+  let added = false;
+  const saved = await saveWithFieldSecrets(
+    server.id,
+    (current) => {
+      added = current === undefined;
+      return server;
+    },
+    isCurrent,
+    options,
+  );
+  if (added) reportConnectorAdded(server);
   return saved!;
 }
 

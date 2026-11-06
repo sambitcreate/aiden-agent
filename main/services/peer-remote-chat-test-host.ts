@@ -458,13 +458,13 @@ export class FakeHost {
     }
     const run = /^\/runs\/([^/]+)\/events$/u.exec(input.path);
     if (run) {
-      this.service.openRunEvents(device, decodeURIComponent(run[1]!), Number(input.lastEventId ?? 0), wire);
+      this.service.openRunEvents(device, decodeURIComponent(run[1]!), Number(input.lastEventId ?? 0), wire, undefined, input.runCheckpoint);
       return;
     }
     const chat = /^\/chats\/([^/]+)\/runs\/current\/events$/u.exec(input.path);
     if (chat) {
       const runId = this.service.currentRunId(decodeURIComponent(chat[1]!));
-      this.service.openRunEvents(device, runId, 0, wire);
+      this.service.openRunEvents(device, runId, 0, wire, undefined, input.runCheckpoint);
       return;
     }
     throw new AidenRemoteServiceError("run_gone", "Not found.", 404);

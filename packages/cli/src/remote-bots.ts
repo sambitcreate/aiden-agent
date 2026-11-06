@@ -1,3 +1,7 @@
+import { join } from "node:path";
+import type { AppSettings } from "../../../main/services/types.js";
+import { botMessagingEnabled } from "../../../renderer/shared/bot-messages.js";
+import { JsonStore } from "./state.ts";
 import { AidenRemoteBotSessionService, projectBotSessionState } from "../../../main/services/aiden-remote-bot-session.js";
 import { createCliBotAvatars } from "./bot-avatars.ts";
 import { AidenRemoteBotService } from "../../../main/services/aiden-remote-bots.js";
@@ -11,7 +15,15 @@ import type { createDaemonChats } from "./daemon-chats.ts";
 
 export function createCliRemoteBots(agentDir: string, instanceId: string, runtime: Awaited<ReturnType<typeof createCliBots>>, daemon: ReturnType<typeof createDaemonChats>, chatApi: Awaited<ReturnType<typeof createCliRemoteChats>>,
   idempotency: AidenIdempotencyLedger, persistIdempotency: (value: AidenIdempotencySnapshot) => Promise<void>) {
-  const bots = new AidenRemoteBotService({ avatar: createCliBotAvatars(agentDir, instanceId), application: runtime.application, ...(runtime.durable ? { deleteBot: runtime.durable.runtime.deleteBot, sessionStates: async (ids: readonly string[]) => new Map(await Promise.all(ids.map(async (id) => [id, projectBotSessionState(await runtime.durable!.runtime.state(id)).state] as const))) } : {}), chatStore: daemon.chatStore, idempotency, persistIdempotency,
+  const settings = new JsonStore<AppSettings>(join(agentDir, "aiden.json"), {});
+  const messaging = runtime.durable ? {
+    enabled: async () => botMessagingEnabled(await settings.load()),
+    setEnabled: async (enabled: boolean) => {
+      await settings.update((value) => { if (enabled) delete value.botMessaging; else value.botMessaging = false; });
+      return enabled;
+    },
+  } : undefined;
+  const bots = new AidenRemoteBotService({ ...(messaging ? { messaging } : {}), avatar: createCliBotAvatars(agentDir, instanceId), application: runtime.application, ...(runtime.durable ? { deleteBot: runtime.durable.runtime.deleteBot, sessionStates: async (ids: readonly string[]) => new Map(await Promise.all(ids.map(async (id) => [id, projectBotSessionState(await runtime.durable!.runtime.state(id)).state] as const))) } : {}), chatStore: daemon.chatStore, idempotency, persistIdempotency,
     inbox: { list: (deviceId, input) => createBotInboxProjectionService({
       listBots: () => runtime.application.list(), listChatMetadata: () => daemon.chatStore.list(),
       projectBatch: async (request) => mergeBotInboxActivityPreviews(request, await chatApi.streams.projectChatActivities(deviceId, request.map(({ chatId }) => chatId))),

@@ -56,7 +56,8 @@ export function recordingDeps(options: {
     },
     requestApproval: async (request) => {
       deps.approvals.push(request);
-      return options.approve ? options.approve(request) : "allow";
+      const answer = options.approve ? await options.approve(request) : "allow";
+      return { id: request.waitId, authorizationFingerprint: request.authorizationFingerprint, answer, source: "person" };
     },
     ...(options.handoff === undefined
       ? {}

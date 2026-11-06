@@ -17,7 +17,7 @@ export const DEFAULT_SPENDING_MONTH_START_DAY = 1;
 
 export const SPENDING_CHANGED_CHANNEL = "spending:changed";
 
-/** Settings → Limits & spending. An absent amount means no limit. */
+/** Settings → Context & Limits. An absent amount means no limit. */
 export interface SpendingLimitsSettings {
   /** Each chat's total, including the helpers it starts. */
   chatUsd?: number;

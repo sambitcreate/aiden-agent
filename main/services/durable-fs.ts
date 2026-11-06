@@ -62,6 +62,8 @@ export interface WriteFileAtomicOptions {
    * condition (such as the writer's authority) that may change mid-write.
    */
   beforePublish?: () => Promise<void>;
+  /** Synchronous authority fence after the last awaited hook, immediately before the publish syscall. */
+  assertCurrent?: () => void;
   /** Test-only filesystem seams. */
   io?: Partial<DurableFsIo>;
 }
@@ -128,6 +130,7 @@ export async function writeFileAtomic(
     }
     if (durable) await io.syncFile(staged);
     await options.beforePublish?.();
+    options.assertCurrent?.();
     if (options.exclusive) {
       await io.link(staged, target);
       published = true;

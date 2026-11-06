@@ -11,6 +11,7 @@ import {
 } from "../../renderer/shared/assistant.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
+  AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   type AidenRemoteCapability,
   type AidenRemoteErrorCode,
   type AidenRemoteErrorEnvelope,
@@ -244,7 +245,8 @@ export function hostRunWireEvent(
 /**
  * The `gap` snapshot a reader gets when its cursor fell behind retention: the
  * run's state and every pending prompt, so it can rebuild attention and read
- * the persisted transcript. It sits at the sequence before the oldest event.
+ * the persisted transcript. A checkpoint covers the current head. A legacy
+ * snapshot sits immediately before the oldest retained event.
  */
 export function hostRunGapSnapshotEvent(
   read: Extract<HostRunRead, { kind: "snapshot_required" }>,
@@ -263,6 +265,7 @@ export function hostRunGapSnapshotEvent(
       chatId: summary.chatId,
       reason: "gap",
       epoch: read.epoch,
+      ...read.transcript,
       state: summary.state,
       pendingApprovalIds: summary.pendingApprovalIds,
       pendingQuestionIds: summary.pendingQuestionIds,
@@ -425,6 +428,7 @@ export class AidenRemoteHostRunService {
     after: number,
     response: ServerResponse,
     admit: () => void = () => {},
+    checkpoint = false,
   ): void {
     admit();
     const registry = this.options.registry;
@@ -441,18 +445,27 @@ export class AidenRemoteHostRunService {
       if (endedSent) return { frames: [], end: true };
       let read;
       try {
-        read = registry.read(runId, cursor, MAX_EVENTS_PER_PULL);
+        read = registry.read(runId, cursor, MAX_EVENTS_PER_PULL, checkpoint);
       } catch {
         // The run was evicted while observed: drop so a reconnect learns run_gone.
         return { abort: true };
       }
       const frames: string[] = [];
       if (read.kind === "snapshot_required") {
-        const resume = read.nextSequence - 1;
         const gap = hostRunGapSnapshotEvent(read, projection);
-        frames.push(sseFrame(String(gap.sequence), gap.type, gap));
-        cursor = resume;
-        return { frames };
+        const frame = sseFrame(String(gap.sequence), gap.type, gap);
+        if (!read.transcript || Buffer.byteLength(frame) <= AIDEN_REMOTE_MAX_SSE_FRAME_BYTES) {
+          cursor = gap.sequence;
+          return { frames: [frame] };
+        }
+        // A large prompt plus optional content can exceed the frame budget.
+        // Fall back to the original replay cursor so retained events still arrive.
+        read = registry.read(runId, cursor, MAX_EVENTS_PER_PULL);
+        if (read.kind === "snapshot_required") {
+          const legacy = hostRunGapSnapshotEvent(read, projection);
+          cursor = legacy.sequence;
+          return { frames: [sseFrame(String(cursor), legacy.type, legacy)] };
+        }
       }
       for (const event of read.events) {
         const wire = hostRunWireEvent(event, read.summary.chatId, projection);

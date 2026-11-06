@@ -552,6 +552,8 @@ export interface ScheduledTask {
   /** A claimed Bot fire awaiting a durable run receipt and delivery handoff. */
   pendingRoutineFires?: Array<{
     fireTime: number;
+    /** Original occurrence facts; retry fireTime is only the retry's due time. */
+    routineTiming?: import("./bot-routines-port.js").BotRoutineTiming;
     /** Reconcile an admitted retry without starting a new turn. */
     observeOnly?: true;
     requestId: string;
@@ -611,6 +613,8 @@ export interface ScheduledRun {
   taskId: string;
   startedAt: number;
   finishedAt: number;
+  /** Private host occurrence facts; old Remote projections must omit these. */
+  routineTiming?: import("./bot-routines-port.js").BotRoutineTiming;
   result: ScheduledRunResult;
   /** Present only when `result` is "skipped". */
   reason?: ScheduledRunSkipReason;
@@ -814,12 +818,13 @@ export interface AppSettings {
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
   /**
-   * Settings → Bots: routine runs go ahead with Ask first steps and connected-app
+   * Settings → Bots & Approvals: routine runs go ahead with Ask first steps and connected-app
    * changes instead of waiting for the person. Never lowers Hand off to me rules,
    * the password and money rules, or chat turns. Absent means off.
    */
   botRoutinesGoAhead?: boolean;
-  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  botMessaging?: boolean;
+  /** Settings → Context & Limits: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;

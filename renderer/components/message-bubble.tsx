@@ -24,6 +24,7 @@ import { cn } from "../lib/ui-utils";
 import { USER_MESSAGE_FOLD_LINES, userMessageFolds, userMessageMayFold } from "../lib/user-message-fold";
 
 export interface MessageBubbleProps {
+  imageScope?: string;
   role: ChatMessage["role"];
   content: string;
   attachments?: Attachment[];
@@ -31,6 +32,7 @@ export interface MessageBubbleProps {
   /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
+  replayedTextLength?: number;
   /** A later step has closed this text: it can no longer grow, though the turn runs on. */
   textClosed?: boolean;
   onStreamHandoffComplete?: () => void;
@@ -58,12 +60,14 @@ export function SafeMessageBubble(props: MessageBubbleProps) {
 }
 
 export function MessageBubble({
+  imageScope,
   role,
   content,
   attachments,
   skill,
   streaming,
   streamComplete,
+  replayedTextLength,
   textClosed,
   onStreamHandoffComplete,
   showCopy = true,
@@ -120,7 +124,9 @@ export function MessageBubble({
         ) : null}
         {revealed ? (
           <StreamingMarkdownReveal
+            imageScope={imageScope}
             content={content}
+            replayedTextLength={replayedTextLength}
             // Text that settled or whose turn ended shows in full in the same
             // tree; text a tool step closed still joins at the next release.
             complete={streaming ? Boolean(streamComplete) : true}
@@ -129,7 +135,7 @@ export function MessageBubble({
             richLinks
           />
         ) : (
-          <Markdown content={content} richLinks />
+          <Markdown content={content} richLinks imageScope={imageScope} />
         )}
         {content && showCopy ? (
           <MessageActions

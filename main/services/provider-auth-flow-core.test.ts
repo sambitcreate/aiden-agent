@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1235,4 +1236,41 @@ test("IPC request parsers reject malformed IDs, excess fields, and oversized inp
       }),
     /response is invalid/u,
   );
+});
+
+test("a committed sign-in counts once by how it signed in, and a cancelled one counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const owner = new FakeOwner(1);
+  const authenticated = makeCoordinator({ login: async () => ({}) });
+  authenticated.start(owner, request());
+  await waitForMessages(owner, "providers:auth:done");
+  assert.deepEqual(sent, [{ event: "provider_connected", props: { provider_id: PROVIDER_ID, auth: "oauth" } }]);
+
+  sent.length = 0;
+  const keyOwner = new FakeOwner(2);
+  const keyed = new ProviderAuthFlowCoordinator({
+    backendFor: () => backend(async (interaction) => ({
+      type: "api_key",
+      key: await interaction.prompt({ type: "secret", message: "API token" }),
+    })),
+    openExternal: async () => undefined,
+    createId: ids(PROMPT_A),
+  });
+  keyed.start(keyOwner, { flowId: FLOW_A, providerId: "cloudflare-workers-ai", authType: "api_key" });
+  await waitForMessages(keyOwner, "providers:auth:prompt");
+  const prompt = messages<ProviderAuthPromptDto>(keyOwner, "providers:auth:prompt")[0];
+  keyed.respond(keyOwner, { flowId: FLOW_A, providerId: "cloudflare-workers-ai", promptId: prompt.promptId, value: "token" });
+  await waitForMessages(keyOwner, "providers:auth:done");
+  assert.deepEqual(sent, [{ event: "provider_connected", props: { provider_id: "cloudflare-workers-ai", auth: "key" } }]);
+
+  sent.length = 0;
+  const cancelOwner = new FakeOwner(3);
+  const cancelled = makeCoordinator({
+    login: async (interaction) => interaction.prompt({ type: "manual_code", message: "Paste a callback URL" }),
+  });
+  cancelled.start(cancelOwner, request());
+  await waitForMessages(cancelOwner, "providers:auth:prompt");
+  cancelled.cancel(cancelOwner, request());
+  await waitForMessages(cancelOwner, "providers:auth:done");
+  assert.deepEqual(sent, []);
 });

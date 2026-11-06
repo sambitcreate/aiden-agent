@@ -359,6 +359,13 @@ async function fixture(
   };
 }
 
+test("Bot-only roots do not contribute to the phone-folder settings count", async () => {
+  const root = { id: "root_phone", label: "Phone", folderPath: "/test/phone", device: "1", inode: "2", policyRevision: "test", createdAt: 1 };
+  const app = await fixture({ initial: (state) => { state.approvedRoots = [root, { ...root, id: "root_bot", folderPath: "/test/bot", botsOnly: true }]; } });
+  try { assert.equal((await app.service.status()).approvedRootCount, 1); }
+  finally { await app.cleanup(); }
+});
+
 async function insecureHealth(port: number): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const request = https.get(
