@@ -25,6 +25,8 @@ Each release publishes the arm64 Mac DMG plus Linux x64 and arm64 AppImage,
 
 ![Aiden Agent showing a workspace chat and Personal Model Pad](docs/assets/aiden-agent-app.png)
 
+On first launch, enter your name and choose **I have an account**, **I have an API key** or **I run a local model**. You can also choose **Set up later** and return to **Settings → Providers → Connect AI**. Open **Advanced** in Providers to add a custom endpoint or update model catalogs.
+
 ## Why Aiden
 
 I don't come from a coding background. I'd been bouncing between the coding agents that exist, and each one had a piece of what I wanted without any of them being the whole thing. I loved **Codex** for its restrained, lovely desktop UX, **Opencode** for letting me bring whatever model and provider I wanted and also looking great in both the terminal and desktop, and **Cursor** for its nimbleness and UI, and I used **Claude Code** for the models lol. But the one terminal agent kept coming back to was **Pi**, by **Mario Zechner**, for the plugin system I could shape to my own workflow. What **Pi** lacked was a GUI, and I wanted the extensibility with a real interface on top of it. The first version was a native **SwiftUI** app, but within two weeks it was clear that building a coding agent inside **SwiftUI** was the wrong fight for someone who doesn't already write code, so the project pivoted to **Electron**. I was playing around with **Glaze**, **Raycast**'s AI app maker. I figured, let me just recreate Aiden in Glaze, ran out of credits inside an hour, used **Codex** to grab the code out of Glaze, and a week later this is what happened. **Aiden** runs on the **Pi** agent runtime and gives it a native-feeling desktop workspace.

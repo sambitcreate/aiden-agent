@@ -24,6 +24,8 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 
 ## Capabilities and Constraints
 
+First-run setup and Settings → Providers share an account, API key and local-model chooser. Providers lists saved connections first. Advanced contains private endpoints, chat-title routing and manual catalog updates. The final setup stage offers the first Bot and feature tour alongside the usage-data choice.
+
 - Supports local and hosted model providers without making one provider the product authority.
 - Reuses local skill folders and explicitly enabled installed plugin skills under the active workspace permission.
 - Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.

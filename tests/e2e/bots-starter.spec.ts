@@ -1,3 +1,4 @@
+import { connectOnboardingLmStudio } from "./fixtures";
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
 import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
@@ -279,10 +280,9 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
   const next = onboarding.getByRole("button", { name: /^Next/u });
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await next.click();
-  const lmStudio = onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u });
-  await lmStudio.click();
-  await next.click();
+  await connectOnboardingLmStudio(onboarding);
 
+  await onboarding.getByText("Choose your first Bot", { exact: true }).click();
   await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
   const starters = onboarding.getByRole("list", { name: "Starter Bots" });
   await starters
@@ -290,7 +290,7 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
     .filter({ hasText: "Chief of Staff" })
     .getByRole("button", { name: "Start chat", exact: true })
     .click();
-  await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
+  await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 

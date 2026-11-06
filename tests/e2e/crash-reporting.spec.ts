@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { E2E_PROFILE_NAME, E2E_WORKSPACE_ID, expect, skipBotsOnboardingStep, test } from "./fixtures";
+import { E2E_PROFILE_NAME, E2E_WORKSPACE_ID, expect, connectOnboardingLmStudio, test } from "./fixtures";
 
 // E2E has no project key, so nothing can reach PostHog. AIDEN_ANALYTICS_DEBUG
 // routes every message through the same outgoing guard into the dev log, which
@@ -53,9 +53,7 @@ test.describe("crash reports", () => {
     });
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await skipBotsOnboardingStep(onboarding);
+    await connectOnboardingLmStudio(onboarding);
     await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
     await expect(onboarding).toBeHidden();
     await expect.poll(() => reportsMatching(/app_opened/u)).toBe(1);
