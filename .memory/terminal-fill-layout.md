@@ -4,7 +4,7 @@
 
 The single-pane body was `display: block`, so its pane had auto height and the canvas's `height: 100%` computed to auto. The canvas then took its height from the bitmap's ratio: the default 300x150 gives height = width / 2, and `fit()` wrote that ratio back into the backing store, so it never corrected. Tall side panels showed an empty band below the screen; the bottom drawer hid about 400px of rows past its edge. Split layouts were always grids, so they were fine.
 
-Every layout now uses one grid with definite tracks. The pane host has no padding and the pane uses `--terminal-background`, which removes the 8px `bg-list-selection` frame. `CONTENT_PADDING` went from 4 to 8 to keep the text off the edge. The active split used to rely on that frame, so inactive split canvases now dim to 70% (Ghostty's `unfocused-split-opacity` idea), alongside the existing hollow cursor.
+Every layout now uses one grid with definite tracks. The pane host has no padding and the pane uses `--terminal-background`, which removes the 8px `bg-list-selection` frame. `CONTENT_PADDING` went from 4 to 8 to keep the text off the edge. The active split used to rely on that frame, so the active pane of a split now carries a 2px neutral `focus-ring` bar in the screen's top padding, alongside the existing hollow cursor. Dimming inactive canvases to 70% was tried and dropped: it took Moss/light foreground to 4.05:1 and Paper/light `--terminal-white` to 3.08:1, below the 4.5:1 terminal text contract in `renderer/shared/appearance.test.ts`.
 
 `initialHeight()` also read a missing key as `Number(null) === 0`, which passed the finite check and clamped to the 152px minimum, so `DEFAULT_DRAWER_HEIGHT` (232) never applied on first open.
 
