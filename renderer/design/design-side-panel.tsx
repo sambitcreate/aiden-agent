@@ -71,6 +71,9 @@ const TABS = [
   { value: "tweaks", label: "Tweaks" },
 ] as const satisfies readonly { value: DesignPanelTab; label: string }[];
 
+/** Every tab, in order; a tab remembered from last time is kept only if it is one of these. */
+export const DESIGN_PANEL_TABS: readonly DesignPanelTab[] = TABS.map((entry) => entry.value);
+
 /** What a person calls each kind of item. */
 export function designKindName(frame: Pick<DesignFrame, "kind" | "shape" | "arrow">): string {
   switch (frame.kind) {
@@ -139,7 +142,10 @@ export function designItemName(frame: DesignFrame): string {
 }
 
 /** `designCanvas:source`'s answer. */
-export type DesignFrameSourceResult = { text: string; truncated: boolean } | { error: "unavailable" | "missing" };
+export type DesignFrameSourceResult =
+  | { text: string; truncated: boolean }
+  /** `unsaved`: the canvas couldn't be saved, so main's copy of the frame is older than the screen. */
+  | { error: "unavailable" | "missing" | "unsaved" };
 
 export type DesignSidePanelProps = {
   /** Reads a page's file or an artifact's HTML; the canvas saves first, since main reads the stored frame. */
@@ -702,6 +708,12 @@ function selectedPage(selected: DesignFrame[]): DesignFrame | null {
 }
 
 /** A page's file or an artifact's HTML, read again after each change on disk; null while it loads. */
+const SOURCE_ERRORS = {
+  missing: "This file is missing.",
+  unavailable: "The code isn't available here.",
+  unsaved: "The canvas couldn't be saved, so the code can't be shown yet.",
+} as const;
+
 function useFrameSource(
   readSource: DesignSidePanelProps["readSource"],
   frame: DesignFrame | null,
@@ -716,7 +728,7 @@ function useFrameSource(
       (answer) => {
         if (cancelled) return;
         if ("text" in answer) setLoaded({ key, text: answer.text, truncated: answer.truncated });
-        else setLoaded({ key, error: answer.error === "missing" ? "This file is missing." : "The code isn't available here." });
+        else setLoaded({ key, error: SOURCE_ERRORS[answer.error] });
       },
       () => !cancelled && setLoaded({ key, error: "The code couldn't be read." }),
     );
@@ -939,13 +951,12 @@ function TweakNumber({
 
 /** A colour well; the page changes once the picker closes. */
 function TweakColor({ label, value, onCommit }: { label: string; value: string; onCommit(value: string): void }) {
-  const ref = React.useRef<HTMLInputElement>(null);
   const commitRef = React.useRef(onCommit);
   React.useLayoutEffect(() => {
     commitRef.current = onCommit;
   });
-  React.useEffect(() => {
-    const input = ref.current;
+  // The well is drawn afresh for each new value (its key), so every one gets the listener.
+  const listen = React.useCallback((input: HTMLInputElement | null) => {
     if (!input) return;
     // "change" fires when the picker closes; React's onChange would fire for every step of a drag.
     const changed = () => commitRef.current(input.value);
@@ -956,7 +967,7 @@ function TweakColor({ label, value, onCommit }: { label: string; value: string; 
     <TweakRow label={label}>
       <span className="font-mono text-small text-secondary">{value}</span>
       <input
-        ref={ref}
+        ref={listen}
         type="color"
         aria-label={label}
         defaultValue={value}

@@ -10,6 +10,7 @@ import {
   duplicateFrames,
   nodesFromCanvas,
   placeFrame,
+  presentedFrameIds,
 } from "./canvas-adapter-core";
 
 function frame(id: string, overrides: Partial<DesignFrame> = {}): DesignFrame {
@@ -362,4 +363,34 @@ test("a locked frame does not move, resize or go away, and its copy is unlocked"
   assert.equal(node.deletable, false);
   const copied = duplicateFrames(doc, ["pinned"], newId);
   assert.equal(copied.frames[copied.frames.length - 1]!.locked, undefined);
+});
+
+test("presenting a frame shows it with what is in it and its own arrows, never a neighbour on top of it", () => {
+  const doc = canvas(
+    frame("board", { kind: "frame", x: 0, y: 0, w: 1000, h: 800 }),
+    frame("inner", { kind: "group", groupId: "board", x: 50, y: 50, w: 400, h: 300 }),
+    frame("deep", { groupId: "inner", x: 60, y: 60 }),
+    frame("title", { groupId: "board", x: 500, y: 50 }),
+    // Lies over the artboard without being part of it.
+    frame("overlap", { x: 100, y: 100 }),
+    frame("beside", { x: 1010, y: 0 }),
+    frame("inside-arrow", {
+      kind: "connector",
+      ends: [
+        { x: 0, y: 0, frameId: "deep", side: "right" },
+        { x: 0, y: 0, frameId: "title", side: "left" },
+      ],
+    }),
+    frame("outward-arrow", {
+      kind: "connector",
+      ends: [
+        { x: 0, y: 0, frameId: "title", side: "right" },
+        { x: 0, y: 0, frameId: "beside", side: "left" },
+      ],
+    }),
+    frame("loose-arrow", { kind: "connector", ends: [{ x: 10, y: 10 }, { x: 90, y: 90 }] }),
+  );
+  assert.deepEqual([...presentedFrameIds(doc, "board")].sort(), ["board", "deep", "inner", "inside-arrow", "title"]);
+  assert.deepEqual([...presentedFrameIds(doc, "beside")], ["beside"]);
+  assert.equal(presentedFrameIds(doc, "gone").size, 0);
 });

@@ -4,6 +4,10 @@
 // words are found once there, and ⌘Z puts them back. A formatting change, or
 // words that can't be placed, become a comment on that element queued for
 // Aiden, as if the person had written it.
+//
+// Writes go one at a time, in the order they were made, and only once the
+// canvas is saved: main finds the page's file in the saved canvas, so while
+// the canvas can't be saved it isn't asked.
 
 import * as React from "react";
 import { toast } from "../components/ui";
@@ -21,6 +25,13 @@ export type PageTextEditing = { frameId: string; element: DesignPageElement };
 
 type EditMessage = Extract<DesignBridgeMessage, { type: "edit-start" | "edit-end" }>;
 type FileEdit = { frameId: string; changes: DesignTextChange[]; stamp?: string };
+
+const HAND_OFF_NOTES = {
+  format: "Aiden will make this formatting change with your next message.",
+  unplaced: "These words appear more than once in the file, so Aiden will make the change with your next message.",
+  changed: "The file changed while saving, so Aiden will make this change with your next message.",
+  unsaved: "The canvas couldn't be saved yet, so Aiden will make this change with your next message.",
+} as const;
 
 const squash = (text: string) => text.replace(/\s+/gu, " ").trim();
 
@@ -42,14 +53,21 @@ export function usePageTextEdits({
 }: {
   chatId: string;
   doc: DesignCanvas;
-  /** Saves the canvas now: main finds the page's frame in the saved canvas. */
-  flush(): Promise<unknown>;
+  /** Saves the canvas now: main finds the page's frame in the saved canvas. False when it couldn't. */
+  flush(): Promise<boolean>;
   pageWindow(frameId: string): Window | null;
   /** Adds a queued comment for Aiden on an element; false when the canvas is full. */
   queueComment(frameId: string, element: DesignPageElement, note: string): boolean;
 }) {
   const [editing, setEditing] = React.useState<PageTextEditing | null>(null);
   const history = React.useRef<{ undo: FileEdit[]; redo: FileEdit[] }>({ undo: [], redo: [] });
+  /** The last file write on its way; the next one starts after it. */
+  const writes = React.useRef<Promise<unknown>>(Promise.resolve());
+  const inTurn = React.useCallback((task: () => Promise<void>) => {
+    const run = writes.current.then(task, task);
+    writes.current = run.catch(() => undefined);
+    return run;
+  }, []);
   const docRef = React.useRef(doc);
   React.useLayoutEffect(() => {
     docRef.current = doc;
@@ -61,7 +79,11 @@ export function usePageTextEdits({
   };
 
   const handToAiden = React.useCallback(
-    (frameId: string, message: Extract<EditMessage, { type: "edit-end" }>, why: "format" | "unplaced") => {
+    (
+      frameId: string,
+      message: Extract<EditMessage, { type: "edit-end" }>,
+      why: "format" | "unplaced" | "changed" | "unsaved",
+    ) => {
       if (!message.element) {
         toast.error("This edit couldn't be placed. Comment on the element instead.");
         return;
@@ -70,11 +92,7 @@ export function usePageTextEdits({
         toast.error("This canvas has too many comments. Delete some to send this edit.");
         return;
       }
-      toast(
-        why === "format"
-          ? "Aiden will make this formatting change with your next message."
-          : "These words appear more than once in the file, so Aiden will make the change with your next message.",
-      );
+      toast(HAND_OFF_NOTES[why]);
     },
     [queueComment],
   );
@@ -97,24 +115,27 @@ export function usePageTextEdits({
         changes: message.changes,
         ...(message.element?.sourcePath ? { stamp: message.element.sourcePath } : {}),
       };
-      void flush()
-        .catch(() => undefined)
-        .then(() => designCanvasApi.editDesignText(chatId, frameId, edit.changes, edit.stamp))
-        .then(
-          (result) => {
-            if (result.ok) {
-              history.current = { undo: [...history.current.undo, edit].slice(-50), redo: [] };
-              toast.success(`Saved the words to ${fileName(frameId)}.`);
-            } else if (result.reason === "ambiguous" || result.reason === "not-found" || result.reason === "too-long") {
-              handToAiden(frameId, message, "unplaced");
-            } else if (result.reason !== "unchanged") {
-              toast.error("The page's file couldn't be changed.");
-            }
-          },
-          () => toast.error("The page's file couldn't be changed."),
-        );
+      void inTurn(async () => {
+        if (!(await flush().catch(() => false))) {
+          handToAiden(frameId, message, "unsaved");
+          return;
+        }
+        const result = await designCanvasApi.editDesignText(chatId, frameId, edit.changes, edit.stamp).catch(() => null);
+        if (!result) {
+          toast.error("The page's file couldn't be changed.");
+        } else if (result.ok) {
+          history.current = { undo: [...history.current.undo, edit].slice(-50), redo: [] };
+          toast.success(`Saved the words to ${fileName(frameId)}.`);
+        } else if (result.reason === "ambiguous" || result.reason === "not-found" || result.reason === "too-long") {
+          handToAiden(frameId, message, "unplaced");
+        } else if (result.reason === "changed") {
+          handToAiden(frameId, message, "changed");
+        } else if (result.reason !== "unchanged") {
+          toast.error("The page's file couldn't be changed.");
+        }
+      });
     },
-    [chatId, flush, handToAiden],
+    [chatId, flush, handToAiden, inTurn],
   );
 
   const command = React.useCallback(
@@ -144,24 +165,27 @@ export function usePageTextEdits({
         [from]: stack.slice(0, -1),
       };
       const changes = from === "undo" ? reverseDesignTextChanges(edit.changes) : edit.changes;
-      void flush()
-        .catch(() => undefined)
-        .then(() => designCanvasApi.editDesignText(chatId, edit.frameId, changes, edit.stamp))
-        .then(
-          (result) => {
-            if (result.ok) {
-              const other = from === "undo" ? "redo" : "undo";
-              history.current = { ...history.current, [other]: [...history.current[other], edit] };
-              toast(from === "undo" ? `Put back the words in ${fileName(edit.frameId)}.` : `Saved the words to ${fileName(edit.frameId)} again.`);
-            } else {
-              toast.error("The file changed since, so those words can't be put back.");
-            }
-          },
-          () => toast.error("The page's file couldn't be changed."),
-        );
+      void inTurn(async () => {
+        if (!(await flush().catch(() => false))) {
+          // Nothing was written, so the step stays where it was for another try.
+          history.current = { ...history.current, [from]: [...history.current[from], edit] };
+          toast.error("The canvas couldn't be saved, so the file wasn't changed. Try again in a moment.");
+          return;
+        }
+        const result = await designCanvasApi.editDesignText(chatId, edit.frameId, changes, edit.stamp).catch(() => null);
+        if (!result) {
+          toast.error("The page's file couldn't be changed.");
+        } else if (result.ok) {
+          const other = from === "undo" ? "redo" : "undo";
+          history.current = { ...history.current, [other]: [...history.current[other], edit] };
+          toast(from === "undo" ? `Put back the words in ${fileName(edit.frameId)}.` : `Saved the words to ${fileName(edit.frameId)} again.`);
+        } else {
+          toast.error("The file changed since, so those words can't be put back.");
+        }
+      });
       return true;
     },
-    [chatId, flush],
+    [chatId, flush, inTurn],
   );
 
   /** A change on the canvas comes after the file edits, so ⌘Z goes to it first. */

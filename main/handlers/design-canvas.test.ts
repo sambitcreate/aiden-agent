@@ -660,6 +660,24 @@ test("a plain text change is written into the page's file only where it is found
   });
 });
 
+test("text edits of one page made at once all land in its file", async (t) => {
+  const { invoke, site } = await exportCanvas(t);
+  const file = path.join(site, "design", "hero page.html");
+  const lines = Array.from({ length: 8 }, (_, index) => `<p>Line ${index} old</p>`);
+  await fs.writeFile(file, `${lines.join("\n")}\n`);
+  const results = await Promise.all(
+    lines.map((_, index) =>
+      invoke("designCanvas:editText", "chat-1", "page", [{ before: `Line ${index} old`, after: `Line ${index} new` }]),
+    ),
+  );
+  assert.deepEqual(results, lines.map(() => ({ ok: true })));
+  assert.equal(
+    await fs.readFile(file, "utf8"),
+    `${lines.map((_, index) => `<p>Line ${index} new</p>`).join("\n")}\n`,
+    "no edit overwrote another",
+  );
+});
+
 test("nothing is saved when the dialog is cancelled, the file is gone, or drawing fails", async (t) => {
   let destination: string | null = null;
   const { invoke, out, renders } = await exportCanvas(t, {

@@ -43,7 +43,8 @@ interface CanvasSync {
   change(mutate: Mutation, recordHistory: boolean): void;
   undo(): void;
   redo(): void;
-  flush(): Promise<void>;
+  /** Saves what is pending now; true when nothing is left unsaved. */
+  flush(): Promise<boolean>;
   dispose(): void;
 }
 
@@ -181,14 +182,18 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     );
   }
 
-  const flush = async () => {
+  const flush = async (): Promise<boolean> => {
     cancelTimer();
     while (inFlight) await inFlight;
     if (unsent.length > 0) await save();
     while (inFlight) await inFlight;
+    // A refused canvas is not kept as unsent edits, so the failure says it too.
+    return local !== null && unsent.length === 0 && !failed;
   };
   // Quit, close and reload save pending edits first, including a closed canvas's still waiting.
-  const unregisterFlush = registerLifecycleFlush(flush);
+  const unregisterFlush = registerLifecycleFlush(async () => {
+    await flush();
+  });
   function finish() {
     if (disposed) return;
     disposed = true;
@@ -262,8 +267,11 @@ export function useDesignCanvas(chatId: string): {
   change(mutate: Mutation, opts?: { record?: boolean }): void;
   undo(): void;
   redo(): void;
-  /** Saves what is pending now, so main reads the canvas as the person sees it. */
-  flush(): Promise<void>;
+  /**
+   * Saves what is pending now, so main reads the canvas as the person sees it.
+   * False when edits are still unsaved: main's copy is older than the screen.
+   */
+  flush(): Promise<boolean>;
   canUndo: boolean;
   canRedo: boolean;
 } {
@@ -295,9 +303,7 @@ export function useDesignCanvas(chatId: string): {
   const undoEdit = React.useCallback(() => sync.current?.undo(), []);
   const redoEdit = React.useCallback(() => sync.current?.redo(), []);
   /** Saves what is pending now, so main reads the canvas as the person sees it. */
-  const flush = React.useCallback(async () => {
-    await sync.current?.flush();
-  }, []);
+  const flush = React.useCallback(async () => (sync.current ? sync.current.flush() : false), []);
 
   return { ...state, change, undo: undoEdit, redo: redoEdit, flush };
 }

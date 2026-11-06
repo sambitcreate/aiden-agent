@@ -932,6 +932,9 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   }).toBe(true);
   await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
   await expectPresentedAlone(page, "hero.html");
+  // Only the presented frame is drawn, not its neighbours on the page.
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(1);
+  await expect(page.locator('iframe[title="pricing.html"]')).toHaveCount(0);
   await capture(page, "1440-present");
   await page.keyboard.press("ArrowRight");
   await expect(bar).toContainText("2 of 3 · pricing.html");
@@ -950,9 +953,11 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   await expect(page.locator('[data-presenting="frame"]')).toBeVisible();
   await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
   await expectPresentedAlone(page, "hero.html");
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(1);
   await capture(page, "1440-open-full-window");
   await single.getByRole("button", { name: "Close full window" }).click();
   await expect(single).toHaveCount(0);
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(3);
 });
 
 test("the side panel edits the selected item, lists the page's layers to hide, lock, rename and reorder, and shows a page's code", async ({
@@ -1162,6 +1167,9 @@ test("the Tweaks tab shows a page dark and changes the page's own controls, kept
   await expect(root).toHaveAttribute("data-density", "compact");
   await panel.getByRole("switch", { name: "Promo banner" }).click();
   await expect(live.locator(".promo")).toBeHidden();
+  // A second pick lands too, after the first has redrawn the well.
+  await panel.getByLabel("Accent").fill("#30a46c");
+  await expect.poll(() => styleOf("a.cta", "background-color")).toBe("rgb(48, 164, 108)");
   await panel.getByLabel("Accent").fill("#e5484d");
   await expect.poll(() => styleOf("a.cta", "background-color")).toBe("rgb(229, 72, 77)");
   const corners = panel.getByRole("slider", { name: "Corners" });

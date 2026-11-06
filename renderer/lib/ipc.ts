@@ -2331,7 +2331,7 @@ export const designCanvasApi = {
   editDesignText: (chatId: string, frameId: string, changes: { before: string; after: string }[], stamp?: string) =>
     invoke<
       | { ok: true }
-      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" }
+      | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" }
     >("designCanvas:editText", chatId, frameId, changes, stamp),
   /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. `theme` draws a dark artifact. */
   exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source", theme?: unknown) =>

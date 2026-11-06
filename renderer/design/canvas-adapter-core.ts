@@ -69,6 +69,33 @@ export function nodesFromCanvas(doc: DesignCanvas, selection: ReadonlySet<string
 }
 
 /**
+ * What Present and Open full window draw for one frame: the frame, what is
+ * in it (a group's or artboard's members, at any depth), and the arrows whose
+ * attached ends are all on those. Neighbours, even overlapping ones, are left out.
+ */
+export function presentedFrameIds(doc: DesignCanvas, id: string): Set<string> {
+  const shown = new Set<string>();
+  if (!doc.frames.some((frame) => frame.id === id)) return shown;
+  shown.add(id);
+  // Members can nest, so go round until a pass adds nothing.
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const frame of doc.frames) {
+      if (!shown.has(frame.id) && frame.groupId !== undefined && shown.has(frame.groupId)) {
+        shown.add(frame.id);
+        grew = true;
+      }
+    }
+  }
+  for (const frame of doc.frames) {
+    if (frame.kind !== "connector" || shown.has(frame.id) || !frame.ends) continue;
+    const attached = frame.ends.flatMap((end) => (end.frameId ? [end.frameId] : []));
+    if (attached.length > 0 && attached.every((frameId) => shown.has(frameId))) shown.add(frame.id);
+  }
+  return shown;
+}
+
+/**
  * Applies position, resize and remove changes. Selection and React Flow's own
  * measurements are not document edits; when nothing in `changes` edits the
  * document, the same object comes back so callers can skip the save.

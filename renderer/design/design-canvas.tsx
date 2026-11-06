@@ -34,6 +34,7 @@ import {
   duplicateFrames,
   nodesFromCanvas,
   placeFrame,
+  presentedFrameIds,
   type DesignNode,
   type PlaceFrameInput,
 } from "./canvas-adapter-core";
@@ -45,7 +46,13 @@ import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
-import { DesignPanelButton, DesignSidePanel, type DesignPanelTab } from "./design-side-panel";
+import {
+  DESIGN_PANEL_TABS,
+  DesignPanelButton,
+  DesignSidePanel,
+  type DesignFrameSourceResult,
+  type DesignPanelTab,
+} from "./design-side-panel";
 import { reorderLayer, stepLayer, type DesignLayerPlace } from "./layers-core";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { selectLiveFrames } from "./live-set-core";
@@ -98,6 +105,7 @@ function basename(path: string) {
 }
 
 const EXPORT_ERRORS = {
+  unsaved: "The canvas couldn't be saved, so this frame can't be downloaded yet.",
   unavailable: "This frame can't be downloaded.",
   missing: "This frame's file is gone, so it can't be downloaded.",
   failed: "The download couldn't be saved. Try again.",
@@ -713,27 +721,31 @@ function LoadedDesignCanvas({
   );
 
   const readSource = React.useCallback(
-    // A frame added a moment ago is not saved yet, and main reads the saved canvas.
-    (frameId: string) =>
-      flush()
-        .catch(() => undefined)
-        .then(() => designCanvasApi.designFrameSource(chatId, frameId)),
+    // A frame added a moment ago is not saved yet, and main reads the saved canvas;
+    // while it can't be saved, main's copy is older than the screen, so it isn't asked.
+    async (frameId: string): Promise<DesignFrameSourceResult> => {
+      const saved = await flush().catch(() => false);
+      if (!saved) return { error: "unsaved" };
+      return designCanvasApi.designFrameSource(chatId, frameId);
+    },
     [chatId, flush],
   );
 
   const download = React.useCallback(
     (id: string, format: DesignExportFormat) => {
       // Main exports what is saved, so a frame added a moment ago is saved first.
-      void flush()
-        .catch(() => undefined)
-        .then(() => designCanvasApi.exportDesignFrame(chatId, id, format, readDesignArtifactTheme(true)))
-        .then(
-        (result) => {
-          if ("saved" in result) toast.success(format === "source" ? "Saved the original file." : `Saved the ${format.toUpperCase()}.`);
-          else if ("error" in result) toast.error(EXPORT_ERRORS[result.error]);
-        },
-        () => toast.error(EXPORT_ERRORS.failed),
-      );
+      void (async () => {
+        const saved = await flush().catch(() => false);
+        if (!saved) {
+          toast.error(EXPORT_ERRORS.unsaved);
+          return;
+        }
+        const result = await designCanvasApi
+          .exportDesignFrame(chatId, id, format, readDesignArtifactTheme(true))
+          .catch(() => ({ error: "failed" as const }));
+        if ("saved" in result) toast.success(format === "source" ? "Saved the original file." : `Saved the ${format.toUpperCase()}.`);
+        else if ("error" in result) toast.error(EXPORT_ERRORS[result.error]);
+      })();
     },
     [chatId, flush],
   );
@@ -789,6 +801,12 @@ function LoadedDesignCanvas({
 
   // Each step fits its frame to the window, once the window-filling layout has been measured.
   const presentedId = presentation ? presentation.ids[presentation.index] : null;
+  // Fitting the view is not enough on its own: a neighbour close by would still show.
+  const shownNodes = React.useMemo(() => {
+    if (!presentedId) return nodes;
+    const shown = presentedFrameIds(doc, presentedId);
+    return nodes.filter((node) => shown.has(node.id));
+  }, [nodes, doc, presentedId]);
   React.useEffect(() => {
     if (!presentedId || viewSize.w === 0) return;
     const frame = requestAnimationFrame(() => {
@@ -923,7 +941,7 @@ function LoadedDesignCanvas({
             onToolChange={changeTool}
             minimap={minimap}
             onMinimapChange={setMinimap}
-            nodes={nodes}
+            nodes={shownNodes}
             edges={NO_EDGES}
             nodeTypes={designNodeTypes}
             onNodesChange={onNodesChange}
@@ -1030,7 +1048,6 @@ function LoadedDesignCanvas({
 }
 
 const PANEL_STORAGE_KEY = "aiden.design.sidePanel";
-const PANEL_TABS: readonly DesignPanelTab[] = ["properties", "layers", "code"];
 
 /** Whether the side panel was open, and on which tab, the last time on this device. */
 function readPanelState(): { open: boolean; tab: DesignPanelTab } {
@@ -1038,7 +1055,7 @@ function readPanelState(): { open: boolean; tab: DesignPanelTab } {
     const saved = JSON.parse(window.localStorage.getItem(PANEL_STORAGE_KEY) ?? "null") as unknown;
     if (saved && typeof saved === "object") {
       const { open, tab } = saved as { open?: unknown; tab?: unknown };
-      return { open: open === true, tab: PANEL_TABS.includes(tab as DesignPanelTab) ? (tab as DesignPanelTab) : "properties" };
+      return { open: open === true, tab: DESIGN_PANEL_TABS.includes(tab as DesignPanelTab) ? (tab as DesignPanelTab) : "properties" };
     }
   } catch {
     // Storage that cannot be read starts the panel closed.

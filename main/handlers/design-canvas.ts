@@ -26,6 +26,7 @@ import {
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import { writeFileAtomic } from "../services/durable-fs.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
 import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
 import { isPathInside } from "../shared/path-containment.js";
@@ -108,9 +109,22 @@ export type DesignCanvasSourceResult =
 export const DESIGN_SOURCE_MAX_BYTES = 512 * 1024;
 
 /** `designCanvas:editText` reply: the words were written into the page's file, or why not. */
+/** Runs one task per file at a time, in the order they arrive. */
+const fileLocks = new Map<string, Promise<unknown>>();
+function withFileLock<T>(file: string, task: () => Promise<T>): Promise<T> {
+  const before = fileLocks.get(file) ?? Promise.resolve();
+  const run = before.then(task, task);
+  const settled = run.catch(() => undefined);
+  fileLocks.set(file, settled);
+  void settled.then(() => {
+    if (fileLocks.get(file) === settled) fileLocks.delete(file);
+  });
+  return run;
+}
+
 export type DesignCanvasEditTextResult =
   | { ok: true }
-  | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" };
+  | { ok: false; reason: "unavailable" | "missing" | "not-found" | "ambiguous" | "unchanged" | "too-long" | "changed" };
 
 /** What the hidden export window draws: a page at its width, as a picture or a PDF. */
 export type DesignFrameRenderRequest = {
@@ -402,20 +416,27 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
       if (!resolved.ok) return { ok: false, reason: "missing" };
       if (!resolved.mimeType.startsWith("text/html")) return { ok: false, reason: "unavailable" };
-      let source: string;
-      try {
-        source = await fs.readFile(resolved.absolute, "utf8");
-      } catch {
-        return { ok: false, reason: "missing" };
-      }
-      const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, frame.path));
-      if (!plan.ok) return plan;
-      try {
-        await fs.writeFile(resolved.absolute, plan.source, "utf8");
-      } catch {
-        return { ok: false, reason: "missing" };
-      }
-      return { ok: true };
+      const framePath = frame.path;
+      // One edit of a file at a time, so two quick edits each plan from what the other wrote.
+      return withFileLock(resolved.absolute, async (): Promise<DesignCanvasEditTextResult> => {
+        let source: string;
+        try {
+          source = await fs.readFile(resolved.absolute, "utf8");
+        } catch {
+          return { ok: false, reason: "missing" };
+        }
+        const plan = planDesignTextEdit(source, parsed, stampLine(stamp as string | undefined, framePath));
+        if (!plan.ok) return plan;
+        try {
+          // Another writer (an editor, Aiden) may have changed the file since it was read.
+          if ((await fs.readFile(resolved.absolute, "utf8")) !== source) return { ok: false, reason: "changed" };
+          // Readers see the old file or the new one, never a half-written page.
+          await writeFileAtomic(resolved.absolute, plan.source);
+        } catch {
+          return { ok: false, reason: "missing" };
+        }
+        return { ok: true };
+      });
     },
   );
 
