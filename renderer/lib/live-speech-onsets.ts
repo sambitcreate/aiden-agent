@@ -12,10 +12,14 @@
 // arrives while that speech, or speech that ended within the caption lag
 // window, is still in reach takes that earlier mark too.
 //
-// A packet captured just before a fence can reach the renderer just after it,
-// since microphone audio and the fence arrive on separate tasks. So speech
-// that opens in the first LIVE_SPEECH_FENCE_GUARD_MS of audio handled after a
-// fence takes a mark at that fence, never above it.
+// A packet captured before a fence can reach the renderer after it, since
+// microphone audio and the fence arrive on separate tasks. So capture order
+// decides: each packet carries the capture clock (the AudioContext's time) it
+// was captured by, the fence reads that clock, and speech that opens in a
+// packet that may hold audio from before the fence takes a mark at the fence,
+// never above it, however long the backlog. Packets without a capture time
+// fall back to a guard: speech that opens in the first
+// LIVE_SPEECH_FENCE_GUARD_MS of audio handled after a fence sits at it too.
 //
 // Time is counted in captured audio. The microphone keeps sending packets,
 // silence included (muted audio is zeros), for as long as Live runs.
@@ -28,6 +32,11 @@ export const LIVE_SPEECH_SILENCE_MS = 500;
 export const LIVE_SPEECH_CAPTION_LAG_MS = 5_000;
 /** Audio handled after a fence during which a new stretch still counts as begun before it. */
 export const LIVE_SPEECH_FENCE_GUARD_MS = 500;
+/**
+ * Slack on the capture clock read at a fence, for how far the window's view
+ * of the AudioContext's time can trail the audio thread's.
+ */
+export const LIVE_SPEECH_CAPTURE_SLACK_MS = 50;
 /**
  * Start mark for an utterance whose onset the microphone cannot vouch for.
  * It is below every fence, so such speech never answers an approval.
@@ -51,19 +60,25 @@ export class LiveSpeechOnsets {
   /** Newest fence taken, and the audio time until which new speech still sits at it. */
   private guardMark = 0;
   private guardUntil = -1;
+  /** Capture time (seconds) up to which audio may come from before the newest fence. */
+  private guardCapturedUntil = Number.NEGATIVE_INFINITY;
 
   /** `begin` takes a start mark on the shared counter (the session bus's). */
   constructor(private readonly begin: () => number) {}
 
-  /** One microphone packet: its level and how many milliseconds of audio it carries. */
-  packet(level: number, durationMs: number): void {
+  /**
+   * One microphone packet: its level, how many milliseconds of audio it
+   * carries, and (when known) the capture time in seconds that none of its
+   * audio was captured after.
+   */
+  packet(level: number, durationMs: number, capturedUntil?: number): void {
     const startedAt = this.audioMs;
     this.audioMs += Math.max(0, durationMs);
     const open = this.open();
     if (level >= LIVE_SPEECH_ONSET_LEVEL) {
       this.quietFrom = null;
       if (!open) {
-        const mark = startedAt < this.guardUntil ? this.guardMark : this.begin();
+        const mark = this.mayPrecedeFence(startedAt, durationMs, capturedUntil) ? this.guardMark : this.begin();
         this.stretches.push({ mark, startedAt, endedAt: null });
       }
     } else if (open) {
@@ -93,13 +108,20 @@ export class LiveSpeechOnsets {
   }
 
   /**
-   * A fence was taken (`LiveSessionBus.voiceInputFence`). Packets handled
-   * from now on may have been captured before it, so speech that opens in
-   * the next LIVE_SPEECH_FENCE_GUARD_MS of audio gets a mark at the fence.
+   * A fence was taken (`LiveSessionBus.voiceInputFence`), with the capture
+   * clock read at that moment when there is one. Speech in a packet that may
+   * hold audio captured before it, or that opens in the next
+   * LIVE_SPEECH_FENCE_GUARD_MS of handled audio, gets a mark at the fence.
    */
-  fenced(fence: number): void {
+  fenced(fence: number, captureTime?: number): void {
     this.guardMark = Math.max(this.guardMark, fence);
     this.guardUntil = this.audioMs + LIVE_SPEECH_FENCE_GUARD_MS;
+    if (typeof captureTime === "number" && Number.isFinite(captureTime)) {
+      this.guardCapturedUntil = Math.max(
+        this.guardCapturedUntil,
+        captureTime + LIVE_SPEECH_CAPTURE_SLACK_MS / 1_000,
+      );
+    }
   }
 
   /**
@@ -124,6 +146,15 @@ export class LiveSpeechOnsets {
     this.heardThrough = -1;
     this.guardMark = 0;
     this.guardUntil = -1;
+    this.guardCapturedUntil = Number.NEGATIVE_INFINITY;
+  }
+
+  private mayPrecedeFence(startedAt: number, durationMs: number, capturedUntil?: number): boolean {
+    if (startedAt < this.guardUntil) return true;
+    if (typeof capturedUntil !== "number" || !Number.isFinite(capturedUntil)) return false;
+    // The worklet may carry up to one chunk of earlier samples into a packet,
+    // so its first sample can be up to two packets older than its end.
+    return capturedUntil - (2 * Math.max(0, durationMs)) / 1_000 <= this.guardCapturedUntil;
   }
 
   private open(): SpeechStretch | null {

@@ -104,6 +104,8 @@ class FakeCaptureContext {
   readonly gain = Object.assign(new FakeAudioNode(), { gain: { value: 1 } });
   closed = false;
   resumed = false;
+  /** The capture clock, in seconds; tests move it by hand. */
+  currentTime = 0;
   createMediaStreamSource(): MediaStreamAudioSourceNode {
     return this.source as unknown as MediaStreamAudioSourceNode;
   }
@@ -1623,13 +1625,38 @@ test("speech that arrives in pieces is heard as one utterance, so a phrase insid
   await stop();
 });
 
-function micPacket(fixture: { worklets: Array<{ emit(message: unknown): void }> }, sample: number): void {
+function micPacket(
+  fixture: { worklets: Array<{ emit(message: unknown): void }> },
+  sample: number,
+  capturedUntil?: number,
+): void {
   // 20 ms of 16 kHz audio at a constant level.
   const data = new ArrayBuffer(640);
   const view = new DataView(data);
   for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, sample, true);
-  fixture.worklets[0]!.emit({ type: "pcm", data });
+  fixture.worklets[0]!.emit({ type: "pcm", data, ...(capturedUntil === undefined ? {} : { capturedUntil }) });
 }
+
+test("speech captured before a fence but handled long after it stays before the fence", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  fixture.contexts[0]!.currentTime = 30;
+  // A confirmation prompt is delivered while a second of audio is still queued.
+  const fence = liveSessionBus.voiceInputFence();
+  for (let index = 0; index < 40; index += 1) micPacket(fixture, 0, 29 + index * 0.02);
+  for (let index = 0; index < 15; index += 1) micPacket(fixture, 8_192, 29.8 + index * 0.01);
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0, 30.1 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  // Then the person really answers.
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 32 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Yes do it", "Yes do it"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "captured before the fence, past the handled-audio guard");
+  assert.ok(inputs[1]!.startedAt > fence, "captured after the fence");
+  await stop();
+});
 
 test("an utterance keeps the start mark of its first caption, so speech begun before a fence stays before it", async () => {
   const { fixture, stop } = await listenToVoiceInput();
