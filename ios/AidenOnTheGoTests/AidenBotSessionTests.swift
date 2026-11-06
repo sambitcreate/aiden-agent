@@ -6538,13 +6538,16 @@ extension AidenBotSessionTests {
         await assertSettles({ session.text == "Approved, with a note" })
     }
 
-    func testARefusedHandoffNoteStaysOffTheMachineTheScreenMovedTo() async throws {
-        let (coordinator, responder) = demoCoordinator()
+    /// Answers the studio's step, moves the screen to the laptop while the answer
+    /// waits at the gate, then lets the machine refuse it.
+    private func refuseANoteAcrossASwitch(
+        _ session: AidenComposerSession,
+        coordinator: AidenRemoteCoordinator,
+        responder: AidenDemoResponder
+    ) async throws -> (studio: AidenBotSessionModel, laptop: AidenBotSessionModel, window: UIWindow) {
         let answer = waitOnAStep(in: responder)
         let release = responder.hold(instanceId: "studio", path: answer)
-        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
         let (_, window) = try await showBot(session, coordinator: coordinator)
-        defer { close(window) }
         let studio = try XCTUnwrap(model(of: session))
         session.text = "Only for the studio"
         await settle()
@@ -6559,13 +6562,38 @@ extension AidenBotSessionTests {
         release()
         await assertSettles({ studio.errorMessage == AidenBotSessionCopy.handoffNotSent }, "The refusal never came")
         await settle()
+        await studio.waitForDraftPersistence()
         await laptop.waitForDraftPersistence()
+        return (studio, laptop, window)
+    }
+
+    private func savedBotDraft(on instanceId: String) async -> String {
+        let drafts = AidenChatDraftStore.shared
+        let draft = await drafts.beginSession(instanceId: instanceId, chatId: AidenBotChatRoute.pathValue(botID: Self.demoBot))
+        return await drafts.load(session: draft) ?? ""
+    }
+
+    func testARefusedHandoffNoteStaysOffTheMachineTheScreenMovedTo() async throws {
+        let (coordinator, responder) = demoCoordinator()
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (_, _, window) = try await refuseANoteAcrossASwitch(session, coordinator: coordinator, responder: responder)
+        defer { close(window) }
 
         XCTAssertEqual(session.text, "", "The studio's note is on the laptop's Bot")
-        let drafts = AidenChatDraftStore.shared
-        let draft = await drafts.beginSession(instanceId: "laptop", chatId: AidenBotChatRoute.pathValue(botID: Self.demoBot))
-        let saved = await drafts.load(session: draft)
-        XCTAssertEqual(saved ?? "", "", "The studio's note is saved under the laptop")
+        let saved = await savedBotDraft(on: "laptop")
+        XCTAssertEqual(saved, "", "The studio's note is saved under the laptop")
+    }
+
+    func testARefusedHandoffNoteWaitsUnderItsOwnMachine() async throws {
+        let (coordinator, responder) = demoCoordinator()
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (_, _, window) = try await refuseANoteAcrossASwitch(session, coordinator: coordinator, responder: responder)
+        defer { close(window) }
+
+        let studio = await savedBotDraft(on: "studio")
+        let laptop = await savedBotDraft(on: "laptop")
+        XCTAssertEqual(studio, "Only for the studio", "The words were lost")
+        XCTAssertEqual(laptop, "")
     }
 
     func testComingBackToABotScreenKeepsWordsJustTyped() async throws {

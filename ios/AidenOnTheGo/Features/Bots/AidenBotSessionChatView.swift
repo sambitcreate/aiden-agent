@@ -949,12 +949,15 @@ struct AidenBotSessionChatView: View {
             let connected = canWrite
             composerSession.text = ""
             Task {
-                let answered = await model.answerHandoffFromComposer(note, connected: connected)
+                guard !(await model.answerHandoffFromComposer(note, connected: connected)) else { return }
                 // The answer can outlast this machine on the screen: `text` writes to
                 // whichever model owns the draft now, and a note stays off another machine.
                 let owner = composerSession.draftOwner as? AidenBotSessionModel
-                if !answered, composerSession.text.isEmpty, owner?.owner.instanceId == model.owner.instanceId {
-                    composerSession.text = note
+                if owner?.owner.instanceId == model.owner.instanceId {
+                    if composerSession.text.isEmpty { composerSession.text = note }
+                } else if model.draft.isEmpty {
+                    // Saved under its own machine, if that machine is still paired.
+                    model.draft = note
                 }
             }
             return
