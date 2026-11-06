@@ -1066,6 +1066,8 @@
 
     <!-- Chat: message footer and select text -->
     <string name="chat_message_worked_for">· %1$s</string>
+    <string name="chat_message_by_voice">By voice</string>
+    <string name="chat_message_by_voice_description">Sent by voice</string>
     <string name="chat_message_copy">Copy message</string>
     <string name="chat_message_copy_response">Copy response</string>
     <string name="chat_read_aloud_stop">Stop reading aloud</string>

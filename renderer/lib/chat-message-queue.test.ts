@@ -180,6 +180,18 @@ test("editing pauses dispatch; cancel preserves the original and save preserves 
   assert.equal(queue.claim()?.id, "one");
 });
 
+test("a queued message the person edits is no longer marked By voice", () => {
+  const queue = new ChatMessageQueue();
+  queue.add({ ...message("one"), options: { inputSource: "voice" } });
+  queue.add({ ...message("two"), options: { inputSource: "voice", visualize: true } });
+  queue.edit("one");
+  queue.update({ ...queue.getSnapshot().messages[0]!, text: "my words now" });
+  queue.edit("two");
+  queue.update({ ...queue.getSnapshot().messages[1]! });
+  assert.equal(queue.getSnapshot().messages[0]!.options, undefined);
+  assert.deepEqual(queue.getSnapshot().messages[1]!.options, { visualize: true });
+});
+
 test("blank and oversized edits leave the editor and original message intact", () => {
   const queue = new ChatMessageQueue();
   queue.add(message("one"));

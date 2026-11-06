@@ -8,6 +8,18 @@ export type LiveRendererToolResult = Record<string, unknown>;
 export interface LiveRendererToolContext {
   sessionId: string;
   signal: AbortSignal;
+  /**
+   * The handler is about to carry the action out (a send handed to the chat).
+   * Check `signal` right before calling it. From then on a cancel no longer
+   * hides the result: the bus reports the real outcome when it arrives.
+   */
+  commit(): void;
+  /**
+   * Runs `listener` once this result has been handed to main, which passes it
+   * straight on to Live. It does not run when the result never goes out (a
+   * cancel answered first, or a session that changed) or main refuses it.
+   */
+  afterReport?(listener: () => void): void;
 }
 
 export type LiveRendererToolHandler = (
@@ -54,7 +66,7 @@ export class LiveSessionBus {
   private readonly voiceListeners = new Set<Listener<LiveVoiceInput>>();
   private readonly fenceListeners = new Set<Listener<number>>();
   private readonly tools = new Map<string, LiveRendererToolHandler>();
-  private readonly inFlight = new Map<string, AbortController>();
+  private readonly inFlight = new Map<string, { abort: AbortController; committed: boolean; reported: boolean }>();
   private lastVoiceInputId = 0;
   private lastVoiceStart = 0;
 
@@ -62,7 +74,7 @@ export class LiveSessionBus {
   setSession(sessionId: string | null, transport: LiveSessionTransport | null): void {
     if (this.sessionId === sessionId && this.transport === transport) return;
     if (this.sessionId !== sessionId) {
-      for (const abort of this.inFlight.values()) abort.abort();
+      for (const entry of this.inFlight.values()) entry.abort.abort();
       this.inFlight.clear();
     }
     this.sessionId = sessionId;
@@ -148,30 +160,82 @@ export class LiveSessionBus {
     const transport = this.transport;
     if (!transport || request.sessionId !== this.sessionId) return;
     const handler = this.tools.get(request.name);
-    const abort = new AbortController();
-    this.inFlight.set(request.requestId, abort);
+    const entry = {
+      abort: new AbortController(),
+      committed: false,
+      reported: false,
+      afterReport: [] as Array<() => void>,
+    };
+    this.inFlight.set(request.requestId, entry);
     let response: LiveRendererToolResult;
     try {
       response = handler
-        ? await handler(request.args, { sessionId: request.sessionId, signal: abort.signal })
+        ? await handler(request.args, {
+            sessionId: request.sessionId,
+            signal: entry.abort.signal,
+            commit: () => {
+              entry.committed = true;
+            },
+            afterReport: (listener) => {
+              entry.afterReport.push(listener);
+            },
+          })
         : toolError("tool_unavailable", "That part of Aiden is not open right now.");
     } catch {
       response = toolError("tool_failed", "The action could not finish.");
     } finally {
-      if (this.inFlight.get(request.requestId) === abort) this.inFlight.delete(request.requestId);
+      if (this.inFlight.get(request.requestId) === entry) this.inFlight.delete(request.requestId);
     }
-    if (abort.signal.aborted || request.sessionId !== this.sessionId) return;
-    try {
-      await transport.toolResult(request.sessionId, request.requestId, response);
-    } catch {
-      // Main times the request out on its side.
+    // A cancel before the commit was already answered; after it, the real
+    // outcome still goes to main.
+    if (entry.reported || (entry.abort.signal.aborted && !entry.committed)) return;
+    if (request.sessionId !== this.sessionId) return;
+    entry.reported = true;
+    // Main refusing the result (a stale or unknown request) means Live never
+    // got it. A hand-off that threw may still have reached Live, so its
+    // listeners run.
+    const accepted = await this.report(transport, request.sessionId, request.requestId, response);
+    if (!accepted) return;
+    for (const listener of entry.afterReport) {
+      try {
+        listener();
+      } catch {
+        // One listener's failure does not skip the others.
+      }
     }
   }
 
+  /**
+   * Main gave up on a request (the call was cancelled or timed out). One that
+   * has not committed is answered "cancelled" at once; a committed one keeps
+   * running and reports what really happened.
+   */
   cancelToolRequest(sessionId: string, requestId: string): void {
     if (sessionId !== this.sessionId) return;
-    this.inFlight.get(requestId)?.abort();
+    const entry = this.inFlight.get(requestId);
+    if (!entry) return;
+    entry.abort.abort();
+    if (entry.committed || entry.reported) return;
+    entry.reported = true;
     this.inFlight.delete(requestId);
+    const transport = this.transport;
+    if (transport) {
+      void this.report(transport, sessionId, requestId, toolError("cancelled", "The request was cancelled."));
+    }
+  }
+
+  private async report(
+    transport: LiveSessionTransport,
+    sessionId: string,
+    requestId: string,
+    response: LiveRendererToolResult,
+  ): Promise<boolean> {
+    try {
+      return (await transport.toolResult(sessionId, requestId, response)) !== false;
+    } catch {
+      // Main times the request out on its side; whether Live got it is unknown.
+      return true;
+    }
   }
 }
 

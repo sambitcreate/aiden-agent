@@ -1,4 +1,5 @@
 import { replayChatRequest, type SavedChatRequest } from "../../shared/chat-intent";
+import type { ChatInputSourceV1 } from "../../shared/chat-input-source";
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
 import type { GenerationThinkingLevel } from "../../shared/generation-thinking";
 import type { SkillInvocationV1 } from "../../shared/slash-commands";
@@ -480,14 +481,24 @@ export class ChatSessionControl {
     }
   }
 
-  async submitInput(runId: string, mode: ChatRunInputMode, text: string): Promise<ChatRunInputAdmissionResult> {
+  async submitInput(
+    runId: string,
+    mode: ChatRunInputMode,
+    text: string,
+    options?: { inputSource?: ChatInputSourceV1 },
+  ): Promise<ChatRunInputAdmissionResult> {
     this.guard("steer");
     const { chatId } = this.ref;
+    const inputSource = options?.inputSource;
     return this.intent(
       "submitInput",
-      (adapter, idempotencyKey) => adapter.submitInput(chatId, { runId, mode, text, idempotencyKey }),
+      (adapter, idempotencyKey) =>
+        adapter.submitInput(chatId, { runId, mode, text, idempotencyKey, ...(inputSource ? { inputSource } : {}) }),
       text,
-      key => ({ kind: "submitInput", input: { runId, mode, text, idempotencyKey: key } }),
+      key => ({
+        kind: "submitInput",
+        input: { runId, mode, text, idempotencyKey: key, ...(inputSource ? { inputSource } : {}) },
+      }),
     );
   }
 

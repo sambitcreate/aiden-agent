@@ -11871,6 +11871,11 @@
               "additionalProperties": false
             }
           },
+          "inputSource": {
+            "type": "string",
+            "enum": ["voice"],
+            "description": "Additive in contract revision 60, user messages only: Aiden Live sent this message for the person on the Mac. Clients show a small \"By voice\" label; they ignore the key on assistant messages and any value they do not know."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"

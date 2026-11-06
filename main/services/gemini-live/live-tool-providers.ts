@@ -1,6 +1,7 @@
 import type { AppSettings } from "../types.js";
 import type { LiveToolPrepareInput, LiveToolProvider } from "./live-tools.js";
 import { createEndSessionToolProvider } from "./end-session-tool.js";
+import { liveChatToolProviderFactory } from "./live-chat-tools.js";
 
 /**
  * Builds one group of Aiden Live tools for a starting session, or null when
@@ -16,6 +17,7 @@ export type LiveToolProviderFactory = (
 export const LIVE_TOOL_PROVIDER_FACTORIES: readonly LiveToolProviderFactory[] = [
   // Saying goodbye ends the session (always on while Live is on).
   (input) => createEndSessionToolProvider(input),
+  (input, settings) => liveChatToolProviderFactory(input, settings),
 ];
 
 /** Runs the factories; a factory that throws leaves its tools out. */

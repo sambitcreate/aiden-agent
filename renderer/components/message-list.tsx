@@ -630,6 +630,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
           content={message.content}
           attachments={message.attachments}
           skill={message.skill}
+          inputSource={message.inputSource}
           fork={fork}
         />
       )}

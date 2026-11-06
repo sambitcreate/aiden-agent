@@ -206,6 +206,8 @@ export interface HostChatInput {
   mode: ChatRunInputMode;
   text: string;
   idempotencyKey?: string;
+  /** Aiden Live sent this for the person ("By voice"); only this Mac's own chats keep it. */
+  inputSource?: import("../../shared/chat-input-source").ChatInputSourceV1;
 }
 
 export interface HostChatRenameInput {

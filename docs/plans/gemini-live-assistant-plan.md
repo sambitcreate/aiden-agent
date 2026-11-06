@@ -103,6 +103,17 @@ Extended Thinking uses explicit `NON_BLOCKING` Computer Use declarations so it
 can speak brief progress updates while tools run. Every mutation remains paused
 behind a fresh, finalized user-voice “Allow once” or “Deny” decision.
 
+Chat tools (2026-11-06, [voice upgrade PR 2](aiden-live-voice-upgrade.md#pr-2-live-talks-to-and-steers-chats)):
+Live can read, send to and stop the open chat, find and open another regular
+chat, and start a new one. Main declares the tools and forwards each call to
+the window, which reuses the chat pane's own send, steer, queue and stop paths.
+Live's sends carry `inputSource: "voice"` and show a "By voice" label (Remote
+revision 60, provisional). Settings → Aiden Live → **Let Live use the open
+chat** (on by default) and `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0` turn the
+tools off. No chat tool can answer an approval. Chat text and titles reach
+Live as untrusted data, and a send, stop or new chat with text needs speech
+that started after Live last read a chat or received a chat note.
+
 ## Evidence and architecture decision
 
 The local Pi checkout at `/Users/sambitbiswas/projects/opp/pi` was audited at
