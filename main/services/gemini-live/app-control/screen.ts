@@ -1,19 +1,19 @@
-// Builds Live's compact, numbered view of Aiden's own window from the DevTools
-// accessibility tree (`Accessibility.getFullAXTree`) and a DOM snapshot
-// (`DOMSnapshot.captureSnapshot`) of the same document. The DOM snapshot
-// supplies what the accessibility tree can't: the Live guard attributes on
-// ancestors, which fields hold secrets, and where each element is drawn.
+// Builds Live's compact, numbered view of Aiden's own window from nodes of
+// the DevTools accessibility tree and, for each element, the facts the page
+// itself reports (AIDEN_ELEMENT_FACTS_SOURCE): its Live guard, whether it
+// holds a secret, whether it is drawn on screen and whether it sits in chat
+// or other untrusted content.
 //
 // - Secret fields (passwords, one-time codes, card fields) never show a value,
-//   and neither does any text field inside a `data-live-guard="you"` region,
-//   which is where Aiden keeps credential and API key fields.
-// - Controls inside a "you" region are listed as only the user's to use;
-//   controls inside a "confirm" region say they ask the user first.
+//   and neither does any text field the user alone may use, which is where
+//   Aiden keeps credential and API key fields.
+// - Chat messages, workspace pages and the web panel are never read: each
+//   shows as one summary line, and nothing inside it is listed.
 // - The list is bounded: an open dialog comes first, then what matches
 //   `focus`, then what is visible, and the rest is counted as omitted.
 
-import { isSensitiveField } from "../../browser/credential-fields.js";
 import type { LiveGuard } from "../../../../renderer/shared/live-app-control.js";
+import type { AidenContentKind, AidenContentRegionFacts, AidenElementFacts } from "./page-action.js";
 
 export interface CdpAxValue {
   type?: string;
@@ -32,29 +32,6 @@ export interface CdpAxNode {
   backendDOMNodeId?: number;
 }
 
-/** The parts of `DOMSnapshot.captureSnapshot` the builder reads. */
-export interface CdpDomSnapshot {
-  documents: Array<{
-    nodes: {
-      parentIndex?: number[];
-      nodeName?: number[];
-      backendNodeId?: number[];
-      /** Per node, flat `[name, value, …]` string-table indexes. */
-      attributes?: number[][];
-    };
-    layout: { nodeIndex: number[]; bounds: number[][] };
-  }>;
-  strings: string[];
-}
-
-/** The visible part of the page, in the same CSS pixels as the snapshot's layout bounds. */
-export interface ScreenViewport {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 export interface AidenScreenElement {
   /** The number Live uses for this element until the next look. */
   ref: number;
@@ -64,6 +41,8 @@ export interface AidenScreenElement {
   guard: LiveGuard | null;
   /** Name of the dialog the element is in, if any. */
   dialog: string | null;
+  /** The page's fingerprint of the element, checked again before acting. */
+  key: string;
 }
 
 export interface AidenScreen {
@@ -87,6 +66,13 @@ export const AIDEN_SCREEN_MARKS = {
   confirm: "(asks the user first)",
   added: "(new)",
 } as const;
+
+/** The one line each untrusted region shows instead of its text. */
+export const AIDEN_CONTENT_SUMMARIES: Record<AidenContentKind, (count: number) => string> = {
+  chat: (count) => `[chat messages (${count}), text not shown]`,
+  artifact: () => "[workspace page, text not shown]",
+  web: () => "[web page panel, text not shown]",
+};
 
 const ROLE_ALIASES: Record<string, string> = {
   PopUpButton: "select",
@@ -135,97 +121,16 @@ const MAX_NAME = 80;
 const MAX_VALUE = 80;
 const MAX_FOCUS = 80;
 
-interface DomFacts {
-  guard: LiveGuard | null;
-  secret: boolean;
-  visible: boolean;
-}
-
-function attributePairs(strings: string[], indexes: number[] | undefined): string[] {
-  return (indexes ?? []).map((index) => strings[index] ?? "");
-}
-
-function ownGuard(attributes: string[]): LiveGuard | null {
-  let guard: LiveGuard | null = null;
-  for (let index = 0; index + 1 < attributes.length; index += 2) {
-    const name = attributes[index]!.toLowerCase();
-    const value = attributes[index + 1]!.trim().toLowerCase();
-    if (name === "data-onboarding-active" && value === "true") return "you";
-    if (name === "data-live-guard") {
-      if (value === "you") return "you";
-      if (value === "confirm") guard = "confirm";
-    }
-  }
-  return guard;
-}
-
-function intersects(bounds: number[] | undefined, viewport: ScreenViewport): boolean {
-  if (!bounds || bounds.length < 4) return false;
-  const [x, y, width, height] = bounds as [number, number, number, number];
-  if (!(width > 0 && height > 0)) return false;
-  return (
-    x < viewport.x + viewport.width &&
-    x + width > viewport.x &&
-    y < viewport.y + viewport.height &&
-    y + height > viewport.y
-  );
-}
-
-/** Guard, secret and visibility facts for every DOM node, by backend node id. */
-export function domFacts(snapshot: CdpDomSnapshot, viewport: ScreenViewport): Map<number, DomFacts> {
-  const facts = new Map<number, DomFacts>();
-  for (const document of snapshot.documents ?? []) {
-    const nodes = document.nodes ?? {};
-    const backendIds = nodes.backendNodeId ?? [];
-    const parents = nodes.parentIndex ?? [];
-    const visible = new Set<number>();
-    const layout = document.layout ?? { nodeIndex: [], bounds: [] };
-    for (let index = 0; index < layout.nodeIndex.length; index += 1) {
-      if (intersects(layout.bounds[index], viewport)) visible.add(layout.nodeIndex[index]!);
-    }
-    const guards: Array<LiveGuard | null | undefined> = new Array(backendIds.length);
-    const guardOf = (start: number): LiveGuard | null => {
-      // Walk up to the nearest node whose guard is known, then fill the path.
-      const path: number[] = [];
-      let index = start;
-      let inherited: LiveGuard | null = null;
-      while (index >= 0 && index < backendIds.length) {
-        const known = guards[index];
-        if (known !== undefined) {
-          inherited = known;
-          break;
-        }
-        path.push(index);
-        index = parents[index] ?? -1;
-      }
-      for (let step = path.length - 1; step >= 0; step -= 1) {
-        const node = path[step]!;
-        const own = ownGuard(attributePairs(snapshot.strings, nodes.attributes?.[node]));
-        inherited = own === "you" || inherited === "you" ? "you" : (own ?? inherited);
-        guards[node] = inherited;
-      }
-      return inherited;
-    };
-    for (let index = 0; index < backendIds.length; index += 1) {
-      const name = snapshot.strings[nodes.nodeName?.[index] ?? -1] ?? "";
-      facts.set(backendIds[index]!, {
-        guard: guardOf(index),
-        secret: isSensitiveField({
-          localName: name.toLowerCase(),
-          attributes: attributePairs(snapshot.strings, nodes.attributes?.[index]),
-        }),
-        visible: visible.has(index),
-      });
-    }
-  }
-  return facts;
-}
-
 function text(value: CdpAxValue | undefined): string {
   const raw = value?.value;
   if (typeof raw === "string") return raw.replace(/\s+/gu, " ").trim();
   if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
   return "";
+}
+
+/** A node's name as a look lists it, to compare with the same element later. */
+export function axName(node: CdpAxNode): string {
+  return clip(text(node.name), MAX_NAME);
 }
 
 function clip(value: string, max: number): string {
@@ -240,7 +145,8 @@ function property(node: CdpAxNode, name: string): unknown {
   return node.properties?.find((entry) => entry.name === name)?.value?.value;
 }
 
-function role(node: CdpAxNode): string {
+/** The role Live uses for a node: Chromium's internal select roles read as "select". */
+export function axRole(node: CdpAxNode): string {
   const raw = typeof node.role?.value === "string" ? node.role.value : "";
   return ROLE_ALIASES[raw] ?? raw;
 }
@@ -280,16 +186,20 @@ interface Item {
  * fit; the caller keeps `elements` to resolve the numbers Live sends back.
  */
 export function buildAidenScreen(input: {
-  ax: { nodes?: CdpAxNode[] };
-  dom: CdpDomSnapshot;
-  viewport: ScreenViewport;
+  nodes: readonly CdpAxNode[];
+  /** Facts for elements, by backend node id; an element without facts is left out. */
+  facts: ReadonlyMap<number, AidenElementFacts>;
+  /** Untrusted content region roots, by backend node id: summarized, never descended. */
+  regions?: ReadonlyMap<number, AidenContentRegionFacts>;
   focus?: string;
   limits?: AidenScreenLimits;
   previous?: ReadonlySet<string>;
 }): AidenScreen {
   const limits = input.limits ?? AIDEN_SCREEN_LIMITS;
-  const facts = domFacts(input.dom, input.viewport);
-  const nodes = input.ax.nodes ?? [];
+  const facts = input.facts;
+  const regions = input.regions ?? new Map<number, AidenContentRegionFacts>();
+  const summarized = new Set<number>();
+  const nodes = input.nodes;
   const byId = new Map(nodes.map((node) => [node.nodeId, node]));
   const focus = clip((input.focus ?? "").replace(/\s+/gu, " ").trim().toLowerCase(), MAX_FOCUS);
   const matches = (value: string) => focus.length > 0 && value.toLowerCase().includes(focus);
@@ -313,8 +223,18 @@ export function buildAidenScreen(input: {
     if (!node) continue;
     let dialog = entry.dialog;
     let region = entry.region;
+    const content = node.backendDOMNodeId !== undefined ? regions.get(node.backendDOMNodeId) : undefined;
+    if (content) {
+      // Chat and page text is data, not instructions: Live sees one line, never the text.
+      if (!summarized.has(content.group)) {
+        summarized.add(content.group);
+        const label = AIDEN_CONTENT_SUMMARIES[content.kind](content.count);
+        items.push({ order: order++, kind: "orientation", line: () => label, score: 20 + (dialog ? 100 : 0) });
+      }
+      continue;
+    }
     if (!node.ignored) {
-      const nodeRole = role(node);
+      const nodeRole = axRole(node);
       const name = clip(text(node.name), MAX_NAME);
       const dom = node.backendDOMNodeId !== undefined ? facts.get(node.backendDOMNodeId) : undefined;
       const visible = dom?.visible === true;
@@ -345,12 +265,12 @@ export function buildAidenScreen(input: {
       } else if (nodeRole === "alert" && name) {
         const label = `! ${name}`;
         items.push({ order: order++, kind: "orientation", line: () => label, score: visible ? 20 : 0 });
-      } else if (INTERACTIVE_ROLES.has(nodeRole) && node.backendDOMNodeId !== undefined) {
-        const guard = dom?.guard ?? null;
+      } else if (INTERACTIVE_ROLES.has(nodeRole) && dom && !dom.content) {
+        const guard = dom.guard;
         const nodeStates = states(node, nodeRole);
         if (nodeStates.includes("focused")) focusedName = name || nodeRole;
         // Credential and API key fields live in "you" regions; their text never leaves.
-        const hideValue = dom?.secret === true || (guard === "you" && TEXT_ROLES.has(nodeRole));
+        const hideValue = dom.secret || (guard === "you" && TEXT_ROLES.has(nodeRole));
         const rawValue = VALUE_ROLES.has(nodeRole) && !hideValue ? clip(text(node.value), MAX_VALUE) : "";
         const value = rawValue && rawValue !== name ? rawValue : "";
         const signature = `${nodeRole}\u0000${name}`;
@@ -372,11 +292,12 @@ export function buildAidenScreen(input: {
             (dialog ? 100 : 0) +
             (region || matches(name) || matches(lastHeading) ? 50 : 0),
           element: {
-            backendNodeId: node.backendDOMNodeId,
+            backendNodeId: node.backendDOMNodeId!,
             role: nodeRole,
             name,
             guard,
             dialog,
+            key: dom.key,
           },
         });
       }

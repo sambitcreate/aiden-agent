@@ -52,6 +52,11 @@ export class LiveAppControlController {
   private readonly listeners = new Set<() => void>();
   private actions = 0;
   private takenOver = false;
+  /**
+   * Live has acted for the user's latest request. Until they speak again, any
+   * input of their own takes over, even between steps when no outline shows.
+   */
+  private requestActive = false;
   private watch: ((result: LiveRendererToolResult) => void) | null = null;
   private lingerTimer: ReturnType<typeof setTimeout> | null = null;
   private confirmation: { id: string; finish(confirmed: boolean, reason: string): void } | null = null;
@@ -63,6 +68,7 @@ export class LiveAppControlController {
     this.stopVoice = deps.bus.onVoiceInput(() => {
       this.actions = 0;
       this.takenOver = false;
+      this.requestActive = false;
     });
   }
 
@@ -99,7 +105,7 @@ export class LiveAppControlController {
       if (event.type === "keydown" && event.key === "Escape") this.confirmation.finish(false, "cancelled");
       return;
     }
-    if (this.state.acting || this.watch) this.takeOver();
+    if (this.requestActive || this.state.acting || this.watch) this.takeOver();
   }
 
   /** Stops Live acting and hands the window back until the user speaks again. */
@@ -115,6 +121,7 @@ export class LiveAppControlController {
   reset(): void {
     this.actions = 0;
     this.takenOver = false;
+    this.requestActive = false;
     this.confirmation?.finish(false, "cancelled");
     const watch = this.watch;
     this.watch = null;
@@ -133,6 +140,7 @@ export class LiveAppControlController {
       return failure("limit", "That is the action limit for this request.");
     }
     this.actions += 1;
+    this.requestActive = true;
     this.setActing(label || "Moving through Aiden");
     return { ok: true, remaining: (this.deps.maxActions ?? LIVE_APP_CONTROL_MAX_ACTIONS) - this.actions };
   }

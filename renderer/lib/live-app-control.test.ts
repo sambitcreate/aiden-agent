@@ -60,3 +60,23 @@ test("main ending the watch clears the outline, and a guarded prompt is never re
   assert.equal(activity.get(), null, "a session that ends leaves nothing on the ribbon");
   controller.dispose();
 });
+
+test("the user's input between Live's steps takes over until they speak; before Live acts it changes nothing", async () => {
+  const { bus, controller, context } = setup();
+  // The user types and clicks as usual while Live hasn't acted for them.
+  controller.userInput({ type: "keydown", key: "a", isTrusted: true });
+  controller.userInput({ type: "pointerdown", isTrusted: true });
+  assert.equal((await controller.handle({ op: "admit", label: "Pressing “Settings”" }, context())).ok, true);
+  const abort = new AbortController();
+  const watch = controller.handle({ op: "watch" }, context(abort));
+  abort.abort();
+  await watch;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(controller.get().acting, false, "between steps no outline shows");
+  controller.userInput({ type: "wheel", isTrusted: true });
+  const refused = await controller.handle({ op: "admit", label: "Pressing “Save”" }, context());
+  assert.equal((refused.error as { code: string }).code, "taken_over", "the next step is refused");
+  bus.publishVoiceInput("ok, carry on");
+  assert.equal((await controller.handle({ op: "admit", label: "Pressing “Save”" }, context())).ok, true);
+  controller.dispose();
+});
