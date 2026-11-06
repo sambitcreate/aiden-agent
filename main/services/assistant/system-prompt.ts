@@ -6,7 +6,7 @@ import { aidenAppGuidance } from "../aiden-app-knowledge.js";
 import { RESPONSE_FORMAT_GUIDANCE } from "../response-format-guidance.js";
 
 export interface AssistantPromptInput {
-  /** Settings page titles, with tabs in brackets, the assistant may talk about. */
+  /** Settings page titles, with their tabs and named rows in brackets, the assistant may talk about. */
   settingsPages: readonly string[];
   /**
    * Names of the tools actually handed to this generation. The prompt is
@@ -198,7 +198,7 @@ export function withTelegramAgentContract(prompt: string, input: TelegramAgentPr
 
 export function buildAssistantSystemPrompt(input: AssistantPromptInput): string {
   const telegram = input.surface === "telegram";
-  const sections = `Settings are organised into these pages, with their tabs in brackets: ${input.settingsPages.join(", ")}.`;
+  const sections = `Settings are organised into these pages, with their tabs or named rows in brackets: ${input.settingsPages.join(", ")}.`;
   const canReadSettings = input.availableTools.includes("aiden_get_state");
   const canReadProjects = input.availableTools.includes("list_projects");
   const canReadMcpServers = input.availableTools.includes("list_mcp_servers");

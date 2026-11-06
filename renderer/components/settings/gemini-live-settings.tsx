@@ -179,10 +179,12 @@ export function AidenLiveSettings(): React.ReactElement {
           >
             <div className="flex items-center gap-2">
               <StateBadge ready={computerUse.data?.ready === true} checking={computerUse.isLoading} />
-              <Button size="small" variant="filled" onClick={() => go("computerUse")}>
-                <MousePointer2 />
-                Manage
-              </Button>
+              {capabilities.computerUse ? (
+                <Button size="small" variant="filled" onClick={() => go("computerUse")}>
+                  <MousePointer2 />
+                  Manage
+                </Button>
+              ) : null}
             </div>
           </Field>
         </FieldSet>

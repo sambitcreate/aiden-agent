@@ -515,7 +515,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
           title="This Mac is not connected"
-          description="Pair it again or turn it back on in Settings → Connections to start chats on it."
+          description="Pair it again or turn it back on in Settings → Connections → Control other devices to start chats on it."
         />
       </div>
     );
@@ -599,7 +599,7 @@ export function RemoteNewChatView({ hostId, workspaceId }: { hostId: string; wor
     [hostId, navigate],
   );
   const manage = React.useCallback(() => {
-    void navigate({ to: "/settings", search: { section: "remoteAccess" } });
+    void navigate({ to: "/settings", search: { section: "peerHosts" } });
   }, [navigate]);
   return (
     <RemoteNewChatRoute

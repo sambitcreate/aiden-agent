@@ -627,7 +627,7 @@ function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
   };
 }
 
-/** Usage-data consent (Settings → Diagnostics, onboarding and the one-time notice). */
+/** Usage-data consent (Settings → About, onboarding and the one-time notice). */
 export const analyticsApi = {
   status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
   setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),

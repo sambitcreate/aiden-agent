@@ -253,7 +253,6 @@ function RenameDialog({
   );
 }
 
-/** Connections → Control other devices. */
 /** Settings → Connections → Control other devices. */
 export function PeerHostsSettingsPage() {
   const capabilities = useAppCapabilities();
