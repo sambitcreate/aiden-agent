@@ -5,16 +5,129 @@ final class AidenShellUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// The real shell opens against every demo scenario. This is the CI smoke test.
+    /// Both shells open against every demo scenario. This is the CI smoke test.
     func testShellLaunchesForEveryScenario() {
+        for shell in AidenStateMatrix.Shell.allCases {
+            for scenario in AidenStateMatrix.Scenario.allCases {
+                let app = AidenStateMatrix.launch(scenario: scenario, shell: shell)
+                XCTAssertTrue(
+                    AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10),
+                    "No first screen for \(scenario.rawValue) in \(shell)"
+                )
+                app.terminate()
+            }
+        }
+    }
+
+    /// The flag is off, so nothing but a demo run that asks sees the tabs.
+    func testTheMenuShellStaysTheDefault() {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10))
+        XCTAssertFalse(app.tabBars.firstMatch.exists, "The tab bar showed with the flag off")
+        app.terminate()
+    }
+
+    func testAllFourTabsExistInEveryScenario() {
         for scenario in AidenStateMatrix.Scenario.allCases {
-            let app = AidenStateMatrix.launch(scenario: scenario)
-            XCTAssertTrue(
-                AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10),
-                "No first screen for \(scenario.rawValue)"
-            )
+            let app = AidenStateMatrix.launch(scenario: scenario, shell: .tabs)
+            XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10), scenario.rawValue)
+            for title in ["Bots", "Workspaces", "Search", "Inbox"] {
+                AidenStateMatrix.leaveSearch(in: app)
+                let tab = AidenStateMatrix.tab(title, in: app)
+                XCTAssertTrue(tab.waitForExistence(timeout: 5), "No \(title) tab in \(scenario.rawValue)")
+                tab.tap()
+                XCTAssertEqual(app.state, .runningForeground, "\(title) in \(scenario.rawValue)")
+            }
             app.terminate()
         }
+    }
+
+    /// A tab is never hidden, because on iOS 27 a selection pointing at a hidden
+    /// tab crashes. Bots stays selectable and says why it has nothing to show.
+    func testBotsTabStaysSelectableWhenBotsAreUnavailable() {
+        let app = AidenStateMatrix.launch(scenario: .oldHost, shell: .tabs)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
+
+        AidenStateMatrix.openArea("Bots", in: app)
+
+        XCTAssertTrue(app.staticTexts["Bots unavailable"].waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "newer version of Aiden Agent"))
+                .firstMatch.exists,
+            "The tab did not say why"
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+
+        AidenStateMatrix.openArea("Inbox", in: app)
+        XCTAssertEqual(app.state, .runningForeground)
+        app.terminate()
+    }
+
+    func testBotsTabDoesNotExplainAnythingWhenBotsAreAvailable() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
+
+        AidenStateMatrix.openArea("Bots", in: app)
+
+        XCTAssertTrue(app.navigationBars["Bots"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Bots unavailable"].exists)
+        app.terminate()
+    }
+
+    func testOnlyTheSearchTabHasASearchField() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        XCTAssertFalse(app.searchFields.firstMatch.exists, "Inbox has a search field")
+
+        for title in ["Bots", "Workspaces"] {
+            AidenStateMatrix.openArea(title, in: app)
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 10))
+            XCTAssertFalse(app.searchFields.firstMatch.exists, "\(title) has a search field")
+        }
+
+        AidenStateMatrix.openArea("Search", in: app)
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10), "Search has no field")
+        app.terminate()
+    }
+
+    /// The largest text makes the list taller than the screen, so it can scroll.
+    func testTheTabBarMinimizesOnScrollDownAndComesBack() {
+        let app = AidenStateMatrix.launch(
+            scenario: .busy,
+            shell: .tabs,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        let bots = app.tabBars.buttons["Bots"].firstMatch
+        XCTAssertTrue(bots.waitForExistence(timeout: 5))
+
+        app.swipeUp(velocity: .slow)
+        let minimized = NSPredicate(format: "exists == false OR hittable == false")
+        wait(for: [XCTNSPredicateExpectation(predicate: minimized, object: bots)], timeout: 5)
+        AidenStateMatrix.capture("tabs-inbox-minimized", in: self)
+
+        app.swipeDown(velocity: .slow)
+        XCTAssertTrue(bots.waitForExistence(timeout: 5), "The tab bar did not come back")
+        app.terminate()
+    }
+
+    /// The composer owns the bottom edge of a pushed chat.
+    func testAPushedChatHidesTheTabBarUntilItIsLeft() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        chat.tap()
+
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertFalse(app.tabBars.firstMatch.isHittable, "The tab bar stayed over the chat")
+
+        goBack(in: app)
+
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "Back did not return to the Inbox")
+        XCTAssertTrue(AidenStateMatrix.tab("Inbox", in: app).isHittable, "The tab bar did not come back")
+        app.terminate()
     }
 
     /// The composer's height is the transcript's bottom inset, and it settles
@@ -50,6 +163,46 @@ final class AidenShellUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         XCTAssertLessThan(firstMessage.frame.minY - navigationBar.maxY, 48, "The chat moved down the screen")
         app.terminate()
+    }
+
+    /// Every tab and a pushed chat, for a person to look at. A screen that cannot
+    /// be reached fails the test.
+    func testCaptureTabShellScreens() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        AidenStateMatrix.capture("tabs-inbox", in: self)
+
+        AidenStateMatrix.openArea("Bots", in: app)
+        XCTAssertTrue(app.navigationBars["Bots"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-bots", in: self)
+
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-workspaces", in: self)
+
+        AidenStateMatrix.openArea("Search", in: app)
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-search", in: self)
+
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10))
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        AidenStateMatrix.capture("tabs-pushed-chat", in: self)
+        goBack(in: app)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        Thread.sleep(forTimeInterval: 1)
+        AidenStateMatrix.capture("tabs-landscape", in: self)
+        XCUIDevice.shared.orientation = .portrait
+        app.terminate()
+
+        let oldHost = AidenStateMatrix.launch(scenario: .oldHost, shell: .tabs)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: oldHost).waitForExistence(timeout: 10))
+        AidenStateMatrix.openArea("Bots", in: oldHost)
+        XCTAssertTrue(oldHost.staticTexts["Bots unavailable"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-bots-unavailable", in: self)
+        oldHost.terminate()
     }
 
     /// Light, dark and the largest accessibility text, so later work has a
@@ -143,12 +296,16 @@ final class AidenShellUITests: XCTestCase {
 
     // MARK: Navigation
 
-    /// Opens the Workspaces side and opens the first workspace, whose chats are
-    /// the inbox. Returns the first chat row.
+    /// Opens the Inbox and returns the first chat row. In the menu shell that is
+    /// the Workspaces side with its first workspace open.
     private func openInbox(in app: XCUIApplication) -> XCUIElement {
-        AidenStateMatrix.openArea("Workspaces", in: app)
-        let expand = app.buttons["Expand Aiden Agent"].firstMatch
-        if expand.waitForExistence(timeout: 5) { expand.tap() }
+        if app.launchArguments.contains("-AidenDemoTabShell") {
+            AidenStateMatrix.openArea("Inbox", in: app)
+        } else {
+            AidenStateMatrix.openArea("Workspaces", in: app)
+            let expand = app.buttons["Expand Aiden Agent"].firstMatch
+            if expand.waitForExistence(timeout: 5) { expand.tap() }
+        }
         return app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")
         ).firstMatch

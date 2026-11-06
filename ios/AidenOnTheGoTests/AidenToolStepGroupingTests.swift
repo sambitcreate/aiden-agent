@@ -36,7 +36,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
             step(4, "read_file"), step(5, "read_file"), step(6, "run_command"),
         ])
 
-        let blocks = rows.groupedForDisplay()
+        let blocks = rows.groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(blocks.count, 1)
         let group = try XCTUnwrap(blocks.first?.group)
@@ -53,7 +53,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
         ])
         XCTAssertEqual(rows.filter { $0.kind == .tool }.count, 2, "The fixture should project to two tool rows")
 
-        let blocks = rows.groupedForDisplay()
+        let blocks = rows.groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(blocks.count, 1)
         XCTAssertEqual(blocks.first?.group?.summary, "Explored 2 files")
@@ -66,7 +66,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
             step(3, "read_file", offset: 8), step(4, "edit_file", offset: 8), step(5, "run_command", offset: 8),
         ])
 
-        let blocks = rows.groupedForDisplay()
+        let blocks = rows.groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(blocks.map(\.kindName), ["group", "text", "group", "text"])
         XCTAssertEqual(blocks[0].group?.summary, "Explored 1 file, 1 search")
@@ -75,7 +75,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
     }
 
     func testALoneStepStaysAnOrdinaryRow() {
-        let blocks = rows(text: "Before.After.", steps: [step(1, "read_file", offset: 7)]).groupedForDisplay()
+        let blocks = rows(text: "Before.After.", steps: [step(1, "read_file", offset: 7)]).groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(blocks.map(\.kindName), ["text", "row", "text"])
     }
@@ -86,7 +86,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
             step(3, "run_command", status: .awaitingApproval, detail: "rm -rf build"),
         ], running: true)
 
-        let blocks = rows.groupedForDisplay()
+        let blocks = rows.groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(blocks.map(\.kindName), ["group", "row"])
         XCTAssertEqual(blocks[0].group?.steps.flatMap(\.steps).map(\.id), ["tool-1", "tool-2"])
@@ -101,10 +101,50 @@ final class AidenToolStepGroupingTests: XCTestCase {
             step(4, "grep"), step(5, "grep"),
         ], running: true)
 
-        let blocks = rows.groupedForDisplay()
+        let blocks = rows.groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(blocks.map(\.kindName), ["group", "row", "group"])
         XCTAssertEqual(Set(blocks.map(\.id)).count, 3, "Block identities stay unique for ForEach")
+    }
+
+    func testAQuestionStillWaitingIsNeverFoldedIntoAGroup() throws {
+        // A waiting question never reaches `awaitingApproval`: it stays running (or pending)
+        // until it is answered, and its recap only exists once it completes.
+        for status in [AidenAgentStepStatus.running, .pending] {
+            let blocks = rows(text: "", steps: [
+                step(1, "read_file"), step(2, "read_file"), step(3, AidenQuestionnaireRecap.toolName, status: status),
+            ], running: true).groupedForDisplay(scope: "s", active: true)
+
+            XCTAssertEqual(blocks.map(\.kindName), ["group", "row"], "\(status)")
+            XCTAssertEqual(blocks[0].group?.summary, "Explored 2 files", "\(status)")
+            XCTAssertEqual(blocks[1].row?.steps.map(\.toolName), [AidenQuestionnaireRecap.toolName], "\(status)")
+        }
+        let alone = rows(text: "", steps: [step(1, AidenQuestionnaireRecap.toolName, status: .running)], running: true)
+            .groupedForDisplay(scope: "s", active: true)
+        XCTAssertEqual(alone.map(\.kindName), ["row"])
+    }
+
+    func testAQuestionWhoseRecapWasDroppedFoldsLikeAnyOtherStep() throws {
+        // A completed question with no usable recap renders as an ordinary activity line.
+        let blocks = rows(text: "", steps: [step(1, "read_file"), step(2, AidenQuestionnaireRecap.toolName)])
+            .groupedForDisplay(scope: "s", active: true)
+
+        XCTAssertEqual(blocks.map(\.kindName), ["group"])
+    }
+
+    func testAStoppedStepIsNotCountedAsRun() throws {
+        let command = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .cancelled)])
+            .groupedForDisplay(scope: "s", active: true).first?.group)
+        let edit = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "edit_file", status: .cancelled)])
+            .groupedForDisplay(scope: "s", active: true).first?.group)
+        let mixed = try XCTUnwrap(rows(text: "", steps: [
+            step(1, "run_command", status: .cancelled), step(2, "grep", status: .cancelled),
+        ]).groupedForDisplay(scope: "s", active: true).first?.group)
+
+        XCTAssertEqual(command.summary, "Explored 1 file, stopped 1 command")
+        XCTAssertEqual(edit.summary, "Explored 1 file, stopped 1 file change")
+        XCTAssertEqual(mixed.summary, "Stopped 2 actions")
+        XCTAssertFalse(command.hasFailure, "A stopped call is not a failure")
     }
 
     func testRowsThatAreNotToolStepsStayOutOfGroups() throws {
@@ -114,14 +154,14 @@ final class AidenToolStepGroupingTests: XCTestCase {
         let more = rows(text: "", steps: [step(3, "grep"), step(4, "grep")])
             .map { AidenChronologicalRow(id: "again-\($0.id)", kind: $0.kind, text: $0.text, steps: $0.steps) }
 
-        let blocks = (toolRows + [questionnaire, reasoning] + more).groupedForDisplay()
+        let blocks = (toolRows + [questionnaire, reasoning] + more).groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(blocks.map(\.kindName), ["group", "row", "row", "group"])
     }
 
     func testAFailureGroupsAndABlockedStepDoesNot() throws {
-        let failed = rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .failed)]).groupedForDisplay()
-        let denied = rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .blocked)]).groupedForDisplay()
+        let failed = rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .failed)]).groupedForDisplay(scope: "", active: true)
+        let denied = rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .blocked)]).groupedForDisplay(scope: "", active: true)
 
         XCTAssertEqual(failed.first?.group?.hasFailure, true)
         XCTAssertEqual(denied.first?.group?.hasFailure, false, "A denied command is the person's own call, not a failure")
@@ -131,10 +171,10 @@ final class AidenToolStepGroupingTests: XCTestCase {
     // MARK: - Identity
 
     func testAGroupKeepsItsIdentityWhenAStepIsAdded() throws {
-        let before = rows(text: "", steps: [step(1, "read_file"), step(2, "read_file")], running: true).groupedForDisplay(scope: "run-a")
+        let before = rows(text: "", steps: [step(1, "read_file"), step(2, "read_file")], running: true).groupedForDisplay(scope: "run-a", active: true)
         let after = rows(text: "", steps: [
             step(1, "read_file"), step(2, "read_file"), step(3, "run_command", status: .running),
-        ], running: true).groupedForDisplay(scope: "run-a")
+        ], running: true).groupedForDisplay(scope: "run-a", active: true)
 
         let group = try XCTUnwrap(after.first?.group)
         XCTAssertEqual(before.first?.id, after.first?.id)
@@ -145,14 +185,14 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testALoneStepKeepsItsRowIdentity() throws {
         let rows = rows(text: "", steps: [step(1, "read_file", status: .running)], running: true)
 
-        XCTAssertEqual(rows.groupedForDisplay(scope: "run-a").first?.id, rows.first?.id)
+        XCTAssertEqual(rows.groupedForDisplay(scope: "run-a", active: true).first?.id, rows.first?.id)
     }
 
     func testTwoRunsNeverShareAGroupIdentity() {
         // The Mac numbers steps from tool-1 in every run, so the first step's ID alone repeats.
         let steps = [step(1, "read_file"), step(2, "read_file")]
-        let first = rows(text: "", steps: steps).groupedForDisplay(scope: "stream-1")
-        let second = rows(text: "", steps: steps).groupedForDisplay(scope: "stream-2")
+        let first = rows(text: "", steps: steps).groupedForDisplay(scope: "stream-1", active: true)
+        let second = rows(text: "", steps: steps).groupedForDisplay(scope: "stream-2", active: true)
 
         XCTAssertNotEqual(first.first?.id, second.first?.id)
     }
@@ -160,9 +200,9 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testAGroupKeepsItsIdentityWhenTheRunSettles() {
         // The live view and the settled message group the same timeline under its generation ID.
         let live = rows(text: "", steps: [step(1, "read_file", status: .running), step(2, "grep", status: .running)], running: true)
-            .groupedForDisplay(scope: "stream-1")
+            .groupedForDisplay(scope: "stream-1", active: true)
         let settled = rows(text: "Done.", steps: [step(1, "read_file"), step(2, "grep")])
-            .groupedForDisplay(scope: "stream-1")
+            .groupedForDisplay(scope: "stream-1", active: true)
 
         XCTAssertEqual(live.first?.id, settled.first?.id)
     }
@@ -172,7 +212,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
             rows(text: text, steps: [
                 step(1, "read_file", offset: 0), step(2, "read_file", offset: 0),
                 step(3, "grep", offset: 9), step(4, "grep", offset: 9),
-            ], running: true).groupedForDisplay(scope: "s")
+            ], running: true).groupedForDisplay(scope: "s", active: true)
         }
         let early = blocks("Reading.\n\nMore")
         let later = blocks("Reading.\n\nMore of it, and a good deal more besides")
@@ -191,13 +231,13 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testExpansionSurvivesAStreamingAppend() throws {
         let expansion = AidenToolStepGroupExpansion()
         let before = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "read_file")], running: true)
-            .groupedForDisplay(scope: "s").first?.group)
+            .groupedForDisplay(scope: "s", active: true).first?.group)
         XCTAssertFalse(expansion.isExpanded(before))
 
         expansion.setExpanded(true, for: before.id)
         let after = try XCTUnwrap(rows(text: "", steps: [
             step(1, "read_file"), step(2, "read_file"), step(3, "grep", status: .running),
-        ], running: true).groupedForDisplay(scope: "s").first?.group)
+        ], running: true).groupedForDisplay(scope: "s", active: true).first?.group)
 
         XCTAssertEqual(before.id, after.id)
         XCTAssertTrue(expansion.isExpanded(after), "The group the person opened closed when a step arrived")
@@ -206,7 +246,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testAFailedGroupStartsExpanded() throws {
         let expansion = AidenToolStepGroupExpansion()
         let group = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .failed)])
-            .groupedForDisplay(scope: "s").first?.group)
+            .groupedForDisplay(scope: "s", active: true).first?.group)
 
         XCTAssertTrue(expansion.isExpanded(group))
     }
@@ -214,7 +254,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testAFailedGroupTheReaderClosedStaysClosedThroughLaterUpdates() throws {
         let expansion = AidenToolStepGroupExpansion()
         func group(_ steps: [AidenAgentStep]) throws -> AidenToolStepGroup {
-            try XCTUnwrap(rows(text: "", steps: steps, running: true).groupedForDisplay(scope: "s").first?.group)
+            try XCTUnwrap(rows(text: "", steps: steps, running: true).groupedForDisplay(scope: "s", active: true).first?.group)
         }
         let failed = try group([step(1, "read_file"), step(2, "run_command", status: .failed)])
         XCTAssertTrue(expansion.isExpanded(failed))
@@ -233,7 +273,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testAGroupThatFailsLaterOpensUnlessTheReaderChoseOtherwise() throws {
         let expansion = AidenToolStepGroupExpansion()
         func group(_ steps: [AidenAgentStep]) throws -> AidenToolStepGroup {
-            try XCTUnwrap(rows(text: "", steps: steps, running: true).groupedForDisplay(scope: "s").first?.group)
+            try XCTUnwrap(rows(text: "", steps: steps, running: true).groupedForDisplay(scope: "s", active: true).first?.group)
         }
         let healthy = try group([step(1, "read_file"), step(2, "read_file")])
         let failing = try group([step(1, "read_file"), step(2, "read_file"), step(3, "run_command", status: .failed)])
@@ -247,11 +287,11 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testAGroupTheReaderOpenedStaysOpenWhenAFailureLandsInIt() throws {
         let expansion = AidenToolStepGroupExpansion()
         let healthy = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "read_file")], running: true)
-            .groupedForDisplay(scope: "s").first?.group)
+            .groupedForDisplay(scope: "s", active: true).first?.group)
         expansion.setExpanded(true, for: healthy.id)
         let failing = try XCTUnwrap(rows(text: "", steps: [
             step(1, "read_file"), step(2, "read_file"), step(3, "run_command", status: .failed),
-        ], running: true).groupedForDisplay(scope: "s").first?.group)
+        ], running: true).groupedForDisplay(scope: "s", active: true).first?.group)
 
         XCTAssertTrue(expansion.isExpanded(failing))
     }
@@ -261,7 +301,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
         let blocks = rows(text: "A.B.", steps: [
             step(1, "read_file", offset: 0), step(2, "read_file", offset: 0),
             step(3, "grep", offset: 2), step(4, "grep", offset: 2),
-        ]).groupedForDisplay(scope: "s")
+        ]).groupedForDisplay(scope: "s", active: true)
         let groups = blocks.compactMap(\.group)
         XCTAssertEqual(groups.count, 2)
 
@@ -275,7 +315,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
         var events: [String] = []
         var expansion: AidenToolStepGroupExpansion!
         let healthy = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "read_file")])
-            .groupedForDisplay(scope: "s").first?.group)
+            .groupedForDisplay(scope: "s", active: true).first?.group)
         expansion = AidenToolStepGroupExpansion(onToggle: { events.append("told, open: \(expansion.isExpanded(healthy))") })
 
         expansion.toggle(healthy)
@@ -288,7 +328,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testATapClosesAFailedGroupThatStartedOpen() throws {
         let expansion = AidenToolStepGroupExpansion()
         let failed = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "run_command", status: .failed)])
-            .groupedForDisplay(scope: "s").first?.group)
+            .groupedForDisplay(scope: "s", active: true).first?.group)
 
         expansion.toggle(failed)
 
@@ -300,7 +340,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
         let group = try XCTUnwrap(rows(text: "", steps: [
             step(1, "read_file", detail: "a.swift"), step(2, "read_file", detail: "b.swift"),
             step(3, "run_command", status: .running, detail: "swift test"),
-        ], running: true).groupedForDisplay(scope: "s").first?.group)
+        ], running: true).groupedForDisplay(scope: "s", active: true).first?.group)
 
         XCTAssertTrue(group.isRunning)
         XCTAssertFalse(expansion.isExpanded(group))
@@ -309,9 +349,26 @@ final class AidenToolStepGroupingTests: XCTestCase {
         XCTAssertEqual(group.runningLine, "Running swift test")
     }
 
+    func testAStaleRunningStepInAReplyThatIsNoLongerActiveShowsNothingRunning() throws {
+        // A cancelled or interrupted run can leave its last step "running" in a settled message.
+        let steps = [step(1, "read_file"), step(2, "read_file"), step(3, "run_command", status: .running, detail: "swift test")]
+        let live = try XCTUnwrap(rows(text: "", steps: steps, running: true)
+            .groupedForDisplay(scope: "s", active: true).first?.group)
+        let settled = try XCTUnwrap(rows(text: "", steps: steps, running: true)
+            .groupedForDisplay(scope: "s", active: false).first?.group)
+
+        XCTAssertTrue(live.isRunning)
+        XCTAssertEqual(live.runningLine, "Running swift test")
+        XCTAssertEqual(live.summary, "Exploring 2 files, running 1 command")
+        XCTAssertFalse(settled.isRunning)
+        XCTAssertNil(settled.runningLine)
+        XCTAssertEqual(settled.summary, "Explored 2 files, ran 1 command")
+        XCTAssertNotEqual(live, settled)
+    }
+
     func testASettledGroupHasNoRunningLine() throws {
         let group = try XCTUnwrap(rows(text: "", steps: [step(1, "read_file"), step(2, "grep")])
-            .groupedForDisplay(scope: "s").first?.group)
+            .groupedForDisplay(scope: "s", active: true).first?.group)
 
         XCTAssertNil(group.runningLine)
     }
@@ -319,7 +376,7 @@ final class AidenToolStepGroupingTests: XCTestCase {
     func testTheGroupsLabelStatesTheSummaryAndWhetherItIsOpen() throws {
         let group = try XCTUnwrap(rows(text: "", steps: [
             step(1, "read_file"), step(2, "read_file"), step(3, "run_command", status: .failed),
-        ]).groupedForDisplay(scope: "s").first?.group)
+        ]).groupedForDisplay(scope: "s", active: true).first?.group)
 
         XCTAssertEqual(group.accessibilityLabel(isExpanded: false), "Explored 2 files, ran 1 command, 1 failed, collapsed")
         XCTAssertEqual(group.accessibilityLabel(isExpanded: true), "Explored 2 files, ran 1 command, 1 failed, expanded")
@@ -327,22 +384,39 @@ final class AidenToolStepGroupingTests: XCTestCase {
 
     // MARK: - Cost
 
-    func testGroupingAVeryLongRunIsLinear() {
-        // 20,000 tool steps in runs of ten, split by text rows: 2,000 groups and 2,000 text rows.
-        var rows: [AidenChronologicalRow] = []
-        for run in 0..<2_000 {
-            let steps = (0..<10).map { step(run * 10 + $0, "read_file", offset: run) }
-            rows.append(AidenChronologicalRow(id: "tool-\(steps[0].id)", kind: .tool, text: "", steps: steps))
-            rows.append(AidenChronologicalRow(id: "text-\(run)", kind: .text, text: "x", steps: []))
+    func testGroupingTakesTimeInProportionToTheRows() {
+        // 2,000 groups and 2,000 text rows at the top size. A pass that compared every row with every
+        // other would take 64 times longer for 8 times the rows; the margin here is 3 times linear,
+        // and the floor keeps a very fast small run from making the ratio meaningless.
+        func rows(runs: Int) -> [AidenChronologicalRow] {
+            var rows: [AidenChronologicalRow] = []
+            for run in 0..<runs {
+                let steps = (0..<10).map { step(run * 10 + $0, "read_file", offset: run) }
+                rows.append(AidenChronologicalRow(id: "tool-\(steps[0].id)", kind: .tool, text: "", steps: steps))
+                rows.append(AidenChronologicalRow(id: "text-\(run)", kind: .text, text: "x", steps: []))
+            }
+            return rows
         }
+        func best(_ rows: [AidenChronologicalRow]) -> (blocks: Int, seconds: Double) {
+            var blocks = 0
+            var fastest = Double.infinity
+            for _ in 0..<3 {
+                let start = ContinuousClock.now
+                blocks = rows.groupedForDisplay(scope: "s", active: true).count
+                let elapsed = ContinuousClock.now - start
+                fastest = min(fastest, Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+            }
+            return (blocks, fastest)
+        }
+        let small = best(rows(runs: 250))
+        let large = best(rows(runs: 2_000))
 
-        let start = ContinuousClock.now
-        let blocks = rows.groupedForDisplay(scope: "s")
-        let elapsed = ContinuousClock.now - start
-
-        XCTAssertEqual(blocks.count, 4_000)
-        XCTAssertEqual(blocks.compactMap(\.group).count, 2_000)
-        XCTAssertLessThan(elapsed, .seconds(1), "Grouping 20,000 steps took \(elapsed)")
+        XCTAssertEqual(small.blocks, 500)
+        XCTAssertEqual(large.blocks, 4_000)
+        XCTAssertLessThan(
+            large.seconds, 24 * max(small.seconds, 0.002),
+            "8 times the rows took \(large.seconds / max(small.seconds, 0.002)) times as long"
+        )
     }
 
     // MARK: - On screen
@@ -388,6 +462,28 @@ final class AidenToolStepGroupingTests: XCTestCase {
         defer { close(second) }
 
         XCTAssertTrue(accessibleElements(in: second).contains { $0.accessibilityLabel == "Explored 4 files, ran 2 commands, expanded" })
+    }
+
+    func testActivatingAGroupOpensItAndTellsTheScreenFirst() throws {
+        // As the chat screen builds it: the row stack owns the state, and its
+        // `onGroupToggle` stops the follow.
+        let follow = AidenTranscriptFollowController()
+        XCTAssertTrue(follow.isFollowing)
+        let window = try show(rowStackHost(onGroupToggle: { follow.handle(.userScrollBegin) }))
+        defer { close(window) }
+        let group = try XCTUnwrap(accessibleElements(in: window).first { $0.accessibilityLabel?.hasPrefix("Explored 4 files") == true })
+        XCTAssertEqual(group.accessibilityLabel, "Explored 4 files, ran 2 commands, collapsed")
+
+        XCTAssertTrue(group.accessibilityActivate(), "The group is not an activatable button")
+
+        XCTAssertTrue(
+            runMainLoop(until: {
+                accessibleElements(in: window).contains { $0.accessibilityLabel == "Explored 4 files, ran 2 commands, expanded" }
+            }),
+            "Activating the group did not open it"
+        )
+        XCTAssertTrue(accessibleElements(in: window).contains { $0.accessibilityLabel?.contains("a0.swift") == true })
+        XCTAssertFalse(follow.isFollowing, "The screen was not told the reader tapped a line")
     }
 
     func testTheGroupHoldsAtTheLargestTextSize() throws {
@@ -463,6 +559,18 @@ final class AidenToolStepGroupingTests: XCTestCase {
         }
         .environment(\.aidenToolGroupExpansion, expansion)
         .dynamicTypeSize(textSize)
+    }
+
+    private func rowStackHost(onGroupToggle: @escaping () -> Void) -> some View {
+        let steps = (0..<4).map { step($0 + 1, "read_file", detail: "a\($0).swift") }
+            + (4..<6).map { step($0 + 1, "run_command", detail: "swift test \($0)") }
+        let rows = rows(text: "", steps: steps)
+        return ScrollView {
+            AidenTranscriptRowStack(spacing: 12, bottomAnchorID: "bottom", onGroupToggle: onGroupToggle) {
+                AidenChronologicalTranscript(rows: rows, active: false, groupScope: "stream-1")
+            }
+            .padding(.horizontal, 16)
+        }
     }
 
     private func show(_ view: some View) throws -> UIWindow {
