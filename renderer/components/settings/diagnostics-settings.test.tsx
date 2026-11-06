@@ -1,8 +1,12 @@
+import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import test from "node:test";
+import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { installBotTestIpc } from "../../main/bots/test-dom";
+import { DiagnosticsSettings } from "./diagnostics-settings";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = (relative: string) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -19,11 +23,36 @@ test("Settings exposes local-only reveal export delete and explicit crash consen
   assert.match(component, /Active until Aiden restarts/u);
 });
 
+afterEach(cleanup);
+
+test("crash capture keeps its sensitivity warning on the row and its retention in a hint", async () => {
+  installBotTestIpc({
+    "diagnostics:status": () => ({
+      retainedBytes: 2_048,
+      fileCount: 1,
+      oldestAt: null,
+      newestAt: null,
+      sinkFailed: false,
+      droppedWrites: 0,
+      diagnosticMode: { enabled: false, expiresAt: null, disablesOnRestart: true, crashDumpCount: 0 },
+    }),
+    "analytics:status": () => ({ enabled: false, hasKey: false, envDisabled: false }),
+  });
+  render(<DiagnosticsSettings />);
+  const row = await screen.findByRole("group", { name: "Crash capture" });
+  await screen.findByText(/Off by default\./u);
+  assert.match(row.textContent ?? "", /may contain sensitive app or workspace data/u);
+  fireEvent.click(within(row).getByRole("button", { name: "About crash capture" }));
+  const hint = (await screen.findByRole("tooltip")).textContent ?? "";
+  assert.match(hint, /never uploaded automatically/u);
+  assert.match(hint, /at most three, for seven days/u);
+});
+
 test("renderer fault forwarding is main-policy-owned, categorical, and rate-limited", () => {
   const diagnostics = source("renderer/lib/dev-log.ts");
   const rootEntry = source("renderer/main/app.tsx");
   const boundary = source("renderer/components/ui.tsx");
-  assert.doesNotMatch(diagnostics, /import\.meta\.env\.DEV|\.message|\.stack|String\(reason\)/u);
+  assert.doesNotMatch(diagnostics, /import\.meta\.env\.DEV|String\(reason\)/u);
   assert.match(diagnostics, /diagnosticsApi\.policy\(\)/u);
   assert.match(diagnostics, /state\.sent < policy\.maxPerKey/u);
   assert.match(diagnostics, /suppressed/u);

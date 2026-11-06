@@ -5,7 +5,7 @@
 // watches are not built yet (D2 approved, spike pending).
 
 /** What a watch checks: a bounded GET of one address, or a script in the Bot's folder. */
-export type BotWatchSource = { type: "url"; url: string } | { type: "script"; script: string };
+export type BotWatchSource = { type: "url"; url: string } | { type: "script"; script: string } | { type: "connector"; watchId: string };
 
 export type BotRoutineTrigger =
   | { kind: "file_change"; folder: string; pattern?: string }
@@ -84,6 +84,10 @@ function parseWatch(record: Record<string, unknown>): BotRoutineTrigger | undefi
     const url = parseBotWatchUrl(fields.url);
     return url ? { kind: "watch", source: { type: "url", url }, everyMinutes: every } : undefined;
   }
+  if (fields.type === "connector") {
+    if (Object.keys(fields).length !== 2 || typeof fields.watchId !== "string" || !/^[a-f0-9-]{36}$/iu.test(fields.watchId) || ![15, 30, 60].includes(every)) return undefined;
+    return { kind: "watch", source: { type: "connector", watchId: fields.watchId }, everyMinutes: every };
+  }
   if (fields.type === "script") {
     if (Object.keys(fields).length !== 2 || !("script" in fields)) return undefined;
     const script = insideRelative(fields.script, BOT_WATCH_LIMITS.scriptChars);
@@ -132,6 +136,7 @@ function shortened(text: string, limit: number): string {
 export function formatBotRoutineTriggerLabel(trigger: BotRoutineTrigger): string {
   if (trigger.kind === "webhook") return "When this routine's link is called";
   if (trigger.kind === "watch") {
+    if (trigger.source.type === "connector") return `Every ${formatBotWatchInterval(trigger.everyMinutes)}, when its connector watch changes`;
     const what = trigger.source.type === "url"
       ? shortened(trigger.source.url, 80)
       : `the output of ${shortened(trigger.source.script, 60)}`;

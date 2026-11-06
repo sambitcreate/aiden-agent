@@ -92,6 +92,8 @@ function advanceBotReplyRow(state: BotReplyRowState, event: BotReplyRowEvent): B
 }
 
 export interface BotReplyRow {
+  /** Host-frozen original Bot identity for a peer final; display delivery only. */
+  botIncarnation?: string;
   requestId: string;
   botId: string;
   /** `reply` (absent): an answer to a Telegram message. `routine`: a routine's result. */
@@ -124,6 +126,9 @@ export interface TelegramBotMessage {
 }
 
 export interface TelegramBotReply {
+  /** Internal original owner identity, checked by the transport after its awaits. */
+  botId?: string;
+  botIncarnation?: string;
   chatId: number;
   threadId?: number;
   ownerUserId: number;
@@ -132,6 +137,8 @@ export interface TelegramBotReply {
 
 /** A routine result for the Bot's bound Telegram chat. */
 export interface TelegramBotRoutineDelivery {
+  botIncarnation?: string;
+  publication?: {assertCurrent():Promise<void>};
   botId: string;
   /** The routine run's session request id: one row per firing. */
   requestId: string;
@@ -154,7 +161,7 @@ export interface TelegramBotIngressDeps {
    * Whether a routine row may still go to its chat: the Bot's binding is
    * enabled and still targets that chat. Checked right before each send.
    */
-  routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "chatId" | "threadId">): Promise<boolean>;
+  routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "botIncarnation" | "chatId" | "threadId">): Promise<boolean>;
   /** The Bot's display name, for the paused line. */
   botName?(botId: string): Promise<string | undefined>;
   now?: () => number;
@@ -264,13 +271,13 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     return next;
   }
 
-  async function persist(file: OutboxFile): Promise<void> {
+  async function persist(file: OutboxFile,publication?:{assertCurrent():Promise<void>}): Promise<void> {
     const settled = file.rows.filter((row) => row.state === "sent" || row.state === "failed" || row.state === "dismissed");
     if (settled.length > MAX_SETTLED_ROWS) {
       const drop = new Set(settled.slice(0, settled.length - MAX_SETTLED_ROWS));
       file.rows = file.rows.filter((row) => !drop.has(row));
     }
-    await writeJsonAtomic(deps.file, file, { mode: 0o600, mkdirMode: 0o700 });
+    await writeJsonAtomic(deps.file, file, { mode: 0o600, mkdirMode: 0o700, beforePublish:async()=>{await publication?.assertCurrent();} });
   }
 
   /** Applies one event under the lock; undefined when the row has moved on and nothing changed. */
@@ -320,9 +327,14 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       ? await advance(requestId, "redelivery_started", (current) => void (current.redelivered = true))
       : await advance(requestId, "send_started");
     if (row === undefined || row.text === undefined) return;
+    if (row.kind === "routine" && !(await routineTargetEnabled(row))) {
+      await advance(requestId, "send_abandoned");
+      return;
+    }
     const text = duplicate ? `${MAY_BE_DUPLICATE_PREFIX} ${row.text}` : row.text;
     try {
       await deps.deliver({
+        ...(row.botIncarnation?{botId:row.botId,botIncarnation:row.botIncarnation}:{}),
         chatId: row.chatId,
         ...(row.threadId === undefined ? {} : { threadId: row.threadId }),
         ownerUserId: row.ownerUserId,
@@ -447,10 +459,12 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     async enqueueRoutineDelivery(delivery) {
       if (stopper.signal.aborted) return { queued: false };
       const queued = await locked(async (file) => {
+        await delivery.publication?.assertCurrent();
         if (file.rows.some((row) => row.requestId === delivery.requestId)) return false;
         file.rows.push({
           requestId: delivery.requestId,
           botId: delivery.botId,
+          ...(delivery.botIncarnation?{botIncarnation:delivery.botIncarnation}:{}),
           kind: "routine",
           submissionId: "",
           chatId: delivery.chatId,
@@ -460,7 +474,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
           text: telegramRoutineText(delivery.routineName, delivery.text),
           updatedAt: now(),
         });
-        await persist(file);
+        await persist(file,delivery.publication);
         return true;
       });
       if (queued) inBackground(() => deliverRow(delivery.requestId, false));

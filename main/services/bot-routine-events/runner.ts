@@ -8,6 +8,24 @@ import { botRoutineRequestId, type BotRoutineExecutor, type BotRoutineExecutorDe
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import type { BotRoutineTriggerKind } from "../../../renderer/shared/bot-routine-trigger.js";
 import type { BotEventRoutine } from "./store.js";
+import { withBotConnectorExecutionRestriction } from "../bot-connector-inventory-scope.js";
+import type { BotRoutineEventDispatcherDependencies } from "./dispatcher.js";
+
+function withEventExecutionScope<T>(routine: BotEventRoutine, action: () => Promise<T>): Promise<T> {
+  return routine.connector ? withBotConnectorExecutionRestriction({ routineId: routine.id, revision: routine.updatedAt, binding: routine.connector.binding,
+    ...(routine.connector.binding.adapter === "composio-calendar-v1" ? { condition: routine.connector.condition } : {}) }, action) : action();
+}
+
+/** Production model-ownership wiring shares one source boundary across both store phases. */
+export function createEventModelOwnershipPorts(ports: {
+  prepare: NonNullable<BotRoutineEventDispatcherDependencies["prepareRoutineExecution"]>;
+  claim: NonNullable<BotRoutineEventDispatcherDependencies["claimRoutineExecution"]>;
+}): Pick<BotRoutineEventDispatcherDependencies, "prepareRoutineExecution" | "claimRoutineExecution"> {
+  return {
+    prepareRoutineExecution: routine => withEventExecutionScope(routine, () => ports.prepare(routine)),
+    claimRoutineExecution: (routine, event, hash) => withEventExecutionScope(routine, () => ports.claim(routine, event, hash)),
+  };
+}
 
 /** An event routine as the executor's task: read-only, notify, never scheduled by cron. */
 export function eventRoutineTask(routine: BotEventRoutine): ScheduledTask {
@@ -65,7 +83,7 @@ export interface BotEventRunnerDependencies {
 export function createBotEventRunner(dependencies: BotEventRunnerDependencies) {
   const inFlight = new Set<AbortController>();
   return {
-    async run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<{ settled: boolean }> {
+    async run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }, signal?: AbortSignal): Promise<{ settled: boolean }> {
       const trigger = { kind: "event" as const, eventId: event.eventId, source: event.source, payload: event.payload };
       // The event's own request id as the run id: a replay after a restart
       // reads the recorded run or the admitted turn instead of sending again.
@@ -74,11 +92,12 @@ export function createBotEventRunner(dependencies: BotEventRunnerDependencies) {
       inFlight.add(controller);
       dependencies.runStarted?.(routine);
       try {
-        const run = await dependencies.executor.run(eventRoutineTask(routine), {
+        const execute = () => dependencies.executor.run(eventRoutineTask(routine), {
           trigger,
           runId: requestId,
-          signal: controller.signal,
+          signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
         });
+        const run = await withEventExecutionScope(routine, execute);
         // Only a run recorded under the event's own id, and handed to the
         // delivery log, is settled; anything else is replayed on next start
         // (the replay reads the saved run and only retries its delivery).

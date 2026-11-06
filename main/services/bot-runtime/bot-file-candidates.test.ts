@@ -7,6 +7,7 @@ import { createBotOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import type { BotToolCall } from "./tool-adapter.js";
+import { createBotRunAccess } from "./bot-run-access.js";
 
 const BOT = "bot-1";
 
@@ -48,4 +49,22 @@ test("a routine run's file writes are journaled even though the registry built t
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("bound file tools resolve only their calling run's late grant", async () => {
+  const root = await folder();
+  try {
+    const store = createBotRunAccess({ now: () => 1 });
+    const stat = await fs.stat(root, { bigint: true });
+    store.grant(BOT, { requestIds: ["r1"], target: "folder", key: root, root, label: "Folder", identity: { device: String(stat.dev), inode: String(stat.ino) }, policyRevision: "rev1", access: "write", owner: { kind: "access", id: "wait" }, grantedAt: 1, expiresAt: 100 });
+    const candidates = botFileCandidates([{ id: "home", label: "Bot folder", root }], {
+      routine: false, recordOwnWrite: () => {},
+      runAccess: { resolve: async (call) => store.location(BOT, await call.runRequestIds!(), "rev1") },
+    });
+    const tool = candidates.find(({ tool }) => tool.name === "write_file")!;
+    await tool.bind!(call(["r1"])).execute("w", { path: "yes.txt", content: "yes", location: "run.access" });
+    await assert.rejects(tool.bind!(call(["r2"])).execute("w", { path: "no.txt", content: "no", location: "run.access" }), /Ask with request_access first/u);
+    assert.equal(await fs.readFile(path.join(root, "yes.txt"), "utf8"), "yes");
+    await assert.rejects(fs.access(path.join(root, "no.txt")));
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

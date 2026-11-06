@@ -4846,7 +4846,7 @@ private struct AidenFolderBrowserView: View {
                     ContentUnavailableView(
                         "No Approved Folders",
                         systemImage: "folder.badge.questionmark",
-                        description: Text("Add an approved root in Aiden Agent → Settings → Remote Access, then try again.")
+                        description: Text("Add an approved root in Aiden Agent → Settings → Connections, then try again.")
                     )
                 } else {
                     List(roots) { root in

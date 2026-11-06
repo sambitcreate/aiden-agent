@@ -724,6 +724,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   ] as const) {
     if (settings[key] !== undefined && !isRecord(settings[key])) delete normalized[key];
   }
+  if (settings.botMessaging !== false) delete normalized.botMessaging;
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
@@ -737,6 +738,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
 /** Safe projection for consumers; persistence retains unknown nested future data. */
 export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
+  if (settings.botMessaging !== false) delete runtime.botMessaging;
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
   if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;

@@ -198,6 +198,15 @@ async function openPairingDialog() {
   return screen.findByRole("dialog", { name: "Pair Aiden On The Go" });
 }
 
+test("the security hint says what a phone can reach and that keys stay on the desktop", async () => {
+  remoteServer(snapshotWith());
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "About Remote Access security" }));
+  const hint = (await screen.findByRole("tooltip")).textContent ?? "";
+  assert.match(hint, /capabilities and folders approved on this desktop/u);
+  assert.match(hint, /Provider keys never leave Aiden\./u);
+});
+
 test("pairing shows the address and setup code, copies the code, and never renders the secret", async () => {
   const server = remoteServer(snapshotWith());
   mount();

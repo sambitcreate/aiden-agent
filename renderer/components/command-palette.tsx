@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
@@ -69,7 +69,13 @@ import {
   visibleModelEntries,
 } from "../lib/model-picker-data";
 import type { Provider } from "../lib/types";
-import { availableSettingsDestinations } from "../lib/settings-section";
+import {
+  availableSettingsDestinations,
+  availableSettingsPages,
+  pageFor,
+  settingsLocation,
+  settingsTabLabel,
+} from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
   createDefaultAppearanceConfig,
@@ -156,6 +162,7 @@ export function AppCommandPalette({
 }) {
   const capabilities = useAppCapabilities();
   const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const { activeId, workspaces } = useActiveWorkspace();
   const { binding, canExecute, execute, palette } = useCommandSystem();
@@ -318,10 +325,16 @@ export function AppCommandPalette({
     ...item,
     result: staticPaletteResult(`${item.title} theme appearance`, { disabled: busy }),
   }));
-  const settingsResults = availableSettingsDestinations(capabilities).map((destination) => ({
-    destination,
-    result: staticPaletteResult(`${destination.title} ${destination.keywords.join(" ")}`),
-  }));
+  const settingsPages = availableSettingsPages(capabilities);
+  const settingsResults = availableSettingsDestinations(capabilities).map((destination) => {
+    const pageId = pageFor(destination.id).id;
+    const pageTitle = settingsPages.find((page) => page.id === pageId)?.title ?? "";
+    return {
+      destination,
+      pageTitle,
+      result: staticPaletteResult(`${settingsTabLabel(destination.id)} ${destination.title} ${destination.keywords.join(" ")} ${pageTitle}`),
+    };
+  });
   // One inventory owns both rendering and selection, including static actions,
   // disabled states and force-mounted retry rows in every palette mode.
   // Appearance rows also answer a typed search at the top level ("dark").
@@ -1007,10 +1020,7 @@ export function AppCommandPalette({
                             if (!allowNavigation()) return;
                             rememberCommand("model.change");
                             close();
-                            void navigate({
-                              to: "/settings",
-                              search: { section: "providers" },
-                            });
+                            void navigate(settingsLocation("providers", router.state.location));
                           }}
                           className="min-h-11 px-3"
                         >
@@ -1070,10 +1080,7 @@ export function AppCommandPalette({
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
-                        void navigate({
-                          to: "/settings",
-                          search: { section: "providers" },
-                        });
+                        void navigate(settingsLocation("providers", router.state.location));
                       }}
                       className="min-h-11 px-3"
                     >
@@ -1113,23 +1120,20 @@ export function AppCommandPalette({
                       ) : null}
                     </PaletteResultItem>
                   ))}
-                  {settingsResults.map(({ destination, result }) => (
+                  {settingsResults.map(({ destination, pageTitle, result }) => (
                     <PaletteResultItem
                       key={destination.id}
                       result={result}
                       onSelect={() => {
                         if (!allowNavigation()) return;
                         close();
-                        void navigate({
-                          to: "/settings",
-                          search: { section: destination.id },
-                        });
+                        void navigate(settingsLocation(destination.id, router.state.location));
                       }}
                       className="min-h-11 px-3"
                     >
                       <Settings className="size-4 shrink-0 text-secondary" />
-                      <span className="min-w-0 flex-1 truncate">{destination.title}</span>
-                      <ItemDetail>{destination.group}</ItemDetail>
+                      <span className="min-w-0 flex-1 truncate">{settingsTabLabel(destination.id)}</span>
+                      <ItemDetail>{pageTitle}</ItemDetail>
                       <ChevronRight className="size-4 shrink-0 text-tertiary" />
                     </PaletteResultItem>
                   ))}

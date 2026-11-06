@@ -1,3 +1,4 @@
+import { botMessageRowLabel } from "../../shared/bot-messages";
 // The side panel's Activity tab (spec §8): every step of every reply, newest
 // reply first, grouped under the message or routine that started it. Built
 // from the transcript tool calls slice B enriched, whose details are already
@@ -43,6 +44,8 @@ function replyTitle(start: BotTurn["start"]): { title: string; routine: boolean 
       return { title: shortTitle(start.text, "Answer"), routine: false };
     case "handoff_result":
       return { title: "Hand-off", routine: false };
+    case "bot_message":
+      return { title: shortTitle(botMessageRowLabel(start.kind, start.botName), "Bot message"), routine: false };
     case "routine":
       return { title: shortTitle(start.label, "Routine"), routine: true };
     default:

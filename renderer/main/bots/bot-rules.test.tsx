@@ -199,7 +199,7 @@ test("where Bots have their own computers, the rules say they read the Bot's sta
   assert.equal(screen.queryByText(note), null);
 });
 
-test("under the rules, the profile says what routines do with Ask first steps and links to Settings → Bots", async () => {
+test("under the rules, the profile says what routines do with Ask first steps and links to Settings → Bots & Approvals", async () => {
   for (const goAhead of [false, true]) {
     installBotTestIpc({
       "bots:rules:get": (botId) => ({ botId: String(botId), revision: 0, rules: [] }),

@@ -103,12 +103,15 @@ class AidenBotsViewModel(
             _isLoading.value = _botList.value == null
             try {
                 supervisorScope {
+                    val messaging = coordinator.botMessagingController()
+                    val messagingGeneration = messaging.readGeneration
                     val botsRequest = async { request { client.bots() } }
                     val conversationsRequest = async { request { client.botConversations() } }
                     val botsResult = botsRequest.await()
                     val conversationsResult = conversationsRequest.await()
                     if (coordinator.client.value !== client) return@supervisorScope
                     botsResult.onSuccess { list ->
+                        messaging.adopt(list.messaging, generation = messagingGeneration)
                         _botList.value = list
                         botCache?.putBotList(list)
                     }
@@ -185,7 +188,7 @@ class AidenBotsViewModel(
     suspend fun deleteBot(botId: String, deleter: AidenBotDeleter): String? {
         val client = coordinator.client.value ?: return "Reconnect to your Mac to delete this Bot."
         return try {
-            deleter.delete(client, botId)
+            coordinator.deleteBot(client,botId,deleter)
             forgetBot(botId)
             null
         } catch (error: CancellationException) {

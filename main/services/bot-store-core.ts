@@ -138,6 +138,8 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     ...(interruptions ? { interruptions } : {}),
     // Also last, after interruptions: only "off" is stored.
     ...(bot.selfWakeUps === false ? { selfWakeUps: false as const } : {}),
+    ...(bot.acceptsBotMessages === false ? { acceptsBotMessages: false as const } : {}),
+    ...(bot.messagesOtherBots === false ? { messagesOtherBots: false as const } : {}),
     ...(typeof bot.selfWakeUpGeneration === "string" ? { selfWakeUpGeneration: bot.selfWakeUpGeneration } : {}),
   };
   return projected;
@@ -311,6 +313,11 @@ export function createBotStore(options: {
           delete bot.selfWakeUps;
           delete bot.selfWakeUpGeneration;
           if (selfWakeUpsOff) bot.selfWakeUps = false;
+          for (const key of ["acceptsBotMessages", "messagesOtherBots"] as const) {
+            const off = input[key] === undefined ? bot[key] === false : input[key] === false;
+            delete bot[key];
+            if (off) bot[key] = false;
+          }
           if (generation !== undefined) bot.selfWakeUpGeneration = generation;
           bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
           return structuredClone(botForRenderer(bot));

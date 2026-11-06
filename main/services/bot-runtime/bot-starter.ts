@@ -31,7 +31,7 @@ export interface BotStarterDeps {
   /** Durably save `creationKey` → `botId`. Called before the Bot is created. */
   reserveCreation(creationKey: string, botId: string): Promise<void>;
   /** Create the Bot with exactly `botId` (the desktop default). */
-  createBot(input: BotCreateInput, access: BotAccessUpdate | undefined, botId: string): Promise<BotDefinition>;
+  createBot(input: BotCreateInput, access: BotAccessUpdate | undefined, botId: string, presetId: string): Promise<BotDefinition>;
   session: Pick<BotSessionRuntime, "send" | "state" | "conversation">;
   onIntroError?(botId: string, error: unknown): void;
 }
@@ -51,7 +51,7 @@ export interface BotStartOptions {
    */
   introduce?: boolean;
   /** Creates the Bot with exactly `botId` for another audience (a paired phone); the key is still kept here. */
-  createBot?(input: BotCreateInput, botId: string): Promise<BotDefinition>;
+  createBot?(input: BotCreateInput, botId: string, presetId: string): Promise<BotDefinition>;
 }
 
 export interface BotStarter {
@@ -69,7 +69,10 @@ export function createBotStarter(deps: BotStarterDeps): BotStarter {
       const options = optionsByKey.get(key) ?? {};
       const botId = deps.mintBotId();
       await deps.reserveCreation(key, botId);
-      return options.createBot ? options.createBot(input, botId) : deps.createBot(input, options.access, botId);
+      const presetId = key.slice("preset:".length);
+      return options.createBot
+        ? options.createBot(input, botId, presetId)
+        : deps.createBot(input, options.access, botId, presetId);
     },
   });
 

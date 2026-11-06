@@ -54,15 +54,15 @@ export function resolveVoiceProvider(input: VoiceProviderInputs): VoiceProviderR
 export function voiceSetupMessage(reason: VoiceSetupReason): string {
   switch (reason) {
     case "no-local-model":
-      return "Download a voice model in Settings → Voice.";
+      return "Download a voice model in Settings → Voice & Speech.";
     case "no-provider":
-      return "Set up a voice provider in Settings → Voice.";
+      return "Set up a voice provider in Settings → Voice & Speech.";
     case "local-engine-unavailable":
-      return "On-device voice couldn't start. Restart Aiden, or choose a cloud provider in Settings → Voice.";
+      return "On-device voice couldn't start. Restart Aiden, or choose a cloud provider in Settings → Voice & Speech.";
   }
 }
 
-/** Setup guidance phrased for Settings → Voice itself, where the fix is on the same page. */
+/** Setup guidance phrased for Settings → Voice & Speech itself, where the fix is on the same page. */
 function settingsSetupMessage(reason: VoiceSetupReason): string {
   switch (reason) {
     case "no-local-model":

@@ -8,6 +8,8 @@ import {
   assertAidenRemoteEndpoint,
   type AidenRemoteCapability,
 } from "./aiden-remote-protocol.js";
+import { captureAnalyticsReporter } from "./analytics/analytics-report.js";
+import { countBucket } from "./analytics/analytics-sanitize.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { hkdfSha256, sealAesGcm } from "./aiden-remote-sealed-envelope.js";
 import type {
@@ -60,6 +62,7 @@ interface PairingWindow {
   sessionId: string;
   secretDigest: Buffer;
   endpoint: string;
+  transport: "lan" | "tailscale";
   serverSpkiSha256: string;
   expiresAt: number;
   consumed: boolean;
@@ -231,7 +234,8 @@ export class AidenRemotePairingService {
 
   constructor(
     private readonly instanceId: string,
-    private readonly devices: Pick<AidenRemoteStateRegistry, "issueDevice">,
+    private readonly devices: Pick<AidenRemoteStateRegistry, "issueDevice"> &
+      Partial<Pick<AidenRemoteStateRegistry, "listDevices">>,
     private readonly dependencies: AidenRemotePairingDependencies = {
       now: Date.now,
       randomBytes,
@@ -245,6 +249,7 @@ export class AidenRemotePairingService {
   begin(
     endpoint: string,
     serverSpkiSha256: string,
+    transport: "lan" | "tailscale" = "lan",
   ): AidenRemoteDesktopPairing {
     assertAidenRemoteEndpoint(endpoint);
     if (!/^sha256\/[A-Za-z0-9+/]{43}=$/u.test(serverSpkiSha256)) {
@@ -264,6 +269,7 @@ export class AidenRemotePairingService {
       sessionId,
       secretDigest: digestSecret(secret),
       endpoint,
+      transport,
       serverSpkiSha256,
       expiresAt,
       consumed: false,
@@ -519,6 +525,7 @@ export class AidenRemotePairingService {
       }
       current.issuedDeviceId = issued.device.id;
       this.onStatusChanged();
+      this.reportPhonePaired(input.deviceType, current.transport);
     } catch (error) {
       if (this.window === current && !current.cancelled) {
         current.issuanceFailed = true;
@@ -536,5 +543,19 @@ export class AidenRemotePairingService {
       serverSpkiSha256: current.serverSpkiSha256,
       ...(input.acceptsDisplayName ? { displayName: this.displayName() } : {}),
     };
+  }
+
+  // A Mac or Linux client reports its own side as peer_mac_paired. The count is
+  // read in the background so the phone's pairing never waits on it.
+  private reportPhonePaired(deviceType: AidenRemoteDeviceType, transport: "lan" | "tailscale"): void {
+    if (deviceType === "mac" || deviceType === "linux") return;
+    const report = captureAnalyticsReporter();
+    void Promise.resolve()
+      .then(() => this.devices.listDevices?.())
+      .then((devices = []) => {
+        const phones = devices.filter((device) => !device.revokedAt && device.type !== "mac" && device.type !== "linux");
+        report("phone_paired", { transport, device_count: countBucket(phones.length) });
+      })
+      .catch(() => undefined);
   }
 }

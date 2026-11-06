@@ -12,6 +12,7 @@ import {
   flushDiagnosticJournal,
   initDiagnosticJournal,
   listDiagnosticJournalFiles,
+  observeDiagnosticEvents,
   MAX_DIAGNOSTIC_LOG_AGE_MS,
   MAX_DIAGNOSTIC_LOG_BYTES,
   MAX_DIAGNOSTIC_LOG_FILES,
@@ -831,4 +832,46 @@ test("a fatal snapshot publication failure preserves its destination and release
     await snapshotDiagnosticJournalFiles(next);
     assert.match(await fs.readFile(path.join(next, "aiden-fatal.log"), "utf8"), /"sequence":2/u);
   });
+});
+
+test("what is passed beside an event reaches the observer and never the journal", async () => {
+  await withJournal("production", async (target, dir) => {
+    const rawError = { message: "reply: my landlord refuses", stack: "at /Users/jane/secret-plan/x.js:1:1" };
+    const seen: unknown[] = [];
+    observeDiagnosticEvents((event, detail) => seen.push([event.event, detail?.rawError]));
+    try {
+      writeDiagnosticEvent({ level: "error", area: "renderer", event: "renderer-global-error", outcome: "failed" }, { rawError });
+      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "uncaught-exception", outcome: "failed" }, { rawError });
+      await flushDiagnosticJournal();
+    } finally {
+      observeDiagnosticEvents(undefined);
+    }
+
+    assert.deepEqual(seen, [["renderer-global-error", rawError], ["uncaught-exception", rawError]]);
+    for (const file of [target, path.join(dir, "aiden-fatal.log")]) {
+      const written = await fs.readFile(file, "utf8");
+      assert.doesNotMatch(written, /landlord|secret-plan|jane/u);
+    }
+  });
+});
+
+test("the observer sees events the journal drops, and its failures stay out of the writer", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-journal-"));
+  try {
+    initDiagnosticJournal({ targetPath: path.join(dir, "aiden.log"), profile: "production", writeMode: "fatal-only" });
+    const seen: string[] = [];
+    observeDiagnosticEvents((event) => {
+      seen.push(event.event);
+      // Reporting that itself writes an event must not come back here.
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check" });
+      throw new Error("observer failed");
+    });
+    assert.doesNotThrow(() => writeDiagnosticEvent({ level: "error", area: "electron", event: "child-process-gone" }));
+    assert.doesNotThrow(() => writeDiagnosticEventSync({ level: "fatal", area: "app", event: "uncaught-exception" }));
+    assert.deepEqual(seen, ["child-process-gone", "uncaught-exception"]);
+  } finally {
+    observeDiagnosticEvents(undefined);
+    await flushDiagnosticJournal();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
