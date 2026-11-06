@@ -43,6 +43,8 @@ export type AssistantLiveRendererEvent =
       direction: "input" | "output";
       final: boolean;
       text: string;
+      /** Google marked this transcription finished, which ends the user's utterance. */
+      finished?: true;
     }
   | { type: "model_text"; sessionId: string; text: string }
   | { type: "computer_use_state"; sessionId: string; active: boolean }

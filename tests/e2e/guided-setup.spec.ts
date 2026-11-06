@@ -1,18 +1,19 @@
 import type { ElectronApplication } from "playwright";
 import { BOT_FULL_ACCESS_NOTICE_VERSION, type BotCapabilityCatalog } from "../../renderer/shared/bot-capabilities";
 import { botFixture } from "../../renderer/main/bots/test-fixtures";
-import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, skipBotsOnboardingStep, test } from "./fixtures";
+import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, connectOnboardingLmStudio, test } from "./fixtures";
 
-test("onboarding exposes the four primary AI choices and validates custom setup", async ({ aiden }) => {
+test("onboarding groups connection methods and validates custom setup", async ({ aiden }) => {
   const { page } = aiden;
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  for (const name of [/^ChatGPT /u, /^LM Studio /u, /^Ollama /u, /^Other Custom Provider /u]) {
+  for (const name of [/I have an account/u, /I have an API key/u, /I run a local model/u]) {
     await expect(onboarding.getByRole("button", { name })).toBeVisible();
   }
-  await expect(onboarding.getByRole("button", { name: /^Other ways/u })).toHaveAttribute("aria-expanded", "false");
-  await onboarding.getByRole("button", { name: /^Other Custom Provider /u }).click();
+  await expect(onboarding.getByRole("button", { name: "Custom endpoint" })).toBeHidden();
+  await onboarding.getByText("Advanced connection", { exact: true }).click();
+  await onboarding.getByRole("button", { name: "Custom endpoint" }).click();
   const custom = page.getByRole("dialog", { name: "Configure Custom Provider" });
   await expect(custom).toBeVisible();
   await custom.getByRole("button", { name: "Save", exact: true }).click();
@@ -21,23 +22,15 @@ test("onboarding exposes the four primary AI choices and validates custom setup"
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
 });
 
-test("skipping provider setup explains the blocked Next and leaves a route to Providers", async ({ aiden }) => {
+test("skipping provider setup leaves a route to Providers", async ({ aiden }) => {
   const { page } = aiden;
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
   await expect(onboarding.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
 
-  const next = onboarding.getByRole("button", { name: /^Next/u });
-  await expect(next).toBeDisabled();
-  await expect(next).toHaveAccessibleDescription(
-    "Sign in with ChatGPT to continue, or choose another connection.",
-  );
-  await expect(onboarding.getByText(/setup required/u)).toHaveCount(0);
-
-  await onboarding.getByRole("button", { name: "Skip provider" }).click();
+  await onboarding.getByRole("button", { name: "Set up later" }).click();
   await expect(onboarding.getByText("Provider setup skipped")).toBeVisible();
-  await skipBotsOnboardingStep(onboarding);
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
 
@@ -48,7 +41,7 @@ test("skipping provider setup explains the blocked Next and leaves a route to Pr
   await expect(connect.first()).toBeVisible();
   await connect.first().click();
   await expect(
-    page.getByText(/Connect with credentials when required; Aiden keeps their model catalogs current/u),
+    page.getByRole("button", { name: /Connect (?:another )?AI/u }),
   ).toBeVisible();
 });
 
@@ -197,9 +190,8 @@ test("feature gallery reveals complete descriptions through keyboard focus at na
   const onboarding = page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-  await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await skipBotsOnboardingStep(onboarding);
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const width of [1000, 600, 390]) {
     await aiden.app.evaluate(({ BrowserWindow }, nextWidth) => {
@@ -250,8 +242,8 @@ for (const platform of ["linux", "darwin"] as const) {
     const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
+    await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
     const card = onboarding.getByRole("article", { name: /^Model Freedom\./u });
     await card.focus();
     const description = card.locator("[data-onboarding-feature-description]");
@@ -262,7 +254,7 @@ for (const platform of ["linux", "darwin"] as const) {
       await expect(description).not.toContainText("Apple");
       await expect(card).not.toHaveAttribute("aria-label", /Apple/u);
     }
-    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s More options");
+    await expect(description).toContainText("Enable local llama.cpp classification in a custom provider’s Advanced panel under Model options");
     await expect(description).toContainText("approve sending it; provider charges may apply");
   });
 }
@@ -281,9 +273,8 @@ for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel M
     const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await skipBotsOnboardingStep(onboarding);
+    await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
     const tile = onboarding.getByRole("article", { name: /^Bot computers\./u });
     if (!botComputers) {
       await expect(onboarding.getByRole("article", { name: /^Meet your Bots\./u })).toBeVisible();
@@ -307,9 +298,8 @@ test("feature tour explains image and classifier disclosure on rendered cards", 
   const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-  await onboarding.getByRole("button", { name: /^Next/u }).click();
-  await skipBotsOnboardingStep(onboarding);
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   const images = onboarding.getByRole("article", { name: /Generate or edit attached images/u });
   await images.hover();
   await expect(images.getByText(/approving the prompt, reference images, and possible provider charges/u)).toBeVisible();

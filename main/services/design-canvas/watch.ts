@@ -1,0 +1,157 @@
+// Watches the workspace files a chat's design canvas shows, so a frame reloads
+// when Aiden (or anything else) rewrites its page or the assets beside it.
+// One watcher per folder; the paths are re-validated against the workspace on
+// every `set`, and nothing outside the workspace root is ever watched.
+
+import type * as fs from "node:fs";
+import { watch as fsWatch } from "node:fs";
+import * as fsp from "node:fs/promises";
+import path from "node:path";
+import { isDesignRelativePath } from "../../../renderer/shared/design-canvas/schema.js";
+import { isPathInside } from "../../shared/path-containment.js";
+
+/** The most workspace paths one chat's canvas watches. */
+export const DESIGN_WATCH_LIMIT = 50;
+/** Quiet period before a burst of writes is reported, in milliseconds. */
+export const DESIGN_WATCH_DEBOUNCE_MS = 150;
+
+export const DESIGN_FILES_CHANGED_CHANNEL = "designCanvas:filesChanged";
+
+/** Broadcast on `designCanvas:filesChanged`. */
+export type DesignFilesChanged = { chatId: string; paths: string[] };
+
+type WatchListener = (event: string, filename: string | Buffer | null) => void;
+type WatchFn = (
+  folder: string,
+  options: { recursive: boolean; persistent: boolean },
+  listener: WatchListener,
+) => Pick<fs.FSWatcher, "close" | "on">;
+
+type ChatWatch = {
+  root: string;
+  generation: number;
+  folders: Array<{ close(): void }>;
+  pending: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
+export class DesignFileWatcher {
+  private readonly chats = new Map<string, ChatWatch>();
+  private readonly generations = new Map<string, number>();
+  private readonly watch: WatchFn;
+  private readonly debounceMs: number;
+
+  constructor(
+    private readonly deps: {
+      onChange(update: DesignFilesChanged): void;
+      /** Re-checked before every report; false closes the chat's watchers. */
+      allowed?: (chatId: string, root: string) => boolean;
+      watch?: WatchFn;
+      debounceMs?: number;
+    },
+  ) {
+    this.watch = deps.watch ?? ((folder, options, listener) => fsWatch(folder, options, listener));
+    this.debounceMs = deps.debounceMs ?? DESIGN_WATCH_DEBOUNCE_MS;
+  }
+
+  /** Replaces the chat's watched set. An empty list stops watching. */
+  async set(chatId: string, root: string, relativePaths: readonly string[]): Promise<void> {
+    const generation = (this.generations.get(chatId) ?? 0) + 1;
+    this.generations.set(chatId, generation);
+    const unique = [...new Set(relativePaths.filter(isDesignRelativePath))].slice(0, DESIGN_WATCH_LIMIT);
+    const byFolder = await this.groupByRealFolder(root, unique);
+    // A newer `set` (or a `clear`) ran while we checked the disk.
+    if (this.generations.get(chatId) !== generation) return;
+    this.close(chatId);
+    if (!byFolder) return;
+
+    const entry: ChatWatch = { root, generation, folders: [], pending: new Set(), timer: null };
+    for (const [folder, { paths, recursive }] of byFolder) {
+      try {
+        const handle = this.watch(folder, { recursive, persistent: false }, (_event, filename) => {
+          const name = filename === null ? null : String(filename);
+          // Editors and git churn hidden files; they never change what a frame shows.
+          if (name?.split(/[\\/]/u).some((segment) => segment.startsWith("."))) return;
+          // A watched page that changed reloads alone; anything else in the folder
+          // (a stylesheet, an image, an unnamed event) may feed every page there.
+          const page = name === null ? undefined : paths.find((relative) => path.posix.basename(relative) === name);
+          this.queue(chatId, generation, page ? [page] : paths);
+        });
+        // A folder removed while watched errors once; the frame shows its own missing state.
+        handle.on("error", () => handle.close());
+        entry.folders.push(handle);
+      } catch {
+        // The folder vanished between the check and the watch: nothing to watch there.
+      }
+    }
+    if (entry.folders.length > 0) this.chats.set(chatId, entry);
+  }
+
+  clear(chatId: string): void {
+    this.generations.set(chatId, (this.generations.get(chatId) ?? 0) + 1);
+    this.close(chatId);
+  }
+
+  clearAll(): void {
+    for (const chatId of [...this.chats.keys()]) this.clear(chatId);
+  }
+
+  /** Real folder → the watched paths inside it, or null when the root itself is gone. */
+  private async groupByRealFolder(
+    root: string,
+    paths: readonly string[],
+  ): Promise<Map<string, { paths: string[]; recursive: boolean }> | null> {
+    if (paths.length === 0) return null;
+    let realRoot: string;
+    try {
+      realRoot = await fsp.realpath(root);
+    } catch {
+      return null;
+    }
+    const byFolder = new Map<string, { paths: string[]; recursive: boolean }>();
+    for (const relative of paths) {
+      let folder: string;
+      try {
+        folder = await fsp.realpath(path.join(realRoot, path.posix.dirname(relative)));
+      } catch {
+        continue;
+      }
+      if (!isPathInside(realRoot, folder, { allowRoot: true })) continue;
+      // The workspace root itself is watched shallowly: a recursive watch there
+      // would follow node_modules, build output and every other folder.
+      const recursive = folder !== realRoot;
+      const group = byFolder.get(folder) ?? { paths: [], recursive };
+      group.paths.push(relative);
+      byFolder.set(folder, group);
+    }
+    return byFolder.size > 0 ? byFolder : null;
+  }
+
+  private queue(chatId: string, generation: number, paths: readonly string[]): void {
+    const entry = this.chats.get(chatId);
+    if (!entry || entry.generation !== generation) return;
+    for (const relative of paths) entry.pending.add(relative);
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => this.flush(chatId, entry), this.debounceMs);
+  }
+
+  private flush(chatId: string, entry: ChatWatch): void {
+    entry.timer = null;
+    if (this.chats.get(chatId) !== entry) return;
+    if (this.deps.allowed && !this.deps.allowed(chatId, entry.root)) {
+      this.clear(chatId);
+      return;
+    }
+    const paths = [...entry.pending];
+    entry.pending.clear();
+    if (paths.length > 0) this.deps.onChange({ chatId, paths });
+  }
+
+  private close(chatId: string): void {
+    const entry = this.chats.get(chatId);
+    if (!entry) return;
+    this.chats.delete(chatId);
+    if (entry.timer) clearTimeout(entry.timer);
+    for (const handle of entry.folders) handle.close();
+  }
+}

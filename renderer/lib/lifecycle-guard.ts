@@ -10,7 +10,7 @@ export interface RendererLifecycleGuard {
  * clearing its state (the Files editor switching workspace) never releases another's (an image
  * workflow still autosaving), and main can name the right thing in the quit prompt.
  */
-export type RendererLifecycleSource = "editor" | "images";
+export type RendererLifecycleSource = "editor" | "images" | "design";
 
 interface SourceState {
   dirty: boolean;
@@ -19,10 +19,11 @@ interface SourceState {
   label?: string;
 }
 
-const SOURCES: readonly RendererLifecycleSource[] = ["editor", "images"];
+const SOURCES: readonly RendererLifecycleSource[] = ["editor", "images", "design"];
 const sources: Record<RendererLifecycleSource, SourceState> = {
   editor: { dirty: false, saving: false },
   images: { dirty: false, saving: false },
+  design: { dirty: false, saving: false },
 };
 let current: RendererLifecycleGuard = { dirty: false, gitBusy: false, revision: 0, saving: false };
 

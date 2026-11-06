@@ -74,6 +74,29 @@ work while Aiden is in the background.
 | `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
+| `⇧⌘L` | Design mode on / off for this chat (experimental, needs `AIDEN_EXPERIMENTAL_DESIGN_MODE=1`; `/design` and `/design off` do the same). `Esc` never leaves design mode |
+
+On the design canvas (with the canvas focused, not a note or an entered
+page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection, `⌫` or
+`Delete` removes it, `⇧1` fits everything, `⇧2` fits the selection, `⇧0`
+resets the zoom, `+` / `-` zoom, `V` / `H` pick the Select or Hand tool,
+`N` adds a note, `C` turns on the comment tool (a click on an element of a
+live page, a frame or the canvas opens a comment there; `⌥` picks the
+element's parent; in the comment box `↩` saves and `Esc` closes; `Esc` again
+leaves the tool), `F2` renames the selected frame (as does a double-click on
+its title; `↩` keeps the name, `Esc` cancels) and `M` shows the minimap.
+The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
+`L` a line, `⇧L` an arrow, `P` the pencil and `⇧P` the pen (hold `⇧` while
+dragging for a square box or a 45° line; `↩`, `Esc` or a double-click
+finishes a pen path). `↩` or a double-click on selected text or a shape edits
+its words; `Esc` or `⌘↩` finishes. `Esc` turns a drawing tool off.
+Inside a note or text item, `⌘B`, `⌘I` and `⌘U` make the selected words bold,
+italic or underlined (the editor takes `⌘B` before the sidebar does); links,
+lists, size and colours are on the formatting bar above it.
+The ⌘/ list shows these under **Design canvas** while design mode is
+available. `↩` or a double-click enters the selected page;
+`Esc` with the canvas focused, or a click on the canvas, leaves. Keys typed
+inside an entered page stay with that page.
 
 `↑` works like **Edit in fork**: it forks the chat just before your last
 message and puts that message back in the box, so the original chat stays as
@@ -129,9 +152,8 @@ Besides the keyed commands above, the palette lists commands with no default
 key. You can give any of them one in Settings.
 
 - **Places:** Go to Bots, Open a Bot… (searches Bots by name), Go to Scheduled,
-  Go to Profile. Open Design Studio and Open Create Images appear in the
-  palette only while their experimental feature is turned on, and can't be
-  given a key.
+  Go to Profile. Open Create Images appears in the palette only while its
+  experimental feature is turned on, and can't be given a key.
 - **Workspace tools:** Open Changes, Files, Browser, Device, Context,
   Subagents and Artifacts.
 - **Chat actions:** Rename chat…, Duplicate chat, Delete chat…, Export chat,

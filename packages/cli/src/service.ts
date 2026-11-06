@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { serverAnalyticsContext, showServerNotice, type ServerAnalyticsContext } from "./server-analytics.ts";
 import { acquireLease } from "./state.ts";
 import type { RemoteNetwork } from "./remote.ts";
 import type { TailscaleFacts } from "./reachability.ts";
@@ -55,6 +56,15 @@ export function systemHost(): ServiceHost {
       return { status: result.error ? null : result.status, stdout: result.stdout ?? "", stderr: result.error?.message ?? result.stderr ?? "" };
     },
   };
+}
+
+/**
+ * True for a process a service manager started: launchd names the job, systemd
+ * sets an invocation ID. A terminal opened from a systemd unit inherits that
+ * ID, so a process on a terminal counts as started by hand.
+ */
+export function runsUnderServiceManager(env: Readonly<Record<string, string | undefined>>, onTerminal: boolean): boolean {
+  return env.XPC_SERVICE_NAME === LAUNCHD_LABEL || (!!env.INVOCATION_ID && !onTerminal);
 }
 
 function serveArgs(launch: ServiceLaunch): string[] {
@@ -501,6 +511,8 @@ export interface ServiceCommandOptions {
   pair?: (transport: "lan" | "tailscale", signal: AbortSignal) => Promise<string | undefined>;
   /** Whether stdout is a terminal that can show a pairing code. */
   tty?: boolean;
+  /** Where the usage-data notice is read and recorded. Tests pass their own. */
+  analytics?: ServerAnalyticsContext;
   /** Releases the stopped service profile's owned route. */
   releaseRoute?: (agentDir: string) => Promise<string | undefined>;
 }
@@ -540,6 +552,8 @@ async function serviceCommandUnlocked(agentDir: string, args: string[], host: Se
   manager(host);
   const entry = realpathSync(process.env.AIDEN_CLI_ENTRY || process.argv[1] || "");
   if (!entry.endsWith(".js")) throw new Error("Build the CLI first (`npm run cli:build`); the service runs the built dist/app/cli.js.");
+  // The service has no terminal, so this is where the person learns about usage data.
+  showServerNotice(options.analytics ?? serverAnalyticsContext(agentDir));
   const kept = flags.network ? undefined : savedNetwork(agentDir);
   if (kept) out(`Keeping the server's network: ${NETWORK_LABEL[kept]}. Choose another with \`--network\` or \`aiden remote network\`.`);
   const network = flags.network ?? kept ?? await chooseNetwork(host, !!(process.stdin.isTTY && process.stdout.isTTY));
