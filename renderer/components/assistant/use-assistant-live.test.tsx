@@ -1637,6 +1637,22 @@ function micPacket(
   fixture.worklets[0]!.emit({ type: "pcm", data, ...(capturedUntil === undefined ? {} : { capturedUntil }) });
 }
 
+test("a fence taken before the microphone starts lets the first stamped speech after it count", async () => {
+  const fixture = await mountHook();
+  // An approval arms while Live is still setting up the microphone.
+  const fence = liveSessionBus.voiceInputFence();
+  await fixture.controller().start();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  // Capture begins after the fence; the person answers at once.
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 0.02 * (index + 1));
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow"]);
+  assert.ok(inputs[0]!.startedAt > fence, "everything this microphone captured came after the fence");
+  await fixture.unmount();
+});
+
 test("speech captured before a fence but handled long after it stays before the fence", async () => {
   const { fixture, stop } = await listenToVoiceInput();
   const inputs: LiveVoiceInput[] = [];
