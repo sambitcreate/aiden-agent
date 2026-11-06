@@ -71,7 +71,10 @@ and refused with `user_only`, when:
   review, the browser's agent-access controls, the Usage data switches, MCP
   secret fields, the window controls, and these whole Settings pages: Aiden
   Live, Computer Use, Approvals, App controls, Remote Access, Connections,
-  Telegram, Bots, Bot computers, Simulator, MCP, Scheduled tasks and Limits;
+  Telegram, Bots, Bot computers, Simulator, MCP, Scheduled tasks, Limits,
+  Providers, Model data, Web Search, Image Generation and About (anything that
+  chooses where chats, prompts, queries or keys go, fetches catalogs or
+  installs updates);
 - it is a password, one-time code or card field;
 - it is a switch or checkbox anywhere in Aiden, unless it sits inside
   `data-live-safe` (only the Appearance and Links pages are marked safe);

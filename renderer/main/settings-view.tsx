@@ -127,9 +127,16 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 };
 
 // Pages that grant access, pair devices, set approvals or spending, run
-// commands (MCP servers) or work in the background are the user's alone:
-// Aiden Live can read them but never use them (portaled menus and dialogs too).
+// commands (MCP servers), work in the background, choose where chats, search
+// queries, prompts or keys are sent (endpoints, providers and routing), fetch
+// catalogs over the network or install updates are the user's alone: Aiden
+// Live can read them but never use them (portaled menus and dialogs too).
 const LIVE_USER_ONLY_SECTIONS = new Set<SettingsSection>([
+  "providers",
+  "modelData",
+  "websearch",
+  "imageGeneration",
+  "about",
   "geminiLive",
   "computerUse",
   "approvals",
