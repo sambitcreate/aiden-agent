@@ -747,28 +747,44 @@ export function createHookService(deps: HookServiceDeps): HookService {
     };
   };
 
-  const applyProposal = async (proposal: HookProposal): Promise<HookResult<HookListing | undefined>> => {
-    const existing = entries.get(proposal.hookId);
-    // An update or delete applies only to the version its card showed; an edit
-    // made since (in Settings or by another approved proposal) is never overwritten.
+  /**
+   * Why a proposal can no longer apply to the stored hook it targets, if it
+   * can't: an update or delete applies only to the version its card showed, so
+   * an edit made since (in Settings or by another approved proposal) is never
+   * overwritten and a deleted hook is never brought back.
+   */
+  const proposalTargetProblem = (proposal: HookProposal, existing: StoredHookEntry | undefined): string | undefined => {
+    if (proposal.action === "delete" && !existing) return "That hook was already deleted.";
+    if (proposal.action === "update" && !existing) return "The hook this proposal changes was deleted.";
+    if (proposal.action === "create" && existing) return "This proposal was already applied.";
     if (existing && proposal.targetDigest !== undefined && storedEntryListingDefinition(existing).digest !== proposal.targetDigest) {
-      return { ok: false, reason: "The hook changed since this proposal was shown; propose it again so the owner sees the current version." };
+      return "The hook changed since this proposal was shown; propose it again so the owner sees the current version.";
     }
-    if (proposal.action === "delete") {
-      if (!existing) return { ok: false, reason: "That hook was already deleted." };
+    return undefined;
+  };
+
+  const applyProposal = async (proposal: HookProposal): Promise<HookResult<HookListing | undefined>> => {
+    const shown = entries.get(proposal.hookId);
+    const problem = proposalTargetProblem(proposal, shown);
+    if (problem) return { ok: false, reason: problem };
+    if (proposal.action === "delete" && shown) {
       await entries.remove(proposal.hookId);
-      await trust.revoke(storedEntryListing(existing));
+      await trust.revoke(storedEntryListing(shown));
       changed({ reason: "hooks", hookId: proposal.hookId });
       return { ok: true, value: undefined };
     }
-    if (proposal.action === "update" && !existing) return { ok: false, reason: "The hook this proposal changes was deleted." };
-    if (proposal.action === "create" && existing) return { ok: false, reason: "This proposal was already applied." };
     const { definition } = proposal;
     const current = await scriptsOf({ ...definition, digest: hookDefinitionFor(definition).digest });
     if (current.scan?.overLimit) return { ok: false, reason: uncheckableScriptsReason(current.scan.overLimit) };
     if (current.digest !== proposal.digest) {
       return { ok: false, reason: "A script this hook runs changed after it was proposed; propose it again so the owner sees the current version." };
     }
+    // The scan awaited, so another approval, edit or delete may have finished
+    // meanwhile: check the target again with nothing awaited before the upsert,
+    // which changes the in-memory store synchronously.
+    const existing = entries.get(proposal.hookId);
+    const raced = proposalTargetProblem(proposal, existing);
+    if (raced) return { ok: false, reason: raced };
     const time = now();
     const entry: StoredHookEntry = {
       id: definition.id,

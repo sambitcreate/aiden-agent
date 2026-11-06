@@ -299,6 +299,31 @@ test("an update or delete proposal never overwrites an edit made after its card 
   assert.equal((await service.listHooks()).hooks.find((hook) => hook.id === id)?.handler.command, "./from-agent.sh");
 });
 
+test("overlapping proposal approvals: one wins, and a hook deleted mid-approval stays deleted", async (t) => {
+  const f = await fixture(t);
+  const service = await f.create();
+  const scope = { kind: "workspace" as const, workspaceRoot: f.workspace };
+  const saved = await service.saveHook({ scope, event: "Stop", name: "Check", handler: { type: "command", command: "./old.sh" } });
+  assert.ok(saved.ok && saved.value);
+  const id = saved.value.id;
+  const first = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./first.sh" } });
+  const second = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./second.sh" } });
+  assert.ok(first.ok && second.ok);
+  // Each approval scans the workspace for the scripts it names, so both are in flight together.
+  const results = await Promise.all([service.approveProposal(first.value.id), service.approveProposal(second.value.id)]);
+  assert.equal(results.filter((result) => result.ok).length, 1, "both were proposed against ./old.sh, so only one can apply");
+  const winner = results[0]?.ok ? "./first.sh" : "./second.sh";
+  assert.equal((await service.listHooks()).hooks.find((hook) => hook.id === id)?.handler.command, winner);
+
+  const update = await service.proposeHook({ scope, event: "Stop", existingId: id, handler: { type: "command", command: "./revived.sh" } });
+  const removal = await service.proposeHook({ scope, event: "Stop", existingId: id, delete: true });
+  assert.ok(update.ok && removal.ok);
+  const [updated, deleted] = await Promise.all([service.approveProposal(update.value.id), service.approveProposal(removal.value.id)]);
+  assert.equal(updated.ok, false, "the update's scan finishes after the delete");
+  assert.ok(deleted.ok);
+  assert.equal((await service.listHooks()).hooks.some((hook) => hook.id === id), false, "the deleted hook is not brought back");
+});
+
 test("deleting hooks: stored entries go away, repo hooks lose their approval", async (t) => {
   const f = await fixture(t);
   await writeRepoHooks(f.workspace, { hooks: { Stop: [{ hooks: [{ type: "command", command: "./repo-check.sh" }] }] } });
