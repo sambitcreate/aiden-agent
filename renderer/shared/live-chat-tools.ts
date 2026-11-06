@@ -105,8 +105,11 @@ const REDACTED = "[hidden]";
 const SECRET_KEY_PART = /(?:^|[_.-])(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|CLIENT_?SECRET|CREDENTIALS?)(?:$|[_.-])/iu;
 /** `KEY=value` or `KEY: value` at the start of a line, optionally after `export`. */
 const ASSIGNMENT = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_.-]{0,80})(\s*[=:]\s*)(.+)$/gmu;
-/** `KEY=value` inside a line, as in a command (`AWS_SECRET_ACCESS_KEY=… aws s3 ls`). */
-const INLINE_ASSIGNMENT = /(?<![A-Za-z0-9_.-])([A-Za-z_][A-Za-z0-9_.-]{0,80})=("[^"\n]*"|'[^'\n]*'|[^\s"']+)/gu;
+/**
+ * `KEY=value` or `KEY: value` inside a line, as in a command
+ * (`AWS_SECRET_ACCESS_KEY=… aws s3 ls`) or a title (`Fix login DB_PASSWORD: hunter2`).
+ */
+const INLINE_ASSIGNMENT = /(?<![A-Za-z0-9_.-])([A-Za-z_][A-Za-z0-9_.-]{0,80})(\s*[=:]\s*)("[^"\n]*"|'[^'\n]*'|[^\s"']+)/gu;
 const PEM_BLOCK = /-----BEGIN [A-Z0-9 ]*KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*KEY-----|$)/gu;
 
 /**
@@ -121,8 +124,8 @@ export function redactLiveChatSecrets(text: string): string {
     (line, lead: string, key: string, separator: string) =>
       SECRET_KEY_PART.test(key) ? `${lead}${key}${separator}${REDACTED}` : line,
   );
-  const withoutInline = withoutAssignments.replace(INLINE_ASSIGNMENT, (match, key: string) =>
-    SECRET_KEY_PART.test(key) ? `${key}=${REDACTED}` : match,
+  const withoutInline = withoutAssignments.replace(INLINE_ASSIGNMENT, (match, key: string, separator: string, value: string) =>
+    SECRET_KEY_PART.test(key) && value !== REDACTED ? `${key}${separator}${REDACTED}` : match,
   );
   return redactBareCredentialTokens(withoutInline, REDACTED);
 }
