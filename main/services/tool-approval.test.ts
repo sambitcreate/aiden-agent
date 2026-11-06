@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
 
 function trackedSignal() {
@@ -426,4 +427,179 @@ test("a caller-supplied approval id is published and answered under that id; re-
   assert.equal(await second, "allowed");
   assert.deepEqual(withdrawn, [["wait-1", "cancelled"], ["wait-1", "allowed"]]);
   assert.equal(coordinator.decideAsHost("wait-1", true), false, "an answered id cannot be answered again");
+});
+
+test("a prompt answered from inside its own publication is still withdrawn exactly once", async () => {
+  const withdrawn: Array<[string, string]> = [];
+  const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(
+    (prompt) => {
+      coordinator.decide(prompt.approvalId, true, "document-one");
+    },
+    (approvalId, outcome) => withdrawn.push([approvalId, outcome]),
+  );
+  const outcome = await coordinator.request(
+    { streamId: "s-sync", approvalId: "a-sync", toolCallId: "c", toolName: "write", summary: "x" },
+    undefined,
+    "document-one",
+  );
+  assert.equal(outcome, "allowed");
+  assert.deepEqual(withdrawn, [["a-sync", "allowed"]]);
+  assert.equal(coordinator.pendingCount, 0);
+});
+
+test("re-asking an id from inside its publication leaves the replacement pending and answerable", async () => {
+  const withdrawn: Array<[string, string]> = [];
+  let replacement: ReturnType<typeof approvals.request> | undefined;
+  // A different fingerprint is what makes this a replacement; an identical request joins the first.
+  const ask = (toolCallId: string) =>
+    approvals.request({
+      botId: "b",
+      waitId: "same",
+      toolCallId,
+      toolName: "write",
+      summary: "x",
+      authorizationFingerprint: toolCallId,
+      signal: new AbortController().signal,
+    });
+  const approvals = createBotApprovals({
+    publish(prompt) {
+      if (prompt.toolCallId === "first") replacement = ask("second");
+    },
+    withdraw: (prompt, outcome) => withdrawn.push([prompt.toolCallId, outcome]),
+  });
+
+  await assert.rejects(ask("first"), /replaced/u);
+  assert.deepEqual(approvals.pending("b").map((prompt) => prompt.toolCallId), ["second"]);
+  assert.deepEqual(withdrawn, []);
+
+  assert.equal(approvals.decide("same", "allow"), true);
+  assert.equal((await replacement)?.answer, "allow");
+  assert.deepEqual(approvals.pending("b"), []);
+  assert.deepEqual(withdrawn, [["second", "allowed"]]);
+});
+
+test("a same-id replacement that settles during its own publication is withdrawn exactly once", async () => {
+  for (const settleFirst of [false, true]) {
+    const withdrawn: Array<[string, string]> = [];
+    let replacement: Promise<string> | undefined;
+    const ask = (toolCallId: string) =>
+      coordinator.request(
+        { streamId: "s-same", approvalId: "same", toolCallId, toolName: "write", summary: "x" },
+        undefined,
+        "document-one",
+      );
+    const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(
+      (prompt) => {
+        if (prompt.toolCallId === "second") {
+          coordinator.decide("same", true, "document-one");
+          return;
+        }
+        if (settleFirst) coordinator.decide("same", false, "document-one");
+        replacement = ask("second");
+      },
+      (approvalId, outcome) => withdrawn.push([approvalId, outcome]),
+    );
+    assert.equal(await ask("first"), settleFirst ? "denied" : "cancelled");
+    assert.equal(await replacement, "allowed");
+    assert.deepEqual(withdrawn, [["same", "allowed"]]);
+  }
+});
+
+test("a same-id replacement that fails to publish leaves the shown original to be withdrawn", async () => {
+  const withdrawn: Array<[string, string]> = [];
+  let replacement: Promise<string> | undefined;
+  const ask = (toolCallId: string) =>
+    coordinator.request(
+      { streamId: "s-same", approvalId: "same", toolCallId, toolName: "write", summary: "x" },
+      undefined,
+      "document-one",
+    );
+  const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(
+    (prompt) => {
+      if (prompt.toolCallId === "second") throw new Error("surface gone");
+      replacement = ask("second");
+    },
+    (approvalId, outcome) => withdrawn.push([approvalId, outcome]),
+  );
+  assert.equal(await ask("first"), "cancelled");
+  assert.equal(await replacement, "unavailable");
+  assert.deepEqual(withdrawn, [["same", "cancelled"]]);
+});
+
+test("a publication that throws after settling its own prompt keeps the outcome and still withdraws", async () => {
+  const withdrawn: string[] = [];
+  const coordinator: ToolApprovalCoordinator = new ToolApprovalCoordinator(
+    (prompt) => {
+      coordinator.decide(prompt.approvalId, false, "document-one");
+      throw new Error("channel lost after the answer");
+    },
+    (approvalId) => withdrawn.push(approvalId),
+  );
+  const outcome = await coordinator.request(
+    { streamId: "s-throw", approvalId: "a-throw", toolCallId: "c", toolName: "write", summary: "x" },
+    undefined,
+    "document-one",
+  );
+  assert.equal(outcome, "denied");
+  assert.deepEqual(withdrawn, ["a-throw"]);
+});
+
+test("concurrent answers across the owner and a paired host settle once, first answer wins", async () => {
+  const withdrawn: string[] = [];
+  const coordinator = new ToolApprovalCoordinator(
+    () => {},
+    (_approvalId, outcome) => withdrawn.push(outcome),
+  );
+  const pending = coordinator.request(
+    { streamId: "s-race", approvalId: "a-race", toolCallId: "c", toolName: "write", summary: "x" },
+    undefined,
+    "document-one",
+  );
+  assert.equal(coordinator.decideAsHost("a-race", false), true);
+  assert.equal(coordinator.decide("a-race", true, "document-one"), false);
+  assert.equal(coordinator.decideAsHost("a-race", true), false);
+  assert.equal(await pending, "denied");
+  assert.deepEqual(withdrawn, ["denied"]);
+});
+
+test("an answer after abort or cancellation cannot settle the prompt as allowed", async () => {
+  const controller = new AbortController();
+  const coordinator = new ToolApprovalCoordinator(() => {});
+  const aborted = coordinator.request(
+    { streamId: "s-a", approvalId: "a-a", toolCallId: "c", toolName: "write", summary: "x" },
+    controller.signal,
+    "document-one",
+  );
+  controller.abort();
+  assert.equal(coordinator.decide("a-a", true, "document-one"), false);
+  assert.equal(await aborted, "cancelled");
+
+  const cancelled = coordinator.request(
+    { streamId: "s-b", approvalId: "a-b", toolCallId: "c", toolName: "write", summary: "x" },
+    undefined,
+    "document-one",
+  );
+  coordinator.cancelStream("s-b");
+  assert.equal(coordinator.decideAsHost("a-b", true), false);
+  assert.equal(await cancelled, "cancelled");
+});
+
+test("a scope granted with an answer does not survive the stream's cancellation", async () => {
+  const coordinator = new ToolApprovalCoordinator(() => {});
+  const pending = coordinator.request(
+    {
+      streamId: "s-scope",
+      approvalId: "a-scope",
+      toolCallId: "c-scope",
+      toolName: "write",
+      summary: "x",
+      scopes: ["once", "always"],
+    },
+    undefined,
+    "document-one",
+  );
+  assert.equal(coordinator.decide("a-scope", true, "document-one", { scope: "always" }), true);
+  assert.equal(await pending, "allowed");
+  coordinator.cancelStream("s-scope");
+  assert.equal(coordinator.takeDecisionPayload("s-scope", "c-scope"), undefined);
 });
