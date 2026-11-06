@@ -1,5 +1,6 @@
 import type { ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
 import { capturePeerProjectRoot, assertPeerProjectRoot, createPeerProjectFile } from "./peer-project-file-io.js";
+import { peerProjectGit } from "./peer-project-source.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { parsePeerProjectClone, PEER_PROJECT_CLONE_TIMEOUT_MS, type PeerProjectCloneRequest } from "../../renderer/shared/peer-project-clone.js";
@@ -352,6 +353,16 @@ export class AidenRemoteWorkspaceService {
                   await assertPeerProjectRoot(root);
                   for (const file of parsed.files) {
                     controller.signal.throwIfAborted();
+                    try {
+                      // A staging-path Git config can differ after the clone is moved.
+                      // Require protection under both case-matching modes.
+                      for (const ignoreCase of ["false", "true"]) {
+                        await peerProjectGit(root.path, ["-c", "core.excludesFile=/dev/null", "-c", `core.ignoreCase=${ignoreCase}`, "check-ignore", "-q", "--", file.name]);
+                      }
+                    } catch {
+                      throw new AidenRemoteServiceError("invalid_request", "The destination repository must ignore each selected environment file.", 400);
+                    }
+                    await assertPeerProjectRoot(root);
                     await createPeerProjectFile(root, file.name, file.content, controller.signal);
                   }
                   await current();
