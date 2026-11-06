@@ -806,7 +806,7 @@ export function useAssistantLiveWithDependencies(
     const pending = pendingUtterance.current;
     discardUtterance();
     if (!pending || !mounted.current) return;
-    speechOnsets.retire(pending.startedAt);
+    speechOnsets.retireFinished();
     liveSessionBus.publishVoiceInput(pending.text, pending.startedAt);
     const receipt = { id: pending.receiptId, text: pending.text };
     setVoiceApprovalReceipts((current) => {

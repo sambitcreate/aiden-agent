@@ -41,7 +41,7 @@ The four PRs build on one shared base:
 - **Voice fence**: anything that must hear only speech begun after a moment takes `liveSessionBus.voiceInputFence()` at that moment. It then accepts an input only if `input.startedAt > fence`.
   - `LiveSpeechOnsets` (`renderer/lib/live-speech-onsets.ts`) stamps `startedAt` from the microphone, since captions arrive only after transcription. A stretch of speech opens at packet level 0.04 and ends after 500 ms of quiet.
   - An utterance's first caption claims the onset of the earliest stretch still going on or ended within 5 s of audio.
-  - When an utterance is finished, the stretches it used that have ended are retired, so they never shadow the next utterance; a stretch still going on is kept.
+  - When an utterance is finished, every stretch that has ended is retired (however many pauses split the utterance), so none shadows the next utterance; a stretch still going on is kept.
   - With nothing in reach, the utterance gets `LIVE_UNTRUSTED_VOICE_START` (0), which is below every fence.
   - It fails closed: speech under way at the fence stays before it.
 - **Open chat**: `liveOpenChat` keeps every mounted chat pane in mount order, so when the newest pane closes Live sees the pane still on screen.
