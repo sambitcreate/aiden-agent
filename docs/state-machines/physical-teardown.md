@@ -23,3 +23,38 @@ SIGTERM comes first, then SIGKILL after the grace period, then up to two seconds
 The order per call stays: prepared, authorized, dispatch started, then a terminal record. After dispatch started, an unconfirmed outcome is recorded as `unknown` and never retried. Before it, the call is cancelled and its workspace admission released.
 
 Descendant cleanup is proved in `native/subagent-shell-runner/main.c`, which reports `cleanup_unconfirmed` itself. The native protocol is unchanged.
+
+## Computer Use host
+
+`CuaDriverHost` owns each session's bridge, broker launcher and lease directory. A runtime is reclaimed only when both children were seen to exit. If one was not, the host keeps the runtime and its directory and rechecks them before the next session and at shutdown, so a late exit is reclaimed. If an exit is still unseen at shutdown, `shutdown()` rejects with `cleanup_unconfirmed`, which the controller already reports as a failed teardown. The host keeps watching after that, so a child that exits later is still reclaimed.
+
+Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession` and `ComputerUseController` already had one close promise, exactly-once close notification and a poisoned state (`backend:M116`, `M117`, `M118`). The native broker, guard, supervisor and JSON-RPC filter (`cli-native:N01` to `N04`) were not changed; their frames and process-group identity checks are out of bounds here.
+
+## MCP stdio servers
+
+`AidenStdioTransport` in `main/services/mcp-stdio-transport.ts` keeps protocol close and group cleanup apart. `close()` resolves only when the group is gone or the wait after SIGKILL ran out. A group leaves the published list only once nothing in it runs, so the exit hook can still reach a survivor. `aiden serve stop` cannot use a listed group once its wrapper exited: `daemonMcpGroups()` in `packages/cli` trusts a group only if a current member is a direct child of the daemon. That gap predates this work and is not fixed here. A survivor is rechecked every second and leaves the list once gone, because a listed ID gets signalled later and could by then belong to something else. SIGKILL is sent only to a group that still exists.
+
+## Owners kept as they are
+
+| Inventory | Owner | Why |
+|---|---|---|
+| `backend:M121`, `M122` | `bot-computers/host.ts` | A failed stop counts as off only if Lume says so, an unreadable state counts as on, and the slot stays held until then. Read only; no real VM was run. |
+| `backend:M089`, `M090` | `acp/` | Shutdown waits for launches and one exit rejects pending calls. On leader exit the group gets SIGKILL and its ledger entry is released without waiting, so a descendant stuck past SIGKILL would be forgotten. Not reproduced and left as is. |
+| `backend:M102`, `M103` | `subagents/child-agent-runtime.ts`, `subagent-inference-process-core.ts` | Shutdown returns false and keeps its children when isolation or settlement is not clean. |
+
+## Quit and update install
+
+`createLifecycleCheck` in `main/application-lifecycle-core.ts` serializes close, reload, quit and onboarding reset. `shutdownAndQuit` joins a shutdown already running, and `cleanupApplication` runs once. `createUpdateInstallIntent` owns an accepted update install. It waits for the check to be free, because whoever holds it owns the outcome. A quit that completes installs the update. A quit cancelled for good withdraws the install before it releases the check, and the update stays ready, so a later ordinary quit cannot install it unasked. A renderer veto retries the quit, and the install rides on that retry. A failed shutdown also withdraws it.
+
+The flags in `main/index.ts` (`backend:M001`) stay where they are. Each is written in few places and the cancel paths reset them, but they have no Electron-free harness, so moving them would trade a read-checked flow for an untested one.
+
+## Not done in this slice
+
+| Inventory | Owner | Why |
+|---|---|---|
+| `backend:M112` | `follow-through/background-jobs.ts` | Not audited beyond `recordCheckGroup`. |
+| `backend:M125`, `M126`, `M130`, `M156`, `clients:C43` | Browser, device helper host, terminal, Ghostty | Not audited. |
+| `cli-native:N13`, `O01` | iMCP launcher, bounded-command guard | Not audited. |
+| Rank 13 capture and input owners, including `M131`, `M133`–`M138` | Recording, dictation, speech, TTS | Not audited. Permission and device behavior needs real hardware evidence, which this slice did not gather. |
+| Rank 14 remainder: `M002`–`M004`, `M165`, `M192` | Startup and updater owners | `M002` already has a pure core. The others were not audited. |
+| Shutdown and restart trace across P1 to P4 | All lanes | Needs the P2, P3 and P4 work on one branch, which has not merged. |
