@@ -381,6 +381,23 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     };
   }
 
+  /** A failure from a session that was already stopped must not touch the one that replaced it. */
+  function beginPolling(): void {
+    started = true;
+    lastError = undefined;
+    botUsername = undefined;
+    const controller = new AbortController();
+    abortController = controller;
+    void runPollLoop(controller.signal).catch((cause) => {
+      if (controller.signal.aborted) return;
+      lastError = cause instanceof Error ? cause.message : String(cause);
+      recordDiagnostic("error", lastError);
+      started = false;
+      deps.releaseOwnership?.();
+      deps.error("Telegram polling stopped unexpectedly.", cause);
+    });
+  }
+
   async function start(): Promise<void> {
     if (started) return;
     const snap = await deps.config.snapshot();
@@ -392,17 +409,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return;
     }
     if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
-    started = true;
-    lastError = undefined;
-    abortController = new AbortController();
-    void runPollLoop(abortController.signal).catch((cause) => {
-      if (abortController?.signal.aborted) return;
-      lastError = cause instanceof Error ? cause.message : String(cause);
-      recordDiagnostic("error", lastError);
-      started = false;
-      deps.releaseOwnership?.();
-      deps.error("Telegram polling stopped unexpectedly.", cause);
-    });
+    beginPolling();
     deps.info("Telegram bridge started.");
     recordDiagnostic("info", "Telegram polling started.");
   }
@@ -439,17 +446,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const ownership = deps.acquireOwnership?.();
     if (ownership && !ownership.acquired) throw new Error(`Telegram profile is already owned by process ${ownership.ownerPid ?? "unknown"}.`);
     if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
-    started = true;
-    lastError = undefined;
-    abortController = new AbortController();
-    void runPollLoop(abortController.signal).catch((cause) => {
-      if (abortController?.signal.aborted) return;
-      lastError = cause instanceof Error ? cause.message : String(cause);
-      recordDiagnostic("error", lastError);
-      started = false;
-      deps.releaseOwnership?.();
-      deps.error("Telegram polling stopped unexpectedly.", cause);
-    });
+    beginPolling();
     deps.info("Telegram bridge connected.");
   }
 
@@ -481,7 +478,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
   async function runPollLoop(signal: AbortSignal): Promise<void> {
     try {
-      const me = await deps.api.getMe();
+      const me = await deps.api.getMe(signal);
+      if (signal.aborted) return;
       botUsername = me.username;
       botTopicsEnabled = me.has_topics_enabled === true;
       deps.info(`Telegram bot connected as @${me.username}.`);
@@ -495,6 +493,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       }
       await refreshCommands();
     } catch (cause) {
+      if (signal.aborted) return;
       lastError = cause instanceof Error ? cause.message : String(cause);
       deps.error("Telegram getMe failed.", cause);
       started = false;

@@ -121,7 +121,7 @@ function createMockApi(opts: MockApiOptions) {
     getUpdatesCalls: () => getUpdatesCalls,
     sendChatActionCalls: () => sendChatActionCalls,
     answerCallbackQueryCalls: () => answerCallbackQueryCalls,
-    async getMe(): Promise<TelegramUser> {
+    async getMe(_signal?: AbortSignal): Promise<TelegramUser> {
       getMeCalls += 1;
       calls.push("getMe");
       return opts.me ?? BOT;
@@ -715,6 +715,60 @@ test("stop() clears a failed start, so an off bridge no longer reads as failed",
   service.stop();
 
   assert.equal(service.getStatus().lastError, undefined);
+});
+
+test("a bot check that fails after stop() leaves the stopped bridge clean", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  let signal: AbortSignal | undefined;
+  let fail: (cause: Error) => void = () => undefined;
+  api.getMe = (requestSignal) => {
+    signal = requestSignal;
+    return new Promise((_resolve, reject) => { fail = reject; });
+  };
+
+  await service.start();
+  service.stop();
+  assert.equal(signal?.aborted, true, "stop() cancels the request in flight");
+  fail(new Error("401: Unauthorized"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.getStatus().lastError, undefined);
+  assert.equal(service.getStatus().status, "disabled");
+});
+
+test("a stale bot check cannot end the session that replaced it", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  const realGetMe = api.getMe;
+  let fail: (cause: Error) => void = () => undefined;
+  api.getMe = () => new Promise((_resolve, reject) => { fail = reject; });
+
+  await service.connect();
+  service.stop();
+  api.getMe = realGetMe;
+  await service.connect();
+  await waitFor(() => service.getStatus().botUsername === BOT.username);
+  fail(new Error("401: Unauthorized"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(service.getStatus().status, "polling");
+  assert.equal(service.getStatus().lastError, undefined);
+  service.stop();
+});
+
+test("a reconnect forgets the bot that answered last time until the new check passes", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  await service.start();
+  await waitFor(() => service.getStatus().botUsername === BOT.username);
+  service.stop();
+
+  api.getMe = async () => {
+    throw new Error("401: Unauthorized");
+  };
+  await service.start();
+  await waitFor(() => service.getStatus().lastError === "401: Unauthorized");
+
+  assert.equal(service.getStatus().botUsername, undefined);
+  service.stop();
 });
 
 test("connect() throws when no bot token is configured", async () => {

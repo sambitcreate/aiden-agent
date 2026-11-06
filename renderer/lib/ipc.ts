@@ -845,6 +845,7 @@ export interface TelegramStatus {
   model?: string;
   workspaceId?: string;
   polling: boolean;
+  botUsername?: string;
   queuedCount: number;
   thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
   draftPreviews: boolean;

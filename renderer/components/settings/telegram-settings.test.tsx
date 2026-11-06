@@ -6,11 +6,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import type { TelegramStatus } from "../../lib/ipc";
+import { telegramStatusPollInterval } from "../../lib/queries";
 import { TelegramSettings } from "./telegram-settings";
 
 afterEach(cleanup);
 
-function mount(initial: Partial<TelegramStatus>) {
+function mount(initial: Partial<TelegramStatus>, overrides: Record<string, (...args: unknown[]) => unknown> = {}) {
   let status: TelegramStatus = {
     enabled: false,
     hasToken: true,
@@ -39,6 +40,7 @@ function mount(initial: Partial<TelegramStatus>) {
     "providers:list": () => [],
     "settings:get": () => ({}),
     "workspaces:list": () => [],
+    ...overrides,
   });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
@@ -54,6 +56,51 @@ test("a bridge that is on but failed to poll can still be turned off", async () 
   await waitFor(() => assert.equal(disconnect.hasAttribute("disabled"), false));
   fireEvent.click(disconnect);
   await waitFor(() => assert.equal(status().enabled, false));
+});
+
+test("Connect and Disconnect both wait while the bridge is turning off", async () => {
+  let finish: () => void = () => undefined;
+  mount({ enabled: true, polling: false, lastError: "Another process owns this bot." }, {
+    "telegram:setEnabled": () => new Promise<void>((resolve) => { finish = resolve; }),
+  });
+  const disconnect = await screen.findByRole("button", { name: "Disconnect" });
+  await waitFor(() => assert.equal(disconnect.hasAttribute("disabled"), false));
+
+  fireEvent.click(disconnect);
+
+  await waitFor(() => assert.equal(disconnect.hasAttribute("disabled"), true));
+  assert.equal(screen.getByRole("button", { name: "Connect" }).hasAttribute("disabled"), true);
+  finish();
+  await waitFor(() => assert.equal(disconnect.hasAttribute("disabled"), false));
+});
+
+test("a Disconnect that fails leaves the button ready to try again", async () => {
+  let attempts = 0;
+  mount({ enabled: true, polling: true, allowedUserId: 7 }, {
+    "telegram:setEnabled": () => {
+      attempts += 1;
+      throw new Error("Couldn’t save the Telegram setting.");
+    },
+  });
+  const disconnect = await screen.findByRole("button", { name: "Disconnect" });
+  await waitFor(() => assert.equal(disconnect.hasAttribute("disabled"), false));
+
+  fireEvent.click(disconnect);
+
+  await waitFor(() => assert.equal(attempts, 1));
+  await waitFor(() => assert.equal(disconnect.hasAttribute("disabled"), false));
+});
+
+test("settings watch a bridge only while it is running and still has something to report", () => {
+  const running = { enabled: true, polling: true } as TelegramStatus;
+  const watching = (status: Partial<TelegramStatus>) => telegramStatusPollInterval({ ...running, ...status }) !== false;
+
+  assert.equal(watching({ botUsername: "aiden_bot" }), true, "waiting for /start");
+  assert.equal(watching({ allowedUserId: 7 }), true, "paired, but the bot hasn’t answered yet");
+  assert.equal(watching({ allowedUserId: 7, botUsername: "aiden_bot" }), false, "connected");
+  assert.equal(watching({ polling: false, lastError: "401: Unauthorized" }), false, "failed and stopped");
+  assert.equal(watching({ enabled: false, polling: false }), false, "off");
+  assert.equal(telegramStatusPollInterval(undefined), false, "not loaded");
 });
 
 test("a bridge that is off has nothing to disconnect", async () => {

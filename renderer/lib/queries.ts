@@ -40,6 +40,7 @@ import {
   webFetchApi,
   workspacesApi,
 } from "./ipc";
+import type { TelegramStatus } from "./ipc";
 import type { BotDefinition } from "../shared/bots";
 import { isWindowActive } from "./window-activity";
 import { keepPullRequestWhilePaused, pausedPollInterval } from "./github-pause";
@@ -935,15 +936,20 @@ export function useWebFetch() {
 
 const TELEGRAM_PAIRING_POLL_MS = 3_000;
 
+/**
+ * Nothing announces a rejected token or a finished /start, so watch a running bridge until its bot
+ * has answered and an owner has paired. A failed bridge has stopped, so there is nothing to wait for.
+ */
+export function telegramStatusPollInterval(status: TelegramStatus | undefined): number | false {
+  if (!status?.enabled || !status.polling) return false;
+  return status.allowedUserId === undefined || !status.botUsername ? TELEGRAM_PAIRING_POLL_MS : false;
+}
+
 export function useTelegramSettings() {
   return useQuery({
     queryKey: queryKeys.telegram,
     queryFn: telegramApi.get,
-    // Nothing announces a rejected token or a finished /start, so watch while the bridge waits to pair.
-    refetchInterval: (query) =>
-      query.state.data?.enabled && query.state.data.allowedUserId === undefined
-        ? TELEGRAM_PAIRING_POLL_MS
-        : false,
+    refetchInterval: (query) => telegramStatusPollInterval(query.state.data),
   });
 }
 

@@ -506,7 +506,8 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     listModels: listTelegramModels,
     abortChat: async (chatId) => {
       lifecycle.cancelChat(chatId);
-      await llmClient.cancelChat(chatId);
+      // The chat stays, so this is a Stop, not the deletion cleanup behind llmClient.cancelChat.
+      if (!(await llmClient.stopChatWork(chatId))) throw new Error("The running turn did not stop in time.");
     },
     admitRunInput: async (input) => {
       const result = await llmClient.admitChatRunInput(input);
@@ -1022,12 +1023,16 @@ export function createTelegramProfileManager() {
       else await secrets.deleteKey(key);
     },
     async setEnabled(enabled: boolean): Promise<void> {
-      await setProfileSettings(activeProfile, { telegramEnabled: enabled });
       if (enabled) {
+        await setProfileSettings(activeProfile, { telegramEnabled: true });
         await telegramBotBindings.assertHealthy();
         await serviceFor(activeProfile).start();
-      } else {
-        // Turning the bridge off also ends the unattended turn it started.
+        return;
+      }
+      try {
+        await setProfileSettings(activeProfile, { telegramEnabled: false });
+      } finally {
+        // Turning the bridge off also ends the unattended turn it started, even if saving failed.
         await serviceFor(activeProfile).stopAndSettle();
       }
     },

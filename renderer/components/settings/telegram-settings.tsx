@@ -50,6 +50,7 @@ export function TelegramSettings() {
   const workspaces = useWorkspaces();
   const [connectionReview, setConnectionReview] = React.useState(false);
   const [connecting, setConnecting] = React.useState(false);
+  const [disconnecting, setDisconnecting] = React.useState(false);
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [keyDraft, setKeyDraft] = React.useState("");
   const [profileDraft, setProfileDraft] = React.useState("");
@@ -104,10 +105,17 @@ export function TelegramSettings() {
   };
 
   const disconnect = async () => {
-    setConnectionError(null);
-    await telegramApi.setEnabled(false);
-    await invalidate();
-    toast.success("Telegram turned off.");
+    if (disconnecting) return;
+    setDisconnecting(true); setConnectionError(null);
+    try {
+      await telegramApi.setEnabled(false);
+      toast.success("Telegram turned off.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to disconnect.");
+    } finally {
+      await invalidate();
+      setDisconnecting(false);
+    }
   };
 
   const resetPairing = async () => {
@@ -384,10 +392,10 @@ export function TelegramSettings() {
           description="Keep Aiden running on this device. After connecting, send /start to your bot from your own Telegram account."
         >
           <div className="flex flex-wrap items-center gap-3">
-            <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting}>
+            <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting || disconnecting}>
               Connect
             </Button>
-            <Button size="medium" variant="muted" onClick={disconnect} disabled={!enabled}>
+            <Button size="medium" variant="muted" onClick={disconnect} disabled={!enabled || disconnecting}>
               Disconnect
             </Button>
             <span className="min-w-0 break-words text-secondary text-regular">
