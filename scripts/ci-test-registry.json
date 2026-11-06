@@ -662,6 +662,7 @@
         "main/services/gemini-live/display-capture-acceptance-core.test.ts",
         "main/services/gemini-live/display-media-contract.test.ts",
         "main/services/gemini-live/feature-flag.test.ts",
+        "main/services/gemini-live/live-tool-providers.test.ts",
         "main/services/gemini-live/live-tools.test.ts",
         "main/services/gemini-live/protocol.test.ts",
         "main/services/gemini-live/sdk-contract.test.ts",
