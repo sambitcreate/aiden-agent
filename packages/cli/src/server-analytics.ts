@@ -27,6 +27,7 @@ import type { AnalyticsEventProps, AnalyticsSuperProperties } from "../../../mai
 import { setAnalyticsReporter, type AnalyticsReporter } from "../../../main/services/analytics/analytics-report.js";
 import type { SanitizedException, isSystemErrorCode, sanitizeException } from "../../../main/services/analytics/analytics-sanitize.js";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
+import { stackWithoutMessage } from "../../../renderer/shared/diagnostics.js";
 import { atomicJson, cliLeaseHelperPath, leaseGuardPath } from "./state.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -248,10 +249,11 @@ interface MessagelessError {
 function withoutMessage(value: unknown, depth = 0): MessagelessError {
   try {
     if (typeof value !== "object" || value === null) return { name: "NonError", message: "" };
-    const { name, stack, code, cause } = value as { name?: unknown; stack?: unknown; code?: unknown; cause?: unknown };
+    const { name, stack, message, code, cause } = value as { name?: unknown; stack?: unknown; message?: unknown; code?: unknown; cause?: unknown };
     return {
       name,
-      stack,
+      // A stack opens with the message, whose lines could otherwise pose as frames.
+      stack: typeof stack === "string" ? stackWithoutMessage(stack, message) : stack,
       message: "",
       code,
       ...(cause !== undefined && cause !== null && depth < MAX_REPORTED_CAUSES ? { cause: withoutMessage(cause, depth + 1) } : {}),

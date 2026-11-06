@@ -21,3 +21,5 @@ Renderer details: main answers through `diagnostics:policy` (`errorDetails`) and
 The browser tab crash report runs in a microtask after the `render-process-gone` handler. `writeDiagnosticEvent` calls `recordDiagnosticHealth`, which arms a 1,000 ms save timer, and `browser-lifecycle.spec.ts` counts every timer the handler starts to prove crash recovery owns exactly one. A synchronous report there failed 19 tests in CI (PR 732).
 
 The owner accepted that a bundle function named by a computed key shows that key in a frame, and chose to keep function names (2026-11-04). Do not remove them on a reviewer's request without asking.
+
+A server report sends no message, but a stack still opens with one, so `withoutMessage` in `packages/cli/src/server-analytics.ts` strips it from the stack before dropping it. Passing `message: ""` alone left a multi-line message's lines to pose as frames, and one naming a bundle path kept its text as a function name. A message changed after the error was created no longer matches its stack header, so that case stays open, on the desktop too.

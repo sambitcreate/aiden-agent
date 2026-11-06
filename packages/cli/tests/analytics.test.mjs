@@ -514,6 +514,27 @@ test("a crash report keeps the error's type, frames and code, and never its mess
   for (const report of reports) assert.deepEqual(value(report), [""]);
 });
 
+test("the lines of a crash's message can't pose as frames, on an error or its cause", async (t) => {
+  const h = harness(t, { state: allowed });
+  started(h);
+  await settle();
+  const posing = (name) => `save failed\n    at ${name} (${h.appDir}/chunks/server.js:7:9)\n    at /home/jane/notes.js:1:1`;
+  const failure = new Error(posing("acme_merger_q3"));
+  failure.cause = new Error(posing("fire_bob_tuesday"));
+  const plain = new Error("save failed");
+  plain.cause = new Error("save failed");
+  const framesOf = (entry) => entry.stacktrace.frames.length;
+
+  api.reportServerRejection(failure);
+  await settle();
+  const posed = h.sent.at(-1);
+  assert.doesNotMatch(JSON.stringify(posed), /acme_merger_q3|fire_bob_tuesday|server\.js/u);
+
+  api.reportServerRejection(plain);
+  await settle();
+  assert.deepEqual(posed.properties.$exception_list.map(framesOf), h.sent.at(-1).properties.$exception_list.map(framesOf), "only the error's real frames remain");
+});
+
 test("a crash during the stop still ends the process with the crash, not a clean exit", async (t) => {
   const slowStop = fakeTransport({ shutdown: () => new Promise((resolve) => setTimeout(resolve, 20)), flush: () => new Promise((resolve) => setTimeout(resolve, 60)) });
   const h = harness(t, { state: allowed, transport: slowStop, crashFlushCapMs: 500 });
