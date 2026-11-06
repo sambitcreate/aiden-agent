@@ -91,7 +91,7 @@ Also fixed, reproduced by test: a publish callback that synchronously re-asks it
 
 Recorded, not changed:
 
-- "Publish throws, unsettled" means never shown, and existing tests require that no withdrawal follows. A surface whose publish shows the prompt and then throws in a later step would break that assumption. `bot-approvals.ts` is the one known case: it stores the waiting entry before calling its own publish, so a throw leaves that entry behind. See `backend:M028`. No desktop path that throws after showing a prompt was established.
+- "Publish throws, unsettled" means never shown, and existing tests require that no withdrawal follows. A surface whose publish shows the prompt and then throws in a later step would break that assumption. `bot-approvals.ts` is the one known case: it stores the waiting entry before calling its own publish, and now clears that entry itself. See `backend:M028`. No desktop path that throws after showing a prompt was established.
 
 ### `backend:M020` question coordinator — converted
 
@@ -114,9 +114,9 @@ Fixed defects, reproduced by test:
 
 ### `backend:M028` Bot approval wait registry — deferred
 
-PR #730 rewrites `bot-approvals.ts`, and #727 also edits it. Reconcile after those land.
+#730 and #727 have landed, and the transition review of the rewritten `bot-approvals.ts` is still to do.
 
-Open item for that reconciliation: #730's publish callback still sets `waiting` and then calls `options.publish`. If that throws, the coordinator settles `unavailable` without withdrawing, so the `waiting` entry stays. Clear it in that path or set it after publish returns.
+The item recorded here while #730 was open is closed: its publish callback still sets `waiting` before calling `options.publish`, but the `finally` in `request` removes that entry and withdraws the prompt as `unavailable` when a publish throws. Read in code, not reproduced by a test.
 
 ## P2b: Remote pairing and single-use capabilities
 
