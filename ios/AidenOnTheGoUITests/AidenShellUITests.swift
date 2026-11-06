@@ -205,6 +205,124 @@ final class AidenShellUITests: XCTestCase {
         oldHost.terminate()
     }
 
+    // MARK: Search
+
+    /// Types into the Search tab's field. The demo machines answer from a
+    /// responder in the app, so this reaches no real machine.
+    private func search(_ text: String, in app: XCUIApplication) {
+        AidenStateMatrix.openArea("Search", in: app)
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "Search has no field")
+        field.tap()
+        field.typeText(text)
+    }
+
+    private func searchRow(_ prefix: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
+    }
+
+    func testSearchFindsAChatAndABotConversationAndOpensTheChat() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("flaky", in: app)
+
+        let chat = searchRow("Fix the flaky upload test, chat on Studio Mac", in: app)
+        let bot = searchRow("Scout, Bot conversation on Studio Mac", in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat result")
+        XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot result")
+        // One element each, naming what it is and which machine has it.
+        XCTAssertEqual(bot.value as? String, "Flagged the flaky upload test again this week")
+
+        chat.tap()
+
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        app.terminate()
+    }
+
+    func testSearchSaysItCoversLoadedChatsWhenNothingMatches() {
+        let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("zzzz", in: app)
+
+        XCTAssertTrue(app.staticTexts["No results"].waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "chats Aiden has loaded"))
+                .firstMatch.exists,
+            "The empty state did not say what search covers"
+        )
+        app.terminate()
+    }
+
+    /// Home Mini errors, and Laptop and Build Box are offline. Studio's results stay.
+    func testSearchNamesTheMachinesItCouldNotSearch() {
+        let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("flaky", in: app)
+
+        XCTAssertTrue(searchRow("Scout, Bot conversation on Studio Mac", in: app).waitForExistence(timeout: 10))
+        let note = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search Bot conversations on")
+        ).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10), "No note about the machines that weren't searched")
+        for name in ["Laptop", "Home Mini", "Build Box"] {
+            XCTAssertTrue(note.label.contains(name), "\(name) is missing from: \(note.label)")
+        }
+        XCTAssertFalse(note.label.contains("Studio Mac"))
+        XCTAssertFalse(app.alerts.firstMatch.exists, "A failing machine raised an app-wide alert")
+        app.terminate()
+    }
+
+    /// Search with results in light, dark and the largest text, with no
+    /// results, and with machines that couldn't be searched. A screen that
+    /// cannot be reached fails the test.
+    func testCaptureSearchScreens() {
+        let variants: [(AidenStateMatrix.Appearance, AidenStateMatrix.ContentSize)] = [
+            (.light, .large),
+            (.dark, .large),
+            (.light, .accessibilityExtraExtraExtraLarge),
+        ]
+        for (appearance, size) in variants {
+            let tag = "\(appearance.rawValue)-\(size.label)"
+            let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance, contentSize: size)
+            XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox (\(tag))")
+            AidenStateMatrix.openArea("Search", in: app)
+            XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10), tag)
+            AidenStateMatrix.capture("search-prompt-\(tag)", in: self)
+            search("flaky", in: app)
+            XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result (\(tag))")
+            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).exists, "No chat result (\(tag))")
+            AidenStateMatrix.capture("search-results-\(tag)", in: self)
+            app.terminate()
+        }
+
+        let empty = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        XCTAssertTrue(openInbox(in: empty).waitForExistence(timeout: 10))
+        search("zzzz", in: empty)
+        XCTAssertTrue(empty.staticTexts["No results"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("search-no-results", in: self)
+        empty.terminate()
+
+        let mixed = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        XCTAssertTrue(openInbox(in: mixed).waitForExistence(timeout: 10))
+        search("flaky", in: mixed)
+        XCTAssertTrue(
+            mixed.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search"))
+                .firstMatch.waitForExistence(timeout: 10)
+        )
+        AidenStateMatrix.capture("search-failing-machines", in: self)
+        mixed.terminate()
+
+        let noBots = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        XCTAssertTrue(openInbox(in: noBots).waitForExistence(timeout: 10))
+        search("zzzz", in: noBots)
+        XCTAssertTrue(noBots.staticTexts["No results"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("search-no-results-failing-machines", in: self)
+        noBots.terminate()
+    }
+
     /// Light, dark and the largest accessibility text, so later work has a
     /// "before" to compare with. A screen that cannot be reached fails the test
     /// instead of being skipped.

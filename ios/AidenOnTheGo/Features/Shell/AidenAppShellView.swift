@@ -27,7 +27,6 @@ struct AidenAppShellView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
     @State private var homeModel = AidenHomeModel()
-    @State private var searchText = ""
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -74,11 +73,11 @@ struct AidenAppShellView: View {
             }
 
             Tab(value: AidenAppTab.search, role: .search) {
+                // The field is on this stack's root view: on the `TabView` it would
+                // sit on every tab.
                 NavigationStack {
-                    AidenTabPlaceholderView(title: "Search", systemImage: "magnifyingglass")
+                    AidenSearchTabView(coordinator: coordinator, homeModel: homeModel) { navigation.open($0) }
                 }
-                // On the `TabView` this would put a field on every tab.
-                .searchable(text: $searchText)
             }
         }
         .tabViewStyle(.sidebarAdaptable)
