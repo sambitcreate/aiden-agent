@@ -303,6 +303,29 @@ class AidenChatTest {
         )
     }
 
+    /**
+     * Contract revision 60: a user message Aiden Live sent on the Mac reads as
+     * By voice; the key on an assistant message, or a value this version does
+     * not know, is ignored without rejecting the message.
+     */
+    @Test
+    fun voiceInputMarksOnlyUserMessagesAidenLiveSent() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        val voiceInput = root.getValue("voiceInput").jsonObject
+        val chat = json.decodeFromJsonElement(AidenChat.serializer(), voiceInput.getValue("chat"))
+        val expected = voiceInput.getValue("voiceMessageIds").jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(3, chat.messages.size)
+        assertTrue(chat.messages.all { it.isWireSafe })
+        assertEquals(expected, chat.messages.filter { it.isByVoice }.map { it.id })
+        assertFalse(chat.messages[1].isByVoice)
+        assertFalse(chat.messages[2].isByVoice)
+        val oddType = json.decodeFromString(
+            AidenChatMessage.serializer(),
+            """{"id":"m","role":"user","text":"Hi","inputSource":7,"createdAt":"2026-11-06T10:00:00.000Z"}"""
+        )
+        assertFalse(oddType.isByVoice)
+    }
+
     @Test
     fun canonicalFixtureWebExtractRecapDecodesFromTheTimelineEvent() {
         val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject

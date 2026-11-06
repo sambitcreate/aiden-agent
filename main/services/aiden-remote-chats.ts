@@ -1,3 +1,4 @@
+import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
@@ -163,6 +164,11 @@ export interface AidenRemoteMessageProjection {
   visuals?: AidenRemoteVisualProjection[];
   outcome?: AidenRemoteMessageOutcomeProjection;
   timeline?: GenerationTimeline;
+  /**
+   * Additive (contract revision 60): a user message Aiden Live sent for the
+   * person on this Mac. Clients show a small "By voice" label; older ones ignore it.
+   */
+  inputSource?: "voice";
 }
 
 /**
@@ -855,6 +861,9 @@ function projectMessage(
     ...(visuals.length > 0 ? { visuals } : {}),
     ...(outcome ? { outcome } : {}),
     ...(timeline ? { timeline } : {}),
+    ...(message.role === "user" && !message.notice && parseChatInputSource(message.inputSource)
+      ? { inputSource: "voice" as const }
+      : {}),
   };
 }
 

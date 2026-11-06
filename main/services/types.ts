@@ -379,6 +379,8 @@ export interface ChatMessage {
   skill?: SkillProvenanceV1;
   /** A user-role follow-up notice (job ended, pull request news, check result), drawn as a card. */
   notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
+  /** User messages Aiden Live sent for the person ("By voice"); display-only. */
+  inputSource?: import("../../renderer/shared/chat-input-source.js").ChatInputSourceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Content-free turn duration and provider-reported token totals for the footer. */

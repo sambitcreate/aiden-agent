@@ -8,6 +8,7 @@ import { AidenOperationUnknownOutcomeError } from "./aiden-remote-operation-cont
 import type { PiRuntimeQueueOptions, PiRuntimeQueueReceipt } from "./pi-agent-runtime-harness.js";
 import type { Chat, ChatMessage } from "./types.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import type { ChatInputSourceV1 } from "../../renderer/shared/chat-input-source.js";
 import type {
   ChatRunInputAdmissionResult,
   ChatRunInputMode,
@@ -68,6 +69,8 @@ export interface ChatRunInputAdmissionRequest {
   ownerDocumentId?: string;
   /** Main-owned follow-up notice: stored with the message so clients draw it as a card. */
   notice?: AgentNoticeV1;
+  /** Aiden Live sent this for the person; the message shows "By voice". */
+  inputSource?: ChatInputSourceV1;
 }
 
 function rejectionReason(
@@ -129,6 +132,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
               role: "user",
               content: input.text,
               ...(input.notice ? { notice: input.notice } : {}),
+              ...(input.inputSource && !input.notice ? { inputSource: input.inputSource } : {}),
             },
             {
               isCurrent: () =>

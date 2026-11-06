@@ -1,4 +1,5 @@
 import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-directory";
+import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave } from "../shared/bot-routine-models";
@@ -1609,6 +1610,8 @@ export const chatsApi = {
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
+    /** Aiden Live sent this first message for the person ("By voice"). */
+    inputSource?: ChatInputSourceV1;
   }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
   /**
    * First send with New worktree. Main creates (or, for the same draft,
@@ -1626,6 +1629,7 @@ export const chatsApi = {
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
+    inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
   }) => invokeChatMutation<FirstMessageWorktreeResult<Chat>>("chats:createWithFirstMessage", input),
   /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
@@ -1723,6 +1727,8 @@ export const chatsApi = {
       autoTitle?: boolean;
       turnId: string;
       skillInvocation?: SkillInvocationV1;
+      /** Aiden Live sent this message for the person ("By voice"). */
+      inputSource?: ChatInputSourceV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (
@@ -2108,7 +2114,7 @@ export function stopDetachedGeneration(streamId: string): Promise<boolean> {
  */
 export function admitChatRunInput(
   streamId: string,
-  input: { mode: ChatRunInputMode; text: string },
+  input: { mode: ChatRunInputMode; text: string; inputSource?: ChatInputSourceV1 },
 ): Promise<ChatRunInputAdmissionResult> {
   return invoke<ChatRunInputAdmissionResult>("chat:admitRunInput", streamId, input);
 }

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 59,
+  "contractRevision": 60,
   "peerRouteAdvertisement": {
     "feature": "peer-routes-v1",
     "routes": [
@@ -2299,7 +2299,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 59,
+    "contractRevision": 60,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -7142,5 +7142,6 @@
         "once"
       ]
     }
-  }
+  },
+  "voiceInput": {"chat":{"id":"chat_fixture_voice_input","workspaceId":"workspace_fixture_01","title":"Fix login","providerId":"provider_fixture","modelId":"model_fixture","messages":[{"id":"message_fixture_voice_user","role":"user","text":"Also check the password reset page.","inputSource":"voice","createdAt":"2026-11-06T10:00:00.000Z"},{"id":"message_fixture_voice_assistant","role":"assistant","text":"Checking the reset page too.","inputSource":"voice","createdAt":"2026-11-06T10:00:02.000Z"},{"id":"message_fixture_voice_unknown","role":"user","text":"Thanks.","inputSource":"dictation","createdAt":"2026-11-06T10:00:05.000Z"}],"createdAt":"2026-11-06T09:59:00.000Z","updatedAt":"2026-11-06T10:00:05.000Z","revision":"chat_revision_voice_input_3"},"voiceMessageIds":["message_fixture_voice_user"]}
 }

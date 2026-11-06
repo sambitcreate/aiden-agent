@@ -12,7 +12,8 @@ export interface QueuedChatMessage {
   text: string;
   attachments: Attachment[];
   skillInvocation?: SkillInvocationV1;
-  options?: { visualize?: boolean };
+  /** inputSource is set only by Aiden Live's chat tools ("By voice"). */
+  options?: { visualize?: boolean; inputSource?: import("../shared/chat-input-source").ChatInputSourceV1 };
 }
 
 interface QueueSnapshot {
@@ -414,7 +415,7 @@ export async function steerQueuedMessage(input: {
  */
 export function withCommittedRunInput<T extends { messages: ChatMessage[] }>(
   chat: T,
-  committed: { messageId: string; text: string; createdAt: number },
+  committed: { messageId: string; text: string; createdAt: number; inputSource?: ChatMessage["inputSource"] },
 ): T {
   if (chat.messages.some((message) => message.id === committed.messageId)) return chat;
   return {
@@ -426,6 +427,7 @@ export function withCommittedRunInput<T extends { messages: ChatMessage[] }>(
         role: "user",
         content: committed.text,
         createdAt: committed.createdAt,
+        ...(committed.inputSource ? { inputSource: committed.inputSource } : {}),
       },
     ],
   };

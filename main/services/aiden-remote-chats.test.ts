@@ -478,6 +478,24 @@ test("a follow-up notice reaches phones as one readable line, never the output i
   assert.doesNotMatch(JSON.stringify(projection), /ghp_secret/u);
 });
 
+test("a message Aiden Live sent reaches paired devices as By voice; nothing else does", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [
+      { id: "voice-1", role: "user", content: "Check the reset page too.", inputSource: "voice", createdAt: 2_000 },
+      { id: "typed-1", role: "user", content: "And the login page.", createdAt: 2_001 },
+      { id: "answer-1", role: "assistant", content: "On it.", inputSource: "voice", createdAt: 2_002 } as never,
+    ],
+  }));
+  const messages = parseAidenRemoteChatProjection(projection).messages;
+  assert.deepEqual(messages.map((message) => message.inputSource), ["voice", undefined, undefined]);
+  const wire = JSON.parse(JSON.stringify(projection)) as { messages: Array<Record<string, unknown>> };
+  assert.deepEqual(
+    wire.messages.map((message) => "inputSource" in message),
+    [true, false, false],
+    "only the voice message carries the key on the wire",
+  );
+});
+
 test("chat projection emits only parent state and rejects private child metadata", () => {
   const projection = projectAidenRemoteChat(chat({
     messages: [{

@@ -826,6 +826,24 @@ test("follow-up notices survive a restart on user messages only, in their exact 
   assert.deepEqual(chatForRenderer(loaded)?.messages[0]?.notice, notice);
 });
 
+test("the By voice marker survives a restart on user messages only", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-voice-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Check the reset page too.", inputSource: "voice" });
+  await store.appendMessage(chat.id, { role: "assistant", content: "On it.", inputSource: "voice" } as never);
+  await store.appendMessage(chat.id, { role: "user", content: "Thanks.", inputSource: "dictation" } as never);
+
+  const loaded = await createChatStore(async () => directory).get(chat.id);
+  assert.deepEqual(
+    loaded?.messages.map((message) => message.inputSource),
+    ["voice", undefined, undefined],
+    "only a user message keeps the marker, and only the known value",
+  );
+  assert.equal(chatForRenderer(loaded)?.messages[0]?.inputSource, "voice");
+});
+
 test("renderer ownership is checked again at the atomic append commit", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-owner-guard-"),
