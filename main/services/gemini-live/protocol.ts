@@ -501,6 +501,13 @@ function liveConnectConfig(
         "functionDeclarations" in tool &&
         tool.functionDeclarations?.some((declaration) => declaration.name === "computer_use") === true,
     ) === true;
+  // Moving through Aiden's own window is not screen control: other apps stay off-limits.
+  const hasAidenAppControl =
+    tools?.some(
+      (tool) =>
+        "functionDeclarations" in tool &&
+        tool.functionDeclarations?.some((declaration) => declaration.name === "use_aiden") === true,
+    ) === true;
   return {
     abortSignal: signal,
     responseModalities: [Modality.AUDIO],
@@ -514,7 +521,9 @@ function liveConnectConfig(
           systemInstruction: withExtra(
             hasComputerUse
               ? "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. Execute the user's requested screen actions directly during this Live session without per-action approval prompts. Stop when the user cancels. Never claim that an action completed until its tool result confirms it."
-              : "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning is still running. You cannot click, type or act on the user's screen in this session; if asked, say so plainly.",
+              : hasAidenAppControl
+                ? "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. You can act inside Aiden's own window only through your Aiden tools. You cannot act on other apps or the user's screen outside Aiden in this session; if asked, say so plainly."
+                : "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning is still running. You cannot click, type or act on the user's screen in this session; if asked, say so plainly.",
           ),
         }
       : extra
