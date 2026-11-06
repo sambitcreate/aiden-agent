@@ -49,6 +49,8 @@ export function InfoHint({
   const hide = () => {
     clearTimer();
     pinnedRef.current = false;
+    // Pressing the hint's text moves focus into it. Hand focus back before the text goes.
+    if (contentRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
     setOpen(false);
   };
   const toggle = () => {
@@ -122,6 +124,10 @@ export function InfoHint({
           onInteractOutside={(event) => {
             // The button handles its own presses.
             if (triggerRef.current?.contains(event.target as Node)) event.preventDefault();
+          }}
+          onKeyDown={(event) => {
+            // The text holds nothing to tab to, so Tab carries on from the button.
+            if (event.key === "Tab") hide();
           }}
           onPointerEnter={clearTimer}
           onPointerLeave={() => {

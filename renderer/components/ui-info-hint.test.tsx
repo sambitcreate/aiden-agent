@@ -74,6 +74,21 @@ test("pressing inside a clicked hint keeps it open, and moving elsewhere closes 
   await waitFor(() => assert.ok(!hintText()));
 });
 
+for (const key of ["Escape", "Tab"]) {
+  test(`${key} from inside a pressed hint closes it and returns focus to its button`, async () => {
+    const button = renderHint();
+    act(() => button.focus());
+    fireEvent.click(button);
+    const tooltip = await screen.findByRole("tooltip");
+    act(() => tooltip.focus());
+
+    const notCancelled = fireEvent.keyDown(tooltip, { key });
+    await waitFor(() => assert.ok(!hintText()));
+    assert.ok(document.activeElement === button);
+    if (key === "Tab") assert.ok(notCancelled, "Tab carries on to the next control");
+  });
+}
+
 test("hovering opens the hint after a short delay and leaving closes an unpinned hint", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   const button = renderHint();
