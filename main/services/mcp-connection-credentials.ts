@@ -5,7 +5,7 @@
 // the storage is injected.
 
 import { mcpPresetKeyBinding } from "./mcp-credential-cleanup-core.js";
-import { mcpFieldSecretMarkers } from "./mcp-field-secrets-core.js";
+import { hasPlaintextMcpFields, mcpFieldSecretMarkers } from "./mcp-field-secrets-core.js";
 import { mcpApiKeyHeaderValue } from "./mcp-oauth-client-metadata.js";
 import { assertMcpPresetServer, type MacAppMcpPreset } from "./mcp-presets.js";
 import { McpStdioApprovalRequiredError } from "./mcp-stdio-approvals.js";
@@ -44,6 +44,9 @@ export async function resolveMcpConnectionCredentials(
   // A local command runs only once this exact launch was approved on this device.
   if (deps.isLaunchApproved && configured.transport === "stdio" && !(await deps.isLaunchApproved(configured))) {
     throw new McpStdioApprovalRequiredError(configured.name || configured.id);
+  }
+  if (deps.isLaunchApproved && configured.transport === "stdio" && hasPlaintextMcpFields(configured)) {
+    throw new Error("This connector’s environment must be saved in secure storage before it can run.");
   }
   if (preset?.transport === "stdio" && deps.isMacAppOpen && !(await deps.isMacAppOpen(preset))) {
     throw new Error(`${preset.name} isn’t open. Open ${preset.name}, then try again.`);

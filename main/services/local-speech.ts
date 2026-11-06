@@ -28,7 +28,7 @@ import { LocalSpeechWorkerHost, type SpeechWorkerTarget } from "./local-speech-w
 import type { LocalSpeechState } from "../../renderer/shared/local-speech-state.js";
 import { LocalSpeechModelState } from "./local-speech-model-state.js";
 
-const MODEL_MISSING_MESSAGE = "The selected voice model isn't downloaded. Download it in Settings → Voice.";
+const MODEL_MISSING_MESSAGE = "The selected voice model isn't downloaded. Download it in Settings → Voice & Speech.";
 
 const lane = new LocalSpeechLane();
 const stateListeners = new Set<(state: LocalSpeechState) => void>();

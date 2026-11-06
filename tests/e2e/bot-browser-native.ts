@@ -10,9 +10,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { app, BrowserWindow, nativeImage, session } from "electron";
+import { app, BrowserWindow, nativeImage, session, webContents } from "electron";
 import type { BrowserCommand, BrowserCommandResult, BrowserSnapshot } from "../../renderer/shared/browser";
-import { leakedIn, tableLeaks } from "./bot-browser-leak-check";
 
 const root = process.env.AIDEN_BOT_BROWSER_ROOT!;
 await mkdir(path.join(root, "user-data"), { recursive: true });
@@ -27,10 +26,31 @@ const deadline = setTimeout(() => {
 const BOT = "bot:ada";
 const BOT_WORKSPACE = "bot-home-ada";
 const PERSON_WORKSPACE = "person";
+/** Has letters no frame id or port can spell: a plain "737" turned up in the fixture's URL (port 49737) or a hex frame id. */
+const TABLE_CODE = "zq737";
 const FIELD = "position:absolute;width:240px;height:44px;border:0;background:rgb(255,0,0);color:rgb(255,0,0)";
 
 function page(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Fixture</title><style>html,body{margin:0;background:#fff}</style></head><body>${body}</body></html>`;
+}
+
+/**
+ * The secrets found in what a snapshot shows: its strings, without Chromium's
+ * node ids and the element refs. Those are counters, so a short code such as a
+ * card's "737" can turn up in one by chance (node 4737).
+ */
+const NODE_ID_KEYS = new Set(["nodeId", "parentId", "childIds", "ref"]);
+function leakedIn(secrets: readonly string[], ...parts: unknown[]): string[] {
+  const strings = (value: unknown): string[] =>
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.flatMap(strings)
+        : value && typeof value === "object"
+          ? Object.entries(value).flatMap(([key, item]) => (NODE_ID_KEYS.has(key) ? [] : strings(item)))
+          : [];
+  const shown = strings(parts);
+  return secrets.filter((secret) => shown.some((text) => text.includes(secret)));
 }
 
 function serve(request: IncomingMessage, response: ServerResponse): void {
@@ -67,7 +87,7 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
         <tr><td>Code</td><td><input id="code" autocomplete="one-time-code"></td></tr>
         <tr><td>Card</td><td><input id="number" autocomplete="cc-number"></td></tr></table>
         <label><input type="checkbox"> Save <input id="saved" autocomplete="cc-number"></label>
-        <div role="button" tabindex="0"><textarea autocomplete="cc-csc">737</textarea></div>
+        <div role="button" tabindex="0"><textarea autocomplete="cc-csc">${TABLE_CODE}</textarea></div>
         <button type="button">Pay</button></form>
         <script>for(const [id,value] of [["pw","hunter2xyz"],["code","550071"],["number","4000123412341234"],["saved","5555444433332222"]])document.getElementById(id).value=value;</script>`);
     case "/covered":
@@ -79,13 +99,14 @@ function serve(request: IncomingMessage, response: ServerResponse): void {
       return html(`<p>Payment</p><iframe title="Pay" src="http://localhost:${port}/inner" style="width:300px;height:200px;border:0"></iframe>`);
     case "/inner":
       return html('<input type="password" value="frame-secret" aria-label="Frame password">');
+    case "/held-frame-secret":
+      return html(`<input id="secret" type="password" value="iframe-held-secret-91" style="left:20px;top:20px;${FIELD}"><button id="show" onclick="document.getElementById('secret').type='text'">Show</button>`);
     case "/reveal":
       // A "show password" toggle turns the field into plain text.
       return html(`
         <input id="secret" type="password" value="open-sesame-77" aria-label="Password" style="left:20px;top:20px;${FIELD}">
         <button id="show" onclick="const f=document.getElementById('secret');f.type=f.type==='password'?'text':'password'" style="position:absolute;left:320px;top:20px;width:120px;height:44px">Show</button>
-        <div id="control" style="position:absolute;left:20px;top:100px;width:240px;height:44px;background:rgb(255,0,0)"></div>
-        <script>const after=Number(new URLSearchParams(location.search).get("show"));if(after>0)setTimeout(()=>document.getElementById("show").click(),after);</script>`);
+        <div id="control" style="position:absolute;left:20px;top:100px;width:240px;height:44px;background:rgb(255,0,0)"></div>`);
     case "/reveal-table":
       // A table-layout sign-in row and a password field inside a role=button, both with no
       // sensitive autocomplete; "Show" turns them into plain text.
@@ -113,6 +134,7 @@ void app.whenReady().then(async () => {
   const { botBrowserPartition } = await import("../../main/services/browser/bot-profile");
   const { browserPartition } = await import("../../main/services/browser/core");
   const boundary = await import("../../main/services/browser/credential-boundary");
+  const { createBotBrowser } = await import("../../main/services/bot-runtime/bot-browser-tools");
   // Only the person's workspace is configured; the Bot's is admitted by registration.
   configStore.getWorkspace = async (id: string) =>
     (id === PERSON_WORKSPACE ? { id } : undefined) as Awaited<ReturnType<typeof configStore.getWorkspace>>;
@@ -145,6 +167,12 @@ void app.whenReady().then(async () => {
     const result = await agent({ action: "snapshot", tabId, includeImage: true });
     assert.ok(result.snapshot);
     return result.snapshot;
+  };
+  const renderedSnapshot = async (tabId: string): Promise<BrowserSnapshot> => {
+    // Pixel controls need the page's paint, beyond load or click completion.
+    // This is a person's page action, so it cannot prime Bot field memory.
+    await user(BOT_WORKSPACE, { action: "evaluate", tabId, expression: "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))" });
+    return snapshot(tabId);
   };
   const cookieNames = async (partition: string) =>
     (await session.fromPartition(partition).cookies.get({})).map((cookie) => `${cookie.name}=${cookie.value}`).sort();
@@ -190,7 +218,7 @@ void app.whenReady().then(async () => {
   };
   step("2 masking");
   await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
-  const masking = loginAsSeen(await snapshot(botTab));
+  const masking = loginAsSeen(await renderedSnapshot(botTab));
   step("2 typing");
   const outcome = (run: Promise<unknown>) => run.then(() => "ran", (error: Error) => error.message);
   const typing = await outcome(agent({ action: "type", tabId: botTab, selector: "#password", text: "guess" }));
@@ -242,7 +270,7 @@ void app.whenReady().then(async () => {
   };
   const table = await snapshot(botTab);
   const tableSeen = {
-    leaked: tableLeaks(["hunter2xyz", "550071", "4000123412341234", "5555444433332222", "737"], table, origin),
+    leaked: leakedIn(["hunter2xyz", "550071", "4000123412341234", "5555444433332222", TABLE_CODE], table.text, table.elements, table.accessibilityTree),
     // Each element's locator still finds it for the Bot.
     found: await Promise.all(table.elements.map((element) => outcome(agent({ action: "wait", tabId: botTab, locator: element.selector, timeoutMs: 300 })))),
     // The name the Bot's rules see for a click on the checkbox, and on Pay.
@@ -280,9 +308,31 @@ void app.whenReady().then(async () => {
   const personMayUse = await user(BOT_WORKSPACE, { action: "snapshot", tabId: botTab }).then(() => true, () => false);
   // What the person's own steps on the held tab load and log stays theirs.
   await navigate(BOT_WORKSPACE, botTab, `${origin}/callback?code=held-sign-in-code`);
-  await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
+  const heldLogin = webContents.getAllWebContents().find((contents) => contents.session === session.fromPartition(botBrowserPartition(BOT)));
+  assert.ok(heldLogin);
+  const loginDebugger = heldLogin.debugger;
+  const loginSend = loginDebugger.sendCommand.bind(loginDebugger);
+  let loginReady = false, loginInspected = false, finishLoginInspection!: () => void;
+  const loginInspection = new Promise<void>((resolve) => { finishLoginInspection = resolve; });
+  const onLoginReady = () => { loginReady = true; };
+  heldLogin.once("dom-ready", onLoginReady);
+  loginDebugger.sendCommand = async (...args: Parameters<typeof loginSend>) => {
+    const value = await loginSend(...args);
+    if (args[0] === "DOM.getDocument" && loginReady && value.root?.documentURL === `${origin}/login`) loginInspected = true;
+    if (args[0] === "DOM.disable" && loginInspected) finishLoginInspection();
+    return value;
+  };
+  try {
+    await navigate(BOT_WORKSPACE, botTab, `${origin}/login`);
+    await loginInspection;
+    // Let the scanner commit its observation after its final CDP cleanup.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    heldLogin.removeListener("dom-ready", onLoginReady);
+    loginDebugger.sendCommand = loginSend;
+  }
   browser.release(BOT_WORKSPACE, "wait-1");
-  const released = await snapshot(botTab).catch((error: Error) => error.message);
+  const released = await renderedSnapshot(botTab).catch((error: Error) => error.message);
   const afterRelease = typeof released === "string" ? released : loginAsSeen(released);
   const heldTraces = typeof released === "string" ? null : JSON.stringify(released).includes("held-sign-in-code");
 
@@ -303,27 +353,162 @@ void app.whenReady().then(async () => {
     return { field: pixel(140, 42), control: pixel(140, 122), leaked: JSON.stringify(shot).includes("open-sesame-77") };
   };
   await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal`);
-  await snapshot(botTab);
+  await renderedSnapshot(botTab);
   await agent({ action: "click", tabId: botTab, selector: "#show" });
-  const shownByBot = revealAsSeen(await snapshot(botTab));
+  const shownByBot = revealAsSeen(await renderedSnapshot(botTab));
   // What the approval of the Bot's typing and the rules read first, as in a Bot's call.
   const probedShownByBot = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
   const typingShownByBot = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
-  browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-2", reason: "sign_in" });
-  // The person reads the page, then presses Show (the page shows the field after 2 s).
-  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal?show=2000`);
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  const shownType = (await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').type" })).value;
+  const heldUrl = `${origin}/reveal?held=1`;
+  const heldContents = webContents.getAllWebContents().filter((contents) => contents.getURL() === `${origin}/reveal`);
+  assert.equal(heldContents.length, 1);
+  const debuggerPort = heldContents[0]!.debugger;
+  const originalSend = debuggerPort.sendCommand;
+  const heldObservation = { delayedRead: false, passwordObserved: false };
+  let oldDocumentRead!: () => void;
+  let observed!: () => void;
+  const oldDocument = new Promise<void>((resolve) => { oldDocumentRead = resolve; });
+  const observation = new Promise<void>((resolve) => { observed = resolve; });
+  // Observe the real held-tab scanner, without asking the Bot to read or mark
+  // this document first. A slow old-document read deliberately exercises its
+  // backoff across navigation; a fixed Show timer can beat the next scan.
+  debuggerPort.sendCommand = async (method, params, sessionId) => {
+    const result = await originalSend.call(debuggerPort, method, params, sessionId);
+    if (method === "DOM.getDocument") {
+      if (!heldObservation.delayedRead) {
+        assert.equal(result.root?.documentURL, `${origin}/reveal`);
+        heldObservation.delayedRead = true;
+        oldDocumentRead();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      if (result.root?.documentURL === heldUrl) {
+        const nodes = [result.root];
+        while (nodes.length) {
+          const node = nodes.pop()!;
+          const attributes = node.attributes ?? [];
+          if (node.nodeName === "INPUT" && attributes.some((value: string, index: number) => index % 2 === 0 && value === "id" && attributes[index + 1] === "secret") &&
+              attributes.some((value: string, index: number) => index % 2 === 0 && value === "type" && attributes[index + 1] === "password")) heldObservation.passwordObserved = true;
+          nodes.push(...(node.children ?? []));
+        }
+      }
+    }
+    // recallSensitiveFields remembers the DOM result before disabling DOM.
+    if (method === "DOM.disable" && heldObservation.passwordObserved) observed();
+    return result;
+  };
+  try {
+    browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-2", reason: "sign_in" });
+    await oldDocument;
+    await navigate(BOT_WORKSPACE, botTab, heldUrl);
+    await observation;
+  } finally {
+    debuggerPort.sendCommand = originalSend;
+  }
+  assert.equal((await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').type" })).value, "password");
+  const shownType = (await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('show').click();document.getElementById('secret').type" })).value;
   // They leave the cursor in the field.
   await user(BOT_WORKSPACE, { action: "evaluate", tabId: botTab, expression: "document.getElementById('secret').focus()" });
   browser.release(BOT_WORKSPACE, "wait-2");
-  const shownByPerson = revealAsSeen(await snapshot(botTab));
+  const shownByPerson = revealAsSeen(await renderedSnapshot(botTab));
   // A printable key into the focused field is typing too (asked before anything else touches the field).
   const pressingShownByPerson = await outcome(agent({ action: "press", tabId: botTab, key: "x" }));
   const typingShownByPerson = await outcome(agent({ action: "type", tabId: botTab, selector: "#secret", text: "guess" }));
   // What an approval and the rules read about the field.
   const probedType = (await browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }))?.type;
-  const reveal = { shownByBot, probedShownByBot, typingShownByBot, shownByPerson, pressingShownByPerson, typingShownByPerson, shownType, probedType };
+  const reveal = { shownByBot, probedShownByBot, typingShownByBot, shownByPerson, pressingShownByPerson, typingShownByPerson, shownType, probedType, heldObservation };
+  // Slow reads of the page's fields, made slow at the tab's DevTools connection
+  // (every read is one DOM.getDocument), so nothing here depends on timing luck.
+  step("5 slow field reads");
+  const botContents = webContents.getAllWebContents().find((contents) => contents.session === session.fromPartition(botBrowserPartition(BOT)));
+  assert.ok(botContents);
+  const tabDebugger = botContents.debugger;
+  const sendCommand = tabDebugger.sendCommand.bind(tabDebugger);
+  let fieldReads = 0;
+  let fieldNavigation = 0, readyFieldNavigation = -1;
+  let inspectedNavigation: number | undefined;
+  const fieldNavigationStarted = (_event: unknown, _url: string, inPlace: boolean, isMainFrame: boolean) => {
+    if (isMainFrame && !inPlace) fieldNavigation += 1;
+  };
+  botContents.on("did-start-navigation", fieldNavigationStarted);
+  let beforeNextReadReturns: (() => Promise<void>) | undefined;
+  tabDebugger.sendCommand = async (...args: Parameters<typeof sendCommand>) => {
+    if (args[0] !== "DOM.getDocument") {
+      const result = await sendCommand(...args);
+      if (args[0] === "DOM.disable" && inspectedNavigation === fieldNavigation && !botContents.isLoading())
+        readyFieldNavigation = inspectedNavigation;
+      return result;
+    }
+    const navigation = fieldNavigation, url = botContents.getURL(), ready = !botContents.isLoading();
+    inspectedNavigation = undefined;
+    const delay = beforeNextReadReturns;
+    beforeNextReadReturns = undefined;
+    const read = await sendCommand(...args);
+    await delay?.();
+    fieldReads += 1;
+    if (ready && navigation === fieldNavigation && url === botContents.getURL() && read.root?.documentURL === url)
+      inspectedNavigation = navigation;
+    return read;
+  };
+  const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  /** Whether `count` reads have ended within `ms`: a read that never comes shows up in what the Bot sees, not as a hang. */
+  const fieldReadsEnded = async (count: number, ms: number): Promise<boolean> => {
+    const end = Date.now() + ms;
+    while (fieldReads < count && Date.now() < end) await pause(20);
+    return fieldReads >= count;
+  };
+  /** A read this slow puts the next timed one at least 6 s away, well past `fieldReadsEnded`'s wait below. */
+  const SLOW_READ_MS = 300;
+  const READ_ON_LOAD_MS = 2_000;
+  // The person shows the field on the page they just opened; the Bot then gets the tab back.
+  const shownAfterHold = async (holdId: string) => {
+    // A raw DOM response is earlier than scan cleanup and coverage. Observe
+    // a complete scan that began on this ready document before handing back.
+    const deadline = Date.now() + READ_ON_LOAD_MS;
+    while (readyFieldNavigation !== fieldNavigation && Date.now() < deadline) await pause(20);
+    assert.equal(readyFieldNavigation, fieldNavigation, "the current ready document's scan completed");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const shown = await user(BOT_WORKSPACE, {
+      action: "evaluate", tabId: botTab,
+      expression: "document.getElementById('show').click();document.getElementById('secret').type",
+    });
+    browser.release(BOT_WORKSPACE, holdId);
+    return { shownType: shown.value, ...revealAsSeen(await snapshot(botTab)) };
+  };
+  // A page opened after a slow read ended, while the next timed read is seconds away.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const readsBeforeBackoff = fieldReads;
+  beforeNextReadReturns = () => pause(SLOW_READ_MS);
+  browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-3", reason: "sign_in" });
+  assert.ok(await fieldReadsEnded(readsBeforeBackoff + 1, 5_000), "the held tab's first read");
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal`);
+  const openedDuringBackoff = await shownAfterHold("wait-3");
+  // A page that becomes ready while a slow read of the previous page is still running.
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const readsBeforeOverlap = fieldReads;
+  let readReachedPage!: () => void;
+  const previousPageRead = new Promise<void>((resolve) => { readReachedPage = resolve; });
+  let finishRead!: () => void;
+  const readHeldOpen = new Promise<void>((resolve) => { finishRead = resolve; });
+  beforeNextReadReturns = () => {
+    readReachedPage();
+    return readHeldOpen;
+  };
+  browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-4", reason: "sign_in" });
+  await previousPageRead;
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal`);
+  await pause(SLOW_READ_MS);
+  finishRead();
+  assert.ok(await fieldReadsEnded(readsBeforeOverlap + 1, 5_000), "the held tab's first read");
+  const openedDuringRead = await shownAfterHold("wait-4");
+  // A wait shorter than the read before it still tries its condition, on an element already there.
+  const readsBeforeWait = fieldReads;
+  beforeNextReadReturns = () => pause(SLOW_READ_MS);
+  const waitAfterSlowRead = await outcome(agent({ action: "wait", tabId: botTab, locator: "#show", timeoutMs: 100 }));
+  assert.equal(fieldReads, readsBeforeWait + 1, "the wait read the page first");
+  tabDebugger.sendCommand = sendCommand;
+  botContents.removeListener("did-start-navigation", fieldNavigationStarted);
+  const slowReads = { openedDuringBackoff, openedDuringRead, waitAfterSlowRead };
+
   // A remembered field is marked before any Bot locator runs, not only before
   // typing: a wait, a scroll's target and the snapshot's own locators. Each is
   // checked on a page nothing has marked yet: the Bot reads it while the fields
@@ -370,6 +555,184 @@ void app.whenReady().then(async () => {
     probe: await outcome(browser.probeAgentTarget(BOT_WORKSPACE, botTab, { locator: "#exp option:nth-child(5)[selected]", click: true })),
   };
 
+  // Release while the previous document's scan still owns the only reader.
+  // No Bot read may prime the newly loaded field before the person shows it.
+  step("5 release before new document observation");
+  await navigate(BOT_WORKSPACE, botTab, `${origin}/saved-card`);
+  const releaseContents = webContents.getAllWebContents().find((contents) => contents.getURL() === `${origin}/saved-card` && contents.session === session.fromPartition(botBrowserPartition(BOT)));
+  assert.ok(releaseContents);
+  const releaseDebugger = releaseContents.debugger;
+  const releaseSend = releaseDebugger.sendCommand.bind(releaseDebugger);
+  let reachedOldRead!: () => void, finishOldRead!: () => void, drainedOldRead!: () => void;
+  const oldReadReached = new Promise<void>((resolve) => { reachedOldRead = resolve; });
+  const oldReadHeld = new Promise<void>((resolve) => { finishOldRead = resolve; });
+  const oldReadDrained = new Promise<void>((resolve) => { drainedOldRead = resolve; });
+  let intercepted = false, releasedOldRead = false;
+  releaseDebugger.sendCommand = async (...args: Parameters<typeof releaseSend>) => {
+    const value = await releaseSend(...args);
+    if (args[0] === "DOM.getDocument" && !intercepted) {
+      intercepted = true;
+      reachedOldRead();
+      await oldReadHeld;
+    }
+    if (args[0] === "DOM.disable" && releasedOldRead) drainedOldRead();
+    return value;
+  };
+  let releaseBeforeRead;
+  try {
+    browser.hold(BOT_WORKSPACE, botTab, { holdId: "wait-release-race", reason: "sign_in" });
+    await oldReadReached;
+    step("release race old scan reached");
+    const ready = new Promise<void>((resolve) => releaseContents.once("dom-ready", () => resolve()));
+    // A real page navigation is observed by BrowserService, without the
+    // fixture's user-command port aborting the deliberately held CDP read.
+    await releaseContents.loadURL(`${origin}/reveal?release-race=1`);
+    await ready;
+    step("release race latest document ready");
+    const shownType = await releaseContents.executeJavaScript("document.getElementById('show').click();document.getElementById('secret').type");
+    browser.release(BOT_WORKSPACE, "unknown-release");
+    const unknownRelease = await outcome(agent({ action: "snapshot", tabId: botTab }));
+    browser.release(BOT_WORKSPACE, "wait-release-race");
+    assert.equal(releasedOldRead, false, "release precedes the old scan's completion");
+    step("release race released before old scan");
+    // The Bot's gateway and status must also use the host's safe projection,
+    // while the person's own browser retains its actual sign-in metadata.
+    const metadataPublished = Promise.all([
+      new Promise<void>((resolve) => releaseContents.once("did-navigate-in-page", () => resolve())),
+      new Promise<void>((resolve) => releaseContents.once("page-title-updated", () => resolve())),
+    ]);
+    await releaseContents.executeJavaScript("history.replaceState(null,'','/callback?code=held-metadata-code');document.title='held-metadata-title'");
+    await metadataPublished;
+    const healthyUrl = `${origin}/whoami?healthy=1`;
+    const beforeHealthy = new Set(webContents.getAllWebContents().map((contents) => contents.id));
+    const healthy = await user(BOT_WORKSPACE, { action: "create", url: healthyUrl, show: false });
+    assert.ok(healthy.tabId);
+    const healthyMetadataTab = healthy.tabId;
+    const healthyContents = webContents.getAllWebContents().find((contents) => !beforeHealthy.has(contents.id) && contents.session === releaseContents.session);
+    assert.ok(healthyContents);
+    await new Promise<void>((resolve) => {
+      const ready = () => {
+        if (healthyContents.getURL() !== healthyUrl || healthyContents.isLoading()) return;
+        healthyContents.removeListener("did-stop-loading", ready);
+        resolve();
+      };
+      healthyContents.on("did-stop-loading", ready);
+      ready();
+    });
+    const botBrowser = createBotBrowser({ service: async () => browser, mintOwner: () => owner });
+    const candidates = await botBrowser.candidates(BOT, { workspaceId: BOT_WORKSPACE, chatId: "bot-native-chat", generationId: "metadata-check", supportsImages: true, botName: "Ada" });
+    const gateway = candidates.find(({ tool }) => tool.name === "browser")!.tool;
+    const status = candidates.find(({ tool }) => tool.name === "browser_status")!.tool;
+    const metadata = {
+      gateway: JSON.stringify(await gateway.execute("held-gateway", {})),
+      status: JSON.stringify(await status.execute("held-status", { tabId: botTab })),
+      person: browser.getState(BOT_WORKSPACE).tabs.find((tab) => tab.id === botTab),
+      healthyTabId: healthyMetadataTab,
+    };
+    botBrowser.shutdown();
+    const beforeDrain = await snapshot(botTab).then(
+      (shot) => ({ kind: "snapshot", leaked: JSON.stringify(shot).includes("open-sesame-77") }),
+      (error: Error) => ({ kind: "refused", message: error.message }),
+    );
+    step(`release race first snapshot ${beforeDrain.kind}`);
+    const probeBeforeDrain = await outcome(browser.probeAgentTarget(BOT_WORKSPACE, botTab, { selector: "#secret" }));
+    step("release race probe finished");
+    releasedOldRead = true;
+    finishOldRead();
+    await oldReadDrained;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    step("release race old scan drained");
+    const afterDrain = await outcome(agent({ action: "snapshot", tabId: botTab }));
+    const pressAfterDrain = await outcome(agent({ action: "press", tabId: botTab, key: "x" }));
+    // A later plaintext scan or ordinary navigation cannot recover missing history.
+    await navigate(BOT_WORKSPACE, botTab, `${origin}/reveal?still-uncertain=1`);
+    const afterNavigation = await outcome(agent({ action: "snapshot", tabId: botTab }));
+    releaseBeforeRead = { shownType, unknownRelease, metadata, beforeDrain, probeBeforeDrain, afterDrain, pressAfterDrain, afterNavigation };
+  } finally {
+    releasedOldRead = true;
+    finishOldRead();
+    releaseDebugger.sendCommand = releaseSend;
+  }
+  // The person can close the uncertain tab; a fresh tab keeps the Bot's sign-in.
+  await user(BOT_WORKSPACE, { action: "close", tabId: botTab });
+  const freshTab = await opened(BOT_WORKSPACE, `${origin}/reveal?fresh-tab=1`);
+  const fresh = revealAsSeen(await renderedSnapshot(freshTab));
+  const releaseRecovery = { ...fresh, botCookies: await cookieNames(botBrowserPartition(BOT)) };
+
+  // A same-process child document can change without the main frame navigating.
+  // Establish real coverage, hold the next old-tree response, then replace and
+  // reveal only the child before release. The old main-document tuple is unchanged.
+  step("5 held iframe replacement");
+  const frameTab = freshTab;
+  const frameContents = webContents.getAllWebContents().find((contents) => contents.getURL() === `${origin}/reveal?fresh-tab=1`);
+  assert.ok(frameContents);
+  await frameContents.executeJavaScript(`new Promise(resolve=>{const frame=document.createElement('iframe');frame.id='held-frame';frame.title='Sign in';frame.style='position:absolute;left:0;top:250px;width:600px;height:250px;border:0';frame.onload=()=>resolve(true);frame.src=${JSON.stringify(`${origin}/saved-card`)};document.body.append(frame);})`);
+  const frameDebugger = frameContents.debugger;
+  const frameSend = frameDebugger.sendCommand.bind(frameDebugger);
+  let firstFrameRead = false, finishFirstFrameRead!: () => void;
+  let holdNextFrameRead = false, releasedFrameRead = false;
+  let reachedFrameRead!: () => void, finishFrameRead!: () => void, drainedFrameRead!: () => void;
+  const firstFrameInspection = new Promise<void>((resolve) => { finishFirstFrameRead = resolve; });
+  const frameReadReached = new Promise<void>((resolve) => { reachedFrameRead = resolve; });
+  const frameReadHeld = new Promise<void>((resolve) => { finishFrameRead = resolve; });
+  const frameReadDrained = new Promise<void>((resolve) => { drainedFrameRead = resolve; });
+  frameDebugger.sendCommand = async (...args: Parameters<typeof frameSend>) => {
+    const value = await frameSend(...args);
+    if (args[0] === "DOM.getDocument") {
+      firstFrameRead = true;
+      if (holdNextFrameRead) {
+        holdNextFrameRead = false;
+        reachedFrameRead();
+        await frameReadHeld;
+        releasedFrameRead = true;
+      }
+    }
+    if (args[0] === "DOM.disable" && firstFrameRead) finishFirstFrameRead();
+    if (args[0] === "DOM.disable" && releasedFrameRead) drainedFrameRead();
+    return value;
+  };
+  try {
+    browser.hold(BOT_WORKSPACE, frameTab, { holdId: "wait-frame", reason: "sign_in" });
+    await firstFrameInspection;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    step("iframe initial document inspected");
+    holdNextFrameRead = true;
+    await frameReadReached;
+    step("iframe old read held");
+    await frameContents.executeJavaScript(`new Promise(resolve=>{const frame=document.getElementById('held-frame');frame.onload=()=>resolve(true);frame.src=${JSON.stringify(`${origin}/held-frame-secret`)};})`);
+    const childFrame = frameContents.mainFrame.frames.find((frame) => frame.url === `${origin}/held-frame-secret`);
+    assert.ok(childFrame, "the new iframe document loaded");
+    step("iframe replacement loaded");
+    assert.equal(childFrame.processId, frameContents.mainFrame.processId, "the iframe is inspected in the main renderer process");
+    const shown = await frameContents.executeJavaScript("const page=document.getElementById('held-frame').contentDocument;page.getElementById('show').click();page.getElementById('secret').type");
+    assert.equal(shown, "text", "the person revealed the child's password before release");
+    const fieldPoint = await frameContents.executeJavaScript("(()=>{const frame=document.getElementById('held-frame');const outer=frame.getBoundingClientRect(),field=frame.contentDocument.getElementById('secret').getBoundingClientRect();return{x:outer.left+field.right-10,y:outer.top+field.top+field.height/2};})()");
+    await frameContents.executeJavaScript("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))");
+    browser.release(BOT_WORKSPACE, "wait-frame");
+    const frameResult = await snapshot(frameTab).then(
+      (shot) => {
+        const image = shot.image ? nativeImage.createFromBuffer(Buffer.from(shot.image.data, "base64")) : undefined;
+        const size = image?.getSize();
+        const scale = size ? size.width / shot.tab.viewport.width : 1;
+        const offset = size ? (Math.round(fieldPoint.y * scale) * size.width + Math.round(fieldPoint.x * scale)) * 4 : 0;
+        const bitmap = image?.toBitmap();
+        return { kind: "snapshot", leaked: JSON.stringify(shot).includes("iframe-held-secret-91"), field: bitmap ? [bitmap[offset + 2], bitmap[offset + 1], bitmap[offset]] : null };
+      },
+      (error: Error) => ({ kind: "refused", message: error.message }),
+    );
+    const unavailable = "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
+    assert.deepEqual(frameResult, { kind: "refused", message: unavailable });
+    finishFrameRead();
+    await frameReadDrained;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(await outcome(agent({ action: "snapshot", tabId: frameTab })), unavailable, "late old-frame completion cannot restore coverage");
+    assert.equal(await outcome(browser.probeAgentTarget(BOT_WORKSPACE, frameTab, { selector: "iframe" })), unavailable);
+  } finally {
+    finishFrameRead();
+    frameDebugger.sendCommand = frameSend;
+  }
+  await user(BOT_WORKSPACE, { action: "close", tabId: frameTab });
+
   // 6. Deleting the Bot clears its sign-ins and closes its tabs; the person's stay.
   step("6 delete");
   await browser.clearBotProfile(BOT, BOT_WORKSPACE);
@@ -388,8 +751,11 @@ void app.whenReady().then(async () => {
         isolation, masking, typing, noteTyping, pressing, navigationKey, refused, textLocators, roleLocators, tableSeen, covered, frame,
         hold: { heldState, held, personMayUse, afterRelease, heldTraces },
         reveal,
+        slowReads,
         remembered,
         savedMonth,
+        releaseBeforeRead,
+        releaseRecovery,
         cleared,
         expected: {
           heldRefusal: boundary.BROWSER_HELD_TAB_REFUSED,

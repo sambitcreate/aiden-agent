@@ -116,7 +116,7 @@ class AidenChatNetworkWaitTest {
                     AidenChatCache.ActiveStream("device-network", "stream-network", "turn-network", 0),
                     "instance-network", initial.id
                 )
-                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, networkAvailability = network)
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial, networkAvailability = network, recoveryClock = { System.nanoTime() / 1_000_000 })
                 viewModels.put("chat", model)
 
                 withTimeout(8_000) { model.isWaitingForNetwork.first { it } }

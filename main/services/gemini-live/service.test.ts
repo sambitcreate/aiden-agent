@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
+import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import { fileURLToPath } from "node:url";
 import type { Credential } from "@earendil-works/pi-ai";
 import type { LiveConnectParameters, LiveServerMessage } from "@google/genai";
@@ -1097,4 +1098,17 @@ test("an older display release cannot revoke its replacement binding", () => {
   assert.equal(subject.service.displayMediaBindings()[0]?.bindingId, "new");
   assert.equal(subject.service.releaseDisplayMedia(owner, "new"), true);
   assert.deepEqual(subject.service.displayMediaBindings(), []);
+});
+
+test("a Live session that became available counts once, and one with no credential counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const missing = serviceHarness(null);
+  await missing.service.start(new FakeOwner(2, "2:1:aiden-live-missing"), intent).catch(() => undefined);
+  assert.deepEqual(sent, []);
+
+  const { service } = serviceHarness();
+  const owner = new FakeOwner(3, "3:1:aiden-live-counted");
+  await service.start(owner, intent);
+  await service.stop(owner);
+  assert.deepEqual(sent, [{ event: "voice_used", props: { mode: "live", engine: "cloud" } }]);
 });

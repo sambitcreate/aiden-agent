@@ -34,6 +34,7 @@ export type ImageGenerationFailureCode =
   | "aborted"
   | "unknown-model"
   | "references-unsupported"
+  | "request-limit"
   | "provider-error"
   | "output-invalid";
 
@@ -63,8 +64,8 @@ export type ImageGenerationResult =
 export type ImageGenerationPreflight =
   | {
       kind: "ready";
-      /** Sends the checked request. Once called, the request may leave the machine. */
-      send(): Promise<ImageGenerationResult>;
+      /** After local authentication, claim once immediately before provider dispatch. A refused claim sends nothing. */
+      send(claim?: () => boolean): Promise<ImageGenerationResult>;
     }
   | { kind: "failed"; code: ImageGenerationFailureCode; message: string };
 

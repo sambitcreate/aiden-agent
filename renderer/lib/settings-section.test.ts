@@ -1,13 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  assistantSettingsSections,
+  assistantSettingsPages,
   availableSettingsDestinations,
+  availableSettingsPages,
+  firstMatchingSettingsSection,
   matchesSettingsSearch,
+  pageFor,
   parseSettingsSearch,
   parseSettingsSection,
+  resolveSettingsSection,
+  settingsLocation,
   SETTINGS_DESTINATIONS,
+  SETTINGS_GROUPS,
+  SETTINGS_PAGES,
+  SETTINGS_SECTIONS,
+  settingsTabLabel,
 } from "./settings-section.js";
+
+const APPLE_SILICON = { computerUse: true, devices: true, botComputers: true };
+const INTEL_MAC = { computerUse: true, devices: true, botComputers: false };
+const LINUX = { computerUse: false, devices: false, botComputers: false };
 
 test("capability-aware settings destinations hide Computer Use everywhere", () => {
   assert.equal(
@@ -36,12 +49,11 @@ test("capability-aware settings destinations hide Simulator without the devices 
   assert.equal(linux.length, SETTINGS_DESTINATIONS.length - 3);
 });
 
-test("Bot computers appear only on Apple silicon, in Agent, and are found by VM words", () => {
+test("Bot computers appear only on Apple silicon and are found by VM words", () => {
   const ids = (botComputers: boolean) =>
     availableSettingsDestinations({ computerUse: true, devices: true, botComputers }).map((destination) => destination.id);
   assert.equal(ids(false).includes("botComputers"), false, "an Intel Mac has Computer Use but no Bot computers");
   assert.equal(ids(true).includes("botComputers"), true);
-  assert.equal(SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers")?.group, "Agent");
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers");
   assert.ok(destination);
   for (const term of ["virtual machine", "vm", "lume", "macos", "bot computer"]) {
@@ -49,8 +61,8 @@ test("Bot computers appear only on Apple silicon, in Agent, and are found by VM 
   }
   assert.equal(parseSettingsSection("botComputers"), "botComputers");
   // The assistant never offers a page this Mac can't show.
-  assert.equal(assistantSettingsSections({ devices: true, botComputers: false }).includes("botComputers"), false);
-  assert.equal(assistantSettingsSections({ devices: true, botComputers: true }).includes("botComputers"), true);
+  assert.equal(assistantSettingsPages(INTEL_MAC).join().includes("Bot computers"), false);
+  assert.equal(assistantSettingsPages(APPLE_SILICON).join().includes("Bot computers"), true);
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
@@ -68,6 +80,13 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
     section: "modelData",
   });
   assert.deepEqual(parseSettingsSearch({ section: "unknown" }), {});
+});
+
+test("moving around Settings keeps one history entry so Back to app leaves it", () => {
+  const onLinks = { pathname: "/settings" };
+  assert.equal(settingsLocation("links", onLinks).replace, true);
+  assert.equal(settingsLocation("providers", onLinks).replace, true);
+  assert.equal(settingsLocation("links", { pathname: "/chat" }).replace, undefined);
 });
 
 test("parses the Remote Access settings deep link", () => {
@@ -155,13 +174,13 @@ test("settings search also matches the page description", () => {
   assert.equal(searchIds("").length, SETTINGS_DESTINATIONS.length);
 });
 
-test("Image Generation is an Agent destination reachable by deep link and model names", () => {
+test("Image Generation is reachable by deep link and model names", () => {
   assert.deepEqual(parseSettingsSearch({ section: "imageGeneration" }), {
     section: "imageGeneration",
   });
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "imageGeneration");
   assert.equal(destination?.title, "Image Generation");
-  assert.equal(destination?.group, "Agent");
+  assert.equal(pageFor("imageGeneration").group, "Capabilities");
   for (const term of ["replicate", "fal", "nano banana", "flux", "seedream", "image api keys"]) {
     assert.ok(searchIds(term).includes("imageGeneration"), term);
   }
@@ -171,4 +190,119 @@ test("Image Generation is an Agent destination reachable by deep link and model 
       (entry) => entry.id === "imageGeneration",
     ),
   );
+});
+
+test("every section lives on exactly one page, and every destination has a section", () => {
+  for (const section of SETTINGS_SECTIONS) {
+    const homes = SETTINGS_PAGES.filter(
+      (page) => page.tabs.includes(section) || page.anchors?.includes(section),
+    );
+    assert.equal(homes.length, 1, section);
+    assert.equal(parseSettingsSection(section), section);
+    assert.ok(SETTINGS_DESTINATIONS.some((entry) => entry.id === section), section);
+  }
+});
+
+test("every sidebar group holds a page", () => {
+  for (const group of SETTINGS_GROUPS) {
+    assert.ok(SETTINGS_PAGES.some((page) => page.group === group), group);
+  }
+});
+
+test("old deep links reach their merged page", () => {
+  assert.equal(pageFor("approvals").title, "Bots & Approvals");
+  assert.equal(pageFor("botComputers").title, "Computers & VMs");
+  assert.equal(pageFor("tts").title, "Voice & Speech");
+  assert.equal(pageFor("telegram").title, "Connections");
+  assert.equal(pageFor("remoteAccess").title, "Connections");
+});
+
+test("links opens Appearance as a spot on the page, not a tab", () => {
+  assert.equal(pageFor("links").id, "appearance");
+  assert.deepEqual(pageFor("links").tabs, ["appearance"]);
+  assert.equal(resolveSettingsSection("links", LINUX), "links");
+});
+
+test("Connections names its tabs for what they do", () => {
+  assert.deepEqual(pageFor("remoteAccess").tabs.map(settingsTabLabel), [
+    "Control this device",
+    "Control other devices",
+    "Telegram",
+  ]);
+});
+
+test("Computers & VMs follows the host", () => {
+  const page = (capabilities: typeof APPLE_SILICON) =>
+    availableSettingsPages(capabilities).find((entry) => entry.id === "computers");
+  assert.deepEqual(page(APPLE_SILICON)?.tabs, ["computerUse", "botComputers"]);
+  assert.equal(page(APPLE_SILICON)?.title, "Computers & VMs");
+  assert.deepEqual(page(INTEL_MAC)?.tabs, ["computerUse"]);
+  assert.equal(page(INTEL_MAC)?.title, "Computer Use");
+  assert.equal(page(LINUX), undefined);
+});
+
+test("a section this host can't show opens the next tab on its page, then Providers", () => {
+  assert.equal(resolveSettingsSection("botComputers", INTEL_MAC), "computerUse");
+  assert.equal(resolveSettingsSection("botComputers", LINUX), "providers");
+  assert.equal(resolveSettingsSection("computerUse", LINUX), "providers");
+  assert.equal(resolveSettingsSection("simulator", LINUX), "providers");
+  assert.equal(resolveSettingsSection(undefined, APPLE_SILICON), "providers");
+  assert.equal(resolveSettingsSection("tts", LINUX), "tts");
+});
+
+test("the assistant names pages as people see them, and none this host hides", () => {
+  const pages = assistantSettingsPages(APPLE_SILICON);
+  assert.ok(pages.includes("Bots & Approvals (Bots, Tool approvals, Controls in chat)"));
+  assert.ok(pages.includes("Connections (Control this device, Control other devices, Telegram)"));
+  assert.ok(pages.includes("Appearance (Links)"));
+  assert.ok(pages.includes("Memory"));
+  assert.ok(assistantSettingsPages(INTEL_MAC).includes("Computer Use"));
+  assert.equal(assistantSettingsPages(LINUX).join().includes("Computer"), false);
+});
+
+test("search finds a tab by what the tab says", () => {
+  const connections = pageFor("peerHosts");
+  assert.equal(firstMatchingSettingsSection(connections, "this device"), "remoteAccess");
+  assert.equal(firstMatchingSettingsSection(connections, "other devices"), "peerHosts");
+});
+
+test("chat links finds the Links row", () => {
+  assert.equal(firstMatchingSettingsSection(pageFor("links"), "chat links"), "links");
+});
+
+function searchSidebar(search: string, capabilities = APPLE_SILICON) {
+  return availableSettingsPages(capabilities).flatMap((page) => {
+    const target = firstMatchingSettingsSection(page, search);
+    return target ? [{ page: page.id, target }] : [];
+  });
+}
+
+test("sidebar search opens the tab that matched", () => {
+  assert.deepEqual(searchSidebar("read aloud"), [{ page: "voiceSpeech", target: "tts" }]);
+  assert.deepEqual(searchSidebar("stop asking me"), [
+    { page: "botsApprovals", target: "bots" },
+  ]);
+  assert.ok(searchSidebar("chat controls").some((row) => row.target === "appControls"));
+  assert.ok(searchSidebar("multiple computers").some((row) => row.target === "peerHosts"));
+});
+
+test("sidebar search on a page title's word prefers the tab that names it", () => {
+  assert.ok(searchSidebar("approvals").some((row) => row.target === "approvals"));
+  assert.deepEqual(searchSidebar("voice & speech"), [{ page: "voiceSpeech", target: "voice" }]);
+  assert.deepEqual(searchSidebar("connections telegram"), [{ page: "connections", target: "telegram" }]);
+});
+
+test("sidebar search opens the links row from Appearance", () => {
+  assert.ok(searchSidebar("open links").some((row) => row.page === "appearance" && row.target === "links"));
+});
+
+test("an empty sidebar search opens each page's first tab", () => {
+  const rows = searchSidebar("", INTEL_MAC);
+  assert.equal(rows.length, availableSettingsPages(INTEL_MAC).length);
+  assert.equal(rows.find((row) => row.page === "connections")?.target, "remoteAccess");
+  assert.equal(rows.find((row) => row.page === "appearance")?.target, "appearance");
+});
+
+test("sidebar search can't open a hidden tab", () => {
+  assert.equal(searchSidebar("lume", INTEL_MAC).length, 0);
 });

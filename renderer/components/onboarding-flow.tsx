@@ -19,7 +19,7 @@ import { CodexProviderSettings } from "./settings/codex-provider-settings";
 import { OnboardingOpenAiLogin } from "./onboarding-openai-login";
 import { Button, Dialog, Field, Input, Text, toast } from "./ui";
 import { UsageDataNotice, UsageDataOnboardingRow } from "./usage-data";
-import { appApi, botsApi, profileApi, providersApi } from "../lib/ipc";
+import { analyticsApi, appApi, botsApi, profileApi, providersApi } from "../lib/ipc";
 import { useBrowserSurfaceBlocker } from "../lib/link-opener";
 import {
   clearLegacyOnboardingCompletion,
@@ -191,6 +191,7 @@ export function OnboardingFlow({
   const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
   const readyProviderIdRef = React.useRef<string | null>(null);
   const savingRef = React.useRef(false);
+  const [usageShownEnabled, setUsageShownEnabled] = React.useState(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
   const profileInitializedRef = React.useRef(false);
   const loadGenerationRef = React.useRef(0);
@@ -525,6 +526,7 @@ export function OnboardingFlow({
       const selectedProviderId = providerSkipped
         ? undefined
         : (readyProviderIdRef.current ?? onboardingSnapshotRef.current?.selectedProviderId);
+      if (usageShownEnabled) await analyticsApi.markNoticeShown("ok").catch(() => undefined);
       const snapshot = await appApi.setOnboardingOutcome(
         providerSkipped || !selectedProviderId ? "deferred" : "completed",
         selectedProviderId,
@@ -707,13 +709,13 @@ export function OnboardingFlow({
                   </div>
                 </div>
                 <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5" data-onboarding-tts-privacy>
-                  Read aloud is separate and off by default. Configure it later in Settings → Text to Speech.
+                  Read aloud is separate and off by default. Configure it later in Settings → Voice & Speech → Text to Speech.
                   Pressing the speaker sends the latest response text to Google, even for local-model replies;
                   Google charges may apply. Paired phones and tablets use this same desktop setup;
                   they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
                 </Text>
                 <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
-                  Settings → Memory also offers optional prompt cache warming. It is off by default;
+                  Settings → Context & Limits also offers optional prompt cache warming. It is off by default;
                   enabling it allows paid refresh requests during active desktop chats when estimated savings justify the cost.
                 </Text>
                 <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
@@ -1017,7 +1019,7 @@ export function OnboardingFlow({
                     </Text>
                   </div>
                 </div>
-                <UsageDataOnboardingRow />
+                <UsageDataOnboardingRow onDisplay={setUsageShownEnabled} />
                 <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />
               </div>
             ) : null}

@@ -9,11 +9,14 @@ import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
 import { botFixture } from "./test-fixtures";
 import type { BotLiveSnapshot, BotTranscriptEntry } from "../../shared/bot-live";
+import { pendingBotResumes, recordBotResume } from "./bot-resume-journal";
+import type { BotPlanView } from "../../shared/bot-plans";
 import { BOT_SIDEBAR_PREFERENCES_KEY, parseBotSidebarPreferences } from "../../lib/bot-sidebar-preferences";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
+const COST_RECEIPT = "cost_" + "a".repeat(64);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
@@ -216,6 +219,200 @@ test("an interrupted Bot offers Resume and Dismiss, each sent once with a reques
   assert.equal(dismissInput.botId, "bot-1");
   assert.match(dismissInput.requestId, UUID);
   assert.notEqual(dismissInput.requestId, resumeInput.requestId);
+});
+
+test("resuming an unconfirmed provider charge requires explicit confirmation and preserves that consent on retry", async () => {
+  let fail = true;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "1" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "1" }),
+    "bots:resume": () => { if (fail) { fail = false; throw new Error("Lost Resume acknowledgement."); } return { kind: "running", submissionId: "1" }; },
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  const consent = await screen.findByRole("alertdialog", { name: "Resume Planner with an unconfirmed charge?" });
+  assert.ok(within(consent).getByText(/Resuming may incur another charge/u));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  fireEvent.click(within(consent).getByRole("button", { name: "Cancel" }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 2));
+  const attempts = calls.filter((call) => call.channel === "bots:resume").map((call) => call.args[0] as { requestId: string; acknowledgeUnknownCost?: boolean });
+  assert.equal(attempts[0].acknowledgeUnknownCost, true);
+  assert.equal(attempts[0].requestId, attempts[1].requestId); assert.equal(attempts[1].acknowledgeUnknownCost, true);
+});
+
+test("a cost confirmation for an older interrupted input cannot resume a newer one", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" }),
+    "bots:resume": () => ({ kind: "running", submissionId: "11" }),
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  const consent = await screen.findByRole("alertdialog");
+  await act(async () => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "state", state: { kind: "interrupted", submissionId: "11" } }));
+  fireEvent.click(within(consent).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.ok(!screen.queryByRole("alertdialog")));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+});
+
+test("a delayed ordinary Resume preflight cannot resume newer work or survive leaving the chat", async () => {
+  let release!: (value: { requiresUnknownCostAcknowledgement: boolean; interruptedSubmissionId?: string }) => void;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => new Promise((resolve) => { release = resolve; }),
+    "bots:resume": () => ({ kind: "running", submissionId: "11" }),
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1));
+  await act(async () => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "state", state: { kind: "interrupted", submissionId: "11" } }));
+  await act(async () => release({ requiresUnknownCostAcknowledgement: false }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 2));
+  cleanup();
+  await act(async () => release({ requiresUnknownCostAcknowledgement: false, interruptedSubmissionId: "11" }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+});
+
+test("an unknown ordinary Resume survives remount and settles its original body before a new consent", async () => {
+  const first = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:resume": () => { throw new Error("Lost ordinary Resume reply."); },
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await screen.findByRole("button", { name: "Retry saved Resume" });
+  await waitFor(() => assert.equal(first.filter((call) => call.channel === "bots:resume").length, 1));
+  const original = first.find((call) => call.channel === "bots:resume")!.args[0];
+  cleanup();
+  const second = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" }),
+    "bots:resume": () => ({ kind: "interrupted", submissionId: "10" }),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.equal(pendingBotResumes("bot-1").length, 0));
+  assert.deepEqual(second.find((call) => call.channel === "bots:resume")!.args[0], original);
+  assert.equal(second.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 0);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  const consent = await screen.findByRole("alertdialog");
+  assert.equal(second.filter((call) => call.channel === "bots:resume").length, 1);
+  fireEvent.click(within(consent).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(second.filter((call) => call.channel === "bots:resume").length, 2));
+  const accepted = second.filter((call) => call.channel === "bots:resume")[1].args[0] as { requestId: string; acknowledgeUnknownCost?: boolean };
+  assert.equal(accepted.acknowledgeUnknownCost, true);
+  assert.notEqual(accepted.requestId, (original as { requestId: string }).requestId);
+});
+
+test("an acknowledged Resume survives remount with its exact source, consent and UUID", async () => {
+  const handlers = {
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" }),
+    "bots:resume": () => { throw new Error("Lost confirmed Resume reply."); },
+  };
+  const first = await mountChat(handlers);
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Resume" }));
+  await screen.findByRole("button", { name: "Retry saved Resume" });
+  await waitFor(() => assert.equal(first.filter((call) => call.channel === "bots:resume").length, 1));
+  const original = first.find((call) => call.channel === "bots:resume")!.args[0];
+  cleanup();
+  const second = await mountChat({ ...handlers, "bots:resume": () => ({ kind: "interrupted", submissionId: "11" }) });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.equal(pendingBotResumes("bot-1").length, 0));
+  assert.deepEqual(second.find((call) => call.channel === "bots:resume")!.args[0], original);
+  assert.equal(second.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 0);
+});
+
+test("a consent dialog keeps its original receipt when another request on the same input becomes unknown", async () => {
+  let currentReceipt = COST_RECEIPT, effects = 0, staleRequest: unknown;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => ({ requiresUnknownCostAcknowledgement: true, interruptedSubmissionId: "10", costReceiptId: currentReceipt }),
+    "bots:resume": (input) => {
+      if ((input as { expectedCostReceiptId?: string }).expectedCostReceiptId !== currentReceipt) {
+        // The host consumes the stale decision, then refuses it. Its exact
+        // replay settles observationally without applying it to the new cost.
+        if (staleRequest === undefined) { staleRequest = input; throw new Error("The prior cost decision changed."); }
+        assert.deepEqual(input, staleRequest);
+        return { kind: "interrupted", submissionId: "10" };
+      }
+      effects++;
+      return { kind: "interrupted", submissionId: "10" };
+    },
+  });
+  const request = async () => fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await request();
+  const oldDialog = await screen.findByRole("alertdialog");
+  currentReceipt = "cost_" + "b".repeat(64);
+  fireEvent.click(within(oldDialog).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
+  assert.equal((calls.find((call) => call.channel === "bots:resume")!.args[0] as { expectedCostReceiptId: string }).expectedCostReceiptId, COST_RECEIPT);
+  assert.equal(effects, 0, "confirming A never silently adopts receipt B");
+  assert.equal(pendingBotResumes("bot-1").length, 1);
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.equal(pendingBotResumes("bot-1").length, 0));
+  assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1, "settling A does not preflight or adopt B");
+  assert.equal(effects, 0);
+  await request();
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(effects, 1));
+});
+
+test("background visits invalidate held preflight and cost consent without sending Resume", async () => {
+  let release!: (value: { requiresUnknownCostAcknowledgement: boolean; interruptedSubmissionId: string }) => void;
+  let held = true;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:routineModels:resumeStatus": () => held ? new Promise((resolve) => { release = resolve; }) : { requiresUnknownCostAcknowledgement: true, costReceiptId: COST_RECEIPT, interruptedSubmissionId: "10" },
+  });
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1));
+  fireEvent(window, new Event("blur")); fireEvent(window, new Event("focus"));
+  await act(async () => release({ requiresUnknownCostAcknowledgement: false, interruptedSubmissionId: "10" }));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  held = false;
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await screen.findByRole("alertdialog");
+  fireEvent(window, new Event("blur")); fireEvent(window, new Event("focus"));
+  assert.ok(!screen.queryByRole("alertdialog"));
+  assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+});
+
+test("an expired saved Resume remains unconfirmed and is never replaced or sent", async () => {
+  const now = Date.now;
+  try {
+    Date.now = () => now() - 24 * 60 * 60 * 1000;
+    recordBotResume({ botId: "bot-1", submissionId: "10", requestId: crypto.randomUUID(), acknowledgement: {} });
+  } finally { Date.now = now; }
+  const original = pendingBotResumes("bot-1")[0];
+  const calls = await mountChat({ "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }) });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry saved Resume" }));
+  await waitFor(() => assert.ok(!(screen.getByRole("button", { name: "Retry saved Resume" }) as HTMLButtonElement).disabled));
+  assert.deepEqual(pendingBotResumes("bot-1"), [original]);
+  assert.equal(calls.filter((call) => call.channel === "bots:resume" || call.channel === "bots:routineModels:resumeStatus").length, 0);
+});
+
+test("Resume sends nothing when its exact request cannot be retained on this device", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ state: { kind: "interrupted", submissionId: "10" } }),
+    "bots:resume": () => ({ kind: "running", submissionId: "10" }),
+  });
+  const storage = localStorage, descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage")!;
+  try {
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+      get length() { return storage.length; }, key: storage.key.bind(storage), getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage), clear: storage.clear.bind(storage), setItem: () => { throw new Error("Device storage is full."); },
+    } });
+    fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+    await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routineModels:resumeStatus").length, 1));
+    await screen.findByRole("group", { name: "Planner was interrupted" });
+    assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 0);
+  } finally { Object.defineProperty(globalThis, "localStorage", descriptor); }
+  fireEvent.click(within(await screen.findByRole("group", { name: "Planner was interrupted" })).getByRole("button", { name: "Resume" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:resume").length, 1));
 });
 
 test("a Resume that fails brings the card back, and the next Resume replays the same request id", async () => {
@@ -641,27 +838,46 @@ test("a chat that fails to open says so, and Try again opens it", async () => {
 });
 
 test("a renderer reload mid-reply shows the partial reply from the fresh snapshot", async () => {
+  const opening = "Story opening.\n\n";
+  const fresh = `${opening}A woodland tale.\n\n`;
+  const continued = `${fresh}Once upon a time there was a fox.\n\n`;
+  let finishReload!: (value: BotLiveSnapshot) => void;
+  const reloadSnapshot = new Promise<BotLiveSnapshot>((resolve) => { finishReload = resolve; });
+  let subscribes = 0;
   const calls = await mountChat({
-    "bots:live:subscribe": () =>
-      snapshot({
-        seq: 4,
-        entries: [userEntry("u1", "Tell me a story")],
-        partial: "Once upon a time",
-        state: { kind: "running", submissionId: "s1" },
-      }),
+    "bots:live:subscribe": () => ++subscribes === 1
+      ? snapshot({
+          seq: 3,
+          entries: [userEntry("u1", "Tell me a story")],
+          partial: opening,
+          state: { kind: "running", submissionId: "s1" },
+        })
+      : reloadSnapshot,
   });
+  assert.ok(await screen.findByText("Story opening."));
   cleanup();
-  // The reloaded document mounts the chat again and subscribes once more.
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1));
   await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
-  await screen.findByRole("button", { name: "Planner profile" });
+  // Identity can render from cache before the new live subscription exists.
+  await waitFor(() => assert.equal(subscribes, 2));
   act(() => emitBotTestNotification("bots:live:event", {
-    botId: "bot-1",
-    epoch: "epoch-1",
-    seq: 5,
-    type: "partial",
-    text: "Once upon a time there was a fox.",
+    botId: "bot-1", epoch: "epoch-1", seq: 5, type: "partial", text: continued,
   }));
-  assert.ok(await screen.findByText("Once upon a time there was a fox."));
+  assert.equal(screen.queryByText("A woodland tale."), null, "the pending snapshot has not authorized its buffered update yet");
+  await act(async () => finishReload(snapshot({
+    seq: 4,
+    entries: [userEntry("u1", "Tell me a story")],
+    partial: fresh,
+    state: { kind: "running", submissionId: "s1" },
+  })));
+  // Finished paragraphs exercise reload/replay without racing the separate
+  // one-second reveal-tail deadline against the query's one-second deadline.
+  assert.ok(await screen.findByText("A woodland tale."));
+  assert.ok(screen.getByText("Once upon a time there was a fox."));
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1", epoch: "epoch-1", seq: 6, type: "partial", text: `${continued}An owl joined the tale.\n\n`,
+  }));
+  assert.ok(await screen.findByText("An owl joined the tale."));
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 2);
   assert.equal(calls.filter((call) => call.channel === "bots:live:unsubscribe").length, 1);
 });
@@ -728,6 +944,20 @@ test("Reply quotes a message at the start of the composer", async () => {
   const composer = screen.getByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
   await waitFor(() => assert.equal(composer.value, "> Day one: Alfama.\n\n"));
 });
+
+for (const key of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
+  test(`${key.key} opens a Bot message menu and Reply keeps that message's text`, async () => {
+    await mountChat({
+      "bots:live:subscribe": () => snapshot({ entries: [userEntry("u1", "First question"), assistantEntry("a1", "Keep this answer")] }),
+    });
+    const actions = await screen.findByRole("button", { name: "Message actions for Planner’s message" });
+    actions.focus();
+    fireEvent.keyDown(actions, key);
+    const reply = await screen.findByRole("menuitem", { name: "Reply" });
+    fireEvent.click(reply);
+    await waitFor(() => assert.equal((screen.getByPlaceholderText("Ask Planner") as HTMLTextAreaElement).value, "> Keep this answer\n\n"));
+  });
+}
 
 test("Copy puts a message on the clipboard", async () => {
   const copied: string[] = [];
@@ -1745,4 +1975,297 @@ test("Retry hides the failed card and echoes the message at once, under one requ
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 2));
   const [first, second] = calls.filter((call) => call.channel === "bots:send").map((call) => (call.args[0] as { requestId: string }).requestId);
   assert.equal(first, second, "the same failed turn retries under one request id");
+});
+
+
+test("Bot questions, replies and saved paused answers show clean labels without Retry", async () => {
+  const calls = await mountChat({ "bots:live:subscribe": () => snapshot({entries: [
+    {id: "q", type: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Can you check?"},
+    {id: "r", type: "bot_message", kind: "reply", botId: "c", botName: "COS", text: "Checked the calendar."},
+    {id: "s", type: "bot_message_status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", summary: "Create 3 events"}},
+    {id: "p", type: "bot_message_status", data: {deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "Saved answer while paused."}},
+    {id: "f", type: "failed_turn", retryText: null},
+  ]}) });
+  for (const text of ["Jester asked", "Can you check?", "COS replied", "Checked the calendar.", "COS is waiting for you to approve: Create 3 events", "Saved answer while paused."]) assert.ok((await screen.findAllByText(text)).length > 0);
+  assert.equal(screen.queryByRole("button", {name: "Retry"}), null);
+  assert.equal(calls.some(call => call.channel === "bots:send" || call.channel === "bots:resume"), false);
+  const waiting = screen.getByText("COS is waiting for you to approve: Create 3 events");
+  assert.equal(waiting.querySelector("button"), null);
+});
+
+test("an access request sits above the unchanged composer, preserves failed grants and removes only on host projection", async () => {
+  const errors = captureErrorToasts();
+  let failure = true;
+  try {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ state: RUNNING, accessRequest: {
+        botId: "bot-1", waitId: "access-attempt", toolCallId: "access-call", target: "folder", label: "Taxes",
+        place: "~/Documents/Taxes", why: "Prepare your return.", choices: ["not_now", "always", "once"],
+      } }),
+      "bots:answerAccessRequest": () => {
+        if (failure) throw new Error("This Bot's access changed. Ask for access again.");
+        return { answered: true };
+      },
+    });
+    const card = await screen.findByRole("group", { name: "Planner wants to use Taxes" });
+    const composer = screen.getByPlaceholderText("Ask Planner");
+    assert.ok(card.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING);
+    fireEvent.click(within(card).getByRole("button", { name: "Always for this folder" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["This Bot's access changed. Ask for access again."]));
+    assert.equal(screen.getByRole("group", { name: "Planner wants to use Taxes" }), card);
+    assert.equal((within(card).getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled, false);
+    failure = false;
+    fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:answerAccessRequest").length, 2));
+    assert.ok(screen.getByRole("group", { name: "Planner wants to use Taxes" }), "a receipt alone cannot fabricate card removal");
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: 1, type: "access_request", accessRequest: null }));
+    await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner wants to use Taxes" }), null));
+    assert.equal(screen.getByPlaceholderText("Ask Planner"), composer);
+  } finally { errors.restore(); }
+});
+
+test("a no-longer-waiting access answer shows no success and its fresh host projection removes the old card", async () => {
+  const errors = captureErrorToasts();
+  try {
+    await mountChat({
+      "bots:live:subscribe": () => snapshot({ accessRequest: {
+        botId: "bot-1", waitId: "old-attempt", toolCallId: "access-call", target: "whole_mac", label: "your whole Mac",
+        why: "Find the missing file.", choices: ["not_now", "once"],
+      } }),
+      "bots:answerAccessRequest": () => ({ answered: false }),
+    });
+    const card = await screen.findByRole("group", { name: "Planner wants to use your whole Mac" });
+    fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+    await waitFor(() => assert.deepEqual(errors.shown, ["That card was already answered or closed."]));
+    act(() => emitBotTestNotification("bots:live:event", {
+      botId: "bot-1", epoch: "epoch-1", seq: 1, type: "snapshot", snapshot: snapshot({ seq: 1, accessRequest: null }),
+    }));
+    await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Planner wants to use your whole Mac" }), null));
+    screen.getByPlaceholderText("Ask Planner");
+  } finally { errors.restore(); }
+});
+
+const CHAT_PLAN: BotPlanView = {
+  botId: "bot-1", planId: "plan-1", revision: 1, status: "pending", from: "Jester",
+  title: "Prepare the team calendar", why: "Keep everyone ready for next week.",
+  steps: [{ text: "Create the team event", status: "pending" }],
+  items: [{ id: "i1", line: "Google Calendar · create events (up to 5)", details: ["Create an event"], used: 0, max: 5 }],
+};
+
+function emitPlan(plan: BotPlanView | null, seq: number) {
+  act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq, type: "plan", plan }));
+}
+
+test("a pending plan renders above the other cards and composer, gates Send and Approve calls respondPlan once", async () => {
+  let release!: (result: { result: "done" }) => void;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN, handoff: BANK_HANDOFF, accessRequest: {
+      botId: "bot-1", waitId: "access-1", toolCallId: "tool-access", target: "folder", label: "Team",
+      place: "~/Documents/Team", why: "Read the brief.", choices: ["not_now", "once"],
+    } }),
+    "bots:pendingApprovals": () => [{ botId: "bot-1", waitId: "approval-1", toolCallId: "tool-approval", toolName: "shell", summary: "Run a command" }],
+    "bots:plans:respond": () => new Promise((resolve) => { release = resolve; }),
+  });
+  const plan = await screen.findByRole("group", { name: "Jester asked Planner to do this" });
+  const composer = document.querySelector("textarea")!;
+  for (const later of [
+    await screen.findByRole("group", { name: "Planner needs you" }),
+    screen.getByRole("group", { name: "Planner wants to use Team" }),
+    await screen.findByRole("group", { name: "Planner needs approval" }),
+    composer,
+  ]) assert.ok(plan.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  fireEvent.change(composer, { target: { value: "Do something else" } });
+  fireEvent.keyDown(composer, { key: "Enter" });
+  assert.equal(calls.some((call) => call.channel === "bots:send" || call.channel === "bots:answerHandoff"), false);
+  const approve = within(plan).getByRole("button", { name: "Approve plan" });
+  fireEvent.click(approve);
+  fireEvent.click(approve);
+  fireEvent.click(within(plan).getByRole("button", { name: "Not now" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:plans:respond").length, 1));
+  assert.deepEqual(calls.find((call) => call.channel === "bots:plans:respond")!.args, [{ botId: "bot-1", planId: "plan-1", decision: "approve" }]);
+  assert.equal((approve as HTMLButtonElement).disabled, true);
+  await act(async () => release({ result: "done" }));
+  assert.ok(screen.getByRole("group", { name: "Jester asked Planner to do this" }));
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true, "a response receipt does not invent plan settlement");
+});
+
+test("only a pending plan gates the composer; active, ended and cleared host events release it", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN }),
+    "bots:send": () => ({ submissionId: "s1", deduped: false }),
+  });
+  await screen.findByRole("button", { name: "Approve plan" });
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  emitPlan({ ...CHAT_PLAN, status: "active", revision: 2, expiresAt: Date.now() + 600_000 }, 1);
+  const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
+  assert.equal(box.disabled, false);
+  screen.getByRole("button", { name: "Stop plan" });
+  fireEvent.change(box, { target: { value: "A normal message" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+  emitPlan({ ...CHAT_PLAN, status: "finished", revision: 3 }, 2);
+  await screen.findByText("Plan ended · 0 of 1 steps");
+  fireEvent.change(box, { target: { value: "After the plan" } });
+  const endedSend = screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement;
+  assert.equal(endedSend.disabled, false);
+  fireEvent.click(endedSend);
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 2));
+  emitPlan(null, 3);
+  await waitFor(() => assert.equal(screen.queryByText(/Plan ended/u), null));
+  assert.equal(box.disabled, false);
+});
+
+test("a not_waiting plan answer stays truthful, keeps the card and can be retried after a host failure", async () => {
+  let attempts = 0;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot({ plan: CHAT_PLAN }),
+    "bots:plans:respond": () => {
+      if (++attempts === 1) return { result: "not_waiting" };
+      if (attempts === 2) throw new Error("Error invoking remote method 'bots:plans:respond': Error: Access changed. Ask for a new plan.");
+      return { result: "done" };
+    },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Approve plan" }));
+  assert.equal((await screen.findByRole("alert")).textContent, "That plan was already answered or closed.");
+  const approve = screen.getByRole("button", { name: "Approve plan" }) as HTMLButtonElement;
+  assert.equal(approve.disabled, false);
+  fireEvent.click(approve);
+  await waitFor(() => assert.equal(screen.getByRole("alert").textContent, "Access changed. Ask for a new plan."));
+  assert.equal(approve.disabled, false);
+  await act(async () => fireEvent.click(approve));
+  assert.equal(screen.queryByRole("alert"), null);
+  assert.equal(attempts, 3);
+  assert.ok(screen.getByRole("button", { name: "Not now" }));
+  assert.equal((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled, true);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+});
+
+for (const [label, decision, status] of [["Not now", "not_now", "pending"], ["Stop plan", "stop", "active"]] as const) {
+  test(`the plan's ${label} forwards the exact IPC decision and waits for the host event`, async () => {
+    const calls = await mountChat({
+      "bots:live:subscribe": () => snapshot({ plan: { ...CHAT_PLAN, status } }),
+      "bots:plans:respond": () => ({ result: "done" }),
+    });
+    await act(async () => fireEvent.click(await screen.findByRole("button", { name: label })));
+    assert.deepEqual(calls.filter((call) => call.channel === "bots:plans:respond").map((call) => call.args), [
+      [{ botId: "bot-1", planId: "plan-1", decision }],
+    ]);
+    screen.getByText("Prepare the team calendar");
+    emitPlan(null, 1);
+    await waitFor(() => assert.equal(screen.queryByText("Prepare the team calendar"), null));
+    assert.equal(document.querySelector("textarea")!.disabled, false);
+  });
+}
+
+test("a repeated approval requests Always truthfully, preserves the draft and Manage opens its list", async (t) => {
+  const messages: { message: unknown; options: { action?: { label: string; onClick(): void } } | undefined }[] = [];
+  t.mock.method(toast, "success", (message: unknown, options?: unknown) => { messages.push({ message, options: options as typeof messages[number]["options"] }); return "requested"; });
+  let release!: (value: { decided: boolean }) => void;
+  const calls = installBotTestIpc({
+    "bots:get": () => botFixture(),
+    "bots:live:subscribe": () => snapshot(),
+    "bots:pendingApprovals": () => [],
+    "bots:approve": () => new Promise((resolve) => { release = resolve; }),
+    "bots:allowed:list": () => [],
+  });
+  const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
+  const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Keep this draft" } });
+  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "always-1", toolCallId: "call-a", toolName: "send_email", summary: "Send the update.", always: { key: "k", count: 3 } }));
+  const card = await screen.findByRole("group", { name: "Planner needs approval" });
+  within(card).getByText("You’ve allowed this 3 times in the last 2 weeks.");
+  const always = within(card).getByRole("button", { name: "Always allow for Planner" });
+  const buttons = within(card).getAllByRole("button");
+  assert.equal(buttons[0], within(card).getByRole("button", { name: "Deny" }));
+  assert.equal(buttons[1], always);
+  assert.equal(buttons[2], within(card).getByRole("button", { name: "Allow" }));
+  act(() => {
+    always.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    always.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    within(card).getByRole("button", { name: "Allow" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  assert.deepEqual(calls.filter((call) => call.channel === "bots:approve").map((call) => call.args), [[{ waitId: "always-1", decision: "allow", scope: "always" }]]);
+  for (const button of within(card).getAllByRole("button")) assert.equal((button as HTMLButtonElement).disabled, true);
+  assert.equal(messages.length, 0);
+  await act(async () => release({ decided: true }));
+  assert.equal(box.value, "Keep this draft");
+  assert.equal(messages[0]?.message, "Always allow requested.");
+  assert.equal(messages[0]?.options?.action?.label, "Manage");
+  assert.ok(!JSON.stringify(messages.map(({ message }) => message)).includes("won’t ask"), "the bridge ACK does not establish persistence");
+  act(() => messages[0]!.options!.action!.onClick());
+  await waitFor(() => assert.equal(router.state.location.href, "/bots/bot-1?page=allowed"));
+});
+
+test("Always errors keep the card retryable; a settled old card never returns after a late failure", async () => {
+  let reject!: (error: Error) => void;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [],
+    "bots:approve": () => new Promise((_resolve, no) => { reject = no; }),
+  });
+  const prompt = { botId: "bot-1", waitId: "always-old", toolCallId: "call-a", toolName: "send_email", summary: "Old update", always: { key: "k", count: 3 } };
+  act(() => emitBotTestNotification("bots:approval", prompt));
+  fireEvent.click(await screen.findByRole("button", { name: "Always allow for Planner" }));
+  await act(async () => reject(new Error("Could not send this answer.")));
+  assert.equal((await screen.findByRole("alert")).textContent, "Could not send this answer.");
+  const always = screen.getByRole("button", { name: "Always allow for Planner" }) as HTMLButtonElement;
+  assert.equal(always.disabled, false);
+  fireEvent.click(always);
+  act(() => {
+    emitBotTestNotification("bots:approval-settled", { botId: "bot-1", waitId: "always-old", outcome: "allow" });
+    emitBotTestNotification("bots:approval", { ...prompt, waitId: "always-new", summary: "New update" });
+  });
+  await screen.findByText("New update");
+  await act(async () => reject(new Error("Old request failed")));
+  assert.ok(!screen.queryByText("Old update"));
+  assert.ok(!screen.queryByRole("alert"));
+  assert.equal((screen.getByRole("button", { name: "Always allow for Planner" }) as HTMLButtonElement).disabled, false);
+  assert.equal(calls.filter((call) => call.channel === "bots:approve").length, 2);
+});
+
+test("an unoffered approval has no Always button and Allow sends no scope property", async () => {
+  const calls = await mountChat({ "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [], "bots:approve": () => ({ decided: true }) });
+  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "once-1", toolCallId: "c", toolName: "send_email", summary: "Once only" }));
+  const card = await screen.findByRole("group", { name: "Planner needs approval" });
+  assert.ok(!within(card).queryByRole("button", { name: /Always allow/u }));
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "Allow" })));
+  assert.deepEqual(calls.find((call) => call.channel === "bots:approve")!.args, [{ waitId: "once-1", decision: "allow" }]);
+});
+
+test("a declined bridge ACK never claims Always was requested and keeps the card retryable", async (t) => {
+  const messages: unknown[] = [];
+  t.mock.method(toast, "success", (message: unknown) => { messages.push(message); return "unused"; });
+  await mountChat({
+    "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [],
+    "bots:approve": () => ({ decided: false }),
+  });
+  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "gone-1", toolCallId: "c", toolName: "send_email", summary: "Changed approval", always: { key: "k", count: 3 } }));
+  const always = await screen.findByRole("button", { name: "Always allow for Planner" });
+  fireEvent.click(always);
+  assert.equal((await screen.findByRole("alert")).textContent, "That approval was already answered or closed.");
+  assert.equal((always as HTMLButtonElement).disabled, false);
+  assert.equal(messages.length, 0);
+});
+
+test("the approval keyboard shortcut stays one-time on an offered card, respects drafts and cannot reenter", async () => {
+  let release!: (value: { decided: boolean }) => void;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [],
+    "bots:approve": () => new Promise((resolve) => { release = resolve; }),
+  });
+  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "keys-1", toolCallId: "c", toolName: "send_email", summary: "An offered approval", always: { key: "k", count: 3 } }));
+  const card = await screen.findByRole("group", { name: "Planner needs approval" });
+  const allow = within(card).getByRole("button", { name: "Allow" });
+  const key = { key: "Enter", ...(allow.getAttribute("aria-keyshortcuts")?.startsWith("Meta") ? { metaKey: true } : { ctrlKey: true }) };
+  const box = screen.getByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "An unsent draft" } });
+  fireEvent.keyDown(box, key);
+  assert.equal(calls.filter((call) => call.channel === "bots:approve").length, 0);
+  fireEvent.change(box, { target: { value: "" } });
+  act(() => {
+    box.dispatchEvent(new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true }));
+    box.dispatchEvent(new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true }));
+  });
+  assert.deepEqual(calls.filter((call) => call.channel === "bots:approve").map((call) => call.args), [[{ waitId: "keys-1", decision: "allow" }]]);
+  await act(async () => release({ decided: true }));
 });

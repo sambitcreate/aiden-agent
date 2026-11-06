@@ -246,8 +246,9 @@ test("extracted values show as a card under their activity line, which stays in 
     ),
     [
       ["text", "Before."],
-      ["activity", ["tool-1", "fetch", "tool-3"]],
+      ["activity", ["tool-1", "fetch"]],
       ["extraction", "20"],
+      ["activity", ["tool-3"]],
       ["text", "After."],
     ],
   );

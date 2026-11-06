@@ -14,13 +14,15 @@ export type BotIdentityPatch = Partial<{
   interruptions: BotInterruptions;
   /** "Let <Bot> set its own wake-ups"; off also cancels the pending ones. */
   selfWakeUps: boolean;
+  acceptsBotMessages: boolean;
+  messagesOtherBots: boolean;
 }>;
 
 /** The Bot as the renderer will show it once `patch` is applied to `base`. */
 function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition {
   // A cleared subtitle must not fall through to the old one: main drops the
   // description when the update omits it, and the cache has to agree.
-  const { description: baseDescription, selfWakeUps: baseSelfWakeUps, ...rest } = base;
+  const { description: baseDescription, selfWakeUps: baseSelfWakeUps, acceptsBotMessages, messagesOtherBots, ...rest } = base;
   const selfWakeUpsOff = patch.selfWakeUps === undefined ? baseSelfWakeUps === false : patch.selfWakeUps === false;
   const description = (patch.description ?? baseDescription ?? "").trim();
   return {
@@ -33,6 +35,8 @@ function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition
       ? { chatActivity: { ...resolveBotChatActivity(base.chatActivity), ...patch.chatActivity } }
       : {}),
     ...(patch.interruptions ? { interruptions: structuredClone(patch.interruptions) } : {}),
+    ...((patch.acceptsBotMessages ?? acceptsBotMessages) === false ? {acceptsBotMessages: false} : {}),
+    ...((patch.messagesOtherBots ?? messagesOtherBots) === false ? {messagesOtherBots: false} : {}),
     ...(selfWakeUpsOff ? { selfWakeUps: false as const } : {}),
   };
 }
@@ -140,6 +144,8 @@ export async function updateBotIdentity(
       avatar: next.avatar,
       ...(patch.chatActivity ? { chatActivity: resolveBotChatActivity(next.chatActivity) } : {}),
       ...(patch.interruptions ? { interruptions: patch.interruptions } : {}),
+      ...(patch.acceptsBotMessages !== undefined ? {acceptsBotMessages: patch.acceptsBotMessages} : {}),
+      ...(patch.messagesOtherBots !== undefined ? {messagesOtherBots: patch.messagesOtherBots} : {}),
       ...(patch.selfWakeUps !== undefined ? { selfWakeUps: patch.selfWakeUps } : {}),
     });
     settle(saved);

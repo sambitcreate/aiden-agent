@@ -29,6 +29,7 @@ import {
   BotCapabilityCatalogMainService,
   type BotCapabilityInventoryPorts,
 } from "./bot-capability-catalog-main.js";
+import { COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -148,6 +149,24 @@ function binding(current = snapshot()): BoundBotCustomSelection {
     catalogRevision: current.catalog.revision,
     snapshot: current,
   });
+}
+
+function composioInventory(service: boolean): BotCapabilityInventory {
+  const value = inventory();
+  const connection = value.connections[0]!;
+  connection.sourceId = "preset-composio";
+  connection.label = "Composio";
+  connection.tools[0]!.name = service ? "composio" : "COMPOSIO_SEARCH_TOOLS";
+  if (service) connection.accessIdentity = COMPOSIO_SERVICE_ACCESS_IDENTITY;
+  return value;
+}
+
+function withLegacyConnectionId(bound: BoundBotCustomSelection): BoundBotCustomSelection {
+  const legacy = structuredClone(bound);
+  const connection = legacy.connections[0]!;
+  connection.option.id = mintLegacyBotCapabilityOpaqueId(key, "connection", connection.sourceId, connection.exactFingerprint);
+  legacy.selection.connectionIds = [connection.option.id];
+  return parseBoundBotCustomSelection(legacy);
 }
 
 test("opaque ids stay stable across fingerprint churn and do not reveal source identity", () => {
@@ -308,6 +327,89 @@ test("MCP schema/effect drift keeps the public id and fail-closes the stored gra
   assert.equal(publicJson.includes("private-connection-id"), false);
   assert.equal(publicJson.includes("calendar_events"), false);
   assert.equal(publicJson.includes("Fingerprint"), false);
+});
+
+test("Composio raw access stays an unavailable old choice until explicitly replaced by its service", async () => {
+  const state = { inventory: composioInventory(false), keyLoads: 0, noticeLoads: [] as string[] };
+  const service = new BotCapabilityCatalogMainService(mainPorts(state));
+  const before = await service.snapshot({ audienceId: "device_a" });
+  const old = await service.bindCustom({ audienceId: "device_a", selection: fullSelection(before), catalogRevision: before.catalog.revision });
+  state.inventory = composioInventory(true);
+  const result = await service.reconcile(old, { audienceId: "device_a", botId: "bot:one" });
+  assert.equal(result.state, "drifted");
+  const oldRow = result.catalogSnapshot.catalog.connections.find(({ id }) => id === old.selection.connectionIds[0]);
+  const newRow = result.catalogSnapshot.catalog.connections.find(({ available }) => available);
+  assert.equal(result.catalogSnapshot.catalog.connections.length, 2);
+  assert.deepEqual(oldRow, { ...old.connections[0]!.option, available: false, label: "Previous Composio access" });
+  assert.ok(newRow); assert.notEqual(newRow.id, oldRow!.id);
+  assert.equal(newRow.label, "Composio");
+  const unrelatedEdit = { ...old.selection, shellEnabled: false };
+  await assert.rejects(service.bindCustom({ audienceId: "device_a", selection: unrelatedEdit, catalogRevision: result.catalogSnapshot.catalog.revision, retainedBindings: [old] }), /unavailable/u);
+  const explicit = await service.bindCustom({ audienceId: "device_a", selection: { ...unrelatedEdit, connectionIds: [newRow.id] }, catalogRevision: result.catalogSnapshot.catalog.revision, retainedBindings: [old] });
+  assert.equal(explicit.connections[0]!.accessIdentity, COMPOSIO_SERVICE_ACCESS_IDENTITY);
+  assert.equal(explicit.connections[0]!.sourceId, "preset-composio", "runtime transport identity stays unchanged");
+  assert.equal(explicit.connections[0]!.tools[0]!.name, "composio");
+  assertBoundBotCustomSelectionOpaqueIds(parseBoundBotCustomSelection(JSON.parse(JSON.stringify(explicit))), createBotCapabilityOpaqueIdMint(key));
+  await service.assertCurrent(explicit, { mode: "runtime", botId: "bot:one" });
+  assert.equal(JSON.stringify(result.catalogSnapshot.catalog).includes("accessIdentity"), false);
+});
+
+test("Composio migration preserves distinct legacy ids and rejects collisions without consuming the service row", () => {
+  const old = binding(snapshot(composioInventory(false)));
+  const legacy = withLegacyConnectionId(old);
+  assertBoundBotCustomSelectionOpaqueIds(legacy, createBotCapabilityOpaqueIdMint(key));
+  const current = snapshot(composioInventory(true));
+  const allowed = binding(current);
+  for (const retained of [[old, legacy, allowed], [allowed, legacy, old]]) {
+    const migrated = withBotCapabilityTombstones(current, retained);
+    const rows = migrated.catalog.connections;
+    assert.equal(rows.length, 3);
+    assert.deepEqual(rows.filter(({ available }) => available).map(({ id }) => id), [allowed.selection.connectionIds[0]]);
+    assert.deepEqual(new Set(rows.filter(({ available }) => !available).map(({ id }) => id)), new Set([old.selection.connectionIds[0], legacy.selection.connectionIds[0]]));
+    assert.deepEqual(withBotCapabilityTombstones(migrated, retained).catalog, migrated.catalog, "repeated reconciliation retains all old choices without renaming them");
+  }
+  const collision = structuredClone(old);
+  collision.connections[0]!.option.id = allowed.selection.connectionIds[0]!;
+  collision.selection.connectionIds = [allowed.selection.connectionIds[0]!];
+  assert.throws(() => withBotCapabilityTombstones(current, [collision]), /collision/u);
+  assert.equal(current.catalog.connections[0]!.available, true, "failed migration does not mutate the input snapshot");
+});
+
+test("ordinary MCP retains legacy identity adoption while accepted Composio service grants stay stable", () => {
+  const generic = withLegacyConnectionId(binding());
+  const changedInventory = inventory();
+  changedInventory.connections[0]!.tools[0]!.inputSchemaFingerprint = digest("updated generic schema");
+  const genericCatalog = withBotCapabilityTombstones(snapshot(changedInventory), [generic]);
+  assert.equal(genericCatalog.catalog.connections[0]!.id, generic.selection.connectionIds[0]);
+  assert.equal(genericCatalog.catalog.connections[0]!.available, true);
+  const rebound = bindBotCustomSelection({ selection: generic.selection, catalogRevision: genericCatalog.catalog.revision, snapshot: genericCatalog });
+  assert.notEqual(rebound.connections[0]!.exactFingerprint, generic.connections[0]!.exactFingerprint);
+  const serviceInventory = composioInventory(true);
+  const accepted = binding(snapshot(serviceInventory));
+  serviceInventory.connections[0]!.label = "Renamed apps";
+  const refreshed = snapshot(serviceInventory);
+  const reconciled = reconcileBoundBotCustomSelection(accepted, refreshed);
+  assert.equal(reconciled.state, "ready");
+  assert.equal(reconciled.catalogSnapshot.catalog.connections.length, 1);
+  assert.equal(reconciled.catalogSnapshot.catalog.connections[0]!.id, accepted.selection.connectionIds[0]);
+  assert.deepEqual(reconciled.catalogSnapshot.resources.connections[0]!.tools, accepted.connections[0]!.tools);
+});
+
+test("a raw tool copying the service descriptor cannot acquire its selection or exact grant identity", () => {
+  const copied = composioInventory(true);
+  delete copied.connections[0]!.accessIdentity;
+  const raw = snapshot(copied);
+  const service = snapshot(composioInventory(true));
+  assert.deepEqual(raw.resources.connections[0]!.tools, service.resources.connections[0]!.tools);
+  assert.notEqual(raw.catalog.connections[0]!.id, service.catalog.connections[0]!.id);
+  assert.notEqual(raw.resources.connections[0]!.exactFingerprint, service.resources.connections[0]!.exactFingerprint);
+  const retained = binding(raw);
+  const reconciled = reconcileBoundBotCustomSelection(retained, service);
+  assert.equal(reconciled.state, "drifted");
+  assert.equal(reconciled.catalogSnapshot.catalog.connections.find(({ id }) => id === retained.selection.connectionIds[0])!.available, false);
+  const invalidMarker = composioInventory(true);
+  invalidMarker.connections[0]!.sourceId = "custom-composio";
+  assert.throws(() => snapshot(invalidMarker), /host-owned/u);
 });
 
 test("provider recipient and skill-content drift keep public ids and fail closed until re-bind", () => {

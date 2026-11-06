@@ -1,6 +1,7 @@
 import { isActiveStep } from "./agent-steps";
 import {
   isToolStep,
+  toolStepEndsActivityGroup,
   type AgentStep,
   type AgentToolStep,
   type GenerationClaimCheck,
@@ -191,7 +192,11 @@ export function assistantPresentationRows(
       isToolStep(visibleSteps[stepIndex]!) &&
       !isQuestionnaireStep(visibleSteps[stepIndex]!) &&
       visibleSteps[stepIndex]!.contentOffset === offset
-    ) steps.push(visibleSteps[stepIndex++]!);
+    ) {
+      const grouped = visibleSteps[stepIndex++]!;
+      steps.push(grouped);
+      if (isToolStep(grouped) && toolStepEndsActivityGroup(grouped)) break;
+    }
     rows.push({
       key: `activity-${offset}-${steps[0]?.id ?? stepIndex}`,
       kind: "activity",

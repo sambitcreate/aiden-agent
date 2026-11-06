@@ -105,20 +105,33 @@ test("a helper over its chat's limit is refused before the provider is asked", a
   assert.equal(last?.type === "error" && last.error.errorMessage, "This chat reached its $1.00 spending limit. Allow more to keep going.");
 });
 
-test("spending is saved and read back by the next start; a bad setting means no limits", async () => {
+test("each spending change is durable before returning; unreadable limits refuse instead of removing the cap", async () => {
   const saved: SpendingDocument[] = [];
   const first = service({ botMonthUsd: 5 }, saved);
   await first.record({ kind: "bot", id: "ada" }, 2);
   await first.setBotLimit("ada", 3);
-
+  await first.flush();
+  assert.equal(Object.values(saved[0]?.botPeriods ?? {})[0]?.spentUsd, 2, "the charge was durable before the later settings write");
   const second = service({ botMonthUsd: 5 }, [], [], saved[saved.length - 1]);
   assert.deepEqual(
     { ...(await second.status("bot", "ada")), periodStart: undefined, periodEnd: undefined },
     { ownerKind: "bot", ownerId: "ada", period: "month", limitUsd: 3, extraUsd: 0, spentUsd: 2, state: "under", periodStart: undefined, periodEnd: undefined },
   );
   const bad = service({ chatUsd: -1 });
-  await bad.record({ kind: "chat", id: "c" }, 9);
-  assert.equal(await bad.status("chat", "c"), undefined);
+  await assert.rejects(bad.record({ kind: "chat", id: "c" }, 9), /Spending limits could not be read safely/u);
+});
+
+test("a meter whose response charge could not be saved refuses the next provider dispatch", async () => {
+  let asked = 0;
+  const meter = createSpendingMeter({
+    owner: { kind: "chat", id: "save-failed" }, counts: async () => true,
+    spending: { refusal: async () => undefined, record: async () => { throw new Error("charge publication failed"); } },
+  });
+  const stream = meter.wrap((...args) => { asked++; return pricedStream(0.2)(...args); });
+  await drain(await stream(model, context, {}));
+  await assert.rejects(meter.settled(), /charge publication failed/u);
+  await assert.rejects(async () => { await stream(model, context, {}); }, /charge publication failed/u);
+  assert.equal(asked, 1);
 });
 
 test("a restart immediately after recording restores the routine and monthly balances", async () => {
@@ -131,26 +144,4 @@ test("a restart immediately after recording restores the routine and monthly bal
   assert.deepEqual(await reopened.block(owner), { kind: "run", allowedUsd: 1, spentUsd: 1 });
   assert.equal((await reopened.status("bot", owner.id))?.spentUsd, 1);
   assert.equal(await reopened.block({ ...owner, run: "evening" }), undefined);
-});
-
-test("a failed write retains the charge for a later flush", async () => {
-  let saved: SpendingDocument | undefined;
-  let writable = false;
-  const spending = new SpendingService({
-    persistence: {
-      load: async () => undefined,
-      save: async (document) => {
-        if (!writable) throw new Error("disk full");
-        saved = document;
-      },
-    },
-    settings: async () => ({ chatUsd: 1 }),
-    broadcast() {},
-  });
-  const owner = { kind: "chat", id: "test" } as const;
-  await assert.rejects(spending.record(owner, 1), /disk full/u);
-  assert.equal((await spending.block(owner))?.kind, "chat");
-  writable = true;
-  await spending.flush();
-  assert.equal((await service({ chatUsd: 1 }, [], [], saved).block(owner))?.kind, "chat");
 });

@@ -2,11 +2,12 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "node:path";
+import { productionRendererCsp } from "./scripts/renderer-csp.js";
 
 export default defineConfig(({ command }) => {
   const appDisplayName = command === "serve" ? "Aiden Agent Dev" : "Aiden Agent";
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), productionRendererCsp()],
     base: "./",
     assetsInclude: ["**/*.wasm"],
     define: { __APP_DISPLAY_NAME__: JSON.stringify(appDisplayName) },

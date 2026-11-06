@@ -398,3 +398,6 @@ export function projectDurableSubagentEffectActivityV1(
     updatedAt: effect.updatedAt,
   };
 }
+
+/** Local transport receipt: the call failed before its first HTTP attempt. */
+export class McpToolCallNotSentError extends Error {}

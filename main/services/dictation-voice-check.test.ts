@@ -38,7 +38,7 @@ test("needs-setup maps to the setup message", async () => {
   const { check } = subject([{ kind: "needs-setup", reason: "no-local-model" }]);
   assert.deepEqual(await check.resolveVoice(), {
     ok: false,
-    message: "Download a voice model in Settings → Voice.",
+    message: "Download a voice model in Settings → Voice & Speech.",
   });
 });
 

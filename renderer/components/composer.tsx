@@ -2048,6 +2048,9 @@ export function Composer({
       attachments.length === 0 &&
       !selectedSkill &&
       !isGenerating &&
+      // Capture and its final decode own words that have not reached `text` yet.
+      !voice.recording &&
+      !voice.transcribing &&
       lastPromptForkId
     ) {
       event.preventDefault();

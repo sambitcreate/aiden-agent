@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type { configStore } from "./config-store.js";
 import type { llmClient } from "./llm-client.js";
 import type { scheduleService } from "./schedule-service.js";
@@ -79,6 +80,8 @@ export interface WorkspaceApplicationMutationOptions {
 }
 
 export interface WorkspaceFolderCreationOptions {
+  /** Added by a typed path or a clone rather than the folder picker; for usage data. */
+  fromPath?: boolean;
   assertCurrent?: (identity: {
     canonicalPath: string;
     filesystemDevice?: string;
@@ -117,7 +120,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         throw new Error("That folder is already registered as an Aiden workspace.");
       }
       const now = deps.now();
-      return deps.configStore.saveWorkspace({
+      const saved = await deps.configStore.saveWorkspace({
         id: deps.createId(),
         name: name?.trim() || path.basename(canonicalPath) || "Workspace",
         folderPath: canonicalPath,
@@ -134,6 +137,8 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
         });
       } : undefined);
+      reportAnalyticsEvent("workspace_added", { kind: options.fromPath ? "path" : "folder" });
+      return saved;
     });
   };
 
@@ -193,6 +198,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         permission,
         createdAt: now,
         updatedAt: now,
+      }).then((saved) => {
+        reportAnalyticsEvent("workspace_added", { kind: "folder" });
+        return saved;
       });
     },
 
@@ -222,7 +230,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         updatedAt: now,
       };
       try {
-        return await deps.configStore.saveWorkspace(workspace);
+        const saved = await deps.configStore.saveWorkspace(workspace);
+        reportAnalyticsEvent("workspace_added", { kind: "scratch" });
+        return saved;
       } catch (error) {
         await deps.removeEmptyDirectory(scratch.folderPath).catch(() => undefined);
         throw error;

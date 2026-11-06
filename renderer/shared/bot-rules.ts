@@ -140,7 +140,7 @@ export interface BotRulesUpdateInput {
 }
 
 /**
- * Settings → Bots, for every Bot: whether a routine run (nobody watching) goes
+ * Settings → Bots & Approvals, for every Bot: whether a routine run (nobody watching) goes
  * ahead with a step that would otherwise wait for the person's OK, an Ask
  * first rule or a connected app's change. Absent or false: such a step is
  * skipped (a rule) or waits (an approval), as before. It never lowers a Hand

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.map
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
 import sbtbiswas.AidenOnTheGo.models.AidenBotIdentityPatch
+import sbtbiswas.AidenOnTheGo.models.AidenBotMessagingPatch
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 
@@ -102,7 +103,8 @@ fun AidenBotDetail.applying(patch: AidenBotIdentityPatch?): AidenBotDetail {
         purpose = patch.purpose ?: purpose,
         instructions = patch.instructions ?: instructions,
         avatar = patch.avatar?.let { avatar.copy(semantic = it) } ?: avatar,
-        chatActivity = patch.chatActivity ?: chatActivity
+        chatActivity = patch.chatActivity ?: chatActivity,
+        botMessaging = botMessaging?.let { patch.botMessaging?.applying(it) ?: it }
     )
 }
 
@@ -112,7 +114,9 @@ fun AidenBotIdentityPatch.then(next: AidenBotIdentityPatch) = AidenBotIdentityPa
     purpose = next.purpose ?: purpose,
     instructions = next.instructions ?: instructions,
     avatar = next.avatar ?: avatar,
-    chatActivity = next.chatActivity ?: chatActivity
+    chatActivity = next.chatActivity ?: chatActivity,
+    botMessaging = if (botMessaging == null) next.botMessaging else if (next.botMessaging == null) botMessaging else
+        AidenBotMessagingPatch(next.botMessaging.receive ?: botMessaging.receive, next.botMessaging.send ?: botMessaging.send)
 )
 
 data class AidenBotIdentityEditState(

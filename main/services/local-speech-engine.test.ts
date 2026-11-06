@@ -151,7 +151,7 @@ test("missing model files fail with a friendly, mappable error", () => {
     const engine = createSpeechEngine(() => fake.module);
     const roles = Object.values(v3.files);
     for (const file of roles.slice(1)) writeFileSync(path.join(dir, file), "");
-    const missing = { name: "ModelMissingError", message: "The selected voice model isn't downloaded. Download it in Settings → Voice." };
+    const missing = { name: "ModelMissingError", message: "The selected voice model isn't downloaded. Download it in Settings → Voice & Speech." };
     assert.throws(() => engine.load(v3, dir), missing);
     assert.throws(() => engine.transcribe(req(v3, { modelDirectory: dir })), (error) => error instanceof ModelMissingError);
     assert.equal(fake.created.length, 0);

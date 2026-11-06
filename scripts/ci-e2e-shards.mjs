@@ -6,33 +6,79 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// Serial file windows from hosted CI 35667578649 (105 collected tests), including fixture work.
+// Conservative complete file windows from hosted runs 41784199399 and 41789418295.
+// Preserve larger historical weights; partial cancelled windows never lower them.
+// Independent completed run 41778188548 validates the allocation and budget reserve.
 // Weights affect scheduling only; newly discovered specs always run.
+export const E2E_SHARD_COUNT = 4;
 export const FILE_SECONDS = Object.freeze({
-  "assistant-scheduled-profile.spec.ts": 31,
-  "bot-browser.spec.ts": 9,
-  "bot-sign-in.spec.ts": 3,
-  "bots-persistence.spec.ts": 11,
-  "browser-agent.spec.ts": 56,
-  "browser-cancellation.spec.ts": 90,
-  "browser-initial-crash.spec.ts": 2,
-  "browser-lifecycle.spec.ts": 331,
-  "browser.spec.ts": 77,
-  "chat-message-queue.spec.ts": 127,
-  "chat-shell-interactions.spec.ts": 219,
-  "custom-model-options.spec.ts": 13,
-  "diagnostics-production.spec.ts": 9,
-  "draft-agent-chats.spec.ts": 86,
-  "environment-focus.spec.ts": 100,
-  "guided-setup.spec.ts": 27,
-  "lmstudio-chat-attachments.spec.ts": 10,
-  "model-pad-responsive.spec.ts": 20,
-  "onboarding-lmstudio.spec.ts": 40,
-  "provider-artwork.spec.ts": 15,
-  "remote-access-lifecycle.spec.ts": 10,
-  "settings-model-picker.spec.ts": 17,
-  "settings-unification.spec.ts": 71,
-  "terminal.spec.ts": 13
+  "app-controls.spec.ts": 59,
+  "assistant-scheduled-profile.spec.ts": 67,
+  "bot-browser.spec.ts": 21,
+  "bot-computer-tab.spec.ts": 14,
+  "bot-connect-card.spec.ts": 8,
+  "bot-connector-watches.spec.ts": 30,
+  "bot-handoff-own-screen.spec.ts": 10,
+  "bot-open-work.spec.ts": 30,
+  "bot-peers.spec.ts": 30,
+  "bot-routine-models.spec.ts": 30,
+  "bot-sign-in.spec.ts": 5,
+  "bots-persistence.spec.ts": 45,
+  "bots-sidebar-panel.spec.ts": 7,
+  "bots-starter.spec.ts": 22,
+  "browser-agent.spec.ts": 38,
+  "browser-cancellation.spec.ts": 66,
+  "browser-initial-crash.spec.ts": 3,
+  "browser-lifecycle.spec.ts": 237,
+  "browser-throttling.spec.ts": 29,
+  "browser.spec.ts": 166,
+  "chat-follow-bottom.spec.ts": 61,
+  "chat-fork.spec.ts": 13,
+  "chat-message-queue.spec.ts": 263,
+  "chat-shell-interactions.spec.ts": 310,
+  "chat-top-bar.spec.ts": 166,
+  "create-images.spec.ts": 166,
+  "custom-model-options.spec.ts": 54,
+  "cut-off-reply.spec.ts": 21,
+  "draft-agent-chats.spec.ts": 112,
+  "environment-devices-agent.spec.ts": 21,
+  "environment-devices-android.spec.ts": 19,
+  "environment-devices-features.spec.ts": 18,
+  "environment-devices-stream.spec.ts": 22,
+  "environment-devices-tab.spec.ts": 23,
+  "environment-focus.spec.ts": 76,
+  "follow-through-lifecycle.spec.ts": 48,
+  "guided-setup.spec.ts": 94,
+  "inbox-sidebar.spec.ts": 59,
+  "inline-visuals.spec.ts": 56,
+  "interrupted-question-resume.spec.ts": 75,
+  "interrupted-reply-resume.spec.ts": 64,
+  "linux-window-controls.spec.ts": 1,
+  "lmstudio-chat-attachments.spec.ts": 22,
+  "memory-list.spec.ts": 16,
+  "model-call-retry.spec.ts": 26,
+  "model-pad-responsive.spec.ts": 13,
+  "no-workspace-chat.spec.ts": 37,
+  "onboarding-lmstudio.spec.ts": 41,
+  "peer-project-clone.spec.ts": 11,
+  "provider-artwork.spec.ts": 8,
+  "provider-failure-actions.spec.ts": 26,
+  "providers-settings.spec.ts": 25,
+  "quick-view-cards.spec.ts": 27,
+  "remote-access-lifecycle.spec.ts": 43,
+  "settings-connectors.spec.ts": 39,
+  "settings-model-picker.spec.ts": 20,
+  "settings-simulator-ssh-hosts.spec.ts": 16,
+  "settings-unification.spec.ts": 156,
+  "studio-foundation.spec.ts": 30,
+  "terminal.spec.ts": 11,
+  "transcript-image-consent.spec.ts": 30,
+  "usage-data.spec.ts": 11,
+  "usage-limit-wait.spec.ts": 18,
+  "workspace-folder-missing.spec.ts": 8,
+  "workspace-panel.spec.ts": 140,
+  "workspace-settings.spec.ts": 12,
+  "worktree-folder-deleted.spec.ts": 11
 });
 
 export function discoverSpecs(directory = path.join(root, "tests/e2e")) {
@@ -42,7 +88,7 @@ export function discoverSpecs(directory = path.join(root, "tests/e2e")) {
     .sort();
 }
 
-export function planShards(specs, count = 3) {
+export function planShards(specs, count = E2E_SHARD_COUNT) {
   if (!Number.isInteger(count) || count < 1 || count > 16) throw new Error("Invalid E2E shard count");
   if (!Array.isArray(specs) || new Set(specs).size !== specs.length || specs.some((file) =>
     typeof file !== "string" || !/^[\w/-]+(?:\.[\w-]+)*\.spec\.ts$/u.test(file) || file.includes(".."))) {

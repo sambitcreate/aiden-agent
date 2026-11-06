@@ -492,3 +492,15 @@ test("after shutdown no connection or Settings attempt can start", async () => {
   assert.equal(created, 0);
   assert.deepEqual(cache.ids(), []);
 });
+
+
+test("an existing-client probe never connects or revives an expired approval session", async () => {
+  const cache = new GenerationBoundConnectionCache<{ id: number }>();
+  let created = 0;
+  assert.equal(cache.peekConnected("mail"), undefined);
+  const approved = await cache.getOrConnect("mail", () => ({ id: ++created }), async () => {}, async () => {});
+  assert.equal(cache.peekConnected("mail"), approved);
+  await cache.closeIdle("mail");
+  assert.equal(cache.peekConnected("mail"), undefined);
+  assert.equal(created, 1, "observing an absent session cannot start an approval-producing replacement");
+});

@@ -473,6 +473,12 @@ const ANCHOR_TOOLS = new Set([
   "render_ui",
 ]);
 
+/** Reserve a media boundary before output arrives, including failed calls. */
+export function toolStepEndsActivityGroup(step: AgentToolStep): boolean {
+  return ANCHOR_TOOLS.has(step.toolName) || step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME ||
+    step.recording !== undefined || step.extraction !== undefined;
+}
+
 function carriesRecap(step: AgentToolStep): boolean {
   return Boolean(step.producedFile || step.lineChanges || step.questionnaire || step.extraction);
 }
@@ -533,7 +539,7 @@ function isFinishedThinking(step: AgentStep | undefined): step is AgentThinkingS
 
 function sharesActivityRow(a: AgentStep | undefined, b: AgentStep | undefined): boolean {
   return Boolean(
-    a && b && isToolStep(a) && isToolStep(b) && !a.questionnaire && !b.questionnaire &&
+    a && b && isToolStep(a) && isToolStep(b) && !toolStepEndsActivityGroup(a) && !a.questionnaire && !b.questionnaire &&
       a.contentOffset === b.contentOffset,
   );
 }
@@ -549,7 +555,14 @@ function canDrop(list: readonly AgentStep[], index: number): boolean {
   if (before !== step.contentOffset && list[index + 1]?.contentOffset !== step.contentOffset) {
     return false;
   }
-  if (sharesActivityRow(list[index - 1], step)) return true;
+  if (sharesActivityRow(list[index - 1], step)) {
+    const next = list[index + 1];
+    // Removing a group's closing media call must not merge the next group's
+    // image/player into this group's identity. The relaxed fallback may still
+    // do so when keeping all boundaries would exceed the reader's limit.
+    return !(isToolStep(step) && toolStepEndsActivityGroup(step) && next &&
+      isToolStep(next) && !next.questionnaire && next.contentOffset === step.contentOffset);
+  }
   for (let next = index + 1; sharesActivityRow(list[next - 1], list[next]); next += 1) {
     const later = list[next] as AgentToolStep;
     if (ANCHOR_TOOLS.has(later.toolName) || later.toolName === "subagent") return false;

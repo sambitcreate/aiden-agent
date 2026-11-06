@@ -1,3 +1,4 @@
+import { isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
 // The `bot_recall` tool: search the Bot's earlier conversations with the
 // person (Hermes Agent's `session_search`, adapted). Saved memory stays small
 // and always in the prompt; recall reaches the long tail on demand, with no
@@ -111,7 +112,7 @@ export async function searchBotHistory(
   const provenance = await provenanceOfHistory(entries, lookup);
   let end = entries.length;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
-    if (entries[index]!.kind === "pi.user") {
+    if (isBotInputEntryKind(entries[index]!.kind)) {
       end = index;
       break;
     }
@@ -138,7 +139,7 @@ export async function searchBotHistory(
     if (score === 0) continue;
     const date = dateOf(entry);
     scored.push({
-      hit: { ...(date === undefined ? {} : { date }), from: entry.kind === "pi.user" ? "person" : "bot", excerpt: excerptAround(text, first, firstLength) },
+      hit: { ...(date === undefined ? {} : { date }), from: isBotInputEntryKind(entry.kind) ? "person" : "bot", excerpt: excerptAround(text, first, firstLength) },
       score,
       order: index,
     });

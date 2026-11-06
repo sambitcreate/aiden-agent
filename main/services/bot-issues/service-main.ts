@@ -34,6 +34,14 @@ export const botIssues = createBotIssueService({
   },
   funnel: { deliver: (input) => botDeliveryFunnel().deliver(input) },
   actions: {
+    allowFolder: async (botId, access, operationId) => {
+      const [{ botApplicationService }, { BOT_DESKTOP_AUDIENCE_ID }] = await Promise.all([import("../bot-application-service-main.js"), import("../bot-runtime-authority-main.js")]);
+      const auth = access.authorization;
+      if (auth.target !== "folder" || !auth.identity || !auth.choices.includes("always") || auth.root !== access.folderPath || auth.rootId !== access.rootId) throw new Error("This folder request is no longer valid.");
+      const outcome = await botApplicationService.grantBotFolder({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, folderPath: auth.root, ...(auth.rootId ? { rootId: auth.rootId } : {}), expectedRevision: auth.policyRevision, expectedIdentity: auth.identity, ...(auth.inventoryRevision ? { expectedInventoryRevision: auth.inventoryRevision } : {}), operationId });
+      (await import("../../platform.js")).ipcMain.broadcast("bots:changed", { botId });
+      return outcome;
+    },
     // The routine service's own enable path: read the revision, then turn it
     // back on. Already enabled stays as it is (no needless next-run rewrite).
     // A routine deleted since the card was raised is reported, not thrown: the
@@ -66,6 +74,7 @@ export const botIssues = createBotIssueService({
     },
   },
   now: Date.now,
+  onError: (error) => logger.warn("bots", "A Bot issue transcript status could not be repaired.", error),
 });
 
 /**

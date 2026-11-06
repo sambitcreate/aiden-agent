@@ -19,3 +19,5 @@ Review round 1 (Pullfrog, 2026-10-26): Manage → Save and the dialog's switch d
 ## Approved executable identity — 2026-11-02
 
 The desktop checks both signatures at setup and at every launch. The universal launcher uses a macOS launch requirement for Developer ID team TTY35UM57S and identifier imcp-server. These match the installed iMCP 1.8.0 distribution. The stored approval still names the selected Applications path. CLI discovery skips old imported iMCP preset records, which remain removable.
+
+The Settings Open action rechecks the originating document after bundle probes and immediately before invoking the OS open operation. The per-launch signed server requirement is separate.
