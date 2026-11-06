@@ -1,12 +1,37 @@
 {
-  "botMessagingDetail": {"id": "bot_fixture_01", "name": "Scout", "purpose": "Finds the signal in a busy week", "instructions": "Find the important signal, explain it plainly, and keep the owner in control.", "avatar": {"semantic": {"version": 1, "shape": "orb", "color": "rose"}, "asset": {"assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024}}, "health": "ready", "sessionState": "idle", "access": {"botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills."}, "modelSelection": {"providerId": "provider_fixture", "modelId": "model_fixture"}, "visionModelSelection": {"providerId": "provider_fixture", "modelId": "vision_model_fixture"}, "createdAt": "2026-08-18T17:00:00.000Z", "updatedAt": "2026-08-18T18:45:00.000Z", "revision": "bot_revision_7", "botMessaging": {"receive": true, "send": true}},
-  "botMessagingPatch": {"botMessaging": {"receive": false}},
-  "botMessagingSettings": {"enabled": false},
-  "botMessageNotification": {"id": "bot-message-fixture-01", "kind": "message", "botId": "bot_fixture_01", "botName": "Scout", "routineName": "COS replied", "finishedAt": "2026-11-03T12:00:00.000Z", "preview": "The calendar is ready."},
-  "contractRevision": 58,
-  "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
-  "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
-  "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
+  "contractRevision": 59,
+  "peerRouteAdvertisement": {
+    "feature": "peer-routes-v1",
+    "routes": [
+      {
+        "endpoint": "https://fixture-peer.example.ts.net/api/aiden/v1",
+        "serverSpkiSha256": "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+    ]
+  },
+  "providerCreation": {
+    "label": "Fixture private model",
+    "baseUrl": "https://models.example.test/v1",
+    "kind": "openai",
+    "deployment": "hosted",
+    "needsKey": false,
+    "models": [
+      {
+        "id": "fixture-vision",
+        "vision": true,
+        "reasoning": false,
+        "toolCall": true
+      }
+    ],
+    "confirmedForeground": true
+  },
+  "providerCreationReceipt": {
+    "id": "custom:remote-fixture",
+    "label": "Fixture private model",
+    "models": [
+      "fixture-vision"
+    ]
+  },
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -33,7 +58,10 @@
     "app-controls:read",
     "app-controls:respond"
   ],
-  "health": { "ok": true, "protocolVersion": 1 },
+  "health": {
+    "ok": true,
+    "protocolVersion": 1
+  },
   "pairingBootstrap": {
     "protocolVersion": 1,
     "instanceId": "instance_fixture_01",
@@ -48,7 +76,20 @@
     "deviceId": "device_fixture_01",
     "credential": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     "displayName": "Fixture Aiden",
-    "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"],
+    "capabilities": [
+      "server:read",
+      "chat:read",
+      "chat:write",
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "bot:read",
+      "bot:write",
+      "tasks:read",
+      "agents:read",
+      "questions:respond",
+      "skills:invoke"
+    ],
     "endpoint": "https://aiden-fixture.example.test/api/aiden/v1",
     "serverSpkiSha256": "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   },
@@ -168,7 +209,11 @@
       "memoryEnabled": true,
       "hasFolder": true,
       "isManagedWorktree": false,
-      "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 },
+      "git": {
+        "isRepo": true,
+        "branch": "feature/mobile",
+        "uncommitted": 2
+      },
       "createdAt": "2026-08-18T18:00:00.000Z",
       "updatedAt": "2026-08-18T18:30:00.000Z",
       "revision": "workspace_revision_7"
@@ -200,18 +245,42 @@
     }
   ],
   "browser": {
-    "roots": [{ "id": "root_fixture_01", "label": "Projects", "location": "loc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "policyRevision": "root_policy_3" }],
+    "roots": [
+      {
+        "id": "root_fixture_01",
+        "label": "Projects",
+        "location": "loc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "policyRevision": "root_policy_3"
+      }
+    ],
     "page": {
       "rootId": "root_fixture_01",
       "label": "Projects",
-      "breadcrumbs": [{ "label": "Projects", "location": "loc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+      "breadcrumbs": [
+        {
+          "label": "Projects",
+          "location": "loc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ],
       "entries": [
-        { "id": "directory_fixture_01", "name": "Aiden", "location": "loc_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" },
-        { "id": "directory_fixture_02", "name": "Examples", "location": "loc_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC" }
+        {
+          "id": "directory_fixture_01",
+          "name": "Aiden",
+          "location": "loc_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        },
+        {
+          "id": "directory_fixture_02",
+          "name": "Examples",
+          "location": "loc_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+        }
       ],
       "nextCursor": "cur_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
     },
-    "selection": { "selection": "sel_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "displayName": "Aiden", "expiresAt": "2026-08-18T19:05:00.000Z" }
+    "selection": {
+      "selection": "sel_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "displayName": "Aiden",
+      "expiresAt": "2026-08-18T19:05:00.000Z"
+    }
   },
   "chat": {
     "id": "chat_fixture_01",
@@ -221,8 +290,93 @@
     "providerId": "provider_fixture",
     "modelId": "model_fixture",
     "messages": [
-      { "id": "message_fixture_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
-      { "id": "message_fixture_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z", "attachments": [{"id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "name": "Weekly total.png", "mimeType": "image/png", "kind": "image", "size": 48213}, {"id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222", "name": "Plan options.png", "mimeType": "image/png", "kind": "image", "size": 51877}], "htmlArtifacts": [{"id": "artifact_fixture_01", "title": "Weekly total"}], "visuals": [{"id": "artifact_fixture_01", "kind": "html", "title": "Weekly total", "toolCallId": "call-1", "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "layout": "wide"}, {"id": "ui_fixture_01", "kind": "ui", "title": "Plan options", "toolCallId": "call-2", "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00", "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"}], "timeline": {"version": 3, "generationId": "stream_fixture_visuals", "status": "completed", "startedAt": 1787079600000, "finishedAt": 1787079601000, "steps": [{"id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "render_artifact", "label": "Draw visual", "status": "completed", "startedAt": 1787079600000, "updatedAt": 1787079600500, "finishedAt": 1787079600500, "contentOffset": 0}, {"id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "render_ui", "label": "Draw visual", "status": "completed", "startedAt": 1787079600500, "updatedAt": 1787079601000, "finishedAt": 1787079601000, "contentOffset": 0}]} }
+      {
+        "id": "message_fixture_user_01",
+        "role": "user",
+        "text": "Review the protocol.",
+        "createdAt": "2026-08-18T19:00:00.000Z"
+      },
+      {
+        "id": "message_fixture_assistant_01",
+        "role": "assistant",
+        "text": "Starting the review.",
+        "createdAt": "2026-08-18T19:00:01.000Z",
+        "attachments": [
+          {
+            "id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Weekly total.png",
+            "mimeType": "image/png",
+            "kind": "image",
+            "size": 48213
+          },
+          {
+            "id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222",
+            "name": "Plan options.png",
+            "mimeType": "image/png",
+            "kind": "image",
+            "size": 51877
+          }
+        ],
+        "htmlArtifacts": [
+          {
+            "id": "artifact_fixture_01",
+            "title": "Weekly total"
+          }
+        ],
+        "visuals": [
+          {
+            "id": "artifact_fixture_01",
+            "kind": "html",
+            "title": "Weekly total",
+            "toolCallId": "call-1",
+            "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111",
+            "layout": "wide"
+          },
+          {
+            "id": "ui_fixture_01",
+            "kind": "ui",
+            "title": "Plan options",
+            "toolCallId": "call-2",
+            "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00",
+            "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"
+          }
+        ],
+        "timeline": {
+          "version": 3,
+          "generationId": "stream_fixture_visuals",
+          "status": "completed",
+          "startedAt": 1787079600000,
+          "finishedAt": 1787079601000,
+          "steps": [
+            {
+              "id": "tool-1",
+              "order": 0,
+              "kind": "tool",
+              "toolCallId": "call-1",
+              "toolName": "render_artifact",
+              "label": "Draw visual",
+              "status": "completed",
+              "startedAt": 1787079600000,
+              "updatedAt": 1787079600500,
+              "finishedAt": 1787079600500,
+              "contentOffset": 0
+            },
+            {
+              "id": "tool-2",
+              "order": 1,
+              "kind": "tool",
+              "toolCallId": "call-2",
+              "toolName": "render_ui",
+              "label": "Draw visual",
+              "status": "completed",
+              "startedAt": 1787079600500,
+              "updatedAt": 1787079601000,
+              "finishedAt": 1787079601000,
+              "contentOffset": 0
+            }
+          ]
+        }
+      }
     ],
     "createdAt": "2026-08-18T18:59:00.000Z",
     "updatedAt": "2026-08-18T19:00:01.000Z",
@@ -232,7 +386,12 @@
     "turnId": "turn_fixture_01",
     "streamId": "stream_fixture_01",
     "status": "accepted",
-    "message": { "id": "message_fixture_user_02", "role": "user", "text": "Continue.", "createdAt": "2026-08-18T19:01:00.000Z" }
+    "message": {
+      "id": "message_fixture_user_02",
+      "role": "user",
+      "text": "Continue.",
+      "createdAt": "2026-08-18T19:01:00.000Z"
+    }
   },
   "streamStatus": {
     "streamId": "stream_fixture_01",
@@ -252,7 +411,11 @@
       "toolName": "write",
       "expiresAt": "2026-08-18T19:06:08.000Z",
       "canAllow": true,
-      "scopes": ["once", "chat", "always"]
+      "scopes": [
+        "once",
+        "chat",
+        "always"
+      ]
     }
   },
   "streamInput": {
@@ -272,31 +435,317 @@
     }
   },
   "events": [
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:01.000Z", "type": "snapshot", "terminal": false, "payload": { "chatId": "chat_fixture_01", "turnId": "turn_fixture_01", "nextSequence": 2 } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:02.000Z", "type": "status", "terminal": false, "payload": { "state": "running" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:03.000Z", "type": "reasoning_delta", "terminal": false, "payload": { "text": "Checking invariants." } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:04.000Z", "type": "text_delta", "terminal": false, "payload": { "text": "The protocol " } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:05.000Z", "type": "tool_started", "terminal": false, "payload": { "toolId": "tool_fixture_01", "name": "read" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }, { "id": "tool-3", "order": 2, "kind": "tool", "toolCallId": "call-3", "toolName": "ask_user_question", "label": "Ask a question", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "questionnaire": { "version": 1, "outcome": "answered", "items": [{ "question": "Which format should the report use?", "header": "Format", "kind": "option", "answers": ["Plain text"] }, { "question": "Anything else to include?", "header": "Extras", "kind": "skipped", "answers": [] }] } }, { "id": "tool-4", "order": 3, "kind": "tool", "toolCallId": "call-4", "toolName": "web_fetch", "label": "Fetch web page", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "detail": "acme.example", "extraction": { "version": 1, "host": "acme.example", "cut": false, "fields": [{ "name": "pro_monthly", "status": "extracted", "value": "20", "confidence": 0.97, "sourceLine": "Pro is $20 per month, billed monthly." }, { "name": "team_yearly", "status": "uncertain", "value": "1399", "confidence": 0.92, "notFound": true }, { "name": "enterprise", "status": "null" }] } }] } } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 7, "timestamp": "2026-08-18T19:01:07.000Z", "type": "tool_finished", "terminal": false, "payload": { "toolId": "tool_fixture_01", "status": "succeeded" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 8, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.000Z", "type": "question_required", "terminal": false, "payload": { "promptId": "q-fixture-01", "questions": [{ "question": "Which tolerance should the chamfer use?", "header": "Chamfer", "multiSelect": false, "options": [{ "label": "0.5 mm", "description": "Standard shop chamfer." }, { "label": "1.0 mm", "description": "Heavy chamfer for handling." }] }], "expiresAt": "2026-08-18T19:06:10.000Z" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 10, "timestamp": "2026-08-18T19:01:09.750Z", "type": "heartbeat", "terminal": false, "payload": {} },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 11, "timestamp": "2026-08-18T19:01:10.000Z", "type": "done", "terminal": true, "payload": { "messageId": "message_fixture_assistant_02" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_error", "sequence": 1, "timestamp": "2026-08-18T19:02:00.000Z", "type": "error", "terminal": true, "payload": { "code": "server_interrupted", "message": "Aiden restarted before the turn completed." } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_cancelled", "sequence": 1, "timestamp": "2026-08-18T19:03:00.000Z", "type": "cancelled", "terminal": true, "payload": { "source": "device" } }
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:01:01.000Z",
+      "type": "snapshot",
+      "terminal": false,
+      "payload": {
+        "chatId": "chat_fixture_01",
+        "turnId": "turn_fixture_01",
+        "nextSequence": 2
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 2,
+      "timestamp": "2026-08-18T19:01:02.000Z",
+      "type": "status",
+      "terminal": false,
+      "payload": {
+        "state": "running"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 3,
+      "timestamp": "2026-08-18T19:01:03.000Z",
+      "type": "reasoning_delta",
+      "terminal": false,
+      "payload": {
+        "text": "Checking invariants."
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 4,
+      "timestamp": "2026-08-18T19:01:04.000Z",
+      "type": "text_delta",
+      "terminal": false,
+      "payload": {
+        "text": "The protocol "
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 5,
+      "timestamp": "2026-08-18T19:01:05.000Z",
+      "type": "tool_started",
+      "terminal": false,
+      "payload": {
+        "toolId": "tool_fixture_01",
+        "name": "read"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 6,
+      "timestamp": "2026-08-18T19:01:06.000Z",
+      "type": "timeline",
+      "terminal": false,
+      "payload": {
+        "timeline": {
+          "version": 3,
+          "generationId": "stream_fixture_01",
+          "status": "running",
+          "startedAt": 1787079660000,
+          "steps": [
+            {
+              "id": "tool-1",
+              "order": 0,
+              "kind": "tool",
+              "toolCallId": "call-1",
+              "toolName": "read_file",
+              "label": "Read file",
+              "status": "running",
+              "startedAt": 1787079660000,
+              "updatedAt": 1787079660000,
+              "contentOffset": 0,
+              "target": "README.md"
+            },
+            {
+              "id": "tool-2",
+              "order": 1,
+              "kind": "tool",
+              "toolCallId": "call-2",
+              "toolName": "write_file",
+              "label": "Write file",
+              "status": "completed",
+              "startedAt": 1787079660000,
+              "updatedAt": 1787079660000,
+              "finishedAt": 1787079660000,
+              "contentOffset": 0,
+              "target": "out/report.txt",
+              "producedFile": {
+                "relativePath": "out/report.txt",
+                "operation": "written",
+                "bytes": 12
+              }
+            },
+            {
+              "id": "tool-3",
+              "order": 2,
+              "kind": "tool",
+              "toolCallId": "call-3",
+              "toolName": "ask_user_question",
+              "label": "Ask a question",
+              "status": "completed",
+              "startedAt": 1787079660000,
+              "updatedAt": 1787079660000,
+              "finishedAt": 1787079660000,
+              "contentOffset": 0,
+              "questionnaire": {
+                "version": 1,
+                "outcome": "answered",
+                "items": [
+                  {
+                    "question": "Which format should the report use?",
+                    "header": "Format",
+                    "kind": "option",
+                    "answers": [
+                      "Plain text"
+                    ]
+                  },
+                  {
+                    "question": "Anything else to include?",
+                    "header": "Extras",
+                    "kind": "skipped",
+                    "answers": []
+                  }
+                ]
+              }
+            },
+            {
+              "id": "tool-4",
+              "order": 3,
+              "kind": "tool",
+              "toolCallId": "call-4",
+              "toolName": "web_fetch",
+              "label": "Fetch web page",
+              "status": "completed",
+              "startedAt": 1787079660000,
+              "updatedAt": 1787079660000,
+              "finishedAt": 1787079660000,
+              "contentOffset": 0,
+              "detail": "acme.example",
+              "extraction": {
+                "version": 1,
+                "host": "acme.example",
+                "cut": false,
+                "fields": [
+                  {
+                    "name": "pro_monthly",
+                    "status": "extracted",
+                    "value": "20",
+                    "confidence": 0.97,
+                    "sourceLine": "Pro is $20 per month, billed monthly."
+                  },
+                  {
+                    "name": "team_yearly",
+                    "status": "uncertain",
+                    "value": "1399",
+                    "confidence": 0.92,
+                    "notFound": true
+                  },
+                  {
+                    "name": "enterprise",
+                    "status": "null"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 7,
+      "timestamp": "2026-08-18T19:01:07.000Z",
+      "type": "tool_finished",
+      "terminal": false,
+      "payload": {
+        "toolId": "tool_fixture_01",
+        "status": "succeeded"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 8,
+      "timestamp": "2026-08-18T19:01:08.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_01",
+        "summary": "Allow a write operation?",
+        "expiresAt": "2026-08-18T19:06:08.000Z"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 9,
+      "timestamp": "2026-08-18T19:01:09.000Z",
+      "type": "question_required",
+      "terminal": false,
+      "payload": {
+        "promptId": "q-fixture-01",
+        "questions": [
+          {
+            "question": "Which tolerance should the chamfer use?",
+            "header": "Chamfer",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "0.5 mm",
+                "description": "Standard shop chamfer."
+              },
+              {
+                "label": "1.0 mm",
+                "description": "Heavy chamfer for handling."
+              }
+            ]
+          }
+        ],
+        "expiresAt": "2026-08-18T19:06:10.000Z"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 10,
+      "timestamp": "2026-08-18T19:01:09.750Z",
+      "type": "heartbeat",
+      "terminal": false,
+      "payload": {}
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_01",
+      "sequence": 11,
+      "timestamp": "2026-08-18T19:01:10.000Z",
+      "type": "done",
+      "terminal": true,
+      "payload": {
+        "messageId": "message_fixture_assistant_02"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_error",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:02:00.000Z",
+      "type": "error",
+      "terminal": true,
+      "payload": {
+        "code": "server_interrupted",
+        "message": "Aiden restarted before the turn completed."
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "stream_fixture_cancelled",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:03:00.000Z",
+      "type": "cancelled",
+      "terminal": true,
+      "payload": {
+        "source": "device"
+      }
+    }
   ],
   "filePage": {
-    "snapshotId": "files_fixture_page", "directoryPath": "", "entries": [
-      { "id": "file_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "displayPath": "Sources", "name": "Sources", "kind": "directory" }
-    ], "truncated": false, "maxEntries": 4000, "maxDepth": 20,
+    "snapshotId": "files_fixture_page",
+    "directoryPath": "",
+    "entries": [
+      {
+        "id": "file_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "displayPath": "Sources",
+        "name": "Sources",
+        "kind": "directory"
+      }
+    ],
+    "truncated": false,
+    "maxEntries": 4000,
+    "maxDepth": 20,
     "nextCursor": "cur_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
   },
   "fileIndex": {
     "snapshotId": "file_snapshot_fixture_01",
     "entries": [
-      { "id": "file_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "displayPath": "README.md", "name": "README.md", "kind": "file", "size": 1200, "language": "markdown" },
-      { "id": "file_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "displayPath": "src", "name": "src", "kind": "directory" }
+      {
+        "id": "file_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "displayPath": "README.md",
+        "name": "README.md",
+        "kind": "file",
+        "size": 1200,
+        "language": "markdown"
+      },
+      {
+        "id": "file_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "displayPath": "src",
+        "name": "src",
+        "kind": "directory"
+      }
     ],
     "truncated": false,
     "maxEntries": 4000,
@@ -313,8 +762,21 @@
     "operationId": "git_operation_fixture_01",
     "status": "snapshot",
     "snapshotId": "git_snapshot_fixture_01",
-    "capability": { "allowed": true },
-    "result": { "kind": "review", "branch": "feature/mobile", "uncommitted": 2, "files": [{ "id": "file_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "displayPath": "README.md", "status": "modified" }] }
+    "capability": {
+      "allowed": true
+    },
+    "result": {
+      "kind": "review",
+      "branch": "feature/mobile",
+      "uncommitted": 2,
+      "files": [
+        {
+          "id": "file_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "displayPath": "README.md",
+          "status": "modified"
+        }
+      ]
+    }
   },
   "scheduledTask": {
     "id": "task_fixture_01",
@@ -328,7 +790,9 @@
     "workspaceId": "workspace_fixture_01",
     "providerId": "provider_fixture",
     "modelId": "model_fixture",
-    "mcpServerIds": ["mcp_fixture_01"],
+    "mcpServerIds": [
+      "mcp_fixture_01"
+    ],
     "notify": true,
     "running": false,
     "createdAt": "2026-08-18T18:00:00.000Z",
@@ -348,7 +812,10 @@
     "revision": "memory_settings_revision_1"
   },
   "speechStatus": {
-    "engine": { "ready": true, "error": null },
+    "engine": {
+      "ready": true,
+      "error": null
+    },
     "selectedModelId": "parakeet-v3",
     "models": [
       {
@@ -362,9 +829,43 @@
         "speed": 0.79,
         "recommended": true,
         "installed": true,
-        "languages": ["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
-        "capabilities": { "autoDetect": true, "languageHint": false, "translateToEnglish": false, "maxWindowSeconds": null },
-        "license": { "name": "CC-BY-4.0 (NVIDIA)", "url": "https://creativecommons.org/licenses/by/4.0/" }
+        "languages": [
+          "bg",
+          "hr",
+          "cs",
+          "da",
+          "nl",
+          "en",
+          "et",
+          "fi",
+          "fr",
+          "de",
+          "el",
+          "hu",
+          "it",
+          "lv",
+          "lt",
+          "mt",
+          "pl",
+          "pt",
+          "ro",
+          "ru",
+          "sk",
+          "sl",
+          "es",
+          "sv",
+          "uk"
+        ],
+        "capabilities": {
+          "autoDetect": true,
+          "languageHint": false,
+          "translateToEnglish": false,
+          "maxWindowSeconds": null
+        },
+        "license": {
+          "name": "CC-BY-4.0 (NVIDIA)",
+          "url": "https://creativecommons.org/licenses/by/4.0/"
+        }
       },
       {
         "id": "whisper-turbo",
@@ -377,10 +878,27 @@
         "speed": 0.35,
         "recommended": false,
         "installed": false,
-        "languages": ["en", "zh", "de"],
-        "capabilities": { "autoDetect": true, "languageHint": true, "translateToEnglish": false, "maxWindowSeconds": 30 },
-        "license": { "name": "MIT (OpenAI Whisper)", "url": "https://github.com/openai/whisper/blob/main/LICENSE" },
-        "download": { "id": "whisper-turbo", "percentage": 90, "phase": "verify", "status": "downloading" }
+        "languages": [
+          "en",
+          "zh",
+          "de"
+        ],
+        "capabilities": {
+          "autoDetect": true,
+          "languageHint": true,
+          "translateToEnglish": false,
+          "maxWindowSeconds": 30
+        },
+        "license": {
+          "name": "MIT (OpenAI Whisper)",
+          "url": "https://github.com/openai/whisper/blob/main/LICENSE"
+        },
+        "download": {
+          "id": "whisper-turbo",
+          "percentage": 90,
+          "phase": "verify",
+          "status": "downloading"
+        }
       }
     ],
     "input": {
@@ -741,11 +1259,20 @@
       "custom": {
         "providerId": "provider_fixture",
         "modelId": "model_fixture",
-        "fileScopeIds": ["scope.bot_home", "scope.documents"],
+        "fileScopeIds": [
+          "scope.bot_home",
+          "scope.documents"
+        ],
         "shellEnabled": false,
-        "connectionIds": ["connection.calendar"],
-        "skillIds": ["skill.research"],
-        "otherCapabilityIds": ["capability.web"]
+        "connectionIds": [
+          "connection.calendar"
+        ],
+        "skillIds": [
+          "skill.research"
+        ],
+        "otherCapabilityIds": [
+          "capability.web"
+        ]
       },
       "visionModel": {
         "providerId": "provider_fixture",
@@ -761,11 +1288,20 @@
       "custom": {
         "providerId": "provider_fixture",
         "modelId": "model_fixture",
-        "fileScopeIds": ["scope.bot_home", "scope.documents"],
+        "fileScopeIds": [
+          "scope.bot_home",
+          "scope.documents"
+        ],
         "shellEnabled": false,
-        "connectionIds": ["connection.calendar"],
-        "skillIds": ["skill.research"],
-        "otherCapabilityIds": ["capability.web"]
+        "connectionIds": [
+          "connection.calendar"
+        ],
+        "skillIds": [
+          "skill.research"
+        ],
+        "otherCapabilityIds": [
+          "capability.web"
+        ]
       }
     }
   },
@@ -1273,9 +1809,28 @@
     "revision": 3,
     "updatedAt": "2026-08-18T19:01:09.000Z",
     "tasks": [
-      { "id": 1, "subject": "Inspect workspace structure", "status": "completed" },
-      { "id": 2, "subject": "Update greeting copy", "status": "in_progress", "activeForm": "Updating greeting copy", "blockedBy": [1] },
-      { "id": 3, "subject": "Verify the change builds", "status": "pending", "blockedBy": [2] }
+      {
+        "id": 1,
+        "subject": "Inspect workspace structure",
+        "status": "completed"
+      },
+      {
+        "id": 2,
+        "subject": "Update greeting copy",
+        "status": "in_progress",
+        "activeForm": "Updating greeting copy",
+        "blockedBy": [
+          1
+        ]
+      },
+      {
+        "id": 3,
+        "subject": "Verify the change builds",
+        "status": "pending",
+        "blockedBy": [
+          2
+        ]
+      }
     ]
   },
   "agentRoster": {
@@ -1283,8 +1838,14 @@
     "chatId": "chat_fixture_01",
     "turnId": "turn_fixture_01",
     "previousTurns": [
-      { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" },
-      { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" }
+      {
+        "turnId": "turn_fixture_previous_02",
+        "startedAt": "2026-08-18T18:59:01.000Z"
+      },
+      {
+        "turnId": "turn_fixture_previous_01",
+        "startedAt": "2026-08-18T18:57:01.000Z"
+      }
     ],
     "availability": "ready",
     "epoch": "epoch_fixture_01",
@@ -1306,7 +1867,10 @@
         "turns": 3,
         "tools": 5,
         "tokens": 4200,
-        "milestones": ["reading", "searching"]
+        "milestones": [
+          "reading",
+          "searching"
+        ]
       },
       {
         "agentId": "agent_fixture_02",
@@ -1324,7 +1888,9 @@
         "turns": 2,
         "tools": 1,
         "tokens": 1100,
-        "notices": ["display_filtered"]
+        "notices": [
+          "display_filtered"
+        ]
       }
     ]
   },
@@ -1335,8 +1901,14 @@
       "chatId": "chat_fixture_01",
       "turnId": "turn_fixture_01",
       "previousTurns": [
-        { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" },
-        { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" }
+        {
+          "turnId": "turn_fixture_previous_02",
+          "startedAt": "2026-08-18T18:59:01.000Z"
+        },
+        {
+          "turnId": "turn_fixture_previous_01",
+          "startedAt": "2026-08-18T18:57:01.000Z"
+        }
       ],
       "availability": "ready",
       "epoch": "epoch_fixture_01",
@@ -1358,7 +1930,10 @@
           "turns": 3,
           "tools": 5,
           "tokens": 4200,
-          "milestones": ["reading", "searching"]
+          "milestones": [
+            "reading",
+            "searching"
+          ]
         },
         {
           "agentId": "agent_fixture_02",
@@ -1376,21 +1951,160 @@
           "turns": 2,
           "tools": 1,
           "tokens": 1100,
-          "notices": ["display_filtered"]
+          "notices": [
+            "display_filtered"
+          ]
         }
       ]
     }
   },
   "deviceCapabilitiesUpdate": {
-    "request": { "accepts": ["tasks:read", "agents:read", "questions:respond", "skills:invoke"] },
+    "request": {
+      "accepts": [
+        "tasks:read",
+        "agents:read",
+        "questions:respond",
+        "skills:invoke"
+      ]
+    },
     "response": {
-      "capabilities": ["server:read", "chat:read", "chat:write", "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write", "tasks:read", "agents:read", "questions:respond", "skills:invoke"]
+      "capabilities": [
+        "server:read",
+        "chat:read",
+        "chat:write",
+        "workspace:read",
+        "workspace:browse",
+        "workspace:manage",
+        "bot:read",
+        "bot:write",
+        "tasks:read",
+        "agents:read",
+        "questions:respond",
+        "skills:invoke"
+      ]
     }
   },
   "chatProgressEvents": [
-    { "protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:09.000Z", "type": "task_update", "terminal": false, "payload": { "version": 1, "chatId": "chat_fixture_01", "availability": "ready", "epoch": "epoch_fixture_01", "revision": 3, "updatedAt": "2026-08-18T19:01:09.000Z", "tasks": [ { "id": 1, "subject": "Inspect workspace structure", "status": "completed" }, { "id": 2, "subject": "Update greeting copy", "status": "in_progress", "activeForm": "Updating greeting copy", "blockedBy": [1] }, { "id": 3, "subject": "Verify the change builds", "status": "pending", "blockedBy": [2] } ] } },
-    { "protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:09.500Z", "type": "agents_update", "terminal": false, "payload": { "version": 1, "chatId": "chat_fixture_01", "turnId": "turn_fixture_01", "previousTurns": [ { "turnId": "turn_fixture_previous_02", "startedAt": "2026-08-18T18:59:01.000Z" }, { "turnId": "turn_fixture_previous_01", "startedAt": "2026-08-18T18:57:01.000Z" } ], "availability": "ready", "epoch": "epoch_fixture_01", "revision": 2, "updatedAt": "2026-08-18T19:01:09.000Z", "agents": [ { "agentId": "agent_fixture_01", "depth": 1, "revision": 4, "role": "implementer", "label": "Implement the change", "taskPreview": "Make a scoped code change", "state": "running", "activity": "Reading sources", "startedAt": "2026-08-18T19:01:01.000Z", "updatedAt": "2026-08-18T19:01:08.000Z", "modelId": "model_fixture", "turns": 3, "tools": 5, "tokens": 4200, "milestones": ["reading", "searching"] }, { "agentId": "agent_fixture_02", "parentAgentId": "agent_fixture_01", "depth": 2, "revision": 2, "role": "reviewer", "label": "Check the findings", "taskPreview": "Review the surveyed findings", "state": "completed", "startedAt": "2026-08-18T19:01:02.000Z", "updatedAt": "2026-08-18T19:01:07.000Z", "finishedAt": "2026-08-18T19:01:07.000Z", "modelId": "model_fixture", "turns": 2, "tools": 1, "tokens": 1100, "notices": ["display_filtered"] } ] } },
-    {"protocolVersion": 1, "streamId": "chat_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:10.000Z", "type": "app_controls_changed", "terminal": false, "payload": {"revision": 1}}
+    {
+      "protocolVersion": 1,
+      "streamId": "chat_fixture_01",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:01:09.000Z",
+      "type": "task_update",
+      "terminal": false,
+      "payload": {
+        "version": 1,
+        "chatId": "chat_fixture_01",
+        "availability": "ready",
+        "epoch": "epoch_fixture_01",
+        "revision": 3,
+        "updatedAt": "2026-08-18T19:01:09.000Z",
+        "tasks": [
+          {
+            "id": 1,
+            "subject": "Inspect workspace structure",
+            "status": "completed"
+          },
+          {
+            "id": 2,
+            "subject": "Update greeting copy",
+            "status": "in_progress",
+            "activeForm": "Updating greeting copy",
+            "blockedBy": [
+              1
+            ]
+          },
+          {
+            "id": 3,
+            "subject": "Verify the change builds",
+            "status": "pending",
+            "blockedBy": [
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "chat_fixture_01",
+      "sequence": 2,
+      "timestamp": "2026-08-18T19:01:09.500Z",
+      "type": "agents_update",
+      "terminal": false,
+      "payload": {
+        "version": 1,
+        "chatId": "chat_fixture_01",
+        "turnId": "turn_fixture_01",
+        "previousTurns": [
+          {
+            "turnId": "turn_fixture_previous_02",
+            "startedAt": "2026-08-18T18:59:01.000Z"
+          },
+          {
+            "turnId": "turn_fixture_previous_01",
+            "startedAt": "2026-08-18T18:57:01.000Z"
+          }
+        ],
+        "availability": "ready",
+        "epoch": "epoch_fixture_01",
+        "revision": 2,
+        "updatedAt": "2026-08-18T19:01:09.000Z",
+        "agents": [
+          {
+            "agentId": "agent_fixture_01",
+            "depth": 1,
+            "revision": 4,
+            "role": "implementer",
+            "label": "Implement the change",
+            "taskPreview": "Make a scoped code change",
+            "state": "running",
+            "activity": "Reading sources",
+            "startedAt": "2026-08-18T19:01:01.000Z",
+            "updatedAt": "2026-08-18T19:01:08.000Z",
+            "modelId": "model_fixture",
+            "turns": 3,
+            "tools": 5,
+            "tokens": 4200,
+            "milestones": [
+              "reading",
+              "searching"
+            ]
+          },
+          {
+            "agentId": "agent_fixture_02",
+            "parentAgentId": "agent_fixture_01",
+            "depth": 2,
+            "revision": 2,
+            "role": "reviewer",
+            "label": "Check the findings",
+            "taskPreview": "Review the surveyed findings",
+            "state": "completed",
+            "startedAt": "2026-08-18T19:01:02.000Z",
+            "updatedAt": "2026-08-18T19:01:07.000Z",
+            "finishedAt": "2026-08-18T19:01:07.000Z",
+            "modelId": "model_fixture",
+            "turns": 2,
+            "tools": 1,
+            "tokens": 1100,
+            "notices": [
+              "display_filtered"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "chat_fixture_01",
+      "sequence": 3,
+      "timestamp": "2026-08-18T19:01:10.000Z",
+      "type": "app_controls_changed",
+      "terminal": false,
+      "payload": {
+        "revision": 1
+      }
+    }
   ],
   "legacyNonNegotiating": {
     "pairingExchange": {
@@ -1433,7 +2147,9 @@
       "message": "The workspace changed. Refresh and try again.",
       "requestId": "request_fixture_01",
       "retryable": false,
-      "details": { "currentRevision": "workspace_revision_8" }
+      "details": {
+        "currentRevision": "workspace_revision_8"
+      }
     }
   },
   "question": {
@@ -1583,21 +2299,160 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 58,
+    "contractRevision": 59,
     "pairingRequests": true
   },
   "hostFeedEvents": [
-    { "protocolVersion": 1, "streamId": "host", "sequence": 0, "timestamp": "2026-08-18T19:02:00.000Z", "type": "snapshot", "terminal": false, "payload": { "epoch": "epoch_fixture_01", "sequence": 0, "summaries": [{ "id": "chat_fixture_summary_02", "workspaceId": "workspace_fixture_01", "title": "Active fixture chat", "titlePending": true, "createdAt": "2026-08-18T18:58:00.000Z", "updatedAt": "2026-08-18T19:02:00.000Z", "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", "activity": "active", "rowState": "needs_approval", "unread": false }], "workspaces": [{ "id": "workspace_fixture_01", "name": "Aiden Agent", "permission": "ask", "memoryEnabled": true, "hasFolder": true, "isManagedWorktree": false, "git": { "isRepo": true, "branch": "feature/mobile", "uncommitted": 2 }, "createdAt": "2026-08-18T18:00:00.000Z", "updatedAt": "2026-08-18T18:30:00.000Z", "revision": "workspace_revision_7", "repository": { "canonicalKey": "github.com/example/aiden-fixture", "relativePath": "" } }], "bots": [] } },
-    { "protocolVersion": 1, "streamId": "host", "sequence": 1, "timestamp": "2026-08-18T19:02:01.000Z", "type": "run.state", "terminal": false, "payload": { "chatId": "chat_fixture_summary_02", "runId": "run_fixture_01", "state": "needs_approval", "unread": false, "attentionSummary": "Allow a write operation?" } },
-    { "protocolVersion": 1, "streamId": "host", "sequence": 2, "timestamp": "2026-08-18T19:02:02.000Z", "type": "workspace.remove", "terminal": false, "payload": { "id": "workspace_fixture_02" } }
+    {
+      "protocolVersion": 1,
+      "streamId": "host",
+      "sequence": 0,
+      "timestamp": "2026-08-18T19:02:00.000Z",
+      "type": "snapshot",
+      "terminal": false,
+      "payload": {
+        "epoch": "epoch_fixture_01",
+        "sequence": 0,
+        "summaries": [
+          {
+            "id": "chat_fixture_summary_02",
+            "workspaceId": "workspace_fixture_01",
+            "title": "Active fixture chat",
+            "titlePending": true,
+            "createdAt": "2026-08-18T18:58:00.000Z",
+            "updatedAt": "2026-08-18T19:02:00.000Z",
+            "revision": "rev_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            "activity": "active",
+            "rowState": "needs_approval",
+            "unread": false
+          }
+        ],
+        "workspaces": [
+          {
+            "id": "workspace_fixture_01",
+            "name": "Aiden Agent",
+            "permission": "ask",
+            "memoryEnabled": true,
+            "hasFolder": true,
+            "isManagedWorktree": false,
+            "git": {
+              "isRepo": true,
+              "branch": "feature/mobile",
+              "uncommitted": 2
+            },
+            "createdAt": "2026-08-18T18:00:00.000Z",
+            "updatedAt": "2026-08-18T18:30:00.000Z",
+            "revision": "workspace_revision_7",
+            "repository": {
+              "canonicalKey": "github.com/example/aiden-fixture",
+              "relativePath": ""
+            }
+          }
+        ],
+        "bots": []
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "host",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:02:01.000Z",
+      "type": "run.state",
+      "terminal": false,
+      "payload": {
+        "chatId": "chat_fixture_summary_02",
+        "runId": "run_fixture_01",
+        "state": "needs_approval",
+        "unread": false,
+        "attentionSummary": "Allow a write operation?"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "host",
+      "sequence": 2,
+      "timestamp": "2026-08-18T19:02:02.000Z",
+      "type": "workspace.remove",
+      "terminal": false,
+      "payload": {
+        "id": "workspace_fixture_02"
+      }
+    }
   ],
   "runEvents": [
-    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 1, "timestamp": "2026-08-18T19:01:01.000Z", "type": "run.started", "terminal": false, "payload": { "runId": "run_fixture_01", "chatId": "chat_fixture_01", "origin": "remote" } },
-    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 2, "timestamp": "2026-08-18T19:01:02.000Z", "type": "status", "terminal": false, "payload": { "state": "running" } },
-    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
-    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:09.000Z", "type": "approval_resolved", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "decision": "allow" } },
-    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:10.000Z", "type": "done", "terminal": true, "payload": { "messageId": "message_fixture_assistant_02" } },
-    { "protocolVersion": 1, "streamId": "run_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:10.000Z", "type": "run.ended", "terminal": true, "payload": { "runId": "run_fixture_01", "chatId": "chat_fixture_01", "state": "done" } }
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_01",
+      "sequence": 1,
+      "timestamp": "2026-08-18T19:01:01.000Z",
+      "type": "run.started",
+      "terminal": false,
+      "payload": {
+        "runId": "run_fixture_01",
+        "chatId": "chat_fixture_01",
+        "origin": "remote"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_01",
+      "sequence": 2,
+      "timestamp": "2026-08-18T19:01:02.000Z",
+      "type": "status",
+      "terminal": false,
+      "payload": {
+        "state": "running"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_01",
+      "sequence": 3,
+      "timestamp": "2026-08-18T19:01:08.000Z",
+      "type": "approval_required",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_01",
+        "summary": "Allow a write operation?",
+        "expiresAt": "2026-08-18T19:06:08.000Z"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_01",
+      "sequence": 4,
+      "timestamp": "2026-08-18T19:01:09.000Z",
+      "type": "approval_resolved",
+      "terminal": false,
+      "payload": {
+        "approvalId": "approval_fixture_01",
+        "decision": "allow"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_01",
+      "sequence": 5,
+      "timestamp": "2026-08-18T19:01:10.000Z",
+      "type": "done",
+      "terminal": true,
+      "payload": {
+        "messageId": "message_fixture_assistant_02"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "run_fixture_01",
+      "sequence": 5,
+      "timestamp": "2026-08-18T19:01:10.000Z",
+      "type": "run.ended",
+      "terminal": true,
+      "payload": {
+        "runId": "run_fixture_01",
+        "chatId": "chat_fixture_01",
+        "state": "done"
+      }
+    }
   ],
   "messagesWindow": {
     "chatId": "chat_fixture_01",
@@ -1608,10 +2463,81 @@
         "role": "assistant",
         "text": "Starting the review.",
         "createdAt": "2026-08-18T19:00:01.000Z",
-        "attachments": [{"id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "name": "Weekly total.png", "mimeType": "image/png", "kind": "image", "size": 48213}, {"id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222", "name": "Plan options.png", "mimeType": "image/png", "kind": "image", "size": 51877}],
-        "htmlArtifacts": [{"id": "artifact_fixture_01", "title": "Weekly total"}],
-        "visuals": [{"id": "artifact_fixture_01", "kind": "html", "title": "Weekly total", "toolCallId": "call-1", "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111", "layout": "wide"}, {"id": "ui_fixture_01", "kind": "ui", "title": "Plan options", "toolCallId": "call-2", "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00", "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"}],
-        "timeline": {"version": 3, "generationId": "stream_fixture_visuals", "status": "completed", "startedAt": 1787079600000, "finishedAt": 1787079601000, "steps": [{"id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "render_artifact", "label": "Draw visual", "status": "completed", "startedAt": 1787079600000, "updatedAt": 1787079600500, "finishedAt": 1787079600500, "contentOffset": 0}, {"id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "render_ui", "label": "Draw visual", "status": "completed", "startedAt": 1787079600500, "updatedAt": 1787079601000, "finishedAt": 1787079601000, "contentOffset": 0}]}
+        "attachments": [
+          {
+            "id": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111",
+            "name": "Weekly total.png",
+            "mimeType": "image/png",
+            "kind": "image",
+            "size": 48213
+          },
+          {
+            "id": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222",
+            "name": "Plan options.png",
+            "mimeType": "image/png",
+            "kind": "image",
+            "size": 51877
+          }
+        ],
+        "htmlArtifacts": [
+          {
+            "id": "artifact_fixture_01",
+            "title": "Weekly total"
+          }
+        ],
+        "visuals": [
+          {
+            "id": "artifact_fixture_01",
+            "kind": "html",
+            "title": "Weekly total",
+            "toolCallId": "call-1",
+            "snapshotAttachmentId": "visual-snapshot_1111111111111111111111111111111111111111111111111111111111111111",
+            "layout": "wide"
+          },
+          {
+            "id": "ui_fixture_01",
+            "kind": "ui",
+            "title": "Plan options",
+            "toolCallId": "call-2",
+            "fallbackText": "Plan options\nSolo: $12.00\nTeam: $60.00",
+            "snapshotAttachmentId": "visual-snapshot_2222222222222222222222222222222222222222222222222222222222222222"
+          }
+        ],
+        "timeline": {
+          "version": 3,
+          "generationId": "stream_fixture_visuals",
+          "status": "completed",
+          "startedAt": 1787079600000,
+          "finishedAt": 1787079601000,
+          "steps": [
+            {
+              "id": "tool-1",
+              "order": 0,
+              "kind": "tool",
+              "toolCallId": "call-1",
+              "toolName": "render_artifact",
+              "label": "Draw visual",
+              "status": "completed",
+              "startedAt": 1787079600000,
+              "updatedAt": 1787079600500,
+              "finishedAt": 1787079600500,
+              "contentOffset": 0
+            },
+            {
+              "id": "tool-2",
+              "order": 1,
+              "kind": "tool",
+              "toolCallId": "call-2",
+              "toolName": "render_ui",
+              "label": "Draw visual",
+              "status": "completed",
+              "startedAt": 1787079600500,
+              "updatedAt": 1787079601000,
+              "finishedAt": 1787079601000,
+              "contentOffset": 0
+            }
+          ]
+        }
       }
     ],
     "hasOlder": true,
@@ -1749,7 +2675,18 @@
         "status": "running",
         "startedAt": 1000,
         "steps": [
-          { "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "run_command", "label": "Build", "status": "completed", "startedAt": 1000, "updatedAt": 1100, "contentOffset": 0 }
+          {
+            "id": "tool-1",
+            "order": 0,
+            "kind": "tool",
+            "toolCallId": "call-1",
+            "toolName": "run_command",
+            "label": "Build",
+            "status": "completed",
+            "startedAt": 1000,
+            "updatedAt": 1100,
+            "contentOffset": 0
+          }
         ]
       },
       "nextSequence": 91
@@ -1940,9 +2877,18 @@
     }
   ],
   "chatFork": {
-    "features": ["chat-fork-v1", "chat-fork-summary-v1"],
+    "features": [
+      "chat-fork-v1",
+      "chat-fork-summary-v1"
+    ],
     "fork": {
-      "request": { "messageId": "message_fixture_source_assistant_01", "position": "after", "summary": { "focus": "the protocol decisions" } },
+      "request": {
+        "messageId": "message_fixture_source_assistant_01",
+        "position": "after",
+        "summary": {
+          "focus": "the protocol decisions"
+        }
+      },
       "response": {
         "chat": {
           "id": "chat_fixture_fork_01",
@@ -1951,8 +2897,18 @@
           "providerId": "provider_fixture",
           "modelId": "model_fixture",
           "messages": [
-            { "id": "message_fixture_fork_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
-            { "id": "message_fixture_fork_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+            {
+              "id": "message_fixture_fork_user_01",
+              "role": "user",
+              "text": "Review the protocol.",
+              "createdAt": "2026-08-18T19:00:00.000Z"
+            },
+            {
+              "id": "message_fixture_fork_assistant_01",
+              "role": "assistant",
+              "text": "Starting the review.",
+              "createdAt": "2026-08-18T19:00:01.000Z"
+            }
           ],
           "createdAt": "2026-08-18T19:05:00.000Z",
           "updatedAt": "2026-08-18T19:05:00.000Z",
@@ -1962,13 +2918,20 @@
             "messageId": "message_fixture_source_assistant_01",
             "position": "after",
             "at": "2026-08-18T19:05:00.000Z",
-            "summary": { "state": "pending", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions" }
+            "summary": {
+              "state": "pending",
+              "afterMessageId": "message_fixture_fork_assistant_01",
+              "focus": "the protocol decisions"
+            }
           }
         }
       }
     },
     "editFork": {
-      "request": { "messageId": "message_fixture_source_user_02", "position": "before" },
+      "request": {
+        "messageId": "message_fixture_source_user_02",
+        "position": "before"
+      },
       "response": {
         "chat": {
           "id": "chat_fixture_fork_02",
@@ -1977,27 +2940,61 @@
           "providerId": "provider_fixture",
           "modelId": "model_fixture",
           "messages": [
-            { "id": "message_fixture_edit_user_01", "role": "user", "text": "Review the protocol.", "createdAt": "2026-08-18T19:00:00.000Z" },
-            { "id": "message_fixture_edit_assistant_01", "role": "assistant", "text": "Starting the review.", "createdAt": "2026-08-18T19:00:01.000Z" }
+            {
+              "id": "message_fixture_edit_user_01",
+              "role": "user",
+              "text": "Review the protocol.",
+              "createdAt": "2026-08-18T19:00:00.000Z"
+            },
+            {
+              "id": "message_fixture_edit_assistant_01",
+              "role": "assistant",
+              "text": "Starting the review.",
+              "createdAt": "2026-08-18T19:00:01.000Z"
+            }
           ],
           "createdAt": "2026-08-18T19:06:00.000Z",
           "updatedAt": "2026-08-18T19:06:00.000Z",
           "revision": "chat_revision_fork_2",
-          "forkedFrom": { "chatId": "chat_fixture_source_01", "messageId": "message_fixture_source_user_02", "position": "before", "at": "2026-08-18T19:06:00.000Z" }
+          "forkedFrom": {
+            "chatId": "chat_fixture_source_01",
+            "messageId": "message_fixture_source_user_02",
+            "position": "before",
+            "at": "2026-08-18T19:06:00.000Z"
+          }
         },
         "prefill": {
           "text": "Now check the error codes.",
           "attachments": [
-            { "id": "att_fixture_fork_codes_000000000000000000000000", "name": "codes.txt", "mimeType": "text/plain", "kind": "text", "size": 42, "expiresAt": "2026-08-18T19:16:00.000Z" }
+            {
+              "id": "att_fixture_fork_codes_000000000000000000000000",
+              "name": "codes.txt",
+              "mimeType": "text/plain",
+              "kind": "text",
+              "size": 42,
+              "expiresAt": "2026-08-18T19:16:00.000Z"
+            }
           ]
         }
       }
     },
     "summaryStates": [
-      { "state": "ready", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "text": "The review settled on revision 21 and kept every route additive." },
-      { "state": "failed", "afterMessageId": "message_fixture_fork_assistant_01", "focus": "the protocol decisions", "error": "The summary could not be generated." }
+      {
+        "state": "ready",
+        "afterMessageId": "message_fixture_fork_assistant_01",
+        "focus": "the protocol decisions",
+        "text": "The review settled on revision 21 and kept every route additive."
+      },
+      {
+        "state": "failed",
+        "afterMessageId": "message_fixture_fork_assistant_01",
+        "focus": "the protocol decisions",
+        "error": "The summary could not be generated."
+      }
     ],
-    "summaryCancel": { "cancelled": true }
+    "summaryCancel": {
+      "cancelled": true
+    }
   },
   "mobileSimulators": {
     "feature": "mobile-simulators-v1",
@@ -2006,50 +3003,327 @@
       "sharing": true,
       "status": "ready",
       "devices": [
-        { "id": "5A0C1F3E-0000-4000-8000-000000000001", "name": "iPhone 17 Pro", "platform": "ios", "version": "26.0", "booted": true, "kind": "iphone" },
-        { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": false, "kind": "ipad" },
-        { "id": "emulator-5554", "name": "Pixel 9", "platform": "android", "version": "16", "booted": true, "kind": "other" },
-        { "id": "Pixel_9_API_35", "name": "Pixel 9 API 35", "platform": "android", "version": "15", "booted": false, "kind": "other" }
+        {
+          "id": "5A0C1F3E-0000-4000-8000-000000000001",
+          "name": "iPhone 17 Pro",
+          "platform": "ios",
+          "version": "26.0",
+          "booted": true,
+          "kind": "iphone"
+        },
+        {
+          "id": "5A0C1F3E-0000-4000-8000-000000000002",
+          "name": "iPad Air 13-inch",
+          "platform": "ios",
+          "version": "26.0",
+          "booted": false,
+          "kind": "ipad"
+        },
+        {
+          "id": "emulator-5554",
+          "name": "Pixel 9",
+          "platform": "android",
+          "version": "16",
+          "booted": true,
+          "kind": "other"
+        },
+        {
+          "id": "Pixel_9_API_35",
+          "name": "Pixel 9 API 35",
+          "platform": "android",
+          "version": "15",
+          "booted": false,
+          "kind": "other"
+        }
       ],
-      "chatDeviceIds": ["5A0C1F3E-0000-4000-8000-000000000001", "emulator-5554"],
-      "toolVersions": { "hub": "0.12.0", "agent": "0.21.12" }
+      "chatDeviceIds": [
+        "5A0C1F3E-0000-4000-8000-000000000001",
+        "emulator-5554"
+      ],
+      "toolVersions": {
+        "hub": "0.12.0",
+        "agent": "0.21.12"
+      }
     },
-    "sharingOff": { "sharing": false, "status": "ready", "devices": [] },
-    "openResponse": { "device": { "id": "5A0C1F3E-0000-4000-8000-000000000002", "name": "iPad Air 13-inch", "platform": "ios", "version": "26.0", "booted": true, "kind": "ipad" } },
-    "shutdownResponse": { "ok": true },
+    "sharingOff": {
+      "sharing": false,
+      "status": "ready",
+      "devices": []
+    },
+    "openResponse": {
+      "device": {
+        "id": "5A0C1F3E-0000-4000-8000-000000000002",
+        "name": "iPad Air 13-inch",
+        "platform": "ios",
+        "version": "26.0",
+        "booted": true,
+        "kind": "ipad"
+      }
+    },
+    "shutdownResponse": {
+      "ok": true
+    },
     "hubRoutes": {
       "mjpeg": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/stream.mjpeg",
       "config": "/simulators/hub/vendor/serve-sim/helper/{deviceId}/config",
       "input": "/simulators/hub/vendor/serve-sim/helper/ws?device={deviceId}"
     },
     "inputMessages": [
-      { "command": { "kind": "hardwareKeyboard", "enabled": false }, "tag": 13, "payload": { "enabled": false } },
-      { "command": { "kind": "touch", "phase": "begin", "x": 0.25, "y": 0.75 }, "tag": 3, "payload": { "type": "begin", "x": 0.25, "y": 0.75 } },
-      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.75 } },
-      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "move", "x": 0.75, "y": 0.75 } },
-      { "command": { "kind": "touch", "phase": "move", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "landscape_right" }, "tag": 3, "payload": { "type": "move", "x": 0.25, "y": 0.25 } },
-      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait_upside_down" }, "tag": 3, "payload": { "type": "end", "x": 0.75, "y": 0.25 } },
-      { "command": { "kind": "touch", "phase": "end", "x": 0.25, "y": 0.75 }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" }, "tag": 3, "payload": { "type": "end", "x": 0.25, "y": 0.75 } },
-      { "command": { "kind": "button", "button": "home" }, "tag": 4, "payload": { "button": "home" } },
-      { "command": { "kind": "button", "button": "lock" }, "tag": 4, "payload": { "button": "lock" } },
-      { "command": { "kind": "button", "button": "appSwitcher" }, "tag": 4, "payload": { "button": "app_switcher" } },
-      { "command": { "kind": "rotate" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" }, "tag": 7, "payload": { "orientation": "landscape_left" } },
-      { "command": { "kind": "rotate" }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_right" }, "tag": 7, "payload": { "orientation": "portrait" } },
-      { "command": { "kind": "rotate" }, "tag": 7, "payload": { "orientation": "landscape_left" } }
+      {
+        "command": {
+          "kind": "hardwareKeyboard",
+          "enabled": false
+        },
+        "tag": 13,
+        "payload": {
+          "enabled": false
+        }
+      },
+      {
+        "command": {
+          "kind": "touch",
+          "phase": "begin",
+          "x": 0.25,
+          "y": 0.75
+        },
+        "tag": 3,
+        "payload": {
+          "type": "begin",
+          "x": 0.25,
+          "y": 0.75
+        }
+      },
+      {
+        "command": {
+          "kind": "touch",
+          "phase": "move",
+          "x": 0.25,
+          "y": 0.75
+        },
+        "screen": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "portrait"
+        },
+        "tag": 3,
+        "payload": {
+          "type": "move",
+          "x": 0.25,
+          "y": 0.75
+        }
+      },
+      {
+        "command": {
+          "kind": "touch",
+          "phase": "move",
+          "x": 0.25,
+          "y": 0.75
+        },
+        "screen": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "landscape_left"
+        },
+        "tag": 3,
+        "payload": {
+          "type": "move",
+          "x": 0.75,
+          "y": 0.75
+        }
+      },
+      {
+        "command": {
+          "kind": "touch",
+          "phase": "move",
+          "x": 0.25,
+          "y": 0.75
+        },
+        "screen": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "landscape_right"
+        },
+        "tag": 3,
+        "payload": {
+          "type": "move",
+          "x": 0.25,
+          "y": 0.25
+        }
+      },
+      {
+        "command": {
+          "kind": "touch",
+          "phase": "end",
+          "x": 0.25,
+          "y": 0.75
+        },
+        "screen": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "portrait_upside_down"
+        },
+        "tag": 3,
+        "payload": {
+          "type": "end",
+          "x": 0.75,
+          "y": 0.25
+        }
+      },
+      {
+        "command": {
+          "kind": "touch",
+          "phase": "end",
+          "x": 0.25,
+          "y": 0.75
+        },
+        "screen": {
+          "width": 2622,
+          "height": 1206,
+          "orientation": "landscape_left"
+        },
+        "tag": 3,
+        "payload": {
+          "type": "end",
+          "x": 0.25,
+          "y": 0.75
+        }
+      },
+      {
+        "command": {
+          "kind": "button",
+          "button": "home"
+        },
+        "tag": 4,
+        "payload": {
+          "button": "home"
+        }
+      },
+      {
+        "command": {
+          "kind": "button",
+          "button": "lock"
+        },
+        "tag": 4,
+        "payload": {
+          "button": "lock"
+        }
+      },
+      {
+        "command": {
+          "kind": "button",
+          "button": "appSwitcher"
+        },
+        "tag": 4,
+        "payload": {
+          "button": "app_switcher"
+        }
+      },
+      {
+        "command": {
+          "kind": "rotate"
+        },
+        "screen": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "portrait"
+        },
+        "tag": 7,
+        "payload": {
+          "orientation": "landscape_left"
+        }
+      },
+      {
+        "command": {
+          "kind": "rotate"
+        },
+        "screen": {
+          "width": 2622,
+          "height": 1206,
+          "orientation": "landscape_right"
+        },
+        "tag": 7,
+        "payload": {
+          "orientation": "portrait"
+        }
+      },
+      {
+        "command": {
+          "kind": "rotate"
+        },
+        "tag": 7,
+        "payload": {
+          "orientation": "landscape_left"
+        }
+      }
     ],
     "screenConfigs": [
-      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "portrait" }, "screen": { "width": 1206, "height": 2622, "orientation": "portrait" } },
-      { "tag": 130, "payload": { "width": 2622, "height": 1206, "orientation": "landscape_left", "screenId": 1, "futureField": true }, "screen": { "width": 2622, "height": 1206, "orientation": "landscape_left" } },
-      { "tag": 130, "payload": { "width": 0, "height": 2622, "orientation": "portrait" }, "screen": null },
-      { "tag": 130, "payload": { "width": 1206, "height": 2622, "orientation": "sideways" }, "screen": null },
-      { "tag": 144, "payload": { "requestId": 1, "ok": true }, "screen": null }
+      {
+        "tag": 130,
+        "payload": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "portrait"
+        },
+        "screen": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "portrait"
+        }
+      },
+      {
+        "tag": 130,
+        "payload": {
+          "width": 2622,
+          "height": 1206,
+          "orientation": "landscape_left",
+          "screenId": 1,
+          "futureField": true
+        },
+        "screen": {
+          "width": 2622,
+          "height": 1206,
+          "orientation": "landscape_left"
+        }
+      },
+      {
+        "tag": 130,
+        "payload": {
+          "width": 0,
+          "height": 2622,
+          "orientation": "portrait"
+        },
+        "screen": null
+      },
+      {
+        "tag": 130,
+        "payload": {
+          "width": 1206,
+          "height": 2622,
+          "orientation": "sideways"
+        },
+        "screen": null
+      },
+      {
+        "tag": 144,
+        "payload": {
+          "requestId": 1,
+          "ok": true
+        },
+        "screen": null
+      }
     ],
     "mjpeg": {
       "contentType": "multipart/x-mixed-replace; boundary=frame",
       "streamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQpDb250ZW50LUxlbmd0aDogMTQNCg0K/9j/4AAQSkZJRgAB/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KQ29udGVudC1MZW5ndGg6IDE1DQoNCv/Y/9sNCi0tZnJhbWX/2Q0K",
-      "framesBase64": ["/9j/4AAQSkZJRgAB/9k=", "/9j/2w0KLS1mcmFtZf/Z"],
+      "framesBase64": [
+        "/9j/4AAQSkZJRgAB/9k=",
+        "/9j/2w0KLS1mcmFtZf/Z"
+      ],
       "unlengthedStreamBase64": "LS1mcmFtZQ0KQ29udGVudC1UeXBlOiBpbWFnZS9qcGVnDQoNCv/YAQID/9kNCi0tZnJhbWUNCkNvbnRlbnQtVHlwZTogaW1hZ2UvanBlZw0KDQr/2AQF/9kNCi0tZnJhbWUNCg==",
-      "unlengthedFramesBase64": ["/9gBAgP/2Q==", "/9gEBf/Z"]
+      "unlengthedFramesBase64": [
+        "/9gBAgP/2Q==",
+        "/9gEBf/Z"
+      ]
     },
     "refusal": {
       "error": {
@@ -2060,8 +3334,35 @@
       }
     }
   },
-  "botAvatarPalette": {"face":"#292735","colors":{"lilac":"#C6A9FF","sky":"#83D8FF","mint":"#88E8B1","sun":"#FFDA7B","periwinkle":"#B2BCFF","coral":"#FF9F9B","peach":"#FFC294","aqua":"#78E8DF","rose":"#FFA3C7","lime":"#C6EC7E","plum":"#DDA8F2","graphite":"#C5C5CE"}},
-  "botSessionFailedTurns": [{"type":"failed_turn","id":"entry_14:failed","createdAt":"2026-08-19T16:00:05.000Z","retryText":"Plan my week, please."},{"type":"failed_turn","id":"entry_16:failed"}],
+  "botAvatarPalette": {
+    "face": "#292735",
+    "colors": {
+      "lilac": "#C6A9FF",
+      "sky": "#83D8FF",
+      "mint": "#88E8B1",
+      "sun": "#FFDA7B",
+      "periwinkle": "#B2BCFF",
+      "coral": "#FF9F9B",
+      "peach": "#FFC294",
+      "aqua": "#78E8DF",
+      "rose": "#FFA3C7",
+      "lime": "#C6EC7E",
+      "plum": "#DDA8F2",
+      "graphite": "#C5C5CE"
+    }
+  },
+  "botSessionFailedTurns": [
+    {
+      "type": "failed_turn",
+      "id": "entry_14:failed",
+      "createdAt": "2026-08-19T16:00:05.000Z",
+      "retryText": "Plan my week, please."
+    },
+    {
+      "type": "failed_turn",
+      "id": "entry_16:failed"
+    }
+  ],
   "botMemory": {
     "botId": "bot_fixture_01",
     "revision": "9f2c1a0b7d3e4f51",
@@ -2231,35 +3532,142 @@
   },
   "botActivity": {
     "phases": [
-      { "id": "preparing", "word": "Getting ready", "mark": "bounce" },
-      { "id": "thinking", "word": "Thinking", "mark": "tri-step" },
-      { "id": "reading", "word": "Reading", "mark": "scan-grid" },
-      { "id": "photo", "word": "Looking at your photo", "mark": "scan-grid" },
-      { "id": "searching", "word": "Searching the web", "mark": "scan-grid" },
-      { "id": "command", "word": "Running a command", "mark": "quad-shuffle" },
-      { "id": "editing", "word": "Editing files", "mark": "quad-shuffle" },
-      { "id": "app", "word": "Using an app", "mark": "quad-shuffle" },
-      { "id": "helper", "word": "Asking a helper", "mark": "quad-shuffle" },
-      { "id": "computer", "word": "Using your Mac", "mark": "quad-shuffle" },
-      { "id": "remembering", "word": "Remembering", "mark": "compose" },
-      { "id": "routine", "word": "Setting up a routine", "mark": "tri-step" },
-      { "id": "working", "word": "Working", "mark": "quad-shuffle" },
-      { "id": "writing", "word": "Writing", "mark": "compose" },
-      { "id": "waiting", "word": "Waiting for you", "mark": "glance" },
-      { "id": "tidying", "word": "Tidying up its notes", "mark": "bounce" },
-      { "id": "stopping", "word": "Stopping", "mark": "bounce" },
-      { "id": "resuming", "word": "Picking up where it left off", "mark": "bounce" },
-      { "id": "reconnecting", "word": "Reconnecting to your Mac", "mark": "bounce" }
+      {
+        "id": "preparing",
+        "word": "Getting ready",
+        "mark": "bounce"
+      },
+      {
+        "id": "thinking",
+        "word": "Thinking",
+        "mark": "tri-step"
+      },
+      {
+        "id": "reading",
+        "word": "Reading",
+        "mark": "scan-grid"
+      },
+      {
+        "id": "photo",
+        "word": "Looking at your photo",
+        "mark": "scan-grid"
+      },
+      {
+        "id": "searching",
+        "word": "Searching the web",
+        "mark": "scan-grid"
+      },
+      {
+        "id": "command",
+        "word": "Running a command",
+        "mark": "quad-shuffle"
+      },
+      {
+        "id": "editing",
+        "word": "Editing files",
+        "mark": "quad-shuffle"
+      },
+      {
+        "id": "app",
+        "word": "Using an app",
+        "mark": "quad-shuffle"
+      },
+      {
+        "id": "helper",
+        "word": "Asking a helper",
+        "mark": "quad-shuffle"
+      },
+      {
+        "id": "computer",
+        "word": "Using your Mac",
+        "mark": "quad-shuffle"
+      },
+      {
+        "id": "remembering",
+        "word": "Remembering",
+        "mark": "compose"
+      },
+      {
+        "id": "routine",
+        "word": "Setting up a routine",
+        "mark": "tri-step"
+      },
+      {
+        "id": "working",
+        "word": "Working",
+        "mark": "quad-shuffle"
+      },
+      {
+        "id": "writing",
+        "word": "Writing",
+        "mark": "compose"
+      },
+      {
+        "id": "waiting",
+        "word": "Waiting for you",
+        "mark": "glance"
+      },
+      {
+        "id": "tidying",
+        "word": "Tidying up its notes",
+        "mark": "bounce"
+      },
+      {
+        "id": "stopping",
+        "word": "Stopping",
+        "mark": "bounce"
+      },
+      {
+        "id": "resuming",
+        "word": "Picking up where it left off",
+        "mark": "bounce"
+      },
+      {
+        "id": "reconnecting",
+        "word": "Reconnecting to your Mac",
+        "mark": "bounce"
+      }
     ],
-    "thinkingKeeps": ["waiting", "stopping", "reconnecting"],
-    "app": { "app": "Notion", "word": "Using Notion" },
+    "thinkingKeeps": [
+      "waiting",
+      "stopping",
+      "reconnecting"
+    ],
+    "app": {
+      "app": "Notion",
+      "word": "Using Notion"
+    },
     "elapsed": [
-      { "startedAt": 1760450000000, "now": 1760450019999, "label": null },
-      { "startedAt": 1760450000000, "now": 1760450020000, "label": "20s" },
-      { "startedAt": 1760450000000, "now": 1760450072000, "label": "1m 12s" },
-      { "startedAt": 1760450000000, "now": 1760450120000, "label": "2m" },
-      { "startedAt": 1760450000000, "now": 1760453720000, "label": "1h 2m" },
-      { "startedAt": 1760450060000, "now": 1760450000000, "label": null }
+      {
+        "startedAt": 1760450000000,
+        "now": 1760450019999,
+        "label": null
+      },
+      {
+        "startedAt": 1760450000000,
+        "now": 1760450020000,
+        "label": "20s"
+      },
+      {
+        "startedAt": 1760450000000,
+        "now": 1760450072000,
+        "label": "1m 12s"
+      },
+      {
+        "startedAt": 1760450000000,
+        "now": 1760450120000,
+        "label": "2m"
+      },
+      {
+        "startedAt": 1760450000000,
+        "now": 1760453720000,
+        "label": "1h 2m"
+      },
+      {
+        "startedAt": 1760450060000,
+        "now": 1760450000000,
+        "label": null
+      }
     ],
     "session": {
       "botId": "bot_fixture_01",
@@ -2268,79 +3676,275 @@
       "state": "running",
       "interrupted": false,
       "entries": [
-        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "submissionId": "17" }
+        {
+          "type": "message",
+          "id": "entry_30",
+          "role": "user",
+          "text": "Plan dinners for this week.",
+          "createdAt": "2026-10-14T09:00:00.000Z",
+          "submissionId": "17"
+        }
       ],
       "hasOlder": false,
       "question": null,
       "approval": null,
-      "activity": { "phase": "app", "app": "Notion", "startedAt": 1760450000000 },
+      "activity": {
+        "phase": "app",
+        "app": "Notion",
+        "startedAt": 1760450000000
+      },
       "queued": [
-        { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." },
-        { "submissionId": "19", "mode": "steer", "text": "Keep it vegetarian." }
+        {
+          "submissionId": "18",
+          "mode": "queue",
+          "text": "Also add a shopping list."
+        },
+        {
+          "submissionId": "19",
+          "mode": "steer",
+          "text": "Keep it vegetarian."
+        }
       ]
     },
     "events": [
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 8, "type": "activity", "payload": { "activity": { "phase": "searching", "startedAt": 1760450000000 } } },
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 9, "type": "queued", "payload": { "queued": [ { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." } ] } },
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 10, "type": "activity", "payload": { "activity": { "phase": "teleporting", "startedAt": 1760450000000 } } },
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 11, "type": "activity", "payload": { "activity": null } }
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_02",
+        "seq": 8,
+        "type": "activity",
+        "payload": {
+          "activity": {
+            "phase": "searching",
+            "startedAt": 1760450000000
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_02",
+        "seq": 9,
+        "type": "queued",
+        "payload": {
+          "queued": [
+            {
+              "submissionId": "18",
+              "mode": "queue",
+              "text": "Also add a shopping list."
+            }
+          ]
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_02",
+        "seq": 10,
+        "type": "activity",
+        "payload": {
+          "activity": {
+            "phase": "teleporting",
+            "startedAt": 1760450000000
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_02",
+        "seq": 11,
+        "type": "activity",
+        "payload": {
+          "activity": null
+        }
+      }
     ],
-    "entryEvent": { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 12, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_32", "role": "user", "text": "Also add a shopping list.", "createdAt": "2026-10-14T09:01:00.000Z", "submissionId": "18" } } },
+    "entryEvent": {
+      "protocolVersion": 1,
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_02",
+      "seq": 12,
+      "type": "entry",
+      "payload": {
+        "entry": {
+          "type": "message",
+          "id": "entry_32",
+          "role": "user",
+          "text": "Also add a shopping list.",
+          "createdAt": "2026-10-14T09:01:00.000Z",
+          "submissionId": "18"
+        }
+      }
+    },
     "detail": {
       "id": "bot_fixture_01",
       "name": "Scout",
       "purpose": "Finds the signal in a busy week",
       "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
-      "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" }, "asset": { "assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024 } },
+      "avatar": {
+        "semantic": {
+          "version": 1,
+          "shape": "orb",
+          "color": "rose"
+        },
+        "asset": {
+          "assetRevision": "avatar_revision_3",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512,
+          "byteSize": 1024
+        }
+      },
       "health": "ready",
       "sessionState": "running",
-      "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
-      "chatActivity": { "level": "summary", "wording": "thinking" },
+      "access": {
+        "botId": "bot_fixture_01",
+        "accessMode": "full",
+        "revision": "bot_policy_revision_4",
+        "policyEpoch": "bot_policy_epoch_4",
+        "summary": "Can use your Mac, shell, enabled connections, and skills."
+      },
+      "chatActivity": {
+        "level": "summary",
+        "wording": "thinking"
+      },
       "createdAt": "2026-08-18T17:00:00.000Z",
       "updatedAt": "2026-08-18T18:46:00.000Z",
       "revision": "bot_revision_8"
     },
     "identityPatch": {
-      "request": { "chatActivity": { "level": "detailed", "wording": "follows" } },
+      "request": {
+        "chatActivity": {
+          "level": "detailed",
+          "wording": "follows"
+        }
+      },
       "response": {
         "id": "bot_fixture_01",
         "name": "Scout",
         "purpose": "Finds the signal in a busy week",
         "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
-        "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" }, "asset": { "assetRevision": "avatar_revision_3", "mimeType": "image/png", "width": 512, "height": 512, "byteSize": 1024 } },
+        "avatar": {
+          "semantic": {
+            "version": 1,
+            "shape": "orb",
+            "color": "rose"
+          },
+          "asset": {
+            "assetRevision": "avatar_revision_3",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512,
+            "byteSize": 1024
+          }
+        },
         "health": "ready",
-        "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
-        "chatActivity": { "level": "detailed", "wording": "follows" },
+        "access": {
+          "botId": "bot_fixture_01",
+          "accessMode": "full",
+          "revision": "bot_policy_revision_4",
+          "policyEpoch": "bot_policy_epoch_4",
+          "summary": "Can use your Mac, shell, enabled connections, and skills."
+        },
+        "chatActivity": {
+          "level": "detailed",
+          "wording": "follows"
+        },
         "createdAt": "2026-08-18T17:00:00.000Z",
         "updatedAt": "2026-08-18T18:47:00.000Z",
         "revision": "bot_revision_9"
       }
     },
     "send": {
-      "request": { "text": "Keep it vegetarian.", "whenBusy": "steer" },
-      "response": { "submissionId": "19", "deduped": false, "state": "running", "interrupted": false }
+      "request": {
+        "text": "Keep it vegetarian.",
+        "whenBusy": "steer"
+      },
+      "response": {
+        "submissionId": "19",
+        "deduped": false,
+        "state": "running",
+        "interrupted": false
+      }
     }
   },
   "botAttachments": {
     "note": "Contract revision 33 (bot-attachments-v1). Uploads take the chat attachment body; a message may then carry attachmentIds and empty text.",
     "imageUpload": {
-      "request": { "name": "receipt.png", "mimeType": "image/png", "kind": "image", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
-      "response": { "id": "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "name": "receipt.png", "mimeType": "image/png", "kind": "image", "size": 70, "expiresAt": "2026-10-16T09:10:00.000Z" }
+      "request": {
+        "name": "receipt.png",
+        "mimeType": "image/png",
+        "kind": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+      },
+      "response": {
+        "id": "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "name": "receipt.png",
+        "mimeType": "image/png",
+        "kind": "image",
+        "size": 70,
+        "expiresAt": "2026-10-16T09:10:00.000Z"
+      }
     },
     "textUpload": {
-      "request": { "name": "notes.md", "mimeType": "text/markdown", "kind": "text", "text": "# Groceries\n- oats" },
-      "response": { "id": "att_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "name": "notes.md", "mimeType": "text/markdown", "kind": "text", "size": 18, "expiresAt": "2026-10-16T09:10:00.000Z" }
+      "request": {
+        "name": "notes.md",
+        "mimeType": "text/markdown",
+        "kind": "text",
+        "text": "# Groceries\n- oats"
+      },
+      "response": {
+        "id": "att_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "name": "notes.md",
+        "mimeType": "text/markdown",
+        "kind": "text",
+        "size": 18,
+        "expiresAt": "2026-10-16T09:10:00.000Z"
+      }
     },
     "send": {
-      "request": { "text": "What did I spend?", "attachmentIds": ["att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "att_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"] },
-      "response": { "submissionId": "18", "deduped": false, "state": "running", "interrupted": false }
+      "request": {
+        "text": "What did I spend?",
+        "attachmentIds": [
+          "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "att_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        ]
+      },
+      "response": {
+        "submissionId": "18",
+        "deduped": false,
+        "state": "running",
+        "interrupted": false
+      }
     },
-    "attachmentsOnly": { "text": "", "attachmentIds": ["att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] },
+    "attachmentsOnly": {
+      "text": "",
+      "attachmentIds": [
+        "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ]
+    },
     "rejectedSends": [
-      { "text": "" },
-      { "text": "Hi", "attachmentIds": [] },
-      { "text": "Hi", "attachmentIds": ["att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] },
-      { "text": "Hi", "attachmentIds": ["att_short"] }
+      {
+        "text": ""
+      },
+      {
+        "text": "Hi",
+        "attachmentIds": []
+      },
+      {
+        "text": "Hi",
+        "attachmentIds": [
+          "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "att_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ]
+      },
+      {
+        "text": "Hi",
+        "attachmentIds": [
+          "att_short"
+        ]
+      }
     ]
   },
   "botActivityPrivacy": {
@@ -2354,101 +3958,344 @@
         "state": "running",
         "interrupted": false,
         "entries": [
-          { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z" }
+          {
+            "type": "message",
+            "id": "entry_30",
+            "role": "user",
+            "text": "Plan dinners for this week.",
+            "createdAt": "2026-10-14T09:00:00.000Z"
+          }
         ],
         "hasOlder": false,
         "question": null,
         "approval": null
       },
-      "entryEvent": { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 12, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_32", "role": "user", "text": "Also add a shopping list.", "createdAt": "2026-10-14T09:01:00.000Z" } } }
+      "entryEvent": {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_02",
+        "seq": 12,
+        "type": "entry",
+        "payload": {
+          "entry": {
+            "type": "message",
+            "id": "entry_32",
+            "role": "user",
+            "text": "Also add a shopping list.",
+            "createdAt": "2026-10-14T09:01:00.000Z"
+          }
+        }
+      }
     },
     "rejectedSubmissionIdEntries": [
-      { "type": "message", "id": "entry_31", "role": "assistant", "text": "Here is a plan.", "submissionId": "17" },
-      { "type": "message", "id": "entry_33", "role": "user", "text": "Check my inbox.", "label": "Morning brief", "submissionId": "21" },
-      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "17 18" },
-      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "" },
-      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcde" },
-      { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "submissionId": 17 }
+      {
+        "type": "message",
+        "id": "entry_31",
+        "role": "assistant",
+        "text": "Here is a plan.",
+        "submissionId": "17"
+      },
+      {
+        "type": "message",
+        "id": "entry_33",
+        "role": "user",
+        "text": "Check my inbox.",
+        "label": "Morning brief",
+        "submissionId": "21"
+      },
+      {
+        "type": "message",
+        "id": "entry_30",
+        "role": "user",
+        "text": "Plan dinners for this week.",
+        "submissionId": "17 18"
+      },
+      {
+        "type": "message",
+        "id": "entry_30",
+        "role": "user",
+        "text": "Plan dinners for this week.",
+        "submissionId": ""
+      },
+      {
+        "type": "message",
+        "id": "entry_30",
+        "role": "user",
+        "text": "Plan dinners for this week.",
+        "submissionId": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcde"
+      },
+      {
+        "type": "message",
+        "id": "entry_30",
+        "role": "user",
+        "text": "Plan dinners for this week.",
+        "submissionId": 17
+      }
     ],
     "rejectedActivities": [
-      { "phase": "command", "startedAt": 1760450000000, "detail": "cat ~/Documents/plan.md" },
-      { "phase": "reading", "startedAt": 1760450000000, "step": { "kind": "reading", "label": "Reading", "detail": "plan.md" } },
-      { "phase": "reading", "startedAt": 1760450000000, "path": "~/Documents/plan.md" },
-      { "phase": "command", "startedAt": 1760450000000, "command": "ls ~/Documents" },
-      { "phase": "searching", "startedAt": 1760450000000, "query": "dinner ideas near me" },
-      { "phase": "thinking", "startedAt": 1760450000000, "thinking": "The person wants a plan." },
-      { "phase": "app", "app": "abcdefghijabcdefghijabcdefghijabcdefghijX", "startedAt": 1760450000000 },
-      { "phase": "Reading!", "startedAt": 1760450000000 },
-      { "phase": "thinking", "startedAt": -1 },
-      { "phase": "thinking", "startedAt": "1760450000000" },
-      { "phase": "thinking", "startedAt": 1.5 },
-      { "phase": "thinking", "startedAt": 9007199254740992 },
-      { "startedAt": 1760450000000 }
+      {
+        "phase": "command",
+        "startedAt": 1760450000000,
+        "detail": "cat ~/Documents/plan.md"
+      },
+      {
+        "phase": "reading",
+        "startedAt": 1760450000000,
+        "step": {
+          "kind": "reading",
+          "label": "Reading",
+          "detail": "plan.md"
+        }
+      },
+      {
+        "phase": "reading",
+        "startedAt": 1760450000000,
+        "path": "~/Documents/plan.md"
+      },
+      {
+        "phase": "command",
+        "startedAt": 1760450000000,
+        "command": "ls ~/Documents"
+      },
+      {
+        "phase": "searching",
+        "startedAt": 1760450000000,
+        "query": "dinner ideas near me"
+      },
+      {
+        "phase": "thinking",
+        "startedAt": 1760450000000,
+        "thinking": "The person wants a plan."
+      },
+      {
+        "phase": "app",
+        "app": "abcdefghijabcdefghijabcdefghijabcdefghijX",
+        "startedAt": 1760450000000
+      },
+      {
+        "phase": "Reading!",
+        "startedAt": 1760450000000
+      },
+      {
+        "phase": "thinking",
+        "startedAt": -1
+      },
+      {
+        "phase": "thinking",
+        "startedAt": "1760450000000"
+      },
+      {
+        "phase": "thinking",
+        "startedAt": 1.5
+      },
+      {
+        "phase": "thinking",
+        "startedAt": 9007199254740992
+      },
+      {
+        "startedAt": 1760450000000
+      }
     ],
     "rejectedQueued": [
-      { "submissionId": "18", "mode": "followUp", "text": "Also add a shopping list." },
-      { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list.", "images": 1 },
-      { "submissionId": "18 19", "mode": "queue", "text": "Also add a shopping list." }
+      {
+        "submissionId": "18",
+        "mode": "followUp",
+        "text": "Also add a shopping list."
+      },
+      {
+        "submissionId": "18",
+        "mode": "queue",
+        "text": "Also add a shopping list.",
+        "images": 1
+      },
+      {
+        "submissionId": "18 19",
+        "mode": "queue",
+        "text": "Also add a shopping list."
+      }
     ],
     "rejectedQueuedLists": [
       [
-        { "submissionId": "18", "mode": "queue", "text": "Also add a shopping list." },
-        { "submissionId": "18", "mode": "steer", "text": "Keep it vegetarian." }
+        {
+          "submissionId": "18",
+          "mode": "queue",
+          "text": "Also add a shopping list."
+        },
+        {
+          "submissionId": "18",
+          "mode": "steer",
+          "text": "Keep it vegetarian."
+        }
       ],
       [
-        { "submissionId": "1", "mode": "queue", "text": "x" },
-        { "submissionId": "2", "mode": "queue", "text": "x" },
-        { "submissionId": "3", "mode": "queue", "text": "x" },
-        { "submissionId": "4", "mode": "queue", "text": "x" },
-        { "submissionId": "5", "mode": "queue", "text": "x" },
-        { "submissionId": "6", "mode": "queue", "text": "x" },
-        { "submissionId": "7", "mode": "queue", "text": "x" },
-        { "submissionId": "8", "mode": "queue", "text": "x" },
-        { "submissionId": "9", "mode": "queue", "text": "x" },
-        { "submissionId": "10", "mode": "queue", "text": "x" },
-        { "submissionId": "11", "mode": "queue", "text": "x" },
-        { "submissionId": "12", "mode": "queue", "text": "x" },
-        { "submissionId": "13", "mode": "queue", "text": "x" },
-        { "submissionId": "14", "mode": "queue", "text": "x" },
-        { "submissionId": "15", "mode": "queue", "text": "x" },
-        { "submissionId": "16", "mode": "queue", "text": "x" },
-        { "submissionId": "17", "mode": "queue", "text": "x" },
-        { "submissionId": "18", "mode": "queue", "text": "x" },
-        { "submissionId": "19", "mode": "queue", "text": "x" },
-        { "submissionId": "20", "mode": "queue", "text": "x" },
-        { "submissionId": "21", "mode": "queue", "text": "x" }
+        {
+          "submissionId": "1",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "2",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "3",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "4",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "5",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "6",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "7",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "8",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "9",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "10",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "11",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "12",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "13",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "14",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "15",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "16",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "17",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "18",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "19",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "20",
+          "mode": "queue",
+          "text": "x"
+        },
+        {
+          "submissionId": "21",
+          "mode": "queue",
+          "text": "x"
+        }
       ]
     ],
     "textBounds": {
       "note": "Each entry is `count` repetitions of `unit`; counts are Unicode code points, so an astral emoji counts once. Rejected entries must be refused and accepted entries must decode unchanged.",
       "queuedText": {
         "rejected": [
-          { "unit": "x", "count": 0 },
-          { "unit": "😀", "count": 32001 }
+          {
+            "unit": "x",
+            "count": 0
+          },
+          {
+            "unit": "😀",
+            "count": 32001
+          }
         ],
         "accepted": [
-          { "unit": "x", "count": 1 },
-          { "unit": "😀", "count": 32000 }
+          {
+            "unit": "x",
+            "count": 1
+          },
+          {
+            "unit": "😀",
+            "count": 32000
+          }
         ]
       },
       "app": {
         "rejected": [
-          { "unit": "😀", "count": 41 }
+          {
+            "unit": "😀",
+            "count": 41
+          }
         ],
         "accepted": [
-          { "unit": "😀", "count": 40 }
+          {
+            "unit": "😀",
+            "count": 40
+          }
         ]
       }
     },
     "rejectedChatActivity": [
-      { "level": "verbose", "wording": "follows" },
-      { "level": "quiet" },
-      { "level": "quiet", "wording": "follows", "extra": true }
+      {
+        "level": "verbose",
+        "wording": "follows"
+      },
+      {
+        "level": "quiet"
+      },
+      {
+        "level": "quiet",
+        "wording": "follows",
+        "extra": true
+      }
     ],
     "rejectedNullLiterals": {
       "note": "An optional key sent as the literal null is refused, never read as absent. Every decoder must refuse each sample.",
       "activities": [
-        { "phase": "app", "app": null, "startedAt": 1760450000000 }
+        {
+          "phase": "app",
+          "app": null,
+          "startedAt": 1760450000000
+        }
       ],
       "sessions": [
         {
@@ -2458,20 +4305,48 @@
           "state": "running",
           "interrupted": false,
           "entries": [
-            { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "submissionId": "17" }
+            {
+              "type": "message",
+              "id": "entry_30",
+              "role": "user",
+              "text": "Plan dinners for this week.",
+              "createdAt": "2026-10-14T09:00:00.000Z",
+              "submissionId": "17"
+            }
           ],
           "hasOlder": false,
           "question": null,
           "approval": null,
-          "activity": { "phase": "app", "app": "Notion", "startedAt": 1760450000000 },
+          "activity": {
+            "phase": "app",
+            "app": "Notion",
+            "startedAt": 1760450000000
+          },
           "queued": null
         }
       ],
       "events": [
-        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_02", "seq": 9, "type": "queued", "payload": { "queued": null } }
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_02",
+          "seq": 9,
+          "type": "queued",
+          "payload": {
+            "queued": null
+          }
+        }
       ],
       "entries": [
-        { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "label": null, "submissionId": "17" }
+        {
+          "type": "message",
+          "id": "entry_30",
+          "role": "user",
+          "text": "Plan dinners for this week.",
+          "createdAt": "2026-10-14T09:00:00.000Z",
+          "label": null,
+          "submissionId": "17"
+        }
       ]
     }
   },
@@ -2497,8 +4372,20 @@
       "state": "running",
       "interrupted": false,
       "entries": [
-        { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
-        { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" }
+        {
+          "type": "message",
+          "id": "entry_40",
+          "role": "user",
+          "text": "Pay the electricity bill.",
+          "createdAt": "2026-10-20T09:00:00.000Z"
+        },
+        {
+          "type": "message",
+          "id": "entry_41",
+          "role": "assistant",
+          "text": "I've filled in the payment form.",
+          "createdAt": "2026-10-20T09:00:30.000Z"
+        }
       ],
       "hasOlder": false,
       "question": null,
@@ -2508,29 +4395,96 @@
         "kind": "action",
         "action": "Enter the 2FA code your bank sent you",
         "why": "The bank asks for a code only you can see.",
-        "open": { "url": "https://bank.example.com/verify" }
+        "open": {
+          "url": "https://bank.example.com/verify"
+        }
       }
     },
     "events": [
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 41, "type": "handoff", "payload": { "handoff": { "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "kind": "action", "action": "Enter the 2FA code your bank sent you", "why": "The bank asks for a code only you can see.", "open": { "url": "https://bank.example.com/verify" } } } },
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 42, "type": "handoff", "payload": { "handoff": null } },
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 43, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" } } },
-      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 44, "type": "state", "payload": { "state": "paused", "interrupted": false } }
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_36",
+        "seq": 41,
+        "type": "handoff",
+        "payload": {
+          "handoff": {
+            "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+            "kind": "action",
+            "action": "Enter the 2FA code your bank sent you",
+            "why": "The bank asks for a code only you can see.",
+            "open": {
+              "url": "https://bank.example.com/verify"
+            }
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_36",
+        "seq": 42,
+        "type": "handoff",
+        "payload": {
+          "handoff": null
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_36",
+        "seq": 43,
+        "type": "entry",
+        "payload": {
+          "entry": {
+            "type": "message",
+            "id": "entry_handoff:call_fixture_36",
+            "role": "user",
+            "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.",
+            "createdAt": "2026-10-20T09:02:00.000Z"
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_36",
+        "seq": 44,
+        "type": "state",
+        "payload": {
+          "state": "paused",
+          "interrupted": false
+        }
+      }
     ],
     "answer": {
-      "request": { "outcome": "done", "note": "The code was from 9:01." },
-      "response": { "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f" }
+      "request": {
+        "outcome": "done",
+        "note": "The code was from 9:01."
+      },
+      "response": {
+        "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f"
+      }
     },
     "openOnMac": {
       "request": {},
-      "response": { "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "opened": true }
+      "response": {
+        "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+        "opened": true
+      }
     },
     "pause": {
       "request": {},
-      "response": { "state": "paused", "interrupted": false }
+      "response": {
+        "state": "paused",
+        "interrupted": false
+      }
     },
     "unpause": {
-      "response": { "state": "idle", "interrupted": false }
+      "response": {
+        "state": "idle",
+        "interrupted": false
+      }
     },
     "pausedSession": {
       "botId": "bot_fixture_01",
@@ -2539,9 +4493,27 @@
       "state": "paused",
       "interrupted": false,
       "entries": [
-        { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
-        { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" },
-        { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" }
+        {
+          "type": "message",
+          "id": "entry_40",
+          "role": "user",
+          "text": "Pay the electricity bill.",
+          "createdAt": "2026-10-20T09:00:00.000Z"
+        },
+        {
+          "type": "message",
+          "id": "entry_41",
+          "role": "assistant",
+          "text": "I've filled in the payment form.",
+          "createdAt": "2026-10-20T09:00:30.000Z"
+        },
+        {
+          "type": "message",
+          "id": "entry_handoff:call_fixture_36",
+          "role": "user",
+          "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.",
+          "createdAt": "2026-10-20T09:02:00.000Z"
+        }
       ],
       "hasOlder": false,
       "question": null,
@@ -2552,7 +4524,13 @@
       "id": "bot_fixture_01",
       "name": "Scout",
       "purpose": "Finds the signal in a busy week",
-      "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" } },
+      "avatar": {
+        "semantic": {
+          "version": 1,
+          "shape": "orb",
+          "color": "rose"
+        }
+      },
       "health": "ready",
       "sessionState": "paused",
       "paused": true,
@@ -2565,17 +4543,34 @@
       "name": "Scout",
       "purpose": "Finds the signal in a busy week",
       "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
-      "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" } },
+      "avatar": {
+        "semantic": {
+          "version": 1,
+          "shape": "orb",
+          "color": "rose"
+        }
+      },
       "health": "ready",
       "sessionState": "paused",
       "paused": true,
-      "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
+      "access": {
+        "botId": "bot_fixture_01",
+        "accessMode": "full",
+        "revision": "bot_policy_revision_4",
+        "policyEpoch": "bot_policy_epoch_4",
+        "summary": "Can use your Mac, shell, enabled connections, and skills."
+      },
       "createdAt": "2026-08-18T17:00:00.000Z",
       "updatedAt": "2026-10-20T09:03:00.000Z",
       "revision": "bot_revision_36"
     },
     "pausedError": {
-      "error": { "code": "bot_paused", "message": "This Bot is paused. Resume it to continue.", "requestId": "request_fixture_36", "retryable": false }
+      "error": {
+        "code": "bot_paused",
+        "message": "This Bot is paused. Resume it to continue.",
+        "requestId": "request_fixture_36",
+        "retryable": false
+      }
     },
     "legacy": {
       "session": {
@@ -2585,19 +4580,109 @@
         "state": "running",
         "interrupted": false,
         "entries": [
-          { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
-          { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" },
-          { "type": "message", "id": "handoff-notice:4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "role": "assistant", "text": "Scout needs you on your Mac: Enter the 2FA code your bank sent you" }
+          {
+            "type": "message",
+            "id": "entry_40",
+            "role": "user",
+            "text": "Pay the electricity bill.",
+            "createdAt": "2026-10-20T09:00:00.000Z"
+          },
+          {
+            "type": "message",
+            "id": "entry_41",
+            "role": "assistant",
+            "text": "I've filled in the payment form.",
+            "createdAt": "2026-10-20T09:00:30.000Z"
+          },
+          {
+            "type": "message",
+            "id": "handoff-notice:4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+            "role": "assistant",
+            "text": "Scout needs you on your Mac: Enter the 2FA code your bank sent you"
+          }
         ],
         "hasOlder": false,
         "question": null,
         "approval": null
       },
       "events": [
-        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 41, "type": "entry", "payload": { "entry": { "type": "message", "id": "handoff-notice:4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "role": "assistant", "text": "Scout needs you on your Mac: Enter the 2FA code your bank sent you" } } },
-        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 42, "type": "snapshot", "payload": { "session": { "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 42, "state": "running", "interrupted": false, "entries": [{ "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" }, { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" }], "hasOlder": false, "question": null, "approval": null } } },
-        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 43, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" } } },
-        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 44, "type": "state", "payload": { "state": "unavailable", "interrupted": false } }
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_36",
+          "seq": 41,
+          "type": "entry",
+          "payload": {
+            "entry": {
+              "type": "message",
+              "id": "handoff-notice:4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+              "role": "assistant",
+              "text": "Scout needs you on your Mac: Enter the 2FA code your bank sent you"
+            }
+          }
+        },
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_36",
+          "seq": 42,
+          "type": "snapshot",
+          "payload": {
+            "session": {
+              "botId": "bot_fixture_01",
+              "epoch": "epoch_fixture_36",
+              "seq": 42,
+              "state": "running",
+              "interrupted": false,
+              "entries": [
+                {
+                  "type": "message",
+                  "id": "entry_40",
+                  "role": "user",
+                  "text": "Pay the electricity bill.",
+                  "createdAt": "2026-10-20T09:00:00.000Z"
+                },
+                {
+                  "type": "message",
+                  "id": "entry_41",
+                  "role": "assistant",
+                  "text": "I've filled in the payment form.",
+                  "createdAt": "2026-10-20T09:00:30.000Z"
+                }
+              ],
+              "hasOlder": false,
+              "question": null,
+              "approval": null
+            }
+          }
+        },
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_36",
+          "seq": 43,
+          "type": "entry",
+          "payload": {
+            "entry": {
+              "type": "message",
+              "id": "entry_handoff:call_fixture_36",
+              "role": "user",
+              "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.",
+              "createdAt": "2026-10-20T09:02:00.000Z"
+            }
+          }
+        },
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_36",
+          "seq": 44,
+          "type": "state",
+          "payload": {
+            "state": "unavailable",
+            "interrupted": false
+          }
+        }
       ],
       "pausedSession": {
         "botId": "bot_fixture_01",
@@ -2606,9 +4691,27 @@
         "state": "unavailable",
         "interrupted": false,
         "entries": [
-          { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
-          { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" },
-          { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" }
+          {
+            "type": "message",
+            "id": "entry_40",
+            "role": "user",
+            "text": "Pay the electricity bill.",
+            "createdAt": "2026-10-20T09:00:00.000Z"
+          },
+          {
+            "type": "message",
+            "id": "entry_41",
+            "role": "assistant",
+            "text": "I've filled in the payment form.",
+            "createdAt": "2026-10-20T09:00:30.000Z"
+          },
+          {
+            "type": "message",
+            "id": "entry_handoff:call_fixture_36",
+            "role": "user",
+            "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.",
+            "createdAt": "2026-10-20T09:02:00.000Z"
+          }
         ],
         "hasOlder": false,
         "question": null,
@@ -2618,7 +4721,13 @@
         "id": "bot_fixture_01",
         "name": "Scout",
         "purpose": "Finds the signal in a busy week",
-        "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" } },
+        "avatar": {
+          "semantic": {
+            "version": 1,
+            "shape": "orb",
+            "color": "rose"
+          }
+        },
         "health": "ready",
         "sessionState": "unavailable",
         "createdAt": "2026-08-18T17:00:00.000Z",
@@ -2626,189 +4735,12 @@
         "revision": "bot_revision_36"
       },
       "pausedError": {
-        "error": { "code": "operation_stale", "message": "This Bot is paused. Resume it to continue.", "requestId": "request_fixture_36", "retryable": false }
-      }
-    }
-  },
-  "botAccessRequests": {
-    "capability": "bot:access-requests",
-    "folder": {
-      "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
-      "target": "folder",
-      "label": "Reports",
-      "place": "~/Documents/Reports",
-      "why": "Read the reports for your summary.",
-      "choices": [
-        "not_now",
-        "always",
-        "once"
-      ]
-    },
-    "wholeMac": {
-      "waitId": "55b1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
-      "target": "whole_mac",
-      "label": "your whole Mac",
-      "why": "Find the files you asked me to organize.",
-      "choices": [
-        "not_now",
-        "once"
-      ]
-    },
-    "session": {
-      "botId": "bot_fixture_01",
-      "epoch": "epoch_fixture_55",
-      "seq": 50,
-      "state": "running",
-      "interrupted": false,
-      "entries": [],
-      "hasOlder": false,
-      "question": null,
-      "approval": null,
-      "accessRequest": {
-        "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
-        "target": "folder",
-        "label": "Reports",
-        "place": "~/Documents/Reports",
-        "why": "Read the reports for your summary.",
-        "choices": [
-          "not_now",
-          "always",
-          "once"
-        ]
-      }
-    },
-    "events": [
-      {
-        "protocolVersion": 1,
-        "botId": "bot_fixture_01",
-        "epoch": "epoch_fixture_55",
-        "seq": 51,
-        "type": "access_request",
-        "payload": {
-          "accessRequest": {
-            "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
-            "target": "folder",
-            "label": "Reports",
-            "place": "~/Documents/Reports",
-            "why": "Read the reports for your summary.",
-            "choices": [
-              "not_now",
-              "always",
-              "once"
-            ]
-          }
+        "error": {
+          "code": "operation_stale",
+          "message": "This Bot is paused. Resume it to continue.",
+          "requestId": "request_fixture_36",
+          "retryable": false
         }
-      },
-      {
-        "protocolVersion": 1,
-        "botId": "bot_fixture_01",
-        "epoch": "epoch_fixture_55",
-        "seq": 52,
-        "type": "access_request",
-        "payload": {
-          "accessRequest": null
-        }
-      }
-    ],
-    "answer": {
-      "request": {
-        "choice": "always"
-      },
-      "response": {
-        "answered": true,
-        "savedForFuture": true
-      }
-    },
-    "expired": {
-      "error": {
-        "code": "access_request_expired",
-        "message": "This access request is no longer waiting.",
-        "requestId": "request_fixture_55",
-        "retryable": false
-      }
-    },
-    "issue": {
-      "id": "issue_fixture_access_01",
-      "kind": "access_needed",
-      "title": "Allow Reports",
-      "body": "Read the reports for your summary.",
-      "actions": [
-        {
-          "kind": "dismiss_access"
-        },
-        {
-          "kind": "allow_folder"
-        }
-      ],
-      "createdAt": "2026-11-03T09:00:00.000Z",
-      "resolved": false
-    },
-    "legacy": {
-      "session": {
-        "botId": "bot_fixture_01",
-        "epoch": "epoch_fixture_55",
-        "seq": 50,
-        "state": "running",
-        "interrupted": false,
-        "entries": [
-          {
-            "type": "message",
-            "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
-            "role": "assistant",
-            "text": "Scout needs you on your Mac: allow access to Reports"
-          }
-        ],
-        "hasOlder": false,
-        "question": null,
-        "approval": null
-      },
-      "events": [
-        {
-          "protocolVersion": 1,
-          "botId": "bot_fixture_01",
-          "epoch": "epoch_fixture_55",
-          "seq": 51,
-          "type": "entry",
-          "payload": {
-            "entry": {
-              "type": "message",
-              "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
-              "role": "assistant",
-              "text": "Scout needs you on your Mac: allow access to Reports"
-            }
-          }
-        },
-        {
-          "protocolVersion": 1,
-          "botId": "bot_fixture_01",
-          "epoch": "epoch_fixture_55",
-          "seq": 52,
-          "type": "snapshot",
-          "payload": {
-            "session": {
-              "botId": "bot_fixture_01",
-              "epoch": "epoch_fixture_55",
-              "seq": 52,
-              "state": "running",
-              "interrupted": false,
-              "entries": [],
-              "hasOlder": false,
-              "question": null,
-              "approval": null
-            }
-          }
-        }
-      ],
-      "settledSession": {
-        "botId": "bot_fixture_01",
-        "epoch": "epoch_fixture_55",
-        "seq": 52,
-        "state": "running",
-        "interrupted": false,
-        "entries": [],
-        "hasOlder": false,
-        "question": null,
-        "approval": null
       }
     }
   },
@@ -3090,7 +5022,7 @@
         "label": "bidi-name",
         "schedule": {
           "action": "create",
-          "name": "Morning\u202ebriefing",
+          "name": "Morning‮briefing",
           "cadence": "Weekdays at 9:00 AM",
           "timezone": "America/Los_Angeles",
           "nextRunAt": "2026-10-23T16:00:00.000Z",
@@ -3344,7 +5276,25 @@
     "imagePath": "/bots/bot_fixture_01/session/images/entry_fixture_shared_image_01"
   },
   "browserRecordings": {
-    "step": { "id": "tool-5", "order": 0, "kind": "tool", "toolCallId": "call-5", "toolName": "browser_recording_stop", "label": "Stop browser recording", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079672400, "finishedAt": 1787079672400, "contentOffset": 0, "recording": { "id": "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", "mimeType": "video/mp4", "durationMs": 12400, "sizeBytes": 1048576 } },
+    "step": {
+      "id": "tool-5",
+      "order": 0,
+      "kind": "tool",
+      "toolCallId": "call-5",
+      "toolName": "browser_recording_stop",
+      "label": "Stop browser recording",
+      "status": "completed",
+      "startedAt": 1787079660000,
+      "updatedAt": 1787079672400,
+      "finishedAt": 1787079672400,
+      "contentOffset": 0,
+      "recording": {
+        "id": "recording-0f1e2d3c-4b5a-4678-9abc-def012345678",
+        "mimeType": "video/mp4",
+        "durationMs": 12400,
+        "sizeBytes": 1048576
+      }
+    },
     "recordingPath": "/chats/chat_fixture_01/recordings/recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
   },
   "botIssues": {
@@ -3631,7 +5581,9 @@
           "label": "Run the dev server",
           "state": "running",
           "startedAt": "2026-10-29T09:00:00.000Z",
-          "ports": [5173]
+          "ports": [
+            5173
+          ]
         },
         {
           "id": "job_5e6f7a8b",
@@ -3639,7 +5591,10 @@
           "state": "running",
           "startedAt": "2026-10-29T08:58:00.000Z",
           "fromCommand": true,
-          "ports": [3000, 5173]
+          "ports": [
+            3000,
+            5173
+          ]
         },
         {
           "id": "job_00000001",
@@ -3663,7 +5618,10 @@
             "state": "running",
             "startedAt": "2026-10-29T08:58:00.000Z",
             "fromCommand": true,
-            "ports": [3000, 5173]
+            "ports": [
+              3000,
+              5173
+            ]
           },
           {
             "id": "job_1a2b3c4d",
@@ -3721,6 +5679,249 @@
         "message": "This device does not have access to that Aiden capability.",
         "requestId": "request_fixture_50",
         "retryable": false
+      }
+    }
+  },
+  "botMessagingDetail": {
+    "id": "bot_fixture_01",
+    "name": "Scout",
+    "purpose": "Finds the signal in a busy week",
+    "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
+    "avatar": {
+      "semantic": {
+        "version": 1,
+        "shape": "orb",
+        "color": "rose"
+      },
+      "asset": {
+        "assetRevision": "avatar_revision_3",
+        "mimeType": "image/png",
+        "width": 512,
+        "height": 512,
+        "byteSize": 1024
+      }
+    },
+    "health": "ready",
+    "sessionState": "idle",
+    "access": {
+      "botId": "bot_fixture_01",
+      "accessMode": "full",
+      "revision": "bot_policy_revision_4",
+      "policyEpoch": "bot_policy_epoch_4",
+      "summary": "Can use your Mac, shell, enabled connections, and skills."
+    },
+    "modelSelection": {
+      "providerId": "provider_fixture",
+      "modelId": "model_fixture"
+    },
+    "visionModelSelection": {
+      "providerId": "provider_fixture",
+      "modelId": "vision_model_fixture"
+    },
+    "createdAt": "2026-08-18T17:00:00.000Z",
+    "updatedAt": "2026-08-18T18:45:00.000Z",
+    "revision": "bot_revision_7",
+    "botMessaging": {
+      "receive": true,
+      "send": true
+    }
+  },
+  "botMessagingPatch": {
+    "botMessaging": {
+      "receive": false
+    }
+  },
+  "botMessagingSettings": {
+    "enabled": false
+  },
+  "botMessageNotification": {
+    "id": "bot-message-fixture-01",
+    "kind": "message",
+    "botId": "bot_fixture_01",
+    "botName": "Scout",
+    "routineName": "COS replied",
+    "finishedAt": "2026-11-03T12:00:00.000Z",
+    "preview": "The calendar is ready."
+  },
+  "botAccessRequests": {
+    "capability": "bot:access-requests",
+    "folder": {
+      "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "folder",
+      "label": "Reports",
+      "place": "~/Documents/Reports",
+      "why": "Read the reports for your summary.",
+      "choices": [
+        "not_now",
+        "always",
+        "once"
+      ]
+    },
+    "wholeMac": {
+      "waitId": "55b1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "target": "whole_mac",
+      "label": "your whole Mac",
+      "why": "Find the files you asked me to organize.",
+      "choices": [
+        "not_now",
+        "once"
+      ]
+    },
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_55",
+      "seq": 50,
+      "state": "running",
+      "interrupted": false,
+      "entries": [],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "accessRequest": {
+        "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+        "target": "folder",
+        "label": "Reports",
+        "place": "~/Documents/Reports",
+        "why": "Read the reports for your summary.",
+        "choices": [
+          "not_now",
+          "always",
+          "once"
+        ]
+      }
+    },
+    "events": [
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 51,
+        "type": "access_request",
+        "payload": {
+          "accessRequest": {
+            "waitId": "55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+            "target": "folder",
+            "label": "Reports",
+            "place": "~/Documents/Reports",
+            "why": "Read the reports for your summary.",
+            "choices": [
+              "not_now",
+              "always",
+              "once"
+            ]
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 52,
+        "type": "access_request",
+        "payload": {
+          "accessRequest": null
+        }
+      }
+    ],
+    "answer": {
+      "request": {
+        "choice": "always"
+      },
+      "response": {
+        "answered": true,
+        "savedForFuture": true
+      }
+    },
+    "expired": {
+      "error": {
+        "code": "access_request_expired",
+        "message": "This access request is no longer waiting.",
+        "requestId": "request_fixture_55",
+        "retryable": false
+      }
+    },
+    "issue": {
+      "id": "issue_fixture_access_01",
+      "kind": "access_needed",
+      "title": "Allow Reports",
+      "body": "Read the reports for your summary.",
+      "actions": [
+        {
+          "kind": "dismiss_access"
+        },
+        {
+          "kind": "allow_folder"
+        }
+      ],
+      "createdAt": "2026-11-03T09:00:00.000Z",
+      "resolved": false
+    },
+    "legacy": {
+      "session": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 50,
+        "state": "running",
+        "interrupted": false,
+        "entries": [
+          {
+            "type": "message",
+            "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+            "role": "assistant",
+            "text": "Scout needs you on your Mac: allow access to Reports"
+          }
+        ],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "events": [
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_55",
+          "seq": 51,
+          "type": "entry",
+          "payload": {
+            "entry": {
+              "type": "message",
+              "id": "access-notice:55a1d3c5-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+              "role": "assistant",
+              "text": "Scout needs you on your Mac: allow access to Reports"
+            }
+          }
+        },
+        {
+          "protocolVersion": 1,
+          "botId": "bot_fixture_01",
+          "epoch": "epoch_fixture_55",
+          "seq": 52,
+          "type": "snapshot",
+          "payload": {
+            "session": {
+              "botId": "bot_fixture_01",
+              "epoch": "epoch_fixture_55",
+              "seq": 52,
+              "state": "running",
+              "interrupted": false,
+              "entries": [],
+              "hasOlder": false,
+              "question": null,
+              "approval": null
+            }
+          }
+        }
+      ],
+      "settledSession": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_55",
+        "seq": 52,
+        "state": "running",
+        "interrupted": false,
+        "entries": [],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
       }
     }
   },

@@ -29,6 +29,7 @@ import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type Bo
 import { BotPanelFiles } from "./bot-panel-files";
 import { BotPanelHandoff } from "./bot-panel-handoff";
 import { BotRoutines } from "./bot-routines";
+import { BotOpenWorkPanelRow } from "./bot-open-work-page";
 
 const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
   activity: { label: "Activity", icon: ListChecks },
@@ -56,6 +57,8 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
   // Always the full log: the Bot's Chat activity level shapes only the in-chat
   // recap, and opening this tab is the person asking to see every step.
   return (
+    <>
+    <BotOpenWorkPanelRow botId={botId} />
     <MemoBotPanelActivity
       botName={botName}
       entries={live.snapshot?.entries ?? NO_ENTRIES}
@@ -64,6 +67,7 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
       failed={live.snapshot === null && live.failed}
       onRetry={live.reload}
     />
+    </>
   );
 }
 

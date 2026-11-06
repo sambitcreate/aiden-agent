@@ -58,6 +58,7 @@ import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
   routineNotesCandidate,
+  botOpenWorkCandidate,
   eventRoutinesToolSource,
   routinesCandidate,
   proposeSkillCandidate,
@@ -84,6 +85,7 @@ import { createBotComputerToolState, type BotComputerToolState } from "../bot-co
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
+import { botExecutionScope } from "./bot-execution.js";
 import { createBotRunAccess } from "./bot-run-access.js";
 import { botAccessRequestCandidate, botSavedLocationForCall } from "./bot-access-request-tool.js";
 import { botAccessRequests } from "./bot-access-requests-main.js";
@@ -282,12 +284,11 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           ...schema,
           async execute(toolCallId, params, signal, onUpdate) {
             const settings = await configStore.getSettings();
-            const runtime = await resolveBotModelRuntime(
-              authority.provider.sourceProviderId,
-              authority.provider.sourceModelId,
-              signal,
-              authority.chatId,
-            );
+            const execution = botExecutionScope(botId);
+            const helpers = execution ? await import("./bot-session-main.js") : undefined;
+            const runtime = helpers
+              ? await helpers.resolveBotExecutionHelperRuntime(botId, "primary", authority.provider.sourceProviderId, authority.provider.sourceModelId, signal)
+              : await resolveBotModelRuntime(authority.provider.sourceProviderId, authority.provider.sourceModelId, signal, authority.chatId);
             // Children belong to this exact parent call, in the Bot's own chat
             // and folder. Nothing is persisted that could relaunch them: the
             // tool is `unsafe`, so a replayed parent call never reruns.
@@ -298,7 +299,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               chatId: await deps.canonicalChatId(botId),
               workspaceId: authority.managedHome.workspaceId,
               runtime,
-              thinkingLevel: "off",
+              ...(helpers ? { transformRuntime: (isolated, context) => helpers.bindBotExecutionHelperRuntime(botId, `subagent:${context.childId}`, isolated, runtime) } : {}),
+              thinkingLevel: execution ? (execution.claim.actual === "fallback" ? execution.claim.fallback! : execution.claim.primary).thinkingLevel : "off",
               workspaceRoot: authority.workingDirectory,
               permission: "full",
               inheritedCeiling: authority.files.botHome ? inheritedSubagentReadToolCeiling(undefined) : [],
@@ -354,6 +356,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const authority = admission.authority;
       const production = facts as ProductionFacts;
       const routineRun = turn.requestId?.startsWith("routine:") ?? false;
+      const peerRun = botExecutionScope(botId)?.claim.peer !== undefined;
       const messageTurn = isBotMessageRequestId(turn.requestId);
       const telegram = turn.requestId?.startsWith("tg:") ?? false;
       const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
@@ -363,6 +366,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         has("subagents") &&
         !messageTurn &&
         !routineRun &&
+        !peerRun &&
         !telegram &&
         subagentsAllowedForGeneration({
           assistantMode: false,
@@ -412,7 +416,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           granted: has("computer"),
           hasComputer: facts.hasComputer,
           supportsImages: facts.supportsImages,
-          routine: routineRun,
+          routine: routineRun || peerRun,
           telegram: telegram || messageTurn,
           computers: async () => (await botComputerServices()).botComputers(),
           state: (control) => (botComputerToolState ??= createBotComputerToolState(control)),
@@ -421,7 +425,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       // The Bot's own browser. Never on routine or Telegram turns: nobody is
       // there to approve a click or use a held tab (blueprint G12).
-      if (has("browser") && !messageTurn && !routineRun && !telegram) {
+      if (has("browser") && !messageTurn && !routineRun && !peerRun && !telegram) {
         tools.push(
           ...(await botBrowser.candidates(botId, {
             workspaceId: workspace.id,
@@ -437,7 +441,7 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       const boundFileLocations = await botFileLocations(admission);
       tools.push(
         ...botFileCandidates(boundFileLocations, {
-          routine: routineRun,
+          routine: routineRun || peerRun,
           recordOwnWrite: (written) => botOwnWrites.record(botId, written),
           ...(authority.accessMode === "custom" && authority.files.mode === "scoped" ? { runAccess: { resolve: async (call: import("./tool-adapter.js").BotToolCall) => {
             await call.assertRunActive?.();
@@ -455,7 +459,9 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         if (shell) tools.push({ tool: shell });
       }
       if (!facts.supportsImages) {
-        const vision = visionCandidate(authority, {
+        const execution = botExecutionScope(botId), savedVision = execution?.claim.vision, currentVision = authority.visionProvider;
+        const matchingVision = !execution || Boolean(savedVision && currentVision && savedVision.sourceProviderId === currentVision.sourceProviderId && savedVision.sourceModelId === currentVision.sourceModelId && savedVision.connectionFingerprint === currentVision.connectionFingerprint && savedVision.providerExactFingerprint === currentVision.providerExactFingerprint && savedVision.modelExactFingerprint === currentVision.modelExactFingerprint);
+        const vision = matchingVision ? visionCandidate(authority, {
           revalidateBeforeEffect: async () => {
             const fresh = await deps.admit(botId);
             try {
@@ -465,13 +471,18 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
             }
           },
           dependencies: {
-            resolveRuntime: (providerId, modelId, signal) => resolveBotModelRuntime(providerId, modelId, signal, authority.chatId),
+            resolveRuntime: async (providerId, modelId, signal) => {
+              if (!botExecutionScope(botId)) return resolveBotModelRuntime(providerId, modelId, signal, authority.chatId);
+              const helpers = await import("./bot-session-main.js");
+              const runtime = await helpers.resolveBotExecutionHelperRuntime(botId, "vision", providerId, modelId, signal);
+              return helpers.bindBotExecutionHelperRuntime(botId, "vision", runtime);
+            },
             recordUsage: async (record) => {
               const { usageStore } = await import("../usage-store.js");
               await usageStore.record(record);
             },
           },
-        });
+        }) : undefined;
         if (vision) tools.push(vision);
       }
       // Both are always installed; ingress (`botIngressAllowsTool`) keeps
@@ -480,6 +491,11 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
         (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
       tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      const peers = await import("../bot-peers/host-main.js");
+      const { botPeerCandidate } = await import("../bot-peers/tool.js");
+      tools.push(botPeerCandidate(botId, {service:peers.botPeerHost,source:peers.botPeerToolSource,wake:peers.wakeBotPeers}));
+      const openWork = await import("../bot-open-work/service-main.js");
+      tools.push(botOpenWorkCandidate(botId, { service: openWork.botOpenWork, routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin, peerOrigin: peers.botPeerOpenWorkOrigin }));
       // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
       const turnLacksConnection = (sourceId: string) =>
         authority.accessMode === "custom" &&
@@ -506,10 +522,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Only in turns a person started (ingress also withholds it on routine,
       // catch-up, wake-up and intro runs), and only while the person's per-Bot
       // switch is on.
-      if (!messageTurn && !routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+      if (!messageTurn && !routineRun && !peerRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
         tools.push(wakeUpCandidate(botId, lazyWakeUps));
       }
-      if (botMessageChainOf([turn.requestId]).canSend && botMessagingEnabled(await configStore.getSettings())) {
+      if (!peerRun && botMessageChainOf([turn.requestId]).canSend && botMessagingEnabled(await configStore.getSettings())) {
         const roster = await botMessageRoster();
         if (roster.find(b => b.id === botId)?.sendsMessages && roster.some(b => b.id !== botId && b.acceptsMessages)) {
           tools.push(await messageBotCandidate(botId, {post: input => botMessages().post(input), roster: botMessageRoster}));

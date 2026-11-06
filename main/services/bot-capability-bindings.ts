@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { types as utilTypes } from "node:util";
+import { botConnectionCapabilityIdentity, isComposioServiceCapability, parseBotConnectionAccessIdentity, type BotConnectionAccessIdentity } from "./bot-connection-capability-identity.js";
 import {
   BOT_CAPABILITY_LIMITS,
   BOT_FILE_SCOPE_SELECTION_GUIDANCE,
@@ -67,6 +68,7 @@ export interface BoundBotShell {
 export interface BoundBotConnection {
   option: BotCapabilityOption;
   sourceId: string;
+  accessIdentity?: BotConnectionAccessIdentity;
   connectionFingerprint: string;
   toolsetFingerprint: string;
   exactFingerprint: string;
@@ -704,7 +706,7 @@ function parseBoundConnection(value: unknown, index: number): BoundBotConnection
     "toolsetFingerprint",
     "exactFingerprint",
     "tools",
-  ]);
+  ], ["accessIdentity"]);
   const option = storedOption(connection.option, `${label} option`, { description: true });
   const sourceId = storedSourceIdentity(connection.sourceId, label);
   const connectionFingerprint = storedFingerprint(
@@ -726,14 +728,16 @@ function parseBoundConnection(value: unknown, index: number): BoundBotConnection
     tools.map(({ name, exactFingerprint }) => ({ name, exactFingerprint })),
     `${label} toolset fingerprint`,
   );
+  const accessIdentity = parseBotConnectionAccessIdentity(connection.accessIdentity, { sourceId, tools });
   const exactFingerprint = exactFacts(
     storedFingerprint(connection.exactFingerprint, `${label} exact fingerprint`),
-    { connectionFingerprint, toolsetFingerprint },
+    { connectionFingerprint, toolsetFingerprint, ...(accessIdentity ? { accessIdentity } : {}) },
     `${label} fingerprint`,
   );
   return {
     option,
     sourceId,
+    ...(accessIdentity ? { accessIdentity } : {}),
     connectionFingerprint,
     toolsetFingerprint,
     exactFingerprint,
@@ -981,7 +985,7 @@ export function assertBoundBotCustomSelectionOpaqueIds(
       opaqueIdMatchesMint(
         mintOpaqueId,
         "connection",
-        connection.sourceId,
+        botConnectionCapabilityIdentity(connection),
         connection.exactFingerprint,
         connection.option.id,
       ),
@@ -1205,6 +1209,7 @@ export function bindBotCustomSelection(input: {
         (connection): BoundBotConnection => ({
           option: { ...connection.option },
           sourceId: connection.sourceId,
+          ...(connection.accessIdentity ? { accessIdentity: connection.accessIdentity } : {}),
           connectionFingerprint: connection.connectionFingerprint,
           toolsetFingerprint: connection.toolsetFingerprint,
           exactFingerprint: connection.exactFingerprint,
@@ -1408,7 +1413,8 @@ function unavailableOption<T extends BotCapabilityOption>(option: T): T {
  * Keep stored public ids visible when a source is gone. Same-identity fingerprint
  * drift keeps the live row available so the user can re-bind; Custom still
  * fail-closes at admit until they save. Distinct sources that hash to one id
- * remain a collision.
+ * remain a collision. Moving Composio's raw-tool grants to the broader service
+ * is a new choice: the old ids stay unavailable until explicitly replaced.
  */
 export function withBotCapabilityTombstones(
   current: BotCapabilityCatalogSnapshot,
@@ -1485,6 +1491,21 @@ export function withBotCapabilityTombstones(
       );
     }
     for (const connection of binding.connections) {
+      // Old per-tool access must not become an available service selection on
+      // an unrelated Custom save. Keep every retained old id, even when several
+      // Bots retained different legacy ids for this same connection.
+      const serviceMigration = !isComposioServiceCapability(connection)
+        && resources.connections.some((item) => item.sourceId === connection.sourceId && isComposioServiceCapability(item));
+      if (serviceMigration) {
+        const existing = resources.connections.find((item) => item.option.id === connection.option.id);
+        if (existing && (existing.sourceId !== connection.sourceId || isComposioServiceCapability(existing))) {
+          throw new Error("Bot connection opaque id collision detected.");
+        }
+        const option = { ...unavailableOption(connection.option), label: "Previous Composio access" };
+        if (existing) existing.option = option;
+        else resources.connections.push({ ...connection, option, tools: connection.tools.map((tool) => ({ ...tool })) });
+        continue;
+      }
       appendResource(
         resources.connections,
         {
@@ -1493,7 +1514,7 @@ export function withBotCapabilityTombstones(
           tools: connection.tools.map((tool) => ({ ...tool })),
         },
         "connection",
-        (item) => item.sourceId === connection.sourceId,
+        (item) => botConnectionCapabilityIdentity(item) === botConnectionCapabilityIdentity(connection),
       );
     }
     for (const skill of binding.skills) {

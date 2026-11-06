@@ -1,3 +1,6 @@
+import { BOT_UNKNOWN_COST_CONFIRMATION } from "../../shared/bot-execution-resume";
+import { BotPeerExchangeDialog } from "./bot-peers";
+import { BOT_RESUME_JOURNAL_EVENT, pendingBotResumes, recordBotResume, settleBotResume, type BotResumeAttempt } from "./bot-resume-journal";
 import { AccessRequestCard } from "../../components/bots/access-request-card";
 import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 // A Bot's one conversation, rendered from the durable projection (`useBotLive`).
@@ -30,7 +33,7 @@ import {
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
-import { Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
+import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botAllowedLocation, botListLocation } from "../../lib/bot-routes";
 import { botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
@@ -727,6 +730,7 @@ export function TranscriptEntries({
   onReply,
   onRetry,
   onOpenMemory,
+  onViewExchange,
   onRunRoutine,
   onRespondToProposal,
   onNewRoutineLink,
@@ -756,6 +760,7 @@ export function TranscriptEntries({
   onReply(text: string): void;
   onRetry(failedId: string, text: string): void;
   onOpenMemory?(): void;
+  onViewExchange?(exchangeId: string): void;
   /** Run now on a routine skipped while paused; rejects when it didn't start. Absent where routines can't run. */
   onRunRoutine?(routineId: string): Promise<void>;
   onRespondToProposal?(
@@ -846,6 +851,8 @@ export function TranscriptEntries({
                 </BotMessageActions>
               </React.Fragment>
             );
+          case "peer":
+            return <div key={row.id} className="flex flex-wrap items-center gap-2 py-1" role="note"><Text variant="small" color="secondary">{row.messageKind === "result" ? "Exchange update" : row.messageKind === "fyi" ? "FYI" : row.messageKind[0]!.toUpperCase() + row.messageKind.slice(1)} {row.direction === "sent" ? "to" : "from"} {row.peerName}</Text>{onViewExchange && <Button size="small" variant="transparent" onClick={() => onViewExchange(row.exchangeId)}>View exchange</Button>}</div>;
           case "assistant":
             return (
               <BotMessageActions key={row.id} text={row.text} from={name} align="start" onReply={onReply}>
@@ -1012,10 +1019,23 @@ export function BotChatPane({ botId }: { botId: string }) {
   // never doubles. A Bot the person paused shows BotPausedCard instead.
   const [hiddenInterruptedSubmission, setHiddenInterruptedSubmission] = React.useState<string | null>(null);
   const interruptedRequestIds = React.useRef(new Map<string, string>());
+  const [resumeSending, setResumeSending] = React.useState(false);
+  const [resumeJournalVersion, refreshResumeJournal] = React.useReducer((value: number) => value + 1, 0);
+  const savedResumes = React.useMemo(() => {
+    try { return { rows: pendingBotResumes(botId), error: null as string | null }; }
+    catch (error) { return { rows: [] as BotResumeAttempt[], error: userFacingErrorMessage(error, "Saved Resume requests need review.") }; }
+  }, [botId, resumeJournalVersion]);
+  React.useEffect(() => {
+    window.addEventListener("storage", refreshResumeJournal);
+    window.addEventListener(BOT_RESUME_JOURNAL_EVENT, refreshResumeJournal);
+    return () => { window.removeEventListener("storage", refreshResumeJournal); window.removeEventListener(BOT_RESUME_JOURNAL_EVENT, refreshResumeJournal); };
+  }, []);
+  const [costConsent, setCostConsent] = React.useState<{ botId: string; submissionId: string; expectedSubmissionId: string; expectedCostReceiptId: string } | null>(null);
   // Sends show at once as pending echoes, each under one request id. A send
   // that failed keeps its id, so the same words sent again are deduplicated by
   // main instead of delivered twice; Retry reuses one id per failed turn.
   const [pendingSends, setPendingSends] = React.useState<readonly BotPendingSend[]>([]);
+  const [peerExchange, setPeerExchange] = React.useState<{ botId: string; exchangeId: string } | null>(null);
   // Sends whose words are still moving from the composer into their bubble:
   // each keeps its echo until it lands, and the entry that answers it waits unseen.
   const sendMorphs = React.useRef(new Map<string, BotSendMorphOrigin>());
@@ -1028,6 +1048,24 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
+  const latestSnapshot = React.useRef(snapshot);
+  React.useLayoutEffect(() => { latestSnapshot.current = snapshot; }, [snapshot]);
+  const interruptedControlLifetime = React.useRef<{ botId: string; active: boolean } | null>(null);
+  React.useLayoutEffect(() => {
+    let focused = true;
+    const visit = () => {
+      if (interruptedControlLifetime.current) interruptedControlLifetime.current.active = false;
+      interruptedControlLifetime.current = { botId, active: focused && !document.hidden };
+      setCostConsent(null); setHiddenInterruptedSubmission(null); setResumeSending(false);
+    };
+    const blur = () => { focused = false; visit(); }, focus = () => { focused = true; visit(); };
+    visit();
+    window.addEventListener("blur", blur); window.addEventListener("focus", focus); document.addEventListener("visibilitychange", visit);
+    return () => {
+      if (interruptedControlLifetime.current) interruptedControlLifetime.current.active = false;
+      window.removeEventListener("blur", blur); window.removeEventListener("focus", focus); document.removeEventListener("visibilitychange", visit);
+    };
+  }, [botId]);
   const replyAt = snapshot ? botLastReplyAt(snapshot.entries) : null;
   const botFound = Boolean(bot.data);
   // The chat has seen every finished reply it shows: opening it, and each reply
@@ -1334,30 +1372,63 @@ export function BotChatPane({ botId }: { botId: string }) {
     return minted;
   };
 
-  const answerInterrupted = async (action: "resume" | "dismiss") => {
-    if (state?.kind !== "interrupted" || hiddenInterruptedSubmission) return;
-    const { submissionId } = state;
-    // The card leaves now; main's state event confirms it, and a failure brings it back.
-    setHiddenInterruptedSubmission(submissionId);
+  const performResume = async (input: Omit<BotResumeAttempt, "version" | "createdAt" | "attempts">, retry: boolean) => {
+    const lifetime = interruptedControlLifetime.current;
+    if (!lifetime?.active || lifetime.botId !== current.id || resumeSending) return;
+    const before = latestSnapshot.current;
+    setResumeSending(true);
     try {
-      const after =
-        action === "resume"
-          ? await botsApi.resume(current.id, interruptedRequestId(action, submissionId))
-          : await botsApi.dismiss(current.id, interruptedRequestId(action, submissionId));
-      // Main answered, so the id is spent: main remembers its answer (even a refusal) per id,
-      // and the next click after, say, fixing access must be a new request. Only a thrown
-      // IPC error keeps the id for a replay.
-      interruptedRequestIds.current.delete(`${action}:${submissionId}`);
-      // Main's answer is the state now: a turn still interrupted (for example, blocked) shows its card again.
-      if (after.kind === "interrupted") setHiddenInterruptedSubmission(null);
+      const attempt = recordBotResume(input, retry);
+      setHiddenInterruptedSubmission(attempt.submissionId);
+      const after = await botsApi.resume(attempt.botId, attempt.requestId, attempt.acknowledgement);
+      if (!after || !["idle", "running", "interrupted", "needs_model", "model_error", "unavailable", "paused"].includes(after.kind) || (after.kind === "running" || after.kind === "interrupted") && !after.submissionId) throw new Error("The host did not confirm the Resume request.");
+      settleBotResume(attempt);
+      if (lifetime.active && (after.kind === "interrupted" || latestSnapshot.current !== before && latestSnapshot.current?.state.kind === "interrupted")) setHiddenInterruptedSubmission(null);
     } catch (error) {
-      setHiddenInterruptedSubmission((hidden) => (hidden === submissionId ? null : hidden));
-      toast.error(
-        userFacingErrorMessage(
-          error,
-          action === "resume" ? `Aiden couldn’t resume ${current.name}.` : `Aiden couldn’t dismiss that for ${current.name}.`,
-        ),
-      );
+      if (lifetime.active) {
+        setHiddenInterruptedSubmission(null);
+        toast.error(userFacingErrorMessage(error, "The Resume outcome is unconfirmed. Retry the saved request."));
+      }
+    } finally {
+      if (lifetime.active) setResumeSending(false);
+      refreshResumeJournal();
+    }
+  };
+
+  const answerInterrupted = async (action: "resume" | "dismiss", acknowledgeUnknownCost = false, expectedSubmissionId?: string, expectedCostReceiptId?: string) => {
+    if (state?.kind !== "interrupted" || hiddenInterruptedSubmission || resumeSending) return;
+    const lifetime = interruptedControlLifetime.current;
+    if (!lifetime?.active || lifetime.botId !== current.id) return;
+    const { submissionId } = state;
+    const before = snapshot;
+    try {
+      if (action === "resume") {
+        const pending = pendingBotResumes(current.id);
+        if (pending.length) { await performResume(pending[0]!, true); return; }
+        if (!acknowledgeUnknownCost) {
+          setHiddenInterruptedSubmission(submissionId);
+          const status = await botsApi.routineModels.resumeStatus(current.id);
+          if (!lifetime.active) return;
+          const latest = latestSnapshot.current;
+          if (latest?.botId !== current.id || latest.state.kind !== "interrupted" || latest.state.submissionId !== submissionId || status.interruptedSubmissionId !== undefined && status.interruptedSubmissionId !== submissionId) throw new Error("This Bot’s interrupted work changed. Review its current state before resuming.");
+          if (status.requiresUnknownCostAcknowledgement) {
+            if (!status.interruptedSubmissionId || !status.costReceiptId) throw new Error("The interrupted work needs a fresh confirmation.");
+            setHiddenInterruptedSubmission(null); setCostConsent({ botId: current.id, submissionId, expectedSubmissionId: status.interruptedSubmissionId, expectedCostReceiptId: status.costReceiptId }); return;
+          }
+        }
+        if (acknowledgeUnknownCost && (!expectedSubmissionId || !expectedCostReceiptId)) throw new Error("The interrupted work needs a fresh confirmation.");
+        await performResume({ botId: current.id, submissionId, requestId: crypto.randomUUID(), acknowledgement: acknowledgeUnknownCost ? { acknowledgeUnknownCost: true, expectedSubmissionId, expectedCostReceiptId } : {} }, false);
+        return;
+      }
+      setHiddenInterruptedSubmission(submissionId);
+      const after = await botsApi.dismiss(current.id, interruptedRequestId(action, submissionId));
+      interruptedRequestIds.current.delete(`${action}:${submissionId}`);
+      if (after.kind === "interrupted" || latestSnapshot.current !== before && latestSnapshot.current?.state.kind === "interrupted") setHiddenInterruptedSubmission(null);
+    } catch (error) {
+      if (lifetime.active) {
+        setHiddenInterruptedSubmission((hidden) => hidden === submissionId ? null : hidden);
+        toast.error(userFacingErrorMessage(error, action === "resume" ? `Aiden couldn’t resume ${current.name}.` : `Aiden couldn’t dismiss that for ${current.name}.`));
+      }
     }
   };
   const resume = () => answerInterrupted("resume");
@@ -1710,6 +1781,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onReply={reply}
           onRetry={(failedId, text) => void retry(failedId, text)}
           onOpenMemory={openMemory}
+          onViewExchange={(exchangeId) => setPeerExchange({ botId: current.id, exchangeId })}
           onRunRoutine={runRoutine}
           wakeUpPending={wakeUpPending}
           onCancelWakeUp={cancelWakeUp}
@@ -1773,6 +1845,16 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
+      {savedResumes.error && <Text as="p" variant="small" role="alert" className="px-4 py-3">{savedResumes.error}</Text>}
+      {savedResumes.rows.length > 0 && <div className="space-y-2 px-4 py-3">
+        <Text as="p" variant="small" color="secondary" role="status">A saved Resume request is awaiting confirmation. Retry keeps its original request and cost acknowledgement.</Text>
+        {savedResumes.rows.map((attempt) => <Button key={attempt.requestId} size="small" disabled={resumeSending} onClick={() => void performResume(attempt, true)}>Retry saved Resume</Button>)}
+      </div>}
+      <AlertDialog open={costConsent !== null} onOpenChange={(open) => { if (!open) setCostConsent(null); }} title={`Resume ${current.name} with an unconfirmed charge?`} description={BOT_UNKNOWN_COST_CONFIRMATION} confirmLabel="Resume" onConfirm={() => {
+        const consent = costConsent; setCostConsent(null);
+        if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);
+      }} />
+      {peerExchange?.botId === current.id && <BotPeerExchangeDialog key={`${peerExchange.botId}:${peerExchange.exchangeId}`} botId={current.id} exchangeId={peerExchange.exchangeId} onClose={() => setPeerExchange(null)} />}
       {/* A new message dismisses the interrupted turn, so the card leaves with the send and comes back if it fails. */}
       {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn ? (
         <BotInterruptedCard

@@ -344,21 +344,29 @@ const OPENROUTER_CATALOG = {
   data: [{ id: "acme/painter-2", name: "Acme: Painter 2", architecture: { input_modalities: ["text"], output_modalities: ["image"] } }],
 };
 
-test("Fetch latest models is single-flight per provider: concurrent presses make one request", async (t) => {
+test("Fetch latest models is single-flight per provider: concurrent presses make one request", { timeout: 30_000 }, async (t) => {
   let answer: (() => void) | undefined;
+  let arrived = () => {};
+  const nextRequest = () => new Promise<void>((resolve) => (arrived = resolve));
   const { fetch, requests } = fakeFetch(
-    () => new Promise<Response>((resolve) => (answer = () => resolve(json(OPENROUTER_CATALOG)))),
+    () =>
+      new Promise<Response>((resolve) => {
+        answer = () => resolve(json(OPENROUTER_CATALOG));
+        arrived();
+      }),
   );
   const { runtime } = await setup(t, { fetch, catalogFetchCooldownMs: 0 });
+  const firstRequest = nextRequest();
   const presses = [runtime.fetchModels("openrouter"), runtime.fetchModels("openrouter"), runtime.fetchModels("openrouter")];
-  for (let turn = 0; turn < 100 && !answer; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  await firstRequest;
   answer!();
   const states = await Promise.all(presses);
   assert.equal(requests.length, 1);
   for (const state of states) assert.ok(state.models.some((model) => model.id === "acme/painter-2"));
   // Once it has settled, a new press (cooldown off) goes to the network again.
+  const secondRequest = nextRequest();
   const again = runtime.fetchModels("openrouter");
-  for (let turn = 0; turn < 100 && requests.length < 2; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  await secondRequest;
   answer!();
   await again;
   assert.equal(requests.length, 2);

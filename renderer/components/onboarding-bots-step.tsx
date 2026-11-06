@@ -19,7 +19,7 @@ export function OnboardingBotsStep({
     <div className="max-w-2xl">
       <BotStarterCarousel onOpenChat={(bot) => onStarted(bot)} />
       <Text as="p" variant="small" color="secondary" className="mt-4 text-pretty">
-        Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once.
+        Bots track accepted tasks in Open work, follow your rules, hand you the steps only you should do, and can ask you to approve a whole plan.
       </Text>
       <Text as="p" variant="small" color="secondary" className="mt-2 text-pretty">
         Bots can message each other when it helps; turn it off in Settings → Bots & Approvals.

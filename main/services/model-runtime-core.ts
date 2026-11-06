@@ -123,9 +123,30 @@ export function withPinnedBotProviderAuth(
   runtime: ResolvedModelRuntime,
   auth: AuthResult,
   providerStream: ProviderStreams["streamSimple"],
+  deferred?: Pick<ProviderStreams, "fetchDeferred" | "cancelDeferred">,
 ): ResolvedModelRuntime {
+  const pinnedOptions = <T extends { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> }>(model: Model<Api>, options?: T) => {
+    if (model.provider !== runtime.model.provider || model.id !== runtime.model.id) throw new Error("Pinned Bot provider auth cannot be reused for another model.");
+    return { model: auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model, options: { ...options, apiKey: auth.auth.apiKey, headers: { ...(options?.headers ?? {}), ...(auth.auth.headers ?? {}) }, env: { ...(options?.env ?? {}), ...(auth.env ?? {}) } } };
+  };
+  const models = new Proxy(runtime.models, {
+    get(target, property) {
+      if (property === "getAuth") return (async (model) => {
+        // Pi accepts either a provider id or a model. A provider lookup still
+        // refers to this one admitted runtime; it cannot open ambient auth.
+        if (typeof model === "string") {
+          if (model !== runtime.model.provider) throw new Error("Pinned Bot provider auth cannot be reused for another provider.");
+        } else if (model.provider !== runtime.model.provider || model.id !== runtime.model.id || !("contextWindow" in model)) throw new Error("Pinned Bot provider auth cannot be reused for another model.");
+        return { ...auth, auth: { ...auth.auth }, ...(auth.env ? { env: { ...auth.env } } : {}) };
+      }) as Models["getAuth"];
+      if (property === "fetchDeferred") return (async (model, handle, options) => { if (!deferred?.fetchDeferred) throw new Error("This pinned Bot provider does not support deferred responses."); const pinned = pinnedOptions(model, options); return deferred.fetchDeferred(pinned.model, handle, pinned.options).result(); }) as Models["fetchDeferred"];
+      if (property === "cancelDeferred") return (async (model, handle, options) => { if (!deferred?.cancelDeferred) throw new Error("This pinned Bot provider does not support deferred cancellation."); const pinned = pinnedOptions(model, options); await deferred.cancelDeferred(pinned.model, handle, pinned.options); }) as Models["cancelDeferred"];
+      const value = Reflect.get(target, property, target) as unknown; return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
   return {
     ...runtime,
+    models,
     streams: {
       streamSimple: (model, context, options) =>
         lazyStream(model, async () => {

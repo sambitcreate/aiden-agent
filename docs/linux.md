@@ -144,6 +144,10 @@ never fall back to files or plaintext. If the helper or keyring is unavailable,
 Bot operations fail closed while ordinary workspace chat remains available;
 unlock or configure the keyring and restart Aiden to restore Bot access.
 
+[Open work](bot-open-work.md) is available on the Linux desktop and its paired phones, with the same records, Undo and linked Stop controls as macOS. [Connected-app watches](bot-routines.md#connected-app-watches) and their tour tile are also available wherever Linux Bots are supported. Choose an existing Google Calendar account through Composio and an explicit calendar; desktop and paired phones can preview, save, edit, pause/resume, run or remove the watch. Connect Composio in the foreground first and grant this Bot Schedules and its Composio service allowance. Checks reuse that approved live connection and never sign in or reconnect in the background. iMCP Mail remains Mac-only, and the standalone CLI does not advertise watch management.
+
+[Routine models](bot-routine-models.md), thinking and explicitly chosen fallback are also available wherever Linux Bots are enabled. The owning host binds each accepted run’s selection across queues and recovery; phones manage choices through the negotiated `bot:routine-models` surface. Unconfirmed provider cost requires the same explicit Resume confirmation as on macOS.
+
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with

@@ -1,3 +1,4 @@
+import { BotRoutineModelButton } from "./bot-routine-models";
 // Profile → When something happens (spec §6 P1): routines that run on a file
 // change in the Bot's folder, when the routine's own link is called on this
 // Mac's network, or when a page or script the person chose gives a different
@@ -66,6 +67,7 @@ function draftOf(routine: BotEventRoutineView): Draft {
   if (routine.trigger.kind === "file_change") return { ...draft, folder: routine.trigger.folder };
   if (routine.trigger.kind !== "watch") return draft;
   const { source, everyMinutes } = routine.trigger;
+  if (source.type === "connector") return draft;
   return source.type === "url"
     ? { ...draft, watchType: "url", url: source.url, everyMinutes }
     : { ...draft, watchType: "script", script: source.script, everyMinutes };
@@ -193,7 +195,7 @@ export function BotEventRoutines({
               </>
             }
           >
-            <span className="flex items-center gap-2 justify-self-end">
+            <span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 justify-self-end">
               <Switch
                 aria-label={`${routine.name} on`}
                 checked={routine.enabled}
@@ -220,6 +222,7 @@ export function BotEventRoutines({
                   <Pencil />
                 </Button>
               ) : null}
+              <BotRoutineModelButton botId={bot.id} routineId={routine.id} routineName={routine.name} />
               <Button
                 iconOnly
                 size="small"

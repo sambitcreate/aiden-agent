@@ -1,6 +1,7 @@
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
+import { botExecutionScope } from "./bot-execution.js";
 // The `aiden-bot` Pi Durable extension: everything a Bot turn needs from
 // Aiden, installed in a Bot harness's registry before anything can run.
 //
@@ -334,6 +335,8 @@ export interface BotExtensionDeps {
   memorySection?(botId: string, offer: { memoryOffered: boolean }): Promise<string>;
   /** The Bot gave a final answer. Called without waiting; must not throw. */
   afterReply?(botId: string): void;
+  /** Awaited host peer outcome observation; never creates a new model request. */
+  peerReply?(botId: string, message: AssistantMessage, taskId: string): Promise<void>;
   /**
    * A compaction is about to summarize. Return a summary to use instead of Pi
    * Durable's own, or `undefined` to let it summarize. Errors fall back too.
@@ -426,6 +429,8 @@ export interface BotRegistry extends Registry {
    * aborts the generation task instead.
    */
   attachHarness(harness: Harness): void;
+  /** Independent prompt/tool closures for one task phase; shares only its sandbox. */
+  fork(): BotRegistry;
 }
 
 function approvalHash(value: unknown): string {
@@ -587,6 +592,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     api: Pick<DocumentReader, "snapshot"> & { readonly conversationId: ConversationId },
     context: Context,
   ): Promise<(string | undefined)[]> {
+    const execution = botExecutionScope(botId); if (execution) return execution.requestIds;
     return (await runOwner(api, context)).inputs.map(input => input.requestId);
   }
 
@@ -987,10 +993,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           // Spending that cannot be attributed must never fail the reply.
         }
       },
-      onYield: () => {
+      onYield: async (message, api) => {
+        await deps.peerReply?.(botId, message, String(api.taskId));
         // The review decides later whether to run; the answer never waits on it.
         try {
-          deps.afterReply?.(botId);
+          if (!botExecutionScope(botId)?.claim.peer) deps.afterReply?.(botId);
         } catch {
           // A review that cannot be scheduled must never affect the reply.
         }
@@ -1160,6 +1167,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     },
     attachHarness(next: Harness) {
       harness = next;
+    },
+    fork() {
+      const child = createBotRegistry(botId, { ...deps, codemodeSandbox: () => sandbox ??= deps.codemodeSandbox?.() ?? new CodemodeSandbox({ memoryLimitBytes: BOT_SCRIPT_MEMORY_BYTES }) });
+      if (harness) child.attachHarness(harness);
+      return child;
     },
   });
 }

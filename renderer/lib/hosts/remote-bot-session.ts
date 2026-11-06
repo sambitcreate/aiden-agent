@@ -57,6 +57,12 @@ function withTime<T extends object>(entry: T, createdAt: string | undefined): T 
 /** One host entry as a transcript entry, or null for one this Mac does not draw. */
 export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): BotTranscriptEntry | null {
   switch (entry.type) {
+    case "peer":
+      return withTime({
+        id: entry.id, type: "peer" as const, exchangeId: entry.exchangeId,
+        direction: entry.direction, peerBotId: entry.peerBotId, peerName: entry.peerName,
+        messageKind: entry.messageKind, ...(entry.final ? { final: true as const } : {}),
+      }, entry.createdAt);
     case "message":
       if (entry.role === "assistant")
         return withTime(

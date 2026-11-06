@@ -198,11 +198,18 @@ test("Linux GUI smokes force teardown without masking startup failures", async (
 
 test("desktop E2E and unit work are sharded with independent Apple and iOS checks", async () => {
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
-  assert.deepEqual(jobs.e2e.strategy.matrix.shard, [1, 2, 3]);
+  assert.deepEqual(jobs.e2e.strategy.matrix.shard, [1, 2, 3, 4]);
+  assert.equal(jobs.e2e["timeout-minutes"], 20);
   assert.equal(jobs.e2e.strategy["fail-fast"], false);
   assert.equal(jobs.unit.strategy["fail-fast"], false);
   assert.deepEqual(jobs.unit.strategy.matrix.lane, readRegistry().lanes.map((lane) => lane.name));
-  const browserInstall = jobs.unit.steps.find((step) => step.run === "npx playwright install chromium");
+  // Pull requests keep one lane on the scarce macOS runners; main runs them all there.
+  assert.deepEqual(
+    jobs.unit.strategy.matrix.include.filter((entry) => entry.runner.startsWith("macos-")).map((entry) => entry.lane),
+    ["macos"],
+  );
+  assert.equal(jobs.unit["runs-on"], "${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}");
+  const browserInstall = jobs.unit.steps.find((step) => step.run === "npx playwright install --with-deps chromium");
   assert.equal(browserInstall.if, "${{ matrix.chromium == true }}");
   const registry = readRegistry();
   const browserModes = new Set(registry.preserved.filter((entry) => ["browser", "chromium"].includes(entry.kind)).map((entry) => entry.id));
@@ -216,7 +223,7 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     });
     assert.equal(result.status, 0, `${lane}: ${result.stderr}`);
   }
-  assert.ok(jobs.e2e.steps.some((step) => step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3"));
+  assert.ok(jobs.e2e.steps.some((step) => step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/4"));
   const receipt = jobs.e2e.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
