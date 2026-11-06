@@ -101,8 +101,8 @@ export interface TerminalServiceOptions {
   killGraceMs?: number;
   /** Foreground polling interval. Test seam. */
   foregroundPollMs?: number;
-  /** The process group holding the shell's terminal, or null when unknown. */
-  readForegroundGroup?: (shellPid: number) => Promise<number | null>;
+  /** Who holds the shell's terminal and whether the shell is on a CPU, or null when unknown. */
+  readForegroundState?: (shellPid: number) => Promise<ForegroundState | null>;
 }
 
 /**
@@ -130,17 +130,28 @@ export function foregroundCommandName(processTitle: unknown, shell: string): str
   return name.slice(0, MAX_COMMAND_NAME_CHARS);
 }
 
-/** Sandboxed kernels such as gVisor report 0, which reads as unknown. */
-function readForegroundGroup(shellPid: number): Promise<number | null> {
+export interface ForegroundState {
+  /** The process group holding the shell's terminal. */
+  group: number;
+  /** The shell itself is on a CPU, so it is not waiting at its prompt. */
+  running: boolean;
+}
+
+/** Reads `ps -o tpgid= -o stat=`. Sandboxed kernels such as gVisor report group 0, which reads as unknown. */
+export function parseForegroundState(output: string): ForegroundState | null {
+  const [group, state] = output.trim().split(/\s+/u);
+  const parsed = Number.parseInt(group ?? "", 10);
+  return parsed > 0 ? { group: parsed, running: state?.startsWith("R") ?? false } : null;
+}
+
+function readForegroundState(shellPid: number): Promise<ForegroundState | null> {
   return new Promise((resolve) => {
     execFile(
       "ps",
-      ["-o", "tpgid=", "-p", String(shellPid)],
+      // Separate -o flags: a comma list with `=` headers is not portable to BSD ps.
+      ["-o", "tpgid=", "-o", "stat=", "-p", String(shellPid)],
       { timeout: FOREGROUND_GROUP_TIMEOUT_MS },
-      (error, stdout) => {
-        const group = error ? 0 : Number.parseInt(stdout.trim(), 10);
-        resolve(group > 0 ? group : null);
-      },
+      (error, stdout) => resolve(error ? null : parseForegroundState(stdout)),
     );
   });
 }
@@ -516,10 +527,12 @@ export class TerminalService {
     const command = this.readForegroundCommand(session);
     if (command !== null) return command;
     // A script run by the shell's own interpreter (`./deploy.sh` under bash)
-    // reads as the shell by name. Its process group is what tells them apart.
+    // reads as the shell by name, so its process group tells them apart. A loop
+    // of builtins runs in the shell's own group; only its CPU state shows it.
     const shellPid = session.pty.pid;
-    const group = await (this.options.readForegroundGroup ?? readForegroundGroup)(shellPid);
-    return group === null || group === shellPid ? null : commandBaseName(session.resolvedShell);
+    const state = await (this.options.readForegroundState ?? readForegroundState)(shellPid);
+    if (state === null) return null;
+    return state.group !== shellPid || state.running ? commandBaseName(session.resolvedShell) : null;
   }
 
   closeForWebContents(webContentsId: number): void {

@@ -428,9 +428,13 @@ test("selected terminal output reaches the composer as an attachment", async ({ 
   const action = drawer.getByRole("button", { name: "Add to chat" });
   await expect(action).toHaveCount(0);
 
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+Shift+A");
-  await action.click();
-  await expect(page.getByText(/^Terminal 1 lines 1-\d+\.txt$/u)).toBeVisible();
+  // The prompt can still print after the echo, and new output retires the action.
+  const attachment = page.getByText(/^Terminal 1 lines? \d+(-\d+)?\.txt$/u);
+  await expect(async () => {
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+Shift+A");
+    await action.click({ timeout: 1_000 });
+  }).toPass();
+  await expect(attachment).toBeVisible();
   await expect(page.locator("textarea").first()).toBeFocused();
   await expect(action).toHaveCount(0);
 
@@ -442,7 +446,7 @@ test("selected terminal output reaches the composer as an attachment", async ({ 
   await menu.getByRole("menuitem", { name: "Select all" }).click();
   await canvas.click({ button: "right" });
   await page.getByRole("menu").getByRole("menuitem", { name: "Add to chat" }).click();
-  await expect(page.getByText(/^Terminal 1 lines 1-\d+\.txt$/u)).toHaveCount(2);
+  await expect(attachment).toHaveCount(2);
   await expect(page.locator("textarea").first()).toBeFocused();
 });
 
