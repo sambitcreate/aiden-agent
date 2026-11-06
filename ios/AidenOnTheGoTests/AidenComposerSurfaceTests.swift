@@ -526,8 +526,6 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertEqual(probe.scrolledFromTop, 0, accuracy: 1)
     }
 
-    /// Nothing has moved since the chat first laid out, so nothing has changed
-    /// to report: the first measurement has to count.
     /// The gate reads fit from the scroll geometry: held while the chat fits
     /// between the insets, released the moment a taller dock makes it overflow.
     func testAFollowWaitsUntilTheChatNoLongerFits() throws {
@@ -558,6 +556,8 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertEqual(probe.scrolledFromTop, 0, accuracy: 1, "The short chat dropped away from the top")
     }
 
+    /// Nothing has moved since the chat first laid out, so nothing has changed
+    /// to report: the first measurement has to count.
     func testALongChatReachesItsEndOnItsFirstFollow() throws {
         let probe = AidenFollowProbe()
         let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 1_500, startsAtTop: true, usesSizeAnchor: false))

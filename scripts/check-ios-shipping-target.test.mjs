@@ -533,6 +533,35 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
 });
 
 
+test("both conversation screens draw their rows through the one transcript row stack", async () => {
+  // On iOS 26.5 with the keyboard up, the end-of-transcript row as the last child of the
+  // lazy stack blanks the transcript. No hosted test can show it, so the source is held.
+  const [scaffold, chatScreen, botScreen] = await Promise.all([
+    readFile(`${iosRoot}AidenOnTheGo/Features/Conversation/AidenTranscriptScaffold.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenChatDetailView.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Bots/AidenBotSessionChatView.swift`, "utf8"),
+  ]);
+  const count = (source, pattern) => [...source.matchAll(pattern)].length;
+
+  // The lazy stack closes after the rows, and the bottom anchor row follows it inside a VStack.
+  assert.match(
+    scaffold,
+    /VStack\(alignment: \.leading, spacing: spacing\) \{\s*LazyVStack\(alignment: \.leading, spacing: spacing\) \{ rows \}\s*Color\.clear\.frame\(height: 1\)\.id\(bottomAnchorID\)\s*\}/u,
+  );
+  assert.equal(count(scaffold, /LazyVStack\(/gu), 1);
+  assert.equal(count(scaffold, /\.id\(bottomAnchorID\)/gu), 1);
+
+  for (const [name, source] of [["chat", chatScreen], ["Bot", botScreen]]) {
+    assert.equal(count(source, /AidenTranscriptRowStack\(/gu), 1, `${name} screen draws its rows through the stack`);
+    assert.equal(count(source, /LazyVStack\(/gu), 0, `${name} screen has its own lazy stack`);
+    assert.doesNotMatch(
+      source,
+      /\.id\(\s*(?:AidenChatScrollPolicy\.transcriptBottomAnchorID|"bottom"|"chat-bottom")\s*\)/u,
+      `${name} screen puts its own id on the bottom anchor`,
+    );
+  }
+});
+
 test("iOS bundles every reviewed Aiden provider logo", async () => {
   const desktopLogos = (await readdir(desktopProviderLogoDirectory))
     .filter((path) => path.endsWith(".svg"))

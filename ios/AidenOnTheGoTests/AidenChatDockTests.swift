@@ -658,8 +658,8 @@ final class AidenChatDockTests: XCTestCase {
         XCTAssertNotNil(model.presentedError)
     }
 
-    /// The cache refuses a receipt only once the chat is removed, so a refusal
-    /// reaches neither the chat's revision nor the list.
+    /// A rename that is still in flight when its chat is removed: the cache
+    /// refuses the receipt, so neither the chat's revision nor the list hears of it.
     func testARenameOfAChatRemovedMeanwhileReachesNoList() async throws {
         try makeCoordinator(.one)
         await coordinator.start()
@@ -794,7 +794,7 @@ final class AidenChatDockTests: XCTestCase {
         await coordinator.hosts.connection(for: instanceId)?.connect(over: .probe)
     }
 
-    /// The same server, advertising spending limits.
+    /// The same server, advertising background jobs (`chat-jobs`).
     private static func withChatJobs(_ server: AidenServer) throws -> AidenServer {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

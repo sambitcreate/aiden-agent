@@ -241,7 +241,7 @@ struct AidenChatDetailView: View {
         .sheet(isPresented: $showsBackgroundJobs) {
             AidenBackgroundJobsSheet(
                 model: backgroundJobs,
-                canStop: allowsMutations && coordinator?.server?.capabilities.contains(.chatWrite) == true,
+                canStop: allowsMutations && model.ownerServer?.capabilities.contains(.chatWrite) == true,
                 onStop: { jobId in Task { await backgroundJobs.stop(jobId, transport: backgroundJobsTransport) } }
             )
         }
