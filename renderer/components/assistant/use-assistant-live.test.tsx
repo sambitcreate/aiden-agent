@@ -1623,6 +1623,24 @@ test("speech that arrives in pieces is heard as one utterance, so a phrase insid
   await stop();
 });
 
+test("an utterance keeps the start mark of its first caption, so speech begun before a fence stays before it", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  fixture.emit(hearUser("Al", { final: false }));
+  // An approval arms here, while the user is already mid-word.
+  const fence = liveSessionBus.voiceInputFence();
+  fixture.emit(hearUser("Allow"));
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  fixture.emit(hearUser("Allow"));
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "begun before the fence, finished after it");
+  assert.ok(inputs[1]!.startedAt > fence, "begun after the fence");
+  await stop();
+});
+
 test("a phrase split across pieces is heard whole and still matches", async () => {
   const { fixture, heard, stop } = await listenToVoiceInput();
   fixture.emit(hearUser("Allow"));

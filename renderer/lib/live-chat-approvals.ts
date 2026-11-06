@@ -5,14 +5,16 @@
 // session is on and the setting allows it, `LiveChatVoiceApprovals` takes the
 // first approval of the chat on screen, asks Live to read it out, publishes it
 // for the floating ribbon, and answers it when the user's own finalized
-// speech, after the read-out was accepted, is exactly an allow or deny phrase.
+// speech is exactly an allow or deny phrase. Only an utterance that began
+// after the arm fence counts: the read-out must have reached Live, then the
+// arm delay must pass.
 // Voice allow is always "allow once". Live's own words and model tool calls
 // never reach this path.
 
 import type { ApprovalPrompt } from "./ipc";
 import { liveActivity, type LiveActivity } from "./live-activity";
 import { liveOpenChat, type LiveOpenChatSnapshot } from "./live-open-chat";
-import { liveSessionBus, type LiveVoiceInput } from "./live-session-bus";
+import { liveSessionBus, type LiveNoteOptions, type LiveVoiceInput } from "./live-session-bus";
 import { matchLiveVoicePhrase } from "../shared/live-voice-phrases";
 import { aidenLivePreferences, type AidenLiveSettingsFields } from "../shared/aiden-live-settings";
 
@@ -301,8 +303,8 @@ export interface LiveChatVoiceApprovalsDependencies {
     currentSessionId(): string | null;
     onSession(listener: (sessionId: string | null) => void): () => void;
     onVoiceInput(listener: (input: LiveVoiceInput) => void): () => void;
-    latestVoiceInputId(): number;
-    note(text: string): Promise<boolean>;
+    voiceInputFence(): number;
+    note(text: string, options?: LiveNoteOptions): Promise<boolean>;
   };
   openChat: { get(): LiveOpenChatSnapshot | null; subscribe(listener: Listener): () => void };
   approvals: Pick<LiveChatApprovalsStore, "get" | "subscribe">;
@@ -314,9 +316,9 @@ export interface LiveChatVoiceApprovalsDependencies {
 export type LiveApprovalVoiceHint = "voice" | "tap";
 
 /**
- * Speech counts only this long after Live accepted the read-out, so a
- * repeated "allow" meant for the previous approval cannot answer the next one
- * before Live has said it. Live spaces its notes 2 s apart.
+ * Speech counts only if it begins this long after main handed the read-out
+ * to Live, so a repeated "allow" meant for the previous approval cannot
+ * answer the next one before Live has started saying it.
  */
 export const LIVE_APPROVAL_ARM_DELAY_MS = 2_500;
 /** How often, and how many times, a refused read-out is retried. */
@@ -330,12 +332,12 @@ interface CurrentApproval {
   chatTitle: string;
   /** The rules let speech answer it. */
   eligible: boolean;
-  readOut: "pending" | "sending" | "accepted";
+  readOut: "pending" | "sending" | "delivered";
   attempts: number;
-  /** Speech answers only once armed: after the read-out was accepted and the arm delay passed. */
+  /** Speech answers only once armed: after the read-out reached Live and the arm delay passed. */
   armed: boolean;
-  /** Only speech with a larger id than this, captured when armed, counts. */
-  baseline: number;
+  /** Only speech that began after this bus start mark, taken when armed, counts. */
+  fence: number;
   answering: boolean;
   /** The pane accepted an answer; nothing more is sent until it republishes. */
   answered: boolean;
@@ -445,7 +447,7 @@ export class LiveChatVoiceApprovals {
       readOut: "pending",
       attempts: 0,
       armed: false,
-      baseline: Number.POSITIVE_INFINITY,
+      fence: Number.POSITIVE_INFINITY,
       answering: false,
       answered: false,
       timer: null,
@@ -458,17 +460,20 @@ export class LiveChatVoiceApprovals {
     target.readOut = "sending";
     target.attempts += 1;
     const text = liveApprovalReadOut(target.chatTitle, target.prompt, target.eligible);
-    void this.deps.bus.note(text).then(
-      (accepted) => this.readOutSettled(target, accepted),
+    // Resolves once main has handed the note to Live, not when it is queued
+    // behind earlier notes or held while the session resumes.
+    void this.deps.bus.note(text, { awaitDelivery: true }).then(
+      (delivered) => this.readOutSettled(target, delivered),
       () => this.readOutSettled(target, false),
     );
   }
 
-  private readOutSettled(target: CurrentApproval, accepted: boolean): void {
+  private readOutSettled(target: CurrentApproval, delivered: boolean): void {
     if (this.current !== target) return;
-    if (!accepted) {
-      // Refused (the session is reconnecting or the note queue is full): stay
-      // tap-only and try again later, or when the session changes.
+    if (!delivered) {
+      // Refused, dropped or cleared before it reached Live (no session, a full
+      // queue, a failed send, a closed session): stay tap-only and try again
+      // later, or when the session changes. Each try must itself be delivered.
       target.readOut = "pending";
       if (target.attempts < LIVE_APPROVAL_READ_OUT_ATTEMPTS) {
         target.timer = this.schedule(() => {
@@ -478,13 +483,13 @@ export class LiveChatVoiceApprovals {
       }
       return;
     }
-    target.readOut = "accepted";
+    target.readOut = "delivered";
     if (!target.eligible) return;
     target.timer = this.schedule(() => {
       target.timer = null;
       if (this.current !== target) return;
       target.armed = true;
-      target.baseline = this.deps.bus.latestVoiceInputId();
+      target.fence = this.deps.bus.voiceInputFence();
       this.publish(target);
     }, LIVE_APPROVAL_ARM_DELAY_MS);
   }
@@ -533,7 +538,7 @@ export class LiveChatVoiceApprovals {
 
   private hear(input: LiveVoiceInput): void {
     const current = this.current;
-    if (!current || !current.armed || current.answering || current.answered || input.id <= current.baseline) return;
+    if (!current || !current.armed || current.answering || current.answered || input.startedAt <= current.fence) return;
     const phrase = matchLiveVoicePhrase(input.text);
     if (phrase?.kind !== "allow" && phrase?.kind !== "deny") return;
     void this.answer(current, phrase.kind);

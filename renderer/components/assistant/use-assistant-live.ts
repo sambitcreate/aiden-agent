@@ -429,7 +429,7 @@ interface AssistantLiveApi {
   releaseDisplay?(bindingId: string): Promise<boolean>;
   sendFrame?(sessionId: string, frame: Uint8Array): Promise<boolean>;
   toolResult?(sessionId: string, requestId: string, response: Record<string, unknown>): Promise<boolean>;
-  note?(sessionId: string, text: string): Promise<boolean>;
+  note?(sessionId: string, text: string, options?: { awaitDelivery?: boolean }): Promise<boolean>;
   onEvent(handler: (event: AssistantLiveRendererEvent) => void): () => void;
 }
 
@@ -643,7 +643,11 @@ export function useAssistantLiveWithDependencies(
   // began. Speech that talks over a reply is followed by that reply's
   // leftovers (a late caption, a last chunk, its turn end), so such an
   // utterance ends only on Google's finished mark or the quiet timer.
-  const pendingUtterance = React.useRef<{ receiptId: number; text: string; overReply: boolean } | null>(null);
+  const pendingUtterance = React.useRef<
+    { receiptId: number; startedAt: number; text: string; overReply: boolean } | null
+  >(null);
+  /** Bus start mark of the utterance under way, taken on its first input caption, interim or final. */
+  const utteranceStartedAt = React.useRef<number | null>(null);
   /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
   const liveReplyOpen = React.useRef(false);
   const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -788,6 +792,7 @@ export function useAssistantLiveWithDependencies(
 
   const discardUtterance = React.useCallback(() => {
     pendingUtterance.current = null;
+    utteranceStartedAt.current = null;
     if (utteranceQuietTimer.current !== null) clearTimeout(utteranceQuietTimer.current);
     utteranceQuietTimer.current = null;
   }, []);
@@ -796,7 +801,7 @@ export function useAssistantLiveWithDependencies(
     const pending = pendingUtterance.current;
     discardUtterance();
     if (!pending || !mounted.current) return;
-    liveSessionBus.publishVoiceInput(pending.text);
+    liveSessionBus.publishVoiceInput(pending.text, pending.startedAt);
     const receipt = { id: pending.receiptId, text: pending.text };
     setVoiceApprovalReceipts((current) => {
       const next = [...current, receipt];
@@ -823,6 +828,7 @@ export function useAssistantLiveWithDependencies(
       if (!text) return;
       pendingUtterance.current = {
         receiptId: pending?.receiptId ?? ++voiceApprovalReceiptId.current,
+        startedAt: pending?.startedAt ?? utteranceStartedAt.current ?? liveSessionBus.beginVoiceInput(),
         text,
         overReply: pending ? pending.overReply : liveReplyOpen.current,
       };
@@ -895,6 +901,11 @@ export function useAssistantLiveWithDependencies(
         // The receipt id is assigned synchronously at IPC delivery time. React may defer
         // the caption render, but an immediately following approval notification must
         // still fence every utterance that began before the prompt.
+        // The bus start mark likewise: speech begun before an approval armed
+        // stays before its fence however late the utterance finishes.
+        if (event.direction === "input" && utteranceStartedAt.current === null) {
+          utteranceStartedAt.current = liveSessionBus.beginVoiceInput();
+        }
         if (event.direction === "input" && event.final) {
           continueUtterance(event.text);
           if (event.finished) endUtterance();

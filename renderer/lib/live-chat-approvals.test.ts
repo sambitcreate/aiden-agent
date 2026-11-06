@@ -48,10 +48,14 @@ function harness(options: { session?: boolean; enabled?: boolean } = {}) {
   const bus = new LiveSessionBus();
   const notes: string[] = [];
   let noteAnswer: (text: string) => Promise<boolean> = async () => true;
+  // Like main: once holding, a note that asks to await delivery settles only
+  // when it is sent (or lost); any other note answers at once, as "queued".
+  let held: Array<(delivered: boolean) => void> | null = null;
   const transport = {
     toolResult: async () => true,
-    note: (_sessionId: string, text: string) => {
+    note: (_sessionId: string, text: string, options?: { awaitDelivery?: boolean }) => {
       notes.push(text);
+      if (held && options?.awaitDelivery) return new Promise<boolean>((resolve) => held!.push(resolve));
       return noteAnswer(text);
     },
   };
@@ -134,6 +138,14 @@ function harness(options: { session?: boolean; enabled?: boolean } = {}) {
     keepOnDecide: () => {
       removeOnDecide = false;
     },
+    /** Main holds notes: queued behind earlier ones, or the session is resuming. */
+    holdNotes: () => {
+      held = [];
+    },
+    /** Main sends (true) or loses (false) every held note. */
+    releaseNotes: (delivered: boolean) => {
+      for (const resolve of held?.splice(0) ?? []) resolve(delivered);
+    },
   };
 }
 
@@ -198,6 +210,66 @@ test("speech before the read-out, longer sentences, bare yes and Live's own word
   assert.deepEqual(live.decisions, []);
   assert.equal(live.pending().length, 1);
   assert.equal(shown(live)?.id, "a1");
+});
+
+test("a read-out main holds back (queued behind notes or while Live resumes) arms only after it is sent", async () => {
+  const live = harness();
+  live.holdNotes();
+  live.showChat("c1", "Fix login");
+  live.raise(runTests);
+  for (let step = 0; step < 3; step += 1) await live.readOut();
+  assert.equal(live.notes.length, 1);
+  assert.equal(live.controller.voiceHint("a1"), null, "queued is not delivered");
+  assert.equal(shown(live)?.voice, false);
+  live.say("allow");
+  await settle();
+  assert.deepEqual(live.harnessDecisions(), []);
+
+  live.releaseNotes(true);
+  await settle();
+  assert.equal(live.controller.voiceHint("a1"), null, "the arm delay starts once it is sent");
+  live.say("allow");
+  await live.readOut();
+  assert.deepEqual(live.harnessDecisions(), [], "said before arming");
+  assert.equal(live.controller.voiceHint("a1"), "voice");
+  live.say("allow");
+  await settle();
+  assert.deepEqual(live.decisions, [{ approvalId: "a1", decision: "allow", extra: 0 }]);
+});
+
+test("a read-out lost before it reaches Live leaves the approval tap-only until a retry is sent", async () => {
+  const live = harness();
+  live.holdNotes();
+  live.showChat("c1", "Fix login");
+  live.raise(runTests);
+  await settle();
+  live.releaseNotes(false);
+  await settle();
+  assert.equal(live.controller.voiceHint("a1"), null);
+  live.say("allow");
+  await live.readOut();
+  assert.equal(live.notes.length, 2, "the retry sends the read-out again");
+  assert.equal(live.controller.voiceHint("a1"), null, "and waits for that one to be sent");
+  assert.equal(shown(live)?.voice, false);
+  live.say("allow");
+  await settle();
+  assert.deepEqual(live.harnessDecisions(), []);
+});
+
+test("an “allow” the user began before voice armed answers nothing, even though it finishes after", async () => {
+  const live = harness();
+  live.showChat("c1", "Fix login");
+  live.raise(runTests);
+  await settle();
+  const begun = live.bus.beginVoiceInput();
+  await live.readOut();
+  assert.equal(live.controller.voiceHint("a1"), "voice");
+  live.bus.publishVoiceInput("allow", begun);
+  await settle();
+  assert.deepEqual(live.harnessDecisions(), [], "begun before the fence");
+  live.say("allow");
+  await settle();
+  assert.deepEqual(live.decisions, [{ approvalId: "a1", decision: "allow", extra: 0 }]);
 });
 
 test("a delayed read-out arms voice only after Live accepts it and the arm delay passes", async () => {

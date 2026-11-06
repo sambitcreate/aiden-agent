@@ -1214,6 +1214,84 @@ test("a note sent while Live resumes waits and goes out once the session reopens
   subject.service.stop(owner);
 });
 
+test("a delivery-awaited note settles when it is sent, not when it is queued behind earlier notes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const subject = serviceHarness();
+  const owner = new FakeOwner(55, "55:1:live-notes-delivery");
+  const session = await subject.service.start(owner, intent);
+  const server = subject.servers[0]!;
+  const notes = () =>
+    server.latest.received
+      .filter((message) => message.type === "realtime_input" && typeof message.value.text === "string")
+      .map((message) => (message.value as { text: string }).text.replace(/^\[[^\]]+\] /u, ""));
+  const settled: Array<[string, boolean]> = [];
+  const track = (label: string, delivery: Promise<boolean>) => void delivery.then((value) => settled.push([label, value]));
+
+  track("first", subject.service.deliverNote(owner, session.sessionId!, "Tests passed."));
+  await Promise.resolve();
+  assert.deepEqual(settled, [["first", true]], "a note with no wait settles as it goes out");
+
+  assert.equal(subject.service.sendNote(owner, session.sessionId!, "Chat finished."), true);
+  track("approval", subject.service.deliverNote(owner, session.sessionId!, "Run npm test?"));
+  await Promise.resolve();
+  assert.deepEqual(notes(), ["Tests passed."]);
+  assert.equal(settled.length, 1, "queued behind two notes, it is not delivered yet");
+  t.mock.timers.tick(2_000);
+  await Promise.resolve();
+  assert.deepEqual(notes(), ["Tests passed.", "Chat finished."]);
+  assert.equal(settled.length, 1, "the earlier note going out does not settle this one");
+  t.mock.timers.tick(2_000);
+  await Promise.resolve();
+  assert.deepEqual(notes(), ["Tests passed.", "Chat finished.", "Run npm test?"]);
+  assert.deepEqual(settled[settled.length - 1], ["approval", true]);
+
+  track("refused", subject.service.deliverNote(owner, "session-other", "Run npm test?"));
+  track("cleared", subject.service.deliverNote(owner, session.sessionId!, "Deploy?"));
+  await Promise.resolve();
+  assert.deepEqual(settled[settled.length - 1], ["refused", false]);
+  subject.service.stop(owner);
+  await Promise.resolve();
+  assert.deepEqual(settled[settled.length - 1], ["cleared", false], "a note cleared with the session is reported lost");
+  assert.ok(!notes().includes("Deploy?"));
+});
+
+test("a delivery-awaited note held while Live resumes settles once the session reopens and sends it", async () => {
+  const subject = serviceHarness();
+  const owner = new FakeOwner(56, "56:1:live-notes-delivery-resume");
+  const session = await subject.service.start(owner, intent);
+  const owned = subject.service.sessions.get(owner)!;
+  const reopen = () =>
+    (
+      subject.service as unknown as {
+        handleProtocolEvent(session: typeof owned, event: { type: "state"; state: "open" }): void;
+      }
+    ).handleProtocolEvent(owned, { type: "state", state: "open" });
+  let delivered: boolean | null = null;
+  owned.state = "resuming";
+  void subject.service.deliverNote(owner, session.sessionId!, "Run npm test?").then((value) => (delivered = value));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(delivered, null, "accepted into the queue is not delivered");
+  reopen();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(delivered, true);
+
+  let failed: boolean | null = null;
+  // Past the two-second spacing, so the reopened session sends at once.
+  owned.lastNoteAt = Number.NEGATIVE_INFINITY;
+  owned.state = "resuming";
+  void subject.service.deliverNote(owner, session.sessionId!, "Deploy?").then((value) => (failed = value));
+  const protocol = owned.protocol!;
+  const sendText = protocol.sendText.bind(protocol);
+  protocol.sendText = () => {
+    throw new Error("transport closed");
+  };
+  reopen();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(failed, false, "a send that throws is reported lost");
+  protocol.sendText = sendText;
+  subject.service.stop(owner);
+});
+
 test("Live reads the chosen voice at each start, so a change applies next time", async () => {
   let voice: string | null = "Kore";
   const subject = serviceHarness(undefined, { resolveVoice: () => voice });
