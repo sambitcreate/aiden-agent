@@ -179,6 +179,11 @@ final class AidenDemoResponder: @unchecked Sendable {
         path: String,
         url: URL
     ) -> Result<(HTTPURLResponse, Data), URLError> {
+        if AidenDemoLongChat.isRequested, method == "GET", instanceId == "studio",
+           path == "/chats/\(AidenDemoLongChat.chatId)/messages",
+           let page = AidenDemoLongChat.window(for: url) {
+            return .success((Self.response(url: url, status: 200), page))
+        }
         lock.lock()
         let outcome = [
             Route(instanceId: instanceId, method: method, path: path, query: url.query),
@@ -563,7 +568,7 @@ private enum AidenDemoContent {
         "bot-durable-session-v1", "bot-routines-v1", "bot-connection-requests-v1",
         "bot-presets-v1", "bot-memory-v1", "bot-proactive-v1", "speech-request-gzip-v1",
         "chat-triage-v1",
-    ]
+    ] + (AidenDemoLongChat.isRequested ? ["chat-messages-window-v1", "chat-messages-window-metadata-v1"] : [])
 
     private static let titles = [
         "Fix the flaky upload test", "Plan the Q3 roadmap", "Summarise the design review",
@@ -820,5 +825,100 @@ private enum AidenDemoContent {
         // Every value here is built above from literals, so serialization cannot fail.
         try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
+}
+
+/// A long chat on the studio machine, served a window at a time, for screens
+/// and UI tests that need Load earlier. Only with `-AidenDemoLongChat YES`, so
+/// no other launch sees it. Its newest replies carry fenced code.
+enum AidenDemoLongChat {
+    static let chatId = "chat_studio_8"
+
+    static var isRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoLongChat")
+    }
+
+    static func window(for url: URL) -> Data? {
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let limit = Int(query.first { $0.name == "limit" }?.value ?? "") ?? 50
+        let before = query.first { $0.name == "before" }?.value
+        let all = messages
+        let end = before.flatMap { cursor in all.firstIndex { ($0["id"] as? String) == cursor } } ?? all.count
+        let start = max(0, end - limit)
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let created = iso.string(from: Date().addingTimeInterval(-8 * 3600))
+        let updated = iso.string(from: Date().addingTimeInterval(-60))
+        let object: [String: Any] = [
+            "chatId": chatId, "revision": "rev_long", "messages": Array(all[start..<end]), "hasOlder": start > 0,
+            "workspaceId": "workspace_app", "title": "Rename the onboarding assets",
+            "createdAt": created, "updatedAt": updated,
+        ]
+        return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    static let messages: [[String: Any]] = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let base = Date().addingTimeInterval(-7 * 3600)
+        let paragraphs = [
+            "Short answer: yes.",
+            "I checked the onboarding assets and the naming is inconsistent between the light and dark sets, which is why the catalog shows two entries for each illustration.",
+            "Here is what I would do.\n\n- Rename every asset to the kebab-case form\n- Move the dark variants into the same catalog entry\n- Drop the three unused illustrations\n\nNone of this changes behaviour, so it is safe to land on its own.",
+            "The longer version: the asset catalog treats a name with a space as a different key from the same name with a hyphen. The loader normalises the key at runtime, so nothing broke, but the Xcode asset preview shows duplicates and the lint step complains. Renaming fixes both.",
+        ]
+        let codeReply = "Here is the rename as a small script.\n\n```swift\nlet assetName = name\n    .replacingOccurrences(of: \" \", with: \"-\")\n    .lowercased()\nprint(assetName)\n```\n\nAnd the command that checks the catalog, which is long enough that it needs to scroll sideways instead of wrapping:\n\n```sh\nxcrun actool --output-format human-readable-text --notices --warnings --platform iphonesimulator --minimum-deployment-target 26.0 Assets.xcassets\n```\n\nThat is all it takes."
+        let tools: [(String, String?)] = [
+            ("read_file", "AidenOnboardingArtwork.swift"), ("grep", "onboarding-art in ios"), ("read_file", "Assets.xcassets/Contents.json"),
+            ("list_dir", "Resources"), ("read_file", "AidenOnboardingVignettes.swift"), ("run_command", "git status"),
+            ("edit_file", "AidenOnboardingArtwork.swift"), ("run_command", "swift test"), ("glob", "**/*.imageset"),
+            ("read_file", "AidenPairingView.swift"), ("grep", "Image(\"onboarding"), ("web_search", nil),
+        ]
+        func step(_ n: Int, _ i: Int, offset: Int, failed: Bool = false) -> [String: Any] {
+            let (name, detail) = tools[i % tools.count]
+            var d: [String: Any] = [
+                "id": "tool-\(n)", "order": n - 1, "kind": "tool", "toolCallId": "call-\(n)", "toolName": name,
+                "label": name, "status": failed ? "failed" : "completed",
+                "startedAt": 1000 + n, "updatedAt": 1000 + n, "finishedAt": 1000 + n, "contentOffset": offset,
+            ]
+            if let detail { d["detail"] = detail }
+            return d
+        }
+        var out: [[String: Any]] = []
+        let turns = 70
+        for turn in 0..<turns {
+            let t = base.addingTimeInterval(Double(turn) * 240)
+            out.append([
+                "id": "m\(turn * 2 + 1)", "role": "user", "createdAt": iso.string(from: t),
+                "text": turn % 4 == 0 ? "Can you also check turn \(turn)? The names still look odd in the dark set and I would like a second opinion before I ship." : "Turn \(turn).",
+            ])
+            let p1 = paragraphs[turn % paragraphs.count]
+            let p2 = paragraphs[(turn + 2) % paragraphs.count]
+            let text = turn >= turns - 2 ? codeReply : (turn % 3 == 1 ? p1 : p1 + "\n\n" + p2)
+            var message: [String: Any] = [
+                "id": "m\(turn * 2 + 2)", "role": "assistant", "text": text,
+                "createdAt": iso.string(from: t.addingTimeInterval(60)),
+            ]
+            let isLast = turn == turns - 1
+            if turn % 3 == 0 || isLast {
+                let firstRun = isLast ? 14 : 3 + (turn % 9)
+                let secondRun = isLast ? 9 : 2 + (turn % 4)
+                var steps: [[String: Any]] = []
+                var n = 1
+                for i in 0..<firstRun { steps.append(step(n, i, offset: 0)); n += 1 }
+                let split = (p1 + "\n\n").utf16.count
+                if text.utf16.count > split, text != codeReply {
+                    for i in 0..<secondRun {
+                        steps.append(step(n, i + 4, offset: split, failed: isLast && i == secondRun - 2)); n += 1
+                    }
+                }
+                message["timeline"] = [
+                    "version": 3, "generationId": "gen-\(turn)", "status": "completed",
+                    "startedAt": 1000, "finishedAt": 2000, "steps": steps,
+                ] as [String: Any]
+            }
+            out.append(message)
+        }
+        return out
+    }()
 }
 #endif

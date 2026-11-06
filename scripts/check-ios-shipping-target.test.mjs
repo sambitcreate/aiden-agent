@@ -280,6 +280,8 @@ const testSources = [
   "AidenNewWorktreeTests.swift",
   "AidenStreamingPerformanceTests.swift",
   "AidenToolStepGroupingTests.swift",
+  "AidenChatMarkdownTests.swift",
+  "AidenTranscriptPlaceTests.swift",
   "AidenVisualViewerTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
 ];
