@@ -392,7 +392,10 @@ pub(crate) fn start(
     } else {
         -1
     };
-    let handshake_error = io::Error::last_os_error();
+    // errno only means something after a call that reported failure, so EOF,
+    // a timeout and a wrong ready byte carry no OS error.
+    let handshake_error =
+        (poll_result < 0 || (poll_result > 0 && read_result < 0)).then(io::Error::last_os_error);
     drop(ready_read);
     if poll_result <= 0 || read_result != 1 || ready != READY_BYTE {
         // Keep the lease writer open while killing the unarmed child so it
@@ -400,8 +403,12 @@ pub(crate) fn start(
         // SAFETY: pid is the unreaped child returned by fork.
         unsafe { libc::kill(pid, libc::SIGKILL) };
         let status = waitpid_blocking(pid);
+        let os_error = handshake_error
+            .map(|error| format!(", {error}"))
+            .unwrap_or_default();
         return Err(format!(
-            "containment guard did not arm: poll {poll_result}, read {read_result}, {}, last error: {handshake_error}",
+            "containment guard did not arm: poll {poll_result}, revents {:#x}, read {read_result}, {}{os_error}",
+            poll_descriptor.revents,
             describe_wait_status(status)
         ));
     }
@@ -501,6 +508,7 @@ while :; do /bin/sleep 30; done
         };
 
         assert!(error.contains("exit 70"), "{error}");
+        assert!(!error.contains("os error"), "{error}");
     }
 
     #[test]
