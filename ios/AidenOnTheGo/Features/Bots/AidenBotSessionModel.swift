@@ -1239,7 +1239,7 @@ final class AidenBotSessionModel {
     /// Revision 33: the Mac announces `bot-attachments-v1`, so the composer offers its +.
     var attachmentsSupported = false
     /// Photos and files staged on the Mac for the next message, in the order they were added.
-    private(set) var pendingAttachments: [AidenAttachmentReference] = []
+    var pendingAttachments: [AidenAttachmentReference] = []
     /// Attachments are being prepared or uploaded; the + and Send wait for them.
     private(set) var isAttaching = false
     /// Revision 50: the phone holds `attachments:raw`, so pictures go as their own bytes.
@@ -2611,6 +2611,12 @@ final class AidenBotSessionModel {
     /// reached the Mac stays ready to send.
     func cancelUploads() {
         attachTask?.cancel()
+    }
+
+    var isPreparingAttachments: Bool { isAttaching }
+
+    func cancelAttachmentPreparation() {
+        cancelUploads()
     }
 
     /// A late report from an earlier upload or batch never moves the bar back.

@@ -17,6 +17,24 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
+    /// The composer's height is the transcript's bottom inset, and it settles
+    /// after the first layout. A chat taller than the screen must still open on
+    /// its latest words, with nothing left to jump to.
+    func testALongChatOpensOnItsLatestWords() {
+        let app = AidenStateMatrix.launch(scenario: .busy, contentSize: .accessibilityExtraExtraExtraLarge)
+        XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10))
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+
+        Thread.sleep(forTimeInterval: 2)
+
+        let jump = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "latest")).firstMatch
+        XCTAssertFalse(jump.exists, "The chat opened short of its latest words")
+        app.terminate()
+    }
+
     /// Light, dark and the largest accessibility text, so later work has a
     /// "before" to compare with. A screen that cannot be reached fails the test
     /// instead of being skipped.

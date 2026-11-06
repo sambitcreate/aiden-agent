@@ -6045,6 +6045,92 @@ final class AidenChatTests: XCTestCase {
         }
     }
 
+    /// The question card's arrival, on the real chat composer: the composer goes
+    /// and the conversion it started finishes.
+    @MainActor
+    func testPreparationSurvivesTheChatComposerGivingWayToAQuestionCard() async throws {
+        let preparation = AidenHeldAttachmentPreparation()
+        defer { preparation.release() }
+        let started = expectation(description: "Preparation is running when the composer goes")
+        try await assertDraftRestoration(edit: "New message", expected: "New message", afterRestore: { _ in
+            preparation.release()
+        }) { model in
+            let swap = AidenChatComposerSwap()
+            let host = UIHostingController(rootView: AidenChatComposerSwapHost(
+                model: model,
+                session: AidenComposerSession(draftOwner: model, attachmentOwner: model),
+                swap: swap
+            ))
+            // The test host can reach its first test before its scene has connected.
+            try await self.waitUntil({ !UIApplication.shared.connectedScenes.isEmpty })
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await self.waitUntil({ swap.appearances == 1 })
+
+            let task = try XCTUnwrap(model.prepareAttachments(.success(["synthetic selection"])) { _ in
+                await preparation.wait { started.fulfill() }
+                return .text(name: "fixture.txt", mimeType: "text/plain", text: "fixture")
+            })
+            await self.fulfillment(of: [started], timeout: 5)
+
+            swap.showsComposer = false
+            try await self.waitUntil({ swap.disappearances == 1 })
+            try await Task.sleep(for: .milliseconds(200))
+
+            XCTAssertTrue(model.isPreparingAttachments, "The composer leaving must not cancel preparation")
+            return Task {
+                await task.value
+                XCTAssertFalse(model.isPreparingAttachments)
+                XCTAssertEqual(model.pendingAttachments.count, 1)
+            }
+        }
+    }
+
+    /// The model's draft stays the one saved: a restored draft shows through the
+    /// session, and typed and dictated words reach the store through the model.
+    @MainActor
+    func testTheComposerSessionReadsAndFeedsTheSavedDraft() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "session-draft-\(UUID().uuidString)")
+        let draftStore = AidenChatDraftStore(root: root.appending(path: "drafts"))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AidenChatProgressLifecycleURLProtocol.reset()
+        }
+        let storeSession = await draftStore.beginSession(
+            instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle"
+        )
+        let saved = try await draftStore.save("Previously saved draft", session: storeSession)
+        XCTAssertTrue(saved)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "chats")),
+            draftStore: draftStore
+        )
+        let voice = AidenComposerFakeVoice()
+        let session = AidenComposerSession(draftOwner: model, attachmentOwner: model, voice: voice)
+
+        await model.load(observeProgress: false)
+        XCTAssertEqual(session.text, "Previously saved draft")
+
+        session.text = "Typed"
+        XCTAssertEqual(model.draft, "Typed")
+        await session.toggleVoice()
+        voice.speak("Typed and spoken")
+        XCTAssertEqual(model.draft, "Typed and spoken")
+
+        await model.waitForDraftPersistence()
+        let readBack = await draftStore.beginSession(
+            instanceId: "instance-progress-lifecycle", chatId: "chat-progress-lifecycle"
+        )
+        let stored = await draftStore.load(session: readBack)
+        XCTAssertEqual(stored, "Typed and spoken")
+        model.setAllowsMutations(false)
+    }
+
     @MainActor
     private func assertDraftRestoration(
         edit: String?,
@@ -10737,6 +10823,42 @@ final class AidenChatTests: XCTestCase {
     }
 }
 
+
+@MainActor
+@Observable
+private final class AidenChatComposerSwap {
+    var showsComposer = true
+    var appearances = 0
+    var disappearances = 0
+}
+
+private struct AidenChatComposerSwapHost: View {
+    let model: AidenChatViewModel
+    let session: AidenComposerSession
+    let swap: AidenChatComposerSwap
+    @FocusState private var focus: Bool
+    @Namespace private var motion
+    @State private var picker = AidenAttachmentPickerState()
+
+    var body: some View {
+        if swap.showsComposer {
+            AidenComposerView(
+                model: model,
+                session: session,
+                autoStartVoice: false,
+                composerFocus: $focus,
+                attachmentPicker: picker,
+                motionNamespace: motion,
+                canToggleAttachments: true,
+                onToggleAttachmentPicker: {}
+            )
+            .onAppear { swap.appearances += 1 }
+            .onDisappear { swap.disappearances += 1 }
+        } else {
+            Text("Which one?")
+        }
+    }
+}
 
 @MainActor
 private final class AidenHeldAttachmentPreparation {

@@ -94,6 +94,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatsView.swift",
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
+  "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
+  "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
@@ -187,6 +189,8 @@ const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatCards.swift",
   "AidenOnTheGo/Features/Chat/AidenChronologicalTranscript.swift",
   "AidenOnTheGo/Features/Chat/AidenChatComposer.swift",
+  "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
+  "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Chat/AidenReadAloud.swift",
   "AidenOnTheGo/Features/Chat/AidenChatViewModel+ForeignRuns.swift",
 ];
@@ -242,6 +246,7 @@ const testSources = [
   "AidenBotSessionTests.swift",
   "AidenActivityMarkTests.swift",
   "AidenChatTests.swift",
+  "AidenComposerSurfaceTests.swift",
   "AidenInboxTests.swift",
   "AidenNativeIntegrationTests.swift",
   "AidenNetworkPathTests.swift",
@@ -857,7 +862,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(attachmentPicker, /private func dismiss\(\) \{\s*picker\.dismiss\(\)\s*\}/u);
   assert.match(
     chat,
-    /AidenAttachmentButtonCenterPreferenceKey[\s\S]*?frame\(in: \.named\(AidenChatAttachmentCoordinateSpace\.name\)\)[\s\S]*?CGPoint\(x: frame\.midX, y: frame\.midY\)/u,
+    /coordinateSpace: AidenChatAttachmentCoordinateSpace\.name[\s\S]*?frame\(in: \.named\(coordinateSpace\)\)[\s\S]*?AidenAttachmentButtonCenterPreferenceKey[\s\S]*?CGPoint\(x: frame\.midX, y: frame\.midY\)/u,
   );
   assert.match(chat, /AidenAttachmentPickerOverlay\([\s\S]*?\.allowsHitTesting\(attachmentPicker\.isPresented\)/u);
   assert.match(chat, /canToggleAttachments: canToggleAttachmentPicker/u);
@@ -928,14 +933,17 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
   assert.match(
     chat,
-    /ZStack\(alignment: \.bottom\)[\s\S]*?frame\(height: max\(96, composerHeight \+ 12\)\)[\s\S]*?AidenComposerView/u,
+    /safeAreaInset\(edge: \.bottom, spacing: 0\)[\s\S]*?composer[\s\S]*?AidenComposerView/u,
   );
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(
     chat,
     /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?TapGesture\(\)\.onEnded[\s\S]*?composerIsFocused = false/u,
   );
-  assert.match(chat, /composerFocus: \$composerIsFocused[\s\S]*?\.focused\(composerFocus\)/u);
+  assert.match(
+    chat,
+    /composerFocus: \$composerIsFocused[\s\S]*?focus: composerFocus[\s\S]*?\.focused\(focus \?\? \$ownFocus\)/u,
+  );
   assert.match(
     chat,
     /candidate\.thinkingLevels[\s\S]*?Menu \{[\s\S]*?ForEach\(levels[\s\S]*?thinkingLevel: level/u,

@@ -39,9 +39,12 @@ struct AidenChatDetailView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenChatViewModel
+    /// Lives here, not in the composer, so a question card taking the composer's
+    /// place leaves dictation and attachment preparation running.
+    @State private var composerSession: AidenComposerSession
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: false)
     @State private var chatLoadEpoch = 0
-    @State private var composerHeight: CGFloat = 132
+    @State private var composerHeight: CGFloat = 0
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
     @State private var isConfirmingBotDelete = false
@@ -76,18 +79,23 @@ struct AidenChatDetailView: View {
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in },
-        onOpenChat: (@MainActor (AidenChat) -> Void)? = nil
+        onOpenChat: (@MainActor (AidenChat) -> Void)? = nil,
+        composerSession: AidenComposerSession? = nil
     ) {
         _coordinator = State(initialValue: coordinator)
         self.onOpenChat = onOpenChat
-        _model = State(initialValue: AidenChatViewModel(
+        let model = AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
             owner: (try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? "")) ?? .noMachine,
             allowsMutations: allowsMutations,
             onChatUpdated: onChatUpdated,
             onChatActivityChanged: onChatActivityChanged
-        ))
+        )
+        _model = State(initialValue: model)
+        _composerSession = State(
+            initialValue: composerSession ?? AidenComposerSession(draftOwner: model, attachmentOwner: model)
+        )
         _botToolsModel = State(initialValue: chat.botId.map {
             AidenBotChatToolsModel(chatID: chat.id, botID: $0)
         })
@@ -98,7 +106,9 @@ struct AidenChatDetailView: View {
 #if DEBUG
     init(readOnlyFixture chat: AidenChat) {
         _coordinator = State(initialValue: nil)
-        _model = State(initialValue: AidenChatViewModel(readOnlyFixture: chat))
+        let model = AidenChatViewModel(readOnlyFixture: chat)
+        _model = State(initialValue: model)
+        _composerSession = State(initialValue: AidenComposerSession(draftOwner: model, attachmentOwner: model))
         _botToolsModel = State(initialValue: nil)
         autoStartVoice = false
         allowsMutations = false
@@ -136,10 +146,6 @@ struct AidenChatDetailView: View {
     var body: some View {
         chatStack
         .background(palette.canvas.ignoresSafeArea())
-        .onPreferenceChange(AidenComposerHeightPreferenceKey.self) { height in
-            guard height > 0 else { return }
-            composerHeight = height
-        }
         .onChange(of: effectiveAllowsMutations, initial: true) { _, allowed in
             model.setAllowsMutations(allowed)
         }
@@ -281,6 +287,9 @@ struct AidenChatDetailView: View {
             if phase != .active {
                 model.readAloud.stop()
             }
+            if AidenVoiceCaptureLifecyclePolicy.shouldDiscardRecording(for: phase) {
+                composerSession.stopVoice()
+            }
             switch sceneRefreshGate.transition(to: phase) {
             case .refresh:
                 chatLoadEpoch &+= 1
@@ -295,6 +304,9 @@ struct AidenChatDetailView: View {
                 break
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
+            composerSession.stopVoice()
+        }
         .onDisappear {
             model.setViewPresent(false)
             model.readAloud.stop()
@@ -302,13 +314,19 @@ struct AidenChatDetailView: View {
             model.setChatForegrounded(false)
             model.stopProgressObservation()
             attachmentPicker.reset()
+            composerSession.stopVoice()
+            composerSession.discardAttachments()
         }
     }
 
     private var chatStack: some View {
         ZStack(alignment: .bottom) {
             transcript
-            composer
+                // The composer floats on Liquid Glass and the transcript scrolls under it.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    composer
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+                }
             AidenAttachmentPickerOverlay(
                 picker: attachmentPicker,
                 motionNamespace: attachmentMotionNamespace,
@@ -368,6 +386,7 @@ struct AidenChatDetailView: View {
                 for: .sizeChanges
             )
             .scrollDismissesKeyboard(.interactively)
+            .aidenComposerSoftScrollEdge()
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
             )
@@ -383,7 +402,7 @@ struct AidenChatDetailView: View {
                     AidenChatJumpToLatestButton {
                         jumpToLatest(proxy)
                     }
-                    .padding(.bottom, composerHeight + 10)
+                    .padding(.bottom, 10)
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
             }
@@ -396,6 +415,11 @@ struct AidenChatDetailView: View {
                 jumpToLatest(proxy)
             }
             .onChange(of: model.chat.messages.count) { _, _ in
+                followLatest(proxy, animated: false)
+            }
+            // The composer's height is the transcript's bottom inset, which
+            // moving doesn't scroll anything: the latest words would slide under it.
+            .onChange(of: composerHeight) { _, _ in
                 followLatest(proxy, animated: false)
             }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
@@ -455,9 +479,6 @@ struct AidenChatDetailView: View {
             if model.showsLiveResponse {
                 AidenLiveResponseView(model: model, presentationStyle: presentationStyle)
             }
-            Color.clear
-                .frame(height: max(96, composerHeight + 12))
-                .accessibilityHidden(true)
             Color.clear.frame(height: 1).id(AidenChatScrollPolicy.transcriptBottomAnchorID)
         }
         .padding(.horizontal)
@@ -603,6 +624,7 @@ struct AidenChatDetailView: View {
                     .padding(.bottom, 6)
             }
             if let question = model.pendingQuestion {
+                AidenComposerListeningBar(session: composerSession)
                 AidenQuestionCard(
                     model: model,
                     prompt: question,
@@ -621,6 +643,7 @@ struct AidenChatDetailView: View {
             } else {
                 AidenComposerView(
                     model: model,
+                    session: composerSession,
                     autoStartVoice: autoStartVoice,
                     composerFocus: $composerIsFocused,
                     attachmentPicker: attachmentPicker,
@@ -634,14 +657,6 @@ struct AidenChatDetailView: View {
         .disabled(model.isReadOnlyPresentation)
         .padding(.horizontal, 16)
         .padding(.bottom, 10)
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: AidenComposerHeightPreferenceKey.self,
-                    value: proxy.size.height
-                )
-            }
-        }
     }
 
     private var attachmentCapacity: Int {
@@ -996,13 +1011,5 @@ private struct AidenChatJumpToLatestGlassModifier: ViewModifier {
         } else {
             content.glassEffect(.regular.interactive(), in: Circle())
         }
-    }
-}
-
-private struct AidenComposerHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 132
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }

@@ -14,7 +14,8 @@ struct AidenBotSessionChatView: View {
     @Environment(\.aidenPalette) private var palette
     @State private var model: AidenBotSessionModel?
     @State private var summary: AidenBotSummary?
-    @State private var draft = ""
+    /// Lives here, not in the composer: the composer leaves while the Bot needs a model.
+    @State private var composerSession = AidenComposerSession()
     @State private var isShowingProfile = false
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
@@ -43,7 +44,6 @@ struct AidenBotSessionChatView: View {
     @State private var footerHeight: CGFloat = 0
     @State private var spending = AidenSpendingNoticeModel()
     @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @FocusState private var composerFocused: Bool
     /// The workspace chat's + picker (Files, Camera, Photos), reused as is (revision 33).
@@ -113,7 +113,7 @@ struct AidenBotSessionChatView: View {
             }
         }
         .coordinateSpace(name: AidenBotComposerCoordinateSpace.name)
-        .onPreferenceChange(AidenBotAttachButtonCenterKey.self) { center in
+        .onPreferenceChange(AidenAttachmentButtonCenterPreferenceKey.self) { center in
             attachButtonCenter = center
         }
         .animation(
@@ -422,12 +422,15 @@ struct AidenBotSessionChatView: View {
                     for: .sizeChanges
                 )
                 .scrollDismissesKeyboard(.interactively)
-                .modifier(AidenBotSoftScrollEdge())
+                .aidenComposerSoftScrollEdge()
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.revealedPartial) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.queued.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.outgoing.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: ownSendScroll) { _, _ in followIfAtEnd(proxy, userInitiated: true) }
+                // The footer's height is the transcript's bottom inset, which
+                // moving doesn't scroll anything: the latest words would slide under it.
+                .onChange(of: footerHeight) { _, _ in followIfAtEnd(proxy) }
                 .onAppear { follow.setStreaming(model.isRunning) }
                 .onChange(of: reduceMotion, initial: true) { _, reduce in
                     model.pacesPartialReveal = !reduce
@@ -438,7 +441,7 @@ struct AidenBotSessionChatView: View {
                         AidenChatJumpToLatestButton {
                             followIfAtEnd(proxy, userInitiated: true)
                         }
-                        .padding(.bottom, footerHeight + 10)
+                        .padding(.bottom, 10)
                     }
                 }
             }
@@ -651,8 +654,8 @@ struct AidenBotSessionChatView: View {
                     Button {
                         if expired {
                             // The words go back in the composer; the files are picked again.
-                            if let text = model.reattach(message.id, into: draft) {
-                                draft = text
+                            if let text = model.reattach(message.id, into: composerSession.text) {
+                                composerSession.text = text
                                 composerFocused = true
                             }
                         } else {
@@ -836,15 +839,6 @@ struct AidenBotSessionChatView: View {
         .accessibilityElement(children: .contain)
     }
 
-    private var draftIsEmpty: Bool {
-        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// Words or attachments: either is a message.
-    private func hasMessage(_ model: AidenBotSessionModel) -> Bool {
-        !draftIsEmpty || !model.pendingAttachments.isEmpty
-    }
-
     /// The draft clears at once and the bubble shows (R14); a refused message
     /// comes back to the composer. While a step waits (revision 37), the text
     /// is its note instead and Send marks the step done, when the card's own
@@ -852,21 +846,25 @@ struct AidenBotSessionChatView: View {
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
         guard !model.composerHeldForPlan else { return }
         if model.composerAnswersHandoff {
-            let note = draft
+            let note = composerSession.text
             let connected = canWrite
-            draft = ""
+            composerSession.text = ""
             Task {
-                if !(await model.answerHandoffFromComposer(note, connected: connected)), draft.isEmpty { draft = note }
+                if !(await model.answerHandoffFromComposer(note, connected: connected)), composerSession.text.isEmpty {
+                    composerSession.text = note
+                }
             }
             return
         }
-        guard hasMessage(model), !model.isAttaching else { return }
-        let text = draft
-        draft = ""
+        guard composerSession.hasContent, !model.isAttaching else { return }
+        let text = composerSession.text
+        composerSession.text = ""
         // The person's own message scrolls into view wherever they were reading.
         ownSendScroll += 1
         Task {
-            if !(await model.send(text, whenBusy: mode)), draft.isEmpty { draft = text }
+            if !(await model.send(text, whenBusy: mode)), composerSession.text.isEmpty {
+                composerSession.text = text
+            }
         }
     }
 
@@ -875,7 +873,7 @@ struct AidenBotSessionChatView: View {
     /// empty draft too, so the mode can be picked before typing.
     private func busyPill(_ model: AidenBotSessionModel) -> some View {
         let available = canCompose && model.canSend && !model.composerHeldForPlan
-        let enabled = available && hasMessage(model) && !model.isAttaching
+        let enabled = available && composerSession.hasContent && !model.isAttaching
         return Menu {
             ForEach(AidenStreamInputMode.busyModes, id: \.self) { mode in
                 Button {
@@ -908,62 +906,46 @@ struct AidenBotSessionChatView: View {
         .accessibilityHint("Touch and hold to choose Steer or Queue")
     }
 
-    /// One Liquid Glass pill holds the +, the field and the send controls: a
-    /// capsule at rest that rounds into a card while typing or holding
-    /// attachments. At accessibility text sizes the controls sit under a
-    /// full-width field.
+    /// The shared surface: the +, the field and the send controls on one row.
     private func composer(_ model: AidenBotSessionModel) -> some View {
-        let actionSize = max(44, controlSize)
-        let isExpanded = composerFocused || !model.pendingAttachments.isEmpty || model.uploadProgress != nil || draft.contains("\n")
-        return AidenBotComposerGlassContainer {
-            VStack(alignment: .leading, spacing: 8) {
+        var config = AidenComposerConfig.bot()
+        config.placeholder = composerPlaceholder(model)
+        config.showsAttachments = model.attachmentsSupported
+        return AidenComposerSurface(
+            session: composerSession,
+            config: config,
+            controls: AidenComposerControls(
+                canSend: canSendFromComposer(model),
+                sendLabel: sendLabel(model),
+                canStop: canWrite && !model.isStopping && !model.inFlight.contains(.stop),
+                stopLabel: String(localized: "Stop"),
+                fieldIsDisabled: !canCompose || composerIsHeld(model)
+            ),
+            focus: $composerFocused,
+            onSend: { submit(model, whenBusy: nil) },
+            onStop: model.isRunning ? { Task { await model.stop() } } : nil,
+            accessory: {
                 if let progress = model.uploadProgress {
                     AidenUploadProgressRow(progress: progress, onCancel: model.cancelUploads)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-                if !model.pendingAttachments.isEmpty {
+                if !composerSession.attachments.isEmpty {
                     pendingAttachments(model)
                 }
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        composerField(model)
-                        HStack(spacing: 6) {
-                            if model.attachmentsSupported { attachButton(model) }
-                            Spacer(minLength: 0)
-                            composerControls(model)
-                        }
+            },
+            attachButton: { attachButton(model) },
+            busyControl: {
+                if model.composerAnswersHandoff || composerIsHeld(model) {
+                    // A waiting step's note goes with a plain Send, never Steer or Queue,
+                    // and a held composer offers neither.
+                    AidenComposerSendButton(label: sendLabel(model), isEnabled: canSendFromComposer(model)) {
+                        submit(model, whenBusy: nil)
                     }
-                } else {
-                    HStack(alignment: .bottom, spacing: 6) {
-                        if model.attachmentsSupported { attachButton(model) }
-                        composerField(model)
-                        composerControls(model)
-                    }
+                } else if model.offersBusyModes {
+                    busyPill(model)
                 }
             }
-            .padding(AidenBotComposerMetrics.inset)
-            .padding(.leading, model.attachmentsSupported ? 0 : 9)
-            // The pill is a stable surface around its own controls: plain, not
-            // interactive, glass, so streamed updates don't recompute it.
-            .aidenChromeGlass(in: RoundedRectangle(
-                cornerRadius: isExpanded
-                    ? AidenBotComposerMetrics.expandedCornerRadius
-                    : (actionSize + AidenBotComposerMetrics.inset * 2) / 2,
-                style: .continuous
-            ))
-            .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
-            .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: isExpanded)
-        }
-    }
-
-    private func composerField(_ model: AidenBotSessionModel) -> some View {
-        TextField(composerPlaceholder(model), text: $draft, axis: .vertical)
-            .lineLimit(1...6)
-            .focused($composerFocused)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 11)
-            .frame(minHeight: max(44, controlSize))
-            .disabled(!canCompose || composerIsHeld(model))
+        )
     }
 
     /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
@@ -988,47 +970,23 @@ struct AidenBotSessionChatView: View {
 
     /// The workspace chat's +: Files, Camera and Photos.
     private func attachButton(_ model: AidenBotSessionModel) -> some View {
-        Button {
+        AidenComposerAttachButton(
+            isOpen: attachmentPicker.isPresented,
+            isBusy: model.isAttaching,
+            showsSpinner: model.uploadProgress == nil,
+            hint: String(localized: "Attach a photo or a text file"),
+            coordinateSpace: AidenBotComposerCoordinateSpace.name
+        ) {
             toggleAttachmentPicker(model)
-        } label: {
-            Image(systemName: "plus")
-                .font(.title3.weight(.medium))
-                .foregroundStyle(palette.foreground)
-                .frame(width: max(44, controlSize), height: max(44, controlSize))
-                .rotationEffect(.degrees(attachmentPicker.isPresented ? 45 : 0))
-                .opacity(model.isAttaching ? 0.48 : 1)
-                .overlay(alignment: .bottomTrailing) {
-                    // While the upload bar shows progress, it is the only spinner.
-                    if model.isAttaching, model.uploadProgress == nil {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .padding(3)
-                            .aidenChromeGlass(in: Circle())
-                    }
-                }
-                .contentShape(Circle())
         }
-        .buttonStyle(.plain)
         .disabled(!canCompose || (!model.canAttach && !attachmentPicker.isPresented))
-        .accessibilityLabel("Add attachment")
-        .accessibilityValue(attachmentPicker.isPresented ? "Open" : "Closed")
-        .accessibilityHint("Attach a photo or a text file")
-        .background {
-            GeometryReader { proxy in
-                let frame = proxy.frame(in: .named(AidenBotComposerCoordinateSpace.name))
-                Color.clear.preference(
-                    key: AidenBotAttachButtonCenterKey.self,
-                    value: CGPoint(x: frame.midX, y: frame.midY)
-                )
-            }
-        }
     }
 
     /// The photos and files waiting to go with the next message.
     private func pendingAttachments(_ model: AidenBotSessionModel) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(model.pendingAttachments) { attachment in
+                ForEach(composerSession.attachments) { attachment in
                     AidenPendingAttachmentCard(
                         attachment: attachment,
                         loadImageData: { model.attachmentImageData(attachment.id) },
@@ -1113,47 +1071,14 @@ struct AidenBotSessionChatView: View {
         }
     }
 
-    @ViewBuilder
-    private func composerControls(_ model: AidenBotSessionModel) -> some View {
-        if model.isRunning {
-            if model.composerAnswersHandoff || composerIsHeld(model) {
-                // A waiting step's note goes with a plain Send, never Steer or Queue,
-                // and a held composer offers neither.
-                sendButton(model)
-            } else if model.offersBusyModes {
-                busyPill(model)
-            }
-            Button {
-                Task { await model.stop() }
-            } label: {
-                Image(systemName: "stop.fill")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(palette.danger)
-                    .frame(width: max(44, controlSize), height: max(44, controlSize))
-                    .background(palette.danger.opacity(0.14), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!canWrite || model.isStopping || model.inFlight.contains(.stop))
-            .accessibilityLabel("Stop")
-        } else {
-            sendButton(model)
-        }
+    private func canSendFromComposer(_ model: AidenBotSessionModel) -> Bool {
+        canCompose && model.canSend && !model.composerHeldForPlan && !composerIsHeld(model)
+            && composerSession.hasContent && !model.isAttaching
+            && (!model.composerAnswersHandoff || (canWrite && model.canAnswerHandoff))
     }
 
-    private func sendButton(_ model: AidenBotSessionModel) -> some View {
-        Button {
-            submit(model, whenBusy: nil)
-        } label: {
-            Image(systemName: "arrow.up")
-                .font(.body.weight(.semibold))
-                .frame(width: max(44, controlSize), height: max(44, controlSize))
-        }
-        .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
-        .disabled(
-            !canCompose || !model.canSend || model.composerHeldForPlan || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
-                || (model.composerAnswersHandoff && !(canWrite && model.canAnswerHandoff))
-        )
-        .accessibilityLabel(model.composerAnswersHandoff ? "Send and mark done" : "Send")
+    private func sendLabel(_ model: AidenBotSessionModel) -> String {
+        model.composerAnswersHandoff ? String(localized: "Send and mark done") : String(localized: "Send")
     }
 
     @MainActor
@@ -1197,6 +1122,7 @@ struct AidenBotSessionChatView: View {
             }
         }
         self.model = model
+        composerSession.attachmentOwner = model
         // Nothing waits on another: the first snapshot, the Bot's detail and the
         // stream (with the outbox it sends) start together.
         async let summaryLoad: Void = loadSummary()
@@ -1742,52 +1668,8 @@ struct AidenBotConnectCardView: View {
 
 // MARK: - Liquid Glass composer (revision 33 adds its +)
 
-enum AidenBotComposerMetrics {
-    /// Space between the pill's edge and the controls inside it.
-    static let inset: CGFloat = 5
-    /// The pill rounds into a card at this radius while typing or holding attachments.
-    static let expandedCornerRadius: CGFloat = 26
-}
-
 private enum AidenBotComposerCoordinateSpace {
     static let name = "aiden-bot-composer-coordinate-space"
-}
-
-private struct AidenBotAttachButtonCenterKey: PreferenceKey {
-    static let defaultValue: CGPoint? = nil
-
-    static func reduce(value: inout CGPoint?, nextValue: () -> CGPoint?) {
-        value = nextValue() ?? value
-    }
-}
-
-/// Groups the composer's glass so nearby glass blends; a plain stack under Reduce Transparency.
-private struct AidenBotComposerGlassContainer<Content: View>: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        if !reduceTransparency {
-            GlassEffectContainer(spacing: 6) { content() }
-        } else {
-            content()
-        }
-    }
-}
-
-/// Messages scroll under the floating composer: the edge softens so the words
-/// stay readable; under Reduce Transparency it stays plain.
-private struct AidenBotSoftScrollEdge: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if !reduceTransparency {
-            content.scrollEdgeEffectStyle(.soft, for: .bottom)
-        } else {
-            content
-        }
-    }
 }
 
 /// The photos and files on one of the person's own messages before the Mac shows it.
