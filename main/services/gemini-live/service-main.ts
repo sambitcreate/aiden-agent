@@ -9,6 +9,7 @@ import { ComputerUseParameters } from "../computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "../computer-use/tool.js";
 import { GeminiLiveComputerUseBridge } from "./computer-use-bridge.js";
 import { prepareLiveToolProviders } from "./live-tool-providers.js";
+import { aidenLivePreferences } from "../../../renderer/shared/aiden-live-settings.js";
 import { app } from "../../platform.js";
 import { createGeminiLiveAcceptanceEvidenceRecorder } from "./acceptance-evidence.js";
 import { AidenLiveThreadStore } from "../aiden-live-thread-store.js";
@@ -99,6 +100,7 @@ export const geminiLiveService = new GeminiLiveService({
     },
   },
   resolveModel: () => experimentalGeminiLiveModel(),
+  resolveVoice: async () => aidenLivePreferences(await configStore.getSettings()).voice,
   screenShareEnabled: () => geminiLiveScreenEnabled(),
   onDisplayBindingsChanged: (bindings) => {
     if (bindings.length > 0 && !disposeDisplayMediaGuards) {

@@ -69,6 +69,7 @@ test("the feed serves the shared fixture's notification for a routine's visible 
   t.after(h.cleanup);
   await h.log.append(delivery());
 
+  h.advanceTo(NOW + 1); // The fixture cursor is the last completed millisecond.
   assert.deepEqual(await h.feed.list(undefined), fixture.botRoutineNotifications);
 });
 
@@ -104,8 +105,17 @@ test("lists due rows newest first, at most 100, after since", async (t) => {
   assert.equal(after.notifications[after.notifications.length - 1]!.id, "run-51");
 
   h.advanceTo(NOW + HOUR);
-  const due = await h.feed.list(undefined);
-  assert.deepEqual(due.notifications[0]?.id, "held", "the held row joins once it is due");
+  const funnel = createBotDeliveryFunnel({
+    log: h.log, gate: ALWAYS_NOW_GATE, mac: async () => {}, telegram: async () => {}, now: () => NOW + HOUR,
+  });
+  const beforeRelease = await h.feed.list(NOW);
+  assert.deepEqual(beforeRelease.notifications, []);
+  await funnel.flush(NOW + HOUR);
+  h.advanceTo(NOW + HOUR + 1);
+  const afterRelease = await h.feed.list(Date.parse(beforeRelease.now));
+  assert.deepEqual(afterRelease.notifications.map((row) => row.id), ["held"],
+    "a release in the same millisecond as the preceding poll reaches the next poll");
+  assert.deepEqual((await h.feed.list(Date.parse(afterRelease.now))).notifications, []);
 });
 
 test("never lists silent, skipped or blocked runs", async (t) => {
@@ -202,6 +212,7 @@ test("never lists silent, skipped or blocked runs", async (t) => {
     signal: new AbortController().signal,
     trigger: { kind: "manual", key: "loud" },
   });
+  h.advanceTo(NOW + 1);
   assert.equal((await h.feed.list(undefined)).notifications.length, 1, "a routine with notifications on still alerts");
 });
 
@@ -334,7 +345,7 @@ test("persisted access issue audience survives restart and pruning of the issue 
   const reloadedLog = createBotDeliveryLog({ profileDir: () => h.profile, now: () => NOW });
   const stored = await reloadedLog.find("bot_fixture_01", "issue:retained_access");
   assert.equal(stored?.requiredCapability, "bot:access-requests");
-  const feed = createBotNotificationFeed({ log: reloadedLog, botName: async () => "Scout", now: () => NOW, issueKind: async () => issueExists ? "access_needed" : undefined });
+  const feed = createBotNotificationFeed({ log: reloadedLog, botName: async () => "Scout", now: () => NOW + 1, issueKind: async () => issueExists ? "access_needed" : undefined });
   const legacy = await feed.list(undefined, { issues: true });
   assert.deepEqual(legacy.notifications.map((n) => n.routineName), ["Run stalled"]);
   const holder = await feed.list(undefined, { issues: true, accessRequests: true });

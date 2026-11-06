@@ -95,6 +95,13 @@ test("pi telemetry is removed, not just disabled", () => {
 	assert.ok(!everything.includes("pi.dev/api/report-install"), "the telemetry endpoint must not ship");
 });
 
+test("a local build carries no PostHog project key", () => {
+	for (const entry of readdirSync(appDir, { recursive: true, withFileTypes: true })) {
+		if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
+		assert.doesNotMatch(readFileSync(join(entry.parentPath, entry.name), "utf-8"), /phc_[A-Za-z0-9_-]{20,}/u, entry.name);
+	}
+});
+
 test("the bundled MCP docs the model reads describe Aiden's MCP configuration, not Pi's native one", () => {
 	const mcp = readFileSync(join(appDir, "docs", "mcp.md"), "utf8");
 	assert.match(mcp, /aiden-mcp\.json/);

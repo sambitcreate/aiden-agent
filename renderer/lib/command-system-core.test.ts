@@ -167,7 +167,7 @@ test("modal, terminal, repeat, and composition guards are deterministic", () => 
 });
 
 test("studio surfaces hide the Environment and terminal commands", () => {
-  for (const pathname of ["/design", "/design/project-1", "/images", "/images/workflow-1"]) {
+  for (const pathname of ["/images", "/images/workflow-1"]) {
     assert.deepEqual(workspaceCommandVisibility(pathname), { environment: false, terminal: false }, pathname);
   }
   assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), { environment: true, terminal: true });
@@ -176,25 +176,44 @@ test("studio surfaces hide the Environment and terminal commands", () => {
 });
 
 test("palette omits studio commands while their capability is off", () => {
-  const studio = (capabilities: { designStudio: boolean; createImages: boolean }) =>
+  const studio = (capabilities: { createImages: boolean }) =>
     paletteCommands(capabilities)
       .map(({ id }) => id)
-      .filter((id) => id === "design.open" || id === "images.open");
+      .filter((id) => id === "images.open");
 
-  assert.deepEqual(studio({ designStudio: false, createImages: false }), []);
-  assert.deepEqual(studio({ designStudio: true, createImages: false }), ["design.open"]);
-  assert.deepEqual(studio({ designStudio: false, createImages: true }), ["images.open"]);
-  assert.deepEqual(studio({ designStudio: true, createImages: true }), ["design.open", "images.open"]);
-  // With both flags off, nothing capability-gated remains in the palette.
+  assert.deepEqual(studio({ createImages: false }), []);
+  assert.deepEqual(studio({ createImages: true }), ["images.open"]);
+  // With the flag off, nothing capability-gated remains in the palette.
   assert.ok(
-    paletteCommands({ designStudio: false, createImages: false }).every(
+    paletteCommands({ createImages: false }).every(
       (definition) => definition.requiresCapability === undefined,
     ),
   );
 });
 
+test("the palette lists Toggle design mode only with the capability and a design-ready chat on screen", () => {
+  const listed = (capabilities: { createImages: boolean; designMode: boolean }, onScreen: boolean) =>
+    paletteCommands(capabilities, (id) => onScreen && id === "design.toggle").some(({ id }) => id === "design.toggle");
+  assert.equal(listed({ createImages: false, designMode: false }, true), false, "flag off");
+  assert.equal(listed({ createImages: false, designMode: true }, false), false, "no eligible chat on screen");
+  assert.equal(listed({ createImages: false, designMode: true }, true), true);
+});
+
+test("no capability set offers a Design Studio command", () => {
+  for (const createImages of [false, true]) {
+    const commands = paletteCommands({ createImages });
+    const ids: readonly string[] = commands.map(({ id }) => id);
+    assert.equal(ids.includes("design.open"), false, `createImages: ${createImages}`);
+    assert.equal(
+      commands.some(({ title }) => /Design Studio/u.test(title)),
+      false,
+      `createImages: ${createImages}`,
+    );
+  }
+});
+
 test("chat actions show in the palette only while something on screen can run them", () => {
-  const capabilities = { designStudio: true, createImages: true };
+  const capabilities = { createImages: true };
   const nothingOnScreen = paletteCommands(capabilities, () => false).map(({ id }) => id);
   assert.ok(!nothingOnScreen.includes("chat.rename"));
   assert.ok(!nothingOnScreen.includes("chat.stop"));
@@ -210,7 +229,6 @@ test("chat actions show in the palette only while something on screen can run th
 
 test("studio commands never reserve a shortcut", () => {
   const bindings = effectiveBindings(undefined);
-  assert.equal(bindings["design.open"], null);
   assert.equal(bindings["images.open"], null);
 });
 

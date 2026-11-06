@@ -1678,6 +1678,40 @@ class AidenChatTest {
     }
 
     @Test
+    fun completeExtractSupportAndUncitableGuessSurviveCache() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(extractRecapJson(
+            """{"name":"destination","status":"extracted","value":"New York","confidence":0.99,"sourceLine":"Ship: New York"}""",
+            """{"name":"cities","status":"extracted","value":"[\"New York\",\"Paris\"]","confidence":0.99,"sourceLine":"New York … Paris"}""",
+            """{"name":"oversized","status":"uncertain","value":"A long matched value…","confidence":0.99}"""
+        )))
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        val fields = cached.steps[1].extractionRecap!!.fields
+        assertEquals(listOf(AidenWebExtractRecap.Status.EXTRACTED, AidenWebExtractRecap.Status.EXTRACTED,
+            AidenWebExtractRecap.Status.UNCERTAIN), fields.map { it.status })
+        assertEquals("Ship: New York", fields[0].sourceLine)
+        assertEquals("New York … Paris", fields[1].sourceLine)
+        assertNull(fields[2].sourceLine)
+        assertNull(fields[2].notFound)
+    }
+
+    @Test
+    fun extractCitationBudgetCountsUnicodeCodePoints() {
+        for ((source, accepted) in listOf(
+            "😀".repeat(200) to true,
+            "😀".repeat(201) to false,
+            "e\u0301".repeat(101) to false
+        )) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(extractRecapJson(
+                """{"name":"symbols","status":"extracted","value":"shown","confidence":0.99,"sourceLine":"$source"}"""
+            )))
+            val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+            val recap = cached.steps[1].extractionRecap
+            assertEquals(accepted, recap != null)
+            if (accepted) assertEquals(source, recap!!.fields[0].sourceLine)
+        }
+    }
+
+    @Test
     fun malformedOrMisplacedExtractRecapIsDroppedButThePageStaysAnActivityLine() {
         val malformed = listOf(
             "no fields and no error" to extractRecapJson(),
@@ -4821,6 +4855,7 @@ class AidenChatTest {
             model.fork("user-2", AidenChatForkPosition.BEFORE)
 
             assertEquals(fork.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+            assertEquals("private-fork-home", harness.cache.loadChat("instance-fork", fork.id)?.workspaceId)
             val request = withContext(Dispatchers.IO) { forkRequests.poll(5, TimeUnit.SECONDS) }!!
             assertEquals("source-r1", request.getHeader("If-Match"))
             val body = json.parseToJsonElement(request.body.readUtf8()).jsonObject
@@ -5239,7 +5274,7 @@ class AidenChatTest {
     )
 
     private fun forkChat(lineage: AidenChatForkLineage) = AidenChat(
-        id = "chat-fork", workspaceId = "workspace-fork", title = "Parser review",
+        id = "chat-fork", workspaceId = "private-fork-home", title = "Parser review",
         messages = listOf(
             AidenChatMessage("fork-user-1", AidenChatRole.USER, "Review the parser.", createdAt = Instant.EPOCH),
             AidenChatMessage("fork-assistant-1", AidenChatRole.ASSISTANT, "Starting.", createdAt = Instant.EPOCH)

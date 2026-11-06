@@ -3415,7 +3415,7 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "Only runs that finished after this host time (the previous response's now).",
+            "description": "Only notifications that became visible after this host time. Pass the previous response's now, the last completed millisecond included in that poll.",
             "schema": {
               "type": "string",
               "format": "date-time"

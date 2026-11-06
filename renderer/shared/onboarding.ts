@@ -52,6 +52,7 @@ export function parseOnboardingState(value: unknown): OnboardingState | null {
 
 export function onboardingStepIndex(snapshot: OnboardingSnapshot): number {
   if (!snapshot.profileReady) return 0;
+  if (snapshot.lastSatisfiedStep === "bots" && !snapshot.selectedProviderId) return 2;
   if (!snapshot.providerReady) return 1;
   return 2;
 }

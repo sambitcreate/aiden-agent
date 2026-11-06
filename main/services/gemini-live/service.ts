@@ -113,6 +113,12 @@ export interface GeminiLiveServiceOptions {
   createConnector(apiKey: string): GeminiLiveConnector;
   resolveModel(): string | null | Promise<string | null>;
   /**
+   * Gemini's prebuilt voice for this start, read once per session. A change
+   * takes effect the next time Live starts. Null or a failure keeps the
+   * provider's default voice.
+   */
+  resolveVoice?(): string | null | Promise<string | null>;
+  /**
    * True only after the packaged native-picker acceptance has been recorded
    * for this build. When absent or false, every screen intent is rejected.
    */
@@ -501,6 +507,16 @@ export class GeminiLiveService {
         throw new Error("The Assistant Live start was superseded.");
       }
 
+      let voice: string | null = null;
+      try {
+        voice = (await this.options.resolveVoice?.()) ?? null;
+      } catch {
+        // A settings read failure must not stop Live; the default voice is used.
+      }
+      if (!this.sessions.isCurrent(session) || session.abort.signal.aborted) {
+        throw new Error("The Assistant Live start was superseded.");
+      }
+
       const protocol = new GeminiLiveProtocol({
         connector: this.options.createConnector(eligibility.apiKey),
         model,
@@ -508,6 +524,7 @@ export class GeminiLiveService {
         onEvent: (event) => this.handleProtocolEvent(session, event),
         tools: liveTools.length > 0 ? liveTools : undefined,
         instructions: registry.instructions(),
+        ...(voice ? { voice } : {}),
       });
       computerUse?.bindSendResult((result) => {
         if (!this.sessions.isCurrent(session) || session.abort.signal.aborted) return;
@@ -608,11 +625,11 @@ export class GeminiLiveService {
    */
   sendNote(owner: RendererDocumentOwner, sessionId: string, text: string): boolean {
     const session = this.sessions.get(owner);
+    // A resuming session queues the note; flushNotes sends it once it reopens.
     if (
       !session ||
       session.sessionId !== sessionId ||
-      session.state !== "open" ||
-      !session.protocol
+      (session.state !== "open" && session.state !== "resuming")
     )
       return false;
     const trimmed = text.trim();

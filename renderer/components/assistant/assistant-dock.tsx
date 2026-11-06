@@ -16,11 +16,22 @@ import {
 import { AssistantComputerUseApproval } from "./assistant-computer-use-approval";
 import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
 import type { AssistantLiveApprovals } from "./use-assistant-live-approvals";
+import { liveActivity, type LiveActivity } from "../../lib/live-activity";
+import type { AidenLivePreferences } from "../../shared/aiden-live-settings";
+import { LiveRibbon } from "./live-ribbon";
+import { useLiveVoiceEnding } from "./live-ribbon-session";
+import { useAidenLivePreferences, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
 
 const SESSION_ACTIONS: AssistantLiveApprovals = {
   approvals: [],
   decidingApprovalId: null,
   decideApproval: async () => undefined,
+};
+
+const DEFAULT_RIBBON_PREFERENCES: Pick<AidenLivePreferences, "voice" | "speed" | "ribbonColors"> = {
+  voice: "Puck",
+  speed: 1,
+  ribbonColors: "spectrum",
 };
 
 const AIDEN_LIVE_SETUP_COMPLETE_KEY = "aiden.live.setup-complete";
@@ -75,6 +86,14 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   // Until settings load, keep Live off so a disabled feature never flashes on.
   const enabled = settings.data ? settings.data.aidenLiveEnabled !== false : false;
   const buttonVisible = settings.data?.aidenLiveButtonVisible !== false;
+  const { preferences, save } = useAidenLivePreferences();
+  const activity = React.useSyncExternalStore(
+    (listener) => liveActivity.subscribe(listener),
+    () => liveActivity.get(),
+  );
+  // Speaking speed applies to the reply that is playing, not just the next one.
+  const { setPlaybackSpeed } = live;
+  React.useEffect(() => setPlaybackSpeed(preferences.speed), [preferences.speed, setPlaybackSpeed]);
   const openSettings = React.useCallback(
     (section: SettingsSection) => {
       live.setSetupOpen(false);
@@ -90,6 +109,9 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
       enabled={enabled}
       buttonVisible={buttonVisible}
       onOpenSettings={openSettings}
+      activity={activity}
+      preferences={preferences}
+      onPreferencesChange={(patch) => void save(patch)}
     />
   );
 }
@@ -102,6 +124,9 @@ export function AssistantDockPresentation({
   buttonVisible = true,
   onOpenSettings = () => undefined,
   useCommand = useCommandHandler,
+  activity = null,
+  preferences = DEFAULT_RIBBON_PREFERENCES,
+  onPreferencesChange = () => undefined,
 }: {
   chat: AssistantLiveApprovals;
   live: AssistantLiveController;
@@ -112,6 +137,10 @@ export function AssistantDockPresentation({
   buttonVisible?: boolean;
   onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
   useCommand?: typeof useCommandHandler;
+  /** What Live is doing or needs, from the shared activity store. */
+  activity?: LiveActivity | null;
+  preferences?: Pick<AidenLivePreferences, "voice" | "speed" | "ribbonColors">;
+  onPreferencesChange?: (patch: AidenLivePreferencesPatch) => void;
 }): React.ReactElement {
   const [hudOpen, setHudOpen] = React.useState(Boolean(live.error));
   const [stopRevealed, setStopRevealed] = React.useState(false);
@@ -120,6 +149,9 @@ export function AssistantDockPresentation({
   const liveApproval = chat.approvals.find((approval) => approval.toolName === "computer_use");
   const approvalPending = Boolean(liveApproval);
   const markState = assistantLiveMarkState(live, approvalPending);
+  // Saying goodbye, or Live's end_session tool, ends the session, but never
+  // while the ribbon's request or the Computer Use approval waits on the user.
+  useLiveVoiceEnding(live, { answerPending: () => approvalPending || markState === "approval" });
 
   React.useEffect(() => {
     if (!live.active) setStopRevealed(false);
@@ -157,10 +189,38 @@ export function AssistantDockPresentation({
   }, [live.active, live.microphoneActive, setupCompleted]);
 
   const openPanel = React.useCallback(() => {
-    const action = liveDockClickAction(live, setupCompleted, stopRevealed);
+    let action = liveDockClickAction(live, setupCompleted, stopRevealed);
     if (action === "none") return;
-    if (action === "stop") { void live.stop(); return; }
-    if (action === "reveal-stop") { setStopRevealed(true); return; }
+    // The ribbon replaces the corner pill while Live runs: the first press
+    // moves focus to its End button, and a second press while End still has
+    // focus ends Live.
+    const end = document.querySelector<HTMLButtonElement>(".live-ribbon .live-ribbon-end");
+    const endReady = Boolean(end && !end.disabled);
+    if (action === "stop") {
+      if (endReady && document.activeElement === end) {
+        void live.stop();
+        return;
+      }
+      setStopRevealed(false);
+      action = "reveal-stop";
+    }
+    if (action === "reveal-stop") {
+      if (!end || !endReady) return;
+      end.focus();
+      if (document.activeElement !== end) return;
+      setStopRevealed(true);
+      const disarm = () => {
+        setStopRevealed(false);
+        end.removeEventListener("blur", disarm);
+        end.removeEventListener("keydown", onKeyDown);
+      };
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") disarm();
+      };
+      end.addEventListener("blur", disarm);
+      end.addEventListener("keydown", onKeyDown);
+      return;
+    }
     if (action === "setup") {
       live.setSetupOpen(true);
       return;
@@ -190,53 +250,68 @@ export function AssistantDockPresentation({
   // control can target "Listening" or "Disconnected" by what it shows.
   const accessibleName = action.toLowerCase().includes(label.toLowerCase()) ? action : `${label}, ${action}`;
 
+  const approvalPrompt = liveApproval ? (
+    <AssistantComputerUseApproval
+      prompt={liveApproval}
+      deciding={chat.decidingApprovalId === liveApproval.approvalId}
+    />
+  ) : null;
+
   return (
-    <div
-      className="aiden-live-dock pointer-events-none absolute z-40 flex flex-col items-end gap-2 transition-[right] duration-300 ease-out motion-reduce:transition-none"
-      style={{ right: `calc(var(--aiden-live-edge-inset) + ${Math.max(0, rightInset)}px)` }}
-    >
-      {(live.active || live.error) && (hudOpen || live.screenActive) ? (
-        <AssistantLiveHud live={live} markState={markState}>
-          {liveApproval ? (
-            <AssistantComputerUseApproval
-              prompt={liveApproval}
-              deciding={chat.decidingApprovalId === liveApproval.approvalId}
-            />
-          ) : null}
-        </AssistantLiveHud>
-      ) : null}
-      {buttonVisible || sessionVisible ? (
-        <button
-          ref={triggerRef}
-          type="button"
-          className="aiden-live-trigger pointer-events-auto"
-          data-state={markState}
-          data-stop-revealed={showStop}
-          disabled={closing}
-          aria-label={accessibleName}
-          aria-expanded={live.active ? stopRevealed : live.setupOpen}
-          onKeyDown={(event) => { if (event.key === "Escape") setStopRevealed(false); }}
-          onClick={openPanel}
+    <>
+      {live.active ? (
+        <LiveRibbon
+          live={live}
+          markState={markState}
+          activity={activity}
+          preferences={preferences}
+          onPreferencesChange={onPreferencesChange}
         >
-          <span className="aiden-live-trigger-glyph" aria-hidden="true">
-            {showStop ? (
-              <span className="aiden-live-stop-symbol" />
-            ) : (
-              <AidenActivityMark key={glyph.mark} mark={glyph.mark} size={20} active={glyph.active} level={live.microphoneLevel} />
-            )}
+          {approvalPrompt}
+        </LiveRibbon>
+      ) : null}
+      <div
+        className="aiden-live-dock pointer-events-none absolute z-40 flex flex-col items-end gap-2 transition-[right] duration-300 ease-out motion-reduce:transition-none"
+        style={{ right: `calc(var(--aiden-live-edge-inset) + ${Math.max(0, rightInset)}px)` }}
+      >
+        {!live.active && live.error && (hudOpen || live.screenActive) ? (
+          <AssistantLiveHud live={live} markState={markState}>
+            {approvalPrompt}
+          </AssistantLiveHud>
+        ) : null}
+        {!live.active && (buttonVisible || sessionVisible) ? (
+          <button
+            ref={triggerRef}
+            type="button"
+            className="aiden-live-trigger pointer-events-auto"
+            data-state={markState}
+            data-stop-revealed={showStop}
+            disabled={closing}
+            aria-label={accessibleName}
+            aria-expanded={live.setupOpen}
+            onKeyDown={(event) => { if (event.key === "Escape") setStopRevealed(false); }}
+            onClick={openPanel}
+          >
+            <span className="aiden-live-trigger-glyph" aria-hidden="true">
+              {showStop ? (
+                <span className="aiden-live-stop-symbol" />
+              ) : (
+                <AidenActivityMark key={glyph.mark} mark={glyph.mark} size={20} active={glyph.active} level={live.microphoneLevel} />
+              )}
+            </span>
+            <span className="aiden-live-trigger-label">{label}</span>
+            {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
+          </button>
+        ) : null}
+        {live.active ? null : (
+          <span role="status" aria-live="polite" className="sr-only">
+            {live.error ? "Disconnected — see details" : live.busy ? live.state === "closing" ? "Stopping…" : "Connecting…" : "Start Live"}
           </span>
-          <span className="aiden-live-trigger-label">{label}</span>
-          {approvalPending ? <span className="aiden-live-trigger-badge" aria-hidden="true" /> : null}
-        </button>
-      ) : null}
-      <span role="status" aria-live="polite" className="sr-only">
-        {live.error ? "Disconnected — see details" : live.busy ? live.state === "closing" ? "Stopping…" : "Connecting…" : live.active
-          ? live.microphoneActive ? "Listening · mic on" : "Live · mic off"
-          : "Start Live"}
-      </span>
-      {!setupCompleted ? (
-        <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} />
-      ) : null}
-    </div>
+        )}
+        {!setupCompleted ? (
+          <AssistantLiveSetupDialog live={live} onOpenSettings={onOpenSettings} />
+        ) : null}
+      </div>
+    </>
   );
 }

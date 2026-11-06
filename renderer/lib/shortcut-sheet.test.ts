@@ -59,17 +59,49 @@ test("a changed key shows as changed, and a custom key for a number breaks the r
 });
 
 test("a key given to a Studio command shows only while that Studio is on", () => {
-  const bindings = { ...defaults(), "design.open": "Command+Alt+D" } as Record<
+  const bindings = { ...defaults(), "images.open": "Command+Alt+I" } as Record<
     CommandId,
     string | null
   >;
-  assert.equal(row(shortcutSheet(bindings, { platform: "darwin" }), "Open Design Studio"), null);
+  assert.equal(row(shortcutSheet(bindings, { platform: "darwin" }), "Open Create Images"), null);
   assert.equal(
     row(
-      shortcutSheet(bindings, { platform: "darwin", capabilities: { designStudio: true } }),
-      "Open Design Studio",
+      shortcutSheet(bindings, { platform: "darwin", capabilities: { createImages: true } }),
+      "Open Create Images",
     )?.section,
     "Moving around",
+  );
+});
+
+test("⌘⇧L lists Toggle design mode only while design mode is available", () => {
+  assert.equal(row(shortcutSheet(defaults(), { platform: "darwin" }), "Toggle design mode"), null);
+  const on = row(shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true } }), "Toggle design mode");
+  assert.deepEqual(on?.keys, ["Command+Shift+L"]);
+  assert.equal(on?.section, "Workspace");
+});
+
+test("the design canvas keys get their own section only while design mode is available", () => {
+  const off = shortcutSheet(defaults(), { platform: "darwin" });
+  assert.equal(off.some((section) => section.title === "Design canvas"), false);
+  assert.equal(row(off, "Rename the selected frame"), null);
+  const on = shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true } });
+  assert.equal(on[on.length - 1]?.title, "Design canvas");
+  assert.deepEqual(row(on, "Rename the selected frame")?.keys, ["F2"]);
+  assert.deepEqual(row(on, "Add a note")?.keys, ["N"]);
+  const found = shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true }, query: "rename" });
+  assert.ok(row(found, "Rename the selected frame"));
+});
+
+test("⌘⇧D is not bound to anything", () => {
+  const sections = shortcutSheet(defaults(), { platform: "darwin", capabilities: { createImages: true } });
+  const keys = sections.flatMap((section) =>
+    section.rows.flatMap((entry) => [...entry.keys, ...(entry.alsoKeys ?? [])]),
+  );
+  assert.ok(keys.length > 0);
+  assert.equal(keys.includes("Command+Shift+D"), false);
+  assert.ok(
+    Object.values(defaults()).every((binding) => binding !== "Command+Shift+D"),
+    "no command reserves it either",
   );
 });
 
