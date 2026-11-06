@@ -492,3 +492,168 @@ test("live workspace revision is revalidated after approval and before commit", 
   await assert.rejects(readFile(path.join(workspace.folderPath!, "revision.txt"), "utf8"));
   await broker.shutdown();
 });
+
+/**
+ * A fixture whose run can be revoked the way production revokes one: the
+ * authority disappears and the run's ledger entries are cancelled together.
+ */
+function revocableBroker(
+  workspace: Workspace,
+  overrides: Partial<SubagentWorkspaceWriteApprovalBrokerV2Input> = {},
+) {
+  const granted = authority(workspace);
+  const ledger = new SubagentApprovalLedgerV2(() => 1_000);
+  let revoked = false;
+  const revoke = () => {
+    revoked = true;
+    ledger.cancelRun(granted.runId);
+  };
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(
+    brokerInput(workspace, {
+      authority: granted,
+      ledger,
+      currentAuthority: () => (revoked ? undefined : granted),
+      ...overrides,
+    }),
+  );
+  return { broker, ledger, revoke };
+}
+
+test("revocation during the awaited workspace check before commit writes nothing", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  let reads = 0;
+  let onRead = () => {};
+  const { broker, ledger, revoke } = revocableBroker(workspace, {
+    currentWorkspace: async () => {
+      reads += 1;
+      onRead();
+      return workspace;
+    },
+  });
+  const args = { path: "revoked.txt", content: "approved\n" };
+  assert.equal(await broker.beforeToolCall(call("write_file", args)), undefined);
+  const readsAtApproval = reads;
+  onRead = revoke;
+  await assert.rejects(
+    broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args }),
+  );
+  assert.ok(reads > readsAtApproval);
+  await assert.rejects(readFile(path.join(workspace.folderPath!, "revoked.txt"), "utf8"));
+  assert.equal(ledger.pendingCount, 0);
+  await broker.shutdown();
+});
+
+test("revocation between the answer and authorization cannot authorize the write", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  let revokeNow = () => {};
+  const { broker, ledger, revoke } = revocableBroker(workspace, {
+    requestApproval: async () => {
+      revokeNow();
+      return true;
+    },
+  });
+  revokeNow = revoke;
+  const args = { path: "late-yes.txt", content: "approved\n" };
+  assert.equal((await broker.beforeToolCall(call("write_file", args)))?.block, true);
+  await assert.rejects(
+    broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args }),
+    /no live one-shot approval/u,
+  );
+  await assert.rejects(readFile(path.join(workspace.folderPath!, "late-yes.txt"), "utf8"));
+  assert.equal(ledger.pendingCount, 0);
+  await broker.shutdown();
+});
+
+test("an expiry that lands during the final check writes nothing", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  const granted = authority(workspace);
+  let clock = 1_000;
+  let onRead = () => {};
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(
+    brokerInput(workspace, {
+      authority: granted,
+      ledger: new SubagentApprovalLedgerV2(() => clock),
+      currentAuthority: () => granted,
+      currentWorkspace: async () => {
+        onRead();
+        return workspace;
+      },
+      now: () => clock,
+    }),
+  );
+  const args = { path: "expired.txt", content: "approved\n" };
+  assert.equal(await broker.beforeToolCall(call("write_file", args)), undefined);
+  onRead = () => {
+    clock = granted.expiresAt;
+  };
+  await assert.rejects(
+    broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args }),
+  );
+  await assert.rejects(readFile(path.join(workspace.folderPath!, "expired.txt"), "utf8"));
+  await broker.shutdown();
+});
+
+test("a committed write's approval cannot be replayed, even after the file changes", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  const target = path.join(workspace.folderPath!, "once.txt");
+  const { broker } = revocableBroker(workspace);
+  const args = { path: "once.txt", content: "approved\n" };
+  const execute = () =>
+    broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args });
+  assert.equal(await broker.beforeToolCall(call("write_file", args)), undefined);
+  await execute();
+  await writeFile(target, "person edited this\n");
+  await assert.rejects(execute(), /no live one-shot approval/u);
+  assert.equal(await readFile(target, "utf8"), "person edited this\n");
+  await broker.shutdown();
+});
+
+test("two concurrent executes of one approval commit at most once", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  const { broker } = revocableBroker(workspace);
+  const args = { path: "race.txt", content: "approved\n" };
+  assert.equal(await broker.beforeToolCall(call("write_file", args)), undefined);
+  const results = await Promise.allSettled([
+    broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args }),
+    broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args }),
+  ]);
+  assert.deepEqual(results.map((result) => result.status).sort(), ["fulfilled", "rejected"]);
+  assert.equal(await readFile(path.join(workspace.folderPath!, "race.txt"), "utf8"), "approved\n");
+  await broker.shutdown();
+});
+
+test("a run-grant answer that arrives after shutdown cannot authorize a write", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  let answer!: (allowed: boolean) => void;
+  let asked!: () => void;
+  const prompted = new Promise<void>((resolve) => {
+    asked = resolve;
+  });
+  const { broker, ledger } = revocableBroker(workspace, {
+    implementerRunGrant: true,
+    requestApproval: () =>
+      new Promise<boolean>((resolve) => {
+        answer = resolve;
+        asked();
+      }),
+  });
+  const args = { path: "late-grant.txt", content: "approved\n" };
+  const prepared = broker.beforeToolCall(call("write_file", args));
+  await prompted;
+  const stopped = broker.shutdown();
+  answer(true);
+  assert.equal((await prepared)?.block, true);
+  await stopped;
+  await assert.rejects(
+    broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args }),
+    /no live one-shot approval/u,
+  );
+  await assert.rejects(readFile(path.join(workspace.folderPath!, "late-grant.txt"), "utf8"));
+  assert.equal(ledger.pendingCount, 0);
+});
