@@ -123,6 +123,8 @@ test("public Remote parser and DTO edits select both native clients without a se
     "renderer/shared/bot-connector-watches.ts",
     "renderer/shared/bot-open-work.ts",
     "renderer/shared/bot-routine-models.ts",
+    "renderer/shared/bot-routine-model-directory.ts",
+    "renderer/shared/bot-presets.ts",
     "renderer/shared/bot-peers.ts",
     "renderer/shared/bot-execution-resume.ts",
     "renderer/shared/bot-access-requests.ts",
@@ -139,6 +141,18 @@ test("public Remote parser and DTO edits select both native clients without a se
     "renderer/shared/devices.ts",
     "renderer/shared/app-controls.ts",
     "renderer/shared/tool-approval-scope.ts",
+  ]) {
+    assert.deepEqual(decideChangedAreas([path]), allTrue, path);
+  }
+});
+
+test("phone connect cards, message outcomes, triage and approval/provider inputs keep native validation", () => {
+  for (const path of [
+    "renderer/shared/bot-connections.ts",
+    "renderer/shared/provider-failure.ts",
+    "renderer/shared/chat-triage.ts",
+    "renderer/shared/assistant.ts",
+    "renderer/shared/custom-model-options.ts",
   ]) {
     assert.deepEqual(decideChangedAreas([path]), allTrue, path);
   }
