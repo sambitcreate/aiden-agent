@@ -3467,8 +3467,14 @@ textarea {
 /* Aiden Live's floating ribbon: a dark glass pill above the chat composer.
    It stays dark in light themes too (the approved look), so it carries its own
    glass tokens and re-scopes the shared control tokens for buttons inside it.
-   The ribbon canvas is the only place the Spectrum colours appear. */
+   The Spectrum colours are the ribbon's only colours outside the theme; the
+   canvas and the onboarding art read them from these tokens. */
 :root {
+  --live-spectrum-1: #ff5a5f;
+  --live-spectrum-2: #ffb020;
+  --live-spectrum-3: #fff6d6;
+  --live-spectrum-4: #3e97f6;
+  --live-spectrum-5: #8b5cf6;
   --live-glass-fill: rgb(12 13 17 / 0.92);
   --live-glass-ink: #f2f4f7;
   --live-glass-ink-secondary: #b0b7c0;

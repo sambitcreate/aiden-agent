@@ -9,8 +9,10 @@ import type { AidenLiveRibbonColors } from "../../shared/aiden-live-settings";
 export type LiveRibbonMotion = "listening" | "thinking" | "speaking" | "waiting";
 
 /**
- * The Spectrum gradient: the ribbon's only colours outside the theme tokens
- * (owner decision 6a). "Theme accent" draws with `--accent` instead.
+ * The Spectrum gradient (owner decision 6a). Its colours are the named tokens
+ * `--live-spectrum-1` to `--live-spectrum-5` in renderer/styles.css; these
+ * values only stand in where the stylesheet is absent. "Theme accent" draws
+ * with `--accent` instead.
  */
 export const LIVE_RIBBON_SPECTRUM = ["#FF5A5F", "#FFB020", "#FFF6D6", "#3E97F6", "#8B5CF6"] as const;
 
@@ -102,9 +104,14 @@ function drawRibbon(
 }
 
 function ribbonPalette(element: Element, colors: AidenLiveRibbonColors): readonly string[] {
-  if (colors === "spectrum") return LIVE_RIBBON_SPECTRUM;
-  const accent = getComputedStyle(element).getPropertyValue("--accent").trim() || LIVE_RIBBON_SPECTRUM[3];
-  const ink = getComputedStyle(element).getPropertyValue("--live-glass-ink").trim() || "#F2F4F7";
+  const style = getComputedStyle(element);
+  if (colors === "spectrum") {
+    return LIVE_RIBBON_SPECTRUM.map(
+      (fallback, index) => style.getPropertyValue(`--live-spectrum-${index + 1}`).trim() || fallback,
+    );
+  }
+  const accent = style.getPropertyValue("--accent").trim() || LIVE_RIBBON_SPECTRUM[3];
+  const ink = style.getPropertyValue("--live-glass-ink").trim() || "#F2F4F7";
   return [accent, accent, ink, accent, accent];
 }
 

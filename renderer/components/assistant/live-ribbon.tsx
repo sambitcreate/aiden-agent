@@ -183,7 +183,9 @@ export function LiveRibbon({
   const aiden = latestLine(live.captions, "output");
   const hint =
     activity?.kind === "approval" && activity.voice
-      ? "Say “allow” or “deny”"
+      ? activity.allow
+        ? "Say “allow” or “deny”"
+        : "Say “deny”"
       : activity?.kind === "confirm"
         ? "Say “yes, do it”"
         : null;
@@ -198,6 +200,9 @@ export function LiveRibbon({
     <section
       className="live-ribbon"
       aria-label="Aiden Live"
+      // Live can press controls in Aiden's window, but never its own End,
+      // Mute, Allow, Deny, Confirm or Take over.
+      data-live-guard="you"
       data-state={state}
       data-dragging={placement.dragging || undefined}
       style={{ left: placement.left, bottom: placement.bottom }}
@@ -258,7 +263,9 @@ export function LiveRibbon({
         ) : state === "approval" && activity?.kind === "approval" ? (
           <span className="live-ribbon-text">
             <span className="live-ribbon-title">{activity.title}</span>
-            <span className="live-ribbon-detail">In {activity.chatTitle}</span>
+            <span className="live-ribbon-detail">
+              {activity.allow ? `In ${activity.chatTitle}` : `Open “${activity.chatTitle}” to choose`}
+            </span>
           </span>
         ) : state === "confirm" && activity?.kind === "confirm" ? (
           <span className="live-ribbon-text">
@@ -278,9 +285,11 @@ export function LiveRibbon({
             <Button size="medium" variant="filled" className="live-ribbon-action" onClick={activity.deny}>
               Deny
             </Button>
-            <Button size="medium" variant="accent" className="live-ribbon-action" onClick={activity.allow}>
-              Allow
-            </Button>
+            {activity.allow ? (
+              <Button size="medium" variant="accent" className="live-ribbon-action" onClick={activity.allow}>
+                Allow
+              </Button>
+            ) : null}
           </>
         ) : null}
         {state === "confirm" && activity?.kind === "confirm" ? (

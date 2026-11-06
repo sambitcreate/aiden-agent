@@ -111,7 +111,7 @@ test("while Live acts in Aiden the pill says what it is doing and Take over hand
 
 test("an approval shows its request and chat with Allow and Deny, and the voice hint only when voice can answer", () => {
   const answers: string[] = [];
-  const approval = (voice: boolean): LiveActivity => ({
+  const approval = (voice: boolean): Extract<LiveActivity, { kind: "approval" }> => ({
     kind: "approval",
     id: "a1",
     title: "Run npm test?",
@@ -131,9 +131,42 @@ test("an approval shows its request and chat with Allow and Deny, and the voice 
   assert.equal(screen.getByRole("status").textContent, "Needs you: Run npm test?");
   unmount();
 
-  renderRibbon({ activity: approval(false) });
+  const second = renderRibbon({ activity: approval(false) });
   assert.equal(screen.queryByText("Say “allow” or “deny”"), null);
   assert.deepEqual(buttonNames(), ["Deny", "Allow"]);
+  second.unmount();
+
+  // An approval the ribbon cannot allow offers only Deny and sends the user to the chat.
+  renderRibbon({ activity: { ...approval(true), allow: undefined } });
+  assert.deepEqual(buttonNames(), ["Deny"]);
+  assert.ok(screen.getByText("Open “Fix login redirect” to choose"));
+  assert.ok(screen.getByText("Say “deny”"));
+  assert.equal(screen.queryByText("Say “allow” or “deny”"), null);
+});
+
+test("every control on the ribbon sits inside the region Live may never press", () => {
+  renderRibbon({
+    activity: {
+      kind: "approval",
+      id: "a1",
+      title: "Run npm test?",
+      chatTitle: "Fix login redirect",
+      voice: true,
+      allow: () => undefined,
+      deny: () => undefined,
+    },
+  });
+  const region = screen.getByRole("region", { name: "Aiden Live" });
+  assert.equal(region.closest('[data-live-guard="you"]'), region);
+  for (const button of within(region).getAllByRole("button")) {
+    assert.ok(button.closest('[data-live-guard="you"]'), button.textContent ?? "");
+  }
+  cleanup();
+  renderRibbon();
+  const listening = screen.getByRole("region", { name: "Aiden Live" });
+  for (const name of ["Mute microphone", "End Live"]) {
+    assert.ok(within(listening).getByRole("button", { name }).closest('[data-live-guard="you"]'), name);
+  }
 });
 
 test("a spoken confirmation shows Confirm and Cancel with its phrase", () => {
