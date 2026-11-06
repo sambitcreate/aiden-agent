@@ -1634,11 +1634,19 @@ textarea {
   line-height: 1.5;
 }
 
-.settings-page .settings-group-title {
+.settings-page .settings-group-title,
+.settings-page .settings-group-header {
   margin: 0 4px 12px;
   padding: 0;
+}
+
+.settings-page .settings-group-title {
   font-size: var(--text-strong);
   font-weight: 600;
+}
+
+.settings-page .settings-group-header > .settings-group-title {
+  margin: 0;
 }
 
 .settings-page .settings-card,

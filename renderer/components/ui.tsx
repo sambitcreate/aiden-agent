@@ -356,7 +356,7 @@ export function FieldSet({
   return (
     <section className={cn("settings-group mb-7", className)}>
       {title ? (
-        <div className="mb-3 flex items-center gap-1.5 px-4">
+        <div className="settings-group-header mb-3 flex items-center gap-1.5 px-4">
           <h2 className="settings-group-title text-large-strong text-primary">{title}</h2>
           {hint}
         </div>
