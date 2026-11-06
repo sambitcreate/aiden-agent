@@ -11,8 +11,9 @@
 // rather than looping. A save the app cannot deliver also reports an error.
 // Either way the edits wait for the next edit to try again. Leaving the canvas
 // saves at once, and edits that still cannot be saved keep trying a few times
-// after the canvas has closed (and when the app quits or reloads) before they
-// are given up.
+// after the canvas has closed. Until they are saved they count as unsaved work:
+// quitting, closing or reloading tries them once more and then asks the person
+// before discarding them, as it does for the Files editor and Create Images.
 //
 // Undo and redo are saved as the frames they change, not as whole canvases,
 // and taking in another writer's canvas clears the history, so neither can
@@ -20,7 +21,7 @@
 
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
-import { registerLifecycleFlush } from "../lib/lifecycle-guard";
+import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
 
@@ -48,6 +49,16 @@ interface CanvasSync {
 
 const EMPTY_HISTORY: CanvasHistory = { past: [], future: [] };
 
+/** Each canvas session's unsaved work; the app's close guard sees them as one "design" source. */
+const guardStates = new Map<symbol, { dirty: boolean; saving: boolean }>();
+function publishDesignGuard() {
+  const states = [...guardStates.values()];
+  setRendererLifecycleGuard(
+    { dirty: states.some((state) => state.dirty), saving: states.some((state) => state.saving) },
+    { source: "design" },
+  );
+}
+
 function createCanvasSync(chatId: string, publish: (state: SyncState) => void): CanvasSync {
   /** The last canvas the store confirmed: the base every save is made from. */
   let server: DesignCanvas | null = null;
@@ -58,11 +69,23 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let history = EMPTY_HISTORY;
   let failed = false;
+  /** The canvas closed; the session lives on only while it holds edits it could not save. */
+  let closed = false;
   let disposed = false;
+  const guardKey = Symbol(chatId);
   /** The newest revision another writer announced. */
   let announced = 0;
 
+  const reportGuard = () => {
+    const before = guardStates.get(guardKey);
+    const next = { dirty: unsent.length > 0, saving: inFlight !== null };
+    if (before?.dirty === next.dirty && before.saving === next.saving) return;
+    if (next.dirty || next.saving) guardStates.set(guardKey, next);
+    else guardStates.delete(guardKey);
+    publishDesignGuard();
+  };
   const emit = () => {
+    reportGuard();
     if (disposed) return;
     publish({
       doc: local ?? undefined,
@@ -124,6 +147,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     inFlight = null;
     emit();
     if (retryNow) return save(true);
+    if (closed && unsent.length === 0) finish();
     // After a failure the edits wait for the next one, so an error the app cannot get past does not loop.
     if (unsent.length > 0 && timer === null && !disposed && !failed) schedule();
     // Another writer saved while this save was on its way.
@@ -163,8 +187,16 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     if (unsent.length > 0) await save();
     while (inFlight) await inFlight;
   };
-  // Quit, close and reload save pending edits first, including a closed canvas's still trying.
+  // Quit, close and reload save pending edits first, including a closed canvas's still waiting.
   const unregisterFlush = registerLifecycleFlush(flush);
+  function finish() {
+    if (disposed) return;
+    disposed = true;
+    cancelTimer();
+    unregisterFlush();
+    guardStates.delete(guardKey);
+    publishDesignGuard();
+  }
 
   const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
     if (update.chatId !== chatId) return;
@@ -208,17 +240,17 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     flush,
     dispose() {
       unsubscribe();
+      closed = true;
       // Leaving the canvas saves what is pending now, not after the debounce. Edits the
-      // app could not save try again a few times before the session lets them go.
+      // app could not save try again a few times; after that they stay unsaved work,
+      // tried again by the next quit, close or reload, until saved or discarded there.
       void (async () => {
         for (const delay of [...DESIGN_CANVAS_CLOSED_RETRY_MS, null]) {
           await flush().catch(() => undefined);
           if (unsent.length === 0 || delay === null) break;
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
-        disposed = true;
-        cancelTimer();
-        unregisterFlush();
+        if (unsent.length === 0) finish();
       })();
     },
   };

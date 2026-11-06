@@ -200,7 +200,7 @@ test("an edit that cannot be saved as the canvas closes keeps trying, and is sav
   assert.equal(saves().length, 2, "nothing more once it is saved");
 });
 
-test("a closed canvas gives up on edits it cannot save after a few tries", async () => {
+test("a closed canvas stops retrying on its own after a few tries", async () => {
   const view = await mount();
   for (let index = 0; index < 20; index += 1) {
     saveReplies.push(() => {
@@ -215,6 +215,45 @@ test("a closed canvas gives up on edits it cannot save after a few tries", async
   assert.equal(tries, DESIGN_CANVAS_CLOSED_RETRY_MS.length + 1);
   await tick(120_000);
   assert.equal(saves().length, tries, "no retry loop");
+  // The edit is still held for the next quit, close or reload; let it save so no session outlives the test.
+  saveReplies.length = 0;
+  await act(async () => {
+    await window.__aidenFlushPendingSaves?.();
+  });
+  assert.deepEqual(ids(stored), ["a", "b"]);
+});
+
+test("unsaved canvas edits keep the app's close guard dirty until they are saved, even after the canvas closes", async () => {
+  const dataset = document.documentElement.dataset;
+  const designDirty = () => (dataset.aidenDirtySources ?? "").split(" ").includes("design");
+  const view = await mount();
+  for (let index = 0; index < 20; index += 1) {
+    saveReplies.push(() => {
+      throw new Error("store busy");
+    });
+  }
+  await act(async () => controller.change(addNote("b")));
+  assert.equal(designDirty(), true, "an edit waiting to save is unsaved work");
+  view.unmount();
+  await settle();
+  for (const delay of DESIGN_CANVAS_CLOSED_RETRY_MS) await tick(delay);
+  assert.equal(designDirty(), true, "still unsaved after the closed canvas stopped retrying");
+  assert.equal(dataset.aidenDirty, "1");
+
+  // Quitting tries once more; the save fails again, so the guard stays dirty and main asks.
+  await act(async () => {
+    await window.__aidenFlushPendingSaves?.();
+  });
+  assert.equal(designDirty(), true, "a failed teardown flush leaves the work guarded");
+
+  // A later flush that saves releases it.
+  saveReplies.length = 0;
+  await act(async () => {
+    await window.__aidenFlushPendingSaves?.();
+  });
+  assert.deepEqual(ids(stored), ["a", "b"]);
+  assert.equal(designDirty(), false);
+  assert.equal(dataset.aidenDirty, "0");
 });
 
 test("quitting while a closed canvas still holds unsaved edits saves them", async () => {

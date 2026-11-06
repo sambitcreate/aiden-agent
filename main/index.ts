@@ -134,6 +134,11 @@ import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/v
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
 import { createDesignFrameNavigationGuard } from "./services/design-canvas/frame-navigation.js";
+import {
+  closeGuardDiscardPrompt,
+  closeGuardSavingPrompt,
+  type CloseGuardSources,
+} from "./services/close-guard-prompt.js";
 import { startDesignProtocol } from "./services/design-canvas/protocol-main.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
@@ -233,13 +238,6 @@ let resolveShortcutInitialization: (() => void) | null = null;
 const shortcutInitializationPromise = new Promise<void>((resolve) => {
   resolveShortcutInitialization = resolve;
 });
-/** Which renderer surfaces hold the unsaved or saving work, as the renderer's close guard reports them. */
-interface CloseGuardSources {
-  dirty: readonly string[];
-  saving: readonly string[];
-  /** The image workflow's title, while it is unsaved or saving. */
-  imagesLabel?: string;
-}
 let closeGuard = {
   dirty: false,
   gitBusy: false,
@@ -336,22 +334,13 @@ function confirmProtectedAction(
     });
     return false;
   }
-  // The Files editor reports no sources through the IPC path; without them it is the editor.
-  const sources = closeGuard.sources;
-  const imagesSaving = sources?.saving.includes("images") === true;
-  const editorSaving = sources ? sources.saving.includes("editor") : true;
-  const imagesDirty = sources?.dirty.includes("images") === true;
-  const editorDirty = sources ? sources.dirty.includes("editor") || !imagesDirty : true;
-  const workflow = sources?.imagesLabel
-    ? `the image workflow “${sources.imagesLabel}”`
-    : "the image workflow";
   if (closeGuard.saving) {
-    const imagesOnly = imagesSaving && !editorSaving;
+    const prompt = closeGuardSavingPrompt(closeGuard.sources, action);
     dialog.showMessageBoxSync(window, {
       type: "info",
-      title: imagesOnly ? "Image workflow save in progress" : "File save in progress",
-      message: `Wait for ${imagesOnly ? workflow : "the open file"} to finish saving before ${action === "close" ? "closing Aiden" : "reloading"}.`,
-      buttons: ["Keep Aiden Open"],
+      title: prompt.title,
+      message: prompt.message,
+      buttons: prompt.buttons,
       defaultId: 0,
       cancelId: 0,
       noLink: true,
@@ -359,26 +348,13 @@ function confirmProtectedAction(
     return false;
   }
   if (!closeGuard.dirty) return true;
-  const file = closeGuard.path ? `“${closeGuard.path}”` : "The open file";
-  const imagesOnly = imagesDirty && !editorDirty;
+  const prompt = closeGuardDiscardPrompt(closeGuard.sources, closeGuard.path, action);
   const response = dialog.showMessageBoxSync(window, {
     type: "warning",
-    title: imagesOnly ? "Discard unsaved changes?" : "Discard unsaved edits?",
-    message: imagesOnly
-      ? `${workflow.charAt(0).toUpperCase()}${workflow.slice(1)} has changes that have not been saved.`
-      : imagesDirty
-        ? `${file} and ${workflow} have edits that have not been saved.`
-        : `${file} has edits that have not been saved.`,
-    detail:
-      action === "close"
-        ? `Closing Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`
-        : `Reloading Aiden will permanently discard those ${imagesOnly ? "changes" : "edits"}.`,
-    buttons: [
-      "Keep Editing",
-      action === "close"
-        ? imagesOnly ? "Discard Changes and Close" : "Discard Edits and Close"
-        : imagesOnly ? "Discard Changes and Reload" : "Discard Edits and Reload",
-    ],
+    title: prompt.title,
+    message: prompt.message,
+    detail: prompt.detail,
+    buttons: prompt.buttons,
     defaultId: 0,
     cancelId: 0,
     noLink: true,

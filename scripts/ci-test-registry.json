@@ -314,6 +314,7 @@
         "main/services/design-canvas/watch.test.ts",
         "main/services/design-canvas/canvas-tools.test.ts",
         "main/services/design-canvas/frame-navigation.test.ts",
+        "main/services/close-guard-prompt.test.ts",
         "main/services/design-canvas/artifact-frames.test.ts",
         "main/services/design-canvas/skill.test.ts",
         "main/services/design-canvas/design-mode-tool.test.ts",
