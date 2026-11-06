@@ -267,6 +267,7 @@ struct AidenChatDetailView: View {
             deleteBotFromChat()
         }
         .onAppear {
+            model.setViewPresent(true)
             model.setHapticsActive(true)
             model.setChatForegrounded(true)
             model.setSceneActive(scenePhase == .active)
@@ -295,6 +296,7 @@ struct AidenChatDetailView: View {
             }
         }
         .onDisappear {
+            model.setViewPresent(false)
             model.readAloud.stop()
             model.setHapticsActive(false)
             model.setChatForegrounded(false)
@@ -470,6 +472,9 @@ struct AidenChatDetailView: View {
                 action: action,
                 summaryFocus: focus
             ) else { return }
+            // The fork lives on this chat's machine. Opening it from another
+            // machine's shell would file it under that machine.
+            guard coordinator?.activeInstanceId == model.owner.instanceId else { return }
             onOpenChat(forked)
         }
     }

@@ -851,6 +851,7 @@ private struct AidenBotShellView: View {
                             chatsByScope[scope, default: [:]][$0.id] = updated
                         }
                     )
+                    .id("\(scope.instanceID)-\(chatID)")
                 } else if isBotSurfaceActive {
                     AidenBotChatSkeletonView()
                 } else {

@@ -63,6 +63,10 @@ final class AidenChatViewModel {
     @ObservationIgnored var beforeConsumerAdmission: (() async -> Void)?
     var isRemoved: Bool { deletionLifetime?.isRemoved == true }
     @ObservationIgnored private var streamTask: Task<Void, Never>?
+    /// The view that shows this chat has left the screen.
+    @ObservationIgnored private var isViewGone = false
+    /// Work a left-behind chat stopped, kept so the view can pick it up again.
+    @ObservationIgnored private var leftBehindWork: LeftBehindWork?
     @ObservationIgnored private var progressTask: Task<Void, Never>?
     @ObservationIgnored private var progressObservationGeneration: UInt64 = 0
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
@@ -290,7 +294,7 @@ final class AidenChatViewModel {
             let isActive = streamState.map { !$0.isTerminal } ?? false
             guard wasActive != isActive else { return }
             if !isActive { runInputMode = .queue }
-            onChatActivityChanged(chat.id, isActive ? .active : .idle)
+            if ownerIsSelected { onChatActivityChanged(chat.id, isActive ? .active : .idle) }
         }
     }
     private var networkWaitStreamID: String?
@@ -434,6 +438,17 @@ final class AidenChatViewModel {
         guard !isReadOnlyFixture, coordinator.isLive(owner) else { return nil }
         return owner
     }
+
+    /// The shell on screen is showing this chat's machine. `onChatUpdated` and
+    /// `onChatActivityChanged` land in the shell's selected-machine state, so a
+    /// chat still running after the selection moved stays quiet until it's back.
+    private var ownerIsSelected: Bool {
+        !isReadOnlyFixture && coordinator.activeInstanceId == owner.instanceId
+    }
+
+    /// Nobody is looking at this chat and its machine isn't selected, so
+    /// nothing will come back for it if its machine stops answering.
+    private var isLeftBehind: Bool { isViewGone && !ownerIsSelected }
 
     private var ownerConnection: AidenHostConnection? {
         coordinator.hosts.connection(for: owner.instanceId)
@@ -1576,12 +1591,13 @@ final class AidenChatViewModel {
     }
 
     private func scheduleDraftPersistence() {
-        guard !isReadOnlyPresentation, !isRemoved, let session = draftSession else { return }
+        guard !isReadOnlyPresentation, !isRemoved, liveOwner != nil, let session = draftSession else { return }
         let text = draft
         draftPersistenceTask?.cancel()
         draftPersistenceTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled, let self, !self.isRemoved,
+                  self.liveOwner != nil,
                   self.draftSession == session,
                   self.draft == text else { return }
             _ = try? await self.draftStore.save(text, session: session)
@@ -2901,6 +2917,7 @@ final class AidenChatViewModel {
                 // A stream that ended without a terminal frame is a lost stream
                 // too: offline, park before any status probe or reconnect.
                 flushPendingStreamingContent()
+                if recovery.parksAfterStreamFailure, stopIfLeftBehind(.stream(stream, feedbackPolicy)) { return }
                 guard try await recovery.shouldProbeAfterStreamFailure(onWaiting: onWaiting) else { continue }
                 guard !isRemoved, coordinator.isLive(context), activeStreamID == stream.streamId else { return }
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
@@ -2924,6 +2941,7 @@ final class AidenChatViewModel {
             } catch {
                 guard !Task.isCancelled else { return }
                 flushPendingStreamingContent()
+                if recovery.parksAfterStreamFailure, stopIfLeftBehind(.stream(stream, feedbackPolicy)) { return }
                 // Offline: park without a status probe, warning, or backoff and
                 // reopen from the last applied sequence when the path returns.
                 do {
@@ -2963,6 +2981,7 @@ final class AidenChatViewModel {
                         return
                     }
                     guard !isRemoved, !Task.isCancelled, activeStreamID == stream.streamId else { return }
+                    if stopIfLeftBehind(.stream(stream, feedbackPolicy)) { return }
                     let message = error.localizedDescription
                     do {
                         _ = try await recovery.recoverAfterProbeFailure(
@@ -2981,6 +3000,55 @@ final class AidenChatViewModel {
                 }
             }
         }
+    }
+
+    /// What a left-behind chat stopped doing. The cached stream record stays,
+    /// so a fresh model for this chat restores the run as it does after a relaunch.
+    private enum LeftBehindWork {
+        case stream(AidenChatCache.ActiveStream, AidenStreamFeedbackPolicy)
+        case reconciliation(streamID: String)
+
+        var streamID: String {
+            switch self {
+            case .stream(let stream, _): stream.streamId
+            case .reconciliation(let streamID): streamID
+            }
+        }
+    }
+
+    /// Ends a failed retry loop once nothing would ever come back for it. A
+    /// loop holds the model, so without this an unreachable machine keeps a
+    /// closed chat and its requests going for good. Runs without suspending:
+    /// the view coming back must find either a running loop or `leftBehindWork`.
+    private func stopIfLeftBehind(_ work: LeftBehindWork) -> Bool {
+        guard isLeftBehind else { return false }
+        leftBehindWork = work
+        Task { [liveActivities, instanceId] in
+            await liveActivities.markStale(instanceID: instanceId, streamID: work.streamID)
+        }
+        return true
+    }
+
+    /// Tracks the view on screen. Coming back restarts whatever a left-behind
+    /// chat stopped, from the sequence it had reached.
+    func setViewPresent(_ present: Bool) {
+        isViewGone = !present
+        guard present, let work = leftBehindWork else { return }
+        leftBehindWork = nil
+        guard !isRemoved, activeStreamID == work.streamID, let context = liveOwner else { return }
+        switch work {
+        case .stream(let stream, let feedbackPolicy):
+            startStreaming(stream, context: context, feedbackPolicy: feedbackPolicy)
+        case .reconciliation(let streamID):
+            scheduleTerminalReconciliation(expectedStreamID: streamID, context: context)
+        }
+    }
+
+    /// Await the stream loop and any reconciliation after it, without starting
+    /// or cancelling either.
+    func waitForStreamWork() async {
+        await streamTask?.value
+        await terminalReconciliationTask?.value
     }
 
     private func setWaitingForNetwork(_ waiting: Bool, streamID: String) async {
@@ -3629,7 +3697,7 @@ final class AidenChatViewModel {
         let presented = beforePublishing(admitted)
         chat = presented
         resolveModelSelection()
-        onChatUpdated(presented)
+        if ownerIsSelected { onChatUpdated(presented) }
         reportChatViewed(presented)
         if scheduleTitleRefresh, presented.isTitlePending {
             schedulePendingTitleRefresh(context: context)
@@ -3773,6 +3841,7 @@ final class AidenChatViewModel {
                         await clearFinishedStream(expectedStreamID: expectedStreamID)
                         return
                     }
+                    if stopIfLeftBehind(.reconciliation(streamID: expectedStreamID)) { return }
                 } catch let error where aidenIsCancellation(error) {
                     return
                 } catch {

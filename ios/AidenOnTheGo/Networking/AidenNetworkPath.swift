@@ -181,13 +181,16 @@ struct AidenStreamNetworkRecovery {
         return seconds * 1_000
     }
 
+    /// Whether a stream failure now would park until the path returns.
+    var parksAfterStreamFailure: Bool {
+        policy.afterStreamFailure(isNetworkAvailable: path.isNetworkAvailable) == .waitForNetwork
+    }
+
     /// After the event stream fails. Returns `true` when the caller should
     /// probe status, or `false` after parking offline until the path returned,
     /// in which case the caller reopens the stream directly.
     func shouldProbeAfterStreamFailure(onWaiting: (Bool) async -> Void) async throws -> Bool {
-        guard policy.afterStreamFailure(isNetworkAvailable: path.isNetworkAvailable) == .waitForNetwork else {
-            return true
-        }
+        guard parksAfterStreamFailure else { return true }
         try await park(onWaiting: onWaiting)
         return false
     }

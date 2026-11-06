@@ -79,7 +79,13 @@ final class AidenOwnerScopeTests: XCTestCase {
         )
     }
 
-    private func model(owner instanceId: String, chat chatId: String = "c1") throws -> AidenChatViewModel {
+    private func model(
+        owner instanceId: String,
+        chat chatId: String = "c1",
+        networkPath: AidenNetworkAvailability? = nil,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
+    ) throws -> AidenChatViewModel {
         AidenChatViewModel(
             coordinator: coordinator,
             chat: emptyChat(chatId),
@@ -88,7 +94,9 @@ final class AidenOwnerScopeTests: XCTestCase {
             draftStore: drafts,
             modelPreferenceStore: preferences,
             visualDocumentCache: AidenVisualDocumentCache(root: root.appending(path: "visuals", directoryHint: .isDirectory)),
-            networkPath: AidenNetworkAvailability()
+            networkPath: networkPath ?? AidenNetworkAvailability(),
+            onChatUpdated: onChatUpdated,
+            onChatActivityChanged: onChatActivityChanged
         )
     }
 
@@ -350,7 +358,248 @@ final class AidenOwnerScopeTests: XCTestCase {
         XCTAssertNil(cached)
         a.draft = "nowhere to go"
         XCTAssertFalse(a.canSend)
+        try await Task.sleep(for: .milliseconds(200)) // past the draft debounce
+        await a.waitForDraftPersistence()
+        XCTAssertEqual(savedDraftCount(), 0)
         XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+    }
+
+    // MARK: A chat left running stays out of the selected machine
+
+    /// Starts a turn on studio and leaves its event stream parked, with two
+    /// frames ready to deliver once `release` is called.
+    private func sendHeldTurn(on a: AidenChatViewModel) async throws -> @Sendable () -> Void {
+        acceptTurn(on: "studio", stream: "stream_1", frames: [
+            frame(1, "text_delta", stream: "stream_1", payload: #"{"text":"streamed on studio"}"#),
+            frame(2, "done", stream: "stream_1", payload: #"{"messageId":"m2"}"#, terminal: true),
+        ])
+        let release = responder.hold(instanceId: "studio", path: "/streams/stream_1/events")
+        await a.load(observeProgress: false)
+        a.draft = "Question"
+        await a.send()
+        try await waitForRequest("GET /streams/stream_1/events", on: "studio")
+        return release
+    }
+
+    func testAChatLeftRunningPublishesNothingWhileAnotherMachineIsSelected() async throws {
+        var updates: [AidenChat] = []
+        var activity: [AidenChatSummaryActivity] = []
+        let a = try model(
+            owner: "studio",
+            onChatUpdated: { updates.append($0) },
+            onChatActivityChanged: { activity.append($1) }
+        )
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        updates = []
+        activity = []
+
+        transcript("from studio", "streamed on studio", on: "studio", revision: "r2")
+        release()
+        try await waitUntil("the reply to settle") {
+            a.activeStreamID == nil && a.chat.messages.last?.text == "streamed on studio"
+        }
+
+        XCTAssertEqual(updates.map(\.id), [])
+        XCTAssertEqual(activity, [])
+    }
+
+    func testAChatPublishesAgainOnceItsMachineIsSelectedAgain() async throws {
+        var updates: [AidenChat] = []
+        var activity: [AidenChatSummaryActivity] = []
+        let a = try model(
+            owner: "studio",
+            onChatUpdated: { updates.append($0) },
+            onChatActivityChanged: { activity.append($1) }
+        )
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        await coordinator.switchInstallation(to: "studio")
+        updates = []
+        activity = []
+
+        transcript("from studio", "streamed on studio", on: "studio", revision: "r2")
+        release()
+        try await waitUntil("the reply to settle") {
+            a.activeStreamID == nil && a.chat.messages.last?.text == "streamed on studio"
+        }
+
+        XCTAssertEqual(updates.last?.messages.last?.text, "streamed on studio")
+        XCTAssertEqual(activity, [.idle])
+    }
+
+    // MARK: A left-behind chat stops when its machine does
+
+    /// Waits for the stream loop and any reconciliation to finish.
+    private func waitForStreamWorkToEnd(_ a: AidenChatViewModel) async throws {
+        var ended = false
+        Task { @MainActor in
+            await a.waitForStreamWork()
+            ended = true
+        }
+        try await waitUntil("the stream work to end") { ended }
+    }
+
+    /// Longer than the first retry delays, which are at most two seconds.
+    private func assertNoNewRequests(on instanceId: String, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let before = responder.requests(instanceId: instanceId).count
+        try await Task.sleep(for: .milliseconds(2_500))
+        XCTAssertEqual(responder.requests(instanceId: instanceId).count, before, file: file, line: line)
+    }
+
+    private func statusProbes() -> Int {
+        responder.requests(instanceId: "studio").filter { $0 == "GET /streams/stream_1" }.count
+    }
+
+    func testALeftBehindStreamEndsWhenItsMachineStopsAnswering() async throws {
+        let a = try model(owner: "studio")
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        a.setViewPresent(false)
+
+        responder.fail(instanceId: "studio", path: "*", code: .cannotConnectToHost)
+        release()
+
+        try await waitForStreamWorkToEnd(a)
+        XCTAssertEqual(statusProbes(), 1)
+        try await assertNoNewRequests(on: "studio")
+        XCTAssertTrue(coordinator.isLive(a.owner))
+        let cachedStream = await cache.loadActiveStream(instanceId: "studio", chatId: "c1")
+        XCTAssertEqual(cachedStream?.streamId, "stream_1")
+    }
+
+    func testALeftBehindStreamEndsRatherThanWaitingForTheNetwork() async throws {
+        let network = AidenNetworkAvailability()
+        let a = try model(owner: "studio", networkPath: network)
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        a.setViewPresent(false)
+
+        network.setAvailable(false)
+        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        release()
+
+        try await waitForStreamWorkToEnd(a)
+        XCTAssertEqual(statusProbes(), 0)
+        XCTAssertFalse(a.isWaitingForNetwork)
+    }
+
+    func testALeftBehindStreamEndsOnARevokedCredential() async throws {
+        let a = try model(owner: "studio")
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        a.setViewPresent(false)
+
+        let revoked = json(["error": [
+            "code": "credential_revoked",
+            "message": "Pair this device again.",
+            "requestId": "request-revoked",
+            "retryable": false,
+        ]])
+        responder.reply(instanceId: "studio", path: "/streams/stream_1/events", status: 401, json: revoked)
+        responder.reply(instanceId: "studio", path: "/streams/stream_1", status: 401, json: revoked)
+        release()
+
+        try await waitForStreamWorkToEnd(a)
+        try await assertNoNewRequests(on: "studio")
+    }
+
+    func testALeftBehindReconciliationEndsWhenItsMachineStopsAnswering() async throws {
+        let a = try model(owner: "studio")
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        a.setViewPresent(false)
+
+        responder.fail(instanceId: "studio", path: "/chats/c1/messages", code: .cannotConnectToHost)
+        responder.fail(instanceId: "studio", path: "/chats/c1", code: .cannotConnectToHost)
+        release()
+
+        try await waitForStreamWorkToEnd(a)
+        XCTAssertEqual(a.activeStreamID, "stream_1")
+        try await assertNoNewRequests(on: "studio")
+    }
+
+    func testAStreamStillOnScreenKeepsRetryingOnAnotherMachine() async throws {
+        let a = try model(owner: "studio")
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+
+        responder.fail(instanceId: "studio", path: "*", code: .cannotConnectToHost)
+        release()
+        try await waitUntil("a retry after the first failed attempt") { self.statusProbes() >= 2 }
+
+        // Leaving the screen ends it at the next failed attempt.
+        a.setViewPresent(false)
+        try await waitForStreamWorkToEnd(a)
+    }
+
+    func testALeftBehindStreamKeepsGoingWhileItsMachineAnswers() async throws {
+        let a = try model(owner: "studio")
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        a.setViewPresent(false)
+
+        // The event stream drops, but the machine still answers for its status.
+        responder.fail(instanceId: "studio", path: "/streams/stream_1/events", code: .networkConnectionLost)
+        responder.reply(instanceId: "studio", path: "/streams/stream_1", status: 200, json: json([
+            "streamId": "stream_1",
+            "chatId": "c1",
+            "turnId": "turn_1",
+            "state": "running",
+            "lastSequence": 0,
+            "updatedAt": "2026-11-05T09:00:02.000Z",
+        ]))
+        release()
+        try await waitUntil("the status probe") { self.statusProbes() >= 1 }
+
+        acceptTurn(on: "studio", stream: "stream_1", frames: [
+            frame(1, "text_delta", stream: "stream_1", payload: #"{"text":"streamed on studio"}"#),
+            frame(2, "done", stream: "stream_1", payload: #"{"messageId":"m2"}"#, terminal: true),
+        ])
+        transcript("from studio", "streamed on studio", on: "studio", revision: "r2")
+
+        try await waitUntil("the reply to settle") {
+            a.activeStreamID == nil && a.chat.messages.last?.text == "streamed on studio"
+        }
+    }
+
+    func testComingBackRestartsAStreamThatStopped() async throws {
+        let a = try model(owner: "studio")
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        a.setViewPresent(false)
+        responder.fail(instanceId: "studio", path: "*", code: .cannotConnectToHost)
+        release()
+        try await waitForStreamWorkToEnd(a)
+
+        acceptTurn(on: "studio", stream: "stream_1", frames: [
+            frame(1, "text_delta", stream: "stream_1", payload: #"{"text":"streamed on studio"}"#),
+            frame(2, "done", stream: "stream_1", payload: #"{"messageId":"m2"}"#, terminal: true),
+        ])
+        transcript("from studio", "streamed on studio", on: "studio", revision: "r2")
+        a.setViewPresent(true)
+
+        try await waitUntil("the reply to settle") {
+            a.activeStreamID == nil && a.chat.messages.last?.text == "streamed on studio"
+        }
+    }
+
+    func testComingBackRestartsAReconciliationThatStopped() async throws {
+        let a = try model(owner: "studio")
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
+        a.setViewPresent(false)
+        responder.fail(instanceId: "studio", path: "/chats/c1/messages", code: .cannotConnectToHost)
+        responder.fail(instanceId: "studio", path: "/chats/c1", code: .cannotConnectToHost)
+        release()
+        try await waitForStreamWorkToEnd(a)
+
+        transcript("from studio", "streamed on studio", on: "studio", revision: "r2")
+        a.setViewPresent(true)
+
+        try await waitUntil("the reply to settle") {
+            a.activeStreamID == nil && a.chat.messages.last?.text == "streamed on studio"
+        }
     }
 
     // MARK: Bot chats
