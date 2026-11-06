@@ -3,6 +3,10 @@ import SwiftUI
 struct AidenWorkspacesDirectoryView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var archiveStore: AidenWorkspaceArchiveStore
+    /// Set in the tab shell, where this list is a tab root: rows push routes and
+    /// the toolbar carries compose.
+    var tabChrome: AidenWorkspacesTabChrome? = nil
+    @Environment(\.aidenPalette) private var palette
     @State private var searchText = ""
     @State private var isShowingFolderBrowser = false
     @State private var isShowingNewWorkspace = false
@@ -72,35 +76,28 @@ struct AidenWorkspacesDirectoryView: View {
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(tabChrome == nil ? .automatic : .hidden)
+        .background {
+            if tabChrome != nil { palette.canvas.ignoresSafeArea() }
+        }
         .navigationTitle("Workspaces")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(tabChrome == nil ? .inline : .automatic)
         .searchable(text: $searchText, prompt: "Search workspaces")
+        .searchToolbarBehavior(tabChrome == nil ? .automatic : .minimize)
         .refreshable {
             await coordinator.refreshWorkspaces()
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        newWorkspaceName = ""
-                        isShowingNewWorkspace = true
-                    } label: {
-                        Label("New Workspace", systemImage: "folder.badge.plus")
-                    }
-
-                    Button { isConfirmingScratch = true } label: {
-                        Label("New Managed Scratch", systemImage: "hammer")
-                    }
-
-                    Button { isShowingFolderBrowser = true } label: {
-                        Label("Add Desktop Folder", systemImage: "folder.badge.plus")
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("Add workspace")
+            if let tabChrome {
+                DefaultToolbarItem(kind: .search, placement: .primaryAction)
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) { AidenNewChatButton(flow: tabChrome.newChat) }
+            } else {
+                ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }
             }
         }
         .sheet(isPresented: $isShowingFolderBrowser) {
@@ -240,11 +237,34 @@ struct AidenWorkspacesDirectoryView: View {
         }
     }
 
+    private var addWorkspaceMenu: some View {
+        Menu {
+            Button {
+                newWorkspaceName = ""
+                isShowingNewWorkspace = true
+            } label: {
+                Label("New Workspace", systemImage: "folder.badge.plus")
+            }
+
+            Button { isConfirmingScratch = true } label: {
+                Label("New Managed Scratch", systemImage: "hammer")
+            }
+
+            Button { isShowingFolderBrowser = true } label: {
+                Label("Add Desktop Folder", systemImage: "folder.badge.plus")
+            }
+        } label: {
+            Image(systemName: "plus")
+        }
+        .accessibilityLabel("Add workspace")
+    }
+
     private func interactiveRow(_ workspace: AidenWorkspace, isArchived: Bool) -> some View {
         AidenWorkspaceInteractiveRow(
             coordinator: coordinator,
             workspace: workspace,
             isArchived: isArchived,
+            route: tabChrome?.route(workspace),
             onRename: { requestRename(workspace) },
             onToggleArchive: { toggleArchive(workspace, isArchived: isArchived) },
             onRemove: workspace.isManagedWorktree || coordinator.workspaces.count <= 1
@@ -335,6 +355,8 @@ private struct AidenWorkspaceInteractiveRow: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
     let isArchived: Bool
+    /// What the row pushes in a stack of routes. Nil pushes the detail itself.
+    let route: AidenAppRoute?
     let onRename: () -> Void
     let onToggleArchive: () -> Void
     let onRemove: (() -> Void)?
@@ -351,6 +373,10 @@ private struct AidenWorkspaceInteractiveRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Unarchives this workspace on this device.")
+            } else if let route {
+                NavigationLink(value: route) {
+                    AidenWorkspaceRow(workspace: workspace)
+                }
             } else {
                 NavigationLink {
                     AidenDirectoryWorkspaceDetail(

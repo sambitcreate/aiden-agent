@@ -517,8 +517,30 @@ enum AidenDemoHosts {
                 json: AidenDemoContent.chatJSON(row: row, index: index)
             )
         }
+        // Compose, and a fork of each chat.
+        responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
+        responder.reply(instanceId: id, path: "/chats/\(AidenDemoContent.newChatId)", status: 200, json: AidenDemoContent.newChatJSON())
+        for (index, row) in rows.enumerated() {
+            guard let chatId = row["id"] as? String else { continue }
+            let forkId = "\(chatId)_fork"
+            responder.reply(
+                instanceId: id,
+                method: "POST",
+                path: "/chats/\(chatId)/fork",
+                status: 201,
+                json: AidenDemoContent.forkResultJSON(row: row, index: index, forkId: forkId)
+            )
+            responder.reply(
+                instanceId: id,
+                path: "/chats/\(forkId)",
+                status: 200,
+                json: AidenDemoContent.forkChatJSON(row: row, index: index, forkId: forkId)
+            )
+        }
+        // An older Mac's chat list, and a workspace page's on every machine.
+        responder.reply(instanceId: id, path: "/chats", status: 200, json: AidenDemoContent.legacyChatsJSON(rows))
         if installation.serverCapabilities == nil {
-            responder.reply(instanceId: id, path: "/chats", status: 200, json: AidenDemoContent.legacyChatsJSON(rows))
+            // Nothing else: an older Mac has no Bots.
         } else if machine.hasBot {
             let botPath = "/bots/\(AidenDemoContent.botId)"
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
@@ -552,7 +574,7 @@ private enum AidenDemoContent {
         "chat-agent-interrupt-v1", "chat-read-state-v1", "bot-delete-v1",
         "bot-durable-session-v1", "bot-routines-v1", "bot-connection-requests-v1",
         "bot-presets-v1", "bot-memory-v1", "bot-proactive-v1", "speech-request-gzip-v1",
-        "chat-triage-v1",
+        "chat-triage-v1", "chat-fork-v1",
     ]
 
     private static let titles = [
@@ -652,6 +674,55 @@ private enum AidenDemoContent {
             "updatedAt": updated,
             "revision": "chat_revision_\(index + 1)",
         ])
+    }
+
+    static let newChatId = "chat_demo_new"
+
+    /// What `POST /chats` answers. Every new demo chat is this one.
+    static func newChatJSON() -> Data {
+        let now = timestamp(Date())
+        return data([
+            "id": newChatId,
+            "workspaceId": "workspace_app",
+            "title": "New chat",
+            "messages": [[String: Any]](),
+            "createdAt": now,
+            "updatedAt": now,
+            "revision": "chat_revision_new",
+        ])
+    }
+
+    private static func forkObject(row: [String: Any], index: Int, forkId: String) -> [String: Any] {
+        let updated = row["updatedAt"] as? String ?? timestamp(Date())
+        let created = row["createdAt"] as? String ?? updated
+        let title = row["title"] as? String ?? "Chat"
+        return [
+            "id": forkId,
+            "workspaceId": row["workspaceId"] as Any,
+            "title": "\(title) (fork)",
+            "messages": [
+                ["id": "message_\(index + 1)_user", "role": "user", "text": "\(title). Where do we stand?", "createdAt": created],
+                ["id": "message_\(index + 1)_assistant", "role": "assistant", "text": answers[index % answers.count], "createdAt": updated],
+            ],
+            "createdAt": updated,
+            "updatedAt": updated,
+            "revision": "chat_revision_fork_\(index + 1)",
+            "forkedFrom": [
+                "chatId": row["id"] as Any,
+                "messageId": "message_\(index + 1)_assistant",
+                "position": "after",
+                "at": updated,
+            ],
+        ]
+    }
+
+    static func forkChatJSON(row: [String: Any], index: Int, forkId: String) -> Data {
+        data(forkObject(row: row, index: index, forkId: forkId))
+    }
+
+    /// What `POST /chats/{id}/fork` answers for a fork of the latest reply.
+    static func forkResultJSON(row: [String: Any], index: Int, forkId: String) -> Data {
+        data(["chat": forkObject(row: row, index: index, forkId: forkId)])
     }
 
     // MARK: Bot

@@ -17,6 +17,27 @@ extension AidenBotsAvailability {
     }
 }
 
+/// A page that's a sheet in the menu shell and pushed in the tab shell. A sheet
+/// needs its own stack, and a pushed page must not bring a second one.
+struct AidenPresentedStack<Content: View>: View {
+    let isPushed: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if isPushed {
+            content
+        } else {
+            NavigationStack { content }
+        }
+    }
+}
+
+private struct AidenArchiveSyncID: Equatable {
+    let instanceID: String?
+    let workspaceRevision: Int
+    let archivedIDs: Set<String>
+}
+
 /// The four tabs, behind `AppConfig.tabShellEnabled`. Each tab has its own stack.
 struct AidenAppShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
@@ -24,9 +45,13 @@ struct AidenAppShellView: View {
     private let inboxBadge: Int
     private let navigationStore: AidenAppNavigationStore
 
+    @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
-    @State private var homeModel = AidenHomeModel()
+    @State private var homeModel: AidenHomeModel
+    @State private var newChat: AidenNewChatFlow
+    @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
+    @State private var isShowingPairing = false
     @State private var searchText = ""
 
     init(
@@ -39,21 +64,43 @@ struct AidenAppShellView: View {
         _navigationRequest = navigationRequest
         self.inboxBadge = inboxBadge
         self.navigationStore = navigationStore
-        _navigation = State(initialValue: AidenAppNavigation(
+        let navigation = AidenAppNavigation(
             restoring: navigationStore.load(),
             installations: coordinator.installationStore.installations
-        ))
+        )
+        let home = AidenHomeModel()
+        _navigation = State(initialValue: navigation)
+        _homeModel = State(initialValue: home)
+        // A chat started from Workspaces stays there; anywhere else it's the Inbox's.
+        _newChat = State(initialValue: AidenNewChatFlow(coordinator: coordinator, home: home) { id in
+            navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
+        })
     }
 
     private var botsAvailability: AidenBotsAvailability {
         AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation)
     }
 
+    private var archiveSyncID: AidenArchiveSyncID {
+        AidenArchiveSyncID(
+            instanceID: coordinator.activeInstanceId,
+            workspaceRevision: coordinator.workspaceSnapshotRevision,
+            archivedIDs: coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
+        )
+    }
+
+    /// A machine that can't report usage leaves nothing to open, as on the old home.
+    private var usageUnavailable: Bool {
+        homeModel.usage == nil
+            && !AidenHomeLoadPlan(installation: coordinator.installationStore.activeInstallation).loadsUsage
+    }
+
     var body: some View {
         TabView(selection: $navigation.tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 NavigationStack(path: $navigation.inboxPath) {
-                    AidenInboxRootView(coordinator: coordinator, model: homeModel, onOpen: openChat)
+                    AidenInboxRootView(model: homeModel, onOpen: openChat)
+                        .toolbar { inboxToolbar }
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
@@ -61,14 +108,19 @@ struct AidenAppShellView: View {
 
             Tab("Bots", systemImage: AidenProductArea.bots.symbol, value: AidenAppTab.bots) {
                 NavigationStack(path: $navigation.botsPath) {
-                    AidenBotsRootView(availability: botsAvailability)
-                        .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                    AidenBotsTabView(
+                        coordinator: coordinator,
+                        navigation: navigation,
+                        availability: botsAvailability,
+                        onOpenBot: { id, bot in botSummaries[id] = bot }
+                    )
+                    .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
 
             Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
                 NavigationStack(path: $navigation.workspacesPath) {
-                    AidenTabPlaceholderView(title: "Workspaces", systemImage: "folder")
+                    AidenWorkspacesTabView(coordinator: coordinator, newChat: newChat)
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
@@ -82,8 +134,13 @@ struct AidenAppShellView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .defaultAdaptableTabBarPlacement(.sidebar)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
+        .aidenNewChatPresentation(newChat)
+        .sheet(isPresented: $isShowingPairing) {
+            AidenPairingView(coordinator: coordinator, onPaired: { isShowingPairing = false })
+        }
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -106,6 +163,37 @@ struct AidenAppShellView: View {
             navigationRequest = nil
             open(request)
         }
+        .onChange(of: coordinator.activeInstanceId) { _, _ in
+            // Scheduled tasks read the machine they opened on.
+            navigation.leave(.scheduled)
+        }
+        // Here, not on the Inbox: compose and Usage need it on every tab.
+        .task(id: AidenHomeLoadID(instanceID: coordinator.activeInstanceId, connectionState: coordinator.connectionState)) {
+            await homeModel.load(coordinator: coordinator)
+        }
+        .task(id: archiveSyncID) {
+            coordinator.setDeviceArchivedWorkspaceIDs(archiveSyncID.archivedIDs, for: archiveSyncID.instanceID)
+        }
+        .onAppear { coordinator.haptics.activate(scope: newChat.hapticScope) }
+        .onDisappear { coordinator.haptics.deactivate(scope: newChat.hapticScope) }
+    }
+
+    @ToolbarContentBuilder
+    private var inboxToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Button("Settings", systemImage: "gearshape") { navigation.open(.settings) }
+                Button("Scheduled tasks", systemImage: "calendar.badge.clock") { navigation.open(.scheduled) }
+                Button("Usage", systemImage: "chart.bar.xaxis") { navigation.open(.usage) }
+                    .disabled(usageUnavailable)
+            } label: {
+                Label("Inbox menu", systemImage: AidenChromeSymbols.overflowMenu)
+            }
+        }
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItem(placement: .primaryAction) {
+            AidenNewChatButton(flow: newChat)
+        }
     }
 
     @ViewBuilder
@@ -115,6 +203,8 @@ struct AidenAppShellView: View {
             AidenChatRouteView(
                 coordinator: coordinator,
                 id: id,
+                receipt: newChat.receipt(for: id),
+                autoStartVoice: navigation.chatStartingVoice == id,
                 onChatUpdated: { chat in
                     if id.instanceId == coordinator.activeInstanceId { homeModel.accept(chat) }
                 },
@@ -122,21 +212,53 @@ struct AidenAppShellView: View {
                     if id.instanceId == coordinator.activeInstanceId {
                         homeModel.setActivity(activity, forChatID: chatID)
                     }
+                },
+                onForkOpened: { fork in
+                    guard id.instanceId == coordinator.activeInstanceId else { return }
+                    homeModel.accept(fork)
+                    homeModel.markViewed(chatID: fork.id)
+                },
+                onBotChat: { bot in navigation.replace(route, with: .bot(bot)) }
+            )
+            .onDisappear { navigation.finishStartingVoice(id) }
+        case .bot(let id):
+            AidenBotRouteView(coordinator: coordinator, id: id, initialSummary: botSummaries[id])
+        case .workspace(let id):
+            AidenWorkspaceRouteView(
+                coordinator: coordinator,
+                id: id,
+                onRemoved: { navigation.leave(route) },
+                onChatUpdated: { homeModel.accept($0) },
+                onChatRemoved: { homeModel.removeChat(id: $0) },
+                onChatActivityChanged: { chatID, activity in
+                    homeModel.setActivity(activity, forChatID: chatID)
                 }
             )
-        case .bot(let id):
-            let installation = coordinator.installationStore.installations.first { $0.id == id.instanceId }
-            AidenBotsRootView(availability: AidenBotsAvailability.resolve(installation))
-        case .workspace:
-            AidenTabPlaceholderView(title: "Workspace", systemImage: "folder")
         case .machines, .machine:
             AidenTabPlaceholderView(title: "Machines", systemImage: "desktopcomputer")
         case .settings:
-            AidenTabPlaceholderView(title: "Settings", systemImage: "gearshape")
+            AidenAppSettingsView(
+                coordinator: coordinator,
+                appearance: appearance,
+                addInstallation: { isShowingPairing = true },
+                isPushed: true
+            )
         case .scheduled:
-            AidenTabPlaceholderView(title: "Scheduled tasks", systemImage: "calendar")
+            AidenScheduledTasksView(coordinator: coordinator, isPushed: true)
         case .usage:
-            AidenTabPlaceholderView(title: "Usage", systemImage: "chart.bar")
+            if let usage = homeModel.usage {
+                AidenUsageView(usage: usage, providers: homeModel.modelCatalog?.providers ?? [], isPushed: true)
+            } else {
+                AidenUsagePendingView(
+                    isOffline: {
+                        if case .offline = coordinator.connectionState { return true }
+                        return false
+                    }(),
+                    failed: homeModel.usageLoadFailed,
+                    retry: { Task { await homeModel.load(coordinator: coordinator) } },
+                    isPushed: true
+                )
+            }
         }
     }
 
@@ -158,7 +280,7 @@ struct AidenAppShellView: View {
             installations: coordinator.installationStore.installations,
             activeInstanceId: coordinator.activeInstanceId
         ) {
-            navigation.open(route)
+            navigation.open(route, startsVoice: request.startsVoice)
         } else {
             coordinator.presentedError = String(localized: "This machine is no longer paired. Pair it again to continue.")
         }
@@ -168,12 +290,6 @@ struct AidenAppShellView: View {
 /// The selected machine's chats, in the order it lists them, until the Inbox
 /// tab has its own view.
 private struct AidenInboxRootView: View {
-    private struct LoadID: Equatable {
-        let instanceID: String?
-        let connectionState: AidenRemoteConnectionState
-    }
-
-    let coordinator: AidenRemoteCoordinator
     let model: AidenHomeModel
     let onOpen: (AidenChatSummary) -> Void
 
@@ -191,9 +307,6 @@ private struct AidenInboxRootView: View {
             if model.chats.isEmpty { emptyState }
         }
         .navigationTitle("Inbox")
-        .task(id: LoadID(instanceID: coordinator.activeInstanceId, connectionState: coordinator.connectionState)) {
-            await model.load(coordinator: coordinator)
-        }
     }
 
     @ViewBuilder
@@ -205,27 +318,6 @@ private struct AidenInboxRootView: View {
             ContentUnavailableView("No chats yet", systemImage: "tray")
         case .failed(let message):
             ContentUnavailableView("Chats unavailable", systemImage: "tray", description: Text(message))
-        }
-    }
-}
-
-/// Bots stays selectable when a machine can't offer them, and says why.
-private struct AidenBotsRootView: View {
-    let availability: AidenBotsAvailability
-
-    @Environment(\.aidenPalette) private var palette
-
-    var body: some View {
-        if let explanation = availability.tabExplanation {
-            ContentUnavailableView(
-                "Bots unavailable",
-                systemImage: "person.2.slash",
-                description: Text(explanation)
-            )
-            .background(palette.canvas.ignoresSafeArea())
-            .navigationTitle("Bots")
-        } else {
-            AidenTabPlaceholderView(title: "Bots", systemImage: AidenProductArea.bots.symbol)
         }
     }
 }
@@ -250,22 +342,32 @@ final class AidenChatRouteModel {
     enum State {
         case loading
         case ready(AidenChat, owner: AidenRemoteRequestContext)
+        /// A Bot's chat. Sending needs the Bot's own health check, so it belongs
+        /// on a `.bot` route for this Bot.
+        case botChat(AidenHostObjectID)
         case unavailable(String)
     }
 
     let id: AidenHostObjectID
     private(set) var state = State.loading
     @ObservationIgnored private let cache: AidenChatCache
+    @ObservationIgnored private let receipt: AidenChat?
 
-    init(id: AidenHostObjectID, cache: AidenChatCache = .shared) {
+    /// `receipt` is the chat as the machine just created it, when there is one.
+    init(id: AidenHostObjectID, cache: AidenChatCache = .shared, receipt: AidenChat? = nil) {
         self.id = id
         self.cache = cache
+        self.receipt = receipt
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
         if case .ready = state { return }
         guard let owner = try? coordinator.ownerContext(for: id.instanceId), owner.deviceId == id.deviceId else {
             state = .unavailable(String(localized: "This machine is no longer paired. Pair it again to open this chat."))
+            return
+        }
+        if let receipt {
+            present(receipt, owner: owner, coordinator: coordinator)
             return
         }
         // Saved transcript first: the chat opens at once and refreshes itself.
@@ -294,12 +396,14 @@ final class AidenChatRouteModel {
             state = .unavailable(String(localized: "This chat is no longer available."))
             return
         }
-        if chat.isBotChat {
+        if let botId = chat.botId {
             let installation = coordinator.installationStore.installations.first { $0.id == id.instanceId }
             if let explanation = AidenBotsAvailability.resolve(installation).tabExplanation {
                 state = .unavailable(explanation)
-                return
+            } else {
+                state = .botChat(AidenHostObjectID(instanceId: id.instanceId, deviceId: id.deviceId, objectId: botId))
             }
+            return
         }
         state = .ready(chat, owner: owner)
     }
@@ -309,18 +413,28 @@ private struct AidenChatRouteView: View {
     let coordinator: AidenRemoteCoordinator
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
+    let onForkOpened: @MainActor (AidenChat) -> Void
+    let onBotChat: @MainActor (AidenHostObjectID) -> Void
+    let autoStartVoice: Bool
     @State private var model: AidenChatRouteModel
 
     init(
         coordinator: AidenRemoteCoordinator,
         id: AidenHostObjectID,
+        receipt: AidenChat?,
+        autoStartVoice: Bool,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void,
-        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void
+        onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void,
+        onForkOpened: @escaping @MainActor (AidenChat) -> Void,
+        onBotChat: @escaping @MainActor (AidenHostObjectID) -> Void
     ) {
         self.coordinator = coordinator
         self.onChatUpdated = onChatUpdated
         self.onChatActivityChanged = onChatActivityChanged
-        _model = State(initialValue: AidenChatRouteModel(id: id))
+        self.onForkOpened = onForkOpened
+        self.onBotChat = onBotChat
+        self.autoStartVoice = autoStartVoice
+        _model = State(initialValue: AidenChatRouteModel(id: id, receipt: receipt))
     }
 
     var body: some View {
@@ -328,24 +442,19 @@ private struct AidenChatRouteView: View {
             switch model.state {
             case .loading:
                 ProgressView()
-            case .ready(let chat, let owner) where chat.isBotChat:
-                // Sending needs the Bot's own health check, which the Bots tab brings.
-                AidenChatDetailView(
-                    coordinator: coordinator,
-                    chat: chat,
-                    owner: owner,
-                    allowsMutations: false,
-                    onChatUpdated: onChatUpdated,
-                    onChatActivityChanged: onChatActivityChanged
-                )
             case .ready(let chat, let owner):
                 AidenForkableChatDetailView(
                     coordinator: coordinator,
                     chat: chat,
                     owner: owner,
+                    autoStartVoice: autoStartVoice,
                     onChatUpdated: onChatUpdated,
-                    onChatActivityChanged: onChatActivityChanged
+                    onChatActivityChanged: onChatActivityChanged,
+                    onForkOpened: onForkOpened
                 )
+            case .botChat(let bot):
+                ProgressView()
+                    .task { onBotChat(bot) }
             case .unavailable(let message):
                 ContentUnavailableView(
                     "Chat unavailable",

@@ -1199,7 +1199,7 @@ private struct AidenBotShellView: View {
 
 /// Matches the stable Bot chat chrome closely enough that a cache miss does
 /// not cause a blank screen or layout jump while the Mac returns the chat.
-private struct AidenBotChatSkeletonView: View {
+struct AidenBotChatSkeletonView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
 

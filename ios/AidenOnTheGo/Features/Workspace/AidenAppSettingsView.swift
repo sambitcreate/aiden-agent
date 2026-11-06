@@ -6,6 +6,8 @@ struct AidenAppSettingsView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
     let addInstallation: () -> Void
+    /// True when a stack has pushed this page, so Back replaces Done.
+    var isPushed = false
 
     @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
@@ -60,7 +62,7 @@ struct AidenAppSettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        AidenPresentedStack(isPushed: isPushed) {
             Form {
                 Section("Aiden Agent") {
                     LabeledContent(
@@ -173,8 +175,10 @@ struct AidenAppSettingsView: View {
             .navigationTitle("App Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !isPushed {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }

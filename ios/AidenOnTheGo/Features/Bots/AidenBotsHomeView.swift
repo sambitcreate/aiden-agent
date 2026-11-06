@@ -268,6 +268,10 @@ struct AidenBotsHomeView: View {
     let onCreateConversation: (AidenBotSummary) async -> Void
     /// Opens a Bot's durable session (`bot-durable-session-v1`).
     var onOpenBotSession: (AidenBotSummary) -> Void = { _ in }
+    /// In the tab shell the navigation bar carries the title and the actions, the
+    /// tabs switch areas, and a profile is always a sheet. The menu shell's own
+    /// header and split view stay out.
+    var isInTabShell = false
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -385,7 +389,9 @@ struct AidenBotsHomeView: View {
 
     var body: some View {
         Group {
-            if horizontalSizeClass == .regular {
+            if isInTabShell {
+                tabHome
+            } else if horizontalSizeClass == .regular {
                 NavigationSplitView {
                     homeScroll
                         .toolbar(.hidden, for: .navigationBar)
@@ -515,15 +521,39 @@ struct AidenBotsHomeView: View {
         }
     }
 
+    private var tabHome: some View {
+        homeScroll
+            .navigationTitle("Bots")
+            .searchable(text: $query, prompt: "Search Bots")
+            .searchToolbarBehavior(.minimize)
+            .toolbar {
+                DefaultToolbarItem(kind: .search, placement: .primaryAction)
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        createPrefill = nil
+                        presentedSheet = .create
+                    } label: {
+                        Label("New Bot", systemImage: "plus")
+                    }
+                    .disabled(!canCreateBot)
+                }
+            }
+    }
+
     private var homeScroll: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                header
+                if !isInTabShell {
+                    header
+                }
                 if isSearching {
                     searchField
                 }
                 if let loadError {
                     statusBanner(loadError)
+                } else if isInTabShell, case .offline = coordinator.connectionState {
+                    statusBanner("Offline — showing saved Bots")
                 }
                 messagingControl
                 content
@@ -850,7 +880,7 @@ struct AidenBotsHomeView: View {
     }
 
     private func presentProfile(_ bot: AidenBotSummary) {
-        if horizontalSizeClass == .regular {
+        if horizontalSizeClass == .regular, !isInTabShell {
             selectedBot = bot
         } else {
             presentedSheet = .profile(bot)

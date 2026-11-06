@@ -21,6 +21,9 @@
 		A2E000000000000000000001 /* AidenAppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000011 /* AidenAppNavigation.swift */; };
 		A2E000000000000000000002 /* AidenAppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000012 /* AidenAppShellView.swift */; };
 		A2E000000000000000000003 /* AidenAppShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000013 /* AidenAppShellTests.swift */; };
+		A2E000000000000000000004 /* AidenBotsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000014 /* AidenBotsTabView.swift */; };
+		A2E000000000000000000005 /* AidenWorkspacesTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000015 /* AidenWorkspacesTabView.swift */; };
+		A2E000000000000000000006 /* AidenNewChatFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000016 /* AidenNewChatFlow.swift */; };
 		DE30000000000000000000C1 /* AidenShellUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000C2 /* AidenShellUITests.swift */; };
 		DE30000000000000000000C3 /* AidenStateMatrix.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE30000000000000000000C4 /* AidenStateMatrix.swift */; };
 		D85700000000000000000001 /* AidenBotAllowedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D85700000000000000000002 /* AidenBotAllowedTests.swift */; };
@@ -252,6 +255,9 @@
 		A2E000000000000000000011 /* AidenAppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppNavigation.swift; sourceTree = "<group>"; };
 		A2E000000000000000000012 /* AidenAppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppShellView.swift; sourceTree = "<group>"; };
 		A2E000000000000000000013 /* AidenAppShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppShellTests.swift; sourceTree = "<group>"; };
+		A2E000000000000000000014 /* AidenBotsTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotsTabView.swift; sourceTree = "<group>"; };
+		A2E000000000000000000015 /* AidenWorkspacesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspacesTabView.swift; sourceTree = "<group>"; };
+		A2E000000000000000000016 /* AidenNewChatFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewChatFlow.swift; sourceTree = "<group>"; };
 		DE30000000000000000000C2 /* AidenShellUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenShellUITests.swift; sourceTree = "<group>"; };
 		DE30000000000000000000C4 /* AidenStateMatrix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenStateMatrix.swift; sourceTree = "<group>"; };
 		DE30000000000000000000C5 /* AidenOnTheGoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AidenOnTheGoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -729,6 +735,9 @@
 			children = (
 				A2E000000000000000000011 /* AidenAppNavigation.swift */,
 				A2E000000000000000000012 /* AidenAppShellView.swift */,
+				A2E000000000000000000014 /* AidenBotsTabView.swift */,
+				A2E000000000000000000015 /* AidenWorkspacesTabView.swift */,
+				A2E000000000000000000016 /* AidenNewChatFlow.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -1219,6 +1228,9 @@
 				A0E200000000000000000007 /* AidenHostConnectScheduler.swift in Sources */,
 				A2E000000000000000000001 /* AidenAppNavigation.swift in Sources */,
 				A2E000000000000000000002 /* AidenAppShellView.swift in Sources */,
+				A2E000000000000000000004 /* AidenBotsTabView.swift in Sources */,
+				A2E000000000000000000005 /* AidenWorkspacesTabView.swift in Sources */,
+				A2E000000000000000000006 /* AidenNewChatFlow.swift in Sources */,
 				A0E200000000000000000001 /* AidenHostConnection.swift in Sources */,
 				A0E200000000000000000004 /* AidenHostRegistry.swift in Sources */,
 				1A2B3C4D5E6F700000000001 /* AidenOnTheGoApp.swift in Sources */,

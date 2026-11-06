@@ -114,6 +114,9 @@ final class AidenAppNavigation {
     var botsPath: [AidenAppRoute]
     var workspacesPath: [AidenAppRoute]
 
+    /// Not saved: a relaunch must not open the microphone.
+    private(set) var chatStartingVoice: AidenHostObjectID?
+
     init() {
         tab = .inbox
         inboxPath = []
@@ -140,14 +143,43 @@ final class AidenAppNavigation {
 
     /// Selects the route's tab and shows the route there. A route already on
     /// that path is gone back to, so one chat never has two screens.
-    func open(_ route: AidenAppRoute) {
-        tab = route.tab
-        switch route.tab {
+    /// `startsVoice` is a voice shortcut's: the chat starts listening when it opens.
+    func open(_ route: AidenAppRoute, startsVoice: Bool = false) {
+        open(route, on: route.tab)
+        if startsVoice, case .chat(let id) = route {
+            chatStartingVoice = id
+        }
+    }
+
+    func finishStartingVoice(_ id: AidenHostObjectID) {
+        if chatStartingVoice == id { chatStartingVoice = nil }
+    }
+
+    /// Shows the route on a tab other than its own: a chat started from the
+    /// Workspaces tab stays there, so Back returns to where it was started.
+    func open(_ route: AidenAppRoute, on tab: AidenAppTab) {
+        chatStartingVoice = nil
+        self.tab = tab
+        switch tab {
         case .inbox: Self.show(route, on: &inboxPath)
         case .bots: Self.show(route, on: &botsPath)
         case .workspaces: Self.show(route, on: &workspacesPath)
         case .search: break
         }
+    }
+
+    /// Goes back to just below the route, wherever it is. Nothing happens when
+    /// it isn't on a path.
+    func leave(_ route: AidenAppRoute) {
+        Self.remove(route, from: &inboxPath)
+        Self.remove(route, from: &botsPath)
+        Self.remove(route, from: &workspacesPath)
+    }
+
+    /// Swaps a route that turned out to be something else for the right one.
+    func replace(_ route: AidenAppRoute, with replacement: AidenAppRoute) {
+        leave(route)
+        open(replacement)
     }
 
     /// A tab holding a route to a machine that's gone returns to its root.
@@ -158,6 +190,11 @@ final class AidenAppNavigation {
         inboxPath = reachable(inboxPath)
         botsPath = reachable(botsPath)
         workspacesPath = reachable(workspacesPath)
+    }
+
+    private static func remove(_ route: AidenAppRoute, from path: inout [AidenAppRoute]) {
+        guard let index = path.firstIndex(of: route) else { return }
+        path.removeSubrange(index...)
     }
 
     private static func show(_ route: AidenAppRoute, on path: inout [AidenAppRoute]) {

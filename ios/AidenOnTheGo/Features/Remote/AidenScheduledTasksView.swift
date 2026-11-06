@@ -641,15 +641,19 @@ struct AidenScheduledTasksView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     @State private var model: AidenScheduledTasksModel
     @State private var editorTask: AidenScheduledTask?
     @State private var isCreating = false
     @State private var isShowingSettings = false
     @State private var searchText = ""
     @State private var filter: TaskFilter = .all
+    private let isPushed: Bool
 
-    init(coordinator: AidenRemoteCoordinator) {
+    /// `isPushed` is true when a stack has pushed this page, so Back replaces Done.
+    init(coordinator: AidenRemoteCoordinator, isPushed: Bool = false) {
         _model = State(initialValue: AidenScheduledTasksModel(coordinator: coordinator))
+        self.isPushed = isPushed
     }
 
     private var visibleTasks: [AidenScheduledTask] {
@@ -669,7 +673,7 @@ struct AidenScheduledTasksView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        AidenPresentedStack(isPushed: isPushed) {
             List {
                 Section {
                     Label {
@@ -763,7 +767,9 @@ struct AidenScheduledTasksView: View {
             .navigationTitle("Scheduled Tasks")
             .searchable(text: $searchText, prompt: "Search tasks")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                if !isPushed {
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                }
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button { isShowingSettings = true } label: { Label("Settings", systemImage: "gearshape") }
                         .disabled(!model.canManageSchedules || !model.isConnected || model.isMutating)
@@ -782,7 +788,8 @@ struct AidenScheduledTasksView: View {
             .safeAreaInset(edge: .top) {
                 if model.canReadSchedules && !model.isConnected {
                     Text("Offline — task history remains visible, but changes are disabled.")
-                        .font(.footnote).frame(maxWidth: .infinity).padding(8).background(.thinMaterial)
+                        .font(.footnote).frame(maxWidth: .infinity).padding(8)
+                        .background(isPushed ? AnyShapeStyle(palette.raised) : AnyShapeStyle(.thinMaterial))
                 }
             }
             .sheet(isPresented: $isCreating) {

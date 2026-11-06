@@ -84,6 +84,19 @@ struct ContentView: View {
     @State private var connectionRecoveryDestination: ConnectionRecoveryDestination?
     @State private var connectScheduler: AidenHostConnectScheduler?
 
+    @ViewBuilder
+    private var connectionRecovery: some View {
+        if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
+            AidenConnectionRecoveryView(
+                coordinator: coordinator,
+                issue: issue,
+                usesMaterial: !AppConfig.tabShellEnabled
+            ) {
+                connectionRecoveryDestination = .installations
+            }
+        }
+    }
+
     var body: some View {
         Group {
             switch coordinator.connectionState {
@@ -97,7 +110,12 @@ struct ContentView: View {
                 )
             case .connecting, .connected, .offline:
                 if AppConfig.tabShellEnabled {
-                    AidenAppShellView(coordinator: coordinator, navigationRequest: $navigationRequest)
+                    // Above the shell, not an inset on it: an inset leaves the
+                    // navigation bars behind the banner, Back included.
+                    VStack(spacing: 0) {
+                        connectionRecovery
+                        AidenAppShellView(coordinator: coordinator, navigationRequest: $navigationRequest)
+                    }
                 } else {
                     AidenProductShellView(
                         coordinator: coordinator,
@@ -107,10 +125,8 @@ struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
-                AidenConnectionRecoveryView(coordinator: coordinator, issue: issue) {
-                    connectionRecoveryDestination = .installations
-                }
+            if !AppConfig.tabShellEnabled {
+                connectionRecovery
             }
         }
         // Keep the sheet on the stable root so a foreground reconnect cannot
@@ -408,7 +424,12 @@ struct ContentView: View {
 struct AidenConnectionRecoveryView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let issue: AidenConnectionIssue
+    /// The menu shell's banner sits on material. The tab shell keeps glass and
+    /// material for its bars, so there it's a plain surface.
+    var usesMaterial = true
     let switchConnection: () -> Void
+
+    @Environment(\.aidenPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -433,7 +454,7 @@ struct AidenConnectionRecoveryView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(.regularMaterial)
+        .background(usesMaterial ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(palette.raised))
         .accessibilityElement(children: .contain)
     }
 

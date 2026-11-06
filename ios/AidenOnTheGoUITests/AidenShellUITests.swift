@@ -205,6 +205,226 @@ final class AidenShellUITests: XCTestCase {
         oldHost.terminate()
     }
 
+    /// Every page the tabs reach, for the review of what the tab bar and the
+    /// toolbars do on each one.
+    func testCaptureTabDestinations() throws {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            try AidenStateMatrix.widenTheWindow(of: app)
+        }
+        openInboxMenu(in: app)
+        XCTAssertTrue(app.buttons["Settings"].firstMatch.waitForExistence(timeout: 5))
+        AidenStateMatrix.capture("tabs-inbox-menu", in: self)
+        app.buttons["Settings"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["App Settings"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-settings", in: self)
+        goBack(in: app)
+
+        openInboxMenu(in: app)
+        app.buttons["Scheduled tasks"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Scheduled Tasks"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-scheduled", in: self)
+        goBack(in: app)
+
+        openInboxMenu(in: app)
+        app.buttons["Usage"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Usage"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-usage", in: self)
+        goBack(in: app)
+
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons["New chat"].firstMatch.tap()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Existing Workspace")).firstMatch
+                .waitForExistence(timeout: 5)
+        )
+        AidenStateMatrix.capture("tabs-compose", in: self)
+        AidenStateMatrix.tapOutsidePopover(in: app)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // A chat pushed from a workspace page, and its fork: neither shows the tab bar.
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        let workspace = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden Agent")).firstMatch
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10))
+        workspace.tap()
+        XCTAssertTrue(app.navigationBars["Aiden Agent"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-workspace-page", in: self)
+        let chat = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")
+        ).firstMatch
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat on the workspace page")
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertFalse(app.tabBars.firstMatch.isHittable, "The tab bar stayed over a workspace's chat")
+        AidenStateMatrix.capture("tabs-workspace-chat", in: self)
+
+        app.navigationBars.buttons["More"].firstMatch.tap()
+        let fork = app.buttons["Fork"].firstMatch
+        XCTAssertTrue(fork.waitForExistence(timeout: 5), "No Fork in the chat's menu")
+        fork.tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "(fork)")).firstMatch
+                .waitForExistence(timeout: 10),
+            "The fork did not open"
+        )
+        XCTAssertFalse(app.tabBars.firstMatch.isHittable, "The tab bar stayed over a fork")
+        AidenStateMatrix.capture("tabs-fork", in: self)
+        goBack(in: app)
+        goBack(in: app)
+        goBack(in: app)
+
+        AidenStateMatrix.openArea("Bots", in: app)
+        let bot = botRow(in: app)
+        XCTAssertTrue(bot.waitForExistence(timeout: 10))
+        bot.tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                .waitForExistence(timeout: 10)
+        )
+        AidenStateMatrix.capture("tabs-bot-chat", in: self)
+        app.terminate()
+
+        let offline = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: offline).waitForExistence(timeout: 10))
+        openInboxMenu(in: offline)
+        offline.buttons["Settings"].firstMatch.tap()
+        let installations = offline.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Paired Installations")
+        ).firstMatch
+        XCTAssertTrue(installations.waitForExistence(timeout: 10))
+        installations.tap()
+        let laptop = offline.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch
+        XCTAssertTrue(laptop.waitForExistence(timeout: 10), "No offline machine to select")
+        laptop.tap()
+        let failure = offline.alerts.buttons["OK"].firstMatch
+        if failure.waitForExistence(timeout: 5) { failure.tap() }
+        Thread.sleep(forTimeInterval: 1)
+        AidenStateMatrix.capture("tabs-offline-settings", in: self)
+        goBack(in: offline)
+        XCTAssertTrue(offline.navigationBars["Inbox"].waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1)
+        AidenStateMatrix.capture("tabs-offline-inbox", in: self)
+        AidenStateMatrix.openArea("Bots", in: offline)
+        Thread.sleep(forTimeInterval: 1)
+        AidenStateMatrix.capture("tabs-offline-bots", in: self)
+        AidenStateMatrix.openArea("Workspaces", in: offline)
+        Thread.sleep(forTimeInterval: 1)
+        AidenStateMatrix.capture("tabs-offline-workspaces", in: self)
+        offline.terminate()
+    }
+
+    // MARK: Everything the old home reached
+
+    /// Settings, Scheduled tasks, Usage, Workspaces, Bots and a new chat, all from
+    /// the tabs. A destination that cannot be reached fails the test.
+    func testEveryOldHomeDestinationIsReachable() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        for (entry, title) in [("Settings", "App Settings"), ("Scheduled tasks", "Scheduled Tasks"), ("Usage", "Usage")] {
+            openInboxMenu(in: app)
+            let item = app.buttons[entry].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5), "No \(entry) in the Inbox menu")
+            item.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 10), "\(entry) did not open")
+            goBack(in: app)
+            XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "\(entry) did not go back")
+        }
+
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        let workspace = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden Agent")).firstMatch
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10), "No workspace in the list")
+        workspace.tap()
+        XCTAssertTrue(app.navigationBars["Aiden Agent"].waitForExistence(timeout: 10), "The workspace did not open")
+        goBack(in: app)
+
+        AidenStateMatrix.openArea("Bots", in: app)
+        let bot = botRow(in: app)
+        XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot on the Bots tab")
+        bot.tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                .waitForExistence(timeout: 10),
+            "The Bot did not open"
+        )
+        XCTAssertFalse(app.tabBars.firstMatch.isHittable, "The tab bar stayed over the Bot chat")
+        goBack(in: app)
+
+        for area in ["Inbox", "Workspaces"] {
+            AidenStateMatrix.openArea(area, in: app)
+            let compose = app.navigationBars.buttons["New chat"].firstMatch
+            XCTAssertTrue(compose.waitForExistence(timeout: 10), "No compose button on \(area)")
+            compose.tap()
+            XCTAssertTrue(
+                app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Existing Workspace")).firstMatch
+                    .waitForExistence(timeout: 5),
+                "Compose on \(area) did not offer a workspace"
+            )
+            AidenStateMatrix.tapOutsidePopover(in: app)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+
+        // The whole flow, through to an open chat.
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        app.navigationBars.buttons["New chat"].firstMatch.tap()
+        let existing = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Existing Workspace")).firstMatch
+        XCTAssertTrue(existing.waitForExistence(timeout: 5))
+        existing.tap()
+        let choice = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden Agent")).firstMatch
+        XCTAssertTrue(app.navigationBars["Choose workspace"].waitForExistence(timeout: 5), "No workspace picker")
+        choice.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The new chat did not open")
+        XCTAssertFalse(app.tabBars.firstMatch.isHittable, "The tab bar stayed over the new chat")
+        app.terminate()
+    }
+
+    /// The tabs become a sidebar when the window has the width for one.
+    func testIPadUsesASidebar() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Needs a regular-width window")
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
+        try AidenStateMatrix.widenTheWindow(of: app)
+        for title in ["Inbox", "Bots", "Workspaces", "Search"] {
+            XCTAssertTrue(
+                AidenStateMatrix.sidebarRow(title, in: app).waitForExistence(timeout: 10),
+                "\(title) is not in the sidebar"
+            )
+        }
+        XCTAssertFalse(app.tabBars.firstMatch.isHittable, "A tab bar showed beside the sidebar")
+        AidenStateMatrix.capture("tabs-ipad-sidebar", in: self)
+
+        for title in ["Bots", "Workspaces", "Inbox"] {
+            // In a window this narrow the sidebar sits over the page and closes on a tap.
+            let row = AidenStateMatrix.sidebarRow(title, in: app)
+            if !row.exists {
+                app.buttons.matching(NSPredicate(format: "identifier ==[c] %@", "ToggleSidebar")).firstMatch.tap()
+            }
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "The sidebar did not come back for \(title)")
+            row.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 10), "\(title) did not open from the sidebar")
+        }
+        app.terminate()
+    }
+
+    /// Size classes pick the layout, never the device: a narrow window on an iPad
+    /// gets the same bottom tabs as a phone.
+    func testCompactWidthUsesTabs() throws {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            try AidenStateMatrix.narrowTheWindow(of: app)
+            AidenStateMatrix.capture("tabs-ipad-compact-window", in: self)
+        }
+
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 10), "No tab bar at compact width")
+        for title in ["Inbox", "Bots", "Workspaces"] {
+            XCTAssertTrue(app.tabBars.buttons[title].firstMatch.exists, "No \(title) tab at compact width")
+        }
+        XCTAssertFalse(AidenStateMatrix.sidebarRow("Bots", in: app).exists, "A sidebar showed at compact width")
+        app.terminate()
+    }
+
     /// Light, dark and the largest accessibility text, so later work has a
     /// "before" to compare with. A screen that cannot be reached fails the test
     /// instead of being skipped.
@@ -311,12 +531,21 @@ final class AidenShellUITests: XCTestCase {
         ).firstMatch
     }
 
+    private func openInboxMenu(in app: XCUIApplication) {
+        let menu = app.navigationBars.buttons["Inbox menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "No Inbox menu")
+        menu.tap()
+        // An open sidebar sits over the page in a narrow window: the first tap closes it.
+        if !app.buttons["Settings"].firstMatch.waitForExistence(timeout: 2) { menu.tap() }
+    }
+
     private func botRow(in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Scout")).firstMatch
     }
 
     private func goBack(in app: XCUIApplication) {
-        let back = app.navigationBars.buttons.firstMatch
+        let named = app.navigationBars.buttons["BackButton"].firstMatch
+        let back = named.waitForExistence(timeout: 2) ? named : app.navigationBars.buttons.firstMatch
         if back.waitForExistence(timeout: 5) { back.tap() }
     }
 

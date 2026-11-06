@@ -9,9 +9,11 @@ struct AidenUsagePendingView: View {
     let isOffline: Bool
     let failed: Bool
     let retry: () -> Void
+    /// True when a stack has pushed this page, so Back replaces Done.
+    var isPushed = false
 
     var body: some View {
-        NavigationStack {
+        AidenPresentedStack(isPushed: isPushed) {
             Group {
                 if isOffline {
                     ContentUnavailableView(
@@ -50,8 +52,10 @@ struct AidenUsagePendingView: View {
             .navigationTitle("Usage")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !isPushed {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }
@@ -63,6 +67,8 @@ struct AidenUsageView: View {
     @Environment(\.aidenPalette) private var palette
     let usage: AidenUsageSummary
     let providers: [AidenProvider]
+    /// True when a stack has pushed this page, so Back replaces Done.
+    var isPushed = false
 
     private var heatmapDays: [AidenUsageHeatmapDay] {
         AidenUsagePresentation.heatmapDays(for: usage)
@@ -87,7 +93,7 @@ struct AidenUsageView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        AidenPresentedStack(isPushed: isPushed) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 28) {
                     usageHero
@@ -106,8 +112,10 @@ struct AidenUsageView: View {
             .navigationTitle("Usage")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !isPushed {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }

@@ -100,8 +100,67 @@ enum AidenStateMatrix {
     /// A tab, in a bottom bar or a sidebar.
     static func tab(_ title: String, in app: XCUIApplication) -> XCUIElement {
         let inBar = app.tabBars.buttons[title].firstMatch
-        return inBar.exists ? inBar : app.buttons[title].firstMatch
+        if inBar.exists { return inBar }
+        let inSidebar = sidebarRow(title, in: app)
+        return inSidebar.exists ? inSidebar : app.buttons[title].firstMatch
     }
+
+    /// A tab's row in the list a regular-width window shows the tabs in.
+    static func sidebarRow(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.cells.matching(NSPredicate(format: "label == %@", title)).firstMatch
+    }
+
+    /// The window the app draws in. An iPad's first window can keep the size the
+    /// scene started at, so it says nothing about the size on screen.
+    static func window(of app: XCUIApplication) -> XCUIElement {
+        app.windows.allElementsBoundByIndex.last ?? app.windows.firstMatch
+    }
+
+    /// Taps beside an open popover, inside the window.
+    static func tapOutsidePopover(in app: XCUIApplication) {
+        window(of: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+    }
+
+    /// Drags a bottom corner of the window to `x`, as a person resizes one.
+    private static func dragCorner(of app: XCUIApplication, left: Bool, toX x: CGFloat) {
+        let frame = window(of: app).frame
+        let screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            .coordinate(withNormalizedOffset: .zero)
+        let y = frame.maxY - 6
+        let corner = screen.withOffset(CGVector(dx: left ? frame.minX + 6 : frame.maxX - 6, dy: y))
+        corner.press(forDuration: 0.6, thenDragTo: screen.withOffset(CGVector(dx: x, dy: y)))
+        Thread.sleep(forTimeInterval: 2)
+    }
+
+    /// Makes the window narrow enough for compact width. Skips when it can't, so a
+    /// simulator without resizable windows says so instead of passing. The system
+    /// keeps a window's size between launches.
+    static func narrowTheWindow(of app: XCUIApplication) throws {
+        guard window(of: app).frame.width > compactWidth else { return }
+        dragCorner(of: app, left: false, toX: window(of: app).frame.minX + 320)
+        guard window(of: app).frame.width <= compactWidth else {
+            throw XCTSkip("This simulator's windows do not resize")
+        }
+    }
+
+    /// Makes the window wide enough for regular width, the other way round.
+    static func widenTheWindow(of app: XCUIApplication) throws {
+        let screenWidth = XCUIApplication(bundleIdentifier: "com.apple.springboard").frame.width
+        if window(of: app).frame.width <= compactWidth {
+            dragCorner(of: app, left: false, toX: screenWidth - 1)
+        }
+        if window(of: app).frame.width < screenWidth - 1 {
+            dragCorner(of: app, left: true, toX: 1)
+        }
+        if window(of: app).frame.width < screenWidth - 1 {
+            dragCorner(of: app, left: false, toX: screenWidth - 1)
+        }
+        guard window(of: app).frame.width > compactWidth else {
+            throw XCTSkip("This simulator's windows do not resize")
+        }
+    }
+
+    private static let compactWidth: CGFloat = 500
 
     /// The Search tab folds the tab bar away while its field is up, and Close
     /// brings it back.
