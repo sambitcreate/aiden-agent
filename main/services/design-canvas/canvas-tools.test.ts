@@ -288,3 +288,87 @@ test("canvas_read with snapshot shows Aiden the canvas picture, or says it is no
   assert.ok(first && first.type === "text");
   assert.equal(JSON.parse(first.text).snapshot, "unavailable");
 });
+
+test("Aiden draws a small flow: labelled shapes, text and an arrow that follows its boxes", async (t) => {
+  const { store, call } = await setup(t);
+  const start = await call("canvas_place_frame", { kind: "shape", title: "Start", text: "Sign in", x: 0, y: 0 });
+  const done = await call("canvas_place_frame", {
+    kind: "shape",
+    shape: "oval",
+    title: "Done",
+    text: "Home",
+    fill: "green",
+    x: 400,
+    y: 0,
+  });
+  const caption = await call("canvas_place_frame", { kind: "text", title: "Caption", text: "Happy path\nNo errors", size: "small" });
+  const arrow = await call("canvas_place_frame", {
+    kind: "connector",
+    title: "Then",
+    from: { frameId: start.frame.id },
+    to: { frameId: done.frame.id },
+  });
+  assert.deepEqual(
+    [start.frame.shape, start.frame.text, start.frame.fill, start.frame.box.w, start.frame.box.h],
+    ["rect", "Sign in", "blue", 160, 100],
+  );
+  assert.deepEqual([done.frame.shape, done.frame.fill], ["oval", "green"]);
+  assert.equal(caption.frame.box.h, 38, "two small lines");
+  assert.equal(arrow.frame.arrow, "end");
+  assert.deepEqual(arrow.frame.from, { x: 160, y: 50, frameId: start.frame.id });
+  assert.deepEqual(arrow.frame.to, { x: 400, y: 50, frameId: done.frame.id });
+
+  // Moving a box brings the arrow with it.
+  await call("canvas_update_frame", { id: done.frame.id, x: 0, y: 400 });
+  const doc = await store.get("chat-1");
+  const after = doc.frames.find((frame) => frame.id === arrow.frame.id)!;
+  assert.deepEqual(
+    after.ends!.map((end) => [end.x, end.y]),
+    [
+      [80, 100],
+      [80, 400],
+    ],
+  );
+
+  // Removing a box leaves the arrow's end where it was.
+  await call("canvas_remove_frame", { id: done.frame.id });
+  const left = (await store.get("chat-1")).frames.find((frame) => frame.id === arrow.frame.id)!;
+  assert.deepEqual(left.ends![1], { x: 80, y: 400 });
+
+  const read = await call("canvas_read");
+  const summary = read.inView.find((frame: { id: string }) => frame.id === arrow.frame.id);
+  assert.deepEqual(summary.from, { x: 80, y: 100, frameId: start.frame.id });
+  assert.deepEqual(summary.to, { x: 80, y: 400 });
+});
+
+test("drawn items refuse what they cannot be", async (t) => {
+  const { call } = await setup(t);
+  const box = await call("canvas_place_frame", { kind: "shape", title: "Box" });
+  const loop = await call("canvas_place_frame", {
+    kind: "connector",
+    title: "Loop",
+    from: { frameId: box.frame.id },
+    to: { frameId: box.frame.id },
+  });
+  assert.equal(loop.status, "error");
+  const nowhere = await call("canvas_place_frame", { kind: "connector", title: "Nowhere", from: { x: 0 }, to: { x: 1, y: 1 } });
+  assert.equal(nowhere.status, "error");
+  const empty = await call("canvas_place_frame", { kind: "text", title: "Empty", text: "  " });
+  assert.equal(empty.status, "error");
+  const pink = await call("canvas_place_frame", { kind: "shape", title: "Odd", fill: "#ff00ff" });
+  assert.equal(pink.status, "error");
+  const sized = await call("canvas_update_frame", { id: box.frame.id, size: "large" });
+  assert.equal(sized.status, "error");
+  const recolored = await call("canvas_update_frame", { id: box.frame.id, fill: "red", text: "Checkout" });
+  assert.deepEqual([recolored.status, recolored.frame.fill, recolored.frame.text], ["updated", "red", "Checkout"]);
+});
+
+test("a shape placed in an artboard sits in it, and moving the artboard moves it", async (t) => {
+  const { store, call } = await setup(t);
+  const board = await call("canvas_place_frame", { kind: "frame", title: "Mobile", x: 0, y: 0, w: 390, h: 844 });
+  const card = await call("canvas_place_frame", { kind: "shape", title: "Card", groupId: board.frame.id });
+  assert.equal(card.frame.groupId, board.frame.id);
+  await call("canvas_update_frame", { id: board.frame.id, x: 1000 });
+  const moved = (await store.get("chat-1")).frames.find((frame) => frame.id === card.frame.id)!;
+  assert.equal(moved.x, card.frame.box.x + 1000);
+});

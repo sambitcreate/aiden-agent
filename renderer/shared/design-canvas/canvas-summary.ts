@@ -3,7 +3,7 @@
 // and tests share it.
 
 import { describeComment } from "./comments.js";
-import { activeDesignPage, type DesignCanvas, type DesignFrame } from "./schema.js";
+import { activeDesignPage, isDesignContainer, type DesignCanvas, type DesignFrame } from "./schema.js";
 
 /**
  * The part of the canvas a person sees, in canvas units. Main does not know
@@ -29,6 +29,14 @@ export type CanvasFrameSummary = {
   groupId?: string;
   designWidth?: number;
   text?: string;
+  shape?: DesignFrame["shape"];
+  fill?: DesignFrame["fill"];
+  color?: DesignFrame["color"];
+  size?: DesignFrame["size"];
+  /** A connector's ends: where each is, and the frame it is on. */
+  from?: { x: number; y: number; frameId?: string };
+  to?: { x: number; y: number; frameId?: string };
+  arrow?: "none" | "end" | "both";
   openComments?: number;
 };
 
@@ -91,9 +99,20 @@ export function summarizeFrame(frame: DesignFrame, openComments = 0): CanvasFram
     ...(frame.path !== undefined ? { path: frame.path } : {}),
     ...(frame.groupId !== undefined ? { groupId: frame.groupId } : {}),
     ...(frame.designWidth !== undefined ? { designWidth: frame.designWidth } : {}),
-    ...(frame.kind === "note" && frame.text ? { text: frame.text } : {}),
+    ...((frame.kind === "note" || frame.kind === "text" || frame.kind === "shape") && frame.text ? { text: frame.text } : {}),
+    ...(frame.shape ? { shape: frame.shape } : {}),
+    ...(frame.fill ? { fill: frame.fill } : {}),
+    ...(frame.color ? { color: frame.color } : {}),
+    ...(frame.size ? { size: frame.size } : {}),
+    ...(frame.ends
+      ? { from: endSummary(frame.ends[0]), to: endSummary(frame.ends[1]), arrow: frame.arrow ?? "none" }
+      : {}),
     ...(openComments > 0 ? { openComments } : {}),
   };
+}
+
+function endSummary(end: NonNullable<DesignFrame["ends"]>[number]): { x: number; y: number; frameId?: string } {
+  return { x: end.x, y: end.y, ...(end.frameId ? { frameId: end.frameId } : {}) };
 }
 
 /**
@@ -110,10 +129,10 @@ export function describeCanvas(
   const comments = openCommentCounts(doc);
   const visible = frames.filter((frame) => overlaps(frame, view));
   const outside = new Map<string, { groupId: string; title: string; frames: number }>();
-  const titles = new Map(frames.filter((frame) => frame.kind === "group").map((frame) => [frame.id, frame.title]));
+  const titles = new Map(frames.filter((frame) => isDesignContainer(frame.kind)).map((frame) => [frame.id, frame.title]));
   for (const frame of frames) {
     if (overlaps(frame, view)) continue;
-    const groupId = frame.kind === "group" ? frame.id : (frame.groupId ?? "ungrouped");
+    const groupId = isDesignContainer(frame.kind) ? frame.id : (frame.groupId ?? "ungrouped");
     const entry = outside.get(groupId) ?? {
       groupId,
       title: groupId === "ungrouped" ? "Not in a group" : (titles.get(groupId) ?? "Group"),

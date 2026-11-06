@@ -102,13 +102,22 @@ test("file frames whose path escapes the workspace or names a hidden file are dr
   assert.equal(dropped, unsafe.length);
 });
 
-test("at most 200 frames are kept, in document order", () => {
-  const frames = Array.from({ length: 201 }, (_, index) => frame({ id: `f${index}` }));
-  const { doc, dropped } = parsed(canvas({ frames }));
-  assert.equal(doc.frames.length, 200);
-  assert.equal(doc.frames[0]?.id, "f0");
-  assert.equal(doc.frames[199]?.id, "f199");
-  assert.equal(dropped, 1);
+test("a page keeps at most 400 frames and the canvas 1 000, in document order", () => {
+  const onePage = Array.from({ length: 401 }, (_, index) => frame({ id: `f${index}` }));
+  const one = parsed(canvas({ frames: onePage }));
+  assert.equal(one.doc.frames.length, 400);
+  assert.equal(one.doc.frames[0]?.id, "f0");
+  assert.equal(one.doc.frames[399]?.id, "f399");
+  assert.equal(one.dropped, 1);
+
+  const pages = ["a", "b", "c"].map((id) => ({ id, name: id, viewport: { x: 0, y: 0, zoom: 1 } }));
+  const spread = pages.flatMap((page) =>
+    Array.from({ length: 400 }, (_, index) => frame({ id: `${page.id}${index}`, pageId: page.id })),
+  );
+  const many = parsed(canvas({ version: 2, pages, activePageId: "a", frames: spread }));
+  assert.equal(many.doc.frames.length, 1000);
+  assert.equal(many.doc.frames.filter((entry) => entry.pageId === "c").length, 200, "the third page fills what is left");
+  assert.equal(many.dropped, 200);
 });
 
 test("a groupId naming a missing group is removed but the frame stays", () => {
@@ -246,4 +255,90 @@ test("relative path check refuses anything outside a plain workspace-relative pa
   for (const value of ["index.html", "design/hero.html", "design/my page.html", "a/b/c.css"]) {
     assert.equal(isDesignRelativePath(value), true, value);
   }
+});
+
+test("drawn items keep their own fields, and small boxes, through a save", () => {
+  const frames = [
+    frame({ id: "t", kind: "text", text: "Checkout", size: "large", color: "red", w: 120, h: 20 }),
+    frame({ id: "s", kind: "shape", shape: "oval", text: "Start", fill: "green", color: "ink", strokeWidth: 3, w: 12, h: 12 }),
+    frame({ id: "c", kind: "connector", ends: [{ x: 0, y: 0 }, { x: 50, y: 0 }], arrow: "both", color: "gray", strokeWidth: 2 }),
+    frame({
+      id: "p",
+      kind: "stroke",
+      points: [
+        [0, 0],
+        [1, 1],
+      ],
+      handles: [
+        [0, 0],
+        [0.2, -0.3],
+      ],
+      closed: true,
+      w: 3,
+      h: 3,
+    }),
+    frame({ id: "board", kind: "frame", title: "Mobile", w: 390, h: 844 }),
+  ];
+  const { doc, dropped } = parsed(canvas({ frames }));
+  assert.equal(dropped, 0);
+  const byId = new Map(doc.frames.map((entry) => [entry.id, entry]));
+  assert.deepEqual(
+    [byId.get("t")!.text, byId.get("t")!.size, byId.get("t")!.color, byId.get("t")!.h],
+    ["Checkout", "large", "red", 20],
+  );
+  assert.deepEqual(
+    [byId.get("s")!.shape, byId.get("s")!.text, byId.get("s")!.fill, byId.get("s")!.color, byId.get("s")!.w],
+    ["oval", "Start", "green", "ink", 12],
+  );
+  assert.equal(byId.get("c")!.arrow, "both");
+  assert.deepEqual(byId.get("p")!.handles, [
+    [0, 0],
+    [0.2, -0.3],
+  ]);
+  assert.equal(byId.get("p")!.closed, true);
+  assert.deepEqual([byId.get("board")!.w, byId.get("board")!.h], [390, 844]);
+  // The parser's output reads back as itself.
+  assert.deepEqual(parsed(doc).doc, doc);
+});
+
+test("drawn items that cannot be drawn are dropped, and unknown colours and sizes are left out", () => {
+  const { doc, dropped } = parsed(
+    canvas({
+      frames: [
+        frame({ id: "no-shape", kind: "shape" }),
+        frame({ id: "one-end", kind: "connector", ends: [{ x: 0, y: 0 }] }),
+        frame({ id: "one-point", kind: "stroke", points: [[0, 0]] }),
+        frame({ id: "bad-point", kind: "stroke", points: [[0, 0], ["x", 1]] }),
+        frame({ id: "odd", kind: "shape", shape: "rect", fill: "#ff0000", color: "chartreuse", strokeWidth: 400 }),
+        frame({ id: "loud", kind: "text", size: "huge" }),
+        frame({ id: "tiny-note", kind: "note", w: 5, h: 5 }),
+      ],
+    }),
+  );
+  assert.deepEqual(
+    doc.frames.map((entry) => entry.id),
+    ["odd", "loud", "tiny-note"],
+  );
+  assert.equal(dropped, 4);
+  const odd = doc.frames[0]!;
+  assert.deepEqual([odd.fill, odd.color, odd.strokeWidth], [undefined, undefined, 24]);
+  assert.equal(doc.frames[1]!.size, undefined);
+  assert.deepEqual([doc.frames[2]!.w, doc.frames[2]!.h], [40, 40], "a note keeps its minimum size");
+});
+
+test("items sit in a group or an artboard, but those never sit in each other", () => {
+  const { doc } = parsed(
+    canvas({
+      frames: [
+        frame({ id: "board", kind: "frame", title: "Board", text: undefined }),
+        frame({ id: "g", kind: "group", title: "Group", text: undefined, groupId: "board" }),
+        frame({ id: "card", kind: "shape", shape: "rect", groupId: "board" }),
+        frame({ id: "inner", kind: "frame", title: "Inner", groupId: "g" }),
+      ],
+    }),
+  );
+  const byId = new Map(doc.frames.map((entry) => [entry.id, entry]));
+  assert.equal(byId.get("card")!.groupId, "board");
+  assert.equal(byId.get("g")!.groupId, undefined);
+  assert.equal(byId.get("inner")!.groupId, undefined);
 });

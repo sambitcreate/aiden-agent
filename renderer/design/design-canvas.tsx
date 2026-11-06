@@ -17,8 +17,15 @@ import {
   renamePage,
   showPage,
 } from "../shared/design-canvas/pages";
-import { activeDesignPage, framesOnPage, withActiveViewport } from "../shared/design-canvas/schema";
-import type { DesignCanvas as CanvasDocument, DesignFrame } from "../shared/design-canvas/schema";
+import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
+import { containerAt, regroupFrames } from "../shared/design-canvas/drawing";
+import {
+  activeDesignPage,
+  framesOnPage,
+  isDesignContainer,
+  withActiveViewport,
+} from "../shared/design-canvas/schema";
+import type { DesignCanvas as CanvasDocument, DesignConnectorEnd, DesignFrame } from "../shared/design-canvas/schema";
 import {
   applyNodeChanges,
   duplicateFrames,
@@ -31,6 +38,7 @@ import { resolveDesignCanvasKey } from "./canvas-keymap-core";
 import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { useDesignComments } from "./design-comments";
+import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { selectLiveFrames } from "./live-set-core";
 import { DesignNodeContext, DESIGN_DEFAULT_WIDTH, type DesignNodeContextValue } from "./nodes/design-node-context";
@@ -106,6 +114,8 @@ function LoadedDesignCanvas({
   const [grant, setGrant] = React.useState<string | null>(null);
   const [autoFocusId, setAutoFocusId] = React.useState<string | null>(null);
   const [renaming, setRenaming] = React.useState<string | null>(null);
+  const [editing, setEditing] = React.useState<string | null>(null);
+  const [drawTool, setDrawTool] = React.useState<DesignDrawTool | null>(null);
   const [viewport, setViewport] = React.useState<Viewport>(() => activeDesignPage(doc).viewport);
   const [viewSize, setViewSize] = React.useState({ w: 0, h: 0 });
   const [live, setLive] = React.useState<ReadonlySet<string>>(() => new Set());
@@ -115,6 +125,8 @@ function LoadedDesignCanvas({
   const latestViewport = React.useRef<Viewport>(activeDesignPage(doc).viewport);
   const moveFrame = React.useRef<number | null>(null);
   const gesture = React.useRef(false);
+  const latestDoc = React.useRef(doc);
+  latestDoc.current = doc;
 
   // The chat's grant: frames load their pages and images through it.
   React.useEffect(() => {
@@ -228,6 +240,7 @@ function LoadedDesignCanvas({
     setSelection((current) => (current.size === 0 ? current : new Set()));
     setEntered(null);
     setRenaming(null);
+    setEditing(null);
     // Only a change of page moves the view; the doc's other changes do not.
   }, [doc]);
 
@@ -247,12 +260,22 @@ function LoadedDesignCanvas({
     comments.setActive(next);
     if (!next) return;
     setTool("select");
+    setDrawTool(null);
     setEntered(null);
     setSelection((current) => (current.size === 0 ? current : new Set()));
   };
   const changeTool = (next: CanvasTool) => {
     comments.setActive(false);
+    setDrawTool(null);
     setTool(next);
+  };
+  const chooseDrawTool = (next: DesignDrawTool) => {
+    comments.setActive(false);
+    setTool("select");
+    setDrawTool(next);
+    setEntered(null);
+    setEditing(null);
+    setSelection((current) => (current.size === 0 ? current : new Set()));
   };
 
   // Aiden's canvas_focus: fit the frames it names once they have arrived,
@@ -316,6 +339,10 @@ function LoadedDesignCanvas({
     }
     const edits = changes.filter((entry) => entry.type !== "select");
     if (edits.length === 0) return;
+    // A drag that ends drops each item in the group or artboard under it.
+    const dropped = edits.flatMap((entry) =>
+      entry.type === "position" && entry.dragging === false ? [entry.id] : [],
+    );
     // One undo step per drag or resize, taken when it starts.
     const flags = edits.map((entry) =>
       entry.type === "position" ? entry.dragging : entry.type === "dimensions" ? entry.resizing : undefined,
@@ -328,7 +355,13 @@ function LoadedDesignCanvas({
       record = !gesture.current;
       gesture.current = false;
     }
-    change((current) => applyNodeChanges(current, edits), { record });
+    change(
+      (current) => {
+        const next = applyNodeChanges(current, edits);
+        return dropped.length > 0 ? regroupFrames(next, dropped) : next;
+      },
+      { record },
+    );
   };
 
   const removeFrames = React.useCallback(
@@ -364,6 +397,67 @@ function LoadedDesignCanvas({
     setSelection(new Set([id]));
     return id;
   };
+
+  /** Places an item a drawing tool made, at its own box, in the group or artboard it was drawn in. */
+  const createDrawn = (input: PlaceFrameInput, options: { edit?: boolean } = {}): string | null => {
+    const id = crypto.randomUUID();
+    let placed = false;
+    change((latest) => {
+      const holder = isDesignContainer(input.kind)
+        ? undefined
+        : containerAt(latest, latest.activePageId, {
+            x: input.x ?? 0,
+            y: input.y ?? 0,
+            w: input.w,
+            h: input.h,
+          });
+      const result = placeFrame(latest, { ...input, ...(holder ? { groupId: holder.id } : {}) }, { x: 0, y: 0, w: 0, h: 0 }, () => id);
+      if ("error" in result) return latest;
+      placed = true;
+      return result.doc;
+    });
+    if (!placed) {
+      toast.error("This page is full. Remove something to draw more.");
+      return null;
+    }
+    setSelection(new Set([id]));
+    if (options.edit) setEditing(id);
+    return id;
+  };
+
+  const attachAt = React.useCallback((point: DesignPoint, except?: string) => {
+    const current = latestDoc.current;
+    return attachTargetAt(current, current.activePageId, point, new Set(except ? [except] : []))?.id;
+  }, []);
+
+  const moveEnd = React.useCallback(
+    (id: string, index: 0 | 1, point: DesignPoint) =>
+      change((current) => {
+        const frame = current.frames.find((entry) => entry.id === id);
+        if (!frame?.ends) return current;
+        const other = frame.ends[index === 0 ? 1 : 0];
+        const target = attachTargetAt(current, frame.pageId, point, new Set([id]))?.id;
+        // An end dropped on the frame the other end is on stays free, so the line never loops.
+        const end: DesignConnectorEnd = {
+          x: Math.round(point.x),
+          y: Math.round(point.y),
+          ...(target && target !== other.frameId ? { frameId: target } : {}),
+        };
+        const ends: [DesignConnectorEnd, DesignConnectorEnd] = index === 0 ? [end, other] : [other, end];
+        const frames = current.frames.map((entry) => (entry.id === id ? { ...entry, ends } : entry));
+        return syncConnectors({ ...current, frames });
+      }),
+    [change],
+  );
+
+  const drawing = useDesignDrawing({
+    tool: drawTool,
+    onDone: () => setDrawTool(null),
+    flow,
+    wrapper,
+    create: createDrawn,
+    attachAt,
+  });
 
   const pick = async (kind: "file" | "image") => {
     let answer: Awaited<ReturnType<typeof designCanvasApi.pickDesignFile>>;
@@ -468,10 +562,16 @@ function LoadedDesignCanvas({
           });
         }
         return true;
-      case "delete":
+      case "delete": {
         if (selection.size === 0) return false;
         removeFrames([...selection]);
+        // The focused frame is going; keys stay with the canvas, so ⌘Z can bring it back.
+        const region = wrapper.current?.querySelector<HTMLElement>(".studio-canvas");
+        requestAnimationFrame(() => {
+          if (region && !region.contains(document.activeElement)) region.focus({ preventScroll: true });
+        });
         return true;
+      }
       case "fitSelection":
         void flow.current?.fitView({
           duration: 0,
@@ -480,10 +580,20 @@ function LoadedDesignCanvas({
         });
         return true;
       case "enter": {
-        // Enter does what a double-click does: a selected page or artifact takes input.
+        if (drawing.finish()) return true;
+        // Enter does what a double-click does: a selected page or artifact takes input,
+        // and text, a shape's label or a note takes typing.
         if (selection.size !== 1) return false;
         const [id] = selection;
         const frame = doc.frames.find((entry) => entry.id === id);
+        if (frame?.kind === "text" || frame?.kind === "shape") {
+          setEditing(frame.id);
+          return true;
+        }
+        if (frame?.kind === "note") {
+          setAutoFocusId(frame.id);
+          return true;
+        }
         if (!frame || (frame.kind !== "file" && frame.kind !== "artifact")) return false;
         if (frame.kind === "file" && missing.get(frame.id) === versionOf(frame.path)) return false;
         setEntered(frame.id);
@@ -501,9 +611,14 @@ function LoadedDesignCanvas({
       case "comment":
         toggleComments();
         return true;
+      case "draw":
+        chooseDrawTool(command.tool);
+        return true;
       case "escape":
         if (comments.escape()) return true;
-        if (entered !== null) setEntered(null);
+        if (drawing.finish()) return true;
+        if (drawTool !== null) setDrawTool(null);
+        else if (entered !== null) setEntered(null);
         else if (selection.size > 0) setSelection(new Set());
         else return false;
         return true;
@@ -520,10 +635,10 @@ function LoadedDesignCanvas({
           let changed = false;
           const frames = current.frames.map((frame): DesignFrame => {
             if (frame.id !== id) return frame;
-            const next = { ...frame, ...patch };
-            if (next.text === frame.text && next.title === frame.title) return frame;
+            const keys = Object.keys(patch) as (keyof typeof patch)[];
+            if (keys.every((key) => frame[key] === patch[key])) return frame;
             changed = true;
-            return next;
+            return { ...frame, ...patch };
           });
           return changed ? { ...current, frames } : current;
         },
@@ -548,8 +663,11 @@ function LoadedDesignCanvas({
       autoFocusDone: (id) => setAutoFocusId((current) => (current === id ? null : current)),
       renaming,
       rename: setRenaming,
+      moveEnd,
+      editing,
+      edit: setEditing,
     }),
-    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming],
+    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming, moveEnd, editing],
   );
 
   return (
@@ -557,7 +675,10 @@ function LoadedDesignCanvas({
     <div
       ref={wrapper}
       data-typing-surface="canvas"
-      className={comments.active ? "design-commenting h-full w-full" : "h-full w-full"}
+      className={
+        comments.active ? "design-commenting h-full w-full" : drawTool ? "design-drawing h-full w-full" : "h-full w-full"
+      }
+      data-draw-tool={drawTool ?? undefined}
       onPointerDownCapture={noteInteraction}
       onWheelCapture={noteInteraction}
       onKeyDownCapture={noteInteraction}
@@ -600,8 +721,8 @@ function LoadedDesignCanvas({
           }}
           onNodeMouseMove={comments.onNodeMouseMove}
           onNodeMouseLeave={comments.onNodeMouseLeave}
-          nodesDraggable={!comments.active}
-          elementsSelectable={!comments.active}
+          nodesDraggable={!comments.active && drawTool === null}
+          elementsSelectable={!comments.active && drawTool === null}
           deleteKeyCode={null}
           elevateNodesOnSelect={false}
           zoomOnDoubleClick={false}
@@ -618,10 +739,13 @@ function LoadedDesignCanvas({
               canAddFiles={grant !== null}
               onAdd={onAdd}
               onPage={onPage}
+              drawTool={drawTool}
+              onDraw={chooseDrawTool}
             />
           }
         >
           {comments.layer}
+          {drawing.layer}
         </StudioCanvas>
       </DesignNodeContext.Provider>
     </div>

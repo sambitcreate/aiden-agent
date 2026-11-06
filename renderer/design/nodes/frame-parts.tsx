@@ -11,12 +11,19 @@ import { captureFrameSnapshot, designFrameSnapshots } from "../frame-snapshots";
 /** How long a leaving iframe waits for its snapshot before it goes anyway. */
 const CAPTURE_FALLBACK_MS = 1000;
 
-export function DesignNodeResizer({ selected }: { selected: boolean }) {
+export function DesignNodeResizer({
+  selected,
+  minSize = DESIGN_CANVAS_LIMITS.minSize,
+}: {
+  selected: boolean;
+  /** The smallest width and height the frame's kind keeps (`designMinSize`). */
+  minSize?: number;
+}) {
   return (
     <NodeResizer
       isVisible={selected}
-      minWidth={DESIGN_CANVAS_LIMITS.minSize}
-      minHeight={DESIGN_CANVAS_LIMITS.minSize}
+      minWidth={minSize}
+      minHeight={minSize}
       maxWidth={DESIGN_CANVAS_LIMITS.maxSize}
       maxHeight={DESIGN_CANVAS_LIMITS.maxSize}
       handleClassName="design-resize-handle"

@@ -2,8 +2,16 @@
 // show. Pure and shared, so the page picker and Aiden's tools agree on what
 // each edit does. Every function returns `doc` itself when it changes nothing.
 
+import { syncConnectors } from "./connectors.js";
 import { clampCoord } from "./placement.js";
-import { DESIGN_CANVAS_LIMITS, type DesignCanvas, type DesignFrame, type DesignPage } from "./schema.js";
+import {
+  DESIGN_CANVAS_LIMITS,
+  isDesignContainer,
+  type DesignCanvas,
+  type DesignConnectorEnd,
+  type DesignFrame,
+  type DesignPage,
+} from "./schema.js";
 
 const FRESH_VIEWPORT = { x: 0, y: 0, zoom: 1 } as const;
 
@@ -56,7 +64,12 @@ export function duplicatePage(doc: DesignCanvas, id: string, pageId: string, new
   const copies = frames.map((frame): DesignFrame => {
     const groupId = frame.groupId ? ids.get(frame.groupId) : undefined;
     const { groupId: _groupId, ...rest } = frame;
-    return { ...rest, id: ids.get(frame.id)!, pageId, ...(groupId ? { groupId } : {}) };
+    // An arrow on the page joins the copies of the frames it joined.
+    const ends = frame.ends?.map((end): DesignConnectorEnd => {
+      const target = end.frameId !== undefined ? ids.get(end.frameId) : undefined;
+      return target ? { ...end, frameId: target } : { x: end.x, y: end.y };
+    }) as DesignFrame["ends"];
+    return { ...rest, id: ids.get(frame.id)!, pageId, ...(groupId ? { groupId } : {}), ...(ends ? { ends } : {}) };
   });
   const page: DesignPage = {
     id: pageId,
@@ -110,7 +123,7 @@ export function moveFramesToPage(doc: DesignCanvas, ids: readonly string[], page
   if (!doc.pages.some((page) => page.id === pageId)) return doc;
   const chosen = new Set(ids);
   for (const frame of doc.frames) {
-    if (frame.kind === "group" && chosen.has(frame.id)) {
+    if (isDesignContainer(frame.kind) && chosen.has(frame.id)) {
       for (const member of doc.frames) if (member.groupId === frame.id) chosen.add(member.id);
     }
   }
@@ -126,7 +139,8 @@ export function moveFramesToPage(doc: DesignCanvas, ids: readonly string[], page
   const comments = doc.comments.map((comment) =>
     comment.frameId !== undefined && chosen.has(comment.frameId) && comment.pageId !== pageId ? { ...comment, pageId } : comment,
   );
-  return { ...doc, frames, comments };
+  // An arrow left behind lets go of the frames that moved away, and one that moved lets go of those left.
+  return syncConnectors({ ...doc, frames, comments });
 }
 
 function cleanName(name: string | undefined): string {

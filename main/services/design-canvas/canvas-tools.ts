@@ -10,6 +10,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { canvasView, describeCanvas, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import { canAttachTo, syncConnectors, translateConnector } from "../../../renderer/shared/design-canvas/connectors.js";
 import {
   clampCoord,
   clampSize,
@@ -18,11 +19,17 @@ import {
 } from "../../../renderer/shared/design-canvas/placement.js";
 import {
   DESIGN_CANVAS_LIMITS,
+  DESIGN_COLORS,
   DESIGN_WIDTHS,
   framesOnPage,
+  isDesignContainer,
   isDesignRelativePath,
   type DesignCanvas,
+  type DesignColor,
+  type DesignConnectorEnd,
   type DesignFrame,
+  type DesignSide,
+  type DesignTextSize,
   type DesignWidth,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { showPage } from "../../../renderer/shared/design-canvas/pages.js";
@@ -40,13 +47,30 @@ export const DESIGN_CANVAS_TOOL_NAMES = [
 /** Canvas tool calls one turn may make; past it each call returns `limit_reached`. */
 export const DESIGN_CANVAS_CALLS_PER_TURN = 20;
 
-/** Default boxes, matching the canvas's Add menu. */
-const DEFAULT_BOX: Record<"file" | "image" | "note" | "group", { w: number; h: number }> = {
+type PlacedKind = "file" | "image" | "note" | "group" | "text" | "shape" | "connector" | "frame";
+const PLACED_KINDS: readonly PlacedKind[] = ["file", "image", "note", "group", "text", "shape", "connector", "frame"];
+
+/** Default boxes, matching the canvas's Add menu and drawing tools. A text box's height follows its lines. */
+const DEFAULT_BOX: Record<Exclude<PlacedKind, "connector">, { w: number; h: number }> = {
   file: { w: 640, h: 436 },
   image: { w: 320, h: 240 },
   note: { w: 240, h: 160 },
   group: { w: 640, h: 400 },
+  text: { w: 240, h: 24 },
+  shape: { w: 160, h: 100 },
+  frame: { w: 640, h: 400 },
 };
+/** Canvas text sizes and the line height a placed text box gets per line, matching the canvas. */
+const TEXT_LINE: Record<DesignTextSize, number> = { small: 19, medium: 24, large: 42 };
+const SIDES: readonly DesignSide[] = ["top", "right", "bottom", "left"];
+const TextSizeSchema = Type.Union([Type.Literal("small"), Type.Literal("medium"), Type.Literal("large")]);
+const ColorSchema = Type.Union(DESIGN_COLORS.map((color) => Type.Literal(color)));
+const EndSchema = Type.Object({
+  frameId: Type.Optional(Type.String({ description: "Join this end to a frame; it follows the frame when it moves." })),
+  side: Type.Optional(Type.Union(SIDES.map((side) => Type.Literal(side)))),
+  x: Type.Optional(Type.Number()),
+  y: Type.Optional(Type.Number()),
+});
 const DEFAULT_DESIGN_WIDTH: DesignWidth = 1280;
 
 type DesignTurn = {
@@ -99,6 +123,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- To show a design, write a self-contained HTML file in the workspace (for example under design/), then place it with canvas_place_frame. Put each direction in its own group.",
   "- A visual you draw with render_artifact also lands on the canvas. Drawing it again under the same title replaces it in place.",
   "- Move, resize or retitle your own frames with canvas_update_frame. Remove a frame the person added only when they ask, with confirm: true.",
+  "- For a flow or diagram, place shapes (with their labels in text), text and frames (artboards), then connectors between them by frameId; a connector follows its frames when they move.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them. canvas_read with snapshot: true shows you the canvas as the person sees it.",
   "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_read lists the pages, and canvas_read and canvas_place_frame take a page.",
   "- Coordinates and sizes are canvas units. Say which file you changed.",
@@ -181,11 +206,63 @@ function groupOf(doc: DesignCanvas, groupId: unknown, pageId: string): string | 
   if (groupId === undefined || groupId === null || groupId === "") return undefined;
   if (
     typeof groupId !== "string" ||
-    !doc.frames.some((frame) => frame.id === groupId && frame.kind === "group" && frame.pageId === pageId)
+    !doc.frames.some((frame) => frame.id === groupId && isDesignContainer(frame.kind) && frame.pageId === pageId)
   ) {
-    throw new CanvasToolError("groupId must be the id of a group frame on the same page.");
+    throw new CanvasToolError("groupId must be the id of a group or frame (artboard) on the same page.");
   }
   return groupId;
+}
+
+function color(value: unknown, field: string): DesignColor | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!(DESIGN_COLORS as readonly unknown[]).includes(value)) {
+    throw new CanvasToolError(`${field} must be one of ${DESIGN_COLORS.join(", ")}.`);
+  }
+  return value as DesignColor;
+}
+
+function textSize(value: unknown): DesignTextSize | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value !== "small" && value !== "medium" && value !== "large") {
+    throw new CanvasToolError('size must be "small", "medium" or "large".');
+  }
+  return value;
+}
+
+function arrowOf(value: unknown): DesignFrame["arrow"] {
+  if (value === undefined || value === null || value === "end") return "end";
+  if (value === "none") return undefined;
+  if (value === "both") return "both";
+  throw new CanvasToolError('arrow must be "end", "both" or "none".');
+}
+
+/** A connector end from a tool call: on a frame of the page (by id), or at a point. */
+function endOf(doc: DesignCanvas, value: unknown, field: string, pageId: string, self?: string): DesignConnectorEnd {
+  if (typeof value !== "object" || value === null) {
+    throw new CanvasToolError(`${field} must be { frameId } or { x, y }.`);
+  }
+  const raw = value as Record<string, unknown>;
+  if (raw.frameId !== undefined && raw.frameId !== null && raw.frameId !== "") {
+    const frame = typeof raw.frameId === "string" ? doc.frames.find((entry) => entry.id === raw.frameId) : undefined;
+    if (!frame || frame.pageId !== pageId || frame.id === self || !canAttachTo(frame)) {
+      throw new CanvasToolError(`${field}.frameId must be the id of a frame on the same page that is not an arrow, line or drawing.`);
+    }
+    const side = raw.side;
+    if (side !== undefined && !(SIDES as readonly unknown[]).includes(side)) {
+      throw new CanvasToolError(`${field}.side must be top, right, bottom or left.`);
+    }
+    // The place is set from the frame when the connector is synced.
+    return {
+      x: Math.round(frame.x + frame.w / 2),
+      y: Math.round(frame.y + frame.h / 2),
+      frameId: frame.id,
+      ...(side ? { side: side as DesignSide } : {}),
+    };
+  }
+  const x = optionalNumber(raw.x, `${field}.x`);
+  const y = optionalNumber(raw.y, `${field}.y`);
+  if (x === undefined || y === undefined) throw new CanvasToolError(`${field} must be { frameId } or { x, y }.`);
+  return { x: clampCoord(x), y: clampCoord(y) };
 }
 
 /** A page named by its id or its name (case-insensitive); the page on screen when left out. */
@@ -279,13 +356,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_place_frame",
         label: "Place on design canvas",
         description:
-          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note or a group. Write the file first with your file tools; path is workspace-relative. It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view. Boxes are in canvas units.",
+          "Put a frame on the design canvas: a workspace HTML page (kind file), an image, a note, a group, or a drawn item for flows and diagrams: text, a shape (rect or oval, with an optional label in text), a frame (an empty artboard that holds shapes and text like a group) or a connector (an arrow or line from one frame or point to another; an end on a frame follows it). Write the file first with your file tools; path is workspace-relative. It goes on the page the person is looking at unless you name another. Leave x and y out to place it right of the last frame in its group or in view. Boxes are in canvas units.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
-          kind: Type.Union([Type.Literal("file"), Type.Literal("image"), Type.Literal("note"), Type.Literal("group")]),
+          kind: Type.Union(PLACED_KINDS.map((kind) => Type.Literal(kind))),
           title: Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars }),
           path: Type.Optional(Type.String({ maxLength: 1024 })),
           text: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.noteChars })),
+          shape: Type.Optional(Type.Union([Type.Literal("rect"), Type.Literal("oval")])),
+          fill: Type.Optional(ColorSchema),
+          color: Type.Optional(ColorSchema),
+          size: Type.Optional(TextSizeSchema),
+          from: Type.Optional(EndSchema),
+          to: Type.Optional(EndSchema),
+          arrow: Type.Optional(Type.Union([Type.Literal("end"), Type.Literal("both"), Type.Literal("none")])),
           x: Type.Optional(Type.Number()),
           y: Type.Optional(Type.Number()),
           w: Type.Optional(Type.Number()),
@@ -296,22 +380,37 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         execute: async (_id, raw) =>
           run(async () => {
             const p = raw as Record<string, unknown>;
-            const kind = p.kind;
-            if (kind !== "file" && kind !== "image" && kind !== "note" && kind !== "group") {
-              throw new CanvasToolError('kind must be "file", "image", "note" or "group".');
+            const kind = p.kind as PlacedKind;
+            if (!PLACED_KINDS.includes(kind)) {
+              throw new CanvasToolError(`kind must be one of ${PLACED_KINDS.map((entry) => `"${entry}"`).join(", ")}.`);
             }
             const title = text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
             const path = kind === "file" || kind === "image" ? await checkedPath(deps.workspaceRoot, p.path, kind) : undefined;
             const x = optionalNumber(p.x, "x");
             const y = optionalNumber(p.y, "y");
-            const w = optionalNumber(p.w, "w") ?? DEFAULT_BOX[kind].w;
-            const h = optionalNumber(p.h, "h") ?? DEFAULT_BOX[kind].h;
+            const words = typeof p.text === "string" ? p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : undefined;
+            if (kind === "text" && !words?.trim()) throw new CanvasToolError("A text item needs text.");
+            const size = kind === "text" ? (textSize(p.size) ?? "medium") : undefined;
+            const box = kind === "connector" ? { w: 1, h: 1 } : DEFAULT_BOX[kind];
+            const lines = words ? words.split("\n").length : 1;
+            const w = optionalNumber(p.w, "w") ?? box.w;
+            const h = optionalNumber(p.h, "h") ?? (size ? TEXT_LINE[size] * lines : box.h);
             const width = kind === "file" ? (designWidth(p.designWidth) ?? DEFAULT_DESIGN_WIDTH) : undefined;
-            const note = kind === "note" ? (typeof p.text === "string" ? p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : "") : undefined;
+            const fill = kind === "shape" ? (color(p.fill, "fill") ?? "blue") : undefined;
+            const outline =
+              kind === "shape" || kind === "text" || kind === "connector"
+                ? (color(p.color, "color") ?? (kind === "shape" ? "blue" : kind === "connector" ? "gray" : undefined))
+                : undefined;
             const id = newId();
             return edit((doc) => {
               const pageId = pageOf(doc, p.page);
-              const groupId = groupOf(doc, p.groupId, pageId);
+              const groupId = isDesignContainer(kind) ? undefined : groupOf(doc, p.groupId, pageId);
+              const ends: [DesignConnectorEnd, DesignConnectorEnd] | undefined =
+                kind === "connector" ? [endOf(doc, p.from, "from", pageId), endOf(doc, p.to, "to", pageId)] : undefined;
+              if (ends && ends[0].frameId !== undefined && ends[0].frameId === ends[1].frameId) {
+                throw new CanvasToolError("A connector joins two different frames, or a frame and a point.");
+              }
+              const arrow = kind === "connector" ? arrowOf(p.arrow) : undefined;
               const input: PlaceFrameInput = {
                 kind,
                 title,
@@ -319,15 +418,24 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 w,
                 h,
                 createdBy: "aiden",
-                ...(x !== undefined && y !== undefined ? { x, y } : {}),
+                ...(ends ? { x: ends[0].x, y: ends[0].y, ends } : x !== undefined && y !== undefined ? { x, y } : {}),
                 ...(groupId ? { groupId } : {}),
                 ...(path ? { path } : {}),
                 ...(width ? { designWidth: width } : {}),
-                ...(note !== undefined ? { text: note } : {}),
+                ...(kind === "note" ? { text: words ?? "" } : {}),
+                ...((kind === "text" || kind === "shape") && words ? { text: words } : {}),
+                ...(kind === "shape" ? { shape: p.shape === "oval" ? ("oval" as const) : ("rect" as const), strokeWidth: 2 } : {}),
+                ...(kind === "connector" ? { strokeWidth: 2 } : {}),
+                ...(size ? { size } : {}),
+                ...(fill ? { fill } : {}),
+                ...(outline ? { color: outline } : {}),
+                ...(arrow ? { arrow } : {}),
               };
               const placed = placeFrame(doc, input, canvasView(doc, undefined, pageId), () => id);
               if ("error" in placed) {
-                throw new CanvasToolError(`The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames). Remove a frame first.`);
+                throw new CanvasToolError(
+                  `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
+                );
               }
               const frame = placed.doc.frames.find((entry) => entry.id === id)!;
               return { doc: placed.doc, value: { status: "placed", units: "canvas", frame: summarizeFrame(frame) } };
@@ -341,11 +449,17 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_update_frame",
         label: "Update design canvas frame",
         description:
-          "Move, resize, retitle or regroup a frame on the design canvas, or change a note's text. Pass groupId \"\" to take a frame out of its group. Boxes are in canvas units.",
+          "Move, resize, retitle or regroup a frame on the design canvas, change the words of a note, text item or shape, a drawn item's colours, or where a connector's ends are. Pass groupId \"\" to take a frame out of its group. Moving a connector moves its free ends. Boxes are in canvas units.",
         parameters: Type.Object({
           id: Type.String(),
           title: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.titleChars })),
           text: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.noteChars })),
+          fill: Type.Optional(ColorSchema),
+          color: Type.Optional(ColorSchema),
+          size: Type.Optional(TextSizeSchema),
+          from: Type.Optional(EndSchema),
+          to: Type.Optional(EndSchema),
+          arrow: Type.Optional(Type.Union([Type.Literal("end"), Type.Literal("both"), Type.Literal("none")])),
           x: Type.Optional(Type.Number()),
           y: Type.Optional(Type.Number()),
           w: Type.Optional(Type.Number()),
@@ -362,37 +476,75 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const h = optionalNumber(p.h, "h");
             const width = designWidth(p.designWidth);
             const title = p.title === undefined ? undefined : text(p.title, "title", DESIGN_CANVAS_LIMITS.titleChars);
+            const fill = color(p.fill, "fill");
+            const outline = color(p.color, "color");
+            const size = textSize(p.size);
             return edit((doc) => {
               const frame = frameIn(doc, p.id);
-              if (p.text !== undefined && frame.kind !== "note") throw new CanvasToolError("Only a note has text.");
+              const worded = frame.kind === "note" || frame.kind === "text" || frame.kind === "shape";
+              if (p.text !== undefined && !worded) throw new CanvasToolError("Only a note, a text item or a shape has text.");
               if (width !== undefined && frame.kind !== "file") throw new CanvasToolError("Only a file frame has a design width.");
+              if (fill !== undefined && frame.kind !== "shape") throw new CanvasToolError("Only a shape has a fill.");
+              if (outline !== undefined && !["shape", "text", "connector", "stroke"].includes(frame.kind)) {
+                throw new CanvasToolError("Only a shape, text, connector or drawing has a color.");
+              }
+              if (size !== undefined && frame.kind !== "text") throw new CanvasToolError("Only a text item has a size.");
+              const connector = frame.kind === "connector";
+              if (!connector && (p.from !== undefined || p.to !== undefined || p.arrow !== undefined)) {
+                throw new CanvasToolError("Only a connector has from, to and arrow.");
+              }
+              if (connector && (w !== undefined || h !== undefined)) {
+                throw new CanvasToolError("A connector's size follows its ends; move them with from and to.");
+              }
               let next: DesignFrame = {
                 ...frame,
                 ...(title !== undefined ? { title } : {}),
                 ...(typeof p.text === "string" ? { text: p.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) } : {}),
-                ...(x !== undefined ? { x: clampCoord(x) } : {}),
-                ...(y !== undefined ? { y: clampCoord(y) } : {}),
-                ...(w !== undefined ? { w: clampSize(w) } : {}),
-                ...(h !== undefined ? { h: clampSize(h) } : {}),
+                ...(x !== undefined && !connector ? { x: clampCoord(x) } : {}),
+                ...(y !== undefined && !connector ? { y: clampCoord(y) } : {}),
+                ...(w !== undefined ? { w: clampSize(w, frame.kind) } : {}),
+                ...(h !== undefined ? { h: clampSize(h, frame.kind) } : {}),
                 ...(width !== undefined ? { designWidth: width } : {}),
+                ...(fill !== undefined ? { fill } : {}),
+                ...(outline !== undefined ? { color: outline } : {}),
+                ...(size !== undefined ? { size } : {}),
               };
+              if (connector) {
+                next = translateConnector(next, x !== undefined ? x - frame.x : 0, y !== undefined ? y - frame.y : 0);
+                const ends = next.ends!;
+                const from = p.from !== undefined ? endOf(doc, p.from, "from", frame.pageId, frame.id) : ends[0];
+                const to = p.to !== undefined ? endOf(doc, p.to, "to", frame.pageId, frame.id) : ends[1];
+                if (from.frameId !== undefined && from.frameId === to.frameId) {
+                  throw new CanvasToolError("A connector joins two different frames, or a frame and a point.");
+                }
+                const { arrow: _arrow, ...rest } = next;
+                const arrow = p.arrow !== undefined ? arrowOf(p.arrow) : frame.arrow;
+                next = { ...rest, ends: [from, to], ...(arrow ? { arrow } : {}) };
+              }
               if (p.groupId !== undefined) {
-                if (frame.kind === "group") throw new CanvasToolError("A group cannot be put inside another group.");
+                if (isDesignContainer(frame.kind)) {
+                  throw new CanvasToolError("A group or frame (artboard) cannot be put inside another.");
+                }
                 const groupId = groupOf(doc, p.groupId, frame.pageId);
                 const { groupId: _old, ...rest } = next;
                 next = groupId ? { ...rest, groupId } : rest;
               }
-              // A moved group takes its frames with it, as dragging it does.
-              const dx = frame.kind === "group" ? next.x - frame.x : 0;
-              const dy = frame.kind === "group" ? next.y - frame.y : 0;
+              // A moved group or artboard takes its frames with it, as dragging it does.
+              const dx = isDesignContainer(frame.kind) ? next.x - frame.x : 0;
+              const dy = isDesignContainer(frame.kind) ? next.y - frame.y : 0;
               const frames = doc.frames.map((entry) => {
                 if (entry.id === frame.id) return next;
                 if ((dx !== 0 || dy !== 0) && entry.groupId === frame.id) {
-                  return { ...entry, x: clampCoord(entry.x + dx), y: clampCoord(entry.y + dy) };
+                  return entry.kind === "connector"
+                    ? translateConnector(entry, dx, dy)
+                    : { ...entry, x: clampCoord(entry.x + dx), y: clampCoord(entry.y + dy) };
                 }
                 return entry;
               });
-              return { doc: { ...doc, frames }, value: { status: "updated", units: "canvas", frame: summarizeFrame(next) } };
+              // Connectors on a moved frame follow it.
+              const synced = syncConnectors({ ...doc, frames });
+              const updated = synced.frames.find((entry) => entry.id === frame.id)!;
+              return { doc: synced, value: { status: "updated", units: "canvas", frame: summarizeFrame(updated) } };
             });
           }),
       },
@@ -403,7 +555,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_remove_frame",
         label: "Remove design canvas frame",
         description:
-          "Remove a frame from the design canvas. The file it shows is not deleted. A frame the person added needs confirm: true and only after they asked; say in your reply that you removed it. Removing a group keeps its frames.",
+          "Remove a frame from the design canvas. The file it shows is not deleted. A frame the person added needs confirm: true and only after they asked; say in your reply that you removed it. Removing a group or an artboard keeps what is in it; a connector on a removed frame keeps its place there.",
         parameters: Type.Object({ id: Type.String(), confirm: Type.Optional(Type.Boolean()) }),
         execute: async (_id, raw) =>
           run(async () => {
@@ -423,7 +575,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   return rest;
                 });
               return {
-                doc: { ...doc, frames },
+                doc: syncConnectors({ ...doc, frames }),
                 value: { status: "removed", id: frame.id, ...(frame.createdBy === "person" ? { personFrame: true } : {}) },
               };
             });

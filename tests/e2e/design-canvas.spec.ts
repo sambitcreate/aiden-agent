@@ -545,3 +545,165 @@ test("a comment on a page's element goes to Aiden with the next send and resolve
   await expect(page.getByRole("region", { name: "Design comments for Aiden" })).toHaveCount(0);
   await capture(page, "1440-comment-pins");
 });
+
+type SavedFrame = {
+  id: string;
+  kind: string;
+  title: string;
+  text?: string;
+  shape?: string;
+  groupId?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  ends?: Array<{ x: number; y: number; frameId?: string }>;
+  points?: unknown[];
+  handles?: unknown[];
+};
+
+async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
+  const [doc] = await savedCanvases(userDataDir);
+  return ((doc?.frames ?? []) as unknown as SavedFrame[]);
+}
+
+/** Drags across the canvas pane from one point to another, in pixels from the pane's top left. */
+async function dragOnCanvas(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): Promise<void> {
+  const pane = (await designCanvas(page).locator(".react-flow__pane").boundingBox())!;
+  await page.mouse.move(pane.x + from.x, pane.y + from.y);
+  await page.mouse.down();
+  await page.mouse.move(pane.x + to.x, pane.y + to.y, { steps: 10 });
+  await page.mouse.up();
+}
+
+/** Presses at the first point and drags through the rest, as a hand drawing would. */
+async function dragThrough(page: Page, points: Array<{ x: number; y: number }>): Promise<void> {
+  const pane = (await designCanvas(page).locator(".react-flow__pane").boundingBox())!;
+  const [first, ...rest] = points;
+  await page.mouse.move(pane.x + first!.x, pane.y + first!.y);
+  await page.mouse.down();
+  for (const point of rest) await page.mouse.move(pane.x + point.x, pane.y + point.y, { steps: 6 });
+  await page.mouse.up();
+}
+
+async function clickOnCanvas(page: Page, at: { x: number; y: number }): Promise<void> {
+  const pane = (await designCanvas(page).locator(".react-flow__pane").boundingBox())!;
+  await page.mouse.click(pane.x + at.x, pane.y + at.y);
+}
+
+test("the drawing tools make text, an artboard, shapes, an arrow that follows its boxes, and pencil and pen lines", async ({
+  aiden,
+}) => {
+  const { app, page, userDataDir } = aiden;
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  const tools = canvas.getByRole("toolbar", { name: "Canvas tools" });
+
+  // Frame: drag out an artboard. The tool steps aside for Select once it has drawn.
+  await tools.getByRole("button", { name: "Frame", exact: true }).click();
+  await expect(tools.getByRole("button", { name: "Frame", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await dragOnCanvas(page, { x: 60, y: 120 }, { x: 640, y: 560 });
+  await expect(tools.getByRole("button", { name: "Select", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind)).toEqual(["frame"]);
+
+  // R and O draw shapes inside it, so they belong to it.
+  await page.keyboard.press("r");
+  await dragOnCanvas(page, { x: 100, y: 200 }, { x: 260, y: 300 });
+  await page.keyboard.press("o");
+  await dragOnCanvas(page, { x: 420, y: 200 }, { x: 540, y: 320 });
+  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind)).toEqual([
+    "frame",
+    "rect",
+    "oval",
+  ]);
+  const [board, rect, oval] = await savedFrames(userDataDir);
+  expect([rect!.groupId, oval!.groupId]).toEqual([board!.id, board!.id]);
+
+  // Shift+L draws an arrow; its ends land on the two shapes and stay joined to them.
+  await page.keyboard.press("Shift+L");
+  await dragOnCanvas(page, { x: 180, y: 250 }, { x: 480, y: 260 });
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")?.ends?.map((end) => end.frameId))
+    .toEqual([rect!.id, oval!.id]);
+
+  // Text: click to place, type, Escape to finish.
+  await page.keyboard.press("t");
+  await clickOnCanvas(page, { x: 100, y: 160 });
+  const textField = canvas.getByRole("textbox", { name: "Text", exact: true });
+  await expect(textField).toBeFocused();
+  await textField.pressSequentially("Sign-in flow");
+  await capture(page, "1440-draw-text-editing");
+  await textField.press("Escape");
+  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "text")?.text).toBe("Sign-in flow");
+
+  // A double-click on a shape edits its label.
+  await canvas.getByRole("group", { name: "Rectangle", exact: true }).dblclick();
+  const label = canvas.getByRole("textbox", { name: "Rectangle label" });
+  await label.pressSequentially("Sign in");
+  await label.press("Escape");
+  await expect(canvas.getByRole("group", { name: "Rectangle: Sign in" })).toBeVisible();
+
+  // The pencil draws freehand and stays on; the pen clicks corners and finishes with Return.
+  await tools.getByRole("button", { name: "Draw" }).click();
+  await page.getByRole("menuitem", { name: /^Pencil/u }).click();
+  await dragThrough(page, [
+    { x: 80, y: 660 },
+    { x: 130, y: 610 },
+    { x: 180, y: 680 },
+    { x: 230, y: 615 },
+    { x: 290, y: 670 },
+  ]);
+  await expect(tools.getByRole("button", { name: "Draw: Pencil" })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Shift+P");
+  await clickOnCanvas(page, { x: 380, y: 620 });
+  // A drag from the second point gives it a curve.
+  await dragOnCanvas(page, { x: 480, y: 720 }, { x: 540, y: 720 });
+  await clickOnCanvas(page, { x: 600, y: 630 });
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () =>
+      (await savedFrames(userDataDir))
+        .filter((entry) => entry.kind === "stroke")
+        .map((entry) => (entry.handles ? `pen ${entry.points?.length}` : "pencil")),
+    )
+    .toEqual(["pencil", "pen 3"]);
+  await clickEmptyCanvas(page);
+  await capture(page, "1440-draw-diagram");
+
+  // A selected arrow shows a handle at each end.
+  await clickOnCanvas(page, { x: 340, y: 255 });
+  await expect(canvas.locator("[data-design-end]")).toHaveCount(2);
+  await capture(page, "1440-draw-arrow-selected");
+  await clickEmptyCanvas(page);
+
+  // Moving the oval brings the arrow along.
+  const arrowBefore = (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends!;
+  await page.keyboard.press("v");
+  await dragOnCanvas(page, { x: 480, y: 290 }, { x: 480, y: 450 });
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![1]!.y)
+    .toBeGreaterThan(arrowBefore[1]!.y + 100);
+
+  // The Shapes menu lists its tools with their keys.
+  await tools.getByRole("button", { name: "Shapes" }).click();
+  await expect(page.getByRole("menuitem", { name: /^Rectangle/u })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /^Arrow/u })).toBeVisible();
+  await capture(page, "1440-draw-shapes-menu");
+  await page.keyboard.press("Escape");
+
+  // Deleting the rectangle leaves the arrow's end where it was; undo joins it again.
+  await canvas.getByRole("group", { name: "Rectangle: Sign in" }).click();
+  await page.keyboard.press("Backspace");
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![0]!.frameId)
+    .toBeUndefined();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "connector")!.ends![0]!.frameId)
+    .toBe(rect!.id);
+});
+

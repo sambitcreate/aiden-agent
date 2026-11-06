@@ -6,8 +6,46 @@
 // It also reads version 1 documents (one page, no page ids) and returns them
 // as version 2, so the next save writes the new shape.
 
-export type DesignFrameKind = "file" | "artifact" | "image" | "note" | "group";
+import { syncConnectors } from "./connectors.js";
+
+export type DesignFrameKind =
+  | "file"
+  | "artifact"
+  | "image"
+  | "note"
+  | "group"
+  | "text"
+  | "shape"
+  | "connector"
+  | "stroke"
+  | "frame";
 export type DesignWidth = 390 | 768 | 1280 | 1440;
+
+/** The fixed colours a drawn item can use; each follows the theme (`designColorVar`). */
+export type DesignColor = "ink" | "gray" | "blue" | "green" | "yellow" | "red" | "purple" | "teal" | "pink";
+export const DESIGN_COLORS = [
+  "ink",
+  "gray",
+  "blue",
+  "green",
+  "yellow",
+  "red",
+  "purple",
+  "teal",
+  "pink",
+] as const satisfies readonly DesignColor[];
+
+export type DesignShapeKind = "rect" | "oval";
+export type DesignTextSize = "small" | "medium" | "large";
+export type DesignSide = "top" | "right" | "bottom" | "left";
+
+/**
+ * One end of an arrow or line. `x` and `y` are where it is, in canvas units.
+ * An end on a frame also names the frame (and, optionally, the side it
+ * leaves from); it follows the frame, and `x`/`y` keep its last place so the
+ * end stays put if the frame goes.
+ */
+export type DesignConnectorEnd = { x: number; y: number; frameId?: string; side?: DesignSide };
 
 export type DesignFrame = {
   id: string;
@@ -23,12 +61,49 @@ export type DesignFrame = {
   path?: string;
   /** artifact. */
   mediaId?: string;
-  /** note. */
+  /** note, text, and a shape's label. */
   text?: string;
+  /** text: how large its type is (medium when left out). */
+  size?: DesignTextSize;
+  /** shape. */
+  shape?: DesignShapeKind;
+  /** shape: its fill (none when left out). */
+  fill?: DesignColor;
+  /** shape outline, connector, stroke and text colour. */
+  color?: DesignColor;
+  /** connector and stroke, and a shape's outline: in canvas units. */
+  strokeWidth?: number;
+  /** connector: its two ends. */
+  ends?: [DesignConnectorEnd, DesignConnectorEnd];
+  /** connector: an arrow points at its second end (or both); a line has none. */
+  arrow?: "end" | "both";
+  /** stroke: points as fractions (0 to 1) of the frame's box, so moving and resizing keep them. */
+  points?: [number, number][];
+  /** stroke drawn with the pen: each point's curve handle, as a fraction of the box; [0, 0] is a corner. */
+  handles?: [number, number][];
+  /** stroke drawn with the pen: the path returns to its first point. */
+  closed?: true;
   /** The page the frame is on. */
   pageId: string;
   createdBy: "person" | "aiden";
 };
+
+/** Kinds other frames can sit in, with `groupId`: a group, or an empty artboard drawn with the Frame tool. */
+export function isDesignContainer(kind: DesignFrameKind): boolean {
+  return kind === "group" || kind === "frame";
+}
+
+/** Kinds drawn as a line, so their box is only where the line is. */
+export function isDesignLine(kind: DesignFrameKind): boolean {
+  return kind === "connector" || kind === "stroke";
+}
+
+/** The smallest box a frame of this kind keeps. Drawn items can be small; pages and notes cannot. */
+export function designMinSize(kind: DesignFrameKind): number {
+  if (isDesignLine(kind)) return 1;
+  if (kind === "text" || kind === "shape") return 8;
+  return DESIGN_CANVAS_LIMITS.minSize;
+}
 
 /** A box in a page's own CSS pixels, from the top left of its document. */
 export type DesignRect = { x: number; y: number; w: number; h: number };
@@ -83,7 +158,8 @@ export type DesignCanvas = {
 };
 
 export const DESIGN_CANVAS_LIMITS = {
-  frames: 200,
+  frames: 1000,
+  framesPerPage: 400,
   comments: 500,
   pages: 50,
   pageNameChars: 60,
@@ -94,6 +170,9 @@ export const DESIGN_CANVAS_LIMITS = {
   noteChars: 2000,
   minZoom: 0.1,
   maxZoom: 4,
+  strokePoints: 2000,
+  minStrokeWidth: 1,
+  maxStrokeWidth: 24,
 } as const;
 
 export const DESIGN_WIDTHS = [390, 768, 1280, 1440] as const;
@@ -104,7 +183,15 @@ const FRAME_KINDS: ReadonlySet<string> = new Set<DesignFrameKind>([
   "image",
   "note",
   "group",
+  "text",
+  "shape",
+  "connector",
+  "stroke",
+  "frame",
 ]);
+const COLORS: ReadonlySet<string> = new Set(DESIGN_COLORS);
+const SIDES: ReadonlySet<string> = new Set<DesignSide>(["top", "right", "bottom", "left"]);
+const TEXT_SIZES: ReadonlySet<string> = new Set<DesignTextSize>(["small", "medium", "large"]);
 const COMMENT_STATES: ReadonlySet<string> = new Set(["open", "sent", "resolved"]);
 const ANCHOR_STATES: ReadonlySet<string> = new Set(["anchored", "stale", "lost"]);
 const MAX_ID_CHARS = 128;
@@ -199,23 +286,28 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
 
   const frames: DesignFrame[] = [];
   const frameIds = new Set<string>();
+  const perPage = new Map<string, number>();
   for (const raw of value.frames as unknown[]) {
-    const frame = frames.length < DESIGN_CANVAS_LIMITS.frames ? parseFrame(raw, pageOf(raw)) : null;
+    const pageId = pageOf(raw);
+    const room =
+      frames.length < DESIGN_CANVAS_LIMITS.frames && (perPage.get(pageId) ?? 0) < DESIGN_CANVAS_LIMITS.framesPerPage;
+    const frame = room ? parseFrame(raw, pageId) : null;
     if (!frame || frameIds.has(frame.id)) {
       dropped += 1;
       continue;
     }
     frameIds.add(frame.id);
+    perPage.set(pageId, (perPage.get(pageId) ?? 0) + 1);
     frames.push(frame);
   }
-  // A frame belongs to a group on its own page only.
+  // A frame belongs to a group or artboard on its own page only, and those do not nest.
   const groupPages = new Map(
-    frames.filter((frame) => frame.kind === "group").map((frame) => [frame.id, frame.pageId]),
+    frames.filter((frame) => isDesignContainer(frame.kind)).map((frame) => [frame.id, frame.pageId]),
   );
   for (const frame of frames) {
     if (
       frame.groupId !== undefined &&
-      (frame.kind === "group" || groupPages.get(frame.groupId) !== frame.pageId)
+      (isDesignContainer(frame.kind) || groupPages.get(frame.groupId) !== frame.pageId)
     ) {
       delete frame.groupId;
     }
@@ -239,14 +331,15 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
 
   return {
     ok: true,
-    doc: {
+    // Arrows and lines follow the frames they are on, so a document read back is already up to date.
+    doc: syncConnectors({
       version: 2,
       revision: revision as number,
       pages,
       activePageId,
       frames,
       comments,
-    },
+    }),
     dropped,
   };
 }
@@ -306,8 +399,8 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
       typeof value.title === "string" ? value.title.slice(0, DESIGN_CANVAS_LIMITS.titleChars) : "",
     x: clampCoord(x),
     y: clampCoord(y),
-    w: clampSize(w),
-    h: clampSize(h),
+    w: clampSize(w, kind as DesignFrameKind),
+    h: clampSize(h, kind as DesignFrameKind),
     pageId,
     createdBy: value.createdBy === "aiden" ? "aiden" : "person",
   };
@@ -325,11 +418,77 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     if (!mediaId) return null;
     frame.mediaId = mediaId;
   }
-  if (frame.kind === "note") {
+  if (frame.kind === "note" || frame.kind === "text") {
     frame.text =
       typeof value.text === "string" ? value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars) : "";
   }
+  if (frame.kind === "text" && typeof value.size === "string" && TEXT_SIZES.has(value.size)) {
+    frame.size = value.size as DesignTextSize;
+  }
+  if (frame.kind === "shape") {
+    if (value.shape !== "rect" && value.shape !== "oval") return null;
+    frame.shape = value.shape;
+    if (typeof value.text === "string" && value.text) frame.text = value.text.slice(0, DESIGN_CANVAS_LIMITS.noteChars);
+    if (isColor(value.fill)) frame.fill = value.fill;
+  }
+  if (frame.kind === "shape" || frame.kind === "text" || isDesignLine(frame.kind)) {
+    if (isColor(value.color)) frame.color = value.color;
+  }
+  if (frame.kind === "shape" || isDesignLine(frame.kind)) {
+    const width = finite(value.strokeWidth);
+    if (width !== undefined) {
+      frame.strokeWidth = clamp(width, DESIGN_CANVAS_LIMITS.minStrokeWidth, DESIGN_CANVAS_LIMITS.maxStrokeWidth);
+    }
+  }
+  if (frame.kind === "connector") {
+    if (!Array.isArray(value.ends) || value.ends.length !== 2) return null;
+    const from = parseEnd(value.ends[0]);
+    const to = parseEnd(value.ends[1]);
+    if (!from || !to) return null;
+    frame.ends = [from, to];
+    if (value.arrow === "end" || value.arrow === "both") frame.arrow = value.arrow;
+  }
+  if (frame.kind === "stroke") {
+    const points = parseFractions(value.points);
+    if (!points || points.length < 2) return null;
+    frame.points = points;
+    const handles = parseFractions(value.handles, 1);
+    if (handles && handles.length === points.length) frame.handles = handles;
+    if (value.closed === true && frame.handles) frame.closed = true;
+  }
   return frame;
+}
+
+function isColor(value: unknown): value is DesignColor {
+  return typeof value === "string" && COLORS.has(value);
+}
+
+function parseEnd(value: unknown): DesignConnectorEnd | null {
+  if (!isRecord(value)) return null;
+  const x = finite(value.x);
+  const y = finite(value.y);
+  if (x === undefined || y === undefined) return null;
+  const end: DesignConnectorEnd = { x: clampCoord(x), y: clampCoord(y) };
+  const frameId = identifier(value.frameId);
+  if (frameId) {
+    end.frameId = frameId;
+    if (typeof value.side === "string" && SIDES.has(value.side)) end.side = value.side as DesignSide;
+  }
+  return end;
+}
+
+/** Points as fractions of a box: at most `strokePoints` of them, each within `-reach..1 + reach`. */
+function parseFractions(value: unknown, reach = 0): [number, number][] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const points: [number, number][] = [];
+  for (const point of value.slice(0, DESIGN_CANVAS_LIMITS.strokePoints)) {
+    if (!Array.isArray(point) || point.length !== 2) return undefined;
+    const px = finite(point[0]);
+    const py = finite(point[1]);
+    if (px === undefined || py === undefined) return undefined;
+    points.push([clamp(px, -reach, 1 + reach), clamp(py, -reach, 1 + reach)]);
+  }
+  return points;
 }
 
 function parseComment(value: unknown, pageId: string): DesignComment | null {
@@ -455,6 +614,6 @@ function clampCoord(value: number): number {
   return clamp(value, -DESIGN_CANVAS_LIMITS.maxCoord, DESIGN_CANVAS_LIMITS.maxCoord);
 }
 
-function clampSize(value: number): number {
-  return clamp(value, DESIGN_CANVAS_LIMITS.minSize, DESIGN_CANVAS_LIMITS.maxSize);
+function clampSize(value: number, kind: DesignFrameKind): number {
+  return clamp(value, designMinSize(kind), DESIGN_CANVAS_LIMITS.maxSize);
 }

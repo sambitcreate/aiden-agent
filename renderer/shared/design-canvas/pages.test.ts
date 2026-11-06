@@ -133,3 +133,34 @@ test("moving frames to another page brings a group's members and comments, and a
   assert.equal(lone.frames[1]!.groupId, undefined);
   assert.equal(moveFramesToPage(doc, ["m"], "nowhere"), doc);
 });
+
+test("a copied page's arrows join the copies of their boxes", () => {
+  const doc: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    frames: [
+      { id: "a", kind: "shape", shape: "rect", title: "A", x: 0, y: 0, w: 100, h: 60, pageId: "page-1", createdBy: "person" },
+      {
+        id: "ab",
+        kind: "connector",
+        title: "Arrow",
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+        ends: [
+          { x: 100, y: 30, frameId: "a" },
+          { x: 400, y: 30 },
+        ],
+        pageId: "page-1",
+        createdBy: "person",
+      },
+    ],
+  };
+  let next = 0;
+  const copy = duplicatePage(doc, "page-1", "page-2", () => `copy-${++next}`);
+  const arrow = copy.frames.find((frame) => frame.pageId === "page-2" && frame.kind === "connector")!;
+  assert.deepEqual(arrow.ends, [
+    { x: 100, y: 30, frameId: "copy-1" },
+    { x: 400, y: 30 },
+  ]);
+});

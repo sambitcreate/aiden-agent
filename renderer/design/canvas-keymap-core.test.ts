@@ -97,3 +97,36 @@ test("the shared canvas keys still resolve as they do on every canvas", () => {
     assert.deepEqual(resolveDesignCanvasKey(event, mac), expected, event.code);
   }
 });
+
+test("letters choose the drawing tools, with Shift for the arrow and the pen", () => {
+  const tools = Object.fromEntries(
+    [
+      ["KeyT", false],
+      ["KeyF", false],
+      ["KeyR", false],
+      ["KeyO", false],
+      ["KeyL", false],
+      ["KeyL", true],
+      ["KeyP", false],
+      ["KeyP", true],
+    ].map(([code, shiftKey]) => {
+      const command = resolveDesignCanvasKey(key(code as string, { shiftKey: shiftKey as boolean }), mac);
+      return [`${shiftKey ? "Shift+" : ""}${code}`, command?.type === "draw" ? command.tool : command];
+    }),
+  );
+  assert.deepEqual(tools, {
+    KeyT: "text",
+    KeyF: "frame",
+    KeyR: "rect",
+    KeyO: "oval",
+    KeyL: "line",
+    "Shift+KeyL": "arrow",
+    KeyP: "pencil",
+    "Shift+KeyP": "pen",
+  });
+  // Not while typing, not held down, and not with Command (Command-R is the app's).
+  assert.equal(resolveDesignCanvasKey(key("KeyR"), { ...mac, editable: true }), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyR", { repeat: true }), mac), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyR", { metaKey: true }), mac), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyT", { shiftKey: true }), mac), null);
+});

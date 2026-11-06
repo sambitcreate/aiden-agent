@@ -204,21 +204,25 @@ test("an explicit position is kept, and a size outside the limits is clamped", (
   assert.deepEqual(box(byId(placed.doc, "p1")), { x: 10, y: 20, w: 40, h: 8000 });
 });
 
-test("a canvas holds at most 200 frames", () => {
-  const full = canvas(...Array.from({ length: 200 }, (_, index) => frame(`f${index}`)));
-  const result = placeFrame(
-    full,
-    { kind: "note", title: "One more", w: 200, h: 100, text: "", pageId: "page-1", createdBy: "person" },
-    { x: 0, y: 0, w: 1000, h: 800 },
-    () => "extra",
-  );
-  assert.deepEqual(result, { error: "limit" });
-  const almost = canvas(...Array.from({ length: 199 }, (_, index) => frame(`f${index}`)));
-  assert.equal(
-    "doc" in
-      placeFrame(almost, { kind: "note", title: "Last", w: 200, h: 100, text: "", pageId: "page-1", createdBy: "person" }, { x: 0, y: 0, w: 1000, h: 800 }, () => "last"),
-    true,
-  );
+test("a page holds at most 400 frames, and the canvas 1 000", () => {
+  const note = { kind: "note" as const, title: "One more", w: 200, h: 100, text: "", createdBy: "person" as const };
+  const view = { x: 0, y: 0, w: 1000, h: 800 };
+  const full = canvas(...Array.from({ length: 400 }, (_, index) => frame(`f${index}`)));
+  assert.deepEqual(placeFrame(full, { ...note, pageId: "page-1" }, view, () => "extra"), { error: "limit" });
+  const almost = canvas(...Array.from({ length: 399 }, (_, index) => frame(`f${index}`)));
+  assert.equal("doc" in placeFrame(almost, { ...note, pageId: "page-1" }, view, () => "last"), true);
+
+  // Another page still has room until the canvas as a whole is full.
+  const second = { ...full, pages: [...full.pages, { id: "page-2", name: "Page 2", viewport: { x: 0, y: 0, zoom: 1 } }] };
+  assert.equal("doc" in placeFrame(second, { ...note, pageId: "page-2" }, view, () => "other"), true);
+  const everywhere = {
+    ...second,
+    frames: [
+      ...second.frames,
+      ...Array.from({ length: 600 }, (_, index) => frame(`g${index}`, { pageId: "page-2" })),
+    ],
+  };
+  assert.deepEqual(placeFrame(everywhere, { ...note, pageId: "page-2" }, view, () => "over"), { error: "limit" });
 });
 
 test("duplicating frames copies them 32 px down and right with new ids", () => {
@@ -247,7 +251,89 @@ test("duplicating a group copies its frames into the new group", () => {
   assert.equal(next.frames.filter((entry) => entry.groupId === "g").length, 2, "the originals stay put");
 });
 
-test("a duplicate that would pass 200 frames changes nothing", () => {
-  const full = canvas(...Array.from({ length: 199 }, (_, index) => frame(`f${index}`)));
+test("a duplicate that would pass 400 frames on a page changes nothing", () => {
+  const full = canvas(...Array.from({ length: 399 }, (_, index) => frame(`f${index}`)));
   assert.equal(duplicateFrames(full, ["f0", "f1"], newId), full);
+  assert.equal(duplicateFrames(full, ["f0"], newId).frames.length, 400);
+});
+
+test("an arrow is drawn where its ends are, and only its line takes the pointer", () => {
+  const doc = canvas(
+    frame("a", { kind: "shape", shape: "rect", x: 0, y: 0, w: 100, h: 60 }),
+    frame("b", { kind: "shape", shape: "rect", x: 400, y: 0, w: 100, h: 60 }),
+    // Stored box out of date on purpose: the node follows the ends, not the stored box.
+    frame("ab", {
+      kind: "connector",
+      x: 9999,
+      y: 9999,
+      w: 1,
+      h: 1,
+      ends: [
+        { x: 0, y: 0, frameId: "a" },
+        { x: 0, y: 0, frameId: "b" },
+      ],
+    }),
+  );
+  const node = nodesFromCanvas(doc, new Set()).find((entry) => entry.id === "ab")!;
+  assert.deepEqual(node.data.ends, [
+    { x: 100, y: 30 },
+    { x: 400, y: 30 },
+  ]);
+  assert.deepEqual({ ...node.position, w: node.width }, { x: 88, y: 18, w: 324 });
+  assert.equal(node.style?.pointerEvents, "none");
+  assert.equal(nodesFromCanvas(doc, new Set()).find((entry) => entry.id === "a")!.style, undefined);
+});
+
+test("an artboard draws under what is in it and carries it when moved", () => {
+  const doc = canvas(
+    frame("card", { kind: "shape", shape: "rect", x: 50, y: 50, groupId: "board" }),
+    frame("board", { kind: "frame", x: 0, y: 0, w: 800, h: 600 }),
+  );
+  assert.deepEqual(
+    nodesFromCanvas(doc, new Set()).map((node) => node.id),
+    ["board", "card"],
+  );
+  const moved = applyNodeChanges(doc, [{ type: "position", id: "board", position: { x: 100, y: 0 }, dragging: true }]);
+  assert.deepEqual(box(byId(moved, "card")), { x: 150, y: 50, w: 200, h: 120 });
+});
+
+test("a shape can be resized small, but an arrow's box is not resized at all", () => {
+  const doc = canvas(
+    frame("s", { kind: "shape", shape: "oval" }),
+    frame("c", { kind: "connector", ends: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }),
+  );
+  const next = applyNodeChanges(doc, [
+    { type: "dimensions", id: "s", dimensions: { width: 10, height: 2 }, resizing: true },
+    { type: "dimensions", id: "c", dimensions: { width: 500, height: 500 }, resizing: true },
+  ]);
+  assert.deepEqual([byId(next, "s")!.w, byId(next, "s")!.h], [10, 8]);
+  assert.deepEqual(byId(next, "c")!.ends, byId(doc, "c")!.ends);
+});
+
+test("duplicating boxes with the arrow between them joins the copied arrow to the copies", () => {
+  counter = 0;
+  const doc = canvas(
+    frame("a", { kind: "shape", shape: "rect", x: 0, y: 0, w: 100, h: 60 }),
+    frame("b", { kind: "shape", shape: "rect", x: 400, y: 0, w: 100, h: 60 }),
+    frame("ab", {
+      kind: "connector",
+      ends: [
+        { x: 100, y: 30, frameId: "a" },
+        { x: 400, y: 30, frameId: "b" },
+      ],
+    }),
+  );
+  const all = duplicateFrames(doc, ["a", "b", "ab"], newId);
+  const copied = all.frames.find((entry) => entry.kind === "connector" && entry.id !== "ab")!;
+  assert.deepEqual(
+    copied.ends!.map((end) => end.frameId),
+    ["new-1", "new-2"],
+  );
+  // Copied alone, the arrow's ends become free ends beside the original's.
+  counter = 0;
+  const alone = duplicateFrames(doc, ["ab"], newId);
+  assert.deepEqual(alone.frames.find((entry) => entry.id === "new-1")!.ends, [
+    { x: 132, y: 62 },
+    { x: 432, y: 62 },
+  ]);
 });

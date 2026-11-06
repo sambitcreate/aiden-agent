@@ -9,6 +9,28 @@ import {
   type CanvasCommand,
   type CanvasKeyEvent,
 } from "../canvas/canvas-keymap-core";
+import type { DesignDrawTool } from "./design-drawing";
+
+/** The drawing tools' keys, as `aria-keyshortcuts` writes them. */
+export const DESIGN_DRAW_SHORTCUTS = Object.freeze({
+  text: "T",
+  frame: "F",
+  rect: "R",
+  oval: "O",
+  arrow: "Shift+L",
+  line: "L",
+  pencil: "P",
+  pen: "Shift+P",
+} as const satisfies Record<DesignDrawTool, string>);
+
+const DRAW_KEYS: Record<string, { plain?: DesignDrawTool; shift?: DesignDrawTool }> = {
+  KeyT: { plain: "text" },
+  KeyF: { plain: "frame" },
+  KeyR: { plain: "rect" },
+  KeyO: { plain: "oval" },
+  KeyL: { plain: "line", shift: "arrow" },
+  KeyP: { plain: "pencil", shift: "pen" },
+};
 
 export type DesignCanvasCommand =
   | CanvasCommand
@@ -21,7 +43,8 @@ export type DesignCanvasCommand =
   | { type: "enter" }
   | { type: "rename" }
   | { type: "addNote" }
-  | { type: "comment" };
+  | { type: "comment" }
+  | { type: "draw"; tool: DesignDrawTool };
 
 export function resolveDesignCanvasKey(
   event: CanvasKeyEvent,
@@ -46,6 +69,9 @@ export function resolveDesignCanvasKey(
     if (!event.shiftKey && event.code === "F2") return { type: "rename" };
     if (!event.shiftKey && event.code === "KeyN") return { type: "addNote" };
     if (!event.shiftKey && event.code === "KeyC") return { type: "comment" };
+    const draw = DRAW_KEYS[event.code];
+    const tool = event.shiftKey ? draw?.shift : draw?.plain;
+    if (tool) return { type: "draw", tool };
   }
   return resolveCanvasKey(event, { editable: false });
 }

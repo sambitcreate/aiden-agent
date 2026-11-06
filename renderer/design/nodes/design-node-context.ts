@@ -3,6 +3,7 @@
 // (grant, live set, versions) arrives through this context.
 
 import * as React from "react";
+import type { DesignPoint } from "../../shared/design-canvas/connectors";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 
 /** Height of a frame's title bar; a page frame's content box is the rest. */
@@ -24,7 +25,13 @@ export type DesignNodeContextValue = {
   markMissing(id: string, version: number): void;
   remove(id: string): void;
   /** Edits one frame. `record` adds an undo step. */
-  update(id: string, patch: Partial<Pick<DesignFrame, "text" | "title">>, options: { record: boolean }): void;
+  update(id: string, patch: Partial<Pick<DesignFrame, "text" | "title" | "h">>, options: { record: boolean }): void;
+  /** Puts one end of an arrow or line at `point`, on the frame there if there is one. */
+  moveEnd(id: string, index: 0 | 1, point: DesignPoint): void;
+  /** The text item or shape whose words are being edited. */
+  editing: string | null;
+  /** Starts editing a text item's or shape's words, or stops (null). */
+  edit(id: string | null): void;
   /** The frame took the focus it was asked to; it is not focused again on a later mount. */
   autoFocusDone(id: string): void;
   /** The frame whose title is being edited. */
