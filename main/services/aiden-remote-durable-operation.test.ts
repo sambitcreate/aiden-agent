@@ -13,6 +13,7 @@ import {
   AidenIdempotencyLedger,
   AidenOperationContractError,
   AidenOperationNotExecutedError,
+  AidenOperationReplaySafeRetryError,
   AidenOperationUnknownOutcomeError,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
@@ -568,6 +569,27 @@ test("a falsy action failure still reaches the caller after its outcome is writt
     (error: unknown) => error,
   );
   assert.equal(failure, 0);
+});
+
+test("an action that owns its own receipt frees the key, on disk too, so its retry can reconcile", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  let saved = ledger.snapshot();
+  const durable = owner(ledger, async (snapshot) => {
+    saved = snapshot;
+  });
+  const lost = new AidenRemoteServiceError("internal_error", "receipt pending", 500);
+  let runs = 0;
+  const action = async () => {
+    runs += 1;
+    if (runs === 1) throw new AidenOperationReplaySafeRetryError(lost);
+    return "reconciled";
+  };
+
+  await assert.rejects(executeAidenDurableOperation(durable, SCOPE, {}, action), (error) => error === lost);
+  assert.equal(new AidenIdempotencyLedger(saved).sizeForTesting(), 0);
+
+  assert.equal(await executeAidenDurableOperation(durable, SCOPE, {}, action), "reconciled");
+  assert.equal(runs, 2);
 });
 
 /** Deterministic Mulberry32: a failing seed reproduces the exact event order. */
