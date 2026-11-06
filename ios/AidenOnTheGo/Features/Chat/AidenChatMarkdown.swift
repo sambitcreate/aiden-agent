@@ -173,7 +173,18 @@ private struct AidenMarkdownChunkView: View, Equatable {
     }
 
     var body: some View {
-        MarkdownUI.Markdown(chunk.content)
+        Group {
+            if let open = chunk.openCode {
+                // Drawn here, not through Markdown, so the block keeps its identity (and
+                // the copy button its state) as its text grows token by token.
+                AidenCodeBlockView(
+                    source: open.code,
+                    language: AidenCodeBlockView.languageName(fromFenceInfo: open.info)
+                )
+            } else {
+                MarkdownUI.Markdown(chunk.content)
+            }
+        }
             .padding(.top, chunk.leadingGap)
             .opacity(isRevealed ? 1 : 0)
             .onAppear {

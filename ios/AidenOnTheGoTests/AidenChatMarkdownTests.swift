@@ -85,8 +85,79 @@ final class AidenChatMarkdownTests: XCTestCase {
 
         host.update(AidenMarkdownView(content: "Before.\n\n```py\nprint(1)\nprint(2)\nprint(3", isStreaming: true))
         drainMainLoop()
-        try copyButton(in: window).activate()
+        // "Copied" is still showing, and pressing again copies what has arrived since.
+        try copyButton(in: window, label: "Copied").activate()
         XCTAssertEqual(UIPasteboard.general.string, "print(1)\nprint(2)\nprint(3")
+    }
+
+    /// A streaming reply is redrawn on every token. The block being written must stay the
+    /// same block through that, or "Copied" ends at the next token and a press that
+    /// spans tokens is lost.
+    func testCopiedSurvivesTheTokensThatArriveAfterThePress() throws {
+        func reply(_ code: String) -> AidenMarkdownView {
+            AidenMarkdownView(content: "Before.\n\n```py\n\(code)", isStreaming: true)
+        }
+        let host = Host(reply("print(1)\nprint("))
+        let window = try show(host)
+        defer { close(window) }
+
+        try copyButton(in: window).activate()
+        XCTAssertEqual(UIPasteboard.general.string, "print(1)\nprint(")
+        for token in ["print(1)\nprint(2", "print(1)\nprint(2)\nprint(", "print(1)\nprint(2)\nprint(3)\nx"] {
+            host.update(reply(token))
+            drainMainLoop(seconds: 0.1)
+            XCTAssertNotNil(
+                try? copyButton(in: window, label: "Copied"),
+                "\"Copied\" ended when more of the block arrived"
+            )
+        }
+        // The press already copied what had arrived, and the next press copies what has arrived since.
+        XCTAssertEqual(UIPasteboard.general.string, "print(1)\nprint(")
+    }
+
+    func testAPressDuringAStreamIsNotLostToTheNextToken() throws {
+        func reply(_ code: String) -> AidenMarkdownView {
+            AidenMarkdownView(content: "```sh\n\(code)", isStreaming: true)
+        }
+        let host = Host(reply("one"))
+        let window = try show(host)
+        defer { close(window) }
+        let button = try copyButton(in: window).element
+
+        host.update(reply("one\ntwo"))
+        drainMainLoop(seconds: 0.05)
+        // The element read before the token is the one pressed after it, as a finger that went down earlier would.
+        XCTAssertTrue(button.accessibilityActivate())
+        XCTAssertEqual(UIPasteboard.general.string, "one\ntwo")
+    }
+
+    func testAnOpenFenceIsReadAsTheCodeThatHasArrived() {
+        let open = AidenStreamingMarkdownTail.openCodeBlock(in: "```swift title=\"a.swift\"\nlet x = 1\n\nlet y")
+        XCTAssertEqual(open, .init(info: "swift title=\"a.swift\"", code: "let x = 1\n\nlet y"))
+        // A newline after the last line that arrived is not code.
+        XCTAssertEqual(AidenStreamingMarkdownTail.openCodeBlock(in: "~~~\nls\n")?.code, "ls")
+        XCTAssertEqual(AidenStreamingMarkdownTail.openCodeBlock(in: "```py\n")?.code, "")
+        XCTAssertEqual(AidenStreamingMarkdownTail.openCodeBlock(in: "```py")?.info, "py")
+        // Indentation of the fence comes off the code, as in the settled block.
+        XCTAssertEqual(AidenStreamingMarkdownTail.openCodeBlock(in: "  ```\n  a\n    b")?.code, "a\n  b")
+        // A longer fence is not closed by a shorter run inside the code.
+        XCTAssertEqual(AidenStreamingMarkdownTail.openCodeBlock(in: "````md\n```swift\nlet x")?.code, "```swift\nlet x")
+    }
+
+    func testOnlyABlockStillBeingWrittenIsReadAsOpenCode() {
+        XCTAssertNil(AidenStreamingMarkdownTail.openCodeBlock(in: "```sh\nls\n```"), "A closed block")
+        XCTAssertNil(AidenStreamingMarkdownTail.openCodeBlock(in: "```sh\nls\n```\n\nAfter"), "A closed block with text after it")
+        XCTAssertNil(AidenStreamingMarkdownTail.openCodeBlock(in: "Text first\n```sh\nls"), "Text before the fence")
+        XCTAssertNil(AidenStreamingMarkdownTail.openCodeBlock(in: "    indented()"), "An indented block")
+        XCTAssertNil(AidenStreamingMarkdownTail.openCodeBlock(in: ""))
+    }
+
+    func testOnlyTheStreamingTailIsDrawnAsOpenCode() {
+        let cache = AidenMarkdownContentCache()
+        let markdown = "```sh\nfirst\n```\n\nText.\n\n```py\nprint("
+        let streaming = cache.chunks(for: markdown, streaming: true)
+        XCTAssertEqual(streaming.map { $0.openCode?.code }, [nil, nil, "print("], "Only the open tail, never a sealed chunk")
+        XCTAssertEqual(cache.chunks(for: markdown, streaming: false).compactMap(\.openCode).count, 0, "A settled reply uses the ordinary block")
     }
 
     func testTheLanguageNamesTheButtonAndFenceOptionsAreDropped() {
@@ -443,8 +514,8 @@ final class AidenChatMarkdownTests: XCTestCase {
         return condition()
     }
 
-    private func drainMainLoop() {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+    private func drainMainLoop(seconds: TimeInterval = 0.25) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 }
 
