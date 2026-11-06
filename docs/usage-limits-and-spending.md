@@ -51,7 +51,7 @@ Spending limits stop a chat, a Bot or a routine run once it has spent a set amou
 
 ### What counts
 
-Only requests paid for with an **API key** count. A Claude or ChatGPT sign-in (a subscription), and models running on the computer, count as $0. A chat's helpers count toward that chat. Prices come from the model catalog Aiden ships; a model with no price counts as $0.
+Only requests paid for with an **API key** count. A Claude or ChatGPT sign-in (a subscription), and models running on the computer, count as $0. A chat's helpers count toward that chat, including the summaries a helper writes to shorten its history; a helper checks the balance before each summary. Prices come from the model catalog Aiden ships; a model with no price counts as $0.
 
 Bot conversation summaries and helpers run under the originating input’s Bot and routine budget scopes. The Bot memory review and chat titles remain outside this accounting.
 

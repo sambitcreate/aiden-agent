@@ -1,4 +1,4 @@
-import { parseSpendingLimitUsd, type SpendingStatusView } from "../../renderer/shared/spending.js";
+import { parseSpendingStatusView, parseSpendingLimitUsd, type SpendingStatusView } from "../../renderer/shared/spending.js";
 
 function owner(kind: unknown, id: unknown): { kind: "chat" | "bot"; id: string } {
   if ((kind !== "chat" && kind !== "bot") || typeof id !== "string" || !id || id.length > 200) {
@@ -12,7 +12,7 @@ export function registerSpendingHandlers<Event>(dependencies: {
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
   spending: {
     status(kind: "chat" | "bot", id: string): Promise<SpendingStatusView | undefined>;
-    allowMore(kind: "chat" | "bot", id: string): Promise<SpendingStatusView | undefined>;
+    allowMoreIf(kind: "chat" | "bot", id: string, current: (view: SpendingStatusView) => boolean): Promise<{ view: SpendingStatusView | undefined }>;
     ownBotLimit(botId: string): Promise<number | null | undefined>;
     setBotLimit(botId: string, limit: number | null | undefined): Promise<SpendingStatusView | undefined>;
   };
@@ -21,9 +21,15 @@ export function registerSpendingHandlers<Event>(dependencies: {
     const target = owner(kind, id);
     return (await dependencies.spending.status(target.kind, target.id)) ?? null;
   });
-  dependencies.handle("spending:allowMore", async (_event, kind, id) => {
+  dependencies.handle("spending:allowMore", async (_event, kind, id, notice) => {
     const target = owner(kind, id);
-    return (await dependencies.spending.allowMore(target.kind, target.id)) ?? null;
+    const shown = parseSpendingStatusView(notice);
+    if (!shown || shown.ownerKind !== target.kind || shown.ownerId !== target.id) throw new Error("Invalid spending notice.");
+    const { view } = await dependencies.spending.allowMoreIf(target.kind, target.id, (current) =>
+      current.period === shown.period && current.periodStart === shown.periodStart &&
+      current.limitUsd === shown.limitUsd && current.extraUsd === shown.extraUsd,
+    );
+    return view ?? null;
   });
   dependencies.handle("spending:botLimit", async (_event, botId) => {
     const target = owner("bot", botId);
