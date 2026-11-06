@@ -505,6 +505,48 @@ test("current resolves through the precedence model with workspace context", asy
   assert.equal(current.pullRequest?.linked, true);
 });
 
+test("a branch that pushes under another name resolves to the pull request on that name", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const listedBranches: unknown[] = [];
+  const { service } = fakeService(
+    directory,
+    {
+      resolveRepository: async () => ({
+        availability: "ready",
+        repository: { host: "github.com", nameWithOwner: REPO },
+        headBranch: "user-feature",
+      }),
+      getPullRequestByUrl: async (...args: never[]) => {
+        const number = Number(/\/pull\/(\d+)/u.exec(JSON.stringify(args))?.[1]);
+        return ready({
+          pullRequest: summary(number, {
+            headBranch: number === 12 ? "user-feature" : "other",
+          }),
+        }) as GitHubPullRequestStatus;
+      },
+      listPullRequests: async (...args: never[]) => {
+        listedBranches.push(
+          (args as unknown as [string, { headBranch?: string }])[1]?.headBranch,
+        );
+        return { availability: "ready", pullRequests: [] };
+      },
+    },
+    { branch: "feature" },
+  );
+
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/12" });
+  await service.link(CHAT, { url: "https://github.com/owner/repo/pull/13" });
+
+  const current = await service.current(CHAT);
+  assert.equal(current.reason, "workspace-branch");
+  assert.equal(current.pullRequest?.number, 12);
+
+  await service.candidates(CHAT);
+  assert.ok(listedBranches.includes("user-feature"));
+  assert.ok(!listedBranches.includes("feature"));
+});
+
 test("sidebar reads each chat's best cached PR without calling GitHub", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
