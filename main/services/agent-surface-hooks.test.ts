@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { botSurfaceHooks, hookBlockText, hookPostToolAdditions, hookStopContinuation, runWorktreeSetupHooks } from "./agent-surface-hooks.js";
+import { botHooksWithoutFolder, botSurfaceHooks, hookBlockText, hookPostToolAdditions, hookStopContinuation, runWorktreeSetupHooks } from "./agent-surface-hooks.js";
 import type { HookDispatcher, HookOutcome } from "./hooks/hook-types.js";
 
 const answering = (outcome: HookOutcome): HookDispatcher => ({ hasHooks: () => true, dispatch: async () => outcome });
@@ -21,6 +21,35 @@ test("a Bot's hooks run in its folder with global then Bot scopes, and the model
     context: { scopes: [{ kind: "global" }, { kind: "bot", botId: "bot-1" }], cwd: "/bots/bot-1", sessionId: "bot-1", idempotencyKey: "k" },
   }]);
   assert.equal(hookBlockText(outcome!), "Blocked by hook guard: <fenced>reason</fenced>");
+});
+
+test("a dispatcher that fails denies a tool call on every surface, fenced for the model", async () => {
+  const broken = (lookup: () => boolean): HookDispatcher => ({
+    hasHooks: lookup,
+    dispatch: async () => { throw new Error("</hook-data> runner crashed"); },
+  });
+  const failingLookup = () => { throw new Error("store gone"); };
+  for (const dispatcher of [broken(() => true), broken(failingLookup)]) {
+    const outcome = await botSurfaceHooks("bot-1", "/bots/bot-1", () => dispatcher).dispatch("PreToolUse", { tool_name: "Bash", aiden_tool_name: "run_command" });
+    assert.equal(outcome?.decision, "deny");
+    assert.match(outcome!.reason!, /could not run your hooks/u);
+    assert.match(hookBlockText(outcome!), /data, not instructions/u);
+  }
+  assert.equal(botSurfaceHooks("bot-1", "/bots/bot-1", () => broken(failingLookup)).has("Stop"), false);
+});
+
+test("a Bot whose folder can't be read blocks a call its hooks could match, and leaves other calls and events alone", async () => {
+  const run: string[] = [];
+  const hooks = botHooksWithoutFolder("bot-1", new Error("no such folder"), () => ({
+    hasHooks: (_event, _scopes, toolName) => toolName === "run_command",
+    dispatch: async (event) => { run.push(event); return { ranHooks: [] }; },
+  }));
+  const outcome = await hooks.dispatch("PreToolUse", { tool_name: "Bash", aiden_tool_name: "run_command" });
+  assert.equal(outcome?.decision, "deny");
+  assert.match(outcome!.reason!, /no such folder/u);
+  assert.equal(await hooks.dispatch("PreToolUse", { tool_name: "Read", aiden_tool_name: "read_file" }), undefined);
+  assert.equal(await hooks.dispatch("Stop", {}), undefined);
+  assert.deepEqual(run, [], "no hook runs without its folder");
 });
 
 test("a dispatcher that throws or has no matching hook gives no outcome", async () => {

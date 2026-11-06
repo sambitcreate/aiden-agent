@@ -112,6 +112,7 @@ import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } f
 import { isPiCodemodeCallable } from "../pi-runtime-tool.js";
 import {
   MAX_STOP_HOOK_CONTINUATIONS,
+  botHooksWithoutFolder,
   botSurfaceHooks,
   hookAskText,
   hookBlockText,
@@ -1104,13 +1105,6 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     const hookDeps = deps.hooks;
     if (hookDeps === undefined) return undefined;
     if (hookClient !== undefined) return hookClient;
-    let cwd: string;
-    try {
-      cwd = await hookDeps.cwd(botId);
-    } catch {
-      // A Bot whose folder can't be read runs no hooks this time; nothing else changes.
-      return undefined;
-    }
     const report = (lines: string[]): void => {
       try {
         hookDeps.report?.(botId, lines);
@@ -1118,9 +1112,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         // Reporting is best effort; the hook's answer still applies.
       }
     };
-    // Observe-only events (PreCompact) report through the same channel as dispatched ones.
-    const client = botSurfaceHooks(botId, cwd, hookDeps.dispatcher, { report });
-    hookClient = {
+    const reporting = (client: SurfaceHooks): SurfaceHooks => ({
       ...client,
       dispatch: async (...args) => {
         const outcome = await client.dispatch(...args);
@@ -1128,7 +1120,16 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         if (lines.length > 0) report(lines);
         return outcome;
       },
-    };
+    });
+    let cwd: string;
+    try {
+      cwd = await hookDeps.cwd(botId);
+    } catch (error) {
+      // Its hooks can't run this time, so a call one of them could match doesn't either.
+      return reporting(botHooksWithoutFolder(botId, error, hookDeps.dispatcher, { report }));
+    }
+    // Observe-only events (PreCompact) report through the same channel as dispatched ones.
+    hookClient = reporting(botSurfaceHooks(botId, cwd, hookDeps.dispatcher, { report }));
     return hookClient;
   }
 

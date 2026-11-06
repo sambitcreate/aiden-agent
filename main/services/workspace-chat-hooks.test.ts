@@ -174,7 +174,7 @@ test("a hook's updated input replaces the call's arguments after validation, but
   assert.deepEqual(command, { command: "npm test" });
 });
 
-test("a dispatcher that throws counts as no outcome", async () => {
+test("a dispatcher that throws blocks a tool call, and every other event carries on", async () => {
   const throwing: HookDispatcher = {
     hasHooks: () => true,
     dispatch: async () => {
@@ -182,7 +182,9 @@ test("a dispatcher that throws counts as no outcome", async () => {
     },
   };
   const hooks = createWorkspaceChatHooks({ chatId: "c" }, () => throwing);
-  assert.deepEqual(await hooks.preToolUse({ toolCallId: "1", toolName: "edit_file", args: {} }), { kind: "none" });
+  const refused = await hooks.preToolUse({ toolCallId: "1", toolName: "edit_file", args: {} });
+  assert.equal(refused.kind, "block");
+  assert.match(refused.kind === "block" ? refused.reason : "", /could not run your hooks/u);
   assert.equal(await hooks.dispatch("UserPromptSubmit", { prompt: "hi" }), undefined);
   assert.equal(
     await hooks.onStop({ finalMessage: {} as never, continuations: 0, maxContinuations: 8, signal: new AbortController().signal }),
@@ -197,6 +199,12 @@ test("a dispatcher that throws counts as no outcome", async () => {
   assert.deepEqual(
     await createWorkspaceChatHooks({ chatId: "c" }, () => brokenLookup).preToolUse({ toolCallId: "1", toolName: "edit_file", args: {} }),
     { kind: "none" },
+    "a lookup that fails still asks the dispatcher, whose answer stands",
+  );
+  const brokenThroughout: HookDispatcher = { ...brokenLookup, dispatch: throwing.dispatch };
+  assert.equal(
+    (await createWorkspaceChatHooks({ chatId: "c" }, () => brokenThroughout).preToolUse({ toolCallId: "1", toolName: "edit_file", args: {} })).kind,
+    "block",
   );
 });
 

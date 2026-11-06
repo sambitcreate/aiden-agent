@@ -1012,6 +1012,91 @@ test("(hk3) a hook's ask opens the approval card when someone is there, and bloc
   assert.match(unattended.results[0]!.content[0]!.text ?? "", /No one is here to approve it on this turn\./u);
 });
 
+test("(hk3b) a Bot whose folder can't be read blocks a call a hook could match and runs the rest", async () => {
+  const turn = async (hookedTool: string) => {
+    const tool = countingTool("lookup");
+    const fauxModels = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("lookup", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const hooks = fakeHooks({ PreToolUse: () => ({ ranHooks: ["guard"] }) });
+    const deps = withHooks(recordingDeps({ tools: [{ tool, replay: "unsafe" }] }), hooks);
+    deps.hooks!.cwd = async () => { throw new Error("folder missing"); };
+    deps.hooks!.dispatcher = () => ({ ...hooks.dispatcher(), hasHooks: (_event, _scopes, toolName) => toolName === hookedTool });
+    const { harness, root } = await memoryHarness(deps, fauxModels);
+    try {
+      await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+      return { tool, hooks, results: await toolResults(root) };
+    } finally {
+      await harness.close(ctx);
+    }
+  };
+  const guarded = await turn("lookup");
+  assert.deepEqual(guarded.tool.executions, []);
+  assert.deepEqual(guarded.hooks.runs, []);
+  assert.match(guarded.results[0]!.content[0]!.text ?? "", /could not run your hooks/u);
+  const unguarded = await turn("something_else");
+  assert.equal(unguarded.tool.executions.length, 1);
+});
+
+test("(hk3c) a remembered allow answers the rule, never a hook's ask", async () => {
+  const tool = countingTool("send");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("send", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  const hooks = fakeHooks({ PreToolUse: () => ({ decision: "ask", reason: "Check it", reasonForModel: "<hook-data>Check it</hook-data>", ranHooks: ["mail-guard"] }) });
+  const deps = withHooks(recordingDeps({
+    tools: [{ tool, replay: "unsafe" }],
+    policy: () => ({ allowed: true, approval: { summary: "Send mail", preapproved: true } }),
+    approve: async () => "deny",
+  }), hooks);
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.equal(deps.approvals.length, 1);
+    assert.match(deps.approvals[0]!.summary, /Hook mail-guard/u);
+    assert.deepEqual(tool.executions, [], "the person declined the hook's card");
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("(hk3d) a rule that changes while a hook's card waits is decided afresh, without asking the hook again", async () => {
+  const turn = async (afterCard: { allowed: true; approval: { summary: string } } | { allowed: false; reason: string }) => {
+    const tool = countingTool("send");
+    const fauxModels = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("send", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    const hooks = fakeHooks({ PreToolUse: () => ({ decision: "ask", reason: "Check it", reasonForModel: "<hook-data>Check it</hook-data>", ranHooks: ["mail-guard"] }) });
+    let cardAnswered = false;
+    const deps = withHooks(recordingDeps({
+      tools: [{ tool, replay: "unsafe" }],
+      policy: () => (cardAnswered ? afterCard : { allowed: true }),
+      approve: async () => {
+        cardAnswered = true;
+        return "allow";
+      },
+    }), hooks);
+    const { harness, root } = await memoryHarness(deps, fauxModels);
+    try {
+      await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+      return { tool, deps, hooks, results: await toolResults(root) };
+    } finally {
+      await harness.close(ctx);
+    }
+  };
+  const forbidden = await turn({ allowed: false, reason: "Sending is off for this Bot." });
+  assert.deepEqual(forbidden.tool.executions, []);
+  assert.match(forbidden.results[0]!.content[0]!.text ?? "", /Sending is off/u);
+
+  const nowAsks = await turn({ allowed: true, approval: { summary: "Rule: send mail" } });
+  assert.deepEqual(nowAsks.deps.approvals.map((request) => /Hook mail-guard/u.test(request.summary)), [true, false], "one hook card, then the rule's");
+  assert.equal(nowAsks.hooks.runs.filter((run) => run.event === "PreToolUse").length, 1);
+  assert.equal(nowAsks.tool.executions.length, 1);
+});
+
 test("(hk4) a Stop hook that always says keep going ends after the shared cap", async () => {
   const fauxModels = createFauxModels(
     Array.from({ length: MAX_STOP_HOOK_CONTINUATIONS + 3 }, (_, index) => fauxAssistantMessage(`answer ${index}`)),

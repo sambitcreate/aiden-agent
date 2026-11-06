@@ -5,8 +5,8 @@
  * `workspace-chat-hooks.ts`; the wording here matches it, so a hook's
  * block, ask and continuation read the same on every surface.
  *
- * Hooks never break a surface: a dispatcher that throws counts as no outcome
- * (a fail-closed PreToolUse hook is already mapped to deny by the dispatcher).
+ * Hooks never break a surface: a dispatcher that throws counts as no outcome,
+ * except for PreToolUse, where it denies the call (`hookDispatchFailure`).
  * Everything here runs in Node without Electron, so the CLI bundles it too.
  */
 
@@ -15,7 +15,7 @@ import { claudeToolInput, claudeToolName } from "./hooks/hook-aliases.js";
 import { hookScopesFor } from "./hooks/hook-config.js";
 import { getHookDispatcher } from "./hooks/index.js";
 import type { HookDispatcher, HookEvent, HookOutcome, HookPayload, HookScope } from "./hooks/hook-types.js";
-import { MAX_STOP_HOOK_CONTINUATIONS, hookNoticeLines, hookStopMessage } from "./workspace-chat-hooks.js";
+import { MAX_STOP_HOOK_CONTINUATIONS, hookCheckFailed, hookDispatchFailure, hookNoticeLines, hookStopMessage } from "./workspace-chat-hooks.js";
 
 /** Stop hooks keep one run going at most this many times, on every surface. */
 export { MAX_STOP_HOOK_CONTINUATIONS };
@@ -37,7 +37,7 @@ export type SurfaceHookPayload = Omit<HookPayload, "hook_event_name" | "session_
 export interface SurfaceHooks {
   readonly target: SurfaceHookTarget;
   has(event: HookEvent, toolName?: string): boolean;
-  /** Runs matching hooks; undefined when none could match or the dispatcher failed. */
+  /** Runs matching hooks; undefined when none could match, or the dispatcher failed on any event but PreToolUse. */
   dispatch(
     event: HookEvent,
     payload: SurfaceHookPayload,
@@ -72,7 +72,7 @@ export function createSurfaceHooks(
     try {
       return dispatcher().hasHooks(event, target.scopes, toolName);
     } catch {
-      return false;
+      return hookCheckFailed(event);
     }
   };
   const dispatch: SurfaceHooks["dispatch"] = async (event, payload, options) => {
@@ -93,8 +93,8 @@ export function createSurfaceHooks(
           ...(reportAsync ? { reportAsync } : {}),
         },
       );
-    } catch {
-      return undefined;
+    } catch (error) {
+      return hookDispatchFailure(event, error);
     }
   };
   return {
@@ -125,6 +125,26 @@ export function botSurfaceHooks(
   options?: SurfaceHookOptions,
 ): SurfaceHooks {
   return createSurfaceHooks({ scopes: hookScopesFor({ botId }), cwd: botFolder, sessionId: botId }, dispatcher, options);
+}
+
+/**
+ * A Bot's hooks when its folder can't be read, so none of them can run: a tool
+ * call one of them could match is denied, and every other event carries on.
+ * Nothing is cached, so the next call looks for the folder again.
+ */
+export function botHooksWithoutFolder(
+  botId: string,
+  error: unknown,
+  dispatcher: () => HookDispatcher = getHookDispatcher,
+  options?: SurfaceHookOptions,
+): SurfaceHooks {
+  const unavailable = (): HookDispatcher => ({
+    ...dispatcher(),
+    dispatch: async () => {
+      throw new Error(`the Bot's folder could not be read (${error instanceof Error ? error.message : String(error)})`);
+    },
+  });
+  return botSurfaceHooks(botId, "", unavailable, options);
 }
 
 /**

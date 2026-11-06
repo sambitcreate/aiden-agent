@@ -166,6 +166,25 @@ export function hookStopMessage(outcome: HookOutcome): string {
   return `Stopped by ${hooksLabel(outcome)}${reason ? `: ${reason}` : "."}`;
 }
 
+/**
+ * Whether a hook could match when Aiden can't ask: only PreToolUse can't be
+ * ruled out, because a hook that would have blocked the call may be among them.
+ */
+export function hookCheckFailed(event: HookEvent): boolean {
+  return event === "PreToolUse";
+}
+
+/**
+ * The answer when the dispatcher itself fails: a tool call is denied, as it is
+ * when hooks can't load, and every other event carries on without an outcome.
+ */
+export function hookDispatchFailure(event: HookEvent, error: unknown): HookOutcome | undefined {
+  if (event !== "PreToolUse") return undefined;
+  const detail = error instanceof Error ? error.message : String(error);
+  const reason = `Aiden could not run your hooks, so it blocked this tool call: ${detail}`;
+  return { ranHooks: [], decision: "deny", reason, reasonForModel: fenceAsData("Hook result", reason), notices: [`${reason}.`] };
+}
+
 /** What the person sees when a UserPromptSubmit hook refuses the prompt. */
 export function promptBlockedMessage(outcome: HookOutcome): string {
   const reason = (outcome.stopReason ?? outcome.reason ?? "").trim();
@@ -270,7 +289,7 @@ export function createWorkspaceChatHooks(
     try {
       return dispatcher().hasHooks(event, scopes, toolName);
     } catch {
-      return false;
+      return hookCheckFailed(event);
     }
   };
   const dispatch: WorkspaceChatHooks["dispatch"] = async (event, payload, options) => {
@@ -288,8 +307,10 @@ export function createWorkspaceChatHooks(
           ...(options?.signal ? { signal: options.signal } : {}),
         },
       );
-    } catch {
-      return undefined;
+    } catch (error) {
+      const refusal = hookDispatchFailure(event, error);
+      if (refusal === undefined) return undefined;
+      outcome = refusal;
     }
     report(hookNoticeLines(outcome));
     return outcome;
