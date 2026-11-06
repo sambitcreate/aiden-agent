@@ -6,7 +6,7 @@
 
 import * as React from "react";
 import { liveActivity } from "../../lib/live-activity";
-import { LiveAppControlController } from "../../lib/live-app-control";
+import { LiveAppControlController, isLiveConfirmAnswerTarget } from "../../lib/live-app-control";
 import { liveSessionBus } from "../../lib/live-session-bus";
 import { useSettings } from "../../lib/queries";
 import { aidenLivePreferences } from "../../shared/aiden-live-settings";
@@ -28,6 +28,7 @@ export function LiveAppControlLayer(): React.ReactElement | null {
         type: event.type,
         isTrusted: event.isTrusted,
         key: event instanceof KeyboardEvent ? event.key : undefined,
+        answersConfirmation: isLiveConfirmAnswerTarget(event.target),
       });
     for (const name of INPUT_EVENTS) window.addEventListener(name, onInput, { capture: true, passive: true });
     return () => {

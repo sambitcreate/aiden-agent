@@ -80,3 +80,60 @@ test("the user's input between Live's steps takes over until they speak; before 
   assert.equal((await controller.handle({ op: "admit", label: "Pressing “Save”" }, context())).ok, true);
   controller.dispose();
 });
+
+test("while Live waits for an OK, the user's own click, scroll, touch or key elsewhere refuses it and takes over", async () => {
+  for (const input of [
+    { type: "pointerdown", isTrusted: true },
+    { type: "wheel", isTrusted: true },
+    { type: "touchstart", isTrusted: true },
+    { type: "keydown", key: "Enter", isTrusted: true },
+    { type: "keydown", key: "Backspace", isTrusted: true },
+  ]) {
+    const { bus, activity, controller, context } = setup();
+    const answer = controller.handle({ op: "confirm", label: "Delete chat? — “Delete”" }, context());
+    controller.userInput(input);
+    assert.deepEqual(await answer, { ok: true, confirmed: false, reason: "taken_over" }, JSON.stringify(input));
+    assert.equal(activity.get(), null, "the question leaves the ribbon");
+    const refused = await controller.handle({ op: "admit", label: "Pressing “Delete”" }, context());
+    assert.equal((refused.error as { code: string }).code, "taken_over", "Live waits for new words");
+    bus.publishVoiceInput("ok, go on");
+    assert.equal((await controller.handle({ op: "admit", label: "Pressing “Delete”" }, context())).ok, true);
+    controller.dispose();
+  }
+});
+
+test("while Live waits for an OK, Escape refuses it and takes over too", async () => {
+  const { controller, context } = setup();
+  const answer = controller.handle({ op: "confirm", label: "Press “Sign out”" }, context());
+  controller.userInput({ type: "keydown", key: "Escape", isTrusted: true });
+  assert.deepEqual(await answer, { ok: true, confirmed: false, reason: "cancelled" });
+  const refused = await controller.handle({ op: "admit", label: "Pressing “Sign out”" }, context());
+  assert.equal((refused.error as { code: string }).code, "taken_over");
+  controller.dispose();
+});
+
+test("pressing or keying the ribbon's Confirm or Cancel answers it; Tab to reach them and Live's own events change nothing", async () => {
+  const { activity, controller, context } = setup();
+  const answer = controller.handle({ op: "confirm", label: "Delete chat? — “Delete”" }, context());
+  let settled = false;
+  void answer.then(() => (settled = true));
+  controller.userInput({ type: "keydown", key: "Tab", isTrusted: true });
+  controller.userInput({ type: "keydown", key: "Shift", isTrusted: true });
+  controller.userInput({ type: "pointerdown", isTrusted: false });
+  controller.userInput({ type: "pointerdown", isTrusted: true, answersConfirmation: true });
+  controller.userInput({ type: "keydown", key: "Enter", isTrusted: true, answersConfirmation: true });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(settled, false, "still waiting for the answer");
+  const shown = activity.get();
+  assert.equal(shown?.kind, "confirm");
+  if (shown?.kind === "confirm") shown.confirm();
+  assert.deepEqual(await answer, { ok: true, confirmed: true, reason: "confirmed" });
+
+  const second = controller.handle({ op: "confirm", label: "Press “Sign out”" }, context());
+  controller.userInput({ type: "keydown", key: " ", isTrusted: true, answersConfirmation: true });
+  const again = activity.get();
+  if (again?.kind === "confirm") again.cancel();
+  assert.deepEqual(await second, { ok: true, confirmed: false, reason: "cancelled" });
+  assert.equal((await controller.handle({ op: "admit", label: "Pressing “Other”" }, context())).ok, true, "Cancel is an answer, not a take-over");
+  controller.dispose();
+});

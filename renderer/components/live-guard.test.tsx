@@ -7,6 +7,7 @@ import { cleanup, render } from "@testing-library/react";
 import { AIDEN_ELEMENT_FACTS_SOURCE, type AidenElementFacts } from "../../main/services/gemini-live/app-control/page-action";
 import { idleLiveController } from "./assistant/assistant-live-test-fixture";
 import { LiveRibbon } from "./assistant/live-ribbon";
+import { isLiveConfirmAnswerTarget } from "../lib/live-app-control";
 import { AccessRequestCard } from "./bots/access-request-card";
 import { DeviceEraseSection } from "./device-erase-control";
 import { LiveGuard } from "./live-guard";
@@ -132,6 +133,34 @@ test("the Live ribbon's Take over, Confirm and Cancel are the user's alone by ma
     assert.ok(button, `${name} is shown`);
     assert.equal(facts(button, "button", name)?.guard, "you", name);
   }
+});
+
+test("the user's input on the ribbon's Confirm or Cancel answers the question; any other control is a take-over", () => {
+  const live = { ...idleLiveController, active: true, state: "open" as const, microphoneActive: true };
+  render(
+    <>
+      <LiveRibbon
+        live={live}
+        markState="listening"
+        activity={{ kind: "confirm", id: "c1", label: "Delete chat", confirm: () => undefined, cancel: () => undefined }}
+        preferences={{ voice: "Puck", speed: 1, ribbonColors: "spectrum" }}
+        onPreferencesChange={() => undefined}
+      />
+      <Button>Delete</Button>
+    </>,
+  );
+  const buttons = Array.from(document.querySelectorAll("button"));
+  const named = (name: string) => buttons.find((entry) => entry.textContent?.trim() === name);
+  for (const name of ["Confirm", "Cancel"]) {
+    const button = named(name);
+    assert.ok(button, `${name} is shown`);
+    assert.equal(isLiveConfirmAnswerTarget(button), true, name);
+  }
+  assert.equal(isLiveConfirmAnswerTarget(named("Delete")), false, "the guarded control itself");
+  const others = buttons.filter((entry) => !["Confirm", "Cancel"].includes(entry.textContent?.trim() ?? ""));
+  for (const other of others) assert.equal(isLiveConfirmAnswerTarget(other), false, other.getAttribute("aria-label") ?? other.textContent ?? "");
+  assert.equal(isLiveConfirmAnswerTarget(document.body), false);
+  assert.equal(isLiveConfirmAnswerTarget(window), false, "a window-level event has no control");
 });
 
 test("a Bot's access card is the user's to answer, including Always for this folder and Not now", () => {

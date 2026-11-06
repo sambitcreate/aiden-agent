@@ -14,6 +14,12 @@ export const LIVE_APP_CONTROL_MAX_ACTIONS = 30;
 /** How long a guarded action waits for the user's OK before it is refused. */
 export const LIVE_APP_CONTROL_CONFIRM_TIMEOUT_MS = 20_000;
 
+/**
+ * Marks the ribbon's Confirm and Cancel while Live waits for an OK: the
+ * person's input there answers the question, anywhere else it takes over.
+ */
+export const LIVE_CONFIRM_ANSWER_ATTRIBUTE = "data-live-confirm-answer";
+
 /** Element attribute that marks controls Live must not use alone. */
 export const LIVE_GUARD_ATTRIBUTE = "data-live-guard";
 

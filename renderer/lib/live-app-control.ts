@@ -9,6 +9,7 @@ import {
   LIVE_APP_CONTROL_ACTIVITY_SOURCE,
   LIVE_APP_CONTROL_CONFIRM_TIMEOUT_MS,
   LIVE_APP_CONTROL_MAX_ACTIONS,
+  LIVE_CONFIRM_ANSWER_ATTRIBUTE,
 } from "../shared/live-app-control";
 import { matchLiveVoicePhrase } from "../shared/live-voice-phrases";
 import type { LiveActivity } from "./live-activity";
@@ -38,10 +39,23 @@ export interface LiveAppControlInputEvent {
   type: string;
   isTrusted: boolean;
   key?: string;
+  /** The input lands on the ribbon's Confirm or Cancel (see `isLiveConfirmAnswerTarget`). */
+  answersConfirmation?: boolean;
+}
+
+/** Whether an input event's target is the ribbon's Confirm or Cancel, or inside one. */
+export function isLiveConfirmAnswerTarget(target: unknown): boolean {
+  const element = target as { closest?: (selector: string) => unknown } | null;
+  return typeof element?.closest === "function" && Boolean(element.closest(`[${LIVE_CONFIRM_ANSWER_ATTRIBUTE}]`));
 }
 
 const IDLE: LiveAppControlState = { acting: false, label: "" };
 const TAKE_OVER_EVENTS = new Set(["keydown", "pointerdown", "mousedown", "wheel", "touchstart"]);
+/**
+ * Keys that only move focus, so a keyboard user can reach the ribbon's
+ * Confirm or Cancel while Live waits. They never act on the page.
+ */
+const FOCUS_ONLY_KEYS = new Set(["Tab", "Shift", "Control", "Alt", "Meta"]);
 
 function failure(code: string, message: string): LiveRendererToolResult {
   return { ok: false, error: { code, message } };
@@ -102,7 +116,14 @@ export class LiveAppControlController {
   userInput(event: LiveAppControlInputEvent): void {
     if (!event.isTrusted || !TAKE_OVER_EVENTS.has(event.type)) return;
     if (this.confirmation) {
-      if (event.type === "keydown" && event.key === "Escape") this.confirmation.finish(false, "cancelled");
+      // Pressing or keying Confirm or Cancel answers through their own handlers.
+      if (event.answersConfirmation) return;
+      if (event.type === "keydown" && event.key !== undefined && FOCUS_ONLY_KEYS.has(event.key)) return;
+      // Anything else is the user carrying on themselves: the guarded control
+      // is not used, and Live waits until they speak again.
+      const escape = event.type === "keydown" && event.key === "Escape";
+      this.confirmation.finish(false, escape ? "cancelled" : "taken_over");
+      this.takeOver();
       return;
     }
     if (this.requestActive || this.state.acting || this.watch) this.takeOver();

@@ -492,8 +492,8 @@ test("a guarded control waits for the user's own spoken confirm after the prompt
   }
 });
 
-test("a guarded control is refused on Cancel, on other speech, on Escape and when nobody answers", async () => {
-  for (const answer of ["tap cancel", "other speech", "escape", "timeout"] as const) {
+test("a guarded control is refused on Cancel, on other speech, on Escape, on the user's own click and when nobody answers", async () => {
+  for (const answer of ["tap cancel", "other speech", "escape", "click", "timeout"] as const) {
     const h = harness(`<button id="out" data-live-guard="confirm">Sign out</button>`, { confirmTimeoutMs: 40 });
     try {
       let pressed = 0;
@@ -504,9 +504,14 @@ test("a guarded control is refused on Cancel, on other speech, on Escape and whe
       if (answer === "tap cancel" && shown?.kind === "confirm") shown.cancel();
       if (answer === "other speech") h.say("Actually what's the weather like?");
       if (answer === "escape") h.controller.userInput({ type: "keydown", key: "Escape", isTrusted: true });
+      if (answer === "click") h.controller.userInput({ type: "pointerdown", isTrusted: true });
       const outcome = await h.noteMatching(/was not used/u);
       assert.equal(pressed, 0, answer);
-      assert.match(outcome, answer === "timeout" ? /didn't answer in time/u : /didn't confirm/u, answer);
+      assert.match(
+        outcome,
+        answer === "timeout" ? /didn't answer in time/u : answer === "click" ? /^The user took over.*Wait until they ask again/u : /didn't confirm/u,
+        answer,
+      );
       assert.equal(h.activity.get(), null, answer);
     } finally {
       h.dispose();

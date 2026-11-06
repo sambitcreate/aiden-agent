@@ -822,9 +822,13 @@ export class AidenAppControlProvider implements LiveToolProvider {
           ? "The page changed before the user answered"
           : answer.reason === "timeout"
             ? "The user didn't answer in time"
-            : "The user didn't confirm";
+            : answer.reason === "taken_over"
+              ? "The user took over"
+              : "The user didn't confirm";
       this.confirming = false;
-      await this.note(`${reason}, so ${quoted(element.name, element.role)} was not used. Nothing changed.`);
+      // Taking over also means waiting until they ask again.
+      const after = answer.reason === "taken_over" ? " Wait until they ask again." : "";
+      await this.note(`${reason}, so ${quoted(element.name, element.role)} was not used. Nothing changed.${after}`);
       return;
     }
     // The switch may have been turned off while the user was answering.

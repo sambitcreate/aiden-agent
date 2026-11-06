@@ -158,7 +158,11 @@ note asking it to prompt the user. Speech counts only after that note was
 accepted: the next whole utterance must be a `confirm` phrase from
 `matchLiveVoicePhrase`, in any of the 11 languages. If the note is refused,
 the OK is tap-only. Cancel, a deny phrase, any other speech, Escape, 20 seconds
-without an answer, a new look or any navigation refuse it. An answer is used
+without an answer, a new look or any navigation refuse it. So does the user's
+own click, scroll, touch or key anywhere but the ribbon's Confirm and Cancel
+(marked `data-live-confirm-answer`), which also takes over until they speak
+again; Tab and lone modifier keys only move focus, so the keyboard can still
+reach Confirm. An answer is used
 once, and every guarded action asks on its own, even the next one in the same
 dialog. Live hears the outcome as a note. The wait is not tied to the Gemini
 call, so the user's barge-in to say "confirm" doesn't cancel it.
