@@ -81,7 +81,7 @@ function clampHeight(height: number): number {
 }
 
 function initialHeight(): number {
-  const saved = Number(localStorage.getItem(HEIGHT_STORAGE_KEY));
+  const saved = Number(localStorage.getItem(HEIGHT_STORAGE_KEY) ?? DEFAULT_DRAWER_HEIGHT);
   return clampHeight(Number.isFinite(saved) ? saved : DEFAULT_DRAWER_HEIGHT);
 }
 
@@ -504,7 +504,7 @@ function TerminalViewport({
       ref={hostRef}
       data-command-scope="terminal"
       onMouseDown={onFocus}
-      className="relative h-full min-h-0 w-full overflow-hidden select-text p-2"
+      className="relative h-full min-h-0 w-full overflow-hidden select-text"
     />
   );
 }
@@ -733,12 +733,12 @@ export function TerminalDrawer() {
         {visibleSessions.length > 0 ? (
           <div
             className={cn(
-              "min-h-0 flex-1 gap-px bg-separator",
+              // One grid for every layout: a single pane needs the definite track
+              // too, or its canvas falls back to the bitmap's aspect ratio for height.
+              "grid min-h-0 flex-1 gap-px bg-separator",
               layout.direction === "vertical"
-                ? "grid grid-rows-[repeat(var(--terminal-panes),minmax(0,1fr))]"
-                : layout.direction === "horizontal"
-                  ? "grid grid-cols-[repeat(var(--terminal-panes),minmax(0,1fr))]"
-                  : "block",
+                ? "grid-cols-[minmax(0,1fr)] grid-rows-[repeat(var(--terminal-panes),minmax(0,1fr))]"
+                : "grid-cols-[repeat(var(--terminal-panes),minmax(0,1fr))] grid-rows-[minmax(0,1fr)]",
             )}
             style={{ "--terminal-panes": visibleSessions.length } as React.CSSProperties}
           >
@@ -746,8 +746,11 @@ export function TerminalDrawer() {
               <div
                 key={session.id}
                 className={cn(
-                  "min-h-0 min-w-0 bg-popover",
-                  activeId === session.id && "bg-list-selection",
+                  "relative min-h-0 min-w-0 bg-(--terminal-background)",
+                  // The cue sits in the screen's padding, outside the canvas: dimming the
+                  // canvas would take its text below the terminal contrast guarantees.
+                  visibleSessions.length > 1 && activeId === session.id &&
+                    "after:pointer-events-none after:absolute after:inset-x-0 after:top-0 after:h-0.5 after:bg-focus-ring",
                 )}
               >
                 <TerminalViewport
