@@ -35,12 +35,15 @@ if (command === "ls") {
   }
   fs.copyFileSync(source, path.join(dir, path.basename(target.slice(target.indexOf(":") + 1))));
 } else if (command === "exec") {
+  if (args.includes("flock")) process.exit(Number(process.env.FAKE_CUA_LOCK_STATUS ?? 0));
   if (process.env.FAKE_CUA_RUN_GUEST === "1") {
     const [script, ...guestArgs] = args.slice(6);
     const guest = require("node:child_process").spawnSync("bash", [path.join(dir, path.basename(script)), ...guestArgs], { stdio: "inherit" });
     process.exit(guest.status ?? 1);
   }
   process.exit(Number(process.env.FAKE_CUA_EXEC_STATUS ?? 0));
+} else if (command === "suspend" || command === "rm") {
+  process.exit(Number(process.env.FAKE_CUA_TEARDOWN_STATUS ?? 0));
 }
 `;
 
@@ -48,7 +51,7 @@ if (command === "ls") {
 // Run in a UTF-8 locale like a normal Mac shell (and CI): macOS's bash 3.2 then reads non-ASCII bytes after `$NAME`
 // as part of the variable name, which `set -u` turns into an abort.
 const isolatedEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LANG: "en_US.UTF-8" };
-for (const name of ["CUA_SPACE", "CUA_SPACE_CPUS", "CUA_SPACE_MEMORY", "LC_ALL", "LC_CTYPE"]) delete isolatedEnv[name];
+for (const name of ["CUA_HOME", "CUA_SPACE", "CUA_SPACE_CPUS", "CUA_SPACE_KEEP", "CUA_SPACE_MEMORY", "LC_ALL", "LC_CTYPE"]) delete isolatedEnv[name];
 
 async function git(cwd, ...args) {
   await execFileAsync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd, env: isolatedEnv });
@@ -78,7 +81,7 @@ async function checkout() {
 async function run({ repo, fake }, args, env = {}) {
   try {
     const { stdout, stderr } = await execFileAsync("bash", [path.join(repo, "scripts", "cua-space-e2e.sh"), ...args], {
-      env: { ...isolatedEnv, CUA_BIN: path.join(fake, "cua"), FAKE_CUA_DIR: fake, ...env },
+      env: { ...isolatedEnv, CUA_BIN: path.join(fake, "cua"), CUA_HOME: path.join(fake, "home"), FAKE_CUA_DIR: fake, ...env },
     });
     return { status: 0, stdout, stderr };
   } catch (error) {
@@ -245,6 +248,96 @@ test("resumes a stopped Space instead of creating another", async (t) => {
   assert.deepEqual(recorded.find((call) => call[1] === "resume"), ["sb", "resume", "local:aiden-e2e"]);
   assert.ok(recorded.every((call) => call[1] !== "create"));
   assert.ok(recorded.some((call) => call[1] === "exec"), "the run continues in the resumed Space");
+});
+
+test("a finished run suspends the shared Space and keeps it for the next run", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+
+  // A failing run tears down too, and still reports the guest's status.
+  for (const [listing, status] of [["[]", "0"], ['[{"id":"local:aiden-e2e","status":"ready"}]', "3"]]) {
+    await rm(path.join(space.fake, "calls.jsonl"), { force: true });
+    assertStatus(await run(space, ["--run", "true"], { FAKE_CUA_LS: listing, FAKE_CUA_EXEC_STATUS: status }), Number(status));
+    const recorded = await calls(space.fake);
+    assert.deepEqual(recorded.at(-1), ["sb", "suspend", "local:aiden-e2e"]);
+    assert.ok(recorded.every((call) => call[1] !== "rm"));
+  }
+});
+
+test("only a custom-named Space created by this run is deleted", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+
+  assertStatus(await run(space, ["--run", "true"], { CUA_SPACE: "aiden-pr-1" }), 0);
+  assert.deepEqual((await calls(space.fake)).at(-1), ["sb", "rm", "-f", "local:aiden-pr-1"]);
+
+  await rm(path.join(space.fake, "calls.jsonl"));
+  const existing = '[{"id":"local:aiden-pr-1","status":"ready"}]';
+  assertStatus(await run(space, ["--run", "true"], { CUA_SPACE: "aiden-pr-1", FAKE_CUA_LS: existing }), 0);
+  const recorded = await calls(space.fake);
+  assert.deepEqual(recorded.at(-1), ["sb", "suspend", "local:aiden-pr-1"]);
+  assert.ok(recorded.every((call) => call[1] !== "rm"));
+});
+
+test("leaves the Space running for a busy Space, --watch and CUA_SPACE_KEEP", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+
+  const cases = [
+    [["--run", "true"], { FAKE_CUA_EXEC_STATUS: "75" }, 75],
+    [["--watch", "tests/e2e/example.spec.ts"], {}, 0],
+    [["--run", "true"], { CUA_SPACE_KEEP: "1" }, 0],
+  ];
+  for (const [args, env, status] of cases) {
+    assertStatus(await run(space, args, { CUA_SPACE: "aiden-pr-1", ...env }), status);
+  }
+  assert.ok((await calls(space.fake)).every((call) => call[1] !== "suspend" && call[1] !== "rm"));
+  await assert.rejects(readFile(path.join(space.fake, "limactl.log")), "no trim ran");
+});
+
+test("leaves the Space running when another run has taken it or the lock check fails", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+
+  for (const name of ["aiden-e2e", "aiden-pr-1"]) {
+    const result = await run(space, ["--run", "true"], { CUA_SPACE: name, FAKE_CUA_LOCK_STATUS: "1" });
+    assertStatus(result, 0);
+    assert.match(result.stdout, /leaving it running/);
+  }
+  assert.ok((await calls(space.fake)).every((call) => call[1] !== "suspend" && call[1] !== "rm"));
+});
+
+test("trims the runtime's disk after teardown, and a failed or missing trim changes nothing", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+  const home = path.join(space.fake, "home");
+  const bin = path.join(home, "runtimes", "linux", "colima-1", "lima", "bin");
+  const record = path.join(space.fake, "limactl.log");
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, "limactl"), `#!/bin/sh\necho "$LIMA_HOME $*" >> "${record}"\nexit \${FAKE_LIMACTL_STATUS:-0}\n`);
+  await chmod(path.join(bin, "limactl"), 0o755);
+
+  assertStatus(await run(space, ["--run", "true"]), 0);
+  assert.equal(
+    await readFile(record, "utf8"),
+    `${path.join(home, "runtimes", "linux", "vm", "_lima")} shell --workdir / colima-cua sudo fstrim /mnt/lima-colima-cua\n`,
+  );
+
+  const failed = await run(space, ["--run", "true"], { FAKE_CUA_EXEC_STATUS: "3", FAKE_LIMACTL_STATUS: "1" });
+  assertStatus(failed, 3);
+  assert.equal(failed.stderr, "", "a failed trim is silent");
+
+  await rm(path.join(home, "runtimes"), { recursive: true });
+  assertStatus(await run(space, ["--run", "true"]), 0);
+});
+
+test("a failed teardown warns without changing the run's result", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+
+  const result = await run(space, ["--run", "true"], { FAKE_CUA_TEARDOWN_STATUS: "1" });
+  assertStatus(result, 0);
+  assert.match(result.stderr, /Could not suspend Space aiden-e2e/);
 });
 
 test("--reset leaves a missing or stopped Space alone", async (t) => {
