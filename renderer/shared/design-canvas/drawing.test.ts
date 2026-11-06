@@ -43,7 +43,7 @@ test("a pencil line keeps its corners, drops jitter along straight runs, and nev
   const corner = [...run, ...Array.from({ length: 50 }, (_, index) => ({ x: 98, y: index * 2 }))];
   const simplified = simplifyStroke(corner, 1);
   assert.deepEqual(simplified[0], corner[0]);
-  assert.deepEqual(simplified.at(-1), corner.at(-1));
+  assert.deepEqual(simplified[simplified.length - 1], corner[corner.length - 1]);
   assert.ok(simplified.length <= 4, `kept ${simplified.length} points`);
   assert.ok(simplified.some((point) => point.x === 98 && point.y === 0), "the corner stays");
 

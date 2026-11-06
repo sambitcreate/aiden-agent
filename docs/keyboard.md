@@ -85,6 +85,11 @@ live page, a frame or the canvas opens a comment there; `⌥` picks the
 element's parent; in the comment box `↩` saves and `Esc` closes; `Esc` again
 leaves the tool), `F2` renames the selected frame (as does a double-click on
 its title; `↩` keeps the name, `Esc` cancels) and `M` shows the minimap.
+The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
+`L` a line, `⇧L` an arrow, `P` the pencil and `⇧P` the pen (hold `⇧` while
+dragging for a square box or a 45° line; `↩`, `Esc` or a double-click
+finishes a pen path). `↩` or a double-click on selected text or a shape edits
+its words; `Esc` or `⌘↩` finishes. `Esc` turns a drawing tool off.
 The ⌘/ list shows these under **Design canvas** while design mode is
 available. `↩` or a double-click enters the selected page;
 `Esc` with the canvas focused, or a click on the canvas, leaves. Keys typed

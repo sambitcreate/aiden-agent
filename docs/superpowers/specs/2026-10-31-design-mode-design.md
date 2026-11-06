@@ -101,7 +101,8 @@ The canvas reuses `StudioCanvas` with its own node registry (`renderer/design/`)
   - Zoom is 10–400 %; Shift+1 fits all and Shift+2 fits the selection.
   - A minimap toggles with M.
 - **Tools:**
-  - V selects, H pans, C comments, D draws.
+  - V selects, H pans, C comments and N adds a note.
+  - Since P4b: T places text, F draws an artboard, R a rectangle, O an oval, L a line, ⇧L an arrow, P a pencil line and ⇧P a pen path. Shift while dragging keeps boxes square and lines at 45° steps.
   - Escape returns to V.
 - **Editing:**
   - Frames can be selected, multi-selected with a marquee, moved, resized with `NodeResizer`, duplicated (⌘D) and deleted.
@@ -271,8 +272,8 @@ The canvas tools are host-owned and registered only for desktop turns in a chat 
 | Tool | Does | Returns |
 |---|---|---|
 | `canvas_read` | Describes one page of the canvas (the one on screen unless `page` names another) and lists every page. | The viewport, the frames in view with their kind, title, path, box, group and open comments, a summary of the frames outside the view clustered by group, the selection, and (since P4e) the page's open and sent comments with what each points at. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px). |
-| `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?, page?}`. | The new frame's ID and box. If x and y are left out, the frame goes to the right of the last frame in its group, or of the current view, with a 64 px gap. |
-| `canvas_update_frame` | Moves, resizes, retitles or regroups a frame. | The frame. |
+| `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group" \| "text" \| "shape" \| "connector" \| "frame", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?, page?}`. Since P4b, `text` and `shape` (`shape: "rect" \| "oval"`, with its label in `text`) take `color`, `fill` and `size`; a `connector` takes `from` and `to`, each `{frameId, side?}` or `{x, y}`, and `arrow: "none" \| "end" \| "both"`; a `frame` is an empty artboard that holds what is placed in it. Pencil and pen strokes are drawn only by the person. | The new frame's ID and box. If x and y are left out, the frame goes to the right of the last frame in its group, or of the current view, with a 64 px gap. |
+| `canvas_update_frame` | Moves, resizes, retitles or regroups a frame, and (since P4b) changes text, colours, size and connector ends. Moving an artboard moves what it holds; connectors follow the frames they are on. | The frame. |
 | `canvas_remove_frame` | Removes a frame Aiden created. Removing a person's frame needs `confirm: true` and shows a one-line notice in chat. | `removed`. |
 | `canvas_focus` | Pans and zooms to frames, but only while the person is not interacting with the canvas. | `focused` or `skipped`. |
 

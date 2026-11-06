@@ -312,7 +312,6 @@ export function useDesignDrawing({
       element.removeEventListener("dblclick", onDoubleClick, true);
     };
     // The listeners read the latest callbacks through refs; only the tool and the elements matter here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, wrapper, finishPen]);
 
   /** Escape and Enter while drawing: a pen path is finished; anything else half drawn is dropped. */

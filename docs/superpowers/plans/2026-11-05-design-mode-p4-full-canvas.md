@@ -1,6 +1,6 @@
 # Design mode P4: the full canvas
 
-Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 and approved by the owner; P4e built 2026-11-06 ([P4e plan](2026-11-05-design-mode-p4e-comments.md)), awaiting the owner's screenshot OK. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
+Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 and approved by the owner; P4e built 2026-11-06 ([P4e plan](2026-11-05-design-mode-p4e-comments.md)) and approved; P4b built 2026-11-06, awaiting the owner's screenshot OK. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
 
 **Goal:** the canvas does everything in the owner's 2026-11-05 reference screenshots of a design canvas (owner chose "add everything shown"). That is the original P4 (point, comment, draw, and send comments to Aiden) plus:
 - drawing tools;
@@ -81,7 +81,7 @@ As built (2026-11-05):
 - The toolbar (`renderer/design/design-toolbar.tsx`) has the page picker, Select, Hand, Note (`N`) and Add (Group, File…, Image…). Text, Frame, Draw and Shape join it in P4b, so it shows only tools that work today. `StudioCanvas` gained an additive `toolbar` prop; Create Images keeps its rail. The zoom controls stay at the bottom right: at the top right they sat under the Linux window controls.
 - Deleting a page shows a toast with Undo. `canvas_focus` on a frame on another page brings that page on screen first.
 - The Keyboard Shortcuts list (⌘/) and Settings show a **Design canvas** section while design mode is available.
-- Frame caps stay at 200 until P4b brings small elements.
+- Frame caps stayed at 200 until P4b brought small elements (now 1 000, 400 per page).
 
 ### P4b: drawing tools
 
@@ -93,6 +93,18 @@ As built (2026-11-05):
 - **Pen:** click for corners, drag for curves, Enter or Escape to finish.
 - Every new element can be selected, moved, resized, duplicated, deleted and undone like any frame.
 - Aiden tools: `canvas_place_frame` accepts `text`, `shape`, `connector` and `frame`, so Aiden can draw flows and diagrams. Strokes stay person-only.
+
+As built (2026-11-06):
+- The toolbar gained Text (`T`), Frame (`F`), a **Shapes** menu (Rectangle `R`, Oval `O`, Arrow `⇧L`, Line `L`) and a **Draw** menu (Pencil `P`, Pen `⇧P`). Each menu shows the tool last picked from it. A tool stays on until Escape or another tool, so several shapes can be drawn in a row; Text and Frame go back to Select after one.
+- A click without a drag makes a standard size: rectangle 160×100, oval 120×120, artboard 640×400, text 240 wide, line 160 long. Shift keeps boxes square and lines at 45° steps.
+- Text is plain text for now, edited in place (double-click or Enter; Escape or ⌘↩ to finish; an empty text block is removed). The formatting bar and the Markdown subset arrive with P4c, so this slice does not build P4c's editor first as planned above.
+- Shapes carry a centred label in `text`, edited the same way. Colours come from a fixed palette (`ink`, `gray`, and `blue` to `pink` mapped to the `--chart-*` tokens); fills are a soft mix of the colour over the surface, so they follow light, dark and every theme preset.
+- Arrows and lines attach an end dropped on a frame to the middle of the side facing the other end (`renderer/shared/design-canvas/connectors.ts`). They follow their frames when those move, resize, or are moved by Aiden. When a frame is deleted or moved to another page, its end stays where it was as a free end. The ends of a selected connector can be dragged to re-attach them.
+- Pencil lines are simplified (Ramer–Douglas–Peucker, at most 2 000 points) and smoothed. Pen: click for corners, drag for curves; Enter, Escape or a double-click finishes, and a click on the first point closes the path.
+- Artboards are containers like groups: an item drawn or dropped inside one joins it and moves with it, and containers do not nest.
+- Caps: 1 000 frames, 400 per page, 2 000 points per stroke, stroke width 1–24. The smallest size is per kind (lines 1, text and shapes 8, others 40).
+- Aiden: `canvas_place_frame` and `canvas_update_frame` take `text`, `shape`, `connector` (`from`/`to` as a frameId and optional side, or a point) and `frame`; `canvas_read` reports labels, colours and connector ends. Strokes stay person-only. A batch drawing tool is a possible follow-up.
+- Known gap: dragging or resizing any node, including notes from before P4b, can log Chromium's "ResizeObserver loop completed with undelivered notifications" as an uncaught renderer error. It is harmless but noisy, and is left for P5.
 
 ### P4c: rich notes
 
