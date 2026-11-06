@@ -23,9 +23,11 @@ export function useLiveChatVoiceApprovals(
 
 /**
  * The chat pane publishes the approvals its card shows and its own decide
- * function. Approvals still in state from the previous chat (the first render
- * after a chat switch, before the pane resets them) are never published under
- * the new chat.
+ * function, bound to the chat it was published with: once the pane renders
+ * another chat, that decide refuses, so one chat's answer path can never
+ * answer another chat's approval. Approvals still in state from the previous
+ * chat (the first render after a switch, before the pane resets them) are
+ * never published under the next chat.
  */
 export function usePublishLiveChatApprovals(
   chatId: string,
@@ -34,23 +36,24 @@ export function usePublishLiveChatApprovals(
   store: LiveChatApprovalsStore = liveChatApprovals,
 ): void {
   const owner = React.useMemo(() => Symbol("chat-approvals"), []);
-  const decideRef = React.useRef(decide);
-  decideRef.current = decide;
-  const stableDecide = React.useCallback<LiveChatApprovalDecide>(
-    (prompt, decision) => decideRef.current(prompt, decision),
-    [],
-  );
+  const renderedChatId = React.useRef(chatId);
+  renderedChatId.current = chatId;
   const lastPublished = React.useRef<{ chatId: string; approvals: readonly ApprovalPrompt[] } | null>(null);
   React.useEffect(() => {
     const last = lastPublished.current;
     const carriedOver = last !== null && last.chatId !== chatId && last.approvals === approvals;
     lastPublished.current = { chatId, approvals };
-    store.publish(owner, { chatId, approvals: carriedOver ? [] : approvals, decide: stableDecide });
-  }, [approvals, chatId, owner, stableDecide, store]);
+    const boundChatId = chatId;
+    const bound: LiveChatApprovalDecide = async (prompt, decision) => {
+      if (renderedChatId.current !== boundChatId) throw new Error("The chat on screen changed.");
+      await decide(prompt, decision);
+    };
+    store.publish(owner, { chatId, approvals: carriedOver ? [] : approvals, decide: bound });
+  }, [approvals, chatId, decide, owner, store]);
   React.useEffect(() => () => store.clear(owner), [owner, store]);
 }
 
-/** "voice" while Live will take allow or deny for this approval, "tap" when it needs a tap. */
+/** "voice" once Live has read this approval out and takes allow or deny, "tap" when it needs a tap. */
 export function useLiveApprovalVoiceHint(
   approvalId: string | undefined,
   controller: LiveChatVoiceApprovals = liveChatVoiceApprovals,

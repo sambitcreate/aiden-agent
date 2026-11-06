@@ -56,6 +56,25 @@ test("approvals left in state from the previous chat are never published under t
   assert.equal(store.get(), null);
 });
 
+test("a decide published for one chat refuses once the pane shows another chat", async () => {
+  const store = new LiveChatApprovalsStore();
+  const answered: string[] = [];
+  function Pane({ chatId }: { chatId: string }) {
+    const decide = React.useCallback(async (prompt: ApprovalPrompt) => {
+      answered.push(`${chatId}:${prompt.approvalId}`);
+    }, [chatId]);
+    usePublishLiveChatApprovals(chatId, [runTests], decide, store);
+    return null;
+  }
+  const view = render(<Pane chatId="c1" />);
+  const c1Decide = store.get()!.decide;
+  view.rerender(<Pane chatId="c2" />);
+  await assert.rejects(Promise.resolve(c1Decide(runTests, "allow")));
+  assert.deepEqual(answered, [], "c2's pane never answers c1's approval");
+  await store.get()!.decide(runTests, "deny");
+  assert.deepEqual(answered, ["c2:a1"]);
+});
+
 /**
  * A chat pane in miniature: its card's buttons and Live's voice both call the
  * pane's decide, which sends the answer over `chat:approve` like the real pane.
@@ -65,7 +84,17 @@ function mountPane(settings: Record<string, unknown> = {}) {
   const bus = new LiveSessionBus();
   const openChat = new LiveOpenChatStore();
   const store = new LiveChatApprovalsStore();
-  const controller = new LiveChatVoiceApprovals({ bus, openChat, approvals: store, activity: new LiveActivityStore() });
+  const controller = new LiveChatVoiceApprovals({
+    bus,
+    openChat,
+    approvals: store,
+    activity: new LiveActivityStore(),
+    // The arm delay passes at once here; its timing is covered in live-chat-approvals.test.ts.
+    schedule: (run) => {
+      const timer = setTimeout(run, 0);
+      return () => clearTimeout(timer);
+    },
+  });
   bus.setSession("s1", { toolResult: async () => true, note: async () => true });
   openChat.publish(Symbol("pane"), { chatId: "c1", title: "Fix login", workspaceId: null, busy: true, streamId: "s" });
 
@@ -99,15 +128,18 @@ function mountPane(settings: Record<string, unknown> = {}) {
 
 test("a spoken allow sends the same chat:approve as tapping Allow once", async () => {
   const tapped = mountPane();
-  await settle();
-  screen.getByText("Live is listening. Say “allow” or “deny”.");
+  await screen.findByText("Live is listening. Say “allow” or “deny”.");
+  assert.ok(
+    screen.getAllByRole("status").some((status) => /Live is listening: say allow or deny/u.test(status.textContent ?? "")),
+    "screen readers hear that voice is active",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
   await settle();
   const byTap = tapped.approveCalls();
   cleanup();
 
   const spoken = mountPane();
-  await settle();
+  await screen.findByText("Live is listening. Say “allow” or “deny”.");
   act(() => {
     spoken.bus.publishVoiceInput("permitir");
   });

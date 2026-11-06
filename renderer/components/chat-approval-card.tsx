@@ -417,7 +417,7 @@ export function ChatApprovalCard({
       <p className="sr-only" role="status">
         {invalidPendingPrivilegedApproval
           ? "Invalid privileged approval blocked"
-          : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
+          : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}${liveVoice === "voice" && !disabledReason ? ". Live is listening: say allow or deny" : ""}`}
       </p>
       <section
         ref={cardRef}

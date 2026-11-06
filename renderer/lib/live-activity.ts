@@ -18,9 +18,14 @@ export type LiveActivity =
       title: string;
       /** The chat it is in. */
       chatTitle: string;
-      /** False when this approval can only be answered by tapping. */
+      /** True once Live has read it out and takes a spoken allow or deny. */
       voice: boolean;
-      allow(): void;
+      /**
+       * Allow once. Absent when the approval's own card does not offer Allow
+       * once (it cannot be allowed here, or it needs its specialised review);
+       * the ribbon then offers Deny only and points to the card.
+       */
+      allow?: () => void;
       deny(): void;
     }
   | {
