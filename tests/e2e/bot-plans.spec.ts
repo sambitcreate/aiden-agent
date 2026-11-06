@@ -171,7 +171,8 @@ test("onboarding explains plan approvals and draws the checklist in its Bots til
   await connectOnboardingLmStudio(onboarding);
   await onboarding.getByText("Choose your first Bot", { exact: true }).click();
   await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
-  await expect(onboarding.getByText("Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once.", { exact: true })).toBeVisible();
+  await expect(onboarding.getByText(/approve a whole plan/u)).toBeVisible();
+  await expect(onboarding.getByText(/track accepted tasks in Open work/u)).toBeVisible();
   await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
   await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
   await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();

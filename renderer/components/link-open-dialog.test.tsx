@@ -30,7 +30,7 @@ test("shows the host and full URL and remembers by default", () => {
   assert.ok(dialog.textContent?.includes("https://docs.example.com/guide?x=1"));
   const remember = screen.getByRole("checkbox", { name: "Remember my choice" }) as HTMLInputElement;
   assert.equal(remember.checked, true);
-  assert.ok(screen.getByText("You can change this in Settings → Links."));
+  assert.ok(screen.getByText("You can change this in Settings → Appearance."));
   fireEvent.click(screen.getByRole("button", { name: "Open in Aiden browser" }));
   assert.deepEqual(choices, [{ target: "browser", remember: true }]);
 });

@@ -1,3 +1,4 @@
+import { analyticsWorkspaceKind } from "./analytics/analytics-ids.js";
 import { createAidenRemoteBotAllowList, type AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
 import { botMessagingEnabled } from "../../renderer/shared/bot-messages.js";
 import { workspaceIntakeService } from "./workspace-intake-main.js";
@@ -184,6 +185,7 @@ import {
   readUnderFreshBotRuntimeInventoryLease,
 } from "./bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
+import { electronConnectorWatchRemotePorts } from "./bot-routine-events/connector-watch-startup.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import { AidenRemoteHostFeedService, hostFeedBotSignals } from "./aiden-remote-host-feed.js";
 import { createAidenRemoteHostFeedSource } from "./aiden-remote-host-feed-source.js";
@@ -656,6 +658,12 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
             },
+            isFolderWorkspace: async (workspaceId) =>
+              analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
+            deviceIsPeer: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
+              return device?.type === "mac" || device?.type === "linux";
+            },
             noWorkspace: {
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.
@@ -1027,7 +1035,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                     const { botStarter } = await import("./bot-runtime/bot-starter-main.js");
                     const result = await botStarter().startFromPreset(presetId, {
                       // Created for the phone's audience; the key is remembered by the shared starter.
-                      createBot: (bot, botId) => botApplicationService.createBot({ audienceId, botId, bot }),
+                      createBot: (bot, botId, presetId) => botApplicationService.createBot({ audienceId, botId, bot, presetId }),
                     });
                     return { botId: result.bot.id, created: result.created };
                   },
@@ -1203,11 +1211,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             usage: usageStore,
             speech,
             readAloud,
+            ...await electronConnectorWatchRemotePorts({ bots: botsSupported }, async () =>
+              (await import("./bot-routine-events/sources-main.js")).botConnectorWatches),
             ...(botsSupported
               ? {
                   botFiles,
                   bots,
                   botSessions,
+                  botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
+                  botRoutineModels: { ...(await import("./bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await (await import("./bot-runtime/bot-session-main.js")).botSessionRuntime()).executionResumeStatus(botId) },
+                  botPeers: (await import("./bot-peers/service-main.js")).botPeers,
                   botAllowed,
                 }
               : {}),

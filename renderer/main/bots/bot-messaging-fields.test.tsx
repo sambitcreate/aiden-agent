@@ -44,5 +44,5 @@ test("the global switch disables both Bot controls", async () => {
       true,
     ),
   );
-  await screen.findAllByText("Turned off in Settings → Bots");
+  await screen.findAllByText("Turned off in Settings → Bots & Approvals");
 });

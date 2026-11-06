@@ -58,3 +58,8 @@ The chat footer's countdown and questionnaire card shared `questionnaire.promptI
 The owner selected Guided connection (Option 1) from the interactive desktop study. The implementation sequence, placement of Advanced, readiness rules, and acceptance journeys are in [the guided connection plan](../docs/plans/completed/guided-provider-connection-plan.md).
 
 Implemented the shared chooser in Settings and onboarding. Existing connections appear first in Settings. Local discovery retains custom addresses, manual models and model overrides. Onboarding confirms the usable model before Continue setup commits the provider checkpoint. Finish setup keeps usage data visible and makes the Bot and feature tour optional. Manual catalog and runtime actions retain their explicit controls. The mounted and Electron suites exercise both hosts with fixture providers.
+
+
+## Guided connection integration (2026-11-06)
+
+Merged current main into the guided connection branch, retaining the Settings reorganization’s InfoHint controls and model-catalog disclosure. Updated the Finish setup disclosure to point to Voice & Speech and Context & Limits. The combined mounted provider, catalog and onboarding suites pass.

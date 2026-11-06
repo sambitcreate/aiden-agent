@@ -176,12 +176,6 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
-test("Aiden Live settings has a dedicated destination", () => {
-  const settings = source("../main/settings-view.tsx");
-  assert.match(settings, /geminiLive: <AudioWaveform/u);
-  assert.doesNotMatch(settings, /assistant: <AidenSidebarLogo/u);
-});
-
 test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {
   const ui = source("./ui.tsx");
   assert.match(
@@ -224,7 +218,6 @@ test("allocated composer and settings widths drive their compact layouts", () =>
   assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
   assert.match(styles, /@container composer \(max-width: 520px\)/u);
   assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);
-  assert.match(styles, /@container settings-content \(max-width: 640px\)/u);
 });
 
 // Workspace layout is covered by Electron geometry checks in workspace-panel.spec.ts

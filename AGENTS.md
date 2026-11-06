@@ -49,7 +49,7 @@ Bot computers (Lume and the macOS restore image) are also manual-only.
 
 - Lume ships inside the app at an exact pin (`resources/bot-computers/lume-artifact.json` for provenance; the security values are compiled into `main/services/bot-computers/lume-binary.ts`). It is upgraded only with an Aiden release.
 - Aiden runs only the vendored binary, never a `PATH` lookup, the installer, `lume serve`, `lume update` or `lume pull`. Every child process gets `LUME_TELEMETRY_ENABLED=false`, `LUME_UPDATE_CHECK=false` and an isolated `HOME`. Every command names Aiden's storage (`--storage`, or `--source-storage` plus `--dest-storage` for `clone`).
-- The macOS restore image is pinned in `main/services/bot-computers/release.ts` (URL, size, SHA-256). It is downloaded from that fixed URL, with no redirects, only after the person chooses **Set up** or **Update base** in Settings → Bot computers.
+- The macOS restore image is pinned in `main/services/bot-computers/release.ts` (URL, size, SHA-256). It is downloaded from that fixed URL, with no redirects, only after the person chooses **Set up** or **Update base** in Settings → Computers & VMs → Bot computers.
 - Startup, listing, onboarding and background work never download, create or start a VM.
 - A Bot computer starts only for that Bot's `computer` or `computer_shell` call, a routine that uses it, the person opening its Computer tab, or the person's Open on its computer sign-in card. Set up, Update base and Set up element control in Settings start the base computer only.
 

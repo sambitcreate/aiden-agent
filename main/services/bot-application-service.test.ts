@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
+import { analyticsSettled, captureAnalyticsEvents } from "./analytics/test-support.js";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -2745,6 +2747,43 @@ test("disabled Full Bot catalog retains only its own saved chat-reduction skill 
   assert.doesNotMatch(JSON.stringify(result), /other-bot|sourceId|instructions/u);
 });
 
+test("a created Bot counts once with its preset and how many there are, and a failed one counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const app = fixture();
+  await app.service.initialize();
+  await app.service.createBot({
+    audienceId: "device:a",
+    presetId: "a-preset-this-build-does-not-ship",
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+  });
+  await analyticsSettled();
+  assert.deepEqual(sent, [{ event: "bot_created", props: { preset_id: "custom", bot_count: "1" } }]);
+
+  sent.length = 0;
+  const preset = BOT_PRESETS[0]!;
+  const shipped = fixture();
+  await shipped.service.initialize();
+  await shipped.service.createBot({
+    audienceId: "device:a",
+    presetId: preset.id,
+    bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+  });
+  await analyticsSettled();
+  assert.equal(sent[0]?.props?.preset_id, preset.id);
+
+  sent.length = 0;
+  const failing = fixture({ failIdentityCreate: true });
+  await failing.service.initialize();
+  await assert.rejects(
+    failing.service.createBot({
+      audienceId: "device:a",
+      bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } },
+    }),
+    /identity failed/u,
+  );
+  await analyticsSettled();
+  assert.deepEqual(sent, []);
+});
 
 test("access changes notify allowed-list readers only after successful saves and unsubscribe cleanly", async t => {
   const app = await folderFixture(t), observed: string[] = [];
@@ -2905,4 +2944,20 @@ test("uncertain folder publication keeps its root and recovery fence until the r
   assert.equal(await restarted.grantBotFolder(input), "already_allowed");
   assert.equal((await app.journal.list())[0]!.rootId, record!.rootId);
   assert.ok((await fs.stat(app.folderPath)).isDirectory());
+});
+
+
+test("Bot count metadata cannot move an earlier action to a new analytics sender", async (t) => {
+  const previous = captureAnalyticsEvents(t), app = fixture();
+  await app.service.initialize();
+  const list = app.deps.botStore.list.bind(app.deps.botStore);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  app.deps.botStore.list = async () => { await held; return list(); };
+  await app.service.createBot({ audienceId: "device:a", bot: { name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "wisp", color: "lilac" } } });
+  const current = captureAnalyticsEvents(t);
+  release();
+  await analyticsSettled();
+  assert.deepEqual(previous, []);
+  assert.deepEqual(current, [], "the earlier Bot creation cannot be attributed to the replacement sender");
 });

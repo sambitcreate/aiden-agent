@@ -201,7 +201,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /listed actions within the Bot's access and limits, for this run and up to 60 minutes/u);
   assert.match(featurePresentation, /ask each other for help/u);
   // Bot computers are opt-in: the tile points to Settings and promises no download before Set up.
-  assert.match(featurePresentation, /Set it up in Settings → Bot computers; nothing downloads until you choose Set up\./u);
+  assert.match(featurePresentation, /Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up\./u);
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
@@ -296,7 +296,7 @@ test("workspace tour discloses AGENTS instruction loading and refresh", () => {
 test("provider onboarding explains separate opt-in and cloud speech privacy without network setup", () => {
   const disclosure = source.slice(source.indexOf("data-onboarding-tts-privacy"), source.indexOf("</Text>", source.indexOf("data-onboarding-tts-privacy")));
   assert.match(disclosure, /off by default/u);
-  assert.match(disclosure, /Settings → Text to Speech/u);
+  assert.match(disclosure, /Settings → Voice & Speech → Text to Speech/u);
   assert.match(disclosure, /response text to Google/u);
   assert.match(disclosure, /local-model replies/u);
   assert.match(disclosure, /charges may apply/u);
@@ -314,6 +314,10 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
     { id: "computerUse", description: "Control the desktop." },
     { id: "bots", description: "Configure a Bot." },
     { id: "botComputers", description: "Give a Bot a computer." },
+    { id: "botWatches", description: "Watch a supported connector." },
+    { id: "botOpenWork", description: "Track accepted Bot tasks." },
+    { id: "botRoutineModels", description: "Choose a routine model." },
+    { id: "botPeers", description: "Approve named Bot pairs." },
   ];
   const linux = visibleOnboardingFeatures(features, { platform: "linux", computerUse: false, bots: false, botComputers: false });
   assert.deepEqual(linux.map(({ id }) => id), ["models", "commands"]);
@@ -323,7 +327,7 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
   assert.match(linux[1]!.description, /Ctrl-K/u);
   assert.equal(features[1]!.description, "Use Command-K to open commands.");
   const mac = visibleOnboardingFeatures(features, { platform: "darwin", computerUse: true, bots: true, botComputers: true });
-  assert.equal(mac.length, 5);
+  assert.equal(mac.length, 9);
   assert.match(mac[0]!.description, /Apple models/u);
   assert.match(mac[0]!.description, /classifiers.*approve sending it; provider charges/u);
   assert.match(mac[0]!.description, /Enable local llama.cpp classification.*Advanced panel under Model options/u);

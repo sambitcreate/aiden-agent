@@ -1568,6 +1568,100 @@ final class AidenBotContractTests: XCTestCase {
         }
     }
 
+    /// Host-issued IDs model the old partial-tool binding and its replacement
+    /// service binding. Their identical labels must never establish authority.
+    private func composioServiceFixture(retainOldChoice: Bool = true) throws -> (
+        baseline: AidenBotDetail, oldCatalog: AidenBotCapabilityCatalog, catalog: AidenBotCapabilityCatalog
+    ) {
+        let fixture = try sharedFixtureObject()
+        var catalog = try XCTUnwrap(fixture["botCapabilityCatalog"] as? [String: Any])
+        let old: [String: Any] = ["id": "connection.composio.partial", "label": "Composio", "available": true]
+        let service: [String: Any] = ["id": "connection.composio.service", "label": "Composio", "available": true]
+        let calendar: [String: Any] = ["id": "connection.calendar", "label": "Calendar", "available": true]
+        catalog["revision"] = "catalog.composio.partial"
+        catalog["connections"] = [old, calendar]
+        let oldCatalog = try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: catalog))
+        catalog["revision"] = "catalog.composio.service"
+        var retained = old
+        retained["available"] = false
+        catalog["connections"] = [service, calendar] + (retainOldChoice ? [retained] : [])
+        let currentCatalog = try AidenRemoteJSONDecoder.decode(AidenBotCapabilityCatalog.self, from: data(for: catalog))
+        let update = try XCTUnwrap(fixture["botPolicyUpdate"] as? [String: Any])
+        var access = try XCTUnwrap(update["response"] as? [String: Any])
+        var custom = try XCTUnwrap(access["custom"] as? [String: Any])
+        custom["connectionIds"] = ["connection.composio.partial"]
+        access["custom"] = custom
+        var detail = try XCTUnwrap(fixture["botDetail"] as? [String: Any])
+        detail["access"] = access
+        let baseline = try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: data(for: detail))
+        return (baseline, oldCatalog, currentCatalog)
+    }
+
+    func testComposioServiceOffersOneCurrentAllowChoiceAndKeepsGenericConnections() throws {
+        let fixture = try composioServiceFixture()
+        let visible = aidenBotVisibleCapabilityOptions(fixture.catalog.connections, selectedIDs: [])
+        XCTAssertEqual(visible.map(\.id), ["connection.composio.service", "connection.calendar"])
+        XCTAssertEqual(visible.map(\.label), ["Composio", "Calendar"])
+        let draft = try XCTUnwrap(AidenBotCustomAccessDraft(access: fixture.baseline.access, catalog: fixture.catalog))
+        let selectedRows = aidenBotVisibleCapabilityOptions(fixture.catalog.connections, selectedIDs: draft.connectionIDs)
+        let oldChoice = try XCTUnwrap(selectedRows.first { $0.id == "connection.composio.partial" })
+        XCTAssertFalse(oldChoice.available)
+        XCTAssertTrue(aidenBotCapabilityOptionTitle(oldChoice, isSelected: true).contains("Unavailable"))
+        XCTAssertFalse(draft.connectionIDs.contains("connection.composio.service"))
+    }
+
+    func testStaleComposioCustomSelectionNeverRebindsDuringUnrelatedEditOrRebase() throws {
+        for retainedTombstone in [true, false] {
+            let fixture = try composioServiceFixture(retainOldChoice: retainedTombstone)
+            var draft = try XCTUnwrap(AidenBotEditorDraft(detail: fixture.baseline, catalog: fixture.oldCatalog))
+            draft.name = "Renamed helper"
+            let rebased = try aidenBotEditorRebasedDraft(draft, baseline: fixture.baseline,
+                baselineCatalog: fixture.oldCatalog, authoritative: fixture.baseline, authoritativeCatalog: fixture.catalog)
+            XCTAssertEqual(try rebased.identityPatch(comparedTo: fixture.baseline)?.name, "Renamed helper")
+            XCTAssertEqual(rebased.customAccess.connectionIDs, ["connection.composio.partial"])
+            XCTAssertFalse(rebased.isSaveable(catalog: fixture.catalog))
+            XCTAssertThrowsError(try rebased.accessUpdate(catalog: fixture.catalog)) { error in
+                XCTAssertEqual(error as? AidenBotContractError, .invalidCombination("unavailable custom access"))
+            }
+        }
+    }
+
+    func testExplicitComposioServiceSelectionAllowsOnlyTheNewHostBinding() throws {
+        let fixture = try composioServiceFixture()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(detail: fixture.baseline, catalog: fixture.catalog))
+        draft.customAccess.connectionIDs.remove("connection.composio.partial")
+        draft.customAccess.connectionIDs.insert("connection.composio.service")
+        guard case let .custom(revision, selection, _) = try draft.accessUpdate(catalog: fixture.catalog) else {
+            return XCTFail("Custom service selection must remain Custom")
+        }
+        XCTAssertEqual(revision, "catalog.composio.service")
+        XCTAssertEqual(selection.connectionIds, ["connection.composio.service"])
+        XCTAssertFalse(selection.connectionIds.contains("connection.calendar"))
+        XCTAssertTrue(fixture.catalog.containsAvailable(selection))
+        XCTAssertTrue(try draft.changesAccess(comparedTo: fixture.baseline, catalog: fixture.catalog))
+    }
+
+    @MainActor
+    func testUnrelatedAdvancedSaveCannotSendAReplacementComposioGrant() async throws {
+        let fixture = try composioServiceFixture()
+        var draft = try XCTUnwrap(AidenBotEditorDraft(detail: fixture.baseline, catalog: fixture.oldCatalog))
+        draft.name = "Renamed helper"
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var authoritativeObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(fixture.baseline)) as? [String: Any])
+        authoritativeObject["name"] = draft.name
+        authoritativeObject["revision"] = "bot_revision_renamed"
+        let authoritative = try AidenRemoteJSONDecoder.decode(AidenBotDetail.self, from: data(for: authoritativeObject))
+        var accessWrites = 0
+        let outcome = await aidenBotAdvancedSave(draft: draft, baseline: fixture.baseline, catalog: fixture.catalog,
+            operations: AidenBotAdvancedSaveOperations(waitForConnection: { _ in true },
+                updateIdentity: { _, _ in authoritative }, updateAccess: { _, _ in accessWrites += 1 },
+                readBot: { authoritative }, readCatalog: { fixture.catalog }))
+        XCTAssertEqual(accessWrites, 0, "An unrelated edit cannot authorize a replacement connection binding")
+        XCTAssertEqual(outcome, .failed(AidenBotAdvancedCopy.changedOnMac))
+        XCTAssertEqual(authoritative.access.custom?.connectionIds, ["connection.composio.partial"])
+    }
+
     func testCustomAccessDraftStartsFromAllAvailableFullAccessChoices() throws {
         let fixtureURL = try XCTUnwrap(sharedContractFixtureURL)
         let fixture = try AidenRemoteJSONDecoder.decode(

@@ -5,14 +5,13 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { getCurrentSystemPrompt, getCurrentTools, type ImageContent, type Message } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, getCurrentTools, type ImageContent, type Message, Type } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, hook, ToolTask, Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import { createBotPlans, type BotPlans } from "../bot-plans/plans.js";
 import { botPlanProposalFingerprint, botPlanRuleFingerprint, type BotPlanProposal } from "../bot-plans/validate.js";
 import type { BotPlanItem } from "../../../renderer/shared/bot-plans.js";
 import { markMcpAgentTool, mcpAgentToolName } from "../mcp-tool-identity.js";
-import { botMcpLiveToolGrantFacts } from "../bot-tool-authority.js";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import type { ResolvedModelRuntime } from "../model-runtime.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
@@ -27,6 +26,15 @@ import { handoffSkippedText, ruleAskUnattendedBlock, ruleHandoffDoneBlock, ruleU
 import { createBotHandoffs, recordRuleHandoffEntry, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND, botImageReference } from "./bot-images.js";
+import { createBotToolAssembly } from "./bot-tool-assembly.js";
+import { composioServiceToolDescriptor } from "../composio-service-tool.js";
+import { botMcpLiveToolGrantFacts } from "../bot-tool-authority.js";
+import { composioSourceConnection } from "../bot-routine-events/connector-source-admission.js";
+import { withBotExecutionAdmission, type BotExecutionPort } from "./bot-execution.js";
+import { assertBotConnectorModelEffectCurrent } from "../bot-connector-inventory-scope.js";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { BotExecutionClaim } from "../bot-routine-models.js";
+import type { BotToolFacts } from "./bot-tool-policy.js";
 import type { BotAllowListPort, BotToolCandidate } from "./bot-tool-assembly.js";
 import type { BotToolCallCheck } from "./bot-extension.js";
 import type { BotApprovalRuleTarget } from "../../../renderer/shared/tool-approval-scope.js";
@@ -1051,7 +1059,7 @@ test("on a routine or Telegram turn a rule never waits: it blocks with what the 
   }
 });
 
-/** One ruled turn from `requestId`, with Settings → Bots' routines setting. */
+/** One ruled turn from `requestId`, with Settings → Bots & Approvals' routines setting. */
 async function goAheadTurn(options: Parameters<typeof ruledTurn>[0], requestId?: string) {
   let handoffAsked = false;
   const turn = ruledTurn({
@@ -1269,6 +1277,37 @@ test("a Bot declares a rarely used tool only after loading it, and keeps it decl
   } finally {
     await harness.close(ctx);
   }
+});
+
+
+test("Calendar's asynchronous MCP read retains its fresh authority, aborts on revocation and never returns late output", async t => {
+  for (const mode of ["success", "error", "revoked"] as const) await t.test(mode, async () => {
+    const descriptor = composioServiceToolDescriptor(), grant = botMcpLiveToolGrantFacts(descriptor)!, connection = composioSourceConnection("preset-composio", "a".repeat(64));
+    const restriction = {routineId:"watch",revision:1,binding:{adapter:"composio-calendar-v1" as const,serverId:"preset-composio",connection,tools:[grant],accountId:"ca_selected0000001",calendarId:"planning@example.test",labels:{providerLabel:"Calendar",accountLabel:"Person",resourceLabel:"Planning"},contract:{revision:"composio-calendar-v1" as const,executorSchemaHash:"a".repeat(64),readSchemaHashes:{listCalendars:"b".repeat(64),listEvents:"c".repeat(64),getEvent:"d".repeat(64)}}},condition:{kind:"calendar" as const,lookAheadMinutes:60,timezone:"UTC"}};
+    const claim = {id:"claim",botId:"bot-1",requestId:"routine:watch:run",connectorServerId:"preset-composio",connectorRestriction:restriction} as BotExecutionClaim;
+    const active = new Set<AbortController>(), releases = new Map<AbortController,number>();
+    const authority = {...full(botHome()),connections:[connection]};
+    const facts: BotToolFacts = {authority,supportsImages:true,fileLocations:0,hasComputer:false,mcpTools:async()=>new Map([["composio",grant]]),mcpToolDescriptor:async()=>descriptor,skillToolNames:async()=>new Set()};
+    let entered!:()=>void, finish!:()=>void, effectSignal:AbortSignal|undefined, sourceChecks=0, taskReleased=0;
+    const started = new Promise<void>(resolve=>{entered=resolve;}), waiting = new Promise<void>(resolve=>{finish=resolve;});
+    const tool:AgentTool = {name:"composio",label:"Calendar read",description:"Synthetic delayed connected-app read",parameters:Type.Object({action:Type.Literal("describe")}),
+      async execute(_id,_args,signal){effectSignal=signal;await assertBotConnectorModelEffectCurrent();entered();await waiting;if(mode==="error")throw new Error("provider read failed");return {content:[{type:"text",text:"late private Calendar result"}],details:null};}};
+    const assembly = createBotToolAssembly({admit:async()=>{const controller=new AbortController();active.add(controller);releases.set(controller,0);return {authority,signal:controller.signal,revalidateBeforeEffect:async()=>{controller.signal.throwIfAborted();},release(){releases.set(controller,releases.get(controller)!+1);active.delete(controller);}};},sources:{facts:async()=>facts,candidates:async()=>({tools:[{tool,mcp:true,replay:"unsafe"}]})}});
+    const faux=createFauxModels([]), port:BotExecutionPort={claim:async()=>claim,getClaim:async()=>claim,selectFallback:async()=>{throw new Error("No fallback");},resolve:async()=>({model:faux.models.getModel(FAUX_MODEL_REF.provider,FAUX_MODEL_REF.modelId)!,models:faux.models,imageInput:false,revalidate:async()=>{sourceChecks++;},release(){taskReleased++;}})};
+    await withBotExecutionAdmission("bot-1",claim,port,async()=>{
+      const offered=await assembly.currentTools("bot-1",{requestId:claim.requestId});assert.equal(offered.length,1);assert.equal(active.size,0,"offering tools releases its separate observation lease");
+      const before=[...releases.values()].reduce((sum,value)=>sum+value,0), pending=offered[0]!.tool.execute("call",{action:"describe"},new AbortController().signal);
+      try{
+        await started;await Promise.resolve();assert.equal(active.size,1,"the actual read keeps its admitted Bot authority until terminal completion");assert.equal(sourceChecks,1);
+        if(mode==="revoked"){for(const controller of active)controller.abort(new Error("Bot access revoked"));assert.equal(effectSignal?.aborted,true);}
+        finish();
+        if(mode==="success"){const result=await pending;assert.equal(result.content[0]?.type,"text");}
+        else await assert.rejects(pending,mode==="error"?/provider read failed/u:/Bot access revoked/u,"even a read that ignores cancellation cannot publish its late successful result");
+        assert.equal(active.size,0);assert.equal([...releases.values()].reduce((sum,value)=>sum+value,0),before+1);assert.ok([...releases.values()].every(value=>value===1),"each observation/effect lease releases exactly once");
+      }finally{finish();await pending.catch(()=>{});}
+    });
+    assert.equal(taskReleased,1);
+  });
 });
 
 test('message_bot is offered only for a person or an eligible hop-1 turn',async()=>{
@@ -2282,4 +2321,20 @@ test("allow list: actual saved payment entries cannot suppress cards while a sav
     assert.ok(f.deps.approvals.every(card => card.always === undefined));
     assert.equal((await rules.matchBot("bot-1", target))?.uses, payment ? 0 : 1, host);
   }
+});
+
+test("shipping messages and approved-peer exchanges offer distinct schemas and cannot bridge ingress authority", async () => {
+  const { botPeerCandidate } = await import("../bot-peers/tool.js");
+  const { createMessageBotTool } = await import("../bot-messages/tool.js");
+  const peer = botPeerCandidate("bot-1", { service: { discover: async () => [], accept: async () => { throw new Error("Unexpected send"); }, exchange: async () => undefined }, source: async () => { throw new Error("Unexpected source"); }, wake() {} });
+  const message = createMessageBotTool("bot-1", { roster: async () => [], post: async () => { throw new Error("Unexpected send"); } });
+  const state = assemblyState(full(botHome()));
+  const deps = assemblyDeps(state, { candidates: () => [peer, { tool: message }] });
+  const namesFor = async (requestId: string) => (await deps.currentTools({ id: "bot-1" } as never, { requestId })).map(entry => entry.tool.name);
+  assert.deepEqual(await namesFor("desktop:person"), ["message_peer", "message_bot"]);
+  assert.deepEqual(await namesFor("peer:host-issued"), ["message_peer"]);
+  assert.deepEqual(await namesFor("bot:sender:1:00112233-4455-4677-8899-aabbccddeeff"), ["message_bot"]);
+  assert.deepEqual(await namesFor("bot:sender:2:00112233-4455-4677-8899-aabbccddeeff"), []);
+  assert.deepEqual(Object.keys((peer.tool.parameters as unknown as { properties: Record<string, unknown> }).properties), ["action", "peerId", "kind", "title", "text", "exchangeId"]);
+  assert.deepEqual(Object.keys((message.parameters as unknown as { properties: Record<string, unknown> }).properties), ["bot", "message"]);
 });

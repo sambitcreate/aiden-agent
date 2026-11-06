@@ -8,9 +8,10 @@ const SETTINGS_SECTIONS = [
   "Web Search",
   "Connections",
   "Scheduled tasks",
-  "Aiden Live",
-  ...(process.platform === "darwin" ? (["Computer Use"] as const) : []),
-  "Voice",
+  ...(process.platform === "darwin"
+    ? ([process.arch === "arm64" ? "Computers & VMs" : "Computer Use"] as const)
+    : []),
+  "Voice & Speech",
   "Keyboard shortcuts",
   "Appearance",
   "About",
@@ -69,19 +70,23 @@ async function assertRenderedSettingsDestination(
         page.getByRole("heading", { level: 1, name: "Scheduled tasks", exact: true }),
       ).toBeVisible();
       return;
-    case "Aiden Live":
-      await expect(
-        page.getByRole("heading", { level: 1, name: "Aiden Live", exact: true }),
-      ).toBeVisible();
-      await expect(page.getByText("Beta", { exact: true })).toBeVisible();
-      return;
     case "Computer Use":
       await expect(page.getByRole("heading", { level: 1, name: "Computer Use", exact: true })).toBeVisible();
+      await expect(page.getByRole("tablist", { name: "Computer Use" })).toHaveCount(0);
       return;
-    case "Voice":
+    case "Computers & VMs":
+      await expect(page.getByRole("heading", { level: 1, name: "Computers & VMs", exact: true })).toBeVisible();
+      await expect(page.getByRole("tab", { name: "Computer Use", exact: true })).toHaveAttribute("aria-selected", "true");
+      await page.getByRole("tab", { name: "Bot computers", exact: true }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Computers & VMs", exact: true })).toBeVisible();
+      return;
+    case "Voice & Speech":
       await expect(
         page.getByRole("heading", { level: 2, name: "Use your voice", exact: true }),
       ).toBeVisible();
+      await page.getByRole("tab", { name: "Aiden Live", exact: true }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true })).toBeVisible();
+      await expect(page.getByText("Beta", { exact: true })).toBeVisible();
       return;
     case "Keyboard shortcuts":
       await expect(
@@ -125,7 +130,7 @@ test("every Settings destination renders and a one-model local inventory stays u
   ).toBeVisible();
   if (process.platform === "linux") {
     await expect(
-      settingsNavigation.getByRole("button", { name: "Computer Use", exact: true }),
+      settingsNavigation.getByRole("button", { name: /^Computer(s & VMs| Use)$/u }),
     ).toHaveCount(0);
   }
 
@@ -209,7 +214,7 @@ test("every Settings destination renders and a one-model local inventory stays u
     await settingsNavigation.getByRole("button", { name: "Appearance", exact: true }).click();
     await expect(page.getByText("Dock icon", { exact: true })).toHaveCount(0);
 
-    await settingsNavigation.getByRole("button", { name: "Voice", exact: true }).click();
+    await settingsNavigation.getByRole("button", { name: "Voice & Speech", exact: true }).click();
     await expect(page.getByText("Accessibility access", { exact: true })).toHaveCount(0);
     await page.getByRole("combobox").first().click();
     await page.getByRole("option", { name: "On this device · Private", exact: true }).click();
@@ -220,10 +225,11 @@ test("every Settings destination renders and a one-model local inventory stays u
       ),
     ).toBeVisible();
 
-    const holdChoice = page.getByRole("radio", { name: /Hold to dictate/u });
     // The development fixture disables global shortcuts; setup must honor that policy.
-    await expect(holdChoice).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: /Press to toggle/u })).toBeChecked();
+    await expect(page.getByRole("combobox", { name: "Dictation shortcut behavior" })).toHaveCount(0);
+    await expect(
+      page.getByText("Press the global dictation shortcut once to start and again to stop.", { exact: true }),
+    ).toBeVisible();
 
     await settingsNavigation.getByRole("button", { name: "About", exact: true }).click();
     await expect(page.getByRole("link", { name: "Open releases", exact: true })).toBeVisible();

@@ -88,8 +88,8 @@ test("a first run offers the starter Bots as an optional part of Finish setup", 
   const stepper = screen.getByRole("list", { name: "Setup progress" });
   assert.ok(within(stepper).getByText("Finish setup"));
   // Explain hand-offs, rules, and whole-plan approval at the first Bot setup.
-  assert.ok(screen.getByText("Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once."));
-  assert.ok(screen.getByText("Bots can message each other when it helps; turn it off in Settings → Bots."));
+  assert.ok(screen.getByText("Bots track accepted tasks in Open work, follow your rules, hand you the steps only you should do, and can ask you to approve a whole plan."));
+  assert.ok(screen.getByText("Bots can message each other when it helps; turn it off in Settings → Bots & Approvals."));
 });
 
 test("Start chat creates exactly one starter Bot and moves on to the tour", async () => {

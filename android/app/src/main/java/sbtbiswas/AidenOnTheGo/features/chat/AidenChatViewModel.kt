@@ -38,6 +38,7 @@ import sbtbiswas.AidenOnTheGo.features.remote.AidenAttachmentPreparation
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteEvent
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteStreamEvent
@@ -2921,8 +2922,12 @@ class AidenChatViewModel(
                             is AidenForeignRunProjection.Effect.ReasoningAppended -> buffer.appendReasoning(outputDelta.text)
                             else -> {
                                 // Controls and terminal state see every accepted byte first.
-                                if (AidenForeignRunProjection.Effect.Reconcile in effects) buffer.reset()
-                                else buffer.flush()
+                                if (event.kind is AidenRemoteRunEvent.Kind.Snapshot) {
+                                    buffer.reset()
+                                    buffer.appendText(event.kind.snapshot.replyText.orEmpty())
+                                    buffer.appendReasoning(event.kind.snapshot.replyReasoning.orEmpty())
+                                }
+                                buffer.flush()
                                 if (foreignProjection === current) liveReveal.flush()
                             }
                         }

@@ -1,3 +1,4 @@
+import { RunTranscriptCheckpoint } from "./run-transcript-checkpoint.js";
 import { randomUUID } from "node:crypto";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { parseAskUserQuestions } from "../../renderer/shared/ask-user-question.js";
@@ -70,6 +71,7 @@ export type HostRunRead =
       nextSequence: number;
       /** Every pending prompt in arrival order, even when its event was trimmed. */
       prompts: HostRunPendingPrompt[];
+      transcript?: Record<string, unknown>;
     };
 
 export interface HostRunRegistryOptions {
@@ -118,6 +120,7 @@ interface RunRecord {
   /** When each pending prompt was raised (epoch ms), for wait-time ordering. */
   promptRaisedAt: Map<string, number>;
   projection: RunProjectionState;
+  transcript: RunTranscriptCheckpoint;
   subscribers: Set<() => void>;
   /** The newest delta event while no `read` has returned it. */
   openDelta?: { sequence: number; openedAt: number };
@@ -300,6 +303,7 @@ export class HostRunRegistry {
       prompts: new Map(),
       promptRaisedAt: new Map(),
       projection: createRunProjectionState(),
+      transcript: new RunTranscriptCheckpoint(),
       subscribers: new Set(),
     };
     this.runs.set(run.runId, run);
@@ -476,7 +480,7 @@ export class HostRunRegistry {
    * cursor older than retention returns `snapshot_required` with the pending
    * prompts so the observer can rebuild its attention state.
    */
-  read(runId: string, afterSequence: number, limit = Number.POSITIVE_INFINITY): HostRunRead {
+  read(runId: string, afterSequence: number, limit = Number.POSITIVE_INFINITY, checkpoint = false): HostRunRead {
     this.pruneExpired();
     const run = this.runs.get(runId);
     if (!run) throw new RangeError("Unknown host run.");
@@ -485,12 +489,22 @@ export class HostRunRegistry {
     }
     const summary = this.summarize(run);
     const firstRetained = run.events[0]?.sequence ?? run.lastSequence + 1;
-    if (afterSequence < firstRetained - 1) {
+    const missed = afterSequence < firstRetained - 1;
+    // A long running turn can be joined in one frame. Keep short replays and
+    // terminal outcomes on their ordinary path. Reading the head seals its
+    // delta: subsequent tokens must receive a sequence after this snapshot.
+    const atHead = checkpoint && !isTerminalState(run.state) && (
+      missed || (afterSequence === 0 && run.lastSequence >= 64 && run.transcript.timeline &&
+        run.transcript.text !== undefined && run.transcript.reasoning !== undefined)
+    );
+    if (missed || atHead) {
+      if (atHead) run.openDelta = undefined;
       return {
         kind: "snapshot_required",
         epoch: this.epoch,
         summary,
-        nextSequence: firstRetained,
+        nextSequence: atHead ? run.lastSequence + 1 : firstRetained,
+        ...(atHead ? { transcript: structuredClone(run.transcript.payload()) } : {}),
         prompts: [...run.prompts.values()].map((prompt) => structuredClone(prompt)),
       };
     }
@@ -552,6 +566,7 @@ export class HostRunRegistry {
       for (const id of [...run.pendingApprovalIds, ...run.pendingQuestionIds]) {
         this.promptRuns.delete(id);
       }
+      run.transcript = new RunTranscriptCheckpoint();
       run.prompts.clear();
       run.promptRaisedAt.clear();
       attentionChanged ||= run.pendingApprovalIds.length + run.pendingQuestionIds.length > 0;
@@ -587,6 +602,7 @@ export class HostRunRegistry {
 
   private append(run: RunRecord, pending: PendingEvent): void {
     const now = this.options.now();
+    run.transcript.apply(pending.type, pending.payload);
     if (!pending.terminal && this.extendOpenDelta(run, pending, now)) return;
     const event: HostRunEvent = {
       runId: run.runId,

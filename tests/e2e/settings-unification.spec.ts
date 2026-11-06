@@ -15,7 +15,8 @@ test("Live audio selectors keep long labels and chevrons inside their bounds", a
     ] });
   });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Aiden Live", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Voice & Speech", exact: true }).click();
+  await page.getByRole("tab", { name: "Aiden Live", exact: true }).click();
   for (const width of [1280, 600, 390]) {
     await aiden.app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 900), width);
     for (const name of ["Live input device", "Live output device"]) {
@@ -389,7 +390,7 @@ test("text fields rest on a fill and deepen it on focus without an accent edge",
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Voice", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Voice & Speech", exact: true }).click();
   const field = page.getByRole("textbox", { name: "Heard as" });
   await expect(field).toBeVisible();
   const look = () => field.evaluate((element) => {
@@ -447,55 +448,56 @@ test("all Settings pages fit narrow and wide windows; Telegram toggles stay on t
     await expect(page.getByRole("heading", { name: destination.trim(), exact: true })).toHaveCount(
       1,
     );
-    if (destination.trim() === "Telegram") {
-      await page.getByText("Advanced Telegram settings", { exact: true }).click();
-    }
-    for (const width of [1280, 600, 390]) {
-      await resizeWindow(width, 650);
-      await expect
-        .configure({ soft: true })
-        .poll(
-          () =>
-            page.locator(".settings-responsive").evaluate((element) => {
-              const page = element.querySelector(".settings-page")!;
-              return Math.max(
-                element.scrollWidth - element.clientWidth,
-                page.scrollWidth - page.clientWidth,
-              );
-            }),
-          { message: `${destination} at ${width}px` },
-        )
-        .toBeLessThanOrEqual(2);
-      if (destination.trim() === "Telegram") {
-        for (const name of [
-          "Enable Telegram bridge",
-          "Live answer drafts",
-          "Private-chat threads",
-        ]) {
-          const toggle = page.getByRole("switch", { name, exact: true });
-          await toggle.scrollIntoViewIfNeeded();
-          expect(
-            await toggle.evaluate((element) => {
-              const row = element.closest('[role="group"]')!;
-              const label = row.firstElementChild!;
-              return element.getBoundingClientRect().left >= label.getBoundingClientRect().right;
-            }),
-          ).toBe(true);
+    const tabs = await page.getByRole("tab").allTextContents();
+    for (const tab of tabs.length > 0 ? tabs : [destination.trim()]) {
+      await resizeWindow(1280, 800);
+      if (tabs.length > 0) await page.getByRole("tab", { name: tab, exact: true }).click();
+      if (tab === "Telegram") {
+        await page.getByRole("button", { name: "Advanced Telegram settings", exact: true }).click();
+      }
+      for (const width of [1280, 600, 390]) {
+        await resizeWindow(width, 650);
+        await expect
+          .configure({ soft: true })
+          .poll(
+            () =>
+              page.locator(".settings-responsive").evaluate((element) => {
+                const page = element.querySelector(".settings-page")!;
+                return Math.max(
+                  element.scrollWidth - element.clientWidth,
+                  page.scrollWidth - page.clientWidth,
+                );
+              }),
+            { message: `${destination} / ${tab} at ${width}px` },
+          )
+          .toBeLessThanOrEqual(2);
+        if (tab === "Telegram") {
+          for (const name of ["Live answer drafts", "Private-chat threads"]) {
+            const toggle = page.getByRole("switch", { name, exact: true });
+            await toggle.scrollIntoViewIfNeeded();
+            expect(
+              await toggle.evaluate((element) => {
+                const row = element.closest('[role="group"]')!;
+                const label = row.firstElementChild!;
+                return element.getBoundingClientRect().left >= label.getBoundingClientRect().right;
+              }),
+            ).toBe(true);
+          }
         }
       }
     }
   }
 });
 
-
 test("model compaction budgets validate, survive relaunch and reset to defaults", async ({ aiden }) => {
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
-  const openMemory = async () => {
+  const openContextAndLimits = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Context & Limits", exact: true }).click();
   };
-  await openMemory();
+  await openContextAndLimits();
+  await page.getByText("Model compaction budgets", { exact: true }).click();
   await page.getByRole("combobox", { name: "Model for compaction budget" }).fill("fixture/exact-model");
   await page.getByRole("spinbutton", { name: "Compaction reserved tokens" }).fill("-1");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
@@ -511,7 +513,7 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
   await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toBeVisible();
   await aiden.relaunch();
   page = aiden.page;
-  await openMemory();
+  await openContextAndLimits();
   await page.getByRole("button", { name: "fixture/exact-model", exact: true }).click();
   await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("8192");
   await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("0");
@@ -520,7 +522,7 @@ test("model compaction budgets validate, survive relaunch and reset to defaults"
   await expect(page.getByRole("spinbutton", { name: "Compaction reserved tokens" })).toHaveValue("");
   await expect(page.getByRole("spinbutton", { name: "Compaction recent tokens" })).toHaveValue("");
   await page.reload();
-  await openMemory();
+  await openContextAndLimits();
   await expect(page.getByRole("button", { name: "fixture/exact-model", exact: true })).toHaveCount(0);
 });
 
@@ -535,11 +537,11 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   await expect(onboarding.getByText(/optional prompt cache warming/u)).toContainText("off by default");
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
-  const openMemory = async () => {
+  const openContextAndLimits = async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Memory", exact: true }).click();
+    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Context & Limits", exact: true }).click();
   };
-  await openMemory();
+  await openContextAndLimits();
   const toggle = () => page.getByRole("switch", { name: "Warm prompt caches during active chats" });
   await expect(toggle()).not.toBeChecked();
   await expect(page.getByText(/Optional paid one-token requests/u)).toBeVisible();
@@ -547,7 +549,7 @@ test("paid cache warming stays off until explicitly enabled and can be disabled 
   await expect(toggle()).toBeChecked();
   await aiden.relaunch();
   page = aiden.page;
-  await openMemory();
+  await openContextAndLimits();
   await expect(toggle()).toBeChecked();
   await toggle().click();
   await expect(toggle()).not.toBeChecked();
@@ -596,6 +598,8 @@ test("composer context usage visibility updates immediately from Appearance", as
   await page.locator("textarea").press("Enter");
   const meter = page.getByRole("button", { name: /^Context usage,/ });
   await expect(meter).toBeVisible();
+  // Memory lives in Settings: the chat toolbar has no manual memory manager.
+  await expect(page.getByRole("button", { name: "Open memory", exact: true })).toHaveCount(0);
   for (const enabled of [false, true]) {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
@@ -658,7 +662,7 @@ test("the Bot messaging switch persists through the real settings handler", asyn
   let page = aiden.page;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots & Approvals", exact: true }).click();
   const toggle = () => page.getByRole("switch", { name: "Bots can message each other", exact: true });
   await expect(toggle()).toBeChecked();
   await toggle().click();
@@ -668,7 +672,7 @@ test("the Bot messaging switch persists through the real settings handler", asyn
   )).toBe(false);
   page = await aiden.relaunch();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Bots & Approvals", exact: true }).click();
   await expect(toggle()).not.toBeChecked();
   const invalid = await page.evaluate(async () => {
     try { await window.aidenAPI.ipc.invoke("settings:set", { botMessaging: "false" }); return "accepted"; }
@@ -680,4 +684,50 @@ test("the Bot messaging switch persists through the real settings handler", asyn
   await expect.poll(() => page.evaluate(async () =>
     (await window.aidenAPI.ipc.invoke("settings:get") as { botMessaging?: boolean }).botMessaging,
   )).toBeUndefined();
+});
+
+test("a merged Settings page switches tabs in place and Back to app leaves in one step", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const navigation = page.getByRole("navigation", { name: "Settings" });
+  const voice = navigation.getByRole("button", { name: "Voice & Speech", exact: true });
+  await voice.click();
+
+  const tabs = page.getByRole("tablist", { name: "Voice & Speech" });
+  await expect(tabs.getByRole("tab", { name: "Voice", exact: true })).toHaveAttribute("aria-selected", "true");
+  for (const name of ["Text to Speech", "Aiden Live", "Voice"]) {
+    await tabs.getByRole("tab", { name, exact: true }).click();
+    await expect(tabs.getByRole("tab", { name, exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel", { name, exact: true })).toBeVisible();
+    await expect(voice).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { level: 1, name: "Voice & Speech", exact: true })).toBeVisible();
+  }
+
+  await page.getByRole("button", { name: "Back to app", exact: true }).click();
+  await expect(navigation).toHaveCount(0);
+});
+
+test("settings search opens the tab that matched, and the Links row on Appearance", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const navigation = page.getByRole("navigation", { name: "Settings" });
+  const search = page.getByRole("searchbox", { name: "Search settings" });
+
+  await search.fill("read aloud");
+  await navigation.getByRole("button", { name: "Voice & Speech", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Text to Speech", exact: true })).toHaveAttribute("aria-selected", "true");
+
+  await search.fill("open links");
+  await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
+  const links = page.getByRole("combobox", { name: "Open chat links in", exact: true });
+  await expect(links).toBeInViewport();
+  await expect(page.getByRole("heading", { level: 1, name: "Appearance", exact: true })).toHaveCount(1);
+
+  // Asking again brings the row back after the page was scrolled away from it.
+  await page.getByRole("heading", { level: 1, name: "Appearance", exact: true }).scrollIntoViewIfNeeded();
+  await expect(links).not.toBeInViewport();
+  await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
+  await expect(links).toBeInViewport();
 });

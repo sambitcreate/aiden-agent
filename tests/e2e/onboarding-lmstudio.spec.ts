@@ -8,11 +8,35 @@ import {
   finishLmStudioOnboarding,
   LM_STUDIO_PROVIDER_ID,
   readJsonFile,
+  skipBotsOnboardingStep,
   test,
   type AidenE2e,
 } from "./fixtures";
 
 const DEFAULT_LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
+
+test("the feature tour explains Calendar watches on supported desktop hosts", async ({ aiden }) => {
+  const { page } = aiden;
+  const onboarding = page.locator('section[aria-label="Set up Aiden"]');
+  await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
+  const next = onboarding.getByRole("button", { name: /^Next/u });
+  await next.click();
+  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
+  await next.click();
+  await skipBotsOnboardingStep(onboarding);
+  const tile = onboarding.getByRole("article", { name: /^Connected-app watches\. Watch upcoming Calendar events on Mac or Linux/u });
+  await expect(tile).toBeVisible();
+  await expect(tile.getByText("Calendar · Team events", { exact: true })).toBeVisible();
+  await expect(tile.getByText("Next 2 hours", { exact: true })).toBeVisible();
+  await tile.focus();
+  await expect(tile.locator("[data-onboarding-feature-description]")).toBeVisible();
+  await expect(tile.locator("[data-onboarding-feature-description]")).toContainText("Mail mailbox on Mac");
+  await onboarding.getByRole("button", { name: "Start using Aiden" }).focus();
+  await page.mouse.move(1, 1);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await tile.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("calendar-watch-tour.png"), fullPage: true });
+});
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

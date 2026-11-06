@@ -701,6 +701,25 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/controls/{panelId}",
     "/bots/{botId}/session/images/{entryId}",
     "/chats/{chatId}/recordings/{recordingId}",
+    "/bots/{botId}/open-work",
+    "/bots/{botId}/open-work/{itemId}/evidence/{kind}",
+    "/bots/{botId}/watches",
+    "/bots/{botId}/watches/sources",
+    "/bots/{botId}/watches/test",
+    "/bots/{botId}/watches/{watchId}",
+    "/bots/{botId}/watches/{watchId}/enabled",
+    "/bots/{botId}/watches/{watchId}/run",
+    "/bots/{botId}/routine-models/{routineId}",
+    "/bots/{botId}/routine-models/{routineId}/catalog",
+    "/bots/{botId}/routine-models/{routineId}/runs",
+    "/bots/{botId}/routine-resume-status",
+    "/bots/{botId}/routine-models",
+    "/bots/{botId}/peers",
+    "/bots/{botId}/peers/catalog",
+    "/bots/{botId}/peer-exchanges",
+    "/bots/{botId}/peer-exchanges/{exchangeId}",
+    "/bots/{botId}/peer-exchanges/{exchangeId}/stop",
+    "/bots/{botId}/peer-exchanges/{exchangeId}/evidence/{kind}",
     "/bots/messaging",
     "/bots/{botId}/allowed",
     "/bots/{botId}/allowed/{entryId}/remove",
@@ -3336,7 +3355,7 @@ test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the pa
       notifications: [{ ...section.notification.notifications[0], status: "failed" }],
     }),
     false,
-    "an issue item must not carry a routine status",
+    "issue notifications cannot carry a routine status, matching the runtime parser",
   );
 });
 
@@ -3588,7 +3607,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 57);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 59);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3675,7 +3694,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 57);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 59);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);

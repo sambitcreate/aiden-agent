@@ -49,7 +49,7 @@ test("computer control respects platform support and explains access before enab
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const computerUse = page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Computer Use", exact: true });
+  const computerUse = page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: /^Computer(s & VMs| Use)$/u });
   if (process.platform !== "darwin") {
     await expect(computerUse).toHaveCount(0);
     await expect(page.getByRole("switch", { name: "Enable Computer Use beta" })).toHaveCount(0);
@@ -290,7 +290,7 @@ for (const [host, botComputers] of [["an Apple silicon Mac", true], ["an Intel M
     await tile.focus();
     const description = tile.locator("[data-onboarding-feature-description]");
     await expect(description).toBeVisible();
-    await expect(description).toContainText("Set it up in Settings → Bot computers; nothing downloads until you choose Set up.");
+    await expect(description).toContainText("Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.");
   });
 }
 

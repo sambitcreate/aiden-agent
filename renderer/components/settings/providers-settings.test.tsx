@@ -2,9 +2,11 @@ import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
+import type { AppSettings } from "../../lib/types";
 import { ProvidersSettings } from "./providers-settings";
 
 afterEach(cleanup);
@@ -73,4 +75,42 @@ test("checking an existing local server preserves overrides and manual entries, 
   assert.deepEqual(saved.models, ["local", "manual"]);
   assert.deepEqual(saved.modelMetadata.local, { source: "provider", reasoning: true, overrides: { contextWindow: 16000 } });
   assert.equal(saved.modelMetadata.manual.manuallyAdded, true);
+});
+
+function mount(capabilities: Partial<AppCapabilities>, settings: Partial<AppSettings> = {}) {
+  installBotTestIpc({
+    "settings:get": () => settings,
+    "providers:catalogStatus": () => ({ source: "bundled", fetchedAt: null }),
+    "titleProviders:status": () => ({ state: "ready", detail: "Ready on this Mac." }),
+  });
+  render(
+    <QueryClientProvider client={createBotTestQueryClient()}>
+      <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, ...capabilities }}>
+        <ProvidersSettings />
+      </AppCapabilitiesProvider>
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByText("Advanced", { exact: true }));
+}
+
+test("an imported on-device title preference stays explicit on an unsupported host", async () => {
+  mount({ appleFoundationModels: false }, { chatTitleProviderId: "apple-foundation-models" });
+  await screen.findByText(/Choose Automatic or Selected chat model to allow your selected model to generate titles/u);
+  const select = screen.getByRole("combobox", { name: "Chat title provider" });
+  assert.match(select.textContent ?? "", /On-device only \(unavailable\)/u);
+});
+
+test("chat title generation is one row whose hint says what stays on the device", async () => {
+  mount({ appleFoundationModels: true, platform: "darwin" });
+  const row = await screen.findByRole("group", { name: "Chat title generation" });
+  within(row).getByRole("combobox", { name: "Chat title provider" });
+  fireEvent.click(within(row).getByRole("button", { name: "About chat title generation" }));
+  assert.match((await screen.findByRole("tooltip")).textContent ?? "", /On-device only never sends your message to a network provider\./u);
+});
+
+test("the page explains provider connections from hints, not dialogs", async () => {
+  mount({});
+  fireEvent.click(await screen.findByRole("button", { name: "About provider connections" }));
+  await screen.findByRole("tooltip");
+  assert.equal(screen.queryByRole("dialog") === null, true);
 });

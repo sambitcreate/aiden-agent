@@ -49,7 +49,7 @@ function routineResult(overrides: Partial<BotDeliveryInput> = {}): BotDeliveryIn
 
 async function harness(
   gate: BotDeliveryGate = ALWAYS_NOW_GATE,
-  ports: { mac?(input: BotDeliveryInput): Promise<void>; telegram?(input: BotDeliveryInput): Promise<void> } = {},
+  ports: { mac?(input: BotDeliveryInput): Promise<void>; telegram?(input: BotDeliveryInput): Promise<void>; ownsPeerFinal?(botId:string,requestId:string):Promise<boolean> } = {},
 ) {
   const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-bot-delivery-"));
   const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
@@ -57,6 +57,7 @@ async function harness(
   const funnel = createBotDeliveryFunnel({
     log,
     gate,
+    ownsPeerFinal: ports.ownsPeerFinal,
     mac: async (input) => {
       calls.mac.push(input);
       await ports.mac?.(input);
@@ -300,6 +301,40 @@ test("a delivery after the Bot is forgotten writes nothing and sends nothing", a
   assert.equal(await h.funnel.deliver(routineResult()), "duplicate");
   assert.equal(h.calls.mac.length, 0);
   assert.deepEqual(await h.log.list("bot:scout"), []);
+});
+
+test("delegation suppresses the initial routine update and delivers one counted root final; quiet roots send no channels",async t=>{
+ const h=await harness(ALWAYS_NOW_GATE,{ownsPeerFinal:async(_bot,request)=>request==="routine:routine-1:1761555600000"});t.after(h.cleanup);assert.equal(await h.funnel.deliver(routineResult()),"suppressed");assert.equal((await h.log.list("bot:scout")).length,0);const final={...routineResult(),class:"peer_result"as const,dedupeKey:"peer-root:accepted-root",routineTask:undefined,requestId:"accepted-root"};assert.equal(await h.funnel.deliver(final),"sent");assert.equal(await h.funnel.deliver(final),"duplicate");assert.equal(h.calls.mac.length,1);assert.equal(h.calls.telegram.length,1);assert.equal((await h.log.list("bot:scout"))[0]?.class,"peer_result");assert.equal(await h.funnel.deliver({...final,dedupeKey:"peer-root:quiet-root",quiet:true}),"suppressed");assert.equal(h.calls.mac.length,1);assert.equal(h.calls.telegram.length,1);const rows=await h.log.list("bot:scout");assert.equal(rows.find(row=>row.dedupeKey==="peer-root:quiet-root")?.quiet,true);
+});
+
+test("a quiet peer final cannot create a daily-limit digest or enter a later mixed digest",async t=>{
+ let decisions=0;const h=await harness({decide:async()=>{decisions++;return {kind:"suppress",reason:"daily_limit",digestKey:"daily-limit"};}});t.after(h.cleanup);await h.funnel.deliver({...routineResult(),class:"peer_result",dedupeKey:"peer-quiet",requestId:"root-quiet",quiet:true});await h.funnel.flush(NOW+HOUR);assert.equal(decisions,0);assert.equal(h.calls.mac.length,0);assert.equal(h.calls.telegram.length,0);const rows=await h.log.list("bot:scout");assert.equal(rows.length,1);assert.equal(rows[0]?.quiet,true);assert.equal(rows[0]?.class,"peer_result");
+});
+
+test("a peer final awaiting the delivery gate cannot write or notify a replacement Bot",async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"aiden-peer-delivery-identity-"));t.after(()=>rm(root,{recursive:true,force:true}));const log=createBotDeliveryLog({profileDir:()=>root}),channels:string[]=[];let current="old",replace=true;const publication={assertCurrent:async()=>{if(current!=="old")throw new Error("Previous Bot identity");}},funnel=createBotDeliveryFunnel({log,gate:{decide:async()=>{if(replace)current="replacement";return {kind:"now"};}},now:()=>NOW,mac:async()=>{channels.push("mac");},telegram:async()=>{channels.push("telegram");}}),input={botId:"bot:scout",class:"peer_result"as const,dedupeKey:"old-peer-root",title:"Private final",body:"Old private result",status:"succeeded"as const,publication};
+ await assert.rejects(funnel.deliver(input),/Previous Bot identity/u);assert.deepEqual(await log.list(input.botId),[]);assert.deepEqual(channels,[]);current="old";replace=false;assert.equal(await funnel.deliver(input),"sent");assert.equal((await log.list(input.botId)).length,1);assert.deepEqual(channels,["mac","telegram"]);
+});
+
+test("quiet-hours peer results revalidate their protected original root after reopening and cannot join a replacement digest",async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"aiden-peer-delayed-identity-"));t.after(()=>rm(root,{recursive:true,force:true}));const log=createBotDeliveryLog({profileDir:()=>root}),channels:string[]=[];let live=true;const peerPublication=async()=>live?{assertCurrent:async()=>{if(!live)throw new Error("retired root");}}:undefined,ports={log,peerPublication,gate:{decide:async()=>({kind:"defer"as const,until:NOW+HOUR})},now:()=>NOW,mac:async()=>{channels.push("mac");},telegram:async()=>{channels.push("telegram");}},funnel=createBotDeliveryFunnel(ports);
+ for(const requestId of ["first-root","second-root"])assert.equal(await funnel.deliver({botId:"bot:scout",class:"peer_result",dedupeKey:requestId,requestId,title:"Peer result",body:"Private old result",status:"succeeded"}),"deferred");live=false;const reopened=createBotDeliveryFunnel({...ports,log:createBotDeliveryLog({profileDir:()=>root})});await reopened.flush(NOW+HOUR);assert.deepEqual(channels,[]);assert.equal((await log.list("bot:scout")).length,2,"no replacement digest is published");
+ live=true;await reopened.flush(NOW+HOUR);assert.deepEqual(channels,["mac","telegram"]);assert.equal((await log.list("bot:scout")).filter(row=>row.class==="digest").length,1);await reopened.flush(NOW+HOUR);assert.equal(channels.length,2);
+});
+
+test("delivery history preserves 200 owed peer finals and admits a new row only after a delivery settles",async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"aiden-peer-delivery-capacity-"));t.after(()=>rm(root,{recursive:true,force:true}));const log=createBotDeliveryLog({profileDir:()=>root});for(let n=0;n<200;n++)await log.append({botId:"bot:scout",class:n===0?"digest":"peer_result",peerRootIds:[`root-${n}`],requestId:`root-${n}`,dedupeKey:`root-${n}`,title:"Owed final",body:"Result",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR});const pending=await log.list("bot:scout"),oldest=pending[199]!;await assert.rejects(log.append({botId:"bot:scout",class:"peer_result",peerRootIds:["new-root"],requestId:"new-root",dedupeKey:"new-root",title:"New final",body:"New",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR}),/No owed result was discarded/u);assert.deepEqual((await log.list("bot:scout")).map(row=>row.dedupeKey),pending.map(row=>row.dedupeKey));await log.markChannel("bot:scout",oldest.id,"mac",NOW+HOUR);await log.markChannel("bot:scout",oldest.id,"telegram",NOW+HOUR);await log.markSent("bot:scout",oldest.id,NOW+HOUR);await log.settlePeerReferences("bot:scout",oldest.id,async facts=>{assert.deepEqual(facts.pending,[]);assert.deepEqual(facts.settled,["root-0"]);},NOW+HOUR);await log.append({botId:"bot:scout",class:"peer_result",peerRootIds:["new-root"],requestId:"new-root",dedupeKey:"new-root",title:"New final",body:"New",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR});assert.equal((await log.list("bot:scout")).length,200);assert.equal(await log.find("bot:scout",oldest.dedupeKey),undefined);assert.ok(await log.find("bot:scout","root-1"));assert.ok(await log.find("bot:scout","new-root"));
+});
+
+test("a full queue of 200 owed peer finals drains without digest headroom and preserves an incomplete digest",async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"aiden-peer-full-flush-"));t.after(()=>rm(root,{recursive:true,force:true}));const log=createBotDeliveryLog({profileDir:()=>root}),owed=new Set<string>(),channels:string[]=[];for(let n=0;n<200;n++){owed.add(`root-${n}`);await log.append({botId:"bot:scout",class:"peer_result",peerRootIds:[`root-${n}`],requestId:`root-${n}`,dedupeKey:`root-${n}`,title:"Owed",body:"Result",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR});}let failDigest=true;const ports={log,gate:ALWAYS_NOW_GATE,now:()=>NOW+HOUR,peerPublication:async()=>({assertCurrent:async()=>{}}),peerSettled:async(_bot:string,root:string)=>{owed.delete(root);},mac:async(input:BotDeliveryInput)=>{channels.push(`mac:${input.class}`);},telegram:async(input:BotDeliveryInput)=>{if(input.class==="digest"&&failDigest)throw new Error("Temporary digest failure");channels.push(`telegram:${input.class}`);}};await createBotDeliveryFunnel(ports).flush(NOW+HOUR);assert.deepEqual(channels,["mac:peer_result","telegram:peer_result","mac:digest"]);assert.equal(owed.size,199);const digest=(await log.list("bot:scout")).find(row=>row.class==="digest")!;assert.equal(digest.sentAt,undefined);assert.equal(digest.peerRootIds?.length,199);assert.equal((await log.list("bot:scout")).length,200);await assert.rejects(log.append({botId:"bot:scout",class:"peer_result",peerRootIds:["next"],requestId:"next",dedupeKey:"next",title:"Next",body:"Next",status:"succeeded",createdAt:NOW,deliverAfter:NOW+HOUR}),/No owed result was discarded/u);failDigest=false;await createBotDeliveryFunnel({...ports,log:createBotDeliveryLog({profileDir:()=>root})}).flush(NOW+HOUR);assert.equal(owed.size,0);assert.deepEqual(channels,["mac:peer_result","telegram:peer_result","mac:digest","telegram:digest"]);await createBotDeliveryFunnel(ports).flush(NOW+HOUR);assert.equal(channels.length,4);for(let n=0;n<2;n++)await log.append({botId:"bot:scout",class:"peer_result",peerRootIds:[`later-${n}`],requestId:`later-${n}`,dedupeKey:`later-${n}`,title:"Later",body:"Later",status:"succeeded",createdAt:NOW+HOUR,deliverAfter:NOW+2*HOUR});assert.equal((await log.list("bot:scout")).length,200);
+});
+
+test("a later pending row re-arms a shared passive root and settlement waits for every current reference",async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"aiden-peer-root-references-"));t.after(()=>rm(root,{recursive:true,force:true}));const log=createBotDeliveryLog({profileDir:()=>root}),channels:string[]=[];let settled=false,fail=true;const ports={log,gate:ALWAYS_NOW_GATE,now:()=>NOW,peerPublication:async()=>({assertCurrent:async()=>{}}),peerSettled:async()=>{settled=true;},peerPending:async()=>{settled=false;},mac:async()=>{channels.push("mac");},telegram:async()=>{if(fail)throw new Error("Temporary failure");channels.push("telegram");}};
+ // The earlier note really settled. A crash before final publication can
+ // cause the retried root to acquire another day's note before its own row.
+ await log.append({botId:"bot:scout",class:"digest",peerRootIds:["shared-root"],dedupeKey:"old-note",title:"Old note",body:"Updates",status:"info",createdAt:NOW,deliverAfter:NOW,macSentAt:NOW,telegramSentAt:NOW,sentAt:NOW,peerSettledAt:NOW});settled=true;await log.append({botId:"bot:scout",class:"digest",peerRootIds:["shared-root"],dedupeKey:"new-note",title:"New note",body:"Updates",status:"info",createdAt:NOW,deliverAfter:NOW,macSentAt:NOW});await createBotDeliveryFunnel(ports).deliver({botId:"bot:scout",class:"peer_result",requestId:"shared-root",dedupeKey:"suppressed-result",title:"Result",body:"Result",status:"succeeded",quiet:true});assert.equal(settled,false);assert.deepEqual(channels,[]);assert.equal((await log.find("bot:scout","new-note"))?.peerSettledAt,undefined);fail=false;await createBotDeliveryFunnel({...ports,log:createBotDeliveryLog({profileDir:()=>root})}).flush(NOW);assert.equal(settled,true);assert.deepEqual(channels,["telegram"]);assert.ok((await log.list("bot:scout")).every(row=>row.peerSettledAt!==undefined));
 });
 
 test('bot_message final delivery is durable and deduplicated',async t=>{
