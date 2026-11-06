@@ -8,7 +8,7 @@ import {
   finishLmStudioOnboarding,
   LM_STUDIO_PROVIDER_ID,
   readJsonFile,
-  skipBotsOnboardingStep,
+  connectOnboardingLmStudio,
   test,
   type AidenE2e,
 } from "./fixtures";
@@ -21,9 +21,8 @@ test("the feature tour explains Calendar watches on supported desktop hosts", as
   await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
   const next = onboarding.getByRole("button", { name: /^Next/u });
   await next.click();
-  await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-  await next.click();
-  await skipBotsOnboardingStep(onboarding);
+  await connectOnboardingLmStudio(onboarding);
+  await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
   const tile = onboarding.getByRole("article", { name: /^Connected-app watches\. Watch upcoming Calendar events on Mac or Linux/u });
   await expect(tile).toBeVisible();
   await expect(tile.getByText("Calendar · Team events", { exact: true })).toBeVisible();
