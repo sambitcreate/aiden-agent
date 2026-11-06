@@ -81,12 +81,17 @@ export function TelegramSettings() {
 
   const saveKey = async () => {
     const value = keyDraft.trim();
-    await telegramApi.setKey(value);
-    setKeyDraft("");
-    await invalidate();
-    toast.success(
-      value ? "Telegram bot token saved." : "Telegram bot token removed and bridge disabled.",
-    );
+    try {
+      await telegramApi.setKey(value);
+      setKeyDraft("");
+      toast.success(
+        value ? "Telegram bot token saved." : "Telegram bot token removed and bridge disabled.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save the bot token.");
+    } finally {
+      await invalidate();
+    }
   };
 
   const connect = async () => {

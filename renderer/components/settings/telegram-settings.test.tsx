@@ -11,22 +11,23 @@ import { TelegramSettings } from "./telegram-settings";
 
 afterEach(cleanup);
 
+const baseStatus: TelegramStatus = {
+  enabled: false,
+  hasToken: true,
+  polling: false,
+  queuedCount: 0,
+  draftPreviews: false,
+  activity: "quiet",
+  rendering: "rich",
+  voiceMode: "hidden",
+  threadedMode: false,
+  activeProfile: "default",
+  profiles: [],
+  recentDiagnostics: [],
+};
+
 function mount(initial: Partial<TelegramStatus>, overrides: Record<string, (...args: unknown[]) => unknown> = {}) {
-  let status: TelegramStatus = {
-    enabled: false,
-    hasToken: true,
-    polling: false,
-    queuedCount: 0,
-    draftPreviews: false,
-    activity: "quiet",
-    rendering: "rich",
-    voiceMode: "hidden",
-    threadedMode: false,
-    activeProfile: "default",
-    profiles: [],
-    recentDiagnostics: [],
-    ...initial,
-  };
+  let status: TelegramStatus = { ...baseStatus, ...initial };
   const calls = installBotTestIpc({
     "telegram:get": () => status,
     "telegram:setKey": () => {
@@ -89,6 +90,24 @@ test("a Disconnect that fails leaves the button ready to try again", async () =>
 
   await waitFor(() => assert.equal(attempts, 1));
   await waitFor(() => assert.equal(disconnect.hasAttribute("disabled"), false));
+});
+
+test("removing the token rereads the bridge when the removal reports a failure", async () => {
+  let status: Partial<TelegramStatus> = { enabled: true, polling: true, hasToken: true, allowedUserId: 7 };
+  mount({}, {
+    "telegram:get": () => ({ ...baseStatus, ...status }),
+    "telegram:setKey": () => {
+      status = { enabled: false, polling: false, hasToken: false };
+      throw new Error("Telegram is off, but its running turn did not stop in time.");
+    },
+  });
+  const remove = await screen.findByRole("button", { name: "Remove" });
+  await waitFor(() => assert.equal(remove.hasAttribute("disabled"), false));
+
+  fireEvent.click(remove);
+
+  // The token is gone, so the page must show that rather than the state from before the click.
+  await screen.findByText("Save your bot token in section 1 to connect.");
 });
 
 test("settings watch a bridge only while it is running and still has something to report", () => {
