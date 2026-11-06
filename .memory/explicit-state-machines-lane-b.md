@@ -17,7 +17,9 @@ Lane B of the explicit state-machine migration: P0 baselines and P2 (authority, 
 - P6a reviewed and retained: `bot-pause-store`, `bot-pause-steps`, `bot-routine-recovery`.
 - P6 still open: `bot-routine-events` (free of overlap, not reviewed), `scheduled-bot-routines` (#687, #734), `bot-session-service` (#729, #734), `bot-routine-notifications` (#709, #727, #728), `aiden-remote-streams` (#746). `schedule-service-core` and `schedule-store-core` claims are free of overlap but not reviewed. P6c and P6d not started.
 - #756 edits `subagent-shell.ts`, as #737 does. The source merges cleanly and only `subagent-shell.test.ts` conflicts.
-- `agent-compatibility.test.ts` fails on this Mac but passes in CI's `Desktop tests (runtime-subagents)`. Cause unknown.
+- `agent-compatibility.test.ts` once failed on this Mac while passing in CI's `Desktop tests (runtime-subagents)`. On 2026-11-06 `npm run test:subagents` passed here with the merged root.
+- `createBotApprovals` on `main` joins an identical pending request (same wait id, Bot and fingerprint) and resolves to a `BotApprovalDecision`. A test that re-asks an id must use a different `authorizationFingerprint` to force a real replacement; the replaced waiter rejects with `The approval was replaced.`
+- `test:aiden-remote` has 4 `lan-transport-spike` failures here with OpenSSL 4.1 (`openssl x509 -req` setup). They fail the same on clean `main` at `7fe6de8cf`.
 
 ## Skipped CLI entries
 
