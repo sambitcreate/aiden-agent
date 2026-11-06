@@ -13,6 +13,42 @@ Each owner below was traced for the state-machine migration and already centrali
 
 `reset` keeps `shutdownInterrupted`, as it did before. Harnesses serve one generation, so it cannot reach another run through `llm-client`.
 
+## Host and harness owners
+
+Audited by a read-only review. Except where marked, these are inspection results, not exhaustive proof.
+
+| Inventory | Owner | Disposition | Why |
+|---|---|---|---|
+| `backend:M021` | `rpiv-btw/service-core.ts` | Retain, one fix | Reservation ownership is local to the service. A throwing owner hook no longer keeps the slot. |
+| `backend:M023` | `bot-runtime/harness-host.ts` | Retain | Per-Bot serialization owns open and close, and failed teardown keeps ownership. |
+| `backend:M024` | `bot-runtime/bot-session-service.ts` | Retain | Mutating commands use the per-Bot serializer, and durable harness state is the source of truth. |
+| `backend:M035` | `bot-lifecycle-journal-core.ts` | Retain | Serialized operations validate predecessor stages and write cloned documents. |
+| `backend:M100` | `subagents/subagent-supervisor-core.ts` | Deferred | Cancellation, cleanup and budget settlement are spread across nested and top-level paths, so extraction would be useful. No ordering defect was found, and it needs the P5a process-settlement work first. |
+| `backend:M101` | `subagents/subagent-nesting-core.ts` | Retain | The ledger and scheduler each own their counters. |
+| `backend:M105` | `subagents/subagent-control-v2.ts` | Retain | Updates converge on `publish` and terminal cleanup. |
+| `backend:M106` | `subagents/background-subagent-coordinator-v2.ts` | Retain, four fixes | The durable lifecycle stays the authority. A launch registers itself before durable acceptance and holds requests until `active` has the child, so a Stop cannot be acknowledged as queued. A launch that fails before its child starts stops that child. A bulk invalidation stops an installing child itself before it returns, and one that beats acceptance leaves a failed run instead of a queued one. All were reproduced in `background-subagent-coordinator-v2.test.ts`. |
+
+## First send and terminal persistence
+
+| Inventory | Owner | Disposition | Why |
+|---|---|---|---|
+| `backend:M007` | `main/services/chat-first-message-commit.ts` | Retain | `committed` and `workSettled` are two locals in one function, and the turn lease already holds the state that outlives it. An owner lost during the durable write keeps the workspace operation until that write settles, and the sender's answer agrees with the disk. `chat-first-message-commit.test.ts` covers that order. The ranking also lists this under P3 for retry and idempotency; those stay with P3. |
+| `backend:M013`, `M173`, `M174`, `M175`, `M176` | Generation timeline and Pi journal child owners in `llm-client` and its helpers | Retain as child owners | P1 settles the generation terminal boundary around them and does not flatten them into the run phase. Their internals were not audited here. Durable reconciliation belongs to P4. |
+| `backend:M022`, `M159`, `M194` | Fork summary, Pi session compaction journal, subagent activation journal | Not changed | They do not cross the generation terminal boundary. Not audited here; they stay with P4. |
+
+## Renderer adapters
+
+The P1b work changed no IPC, so these needed no adapter change.
+
+| Inventory | Owner | Disposition | Why |
+|---|---|---|---|
+| `clients:C02` | `renderer/lib/chat-message-queue.ts` | Retain | `claim`, `settle` and `deliverQueuedMessage` are the only route for delivering a queued message, and `chat-message-queue.test.ts` covers stale chats, drafts and unknown appends. |
+| `clients:C03` | `renderer/main/chat-pane.tsx` | Deferred | The orchestration is spread through a 4,166-line view. Moving it needs a UI test harness first, and it holds no authority of its own: the host decides. |
+| `clients:C04` | `renderer/lib/generation-stream.ts` | Retain, one fix | One subscription per stream. The first terminal event now blocks any later terminal event, because listeners stay on while an async `onDone` settles. Disposal runs even if a terminal handler throws. |
+| `clients:C05` | `renderer/lib/chat-terminal-sync.ts` | Retain | Identity-keyed registries with bounded retries, covered by `chat-terminal-sync.test.ts`. Not re-audited beyond the entry points. |
+| `clients:C11` | `renderer/lib/hosts/remote-queue-fence.ts` | Retain | `remoteQueueFenceHolds` is pure and tested. Two overlapping `sendFencedTurn` calls can replace each other's fence. The 120 s stall bounds how long a fence can hold, but not the ordering. Whether two can overlap in practice was not established. |
+| `clients:N15` | iOS `AidenChatFeature.swift` | Unchanged, not audited | No shared contract changed, so nothing here needed native work. That says nothing about how its ownership is structured. |
+
 ## Run input transitions
 
 | Step | Guard | Result if refused | Draft |
