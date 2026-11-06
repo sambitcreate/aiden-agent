@@ -17,9 +17,10 @@
 // decides: each packet carries the capture clock (the AudioContext's time) it
 // was captured by, the fence reads that clock, and speech that opens in a
 // packet that may hold audio from before the fence takes a mark at the fence,
-// never above it, however long the backlog. Packets without a capture time
-// fall back to a guard: speech that opens in the first
-// LIVE_SPEECH_FENCE_GUARD_MS of audio handled after a fence sits at it too.
+// never above it, however long the backlog, and speech captured after it is
+// fresh at once. Only packets without a capture time fall back to a guard:
+// speech that opens in the first LIVE_SPEECH_FENCE_GUARD_MS of audio handled
+// after a fence sits at it.
 //
 // Time is counted in captured audio. The microphone keeps sending packets,
 // silence included (muted audio is zeros), for as long as Live runs.
@@ -150,8 +151,8 @@ export class LiveSpeechOnsets {
   }
 
   private mayPrecedeFence(startedAt: number, durationMs: number, capturedUntil?: number): boolean {
-    if (startedAt < this.guardUntil) return true;
-    if (typeof capturedUntil !== "number" || !Number.isFinite(capturedUntil)) return false;
+    // Without a capture time, only the handled-audio guard can tell.
+    if (typeof capturedUntil !== "number" || !Number.isFinite(capturedUntil)) return startedAt < this.guardUntil;
     // The worklet may carry up to one chunk of earlier samples into a packet,
     // so its first sample can be up to two packets older than its end.
     return capturedUntil - (2 * Math.max(0, durationMs)) / 1_000 <= this.guardCapturedUntil;
