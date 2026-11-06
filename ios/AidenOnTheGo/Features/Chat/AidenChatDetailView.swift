@@ -79,6 +79,7 @@ struct AidenChatDetailView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
+        owner: AidenRemoteRequestContext? = nil,
         autoStartVoice: Bool = false,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
@@ -91,7 +92,7 @@ struct AidenChatDetailView: View {
         let model = AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
-            owner: (try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? "")) ?? .noMachine,
+            owner: Self.owner(owner, coordinator: coordinator),
             allowsMutations: allowsMutations,
             onChatUpdated: onChatUpdated,
             onChatActivityChanged: onChatActivityChanged
@@ -105,6 +106,14 @@ struct AidenChatDetailView: View {
         })
         self.autoStartVoice = autoStartVoice
         self.allowsMutations = allowsMutations
+    }
+
+    /// The machine the chat was opened for, or else the selected one.
+    static func owner(
+        _ owner: AidenRemoteRequestContext?,
+        coordinator: AidenRemoteCoordinator
+    ) -> AidenRemoteRequestContext {
+        owner ?? (try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? "")) ?? .noMachine
     }
 
 #if DEBUG
