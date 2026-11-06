@@ -247,7 +247,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Bot computers",
     description:
-      "Give a Bot its own macOS virtual machine, apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Bot computers; nothing downloads until you choose Set up.",
+      "Give a Bot its own macOS virtual machine, apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.",
     icon: Monitor,
     size: "standard",
   },
@@ -297,7 +297,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. On-device models keep audio on this computer, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.",
+      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice & Speech settings. On-device models keep audio on this computer, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     size: "standard",
   },

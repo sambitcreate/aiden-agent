@@ -1,9 +1,9 @@
 import * as React from "react";
 import { LiveAudioSettings } from "./live-audio-settings";
 import { useNavigate } from "@tanstack/react-router";
+import { settingsLocation } from "../../lib/settings-section";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  AudioWaveform,
   CheckCircle2,
   Clock3,
   Mic,
@@ -111,7 +111,7 @@ export function AidenLiveSettings(): React.ReactElement {
   }, []);
 
   const go = (section: "providers" | "computerUse" | "scheduledTasks" | "shortcut") =>
-    void navigate({ to: "/settings", search: { section } });
+    void navigate({ ...settingsLocation(section), replace: true });
   const liveReady = capabilities.geminiLive && live?.available === true;
   const shortcut = shortcuts.data?.global.find((item) => item.commandId === "assistant.open");
   const requestMicrophone = async () => {
@@ -128,12 +128,12 @@ export function AidenLiveSettings(): React.ReactElement {
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <Text variant="strong">Aiden Live is Aiden’s voice and action layer</Text>
+              <Text variant="strong">Aiden Live</Text>
               <Badge color="blue">Beta</Badge>
             </div>
             <Text as="p" variant="small" color="secondary" className="mt-0.5">
               Speak naturally and let Aiden act on your screen during Live. Stop Live to end
-              session access. Availability and supported actions may change during beta.
+              session access.
             </Text>
           </div>
         </div>
@@ -180,10 +180,12 @@ export function AidenLiveSettings(): React.ReactElement {
           >
             <div className="flex items-center gap-2">
               <StateBadge ready={computerUse.data?.ready === true} checking={computerUse.isLoading} />
-              <Button size="small" variant="filled" onClick={() => go("computerUse")}>
-                <MousePointer2 />
-                Manage
-              </Button>
+              {capabilities.computerUse ? (
+                <Button size="small" variant="filled" onClick={() => go("computerUse")}>
+                  <MousePointer2 />
+                  Manage
+                </Button>
+              ) : null}
             </div>
           </Field>
         </FieldSet>
@@ -191,15 +193,6 @@ export function AidenLiveSettings(): React.ReactElement {
         <LiveAudioSettings />
 
         <FieldSet title="Actions">
-          <Field
-            label="Operate Aiden"
-            description="Aiden Live can use the screen and accessibility tree to focus the composer, choose the current model or actions, send prompts, and navigate Aiden."
-          >
-            <Badge color="blue">
-              <AudioWaveform />
-              Direct actions during Live
-            </Badge>
-          </Field>
           <Field
             label="Scheduled tasks"
             description="Create or review one-time and recurring work through Aiden’s existing scheduled-task interface."

@@ -627,7 +627,7 @@ function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
   };
 }
 
-/** Usage-data consent (Settings → Diagnostics, onboarding and the one-time notice). */
+/** Usage-data consent (Settings → About, onboarding and the one-time notice). */
 export const analyticsApi = {
   status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
   setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
@@ -856,6 +856,7 @@ export interface TelegramStatus {
   model?: string;
   workspaceId?: string;
   polling: boolean;
+  botUsername?: string;
   queuedCount: number;
   thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
   draftPreviews: boolean;
@@ -1182,7 +1183,7 @@ async function botComputer(channel: string, botId: string): Promise<BotComputerS
   return computer;
 }
 
-/** Settings → Bot computers and the profile's Computer section (Apple silicon only). */
+/** Settings → Computers & VMs → Bot computers and the profile's Computer section (Apple silicon only). */
 export const botComputersApi = {
   status: () => botComputersStatus(BOT_COMPUTER_CHANNELS.status),
   setUp: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUp),

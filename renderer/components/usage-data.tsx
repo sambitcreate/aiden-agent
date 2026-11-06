@@ -11,7 +11,7 @@ import type {
 } from "../shared/analytics";
 import { Button, Dialog, type DialogLayer, Field, FieldSet, Switch, Text, toast } from "./ui";
 
-// Usage-data consent shared by Settings → Diagnostics, the onboarding tour step
+// Usage-data consent shared by Settings → About, the onboarding tour step
 // and the one-time notice for people who installed Aiden before analytics.
 
 export const USAGE_DATA_LABEL = "Share anonymous usage and crash data";

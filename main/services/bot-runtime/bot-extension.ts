@@ -189,7 +189,7 @@ export interface BotApprovalRequirement {
   /** The rule that made (or also covers) this ask. */
   rule?: BotHandoffRule;
   /**
-   * The person's Settings → Bots lets this routine run go ahead: no card,
+   * The person's Settings → Bots & Approvals lets this routine run go ahead: no card,
    * `onAllow` still runs before the tool.
    */
   preapproved?: true;

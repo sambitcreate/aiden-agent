@@ -149,6 +149,13 @@ test("settings render shared accessible controls, not native selects or page hea
   assert.doesNotMatch(savedKey, /aria-label="Dedicated Google API key"/u);
 });
 
+test("the page reads as three groups, in order", () => {
+  const html = renderToStaticMarkup(TtsSettingsView(props()));
+  const positions = ["Setup", "Voice and delivery", "Privacy and storage"].map((title) => html.indexOf(`>${title}<`));
+  assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
+  assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+});
+
 test("preview failures surface as an alert, and a load failure offers retry", () => {
   const html = renderToStaticMarkup(TtsSettingsView(props({ previewError: { message: "Voice unavailable." } })));
   assert.match(html, /role="alert"[^>]*>Voice unavailable\./u);
