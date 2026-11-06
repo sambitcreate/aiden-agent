@@ -171,3 +171,15 @@ test("with capture times, speech captured after a fence is fresh at once, even w
   const mark = onsets.claim();
   assert.ok(mark !== null && mark > fence);
 });
+
+test("speech spoken before a fence but rendered just after it, by the microphone's latency, stays before it", () => {
+  const bus = new LiveSessionBus();
+  const onsets = new LiveSpeechOnsets(() => bus.beginVoiceInput());
+  bus.onVoiceInputFence((fence) => onsets.fenced(fence, 10));
+  const fence = bus.voiceInputFence();
+  // The person spoke before the fence; the samples reached the render graph
+  // 250 ms after it, so their render stamps are later than the fence.
+  for (let elapsed = 0; elapsed < 300; elapsed += PACKET_MS) onsets.packet(SPEECH, PACKET_MS, 10.25);
+  const mark = onsets.claim();
+  assert.ok(mark !== null && mark <= fence);
+});

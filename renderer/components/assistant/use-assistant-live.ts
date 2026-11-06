@@ -1285,7 +1285,11 @@ export function useAssistantLiveWithDependencies(
         const silent = context.createGain();
         silent.gain.value = 0;
         source.connect(worklet).connect(silent).connect(context.destination);
-        captureClock.current = () => context.currentTime;
+        // The capture clock is render time, which trails the sound in the
+        // room by the input latency; add whatever latency the browser reports
+        // on top of the tracker's own slack.
+        const inputLatency = reportedInputLatencySeconds(stream);
+        captureClock.current = () => context.currentTime + inputLatency;
         let stopped = false;
         let loggedInput = false;
         let audioSendFailed = false;
@@ -1687,4 +1691,14 @@ export function useAssistantLive(
     [audioDependencies, geminiLive, ordinaryBusyReason, providers.dataUpdatedAt, providers.fetchStatus],
   );
   return useAssistantLiveWithDependencies(dependencies);
+}
+
+/** The microphone's input latency in seconds when the browser reports one (capped at 2 s), else 0. */
+function reportedInputLatencySeconds(stream: MediaStream): number {
+  try {
+    const latency = (stream.getTracks()[0]?.getSettings?.() as { latency?: unknown } | undefined)?.latency;
+    return typeof latency === "number" && Number.isFinite(latency) && latency > 0 ? Math.min(latency, 2) : 0;
+  } catch {
+    return 0;
+  }
 }

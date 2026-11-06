@@ -84,8 +84,13 @@ class FakeAudioNode {
 
 class FakeTrack {
   stopped = false;
+  /** Input latency the browser reports for this microphone, if any. */
+  latency: number | undefined;
   stop(): void {
     this.stopped = true;
+  }
+  getSettings(): { latency?: number } {
+    return this.latency === undefined ? {} : { latency: this.latency };
   }
 }
 
@@ -1636,6 +1641,32 @@ function micPacket(
   for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, sample, true);
   fixture.worklets[0]!.emit({ type: "pcm", data, ...(capturedUntil === undefined ? {} : { capturedUntil }) });
 }
+
+test("a microphone's reported input latency widens what counts as spoken before a fence", async () => {
+  const fixture = await mountHook({
+    getUserMedia: async () => {
+      const track = new FakeTrack();
+      track.latency = 0.6;
+      return { getTracks: () => [track] } as unknown as MediaStream;
+    },
+  });
+  await fixture.controller().start();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  fixture.contexts[0]!.currentTime = 50;
+  const fence = liveSessionBus.voiceInputFence();
+  // Rendered 0.8 s after the fence, but this headset delays sound by 0.6 s.
+  for (let index = 0; index < 15; index += 1) micPacket(fixture, 8_192, 50.8 + index * 0.01);
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0, 51 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  // Well after that, a real answer.
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 53 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  unsubscribe();
+  assert.ok(inputs[0]!.startedAt <= fence, "within the headset's latency of the fence");
+  assert.ok(inputs[1]!.startedAt > fence, "spoken after the fence");
+  await fixture.unmount();
+});
 
 test("a fence taken before the microphone starts lets the first stamped speech after it count", async () => {
   const fixture = await mountHook();
