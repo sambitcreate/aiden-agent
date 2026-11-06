@@ -1,5 +1,6 @@
 import type { AppSettings } from "../types.js";
 import type { LiveToolPrepareInput, LiveToolProvider } from "./live-tools.js";
+import { liveChatToolProviderFactory } from "./live-chat-tools.js";
 
 /**
  * Builds one group of Aiden Live tools for a starting session, or null when
@@ -12,7 +13,9 @@ export type LiveToolProviderFactory = (
 ) => Promise<LiveToolProvider | null> | LiveToolProvider | null;
 
 /** Every Live tool group. Each feature adds one entry here. */
-export const LIVE_TOOL_PROVIDER_FACTORIES: readonly LiveToolProviderFactory[] = [];
+export const LIVE_TOOL_PROVIDER_FACTORIES: readonly LiveToolProviderFactory[] = [
+  (input, settings) => liveChatToolProviderFactory(input, settings),
+];
 
 /** Runs the factories; a factory that throws leaves its tools out. */
 export async function prepareLiveToolProviders(
