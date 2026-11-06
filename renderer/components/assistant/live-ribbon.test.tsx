@@ -8,9 +8,12 @@ import { LiveSessionBus } from "../../lib/live-session-bus";
 import { AidenLiveVoiceAndLookFields } from "../settings/aiden-live-voice-settings";
 import { idleLiveController } from "./assistant-live-test-fixture";
 import { LiveRibbon, LiveRibbonMenuItems } from "./live-ribbon";
+import { AssistantDockPresentation } from "./assistant-dock";
+import { measureLiveRibbonFootprint, placeLiveRibbon } from "./use-live-ribbon-placement";
 import { useLiveVoiceEnding, waitForLivePlayback } from "./live-ribbon-session";
 import type { AidenLiveMarkState } from "./aiden-live-mark";
-import type { AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
+import { createLivePreferenceSaver, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
+import type { AppSettings } from "../../lib/types";
 import type { AssistantLiveController } from "./use-assistant-live";
 
 afterEach(cleanup);
@@ -169,6 +172,28 @@ test("every control on the ribbon sits inside the region Live may never press", 
   }
 });
 
+test("the ••• menu and its voice list are guarded too, though they open outside the ribbon", async () => {
+  renderRibbon();
+  const trigger = screen.getByRole("button", { name: "Voice, speed and colours" });
+  await act(async () => {
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+  });
+  const menu = await screen.findByRole("menu");
+  assert.equal(menu.closest(".live-ribbon"), null, "the menu is portaled out of the ribbon");
+  assert.ok(menu.closest('[data-live-guard="you"]'));
+  const voice = within(menu).getByRole("menuitem", { name: /Voice/u });
+  await act(async () => {
+    voice.focus();
+    fireEvent.keyDown(voice, { key: "ArrowRight" });
+  });
+  const voices = await screen.findByRole("group", { name: "Voice" });
+  assert.ok(voices.closest('[data-live-guard="you"]'));
+  for (const item of within(voices).getAllByRole("menuitemradio")) {
+    assert.ok(item.closest('[data-live-guard="you"]'));
+  }
+});
+
 test("a spoken confirmation shows Confirm and Cancel with its phrase", () => {
   const answers: string[] = [];
   renderRibbon({
@@ -256,32 +281,169 @@ test("Settings shows Voice, Speaking speed and Ribbon colours with the saved cho
   assert.ok(screen.getByText("How Live sounds. A new voice starts the next time you start Live."));
 });
 
+// ---- Saving choices ----
+
+test("a quick run of menu choices saves in order and ends on the last one", async () => {
+  let stored = { aidenLiveSpeed: 1 } as unknown as AppSettings;
+  let shown = stored;
+  const pending: Array<{ patch: AidenLivePreferencesPatch; resolve(): void }> = [];
+  let reloads = 0;
+  let errors = 0;
+  const save = createLivePreferenceSaver({
+    read: () => shown,
+    write: (next) => void (shown = next),
+    persist: (patch) =>
+      new Promise<AppSettings>((resolve) =>
+        pending.push({
+          patch,
+          resolve: () => {
+            stored = { ...stored, ...patch };
+            resolve(stored);
+          },
+        }),
+      ),
+    reload: () => void (reloads += 1),
+    onError: () => void (errors += 1),
+  });
+  const speed = () => (shown as unknown as { aidenLiveSpeed: number }).aidenLiveSpeed;
+  const first = save({ aidenLiveSpeed: 1.5 });
+  const second = save({ aidenLiveSpeed: 2 });
+  assert.equal(speed(), 2, "the newest choice shows at once");
+  await tick();
+  assert.equal(pending.length, 1, "the second save waits for the first");
+  pending[0]!.resolve();
+  await first;
+  assert.equal(speed(), 2, "the first save's reply does not undo the newer choice");
+  await tick();
+  assert.equal(pending.length, 2);
+  pending[1]!.resolve();
+  await second;
+  assert.equal(speed(), 2);
+  assert.equal((stored as unknown as { aidenLiveSpeed: number }).aidenLiveSpeed, 2, "the last choice is what was saved");
+  assert.equal(reloads + errors, 0);
+
+  const failing = createLivePreferenceSaver({
+    read: () => shown,
+    write: (next) => void (shown = next),
+    persist: async () => {
+      throw new Error("disk full");
+    },
+    reload: () => void (reloads += 1),
+    onError: () => void (errors += 1),
+  });
+  await failing({ aidenLiveSpeed: 0.75 });
+  assert.deepEqual([errors, reloads], [1, 1], "a failed save says so and reloads the saved choice");
+});
+
+// ---- Where the ribbon sits ----
+
+test("a ribbon dragged to a window edge keeps its captions and approval cards inside the window", () => {
+  const sized = (element: HTMLElement, width: number, height: number) => {
+    Object.defineProperty(element, "offsetWidth", { configurable: true, value: width });
+    Object.defineProperty(element, "offsetHeight", { configurable: true, value: height });
+    return element;
+  };
+  const section = sized(document.createElement("section"), 380, 64 + 8 + 70 + 8 + 160);
+  section.append(
+    sized(document.createElement("div"), 440, 70), // captions, wider than the pill
+    sized(document.createElement("div"), 380, 160), // an approval card
+    sized(document.createElement("div"), 380, 64), // the pill
+  );
+  const footprint = measureLiveRibbonFootprint(section);
+  assert.deepEqual(footprint, { width: 440, height: 310 });
+
+  const viewport = { width: 1000, height: 700 };
+  const anchor = { centerX: 500, bottom: 120 };
+  // Dragged far up and left: the cards' top and the captions' left edge stay on screen.
+  const placed = placeLiveRibbon(anchor, { x: -2_000, y: -2_000 }, footprint, viewport);
+  assert.ok(placed.left - footprint.width / 2 >= 0, `left edge at ${placed.left - footprint.width / 2}`);
+  assert.ok(placed.bottom + footprint.height <= viewport.height, `top edge at ${viewport.height - placed.bottom - footprint.height}`);
+  // Dragged far down and right: the pill's bottom and the captions' right edge stay on screen.
+  const corner = placeLiveRibbon(anchor, { x: 2_000, y: 2_000 }, footprint, viewport);
+  assert.ok(corner.left + footprint.width / 2 <= viewport.width);
+  assert.ok(corner.bottom >= 0);
+});
+
+// ---- The Live shortcut while a session runs ----
+
+function renderDockWithShortcut(live: AssistantLiveController, activity: LiveActivity | null = null) {
+  let shortcut: (() => void) | null = null;
+  const useCommand = ((_id: string, handler: () => void) => {
+    shortcut = handler;
+  }) as unknown as NonNullable<Parameters<typeof AssistantDockPresentation>[0]["useCommand"]>;
+  const view = render(
+    <AssistantDockPresentation
+      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
+      live={live}
+      activity={activity}
+      useCommand={useCommand}
+    />,
+  );
+  return {
+    ...view,
+    press: () => act(() => (shortcut as (() => void) | null)?.()),
+  };
+}
+
+test("the Live shortcut first moves focus to End and only a second press while End has focus ends Live", () => {
+  let stops = 0;
+  const live: AssistantLiveController = { ...openLive, stop: async () => void (stops += 1) };
+  const dock = renderDockWithShortcut(live);
+  const end = screen.getByRole("button", { name: "End Live" });
+  dock.press();
+  assert.equal(document.activeElement, end);
+  assert.equal(stops, 0);
+
+  // Focus moved away: the next press only brings focus back.
+  act(() => end.blur());
+  dock.press();
+  assert.equal(stops, 0);
+  assert.equal(document.activeElement, end);
+
+  dock.press();
+  assert.equal(stops, 1);
+});
+
+test("while the ribbon shows answer buttons and no End, the Live shortcut never ends Live", () => {
+  let stops = 0;
+  const live: AssistantLiveController = { ...openLive, stop: async () => void (stops += 1) };
+  const dock = renderDockWithShortcut(live, {
+    kind: "approval",
+    id: "a1",
+    title: "Run npm test?",
+    chatTitle: "Fix login",
+    voice: false,
+    allow: () => undefined,
+    deny: () => undefined,
+  });
+  assert.equal(screen.queryByRole("button", { name: "End Live" }), null);
+  dock.press();
+  dock.press();
+  assert.equal(stops, 0);
+});
+
 // ---- Ending Live by voice ----
 
-function playback(initial: { idle: boolean; flushes: number }) {
+function playback(initial: { idle: boolean; bargeIns: number }) {
   const state = { ...initial };
   return { state, probe: { playbackState: () => ({ ...state }) } };
 }
 
 function EndingHarness({
   live,
-  bus,
-  activity,
-  maxWaitMs,
+  options,
 }: {
   live: Parameters<typeof useLiveVoiceEnding>[0];
-  bus: LiveSessionBus;
-  activity: LiveActivityStore;
-  maxWaitMs?: number;
+  options: Parameters<typeof useLiveVoiceEnding>[1];
 }) {
-  useLiveVoiceEnding(live, { bus, activity, ...(maxWaitMs ? { maxWaitMs } : {}) });
+  useLiveVoiceEnding(live, options);
   return null;
 }
 
-function endingFixture(maxWaitMs?: number) {
+function endingFixture(maxWaitMs?: number, extra: { answerPending?: () => boolean } = {}) {
   const bus = new LiveSessionBus();
   const activity = new LiveActivityStore();
-  const audio = playback({ idle: true, flushes: 0 });
+  const audio = playback({ idle: true, bargeIns: 0 });
   let stops = 0;
   const live = { active: true, stop: async () => void (stops += 1), ...audio.probe };
   const results: Array<Record<string, unknown>> = [];
@@ -292,7 +454,12 @@ function endingFixture(maxWaitMs?: number) {
     },
     note: async () => true,
   });
-  render(<EndingHarness live={live} bus={bus} activity={activity} maxWaitMs={maxWaitMs} />);
+  render(
+    <EndingHarness
+      live={live}
+      options={{ bus, activity, goodbyeStartMs: 120, settleMs: 60, pollMs: 10, ...(maxWaitMs ? { maxWaitMs } : {}), ...extra }}
+    />,
+  );
   return { bus, activity, audio, results, stops: () => stops };
 }
 
@@ -302,10 +469,24 @@ test("saying an exact end phrase in any supported language ends Live", async () 
   for (const phrase of ["Bye!", "Tschüss", "au revoir"]) {
     const fixture = endingFixture();
     fixture.bus.publishVoiceInput(phrase);
-    await tick();
+    await tick(40);
+    assert.equal(fixture.stops(), 0, `${phrase}: Live's goodbye may still be on its way`);
+    await tick(160);
     assert.equal(fixture.stops(), 1, phrase);
     cleanup();
   }
+});
+
+test("after the user says bye, Live's spoken goodbye that starts late still plays to the end", async () => {
+  const fixture = endingFixture();
+  fixture.bus.publishVoiceInput("bye");
+  await tick(60);
+  fixture.audio.state.idle = false; // the goodbye reply arrives
+  await tick(300);
+  assert.equal(fixture.stops(), 0, "still saying goodbye");
+  fixture.audio.state.idle = true;
+  await tick(150);
+  assert.equal(fixture.stops(), 1);
 });
 
 test("an end phrase inside a longer sentence, or while an approval or confirmation shows, does not end Live", async () => {
@@ -334,8 +515,41 @@ test("an end phrase inside a longer sentence, or while an approval or confirmati
 
   fixture.activity.set("chat-approvals", null);
   fixture.bus.publishVoiceInput("bye");
-  await tick();
+  await tick(250);
   assert.equal(fixture.stops(), 1);
+});
+
+test("neither bye nor Live's end tool ends Live while any request waits on the user", async () => {
+  let legacyApproval = true;
+  const fixture = endingFixture(undefined, { answerPending: () => legacyApproval });
+  fixture.bus.publishVoiceInput("bye");
+  await tick(250);
+  assert.equal(fixture.stops(), 0, "the dock's Computer Use approval is waiting");
+  await fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "end_session", args: {} });
+  assert.deepEqual(fixture.results[fixture.results.length - 1], {
+    ok: false,
+    error: { code: "answer_pending", message: "Answer the waiting request first." },
+  });
+
+  legacyApproval = false;
+  fixture.activity.set("chat-approvals", { kind: "confirm", id: "c1", label: "Delete", confirm: () => undefined, cancel: () => undefined });
+  await fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "end_session", args: {} });
+  assert.equal(fixture.results[fixture.results.length - 1]?.ok, false);
+  assert.equal(fixture.stops(), 0);
+
+  // A request that appears while the goodbye plays also keeps Live running.
+  fixture.activity.set("chat-approvals", null);
+  fixture.audio.state.idle = false;
+  const ending = fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r3", name: "end_session", args: {} });
+  await tick(30);
+  fixture.activity.set("chat-approvals", { kind: "confirm", id: "c2", label: "Delete", confirm: () => undefined, cancel: () => undefined });
+  fixture.audio.state.idle = true;
+  await ending;
+  assert.deepEqual(fixture.results[fixture.results.length - 1]?.error, {
+    code: "answer_pending",
+    message: "Answer the waiting request first.",
+  });
+  assert.equal(fixture.stops(), 0);
 });
 
 test("Live's end tool lets the goodbye finish playing, then ends the session", async () => {
@@ -354,7 +568,7 @@ test("talking over the goodbye cancels the end, and a goodbye that never finishe
   fixture.audio.state.idle = false;
   void fixture.bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "end_session", args: {} });
   await tick(150);
-  fixture.audio.state.flushes += 1; // barge-in flushed playback
+  fixture.audio.state.bargeIns += 1; // barge-in flushed playback
   await tick(150);
   assert.equal(fixture.stops(), 0);
   assert.deepEqual(fixture.results[fixture.results.length - 1], { ok: false, error: { code: "cancelled", message: "The user kept talking." } });
@@ -367,9 +581,9 @@ test("talking over the goodbye cancels the end, and a goodbye that never finishe
 });
 
 test("waiting for playback reports a cancelled wait without ending anything", async () => {
-  const audio = playback({ idle: false, flushes: 0 });
+  const audio = playback({ idle: false, bargeIns: 0 });
   const abort = new AbortController();
-  const waiting = waitForLivePlayback(audio.probe, abort.signal, 1_000, 10);
+  const waiting = waitForLivePlayback(audio.probe, abort.signal, { maxWaitMs: 1_000, pollMs: 10 });
   abort.abort();
   assert.equal(await waiting, "cancelled");
 });

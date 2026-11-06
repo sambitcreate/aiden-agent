@@ -91,8 +91,6 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
     (listener) => liveActivity.subscribe(listener),
     () => liveActivity.get(),
   );
-  // Saying goodbye, or Live's end_session tool, ends the session.
-  useLiveVoiceEnding(live);
   // Speaking speed applies to the reply that is playing, not just the next one.
   const { setPlaybackSpeed } = live;
   React.useEffect(() => setPlaybackSpeed(preferences.speed), [preferences.speed, setPlaybackSpeed]);
@@ -151,6 +149,9 @@ export function AssistantDockPresentation({
   const liveApproval = chat.approvals.find((approval) => approval.toolName === "computer_use");
   const approvalPending = Boolean(liveApproval);
   const markState = assistantLiveMarkState(live, approvalPending);
+  // Saying goodbye, or Live's end_session tool, ends the session, but never
+  // while the ribbon's request or the Computer Use approval waits on the user.
+  useLiveVoiceEnding(live, { answerPending: () => approvalPending || markState === "approval" });
 
   React.useEffect(() => {
     if (!live.active) setStopRevealed(false);
@@ -188,14 +189,36 @@ export function AssistantDockPresentation({
   }, [live.active, live.microphoneActive, setupCompleted]);
 
   const openPanel = React.useCallback(() => {
-    const action = liveDockClickAction(live, setupCompleted, stopRevealed);
+    let action = liveDockClickAction(live, setupCompleted, stopRevealed);
     if (action === "none") return;
-    if (action === "stop") { void live.stop(); return; }
+    // The ribbon replaces the corner pill while Live runs: the first press
+    // moves focus to its End button, and a second press while End still has
+    // focus ends Live.
+    const end = document.querySelector<HTMLButtonElement>(".live-ribbon .live-ribbon-end");
+    const endReady = Boolean(end && !end.disabled);
+    if (action === "stop") {
+      if (endReady && document.activeElement === end) {
+        void live.stop();
+        return;
+      }
+      setStopRevealed(false);
+      action = "reveal-stop";
+    }
     if (action === "reveal-stop") {
+      if (!end || !endReady) return;
+      end.focus();
+      if (document.activeElement !== end) return;
       setStopRevealed(true);
-      // The ribbon replaces the corner pill while Live runs: the first press
-      // moves focus to its End button, the second ends Live.
-      document.querySelector<HTMLElement>(".live-ribbon .live-ribbon-end")?.focus();
+      const disarm = () => {
+        setStopRevealed(false);
+        end.removeEventListener("blur", disarm);
+        end.removeEventListener("keydown", onKeyDown);
+      };
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") disarm();
+      };
+      end.addEventListener("blur", disarm);
+      end.addEventListener("keydown", onKeyDown);
       return;
     }
     if (action === "setup") {

@@ -114,6 +114,8 @@ test("voice approvals accept only the two explicit finalized command phrases", (
   assert.equal(assistantLiveVoiceApprovalDecision("allow"), null);
   assert.equal(assistantLiveVoiceApprovalDecision("yes, allow once"), null);
   assert.equal(assistantLiveVoiceApprovalDecision("do not deny"), null);
+  assert.equal(assistantLiveVoiceApprovalDecision("Allow once?"), null);
+  assert.equal(assistantLiveVoiceApprovalDecision("deny？ "), null);
 });
 
 test("voice approval ignores stale and consumed receipts", () => {

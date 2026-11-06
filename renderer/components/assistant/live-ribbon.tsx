@@ -69,7 +69,10 @@ export function LiveRibbonMenuItems({
             <span className="truncate text-small text-tertiary">{current?.id ?? preferences.voice}</span>
           </span>
         </DropdownMenuSubTrigger>
-        <DropdownMenuSubContent className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto">
+        <DropdownMenuSubContent
+          data-live-guard="you"
+          className="max-h-[min(24rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto"
+        >
           <DropdownMenuLabel>New voice starts next time</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             aria-label="Voice"
@@ -167,7 +170,8 @@ export function LiveRibbon({
   children?: React.ReactNode;
 }): React.ReactElement {
   const pillRef = React.useRef<HTMLDivElement>(null);
-  const placement = useLiveRibbonPlacement(pillRef);
+  const sectionRef = React.useRef<HTMLElement>(null);
+  const placement = useLiveRibbonPlacement(sectionRef);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const state = liveRibbonState(markState, activity);
   const muted = live.microphoneMuted;
@@ -198,6 +202,7 @@ export function LiveRibbon({
 
   return (
     <section
+      ref={sectionRef}
       className="live-ribbon"
       aria-label="Aiden Live"
       // Live can press controls in Aiden's window, but never its own End,
@@ -329,7 +334,8 @@ export function LiveRibbon({
                   <Ellipsis aria-hidden="true" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="end" className="w-60">
+              {/* The menu is portaled out of the ribbon, so it carries the guard itself. */}
+              <DropdownMenuContent data-live-guard="you" side="top" align="end" className="w-60">
                 <LiveRibbonMenuItems preferences={preferences} onChange={onPreferencesChange} />
               </DropdownMenuContent>
             </DropdownMenu>

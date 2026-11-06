@@ -64,7 +64,20 @@ export function measureLiveRibbonAnchor(doc: Document = document, view: Window =
   return { centerX: view.innerWidth / 2, bottom: 24 };
 }
 
-/** Keeps the whole pill inside the window, whatever the stored offset says. */
+/**
+ * The ribbon's footprint: the pill and every card stacked above it (captions,
+ * hints, errors, approvals). The captions card is wider than the pill and
+ * overflows it equally on both sides.
+ */
+export function measureLiveRibbonFootprint(section: HTMLElement): { width: number; height: number } {
+  let width = section.offsetWidth;
+  for (const child of Array.from(section.children)) {
+    if (child instanceof HTMLElement) width = Math.max(width, child.offsetWidth);
+  }
+  return { width, height: section.offsetHeight };
+}
+
+/** Keeps the whole ribbon (pill and the cards above it) inside the window, whatever the stored offset says. */
 export function placeLiveRibbon(
   anchor: LiveRibbonAnchor,
   offset: LiveRibbonOffset,
@@ -82,7 +95,7 @@ export function placeLiveRibbon(
   };
 }
 
-export function useLiveRibbonPlacement(pillRef: React.RefObject<HTMLElement | null>): {
+export function useLiveRibbonPlacement(sectionRef: React.RefObject<HTMLElement | null>): {
   left: number;
   bottom: number;
   dragging: boolean;
@@ -99,6 +112,7 @@ export function useLiveRibbonPlacement(pillRef: React.RefObject<HTMLElement | nu
     typeof window === "undefined" ? { width: 0, height: 0 } : { width: window.innerWidth, height: window.innerHeight },
   );
   const [dragging, setDragging] = React.useState(false);
+  const [size, setSize] = React.useState({ width: 380, height: 64 });
 
   React.useEffect(() => {
     let frame = 0;
@@ -111,27 +125,36 @@ export function useLiveRibbonPlacement(pillRef: React.RefObject<HTMLElement | nu
           ? current
           : { width: window.innerWidth, height: window.innerHeight },
       );
+      const section = sectionRef.current;
+      if (section) {
+        const footprint = measureLiveRibbonFootprint(section);
+        if (footprint.width > 0 && footprint.height > 0) {
+          setSize((current) =>
+            current.width === footprint.width && current.height === footprint.height ? current : footprint,
+          );
+        }
+      }
     };
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(measure);
     };
     window.addEventListener("resize", schedule);
     document.addEventListener("transitionend", schedule, true);
+    // Cards appear and disappear above the pill as Live talks and asks.
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    if (sectionRef.current) observer?.observe(sectionRef.current);
     // Chats open and close and the composer grows while the session runs.
     const interval = window.setInterval(schedule, 500);
     measure();
     return () => {
       window.cancelAnimationFrame(frame);
       window.clearInterval(interval);
+      observer?.disconnect();
       window.removeEventListener("resize", schedule);
       document.removeEventListener("transitionend", schedule, true);
     };
-  }, []);
+  }, [sectionRef]);
 
-  const size = {
-    width: pillRef.current?.offsetWidth || 380,
-    height: pillRef.current?.offsetHeight || 64,
-  };
   const placed = placeLiveRibbon(anchor, offset, size, viewport);
   const layoutRef = React.useRef({ anchor, size, viewport });
   layoutRef.current = { anchor, size, viewport };
