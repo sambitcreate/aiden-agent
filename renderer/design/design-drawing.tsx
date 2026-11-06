@@ -61,9 +61,14 @@ export function useDesignDrawing({
   attachAt(point: DesignPoint, except?: string): string | undefined;
 }) {
   const [draft, setDraft] = React.useState<Draft | null>(null);
-  const [pen, setPen] = React.useState<PenPath | null>(null);
+  const [pen, setPenState] = React.useState<PenPath | null>(null);
+  // The ref is the path as it is now; the state only redraws it. A press and
+  // its release can arrive before React renders, so handlers read the ref.
   const penRef = React.useRef<PenPath | null>(null);
-  penRef.current = pen;
+  const setPen = React.useCallback((next: PenPath | null) => {
+    penRef.current = next;
+    setPenState(next);
+  }, []);
 
   const latest = React.useRef({ tool, onDone, create, attachAt });
   latest.current = { tool, onDone, create, attachAt };
@@ -91,7 +96,7 @@ export function useDesignDrawing({
     }
     latest.current.onDone();
     return true;
-  }, []);
+  }, [setPen]);
 
   // A different tool, or none, drops anything half drawn; a pen path with two points is kept.
   React.useEffect(() => {
@@ -205,7 +210,7 @@ export function useDesignDrawing({
       // The double-click's two presses each added the same point; finish without the repeat.
       const path = penRef.current;
       if (path && path.anchors.length > 2) {
-        penRef.current = { ...path, anchors: path.anchors.slice(0, -1), handles: path.handles.slice(0, -1) };
+        setPen({ ...path, anchors: path.anchors.slice(0, -1), handles: path.handles.slice(0, -1) });
       }
       finishPen(false);
     };

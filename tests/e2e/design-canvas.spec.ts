@@ -662,6 +662,7 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
   ]);
   await expect(tools.getByRole("button", { name: "Draw: Pencil" })).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("Shift+P");
+  await expect(tools.getByRole("button", { name: "Draw: Pen" })).toHaveAttribute("aria-pressed", "true");
   await clickOnCanvas(page, { x: 380, y: 620 });
   // A drag from the second point gives it a curve.
   await dragOnCanvas(page, { x: 480, y: 720 }, { x: 540, y: 720 });
@@ -713,7 +714,12 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
 
 test("notes and text take formatting from the bar above them: marks, a link, a list, size and colours", async ({ aiden }) => {
   const { app, page, userDataDir } = aiden;
-  const mod = process.platform === "darwin" ? "Meta" : "Control";
+  const mac = process.platform === "darwin";
+  const mod = mac ? "Meta" : "Control";
+  // Chromium on a Mac moves by line with ⌘ and the arrows; Home and End do not move the caret there.
+  const lineStart = mac ? "Meta+ArrowLeft" : "Home";
+  const lineEnd = mac ? "Meta+ArrowRight" : "End";
+  const textStart = mac ? "Meta+ArrowUp" : "Control+Home";
   await openDesignChat(app, page);
   const canvas = designCanvas(page);
 
@@ -741,14 +747,14 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
 
   // The second and third lines become a bulleted list from the bar.
   await page.keyboard.press("ArrowUp");
-  await page.keyboard.press("Home");
+  await page.keyboard.press(lineStart);
   await page.keyboard.press("Shift+ArrowDown");
-  await page.keyboard.press("Shift+End");
+  await page.keyboard.press(`Shift+${lineEnd}`);
   await bar.getByRole("button", { name: "Bulleted list" }).click();
 
   // The first line goes bold with the keyboard, and the bar shows it.
-  await page.keyboard.press(`${mod}+Home`);
-  await page.keyboard.press("Shift+End");
+  await page.keyboard.press(textStart);
+  await page.keyboard.press(`Shift+${lineEnd}`);
   await page.keyboard.press(`${mod}+b`);
   await expect(bar.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
   await expect
@@ -790,7 +796,7 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
       return [saved?.text, saved?.color];
     })
     .toEqual(["*Checkout*", "blue"]);
-  await page.keyboard.press("End");
+  await page.keyboard.press(lineEnd);
   await capture(page, "1440-text-format-bar");
   await page.keyboard.press("Escape");
 
