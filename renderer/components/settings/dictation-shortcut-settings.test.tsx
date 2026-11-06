@@ -16,11 +16,16 @@ import { DictationShortcutSettings } from "./dictation-shortcut-settings";
 
 afterEach(cleanup);
 
-async function mount(capabilities: Partial<AppCapabilities>, settings: Record<string, unknown> = {}) {
+async function mount(
+  capabilities: Partial<AppCapabilities>,
+  settings: Record<string, unknown> = {},
+  saveGate?: Promise<void>,
+) {
   let stored = { ...settings };
   const calls = installBotTestIpc({
     "settings:get": () => stored,
-    "settings:set": (patch: unknown) => {
+    "settings:set": async (patch: unknown) => {
+      await saveGate;
       const next = patch as Record<string, unknown>;
       stored = { ...stored, ...next };
       // Main keeps the release-events flag in step with the chosen behavior.
@@ -76,6 +81,31 @@ test("choosing a behavior saves it and the description follows", async () => {
     ),
   );
   await screen.findByText("Tap to start and tap again to stop, or hold while speaking and release to transcribe.");
+});
+
+test("while a behavior saves, focus stays on the selector and a second choice waits", async () => {
+  let finishSave = () => {};
+  const saveGate = new Promise<void>((resolve) => { finishSave = resolve; });
+  const calls = await mount({ dictationHoldToTalk: true }, {}, saveGate);
+  const trigger = await screen.findByRole("combobox", { name: "Dictation shortcut behavior" });
+  const saves = () => calls.filter((call) => call.channel === "settings:set");
+  const choose = async (name: string) => {
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name }));
+    await waitFor(() => assert.equal(screen.queryByRole("option") === null, true));
+  };
+
+  await choose("Tap or hold");
+  await waitFor(() => assert.equal(trigger.getAttribute("aria-busy"), "true"));
+  await waitFor(() => assert.equal(document.activeElement === trigger, true));
+
+  await choose("Hold to dictate");
+  assert.equal(saves().length, 1);
+
+  finishSave();
+  await waitFor(() => assert.equal(trigger.getAttribute("aria-busy"), "false"));
+  assert.equal(trigger.textContent?.includes("Tap or hold"), true);
 });
 
 test("a desktop that assigns the hold shortcut keeps saying so while Press to toggle is selected", async () => {

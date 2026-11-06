@@ -88,7 +88,11 @@ function helperToolsSummary(toolchain: DeviceToolchainState | null): string {
   if (!toolchain) return "Pinned helper packages";
   const total = toolchain.tools.length;
   const installed = toolchain.tools.filter((tool) => tool.installed.includes(tool.pinned)).length;
-  if (installed === 0) return "No pinned packages installed";
+  if (installed === 0) {
+    return toolchain.tools.some((tool) => tool.installed.length > 0)
+      ? "Older versions installed"
+      : "No pinned packages installed";
+  }
   const noun = total === 1 ? "pinned package" : "pinned packages";
   return installed === total ? `${total} ${noun} installed` : `${installed} of ${total} ${noun} installed`;
 }

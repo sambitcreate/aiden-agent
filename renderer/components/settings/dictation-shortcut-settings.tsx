@@ -291,12 +291,18 @@ export function DictationShortcutSettings() {
         >
           <Select
             value={activationMode}
-            disabled={holdBusy}
             onValueChange={(value) => {
-              if (isDictationActivationMode(value)) void patch({ dictationActivationMode: value });
+              // Not `disabled`: the trigger gets focus back as the list closes, and a
+              // disabled trigger would drop it to the page while this saves.
+              if (!holdBusy && isDictationActivationMode(value)) void patch({ dictationActivationMode: value });
             }}
           >
-            <SelectTrigger size="small" className="w-44 max-w-full" aria-label="Dictation shortcut behavior">
+            <SelectTrigger
+              size="small"
+              className="w-44 max-w-full"
+              aria-label="Dictation shortcut behavior"
+              aria-busy={holdBusy}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

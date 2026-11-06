@@ -56,7 +56,7 @@ test("chat title generation is one row whose hint says what stays on the device"
   const row = await screen.findByRole("group", { name: "Chat title generation" });
   within(row).getByRole("combobox", { name: "Chat title provider" });
   fireEvent.click(within(row).getByRole("button", { name: "About chat title generation" }));
-  assert.match((await screen.findByRole("tooltip")).textContent ?? "", /On-device only never sends titles out\./u);
+  assert.match((await screen.findByRole("tooltip")).textContent ?? "", /On-device only never sends your message to a network provider\./u);
 });
 
 test("the page explains provider connections from hints, not dialogs", async () => {

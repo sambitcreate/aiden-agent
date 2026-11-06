@@ -246,7 +246,7 @@ test("helper tools fold away when current, and open with the update state when o
   const outdated = parse(view({ state: local(["0.11.0"]), toolchain: tools(["0.11.0"]) }));
   const open = outdated.querySelector("details")!;
   assert.equal(open.hasAttribute("open"), true);
-  assert.match(open.querySelector("summary")!.textContent ?? "", /Update available.*No pinned packages installed/u);
+  assert.match(open.querySelector("summary")!.textContent ?? "", /Update available.*Older versions installed/u);
 
   // Removing the helpers is destructive, so it never hides inside the fold.
   assert.equal(fold.textContent?.includes("Remove installed tools"), false);

@@ -442,7 +442,7 @@ export function ProvidersSettings() {
               hint={
                 <InfoHint topic="chat title generation">
                   Automatic uses the on-device model when it can, then your chat model. On-device
-                  only never sends titles out.
+                  only never sends your message to a network provider.
                 </InfoHint>
               }
             >
@@ -646,8 +646,9 @@ export function ProvidersSettings() {
                   }`}
               </span>
               <span className="mt-0.5 block">
-                Updating contacts built-in catalog services and models.dev. It sends no prompts, chats,
-                keys or device identifier.
+                Updating contacts built-in catalog services and models.dev. It sends no prompts, chats
+                or device identifier. A provider&apos;s own catalog service may use your sign-in for
+                that provider; models.dev gets no credentials.
               </span>
             </>
           }

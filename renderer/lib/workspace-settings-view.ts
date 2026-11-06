@@ -76,7 +76,6 @@ const SKILL_GROUP_TITLES: Record<SkillGroup["id"], string> = {
   global: "Built-in and global",
 };
 
-/** Your skills, then this folder's, then built-in and global ones; empty groups are left out. */
 /** Skills whose name or description contains the query; a blank query keeps them all. */
 export function filterSkillsByQuery<T extends { name: string; description: string }>(
   skills: readonly T[],
@@ -91,6 +90,7 @@ export function filterSkillsByQuery<T extends { name: string; description: strin
   );
 }
 
+/** Your skills, then this folder's, then built-in and global ones; empty groups are left out. */
 export function groupWorkspaceSkills(
   skills: readonly WorkspaceSkillChoice[],
   query = "",

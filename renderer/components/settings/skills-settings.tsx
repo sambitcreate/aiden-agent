@@ -187,7 +187,7 @@ export function SkillsSettings() {
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <Text variant="strong">Built-in and discovered skills</Text>
               <InfoHint topic="discovered skills">
-                Aiden includes the aiden-app skill. Others come from SKILL.md files in .agents, .claude/skills and .aiden/skills folders, plus enabled Claude Code plugins named plugin:name.
+                Aiden includes the aiden-app skill. Others come from SKILL.md files in .agents, .claude/skills and .aiden/skill or .aiden/skills folders, plus enabled Claude Code plugins named plugin:name.
               </InfoHint>
             </div>
             {showDiscoveredSearch ? (
@@ -199,7 +199,7 @@ export function SkillsSettings() {
             ) : null}
           </div>
           {visibleDiscovered.length === 0 ? (
-            <Text variant="small" color="tertiary" className="block px-1">
+            <Text role="status" variant="small" color="tertiary" className="block px-1">
               No skills match “{discoveredQuery.trim()}”.
             </Text>
           ) : (

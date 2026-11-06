@@ -8,9 +8,11 @@ import { createSettingsApplicationEffects } from "../../../main/services/setting
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
 import { SkillsSettings } from "./skills-settings";
+import { Toaster, toast } from "../ui";
 import type { AppSettings, Skill } from "../../lib/types";
 
 afterEach(() => {
+  toast.dismiss();
   cleanup();
   localStorage.clear();
 });
@@ -52,6 +54,7 @@ function mount({
   });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
+      <Toaster />
       <SkillsSettings />
     </QueryClientProvider>,
   );
@@ -91,6 +94,7 @@ test("a failed save leaves skills on", async () => {
   await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), false));
   assert.equal(toggle.getAttribute("aria-checked"), "true");
   assert.equal(screen.queryByText(/Skills are off\./u) === null, true);
+  await screen.findByText("Could not save");
 });
 
 test("eight discovered skills list without a search field", async () => {

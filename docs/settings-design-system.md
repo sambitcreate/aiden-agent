@@ -75,7 +75,7 @@ While Inbox is the chosen view, and only on a host with the `badgeCount` capabil
 
 ## Aiden Live
 
-Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the Live readiness and Actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
+Settings → Voice & Speech → Aiden Live opens with an "Availability" group of two trailing switches. `AppSettings.aidenLiveEnabled` (omitted means on) turns the feature off everywhere: the window's Live pill and HUD are not rendered, the `assistant.open` command and shortcut are ignored (so the `/assistant` slash command reports unavailable), any running session is stopped, and the main process refuses `assistant-live:start` with `aiden_live_disabled`. While it is off, the Live readiness, Audio devices and Actions groups are hidden. `aidenLiveButtonVisible` (omitted means shown) appears only while Live is on and hides just the idle pill. Whenever a session is active, connecting, closing, awaiting approval, or in error, the pill and HUD still render so the user can see and stop it.
 
 ## Page notes
 
@@ -115,7 +115,7 @@ Settings → Bots & Approvals → Bots (section id `bots`, the page's first tab)
 
 ## Web pages
 
-Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.
+Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved, and the row offers **Set up Cloudflare…** until the form is showing. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.
 
 ## Icons and illustrations
 

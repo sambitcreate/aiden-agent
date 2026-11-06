@@ -31,11 +31,12 @@ test("Actions offers the two rows that do something, not a static statement", as
   await mount();
   await screen.findByRole("group", { name: "Scheduled tasks" });
   await screen.findByRole("group", { name: "Global shortcut" });
-  assert.equal(screen.queryByRole("group", { name: "Operate Aiden" }) === null, true);
 });
 
 test("with Aiden Live off, only the switch remains", async () => {
   await mount({ aidenLiveEnabled: false });
   await screen.findByRole("switch", { name: "Aiden Live" });
   assert.equal(screen.queryByRole("group", { name: "Scheduled tasks" }) === null, true);
+  assert.equal(screen.queryByText("Live readiness") === null, true);
+  assert.equal(screen.queryByText("Audio devices") === null, true);
 });

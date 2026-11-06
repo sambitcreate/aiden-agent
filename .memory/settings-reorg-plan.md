@@ -19,3 +19,11 @@ Implementation branch `feature/settings-reorg` (plan and prototype came from `re
 - `routeRecipientSummary` stays beside the current search route, not in Privacy as the prototype shows, because it changes with selection.
 - Context & Limits: only the override detail moved to a hint. The "may be sent to your chat model" footer and the model-token footer stay visible.
 - `InfoHint` rules now live in `docs/settings-design-system.md`.
+
+## Phase 5 landed (2026-11-05)
+
+- `SettingsDisclosure` in `renderer/components/ui.tsx` is the one shared fold: children stay mounted, and a fold that gains an override reopens through a render-phase latch unless the person closed it.
+- `FieldSet` takes an `action` for a group-heading control. The page heading takes no controls, so **Add model by ID…** sits in the Image Generation Models group heading and opens a `Dialog`.
+- Web Page Extract shows a short row until `configured` (account ID, a key, or Extract on). **Set up Cloudflare…** opens the form; "What leaves this device" shows with the form, following the prototype note.
+- Compaction engine stays radio cards rather than the prototype's Select: the plan table does not require it and `limits-settings.test.tsx` expects a radiogroup.
+- Dictation shortcut is a Select or a plain row; Simulator Helper tools fold with a badge while Remove stays outside.
