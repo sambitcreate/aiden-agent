@@ -34,4 +34,6 @@ Implementation branch `feature/settings-reorg` (plan and prototype came from `re
 - `InfoHint` ignores blur into its own content, so pressing a pinned hint's text keeps it open.
 - Connect checks bot store health before saving `telegramEnabled`, so a failed Connect stays off.
 - Left alone on purpose: a prompt caught mid-batch by Disconnect can run on the next Connect. Telegram redelivers unconfirmed updates then anyway, so a queue guard would change nothing for the person.
+- Telegram Connect and Disconnect go through the core's `setEnabled`. Connect uses `connect()`, not `start()`, because `start()` only records a polling conflict, and it saves `telegramEnabled` after polling starts. Disconnect stops polling first and then fails if `stopAndSettle()` returns false. A bad token still fails later in the poll loop and shows up as status, not as a failed Connect.
+- Settings is one history entry: moving between pages must replace, or Back to app lands on the previous Settings page. Use `settingsLocation`, and add `replace: true` for links rendered inside Settings.
 - Re-pair links go to Control other devices (`peerHosts`); the phone connection popover stays on `remoteAccess`.
