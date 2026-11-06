@@ -12,9 +12,12 @@ import {
 } from "../lib/streaming-reveal";
 
 interface StreamingMarkdownRevealProps {
+  imageScope?: string;
   content: string;
   /** The turn ended: show everything now and hand over to the saved reply. */
   complete?: boolean;
+  /** Paint previously received text immediately. Only subsequent live text waits on the gate. */
+  replayedTextLength?: number;
   /** A tool step closed the text: it joins at the next release, still gated. */
   closed?: boolean;
   onHandoffComplete?: () => void;
@@ -22,8 +25,10 @@ interface StreamingMarkdownRevealProps {
 }
 
 export function StreamingMarkdownReveal({
+  imageScope,
   content,
   complete = false,
+  replayedTextLength = 0,
   closed = false,
   onHandoffComplete,
   richLinks = false,
@@ -88,14 +93,11 @@ export function StreamingMarkdownReveal({
   // blocks. Blocks keep their elements as the text grows, so the finished
   // reply settles in place.
   // A tail the deadline released shows as written, even unfinished.
-  const source = complete
-    ? content
-    : reducedMotion
-    ? released
-    : released.slice(
-        0,
-        Math.max(streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY), gate.flushed),
-      );
+  const visibleEnd = reducedMotion ? released.length : Math.min(
+    released.length,
+    Math.max(streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY), gate.flushed),
+  );
+  const source = complete ? content : content.slice(0, Math.max(visibleEnd, replayedTextLength));
 
   const handoffNotified = React.useRef(false);
   const notifyHandoffComplete = React.useCallback(() => {
@@ -115,9 +117,9 @@ export function StreamingMarkdownReveal({
   return (
     <div
       className={`streaming-reveal ${MARKDOWN_CLASSNAME}`}
-      data-streaming={fadeDone ? undefined : ""}
+      data-streaming={fadeDone || (replayedTextLength > 0 && source.length <= replayedTextLength) ? undefined : ""}
     >
-      <MarkdownContent content={source} richLinks={richLinks} streaming={!complete} />
+      <MarkdownContent content={source} richLinks={richLinks} streaming={!complete} imageScope={imageScope} />
     </div>
   );
 }

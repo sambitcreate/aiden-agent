@@ -38,3 +38,6 @@ Branch `claude/audit-fix-remote-server`. Fixes audit 07 (the Aiden Remote HTTPS/
 ## Approved pairing withdrawal
 - Desktop pairing-request withdrawal uses the same runtime revocation transaction as Remove access. It closes the withdrawn device’s feeds, streams and relays and preserves the state fence, cleanup retries and other devices.
 - A two-desktop HTTPS regression opens host feeds with delivered grants and verifies a later Bot update reaches only the retained peer.
+
+## Mobile stream retry delay
+- iOS and Android stream recovery retain a server-requested Retry-After minimum across network loss and return. Offline time and device sleep count toward the delay; Android screen wake and activity resume recheck it even if network availability does not change. Normal interrupted-backoff refund and cancellation remain intact.

@@ -7,7 +7,7 @@
  *   (exact command or exact workspace-relative path) for the rest of this chat
  *   while the app stays open.
  * - `always`: persists that same narrow rule for the workspace until the user
- *   revokes it from Settings → Tool approvals.
+ *   revokes it from Settings → Bots & Approvals → Tool approvals.
  */
 export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always"] as const;
 
@@ -74,3 +74,40 @@ export function toolApprovalScopeLabel(scope: ToolApprovalScope): string {
       return "Always allow";
   }
 }
+
+export type BotApprovalSiteAction = "click" | "type" | "press";
+export type BotApprovalRuleTarget =
+  | { kind: "connection"; serverId: string; tool: string }
+  | { kind: "site"; host: string; action: BotApprovalSiteAction };
+
+export interface BotApprovalRuleView {
+  id: string;
+  botId: string;
+  target: BotApprovalRuleTarget;
+  label: string;
+  createdAt: string;
+  uses: number;
+  lastUsedAt?: string;
+}
+
+export const BOT_APPROVAL_RULES_PER_BOT_MAX = 50;
+
+export function botApprovalRuleKey(target: BotApprovalRuleTarget): string {
+  return target.kind === "connection"
+    ? JSON.stringify(["connection", target.serverId, target.tool])
+    : JSON.stringify(["site", target.host, target.action]);
+}
+
+export function describeBotApprovalRule(rule: Pick<BotApprovalRuleView, "target" | "label">): string {
+  if (rule.target.kind === "connection") return rule.label;
+  const verb = { click: "Click", type: "Type", press: "Press keys" }[rule.target.action];
+  return `${verb} on ${rule.target.host}`;
+}
+
+export function botAlwaysAllowLabel(botName: string): string {
+  return `Always allow for ${botName}`;
+}
+
+export type BotAllowedEntry =
+  | { kind: "rule"; id: string; botId: string; what: string; createdAt: string; uses: number; lastUsedAt?: string }
+  | { kind: "folder"; id: string; botId: string; what: string; createdAt: string };

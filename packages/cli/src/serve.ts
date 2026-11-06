@@ -1,3 +1,4 @@
+import { ensurePrivateDirectory } from "../../../main/services/private-storage.ts";
 import { createServer } from "node:net";
 import { chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -27,6 +28,7 @@ async function serveStatus(remote: CliRemote | undefined, args: string[]) {
 
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void } = {}) {
+  ensurePrivateDirectory(agentDir, "reject");
   recoverStaleServeLease(agentDir);
   // startDaemon marks the background daemon so `serve stop` may force-kill its
   // whole process group; a foreground serve shares its group with the shell job.
@@ -79,6 +81,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       try { remote = await createCliRemote(agentDir, chats, runtime, { bots }); await remote.start(); }
       catch (error) { throw new Error(`Remote could not start: ${(error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".")} Run \`aiden serve --no-remote\` to serve without Remote.`, { cause: error }); }
     }
+    ensurePrivateDirectory(agentDir, "reject");
     rmSync(path, { force: true });
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(path, () => { server.removeListener("error", reject); resolve(); }); });
     chmodSync(path, 0o600);

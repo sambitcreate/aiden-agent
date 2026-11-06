@@ -2,9 +2,17 @@ import type {
   RendererDiagnosticKind,
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
+  RendererErrorDetails,
 } from "../shared/diagnostics";
-import { normalizeDiagnosticErrorType } from "../shared/diagnostics";
-import { diagnosticsApi } from "./ipc";
+import {
+  MAX_RENDERER_ERROR_MESSAGE_LENGTH,
+  MAX_RENDERER_ERROR_NAME_LENGTH,
+  MAX_RENDERER_ERROR_STACK_LENGTH,
+  RENDERER_CRASH_KINDS,
+  normalizeDiagnosticErrorType,
+  stackWithoutMessage,
+} from "../shared/diagnostics";
+import { diagnosticsApi, onNotification } from "./ipc";
 
 const FALLBACK_POLICY: RendererDiagnosticPolicy = {
   enabled: false,
@@ -25,6 +33,8 @@ interface RateState {
 let policy = FALLBACK_POLICY;
 let installed = false;
 let policyResolved = false;
+// Set only by main. While false the report is exactly its content-free form.
+let errorDetailsAllowed = false;
 const rates = new Map<string, RateState>();
 const pending: Array<{
   kind: RendererDiagnosticKind;
@@ -35,6 +45,25 @@ const pending: Array<{
 function errorType(error: unknown): string {
   const candidate = error instanceof Error ? error.name : "UnknownError";
   return normalizeDiagnosticErrorType(candidate);
+}
+
+// Reads only strings and sends them as they are: deciding what is safe to keep
+// is main's job, never this process's.
+function errorDetails(kind: RendererDiagnosticKind, error: unknown): RendererErrorDetails | undefined {
+  if (!errorDetailsAllowed || !RENDERER_CRASH_KINDS.includes(kind)) return undefined;
+  try {
+    if (typeof error === "string") return { message: error.slice(0, MAX_RENDERER_ERROR_MESSAGE_LENGTH) };
+    if (!(error instanceof Error)) return {};
+    return {
+      name: String(error.name).slice(0, MAX_RENDERER_ERROR_NAME_LENGTH),
+      message: String(error.message).slice(0, MAX_RENDERER_ERROR_MESSAGE_LENGTH),
+      ...(typeof error.stack === "string"
+        ? { stack: stackWithoutMessage(error.stack, error.message).slice(0, MAX_RENDERER_ERROR_STACK_LENGTH) }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 function createReferenceId(): string {
@@ -81,7 +110,8 @@ export function reportRendererDiagnostic(
   if (!policy.enabled) return null;
   if (state.sent < policy.maxPerKey) {
     state.sent += 1;
-    send(state.sample);
+    const details = errorDetails(kind, error);
+    send(details ? { ...state.sample, error: details } : state.sample);
   } else {
     state.suppressed += 1;
     if (state.timer === null) {
@@ -100,11 +130,15 @@ export async function installRendererDiagnostics(): Promise<void> {
   window.addEventListener("unhandledrejection", (event) => {
     reportRendererDiagnostic("unhandled-rejection", event.reason, "window");
   });
+  onNotification<{ sending?: unknown }>("analytics:sending-changed", (status) => {
+    errorDetailsAllowed = status?.sending === true;
+  });
   try {
     policy = await diagnosticsApi.policy();
   } catch {
     policy = FALLBACK_POLICY;
   }
+  errorDetailsAllowed = policy.errorDetails === true;
   policyResolved = true;
   for (const report of pending.splice(0)) {
     reportRendererDiagnostic(report.kind, report.error, report.context);

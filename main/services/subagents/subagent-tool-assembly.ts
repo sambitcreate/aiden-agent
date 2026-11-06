@@ -104,21 +104,26 @@ export async function buildProductionSubagentChildTools(
     outboundApprovalBindings.push({ toolName: web.name, kind: "web" });
   }
   if (readScopes.length > 0) {
+    const currentReadAuthority = () => {
+      const current = input.currentAuthority?.();
+      const now = input.now ?? Date.now;
+      if (
+        !current ||
+        JSON.stringify(current) !== JSON.stringify(authority) ||
+        current.expiresAt <= now()
+      ) {
+        throw new Error("Subagent MCP authority was revoked.");
+      }
+      return current;
+    };
     const mcpTools = await createReadOnlySubagentMcpTools({
       scopes: readScopes,
       peerServerIds: mcpServerIds,
       host: dependencies.mcpHost,
       signal: input.signal,
+      assertRetryAuthority: currentReadAuthority,
       consumeNetworkOperation: () => {
-        const current = input.currentAuthority?.();
-        const now = input.now ?? Date.now;
-        if (
-          !current ||
-          JSON.stringify(current) !== JSON.stringify(authority) ||
-          current.expiresAt <= now()
-        ) {
-          throw new Error("Subagent MCP authority was revoked.");
-        }
+        const current = currentReadAuthority();
         const consumed = input.consumeNetworkOperation?.(current);
         if (consumed !== true) {
           throw new Error("Subagent MCP network budget was not granted.");

@@ -306,6 +306,36 @@ test("denial and pre-dispatch journal failure remain no-effect", async () => {
   assert.deepEqual(failed.transitions.slice(-2), ["dispatch_started", "cancelled_before_dispatch"]);
 });
 
+test("cancellation during request preparation blocks the delayed send without spending a network operation", async () => {
+  const controller = new AbortController();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let ready!: () => void;
+  const waiting = new Promise<void>(resolve => { ready = resolve; });
+  let sent = false;
+  let delayed!: Promise<unknown>;
+  const run = harness(undefined, {
+    dispatch(beforeRawBytes) {
+      ready();
+      delayed = held.then(() => { beforeRawBytes(); sent = true; });
+      return delayed;
+    },
+  });
+  await run.gate.beforeToolCall(toolContext());
+  const call = run.gate.execute({
+    toolCallId: "call-1", toolName: binding.childAgentToolName,
+    arguments: { document: "release" }, signal: controller.signal,
+  });
+  await waiting;
+  controller.abort();
+  await assert.rejects(call, /cancelled before/u);
+  release();
+  await assert.rejects(delayed);
+  assert.equal(sent, false);
+  assert.equal(run.networkCalls, 0);
+  assert.equal(last(run.transitions), "cancelled_before_dispatch");
+});
+
 test("post-dispatch transport failure and timeout seal unknown without retry", async () => {
   const failed = harness(undefined, {
     dispatch: (beforeRawBytes) => {

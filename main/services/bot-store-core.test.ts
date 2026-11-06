@@ -420,17 +420,38 @@ test("a Bot's own-wake-ups switch is on by default, stays off once turned off, a
     const created = await store.create({ name: "Planner", instructions: "Plan dinners.", avatar: { version: 1, shape: "hex", color: "sun" } });
     assert.notEqual(created.selfWakeUps, false, "on unless the person turns it off");
     const base = { id: created.id, name: created.name, instructions: created.instructions, avatar: created.avatar };
+    const original = await store.wakeUpGeneration(created.id);
+    assert.equal(original, "", "legacy wake-ups belong to the original permission");
     const off = await store.update({ ...base, expectedRevision: created.revision, selfWakeUps: false });
     assert.equal(off.selfWakeUps, false);
     const renamed = await store.update({ ...base, expectedRevision: off.revision, name: "Dinner planner" });
     assert.equal(renamed.selfWakeUps, false, "an edit that leaves it out keeps it");
     const reopened = await createBotStore({ root: () => root, now: () => 900 }).get(created.id);
     assert.equal(reopened?.selfWakeUps, false);
+    assert.equal(await createBotStore({ root: () => root }).wakeUpGeneration(created.id), null);
     assert.equal(reopened?.revision, renamed.revision);
     const on = await store.update({ ...base, expectedRevision: renamed.revision, selfWakeUps: true });
     assert.notEqual(on.selfWakeUps, false);
+    const newPermission = await createBotStore({ root: () => root }).wakeUpGeneration(created.id);
+    assert.ok(newPermission && newPermission !== original, "reenabling cannot revive a surviving old task");
+    const saved = await store.update({ ...base, expectedRevision: on.revision, name: "New planner" });
+    assert.equal(await store.wakeUpGeneration(saved.id), newPermission, "an ordinary edit preserves pending wake-ups");
     assert.notEqual(on.revision, renamed.revision);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('messaging switches store only off and survive unrelated edits',async()=>{
+ const {root,store}=await fixture();
+ try {
+  const bot=await store.create({name:'Ada',instructions:'help',avatar:DEFAULT_BOT_AVATAR});
+  const base={id:bot.id,name:bot.name,instructions:bot.instructions,avatar:bot.avatar};
+  const off=await store.update({...base,expectedRevision:bot.revision,acceptsBotMessages:false,messagesOtherBots:false});
+  const renamed=await store.update({...base,expectedRevision:off.revision,name:'New Ada'});
+  assert.equal(renamed.acceptsBotMessages,false);assert.equal(renamed.messagesOtherBots,false);
+  const on=await store.update({...base,expectedRevision:renamed.revision,acceptsBotMessages:true,messagesOtherBots:true});
+  assert.equal(Object.prototype.hasOwnProperty.call(on,'acceptsBotMessages'),false);assert.equal(Object.prototype.hasOwnProperty.call(on,'messagesOtherBots'),false);
+  const stored=await createBotStore({root:()=>root}).get(bot.id);assert.equal(stored?.revision,on.revision);
+ } finally {await rm(root,{recursive:true,force:true});}
 });

@@ -17,7 +17,8 @@ import { BOT_WATCH_LIMITS, parseBotWatchUrl, type BotWatchSource } from "../../.
 import { isPathInside } from "../../shared/path-containment.js";
 import { runScheduledScript, type ScriptProcessResult } from "../schedule-script.js";
 
-export type BotWatchCheck = { ok: true; bytes: Uint8Array } | { ok: false; error: string };
+export interface BotWatchPublication { signal:AbortSignal; guard:import("./store.js").BotEventPublicationGuard; release():void }
+export type BotWatchCheck = { ok: true; publication?:BotWatchPublication; bytes: Uint8Array; connector?: { baseline: import("./connector-types.js").BotConnectorWatchBaseline; itemCount: number; changeCount: number; payload: string } } | { ok: false; error: string; pause?: boolean; skipped?: boolean };
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -28,7 +29,7 @@ function failed(error: string): BotWatchCheck {
 /** One GET of `url`: the body's bytes, or why it didn't count as a check. */
 export async function fetchBotWatchUrl(
   rawUrl: string,
-  options: { fetch?: FetchLike; timeoutMs?: number; maxBytes?: number } = {},
+  options: { fetch?: FetchLike; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal } = {},
 ): Promise<BotWatchCheck> {
   const url = parseBotWatchUrl(rawUrl);
   if (!url) return failed("This address isn't allowed. Use https, or http only for this Mac.");
@@ -51,7 +52,7 @@ export async function fetchBotWatchUrl(
         cache: "no-store",
         referrerPolicy: "no-referrer",
         headers: { accept: "*/*" },
-        signal: controller.signal,
+        signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
       });
     } catch {
       return failed(timedOut ? "The check timed out after 30 seconds." : `Aiden couldn't reach ${host}.`);
@@ -136,7 +137,7 @@ export async function resolveBotWatchScript(home: string, script: string): Promi
 export async function runBotWatchScript(
   home: string,
   script: string,
-  options: { authorize: BotWatchScriptAuthorizer; run?: BotWatchScriptRunner; timeoutMs?: number; maxBytes?: number },
+  options: { authorize: BotWatchScriptAuthorizer; run?: BotWatchScriptRunner; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal },
 ): Promise<BotWatchCheck> {
   const resolved = await resolveBotWatchScript(home, script);
   if ("error" in resolved) return failed(resolved.error);
@@ -150,12 +151,12 @@ export async function runBotWatchScript(
   if ("error" in grant) return failed(grant.error);
   let result: ScriptProcessResult;
   try {
-    if (grant.signal.aborted) return failed(`${script} was stopped because the Bot's Shell access changed.`);
+    if (grant.signal.aborted || options.signal?.aborted) return failed(`${script} was stopped.`);
     result = await run(resolved.path, {
       cwd: await fs.realpath(home),
       timeoutMs: options.timeoutMs ?? BOT_WATCH_LIMITS.scriptTimeoutMs,
       outputLimit: options.maxBytes ?? BOT_WATCH_LIMITS.scriptBytes,
-      signal: grant.signal,
+      signal: options.signal ? AbortSignal.any([grant.signal, options.signal]) : grant.signal,
     });
   } catch {
     return failed(`${script} couldn't start.`);
@@ -176,11 +177,12 @@ export async function runBotWatchScript(
 export function checkBotWatchSource(
   source: BotWatchSource,
   home: () => Promise<string>,
-  options: { authorize: BotWatchScriptAuthorizer; fetch?: FetchLike; run?: BotWatchScriptRunner },
+  options: { authorize: BotWatchScriptAuthorizer; fetch?: FetchLike; run?: BotWatchScriptRunner; signal?: AbortSignal },
 ): Promise<BotWatchCheck> {
-  if (source.type === "url") return fetchBotWatchUrl(source.url, { ...(options.fetch ? { fetch: options.fetch } : {}) });
+  if (source.type === "url") return fetchBotWatchUrl(source.url, { ...(options.fetch ? { fetch: options.fetch } : {}), signal: options.signal });
+  if (source.type === "connector") return Promise.resolve(failed("Connector watches require the owning host service."));
   return home().then(
-    (folder) => runBotWatchScript(folder, source.script, { authorize: options.authorize, ...(options.run ? { run: options.run } : {}) }),
+    (folder) => runBotWatchScript(folder, source.script, { authorize: options.authorize, ...(options.run ? { run: options.run } : {}), signal: options.signal }),
     () => failed("Aiden couldn't find the Bot's folder."),
   );
 }

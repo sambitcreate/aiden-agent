@@ -1,3 +1,4 @@
+import { redactBareCredentialTokens } from "./credential-tokens.js";
 import { decodeHTMLStrict } from "entities";
 import { toString as markdownToString } from "mdast-util-to-string";
 import remarkGfm from "remark-gfm";
@@ -32,8 +33,6 @@ const BEARER_SECRET =
 const BASIC_SECRET =
   /(?<![A-Za-z0-9])Basic\s+(?:\*{1,2}|_{1,2}|~~)?[A-Za-z0-9+/=]+(?:\*{1,2}|_{1,2}|~~)?/giu;
 const CREDENTIAL_URI = /((?<![A-Za-z0-9])[a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/giu;
-const TOKEN_SECRET =
-  /(?<![A-Za-z0-9])(?:AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,}|SG\.[0-9A-Za-z_-]{12,}\.[0-9A-Za-z_-]{12,}|eyJ[0-9A-Za-z_-]{10,}\.[0-9A-Za-z_-]{10,}\.[0-9A-Za-z_-]{10,}|gh[pousr]_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|glpat-[0-9A-Za-z_-]{10,}|hf_[0-9A-Za-z]{10,}|npm_[0-9A-Za-z]{10,}|pypi-[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z_-]{8,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{12,}|xox[baprs]-[0-9A-Za-z-]{8,}|ya29\.[0-9A-Za-z_-]{10,})(?![A-Za-z0-9])/gu;
 const ASSIGNMENT_SECRET_HINT =
   /auth|access|api|authorization|aws|client|connection|cookie|credential|database|db|encryption|github|passwd|password|private|pwd|refresh|secret|session|signing|token/iu;
 const STANDALONE_CREDENTIAL_HINT =
@@ -317,6 +316,20 @@ function controlVariants(value: string): {
   };
 }
 
+/**
+ * Redact only credentials that span lines (YAML block scalars, private-key blocks) so a later
+ * per-line pass cannot separate their opening line from the body. Single-line tokens are left
+ * whole for control-aware inspection.
+ */
+export function redactMultilineCredentialBlocks(value: string): string {
+  let sanitized = value;
+  if (value.includes(":") && ASSIGNMENT_SECRET_HINT.test(value)) sanitized = sanitized.replace(BLOCK_SCALAR_ASSIGNED_SECRET, "$1[REDACTED]");
+  if (STANDALONE_CREDENTIAL_HINT.test(value)) {
+    sanitized = sanitized.replace(PRIVATE_KEY_BLOCK, "[REDACTED PRIVATE KEY]").replace(PUTTY_PRIVATE_KEY, "[REDACTED PRIVATE KEY]");
+  }
+  return sanitized;
+}
+
 export function sanitizeCredentialText(value: string): string {
   let sanitized = value;
   if ((value.includes("=") || value.includes(":")) && ASSIGNMENT_SECRET_HINT.test(value)) {
@@ -333,10 +346,9 @@ export function sanitizeCredentialText(value: string): string {
       .replace(PUTTY_PRIVATE_KEY, "[REDACTED PRIVATE KEY]")
       .replace(BEARER_SECRET, "Bearer [REDACTED]")
       .replace(BASIC_SECRET, "Basic [REDACTED]")
-      .replace(CREDENTIAL_URI, "$1[REDACTED]@")
-      .replace(TOKEN_SECRET, "[REDACTED CREDENTIAL]");
+      .replace(CREDENTIAL_URI, "$1[REDACTED]@");
   }
-  return sanitized.replace(/(\[REDACTED(?: CREDENTIAL| ABSOLUTE PATH)?\])\]+/gu, "$1");
+  return redactBareCredentialTokens(sanitized, "[REDACTED CREDENTIAL]").replace(/(\[REDACTED(?: CREDENTIAL| ABSOLUTE PATH)?\])\]+/gu, "$1");
 }
 
 function directCredentialPolicyIsUnsafe(value: string): boolean {

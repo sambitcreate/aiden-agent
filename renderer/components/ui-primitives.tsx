@@ -96,7 +96,7 @@ export function Tabs<T extends string>({
           <TabsPrimitive.Trigger
             key={item.value}
             value={item.value}
-            {...(idBase !== undefined ? { id: tabIds(idBase, item.value).tab, "aria-controls": tabIds(idBase, item.value).panel } : {})}
+            {...(idBase !== undefined ? { id: tabIds(idBase, item.value).tab, "aria-controls": item.value === value ? tabIds(idBase, item.value).panel : undefined } : {})}
             className="h-7 rounded-menu px-3 text-small text-secondary outline-none transition-[background-color,color] duration-(--motion-duration) ease-standard hover:bg-control hover:text-primary data-[state=active]:bg-control data-[state=active]:text-primary"
           >
             {item.label}
@@ -246,11 +246,13 @@ export function Disclosure({
   defaultOpen = false,
   children,
   className,
+  contentClassName,
 }: {
   title: React.ReactNode;
   defaultOpen?: boolean;
   children: React.ReactNode;
   className?: string;
+  contentClassName?: string;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   return (
@@ -264,7 +266,7 @@ export function Disclosure({
           {title}
         </Button>
       </CollapsiblePrimitive.Trigger>
-      <CollapsiblePrimitive.Content className="min-w-0 pl-1">{children}</CollapsiblePrimitive.Content>
+      <CollapsiblePrimitive.Content className={cn("min-w-0 pl-1", contentClassName)}>{children}</CollapsiblePrimitive.Content>
     </CollapsiblePrimitive.Root>
   );
 }

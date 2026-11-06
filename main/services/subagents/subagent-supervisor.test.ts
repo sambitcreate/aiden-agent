@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import { createModels, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { Agent, AgentEvent, AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
@@ -3322,4 +3323,27 @@ test("model-supplied task and label text preserve semantic content before child 
   });
   assert.match(output, /Users\/alice|SecretProject/);
   assert.doesNotMatch(output, /REDACTED ABSOLUTE PATH/);
+});
+
+test("each foreground subagent counts once, and a batch over budget counts nothing", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    compactionEngine: "vcc",
+    workspaceRoot: "/workspace",
+    permission: "ask",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    policy: { launchBudget: 2 },
+    runChild: async ({ request: task }) => completed(task.label),
+  });
+  const batch = request(["1", "2"]);
+  await supervisor.execute(batch);
+  assert.deepEqual(sent, batch.tasks.map((task) => ({ event: "subagent_launched", props: { role: task.role } })));
+
+  sent.length = 0;
+  await assert.rejects(supervisor.execute(request(["3"])), /launch budget exceeded/i);
+  assert.deepEqual(sent, []);
 });

@@ -35,7 +35,7 @@ async function settingsSnapshot(): Promise<AidenRemoteSettingsSnapshot> {
     status: await runtime.service.status(),
     devices: await runtime.state.listDevices(),
     ...(pairing ? { pairing } : {}),
-    approvedRoots: state.approvedRoots.map((root) => ({
+    approvedRoots: state.approvedRoots.filter((root) => !root.botsOnly).map((root) => ({
       id: root.id,
       label: root.label,
       folderPath: root.folderPath,

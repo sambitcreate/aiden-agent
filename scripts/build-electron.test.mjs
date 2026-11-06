@@ -1,10 +1,11 @@
+import process from "node:process";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { SourceMap } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { electronBuildOptions } from "./build-electron.mjs";
 
@@ -69,4 +70,17 @@ test("production main bundle is smaller but keeps names and symbolicates through
   assert.equal(path.basename(original.originalSource), "entry.ts");
   const sourceLine = FIXTURE.split("\n")[original.originalLine];
   assert.match(sourceLine, /throw new Error\("fixture failure"\)/u);
+});
+
+
+test("the production Linux bundle reads artifact files without a macOS helper", { skip: process.platform !== "linux" }, async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-linux-artifact-bundle-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const outfile = path.join(directory, "artifact-reader.mjs");
+  const main = electronBuildOptions({ production: true }).find((candidate) => candidate.outfile === "build/main/index.js");
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  await build({ ...main, entryPoints: [path.join(root, "main/services/workspace-artifacts/file-policy.ts")], outfile, logLevel: "silent" });
+  const bundled = await import(pathToFileURL(outfile).href);
+  await writeFile(path.join(directory, "data.txt"), "bundled Linux workspace data");
+  assert.equal(await bundled.readWorkspaceArtifactFile(directory, "data.txt"), "bundled Linux workspace data");
 });

@@ -2252,7 +2252,8 @@ object AidenChatModelAuthority {
         selectedProviderId: String?,
         selectedModelId: String?,
         selectedThinkingLevel: String?,
-        remembered: AidenChatModelSelection? = null
+        remembered: AidenChatModelSelection? = null,
+        hasExplicitSelection: Boolean = false
     ): AidenChatModelSelection {
         if (chat.isBotChat) {
             val provider = catalog?.providers?.firstOrNull { it.id == chat.providerId }
@@ -2265,6 +2266,12 @@ object AidenChatModelAuthority {
         }
 
         if (catalog == null) {
+            if (!hasExplicitSelection && chat.messages.isNotEmpty() && chat.providerId != null && chat.modelId != null) {
+                return AidenChatModelSelection(
+                    chat.providerId, chat.modelId,
+                    if (selectedProviderId == chat.providerId && selectedModelId == chat.modelId) selectedThinkingLevel else null
+                )
+            }
             return AidenChatModelSelection(
                 providerId = selectedProviderId,
                 modelId = selectedModelId,
@@ -2272,13 +2279,13 @@ object AidenChatModelAuthority {
             )
         }
 
-        // A chat that already has messages keeps its own model. The remembered
-        // per-host choice (passed only until the user picks in this chat)
-        // seeds a new chat, or one whose model this phone can't use.
-        if (remembered != null && chat.messages.isNotEmpty()) {
+        // Cache-seeded selections are not user choices. Until the person picks,
+        // a populated chat follows its refreshed host pair, even without a
+        // remembered default. Explicit unsent choices stay with this chat.
+        if (!hasExplicitSelection && chat.messages.isNotEmpty()) {
             ownSelection(chat, catalog, selectedProviderId, selectedModelId, selectedThinkingLevel)?.let { return it }
         }
-        rememberedSelection(catalog, remembered)?.let { return it }
+        if (!hasExplicitSelection) rememberedSelection(catalog, remembered)?.let { return it }
 
         val selectedProvider = catalog.providers.firstOrNull { it.id == selectedProviderId }
         val chatProvider = catalog.providers.firstOrNull { it.id == chat.providerId }

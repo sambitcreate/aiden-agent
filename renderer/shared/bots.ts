@@ -190,6 +190,8 @@ export interface BotDefinition {
   interruptions?: BotInterruptions;
   /** `false`: the person turned off "Let <Bot> set its own wake-ups". Absent: on (main never stores `true`). */
   selfWakeUps?: boolean;
+  acceptsBotMessages?: boolean;
+  messagesOtherBots?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -216,6 +218,8 @@ export interface BotUpdateInput extends BotCreateInput {
   interruptions?: BotInterruptions;
   /** Absent keeps the stored setting. */
   selfWakeUps?: boolean;
+  acceptsBotMessages?: boolean;
+  messagesOtherBots?: boolean;
 }
 
 export interface TelegramBotBindingView {

@@ -113,5 +113,5 @@ test("the saved document survives a reload and drops anything malformed", () => 
     runs: { "routine:t1:2": 0.5 },
   });
   assert.equal(Object.getPrototypeOf(parsed.chats), Object.prototype);
-  assert.deepEqual(parseSpendingDocument({ version: 2, chats: { a: { spentUsd: 1 } } }).chats, {});
+  assert.deepEqual(parseSpendingDocument({ version: 3, chats: { a: { spentUsd: 1 } } }).chats, {});
 });

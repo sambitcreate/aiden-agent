@@ -2,11 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  CONNECTIONS_SEGMENTS,
-  ConnectionsSegments,
-  connectionsSegmentForKey,
-} from "./connections-settings.js";
-import {
   PeerAddDeviceSheetBody,
   peerAddDeviceTitle,
   type PeerAddDeviceActions,
@@ -177,21 +172,6 @@ test("a turned-off host shows its switch off and offers no reconnect", () => {
   assert.match(html, /role="switch"[^>]*aria-checked="false"[^>]*aria-label="Control Studio Mac"|aria-label="Control Studio Mac"[^>]*aria-checked="false"|aria-checked="false"[^>]*aria-label="Control Studio Mac"/u);
   assert.ok(!buttons(html).includes("Reconnect"));
   assert.match(html, />Off</u);
-});
-
-test("the Connections segments expose one selected tab and keyboard order wraps", () => {
-  const html = renderToStaticMarkup(
-    <ConnectionsSegments selected="others" onSelect={noop} idPrefix="connections" />,
-  );
-  assert.equal([...html.matchAll(/role="tab"/gu)].length, CONNECTIONS_SEGMENTS.length);
-  assert.match(html, /aria-selected="true"[^>]*>Control other devices</u);
-  assert.match(html, /aria-selected="false"[^>]*tabindex="-1"[^>]*>Control this device</u);
-
-  assert.equal(connectionsSegmentForKey("ArrowRight", 1), 0);
-  assert.equal(connectionsSegmentForKey("ArrowLeft", 0), 1);
-  assert.equal(connectionsSegmentForKey("End", 0), 1);
-  assert.equal(connectionsSegmentForKey("Home", 1), 0);
-  assert.equal(connectionsSegmentForKey("Enter", 0), null);
 });
 
 test("transport connection stays syncing until the host feed is live", () => {

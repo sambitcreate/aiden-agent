@@ -30,6 +30,32 @@ import { processRunning } from "../shared/process-liveness-test-support.js";
 
 const execFileAsync = promisify(execFile);
 
+test("a caller's canonical read fence covers direct reads, aliases and every recursive search entry", async (t) => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "coding-read-fence-")));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const privateRoot = path.join(root, "private");
+  await fs.mkdir(privateRoot);
+  await fs.writeFile(path.join(privateRoot, "secret.txt"), "SECRET FENCED CONTENT");
+  await fs.writeFile(path.join(root, "ordinary.txt"), "ORDINARY CONTENT");
+  await fs.symlink(privateRoot, path.join(root, "alias"));
+  const tools = buildPinnedCodingTools(root, undefined, undefined, { assertReadPath(canonical) {
+    if (canonical === privateRoot || canonical.startsWith(privateRoot + path.sep)) throw new Error("Private path refused.");
+  } });
+  const read = tools.find((tool) => tool.name === "read_file")!;
+  const text = (result: Awaited<ReturnType<typeof read.execute>>) => JSON.stringify(result.content);
+  for (const file of ["private/secret.txt", "alias/secret.txt"]) {
+    await assert.rejects(read.execute("private", { path: file }), /Private path refused/u);
+  }
+  assert.match(text(await read.execute("ordinary", { path: "ordinary.txt" })), /ORDINARY CONTENT/u);
+  for (const name of ["list_dir", "glob", "grep"]) {
+    const tool = tools.find((tool) => tool.name === name)!;
+    const result = await tool.execute("search", name === "list_dir" ? {} : { pattern: name === "glob" ? "**/*.txt" : "CONTENT" });
+    assert.doesNotMatch(text(result), /secret\.txt|SECRET FENCED CONTENT/u, name);
+    assert.match(text(result), /ordinary\.txt/u, name);
+  }
+  await assert.rejects(tools.find((tool) => tool.name === "list_dir")!.execute("private-dir", { path: "alias" }), /Private path refused/u);
+});
+
 function base32(value: string, alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"): string {
   let bits = 0;
   let bitCount = 0;
