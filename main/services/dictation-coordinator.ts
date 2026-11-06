@@ -75,7 +75,7 @@ export interface DictationTiming {
 }
 
 export const VOICE_CHECK_FAILED_MESSAGE =
-  "Aiden couldn't check your voice setup. Open Settings → Voice and try again.";
+  "Aiden couldn't check your voice setup. Open Settings → Voice & Speech and try again.";
 
 const RESULT_HIDE_DELAY_MS = 1_200;
 // The pill window cannot take focus, so an error is readable only while it is

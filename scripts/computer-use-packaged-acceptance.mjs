@@ -704,7 +704,7 @@ async function runAcceptance() {
     const deadline = Date.now() + ACCEPTANCE_TIMEOUT_MS;
 
     console.log(`\nPackaged Computer Use acceptance is running in: ${temporary}`);
-    console.log("1. In Settings → Computer Use, turn on the global beta gate.");
+    console.log("1. In Settings → Computers & VMs → Computer Use, turn on the global beta gate.");
     console.log("2. Request access if macOS reports missing permissions.");
     console.log("3. Return to the acceptance chat and send: “Run the packaged Computer Use acceptance sequence.”");
     console.log("4. On the Computer Use access card, choose Allow for this chat.");

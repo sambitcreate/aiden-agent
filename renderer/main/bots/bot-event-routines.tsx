@@ -243,7 +243,7 @@ export function BotEventRoutines({
           label={`${link.name}'s link`}
           description={link.link
             ? "Works on your network or Tailscale while this Mac is awake. It is shown only now; New link makes another and stops this one. The Mac's certificate is self-signed, so callers may need to allow that (curl -k)."
-            : "Turn on Aiden On The Go in Settings to use this routine's link."}
+            : "Turn on remote access in Settings → Connections to use this routine's link."}
         >
           {link.link ? (
             <Button
