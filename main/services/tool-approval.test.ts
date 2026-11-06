@@ -449,7 +449,8 @@ test("a prompt answered from inside its own publication is still withdrawn exact
 
 test("re-asking an id from inside its publication leaves the replacement pending and answerable", async () => {
   const withdrawn: Array<[string, string]> = [];
-  let replacement: Promise<"allow" | "deny"> | undefined;
+  let replacement: ReturnType<typeof approvals.request> | undefined;
+  // A different fingerprint is what makes this a replacement; an identical request joins the first.
   const ask = (toolCallId: string) =>
     approvals.request({
       botId: "b",
@@ -457,6 +458,7 @@ test("re-asking an id from inside its publication leaves the replacement pending
       toolCallId,
       toolName: "write",
       summary: "x",
+      authorizationFingerprint: toolCallId,
       signal: new AbortController().signal,
     });
   const approvals = createBotApprovals({
@@ -466,12 +468,12 @@ test("re-asking an id from inside its publication leaves the replacement pending
     withdraw: (prompt, outcome) => withdrawn.push([prompt.toolCallId, outcome]),
   });
 
-  assert.equal(await ask("first"), "deny");
+  await assert.rejects(ask("first"), /replaced/u);
   assert.deepEqual(approvals.pending("b").map((prompt) => prompt.toolCallId), ["second"]);
   assert.deepEqual(withdrawn, []);
 
   assert.equal(approvals.decide("same", "allow"), true);
-  assert.equal(await replacement, "allow");
+  assert.equal((await replacement)?.answer, "allow");
   assert.deepEqual(approvals.pending("b"), []);
   assert.deepEqual(withdrawn, [["second", "allowed"]]);
 });
