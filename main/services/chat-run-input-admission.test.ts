@@ -303,6 +303,40 @@ test("run input admission reports committed-but-capacity when the queue fills du
   });
 });
 
+test("a chat deletion that starts during persistence stops the input reaching the run", async () => {
+  const app = fixture();
+  app.setAfterAppend(() => {
+    app.deleting.add("chat-1");
+  });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "steer",
+    text: "sent as the chat was deleted",
+  });
+  assert.deepEqual(result, {
+    admitted: false,
+    reason: "cancelled",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
+  assert.equal(app.steered.length, 0);
+});
+
+test("a chat deletion that starts before the save lands leaves the draft unconsumed", async () => {
+  const app = fixture();
+  app.setDuringAppend(() => {
+    app.deleting.add("chat-1");
+  });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "deleted first",
+  });
+  assert.deepEqual(result, { admitted: false, reason: "cancelled", committed: false });
+  assert.equal(app.appended.length, 0);
+  assert.equal(app.followedUp.length, 0);
+});
+
 test("run input admission maps the isCurrent cancel race to cancelled without committing", async () => {
   const app = fixture();
   app.setDuringAppend(() => {

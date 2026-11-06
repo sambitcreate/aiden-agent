@@ -110,7 +110,8 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     if (generation.inputClosed) {
       return { admitted: false, reason: "run_not_active", committed: false };
     }
-    if (generation.cancelRequested || deps.isChatDeleting(generation.chatId)) {
+    const stopped = () => generation.cancelRequested || deps.isChatDeleting(generation.chatId);
+    if (stopped()) {
       return { admitted: false, reason: "cancelled", committed: false };
     }
     const blocked = generation.agent.queueAdmissionBlocked();
@@ -132,8 +133,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
             },
             {
               isCurrent: () =>
-                deps.active.get(input.streamId) === generation &&
-                !generation.cancelRequested,
+                deps.active.get(input.streamId) === generation && !stopped(),
             },
           ),
         recover: () => deps.readChat(generation.chatId),
@@ -146,7 +146,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
       // client draft is genuinely unconsumed here.
       return {
         admitted: false,
-        reason: generation.cancelRequested ? "cancelled" : "run_not_active",
+        reason: stopped() ? "cancelled" : "run_not_active",
         committed: false,
       };
     }
@@ -160,7 +160,7 @@ export function createChatRunInputAdmission(deps: ChatRunInputAdmissionDeps) {
     if (deps.active.get(input.streamId) !== generation) {
       return { admitted: false, reason: "run_not_active", committed: true, messageId };
     }
-    if (generation.cancelRequested) {
+    if (stopped()) {
       return { admitted: false, reason: "cancelled", committed: true, messageId };
     }
     const message: AgentMessage = { role: "user", content: input.text, timestamp: now() };
