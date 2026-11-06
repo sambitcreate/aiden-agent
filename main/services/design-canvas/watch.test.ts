@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
@@ -54,22 +55,44 @@ function watcher(t: TestContext, options: { allowed?: (chatId: string, root: str
   return { instance, updates, open: () => open };
 }
 
-test("five quick writes to a watched file are reported once, after the quiet period", async (t) => {
+test("five quick changes to a watched file are reported once, after the quiet period", async (t) => {
+  // The debounce is timing, so it runs on a fake watch and mocked timers: a busy
+  // machine must not split one burst into two reports. Real files are covered below.
+  const root = await workspace(t, { "design/hero.html": "<p>1</p>" });
+  const watched: { emit?: (event: string, filename: string | null) => void } = {};
+  const updates: DesignFilesChanged[] = [];
+  const instance = new DesignFileWatcher({
+    onChange: (update) => updates.push(update),
+    watch: (_folder, _options, listener) => {
+      watched.emit = listener as (event: string, filename: string | null) => void;
+      return Object.assign(new EventEmitter(), { close: () => undefined }) as unknown as fs.FSWatcher;
+    },
+  });
+  t.after(() => instance.clearAll());
+  await instance.set("chat-1", root, ["design/hero.html"]);
+  const emit = watched.emit;
+  assert.ok(emit, "the page's folder is watched");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  for (let index = 0; index < 5; index += 1) {
+    emit("change", "hero.html");
+    t.mock.timers.tick(DESIGN_WATCH_DEBOUNCE_MS - 1);
+  }
+  assert.equal(updates.length, 0, "each change restarts the quiet period");
+  t.mock.timers.tick(1);
+  assert.deepEqual(updates, [{ chatId: "chat-1", paths: ["design/hero.html"] }]);
+  t.mock.timers.tick(10 * DESIGN_WATCH_DEBOUNCE_MS);
+  assert.equal(updates.length, 1, "reported once");
+});
+
+test("a write to a watched file on disk is reported", async (t) => {
   const root = await workspace(t, { "design/hero.html": "<p>1</p>" });
   const { instance, updates } = watcher(t);
   await instance.set("chat-1", root, ["design/hero.html"]);
   await streamStarted();
-  const started = Date.now();
-  for (let index = 0; index < 5; index += 1) {
-    await fsp.writeFile(path.join(root, "design/hero.html"), `<p>${index}</p>`);
-    await sleep(10);
-  }
-  await sleep(450);
-  assert.equal(updates.length, 1);
+  await fsp.writeFile(path.join(root, "design/hero.html"), "<p>2</p>");
+  await eventually(() => updates.length > 0);
   assert.deepEqual(updates[0], { chatId: "chat-1", paths: ["design/hero.html"], at: updates[0]!.at });
-  const delay = updates[0]!.at - started;
-  assert.ok(delay >= DESIGN_WATCH_DEBOUNCE_MS, `reported after ${delay} ms`);
-  assert.ok(delay <= 400 + 50, `reported after ${delay} ms`);
 });
 
 test("a change to an asset in the same folder reports the watched page", async (t) => {
