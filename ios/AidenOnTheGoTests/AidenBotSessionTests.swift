@@ -101,6 +101,11 @@ private final class TestGate: @unchecked Sendable {
 
 /// A scripted host for `AidenBotSessionModel`. Every request is recorded so a
 /// test can assert what reached the Mac.
+/// The owner a cached Bot chat must have: the machine its key names.
+private func botOwner(of key: AidenBotSessionKey) -> AidenRemoteRequestContext {
+    AidenRemoteRequestContext(instanceId: key.instanceId, deviceId: key.deviceId, generation: 0, scope: .owner)
+}
+
 private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var _sessions: [Result<AidenBotSession, Error>] = []
@@ -429,7 +434,7 @@ final class AidenBotSessionTests: XCTestCase {
         _ initial: AidenBotSession
     ) async -> AidenBotSessionModel {
         transport.queueSession(.success(initial))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         return model
     }
@@ -630,7 +635,7 @@ final class AidenBotSessionTests: XCTestCase {
             entries: [.sharedImage(image("entry_1")), .sharedImage(image("entry_2")), .sharedImage(image("entry_3"))]
         )))
         // Room for two 4-byte images.
-        let model = AidenBotSessionModel(botID: botID, transport: transport, sharedImageBudget: 8)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine, sharedImageBudget: 8)
         await model.load()
 
         _ = await model.sharedImageData(entryId: "entry_1")
@@ -710,7 +715,7 @@ final class AidenBotSessionTests: XCTestCase {
         transport.queueStream([
             event(epoch: "epoch_b", seq: 1, .snapshot(try session(epoch: "epoch_b", seq: 1, entries: []))),
         ])
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
 
         let listener = Task { await model.listen() }
         let deadline = Date().addingTimeInterval(5)
@@ -733,7 +738,7 @@ final class AidenBotSessionTests: XCTestCase {
         transport.queueStream([
             event(seq: 4, .snapshot(try session(seq: 4, entries: [message("m1", .user, "Hi"), message("m2", .assistant, "Your turn.")]))),
         ], staysOpen: true)
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         let listener = Task { await model.listen() }
         var deadline = Date().addingTimeInterval(5)
         while model.seq != 3, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
@@ -755,7 +760,7 @@ final class AidenBotSessionTests: XCTestCase {
 
     func testListenStopsWhenItsTaskIsCancelled() async throws {
         let transport = FakeBotSessionTransport()
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         let listener = Task { await model.listen() }
         try await Task.sleep(for: .milliseconds(50))
         listener.cancel()
@@ -876,7 +881,7 @@ final class AidenBotSessionTests: XCTestCase {
     func testALostRetryKeepsItsKeyUntilTheMacIsBackAndAnotherFailedTurnGetsANewOne() async throws {
         let transport = FakeBotSessionTransport()
         transport.queueSession(.success(try session(seq: 1, entries: [failedTurn("t1:failed", retryText: "First")])))
-        let model = AidenBotSessionModel(botID: botID, transport: transport, retryDelays: [.seconds(60)])
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine, retryDelays: [.seconds(60)])
         await model.load()
         transport.failNextSend(with: URLError(.networkConnectionLost))
         transport.failNextSend(with: URLError(.networkConnectionLost))
@@ -1503,7 +1508,7 @@ final class AidenBotSessionQuestionTests: XCTestCase {
 
     func testSnapshotQuestionIsAnsweredOnceAndClearsWhenTheMacReceipts() async throws {
         let transport = QuestionTransport(snapshot: try session(question: questionJSON))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         XCTAssertEqual(model.question?.waitId, waitID)
         XCTAssertTrue(model.canAnswerQuestion)
@@ -1519,7 +1524,7 @@ final class AidenBotSessionQuestionTests: XCTestCase {
 
     func testALostAnswerIsRetriedUnderItsKeyAndAnotherAnswerIsANewRequest() async throws {
         let transport = QuestionTransport(snapshot: try session(question: questionJSON))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         let blue = AidenQuestionRespondRequest(cancelled: false, answers: [.option(questionIndex: 0, answer: "Blue")])
         let red = AidenQuestionRespondRequest(cancelled: false, answers: [.option(questionIndex: 0, answer: "Red")])
@@ -1539,7 +1544,7 @@ final class AidenBotSessionQuestionTests: XCTestCase {
 
     func testQuestionEventsShowAndSettleTheWaitingQuestion() async throws {
         let transport = QuestionTransport(snapshot: try session(question: "null"))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         XCTAssertNil(model.question)
 
@@ -1572,7 +1577,7 @@ final class AidenBotSessionApprovalTests: XCTestCase {
 
     private func loadedModel(approval: String) async throws -> (AidenBotSessionModel, QuestionTransport) {
         let transport = QuestionTransport(snapshot: try session(approval: approval))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         return (model, transport)
     }
@@ -1654,7 +1659,7 @@ final class AidenBotSessionApprovalTests: XCTestCase {
         let transport = QuestionTransport(
             snapshot: try session(approval: "null", epoch: first.epoch, seq: first.seq - 1)
         )
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         XCTAssertNil(model.approval)
 
@@ -2126,7 +2131,7 @@ final class AidenBotSessionActivityTests: XCTestCase {
         supported: Bool = true
     ) async -> AidenBotSessionModel {
         transport.queueSession(.success(session))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         model.activitySupported = supported
         await model.load()
         return model
@@ -2381,6 +2386,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         let model = AidenBotSessionModel(
             botID: botID,
             transport: transport,
+            owner: key.map(botOwner) ?? .noMachine,
             cacheKey: key,
             cache: cache ?? AidenBotSessionCache(),
             outboxStore: store,
@@ -3042,7 +3048,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         // A Bot whose access changed loses what waited for it too.
         let other = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: "bot_fixture_02")
         let blockedTransport = FakeBotSessionTransport()
-        let blocked = AidenBotSessionModel(botID: botID, transport: blockedTransport, cacheKey: other, cache: cache, outboxStore: store)
+        let blocked = AidenBotSessionModel(botID: botID, transport: blockedTransport, owner: botOwner(of: other), cacheKey: other, cache: cache, outboxStore: store)
         _ = await blocked.send("Hello")
         try await stored(store, other, count: 1)
         blockedTransport.queueSession(.success(try session(.interrupted, blocked: .accessChanged)))
@@ -3204,7 +3210,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         {"botId":"bot_fixture_01","epoch":"epoch_1","seq":0,"state":"running","interrupted":false,"entries":[],"hasOlder":false,"question":\(question),"approval":null}
         """
         let transport = QuestionTransport(snapshot: try JSONDecoder().decode(AidenBotSession.self, from: Data(json.utf8)))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         XCTAssertNotNil(model.question)
         transport.answerGate.hold()
@@ -3268,7 +3274,7 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
             {"botId":"bot_fixture_01","epoch":"epoch_1","seq":0,"state":"running","interrupted":false,"entries":[],"hasOlder":false,"question":\(card == "question" ? question : "null"),"approval":\(card == "approval" ? approval : "null")}
             """
             let transport = QuestionTransport(snapshot: try JSONDecoder().decode(AidenBotSession.self, from: Data(json.utf8)))
-            let model = AidenBotSessionModel(botID: botID, transport: transport)
+            let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
             await model.load()
             transport.answerGate.hold()
             let task: Task<Void, Never>
@@ -3975,7 +3981,7 @@ final class AidenBotConnectionHintTests: XCTestCase {
 
     func testAChatSaysConnectingUntilTheMacAnswersAndAFailedFirstLoadOffersTryAgain() async throws {
         let transport = FakeBotSessionTransport()
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         XCTAssertEqual(aidenBotConnectionHint(for: model, nowMs: started), .connecting, "before the first snapshot")
 
         await model.load() // nothing queued: the Mac can't be reached
@@ -3994,7 +4000,7 @@ final class AidenBotConnectionHintTests: XCTestCase {
             transport.queueSession(.success(try session(state)))
             transport.queueStream([]) // the first connection drops at once
             transport.queueStream([], staysOpen: true)
-            let model = AidenBotSessionModel(botID: botID, transport: transport)
+            let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
             model.activitySupported = true
             await model.load()
             let listener = Task { await model.listen() }
@@ -4611,8 +4617,8 @@ final class AidenBotSessionAttachmentTests: XCTestCase {
             hasOlder: false
         )))
         let model = clock.map { clock in
-            AidenBotSessionModel(botID: botID, transport: transport, now: { clock.now })
-        } ?? AidenBotSessionModel(botID: botID, transport: transport)
+            AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine, now: { clock.now })
+        } ?? AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         model.attachmentsSupported = supported
         await model.load()
         return model
@@ -4924,7 +4930,7 @@ final class AidenBotSessionHandoffTests: XCTestCase {
 
     private func loadedModel(_ snapshot: AidenBotSession) async -> (AidenBotSessionModel, HandoffTransport) {
         let transport = HandoffTransport(snapshot: snapshot)
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         return (model, transport)
     }
@@ -5249,7 +5255,7 @@ final class AidenBotIssueTests: XCTestCase {
     func testAResumeTapPostsTheCardsActionOnceAndDropsTheCard() async throws {
         let transport = FakeBotSessionTransport()
         transport.queueSession(.success(try session()))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         XCTAssertEqual(model.openIssues.count, 3, "the settled card is not shown")
         let card = try routineCard()
@@ -5283,7 +5289,7 @@ final class AidenBotIssueTests: XCTestCase {
     func testAStaleCardComesBackWithTheMacsReasonAndNotOpenStaysGone() async throws {
         let transport = FakeBotSessionTransport()
         transport.queueSession(.success(try session()))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         let stop = try session().issues[2]
         let stopAction = try XCTUnwrap(stop.actions.first)
@@ -5315,7 +5321,7 @@ final class AidenBotIssueTests: XCTestCase {
     func testOpenChatTellsTheMacWithoutDroppingTheCard() async throws {
         let transport = FakeBotSessionTransport()
         transport.queueSession(.success(try session()))
-        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
         await model.load()
         let card = try routineCard()
         let openChat = try XCTUnwrap(card.actions.first)
@@ -5539,7 +5545,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
     private func session() throws -> AidenBotSession { try decode(AidenBotSession.self, section()["session"]!) }
     private func model() async throws -> (AidenBotSessionModel, HandoffTransport) {
         let transport = HandoffTransport(snapshot: try session())
-        let model = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport)
+        let model = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport, owner: .noMachine)
         await model.load()
         return (model, transport)
     }
@@ -5572,7 +5578,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
         XCTAssertNil(model.accessRequest)
         let legacy = try XCTUnwrap(section["legacy"] as? [String: Any])
         let transport = HandoffTransport(snapshot: try decode(AidenBotSession.self, legacy["session"]!))
-        let legacyModel = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport)
+        let legacyModel = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport, owner: .noMachine)
         await legacyModel.load()
         XCTAssertEqual(legacyModel.entries.count, 1)
         for raw in try XCTUnwrap(legacy["events"] as? [[String: Any]]) {
@@ -5696,7 +5702,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
         object["issues"] = [issue]
         let transport = FakeBotSessionTransport()
         transport.queueSession(.success(try decode(AidenBotSession.self, object)))
-        let model = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport)
+        let model = AidenBotSessionModel(botID: "bot_fixture_01", transport: transport, owner: .noMachine)
         await model.load()
         let card = try XCTUnwrap(model.openIssues.first)
         let action = try XCTUnwrap(card.actions.first)

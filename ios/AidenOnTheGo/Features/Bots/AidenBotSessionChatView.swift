@@ -1158,7 +1158,7 @@ struct AidenBotSessionChatView: View {
 
     @MainActor
     private func start() async {
-        guard let context = try? coordinator.requestContext(),
+        guard let context = try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? ""),
               let client = try? coordinator.remoteClient(for: context) else {
             // No way to reach the Mac yet: say so, with Try again, instead of an endless skeleton.
             if model == nil { startFailed = true }
@@ -1170,6 +1170,8 @@ struct AidenBotSessionChatView: View {
         let model = AidenBotSessionModel(
             botID: botID,
             transport: client,
+            owner: context,
+            isOwnerLive: { [coordinator] in coordinator.isLive(context) },
             cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID),
             allowedSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
             plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true

@@ -352,5 +352,103 @@ final class AidenOwnerScopeTests: XCTestCase {
         XCTAssertFalse(a.canSend)
         XCTAssertEqual(coordinator.activeInstanceId, "laptop")
     }
+
+    // MARK: Bot chats
+
+    private let botId = "bot_scout"
+
+    private func botSession(_ text: String, on instanceId: String) {
+        responder.reply(instanceId: instanceId, path: "/bots/\(botId)/session", status: 200, json: json([
+            "botId": botId,
+            "epoch": "epoch_\(instanceId)",
+            "seq": 1,
+            "state": "idle",
+            "interrupted": false,
+            "entries": [[
+                "type": "message", "id": "entry_1", "role": "assistant",
+                "text": text, "createdAt": "2026-11-05T09:00:00.000Z",
+            ]],
+            "hasOlder": false,
+            "question": NSNull(),
+            "approval": NSNull(),
+        ]))
+    }
+
+    private func botKey(_ owner: AidenRemoteRequestContext) -> AidenBotSessionKey {
+        AidenBotSessionKey(instanceId: owner.instanceId, deviceId: owner.deviceId, botID: botId)
+    }
+
+    private func botModel(
+        owner instanceId: String,
+        cache: AidenBotSessionCache
+    ) throws -> AidenBotSessionModel {
+        let owner = try coordinator.ownerContext(for: instanceId)
+        let coordinator = coordinator!
+        return AidenBotSessionModel(
+            botID: botId,
+            transport: try coordinator.remoteClient(for: owner),
+            owner: owner,
+            isOwnerLive: { coordinator.isLive(owner) },
+            cacheKey: botKey(owner),
+            cache: cache,
+            outboxStore: nil
+        )
+    }
+
+    private func texts(_ entries: [AidenBotSessionEntry]?) -> [String]? {
+        entries?.compactMap { entry in
+            if case let .message(message) = entry { return message.text }
+            return nil
+        }
+    }
+
+    func testABotChatKeepsItsMachineWhenTheSelectionMoves() async throws {
+        botSession("from studio", on: "studio")
+        botSession("from laptop", on: "laptop")
+        let botCache = AidenBotSessionCache()
+        let release = responder.hold(instanceId: "studio", path: "/bots/\(botId)/session")
+        let a = try botModel(owner: "studio", cache: botCache)
+        let b = try botModel(owner: "laptop", cache: botCache)
+        let loading = Task { await a.load() }
+        try await waitForRequest("GET /bots/\(botId)/session", on: "studio")
+
+        await b.load()
+        await coordinator.switchInstallation(to: "laptop")
+        release()
+        await loading.value
+
+        XCTAssertEqual(texts(a.entries), ["from studio"])
+        XCTAssertEqual(texts(b.entries), ["from laptop"])
+        XCTAssertEqual(a.owner.instanceId, "studio")
+        XCTAssertEqual(texts(botCache.transcript(for: botKey(a.owner))), ["from studio"])
+        XCTAssertEqual(texts(botCache.transcript(for: botKey(b.owner))), ["from laptop"])
+    }
+
+    func testABotModelWhoseMachineIsForgottenStopsWriting() async throws {
+        botSession("from studio", on: "studio")
+        await coordinator.switchInstallation(to: "laptop")
+        let botCache = AidenBotSessionCache()
+        let release = responder.hold(instanceId: "studio", path: "/bots/\(botId)/session")
+        let a = try botModel(owner: "studio", cache: botCache)
+        let key = botKey(a.owner)
+        let loading = Task { await a.load() }
+        try await waitForRequest("GET /bots/\(botId)/session", on: "studio")
+        let waiting = await a.send("Waiting for the first snapshot")
+        XCTAssertTrue(waiting)
+
+        await coordinator.removeInstallation("studio")
+        release()
+        await loading.value
+
+        XCTAssertEqual(a.entries, [])
+        XCTAssertNil(botCache.transcript(for: key))
+        XCTAssertFalse(a.canSend)
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains { $0.hasPrefix("POST") })
+
+        // A frame that was already on its way changes nothing either.
+        let outcome = await a.apply(AidenBotSessionEvent(botId: botId, epoch: "epoch_studio", seq: 2, kind: .partial("late")))
+        XCTAssertEqual(outcome, .closed)
+        XCTAssertNil(a.partial)
+    }
 }
 #endif

@@ -1181,7 +1181,13 @@ final class AidenBotSessionModel {
     }
 
     let botID: String
+    /// The machine this chat belongs to. `transport` and the cache key are its
+    /// own, so nothing here follows the selection.
+    let owner: AidenRemoteRequestContext
     private let transport: any AidenBotSessionTransport
+    /// False once `owner`'s machine is forgotten or paired again. From then on
+    /// nothing is applied, written or sent.
+    @ObservationIgnored private let isOwnerLive: @MainActor () -> Bool
 
     private(set) var entries: [AidenBotSessionEntry] = []
     /// The streamed answer so far, as the Mac last sent it.
@@ -1334,6 +1340,8 @@ final class AidenBotSessionModel {
     init(
         botID: String,
         transport: any AidenBotSessionTransport,
+        owner: AidenRemoteRequestContext,
+        isOwnerLive: @escaping @MainActor () -> Bool = { true },
         cacheKey: AidenBotSessionKey? = nil,
         allowedSupported: Bool = false,
         plansSupported: Bool = false,
@@ -1344,7 +1352,13 @@ final class AidenBotSessionModel {
         sharedImageBudget: Int = AidenSharedImageBytes.defaultMaxBytes,
         now: @escaping () -> Date = { Date() }
     ) {
+        assert(
+            cacheKey.map { $0.instanceId == owner.instanceId && $0.deviceId == owner.deviceId } ?? true,
+            "A Bot chat caches under the machine that owns it."
+        )
         self.botID = botID
+        self.owner = owner
+        self.isOwnerLive = isOwnerLive
         self.allowedSupported = allowedSupported
         self.plansSupported = plansSupported
         self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
@@ -1407,7 +1421,7 @@ final class AidenBotSessionModel {
     /// The composer takes a message unless the Mac said this Bot can't take one
     /// (it needs a model, is unavailable or is paused). Before the first
     /// snapshot it waits in the outbox (R14).
-    var canSend: Bool { !needsModel && state != .unavailable && state != .paused }
+    var canSend: Bool { !needsModel && state != .unavailable && state != .paused && isOwnerLive() }
 
     /// No snapshot yet: the chat draws skeleton bubbles where it has no transcript (R14).
     var showsSkeleton: Bool { !hasLoaded && entries.isEmpty }
@@ -1500,6 +1514,7 @@ final class AidenBotSessionModel {
             let session = try await aidenBotWithin(requestLimit) { [transport, botID] in
                 try await transport.botSession(botId: botID)
             }
+            guard isOwnerLive() else { return false }
             // Cleared first, so what the snapshot itself reports (a purged outbox) stays.
             errorMessage = nil
             apply(snapshot: session)
@@ -1507,6 +1522,7 @@ final class AidenBotSessionModel {
         } catch is CancellationError {
             return false
         } catch {
+            guard isOwnerLive() else { return false }
             // Losing access says so once ("That message wasn't sent"); nothing overwrites it.
             if Self.isAccessLoss(error) {
                 purgeForAccessLoss()
@@ -1523,7 +1539,7 @@ final class AidenBotSessionModel {
     func listen() async {
         await restoreOutbox()
         var failures = 0
-        while !Task.isCancelled {
+        while !Task.isCancelled, isOwnerLive() {
             do {
                 for try await event in openFeedConnection() {
                     failures = 0
@@ -1597,6 +1613,7 @@ final class AidenBotSessionModel {
     /// connection starts with a fresh snapshot anyway.
     @discardableResult
     func apply(_ event: AidenBotSessionEvent) async -> EventOutcome {
+        guard isOwnerLive() else { return .closed }
         guard event.botId == botID else { return .ignored }
         if case .closed = event.kind { return .closed }
         if case let .snapshot(session) = event.kind {
@@ -1632,7 +1649,7 @@ final class AidenBotSessionModel {
                 // entries leave it alone; the host clears it with `partial ""`.
                 if case let .message(message) = entry, message.role == .assistant { partial = nil }
             }
-            if let cacheKey { cache.store(entries, for: cacheKey) }
+            storeTranscript()
         case .unknownEntry:
             // A newer Mac's entry type: the sequence advances, nothing renders.
             break
@@ -1766,7 +1783,7 @@ final class AidenBotSessionModel {
         activity = session.activity
         queued = session.queued
         hasLoaded = true
-        if let cacheKey { cache.store(entries, for: cacheKey) }
+        storeTranscript()
         reconcileOutbox(snapshot: true)
         // A snapshot is a connection: what waits in the outbox goes out now.
         wakeOutbox()
@@ -1867,13 +1884,18 @@ final class AidenBotSessionModel {
         return byText
     }
 
+    private func storeTranscript() {
+        guard let cacheKey, isOwnerLive() else { return }
+        cache.store(entries, for: cacheKey)
+    }
+
     // MARK: The outbox
 
     /// Writes the outbox to the cache and disk while this model owns the chat;
     /// an older model left open never overwrites a newer one's messages. The
     /// store keeps one ordered writer per chat.
     private func outboxDidChange() {
-        guard let cacheKey, !released,
+        guard let cacheKey, !released, isOwnerLive(),
               cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
         // A write before the restore would replace the previous launch's file. The first change starts the
         // restore, which writes the merged outbox once.
@@ -1884,7 +1906,7 @@ final class AidenBotSessionModel {
     /// The one write the restore owes: the merged outbox, even if the chat closed while the file was read,
     /// since messages sent before the restore exist nowhere else.
     private func writeRestoredOutbox(_ cacheKey: AidenBotSessionKey) {
-        guard let outboxStore, !outbox.isEmpty,
+        guard let outboxStore, !outbox.isEmpty, isOwnerLive(),
               cache.storeOutbox(outbox, for: cacheKey, owner: ObjectIdentifier(self)) else { return }
         outboxStore.submit(.save(outbox), for: cacheKey)
     }
@@ -1904,7 +1926,7 @@ final class AidenBotSessionModel {
         restoreTask = Task { [weak self] in
             let (stored, unreadable) = await outboxStore.restore(cacheKey)
             // Access was lost while the file was read: what it held stays purged, in memory and on disk.
-            guard let self, !Task.isCancelled, generation == self.purgeGeneration else { return }
+            guard let self, !Task.isCancelled, generation == self.purgeGeneration, self.isOwnerLive() else { return }
             if unreadable { self.restoreNotice = AidenBotSessionCopy.outboxUnrestorable }
             let known = Set(self.outbox.map(\.key))
             let now = self.now()
@@ -1944,7 +1966,7 @@ final class AidenBotSessionModel {
     /// The oldest unsettled message, unless it waits for a retry: nothing
     /// overtakes it, so messages reach the Mac in the order they were sent.
     private func nextToDeliver() -> UUID? {
-        guard isConnected, !released, let head = outbox.first(where: { $0.status == .sending }), !head.deferred else {
+        guard isConnected, !released, isOwnerLive(), let head = outbox.first(where: { $0.status == .sending }), !head.deferred else {
             return nil
         }
         return head.key
