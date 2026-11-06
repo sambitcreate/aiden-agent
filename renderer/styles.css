@@ -3465,10 +3465,13 @@ textarea {
 }
 
 /* Aiden Live's floating ribbon: a dark glass pill above the chat composer.
-   It stays dark in light themes too (the approved look), so it carries its own
-   glass tokens and re-scopes the shared control tokens for buttons inside it.
-   The Spectrum colours are the ribbon's only colours outside the theme; the
-   canvas and the onboarding art read them from these tokens. */
+   Live tokens. Two owner-approved exceptions to the theme palette live here
+   and nowhere else (decisions 5a and 6a in docs/plans/aiden-live-voice-upgrade.md):
+   - --live-glass-*: the pill stays dark glass in light themes too, so it
+     carries its own fill, ink and control tokens and re-scopes the shared
+     control tokens for the buttons inside it.
+   - --live-spectrum-1..5: the Spectrum ribbon colours, read by the ribbon
+     canvas and the onboarding art. "Theme accent" uses --accent instead. */
 :root {
   --live-spectrum-1: #ff5a5f;
   --live-spectrum-2: #ffb020;

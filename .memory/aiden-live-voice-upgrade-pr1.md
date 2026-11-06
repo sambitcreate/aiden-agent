@@ -8,6 +8,8 @@ Plan: `docs/plans/aiden-live-voice-upgrade.md`. PR 1 is the ribbon pill, voice, 
 - Speed: `renderer/lib/live-time-stretch.ts` (WSOLA) inside `PcmPlayer`; `flush` resets the stretcher.
 - One utterance per user turn: `use-assistant-live.ts` joins input caption pieces and publishes on Google's `finished` (the caption event's optional `finished: true`), Live's first output, `turn`, a tool request, or 2 s of quiet (`utteranceQuietMs` dependency in tests). Approval receipts take their id at the first piece.
 
+- Review fixes (2026-11-06): speech that starts while Live's reply is open (`liveReplyOpen`) ends only on `finished` or the quiet timer; `PcmPlayer.endOfReply()` on `turn` plays the stretcher's held tail (or after 250 ms without audio); `playbackState()` reports `bargeIns`, which a resumption's `pauseAndFlush` does not bump; goodbye waits take an `answerPending` check from the dock; the ribbon placement measures the whole section.
+
 ## Decisions
 - The pill stays dark glass in light themes (`--live-glass-*` tokens). Spectrum colours are `--live-spectrum-1..5`.
 - Esc ends Live only with focus inside the pill. End is hidden while the pill shows answer buttons.
