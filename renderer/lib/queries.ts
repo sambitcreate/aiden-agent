@@ -40,6 +40,7 @@ import {
   webFetchApi,
   workspacesApi,
 } from "./ipc";
+import type { TelegramStatus } from "./ipc";
 import type { BotDefinition } from "../shared/bots";
 import { isWindowActive } from "./window-activity";
 import { keepPullRequestWhilePaused, pausedPollInterval } from "./github-pause";
@@ -933,8 +934,23 @@ export function useWebFetch() {
   return useQuery({ queryKey: queryKeys.webFetch, queryFn: webFetchApi.get });
 }
 
+const TELEGRAM_PAIRING_POLL_MS = 3_000;
+
+/**
+ * Nothing announces a rejected token or a finished /start, so watch a running bridge until its bot
+ * has answered and an owner has paired. A failed bridge has stopped, so there is nothing to wait for.
+ */
+export function telegramStatusPollInterval(status: TelegramStatus | undefined): number | false {
+  if (!status?.enabled || !status.polling) return false;
+  return status.allowedUserId === undefined || !status.botUsername ? TELEGRAM_PAIRING_POLL_MS : false;
+}
+
 export function useTelegramSettings() {
-  return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
+  return useQuery({
+    queryKey: queryKeys.telegram,
+    queryFn: telegramApi.get,
+    refetchInterval: (query) => telegramStatusPollInterval(query.state.data),
+  });
 }
 
 // Each Remote snapshot runs the Tailscale CLI twice. Settings changes arrive as

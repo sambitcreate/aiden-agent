@@ -4417,7 +4417,7 @@ struct AidenReadAloudStatus: Codable, Sendable {
     let settingsRevision: String
     let source: AidenReadAloudSource?
     let job: AidenReadAloudJob?
-    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
+    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Voice & Speech → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
 }
 struct AidenReadAloudAudio: Codable, Sendable {
     let bytesBase64: String

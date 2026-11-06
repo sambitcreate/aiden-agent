@@ -388,7 +388,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(featurePresentation, /listed actions within the Bot's access and limits, for this run and up to 60 minutes/u);
   assert.match(featurePresentation, /ask each other for help/u);
   // Bot computers are opt-in: the tile points to Settings and promises no download before Set up.
-  assert.match(featurePresentation, /Set it up in Settings → Bot computers; nothing downloads until you choose Set up\./u);
+  assert.match(featurePresentation, /Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up\./u);
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
@@ -498,7 +498,7 @@ test("workspace tour discloses AGENTS instruction loading and refresh", () => {
 test("provider onboarding explains separate opt-in and cloud speech privacy without network setup", () => {
   const disclosure = source.slice(source.indexOf("data-onboarding-tts-privacy"), source.indexOf("</Text>", source.indexOf("data-onboarding-tts-privacy")));
   assert.match(disclosure, /off by default/u);
-  assert.match(disclosure, /Settings → Text to Speech/u);
+  assert.match(disclosure, /Settings → Voice & Speech → Text to Speech/u);
   assert.match(disclosure, /response text to Google/u);
   assert.match(disclosure, /local-model replies/u);
   assert.match(disclosure, /charges may apply/u);

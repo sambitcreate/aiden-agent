@@ -15,7 +15,7 @@ test("provider explanations open from the keyboard", async ({ aiden }) => {
   const info = page.getByRole("button", { name: "About provider connections" });
   await info.focus();
   await page.keyboard.press("Enter");
-  const explanation = page.getByRole("dialog", { name: "Provider connections" });
+  const explanation = page.getByRole("tooltip");
   await expect(explanation).toBeVisible();
   await expect(info).toHaveAttribute("aria-expanded", "true");
   await page.keyboard.press("Escape");

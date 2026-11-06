@@ -47,7 +47,7 @@ export interface SpendingPersistence {
 
 export interface SpendingServiceDependencies {
   persistence: SpendingPersistence;
-  /** Settings → Limits & spending, read at every check. */
+  /** Settings → Context & Limits, read at every check. */
   settings(): Promise<unknown>;
   broadcast(event: SpendingChangedEvent): void;
   now?(): number;

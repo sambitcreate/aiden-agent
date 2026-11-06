@@ -7,7 +7,7 @@
  *   (exact command or exact workspace-relative path) for the rest of this chat
  *   while the app stays open.
  * - `always`: persists that same narrow rule for the workspace until the user
- *   revokes it from Settings → Tool approvals.
+ *   revokes it from Settings → Bots & Approvals → Tool approvals.
  */
 export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always"] as const;
 

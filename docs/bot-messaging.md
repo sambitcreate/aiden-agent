@@ -8,7 +8,7 @@ A message shows who asked or replied. The message and final answer cross between
 
 Messaging starts on. You can change it on desktop, iOS and Android:
 
-- **Settings → Bots → Bots can message each other** controls the profile. On a phone, use the same switch on the Bots page.
+- **Settings → Bots & Approvals → Bots can message each other** controls the profile. On a phone, use the same switch on the Bots page.
 - A Bot's **Advanced → Other Bots** has **Other Bots can message {name}** and **{name} can message other Bots**.
 - Turning messaging off for all Bots disables the per-Bot controls. Older paired hosts without messaging support show no messaging controls.
 

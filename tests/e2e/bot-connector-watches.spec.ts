@@ -36,7 +36,7 @@ test("connector watches require explicit source discovery and keep the editor us
   }, { bot, templates: BOT_CONNECTOR_WATCH_TEMPLATES, rules: defaultBotRulesView(bot.id) });
   await page.getByRole("button", { name: "Bots", exact: true }).click();
   await page.getByRole("button", { name: "Inbox Helper profile" }).click();
-  const group = page.getByRole("heading", { name: "Connected-app watches", exact: true }).locator("..");
+  const group = page.getByRole("heading", { name: "Connected-app watches", exact: true }).locator("xpath=ancestor::section[1]");
   await expect(group.getByText("No connected-app watches", { exact: true })).toBeVisible();
   expect(await aiden.app.evaluate(() => (globalThis as { watchDiscoveries?: number }).watchDiscoveries ?? 0)).toBe(0);
   await group.getByRole("button", { name: "Add watch", exact: true }).click();
@@ -158,7 +158,7 @@ test("an eligible Calendar watch supports preview, editing, pause, same-request 
   const snapshot = () => aiden.app.evaluate(() => (globalThis as { calendarJourney?: CalendarJourneyState }).calendarJourney!);
   await page.getByRole("button", { name: "Bots", exact: true }).click();
   await page.getByRole("button", { name: "Calendar Helper profile" }).click();
-  const group = page.getByRole("heading", { name: "Connected-app watches", exact: true }).locator("..");
+  const group = page.getByRole("heading", { name: "Connected-app watches", exact: true }).locator("xpath=ancestor::section[1]");
   await expect(group.getByText("No connected-app watches", { exact: true })).toBeVisible();
   expect((await snapshot()).discoveries).toBe(0);
   await group.getByRole("button", { name: "Add watch", exact: true }).click();

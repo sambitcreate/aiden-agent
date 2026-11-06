@@ -73,7 +73,7 @@ class GeminiLiveTranscriptionManager {
     const resolution = await resolveVoiceProviderNow();
     const resolvedGemini = resolution.kind === "ready" && resolution.provider === "gemini";
     if (!resolvedGemini || !isGeminiLiveTranscriptionModel(selected)) {
-      throw new Error("Select Gemini 3.5 Transcribe Live in Settings → Voice first.");
+      throw new Error("Select Gemini 3.5 Transcribe Live in Settings → Voice & Speech first.");
     }
     const auth = await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID);
     const key = auth?.auth.apiKey;

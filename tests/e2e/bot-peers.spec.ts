@@ -61,7 +61,7 @@ test("Bot pairs review both names, preserve lost requests and inspect Stop outco
   await manager.getByRole("button", { name: "View exchange", exact: true }).click();
   const exchange = page.getByRole("dialog", { name: "Bot exchange", exact: true });
   await exchange.getByRole("button", { name: "View source", exact: true }).click();
-  const evidence = exchange.getByRole("heading", { name: peers.evidence.title, exact: true }).locator("..");
+  const evidence = exchange.getByRole("heading", { name: peers.evidence.title, exact: true }).locator("xpath=ancestor::section[1]");
   await expect(evidence.getByText(peers.evidence.text, { exact: true })).toBeVisible();
   await exchange.getByRole("button", { name: "Stop exchange", exact: true }).click(); await page.getByRole("dialog", { name: "Stop this exchange?", exact: true }).getByRole("button", { name: "Confirm Stop", exact: true }).click();
   await expect(exchange.getByRole("button", { name: "Retry saved Stop", exact: true })).toBeVisible();

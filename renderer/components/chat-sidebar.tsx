@@ -912,6 +912,13 @@ function WorkspaceChatSidebar({
     }
     void navigate({ to: "/settings", search: { section: "remoteAccess" } });
   }, [navigate, settingsBlockedReason]);
+  const openPeerHostSettings = React.useCallback(() => {
+    if (settingsBlockedReason) {
+      toast.info(settingsBlockedReason);
+      return;
+    }
+    void navigate({ to: "/settings", search: { section: "peerHosts" } });
+  }, [navigate, settingsBlockedReason]);
   const openRemoteChat = React.useCallback(
     async (chat: RemoteSidebarChat) => {
       if (settingsBlockedReason) {
@@ -2125,7 +2132,7 @@ function WorkspaceChatSidebar({
             hosts={peerHosts.hosts}
             filter={shownMachines}
             onReconnect={reconnectHost}
-            onManage={openRemoteSettings}
+            onManage={openPeerHostSettings}
           />
         ) : null}
 

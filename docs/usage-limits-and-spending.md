@@ -1,8 +1,8 @@
 # Usage limits and spending limits
 
-Aiden handles two kinds of limits on the Mac and Linux desktop app: the ones a provider sets (rate limits and plan windows), and the dollar limits the owner sets. Both live in **Settings → Limits & spending**. Nothing about either leaves the computer. The two settings travel with Aiden's portable settings like other preferences; the saved waits and the spending ledger stay on this computer only.
+Aiden handles two kinds of limits on the Mac and Linux desktop app: the ones a provider sets (rate limits and plan windows), and the dollar limits the owner sets. Both live in **Settings → Context & Limits**. Nothing about either leaves the computer. The two settings travel with Aiden's portable settings like other preferences; the saved waits and the spending ledger stay on this computer only.
 
-The CLI does not wait for provider usage limits. Its Bot runner records paid response costs in the profile-local `spending.json` and enforces the monthly Bot and routine-run limits configured in the profile's `aiden.json`. It uses the same API-key versus subscription classification as desktop. The CLI has no Limits & spending editor or temporary spending-allowance controls.
+The CLI does not wait for provider usage limits. Its Bot runner records paid response costs in the profile-local `spending.json` and enforces the monthly Bot and routine-run limits configured in the profile's `aiden.json`. It uses the same API-key versus subscription classification as desktop. The CLI has no Context & Limits editor or temporary spending-allowance controls.
 
 ## Waiting out a provider's usage limit
 
@@ -59,9 +59,9 @@ Bot conversation summaries and helpers run under the originating input’s Bot a
 
 | Limit | Where it is set | What it covers |
 | --- | --- | --- |
-| **Each chat** | Settings → Limits & spending | The whole workspace chat, with the helpers it starts. |
+| **Each chat** | Settings → Context & Limits | The whole workspace chat, with the helpers it starts. |
 | **Each Bot, per month** | Settings (the default) and the Bot's Profile → Spending → Monthly limit | Everything the Bot spends in its month, routines included. A Bot can use the default, its own amount, or no limit. |
-| **Each routine run** | Settings → Limits & spending | One run of a routine. It also counts toward its Bot's month. |
+| **Each routine run** | Settings → Context & Limits | One run of a routine. It also counts toward its Bot's month. |
 
 Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set to no limit (the default for all three). **A Bot's month starts on** picks the day of the month a Bot's month starts over, from the 1st (the default) to the 28th, at local midnight.
 
@@ -98,4 +98,4 @@ Aiden On The Go for iPhone and Android shows the same 80% line and reached notic
 - `main/services/provider-failure.ts`: the existing provider-failure classifier the wait builds on.
 - `main/services/spending-core.ts`, `spending-service.ts`, `spending-main.ts`: the ledger, the meter wrapped around each request, and its Electron binding. `aiden-remote-spending.ts` is the phone projection.
 - `renderer/shared/usage-limits.ts` and `renderer/shared/spending.ts`: settings, parsing and the words the app shows.
-- `renderer/components/settings/limits-settings.tsx`: Settings → Limits & spending. `renderer/components/spending/` and `renderer/main/bots/bot-spending-section.tsx`: the notices and the Bot Profile row.
+- `renderer/components/settings/limits-settings.tsx`: Settings → Context & Limits. `renderer/components/spending/` and `renderer/main/bots/bot-spending-section.tsx`: the notices and the Bot Profile row.
