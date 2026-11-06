@@ -55,6 +55,7 @@ import {
 } from "../lib/gemini-recorded-retry";
 import { attachmentsApi, browserApi, chatsApi } from "../lib/ipc";
 import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
+import { terminalContextAttachment, terminalContextDelivery, type TerminalContextSelection } from "../lib/terminal-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
@@ -581,11 +582,22 @@ export function Composer({
       inputRef?.current?.focus({ preventScroll: true });
       return true;
     };
+    const receiveTerminalContext = (selection: TerminalContextSelection) => {
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
+      const attachment = terminalContextAttachment(selection, attachmentsRef.current, crypto.randomUUID());
+      if (!attachment) return false;
+      attachmentRevisionRef.current += 1;
+      updateAttachments((current) => [...current, attachment]);
+      setAttachmentStatus("Terminal selection added to this message.");
+      inputRef?.current?.focus({ preventScroll: true });
+      return true;
+    };
     const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unregisterTerminalContext = terminalContextDelivery.register({ workspaceId: workspace.id, chatId, available, receive: receiveTerminalContext });
     const unsubscribe = browserApi.onEvent((event) => {
       if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
     });
-    return () => { unregister(); unsubscribe(); };
+    return () => { unregister(); unregisterTerminalContext(); unsubscribe(); };
   }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
   const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
   const attachmentVisionRef = React.useRef(visionSupported);

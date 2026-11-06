@@ -1,7 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
+import type { Page } from "@playwright/test";
 import {
   E2E_WORKSPACE_ID,
   expect,
@@ -338,6 +340,179 @@ test("terminal screen reaches every edge of its area in both placements", async 
     .click();
   await expect(drawer).toHaveAttribute("data-placement", "side");
   await expect.poll(edgeGaps).toEqual(flush);
+});
+
+async function openTerminal(page: Page) {
+  await finishLmStudioOnboarding(page);
+  await page.getByRole("button", { name: "Show terminal", exact: true }).click();
+  const drawer = page.locator(".terminal-drawer");
+  const output = drawer.getByRole("log", { name: "Terminal output" });
+  await expect(output).toHaveText(/\S/u);
+  await expect(drawer.locator(".ghostty-input")).toBeFocused();
+  const run = async (command: string) => {
+    await page.keyboard.type(command);
+    await page.keyboard.press("Enter");
+  };
+  return { drawer, output, run };
+}
+
+test("a program's synchronized redraw appears whole, and an unfinished one still appears", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  const { output, run } = await openTerminal(page);
+  // The transcript follows every painted frame, so it records any half-drawn one.
+  await output.evaluate((log) => {
+    const frames: string[] = [];
+    (window as unknown as { terminalFrames: string[] }).terminalFrames = frames;
+    new MutationObserver(() => frames.push(log.textContent ?? "")).observe(log, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+  });
+  // Built at runtime so the typed command line cannot satisfy the checks below.
+  await run(`M=frame; printf "\\033[?2026h$M-begun"; sleep 0.25; printf " $M-finished\\033[?2026l\\n"`);
+  await expect(output).toContainText("frame-begun frame-finished");
+  const frames = await page.evaluate(
+    () => (window as unknown as { terminalFrames: string[] }).terminalFrames,
+  );
+  expect(frames.filter((frame) => frame.includes("frame-begun") && !frame.includes("frame-finished"))).toEqual([]);
+
+  await run(`M=stuck; printf "\\033[?2026h$M-output\\n"`);
+  await expect(output).toContainText("stuck-output");
+});
+
+test("back-to-back synchronized redraws still reach the screen", async ({ aiden }) => {
+  const { page } = aiden;
+  const { output, run } = await openTerminal(page);
+  // Every chunk closes one group and opens the next, so no frame lands between groups.
+  await run(
+    `M=tick; printf "\\033[?2026h"; for i in $(seq 1 40); do sleep 0.05; printf "$M-$i\\n\\033[?2026l\\033[?2026h"; done`,
+  );
+  await expect(output).toContainText("tick-3", { timeout: 1_900 });
+});
+
+test("a hidden terminal keeps its output and shows it when revealed", async ({ aiden }) => {
+  const { page } = aiden;
+  const { drawer, output, run } = await openTerminal(page);
+  await run(`M=caught; sleep 0.8; echo "$M-up"`);
+  await drawer.getByRole("button", { name: "Hide terminal" }).click();
+  await expect(drawer).toBeHidden();
+  await page.waitForTimeout(1_200);
+  await page.getByRole("button", { name: "Show terminal", exact: true }).click();
+  await expect(output).toContainText("caught-up");
+});
+
+test("scrollback keys move through history without reaching the shell", async ({ aiden }) => {
+  const { page } = aiden;
+  const { output, run } = await openTerminal(page);
+  await run("seq 1 300");
+  await expect(output).toContainText(/\b300\b/u);
+  await page.keyboard.press("Shift+PageUp");
+  await expect(output).not.toContainText(/\b300\b/u);
+  await page.keyboard.press("Shift+PageDown");
+  await expect(output).toContainText(/\b300\b/u);
+  const jump = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${jump}+Shift+Home`);
+  await expect(output).toContainText("seq 1 300");
+  await page.keyboard.press(`${jump}+Shift+End`);
+  await expect(output).toContainText(/\b300\b/u);
+});
+
+test("selected terminal output reaches the composer as an attachment", async ({ aiden }) => {
+  const { page } = aiden;
+  const { drawer, output, run } = await openTerminal(page);
+  await run(`M=build; echo "$M-failed"`);
+  await expect(output).toContainText("build-failed");
+  const action = drawer.getByRole("button", { name: "Add to chat" });
+  await expect(action).toHaveCount(0);
+
+  // The prompt can still print after the echo, and new output retires the action.
+  const attachment = page.getByText(/^Terminal 1 lines? \d+(-\d+)?\.txt$/u);
+  await expect(async () => {
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+Shift+A");
+    await action.click({ timeout: 1_000 });
+  }).toPass();
+  await expect(attachment).toBeVisible();
+  await expect(page.locator("textarea").first()).toBeFocused();
+  await expect(action).toHaveCount(0);
+
+  // The menu offers the same action, and only once there is a selection to add.
+  const canvas = drawer.locator("canvas");
+  await canvas.click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Add to chat" })).toBeDisabled();
+  await menu.getByRole("menuitem", { name: "Select all" }).click();
+  await canvas.click({ button: "right" });
+  await page.getByRole("menu").getByRole("menuitem", { name: "Add to chat" }).click();
+  await expect(attachment).toHaveCount(2);
+  await expect(page.locator("textarea").first()).toBeFocused();
+});
+
+test("a terminal program that reports the mouse keeps right-click", async ({ aiden }) => {
+  const { page } = aiden;
+  const { drawer, output, run } = await openTerminal(page);
+  await run(`M=mouse; printf "\\033[?1000h$M-on\\n"`);
+  await expect(output).toContainText("mouse-on");
+  await drawer.locator("canvas").click({ button: "right" });
+  await page.waitForTimeout(200);
+  await expect(page.getByRole("menu")).toHaveCount(0);
+});
+
+test("the selection action leaves when its text moves or goes away", async ({ aiden }) => {
+  const { page } = aiden;
+  const { drawer, output, run } = await openTerminal(page);
+  const selectAll = process.platform === "darwin" ? "Meta+A" : "Control+Shift+A";
+  const action = drawer.getByRole("button", { name: "Add to chat" });
+  await run("seq 1 300");
+  await expect(output).toContainText(/\b300\b/u);
+
+  await page.keyboard.press(selectAll);
+  await expect(action).toBeVisible();
+  await page.keyboard.press("Shift+PageUp");
+  await expect(action).toHaveCount(0);
+
+  await page.keyboard.press(selectAll);
+  await expect(action).toBeVisible();
+  await drawer.getByRole("button", { name: "Clear terminal view" }).click();
+  await expect(action).toHaveCount(0);
+});
+
+test("closing a terminal asks first only while a program is running", async ({ aiden }) => {
+  // Cua Spaces run on gVisor, whose TTYs never report a foreground process group.
+  test.skip(
+    existsSync("/proc/version") && readFileSync("/proc/version", "utf8").includes("gvisor"),
+    "gVisor has no terminal foreground process group",
+  );
+  const { page } = aiden;
+  const { drawer, run } = await openTerminal(page);
+  const tab = drawer.getByRole("button", { name: /^Terminal 1/u });
+  const closeTab = drawer.getByRole("button", { name: "Close Terminal 1" });
+  await run("sleep 60");
+  await expect(tab).toContainText("sleep");
+
+  await closeTab.click();
+  const dialog = page.getByRole("alertdialog", { name: "Close Terminal 1?" });
+  await expect(dialog).toContainText("sleep is still running");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(tab).toContainText("sleep");
+
+  await drawer.locator("canvas").click();
+  await page.keyboard.press("Control+C");
+  await expect(tab).not.toContainText("sleep");
+  await run("sleep 60");
+  await expect(tab).toContainText("sleep");
+  await closeTab.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Close terminal" }).click();
+  await expect(tab).toHaveCount(0);
+
+  await drawer.getByRole("button", { name: "New terminal" }).first().click();
+  await expect(tab).toBeVisible();
+  await expect(drawer.locator("canvas")).toHaveCount(1);
+  await closeTab.click();
+  await expect(tab).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 
 test("context is available with the composer meter hidden and preference survives restart", async ({
