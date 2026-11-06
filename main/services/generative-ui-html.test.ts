@@ -202,7 +202,7 @@ test("wrapper emits sanitized vars, the kit stylesheet, and a transparent inline
   assert.doesNotMatch(doc, /red;\}/u);
   assert.match(doc, /href="aiden-genui:\/\/aiden-ui\.css"/u);
   assert.match(doc, /html, body \{[^}]*background: transparent/u);
-  // Standalone pages (export, Design Studio) keep a solid canvas.
+  // Standalone pages (export) keep a solid canvas.
   const standalone = wrapGenerativeUiHtml("<p>x</p>", "T", theme);
   assert.match(standalone, /html, body \{[^}]*background: var\(--artifact-canvas\)/u);
 });

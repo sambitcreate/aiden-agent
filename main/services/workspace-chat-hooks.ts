@@ -11,7 +11,7 @@
  * SubagentStop through `chatSurfaceHooks` in `agent-surface-hooks.ts`.
  *
  * Not wired here, each on purpose: Bot chats (their hooks are policy-owned and
- * run through `agent-surface-hooks.ts`), Design Studio runs, ACP harness
+ * run through `agent-surface-hooks.ts`), ACP harness
  * providers such as Antigravity (the agent runs its own tools), routines,
  * title generation, provider probes and model-catalog work. None of those
  * reach this module.

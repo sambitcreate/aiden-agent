@@ -9,7 +9,7 @@ Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-
 ## Requirements
 
 - macOS or Linux (x64 or arm64).
-- Node.js 22.19 or newer. Keep Node on the newest release of its line: the server's network calls run on the installed Node, and the October 21, 2026 Node.js security release (22.23.4, 24.22.1, 26.12.1) fixed a Brotli decoder flaw and HTTPS hostname-check bypasses that any older Node still has.
+- Node.js 22.22 or newer. Keep Node on the newest release of its line: the server's network calls run on the installed Node, and the October 21, 2026 Node.js security release (22.23.4, 24.22.1, 26.12.1) fixed a Brotli decoder flaw and HTTPS hostname-check bypasses that any older Node still has.
 - `openssl` on the `PATH`: the first `aiden serve` uses it to create the server's TLS identity for paired devices.
 - `git`, and for Tailscale pairing the Tailscale CLI on the host.
 
@@ -188,6 +188,7 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 | `search <query>`, `import <file>`, `export <session.jsonl> [output]` | Find, import and export conversations |
 | `files list\|read`, `git status\|review\|branches\|worktrees`, `worktree list\|create\|remove` | Workspace files, Git and managed worktrees |
 | `app help [query]\|status\|get <topic>\|set <control> <value> <revision> [operation-id]` | Product help; shows Memory, Web Search and Skills settings and changes Memory and Web Search (Skills are read-only on the server) |
+| `telemetry status\|on\|off` | Anonymous usage and crash data; see Privacy |
 | `help`, `--version` | Command list and version |
 
 Notes:
@@ -214,7 +215,7 @@ New Memory databases support bounded incremental space reclamation on open and c
 ## Privacy and network
 
 - **No telemetry.** The server ships without Pi telemetry, enforced three ways: the entry forces `PI_TELEMETRY=0` (which gates both the pi.dev `report-install` ping and Pi's attribution headers, and overrides settings), the settings default is off, and the build patches the ping's call sites and endpoint out of the bundle, asserted by `tests/bundle.test.mjs`. The shared desktop runtime and durable Bots, which don't read that switch, set their own request identity with no attribution (`main/services/pi-client-identity.ts`). The entry also turns off pi.dev's version feed (`PI_SKIP_VERSION_CHECK=1`, overridable), because this package versions independently.
-- **No Aiden usage data.** The desktop app's opt-out usage data ([`docs/analytics.md`](../../docs/analytics.md)) does not apply to the server yet; when the server adopts it, it will follow the same event list, `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0`.
+- **Aiden usage data.** A server built from a clone or the Docker image has no project key and sends nothing. Only the `aiden serve` process of a distribution build (`npm run cli:dist`) can send the anonymous usage and crash data in [`docs/analytics.md`](../../docs/analytics.md); admin commands send nothing, apart from the one final event of `aiden telemetry off`. It sends only after its one-time notice, shown at `aiden service install` or the first `aiden serve` on a terminal; a server that never showed the notice stays silent. `aiden telemetry status|on|off` is the switch (`off` also stops a running server; a server picks up `on` at its next start). `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` turn it off for that process, and a service does not inherit them from your shell, so use `aiden telemetry off` there. With `CI` set nothing is ever sent. State lives in `<agentDir>/aiden-analytics.json`, not Pi's `settings.json`.
 - **Manual-only catalogs.** models.dev, Artificial Analysis and OpenRouter benchmark data are fetched only by the explicit `aiden catalog models-dev fetch` and `aiden insights aa|openrouter fetch` commands, never on startup or in the background, and the fetched data is display-only. Speech models download only with `aiden speech download`.
 - **Remote.** Paired devices authenticate to the server's own TLS identity. Tailscale is used only after you choose it for pairing.
 

@@ -55,6 +55,7 @@ export const ON_DEMAND_TOOL_NAMES: ReadonlySet<string> = new Set([
   "inspect_image",
   "routines",
   "hooks",
+  "design_mode",
 ]);
 
 const MAX_SUMMARY_CHARACTERS = 90;

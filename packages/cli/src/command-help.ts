@@ -30,5 +30,6 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   files list|read <relative-path>           Inspect bounded workspace files
   git status|review|branches|worktrees
   worktree list|create <branch>|remove <path>
+  telemetry status|on|off                   Anonymous usage and crash data
   help | --version
 `;

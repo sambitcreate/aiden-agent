@@ -1,5 +1,5 @@
-export const DESIGN_STUDIO_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_STUDIO";
 export const CREATE_IMAGES_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_CREATE_IMAGES";
+export const DESIGN_MODE_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_MODE";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -8,27 +8,27 @@ function flagOn(environment: Environment, name: string): boolean {
   return value === "1" || value === "true";
 }
 
-/** Design Studio stays dark (no route, row, command, store or protocol) until explicitly enabled. */
-export function designStudioEnabled(environment: Environment = process.env): boolean {
-  return flagOn(environment, DESIGN_STUDIO_FEATURE_FLAG);
-}
-
 /** Create Images stays dark until explicitly enabled. */
 export function createImagesEnabled(environment: Environment = process.env): boolean {
   return flagOn(environment, CREATE_IMAGES_FEATURE_FLAG);
 }
 
-/** The shared studio asset store and `aiden-asset:` protocol exist only for an enabled studio feature. */
+/** Design mode (chat beside a design canvas) stays dark until explicitly enabled. */
+export function designModeEnabled(environment: Environment = process.env): boolean {
+  return flagOn(environment, DESIGN_MODE_FEATURE_FLAG);
+}
+
+/** The shared studio asset store and `aiden-asset:` protocol exist only while Create Images is on. */
 export function studioAssetsEnabled(environment: Environment = process.env): boolean {
-  return designStudioEnabled(environment) || createImagesEnabled(environment);
+  return createImagesEnabled(environment);
 }
 
 export function studioCapabilities(environment: Environment = process.env): {
-  designStudio: boolean;
   createImages: boolean;
+  designMode: boolean;
 } {
   return {
-    designStudio: designStudioEnabled(environment),
     createImages: createImagesEnabled(environment),
+    designMode: designModeEnabled(environment),
   };
 }

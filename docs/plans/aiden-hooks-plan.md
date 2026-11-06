@@ -236,7 +236,7 @@ Wiring:
   - The `aiden.hooks` extension appends PostToolUse feedback and context to the tool result, and places SessionStart and UserPromptSubmit context after the current prompt for that turn only; it is never saved as the person's words. A blocked prompt fails the turn before any model call, with the hook's reason as the error. Mid-flight steer and follow-up input runs UserPromptSubmit in the shared run-input admission (`chat-run-input-admission.ts`) before it is saved: a refused input is held out of every projection, saved with its blocked mark and never queued (`invalid`, committed), and accepted input's context rides that queued message only.
   - SessionStart sources are tracked per app process: `startup` for a new chat, `resume` for a chat's first turn after a restart, `compact` for the first turn after compaction.
   - Stop continues through the harness `onStop` path (`stop_hook_active` on continued turns, at most 8 per person turn), never after an abort, an error, a cut-off or a spending block. Notification fires when an approval card or a question waits. SessionEnd fires, without waiting, when a chat whose hooks ran in this process is deleted.
-  - Not wired, each on purpose: Bot chats, Design Studio, the attended Assistant, routines, Telegram, side questions, ACP harness providers, subagents, title generation, probes and catalog work.
+  - Not wired, each on purpose: Bot chats, Design Studio (since retired by #778; design mode runs in regular chats, so their hooks apply), the attended Assistant, routines, Telegram, side questions, ACP harness providers, subagents, title generation, probes and catalog work.
 - **Bots** (Phase 3). The Bot extension's `beforeTool` (`{ block }` only) and `afterResponse` call the same dispatcher with `scope: bot:<id>`.
   - As built (`main/services/agent-surface-hooks.ts`, wired in `bot-runtime/bot-extension.ts`, on the desktop and the CLI): scopes are global, then `bot:<id>`; hooks run in the Bot's folder and `session_id` is the Bot id. PreToolUse runs after the Bot's own tool policy and only blocks: an ask is refused with "No one is here to approve it on this turn." PostToolUse appends feedback to the result, Stop continues the run (at most 8 times), and SessionStart and PreCompact add context. `updatedInput` is never applied. Durable Bots pass an idempotency key per tool call, so a replayed call doesn't run its hooks twice.
 - **Routines** (Phase 3, as built). `scheduled-bot-routines.ts` fires RoutineRun after a successful run and RoutineFailed after a failed one, observe-only, with the Bot's scopes.
@@ -247,7 +247,7 @@ Wiring:
   - `aiden hooks list | approve <id> <digest> | disable <id> | enable <id> | pause | resume | test <id> <digest>` manage the store through the daemon socket, or open it directly under the serve lease when no daemon runs.
 - **Excluded by design:**
   - title generation, probes and model-catalog actions (t3code's `disableAllHooks`);
-  - Design Studio runs, which already reject foreign extensions;
+  - Design Studio runs, which already rejected foreign extensions (since retired by #778);
   - ACP/Antigravity turns, whose tools run inside the agent process.
 
   Each exclusion is documented rather than silent.

@@ -82,7 +82,7 @@ const proposeGuard = {
   command: "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
 } as const;
 
-const attended: HooksToolSurface = { bot: false, design: false, assistant: false, harnessProvider: false, unattended: false };
+const attended: HooksToolSurface = { bot: false, assistant: false, harnessProvider: false, unattended: false };
 
 test("the tool is offered on attended workspace chats only", () => {
   assert.equal(offersHooksTool(attended), true);
@@ -91,7 +91,6 @@ test("the tool is offered on attended workspace chats only", () => {
     ["an unattended follow-up", { ...attended, unattended: true }],
     ["a turn a phone or paired Mac drives", { ...attended, remoteAudience: true }],
     ["a Bot chat", { ...attended, bot: true }],
-    ["Design Studio", { ...attended, design: true }],
     ["the Assistant", { ...attended, assistant: true }],
     ["an ACP harness", { ...attended, harnessProvider: true }],
     ["Telegram", { ...attended, interactionSurface: "telegram" }],

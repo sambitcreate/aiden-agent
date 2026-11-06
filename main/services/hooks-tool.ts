@@ -51,7 +51,7 @@ export const HOOKS_TOOL_LOG_EXCERPT_CHARS = 1_000;
 
 /**
  * Where the `hooks` tool is offered: the surfaces that run workspace chat
- * hooks (an ordinary desktop chat; not a Bot, Design Studio, the Assistant,
+ * hooks (an ordinary desktop chat; not a Bot, the Assistant,
  * an ACP harness, a routine, Telegram or a side question), and only while a
  * person is there to answer the card. Subagents build their own inventory and
  * never get it.
@@ -61,7 +61,6 @@ export interface HooksToolSurface {
   usageSource?: string;
   interactionSurface?: string;
   bot: boolean;
-  design: boolean;
   assistant: boolean;
   harnessProvider: boolean;
   /** A follow-up turn nobody watches: its approvals settle as unavailable. */
@@ -82,7 +81,6 @@ export function runsWorkspaceChatHooks(
     (surface.usageSource ?? "chat") === "chat" &&
     surface.interactionSurface !== "telegram" &&
     !surface.bot &&
-    !surface.design &&
     !surface.assistant &&
     !surface.harnessProvider
   );

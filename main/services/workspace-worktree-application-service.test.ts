@@ -2,6 +2,7 @@ import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { WorktreeCapacityUnavailableError, WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Workspace } from "./types.js";
 import { createWorkspaceWorktreeApplicationService, type WorkspaceWorktreeApplicationDependencies } from "./workspace-worktree-application-service.js";
@@ -33,7 +34,9 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   let terminalDrain: Promise<void> = Promise.resolve();
   let failGitDeletion = false;
   const signal = new AbortController().signal;
+  const designGrants = new DesignGrantRegistry();
   const service = createWorkspaceWorktreeApplicationService({
+    designGrants,
     environment: {
       resolve: async (id) => id === source.id
         ? { folderPath: source.folderPath!, workspace: source }
@@ -157,6 +160,8 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   ]);
 
   events.length = 0;
+  const worktreeGrant = designGrants.issue("chat-in-worktree", created.folderPath!);
+  const sourceGrant = designGrants.issue("chat-in-source", source.folderPath!);
   terminalDrain = new Promise<void>((resolve) => { releaseTerminals = resolve; });
   const removal = service.remove(owner, created.id, (workspace) => {
     events.push(`validate:${workspace.id}`);
@@ -186,6 +191,8 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     "finish-mutation",
     "close-git-watcher:workspace-managed",
   ]);
+  assert.equal(designGrants.resolve(worktreeGrant), null, "deleting the worktree ends its design grants");
+  assert.notEqual(designGrants.resolve(sourceGrant), null);
   assert.deepEqual(allocations, [["/aiden/worktrees", "/canonical/source/.git", 1024 + MAX_PROVISIONED_BYTES]]);
   assert.deepEqual(createAdmissions, [["/aiden/worktrees/mobile", MAX_PROVISIONED_BYTES]]);
 

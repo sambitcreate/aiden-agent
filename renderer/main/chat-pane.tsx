@@ -111,6 +111,8 @@ import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
+import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
 import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
@@ -130,8 +132,15 @@ import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
-import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
+import {
+  ChatTitleMenu,
+  DesignModeToggle,
+  DesignPaneSwitch,
+  WorkspaceChip,
+  WorkspaceToolButtons,
+} from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
+import { DesignModeBannerSlot, useDesignChatBodyHidden } from "../design/design-layout";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
@@ -188,6 +197,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import {
   EnvironmentPanelToggle,
+  QuickViewIcon,
   QuickViewToggle,
   useEnvironmentPanel,
 } from "../components/environment-panel";
@@ -445,6 +455,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
+  const designChatBodyHidden = useDesignChatBodyHidden();
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -797,6 +808,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [deniedApprovalChatId, setDeniedApprovalChatId] = React.useState<string | null>(null);
   const [questionnaire, setQuestionnaire] = React.useState<(AskUserQuestionPromptV1 & { source?: "remote" }) | null>(null);
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
+  // Aiden's "Open design mode?" card for this chat, while one is waiting.
+  const designModeConsent = useDesignModeConsent(capabilities.designMode ? chatId : undefined);
+  // Aiden's canvas_focus can arrive before the canvas loads; keep it until it does.
+  useCanvasFocusRequests(capabilities.designMode);
   // The prompt whose agent deadline passed while its card was still open.
   const [expiredQuestionnaireId, setExpiredQuestionnaireId] = React.useState<string | null>(null);
   // An answer submitted after the deadline, offered as a follow-up message.
@@ -3553,7 +3568,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <>
       <ScrollArea
         focusRegion="chat"
+        bodyHidden={designChatBodyHidden}
         overlay={findBar}
+        toolbarAccessory={<DesignModeBannerSlot />}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -3603,23 +3620,48 @@ export function ChatPane({ chatId }: { chatId: string }) {
             )}
             // A cached repository read must not outlive access being switched off.
             isRepo={git.data?.isRepo === true && effectiveWorkspace?.permission !== "none"}
-            leading={<QuickViewToggle disabled={!effectiveWorkspace} />}
-            terminalButton={
-              <Button
-                iconOnly
-                variant="bar"
-                size="small"
-                onClick={terminal.toggle}
-                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-                aria-pressed={terminal.open}
-                title={`Toggle terminal (${terminalShortcut})`}
-                data-terminal-toggle
-              >
-                <TerminalSquare />
-              </Button>
+            leading={
+              <>
+                <DesignModeToggle chatId={chatId} />
+                <DesignPaneSwitch />
+              </>
             }
+            foldable={[
+              {
+                key: "quick-view",
+                placement: "leading",
+                button: <QuickViewToggle disabled={!effectiveWorkspace} />,
+                label: environmentPanel.quickViewOpen ? "Hide Quick View" : "Show Quick View",
+                icon: QuickViewIcon,
+                onSelect: environmentPanel.toggleQuickView,
+                disabled: !effectiveWorkspace || environmentPanel.gitOperationBusy,
+                active: environmentPanel.quickViewOpen,
+              },
+              {
+                key: "terminal",
+                button: (
+                  <Button
+                    iconOnly
+                    variant="bar"
+                    size="small"
+                    onClick={terminal.toggle}
+                    disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                    aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                    aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                    aria-pressed={terminal.open}
+                    title={`Toggle terminal (${terminalShortcut})`}
+                    data-terminal-toggle
+                  >
+                    <TerminalSquare />
+                  </Button>
+                ),
+                label: terminal.open ? "Hide terminal" : "Show terminal",
+                icon: TerminalSquare,
+                onSelect: terminal.toggle,
+                disabled: !effectiveWorkspace?.folderPath || !terminal.canOpen,
+                active: terminal.open,
+              },
+            ]}
             trailing={
               <OpenInEditorPicker
                 workspaceId={effectiveWorkspace?.id}
@@ -3747,6 +3789,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             ) : null}
             {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
+            {designModeConsent && !questionnaire ? (
+              <DesignModeConsentCard key={designModeConsent.requestId} request={designModeConsent} />
+            ) : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}

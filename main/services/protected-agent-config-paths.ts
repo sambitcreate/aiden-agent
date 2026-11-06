@@ -8,8 +8,9 @@
 //
 // `run_command` is out of scope: a shell can write anywhere the person can.
 // Aiden's digest check catches a changed hook file or script, but on the
-// desktop a shell command could also rewrite Aiden's own hook store. Only the
-// sandbox, or a person reading the approval card for that command, stops it.
+// desktop a shell command could also rewrite Aiden's own hook store. There is
+// no OS sandbox around it: only a person reading the command's approval card
+// stops it, and Full access shows no card.
 
 import { realpathSync } from "node:fs";
 import * as path from "node:path";

@@ -20,6 +20,8 @@ export const BOT_DELIVERIES_FILE = "deliveries.json";
 /** Newest rows kept per Bot; older rows fall off as new ones arrive. */
 export const BOT_DELIVERIES_MAX = 200;
 export class BotDeliveryHistoryFullError extends Error {constructor(){super("Pending peer deliveries fill this Bot’s delivery history. No owed result was discarded.");this.name="BotDeliveryHistoryFullError";}}
+/** The most peer roots one stored row may carry; a row over this does not load. */
+const BOT_DELIVERY_PEER_ROOTS_MAX = 200;
 /** The phone feed serves at most this many due rows, newest first. */
 export const BOT_DELIVERIES_DUE_MAX = 100;
 
@@ -42,6 +44,8 @@ export interface BotDeliveryRow {
   createdAt: number;
   /** The row may reach the person (and their phones) from this time on. */
   deliverAfter: number;
+  /** When the flush actually released a held row for phone cursors. */
+  releasedAt?: number;
   /** Kept for the record only: a suppressed row never reaches a person. */
   suppressed?: boolean;
   /** When the Mac banner went out; unset while it is still owed. */
@@ -74,10 +78,18 @@ export interface BotDeliveryLog {
   find(botId: string, dedupeKey: string): Promise<BotDeliveryRow | undefined>;
   /** Rows due at `now`, newest first, at most 100. `since` is exclusive. */
   due(since: number | undefined, now: number): Promise<BotDeliveryRow[]>;
+  /** Makes held rows visible, or stops them when the day's budget is spent. */
+  releaseHeld(botId: string, ids: readonly string[], at: number, suppressed: ReadonlySet<string>, publication?: {assertCurrent():Promise<void>}): Promise<void>;
   /** Records one channel's success; the first time sticks. */
   markChannel(botId: string, id: string, channel: BotDeliveryChannel, at: number, publication?: {assertCurrent():Promise<void>}): Promise<void>;
   /** Records that every channel went out; keeps the first time. */
   markSent(botId: string, id: string, at: number, publication?: {assertCurrent():Promise<void>}): Promise<void>;
+  /**
+   * Ties more peer roots to a note that still owes a channel, so they wait for
+   * it. A note that went out owes nothing and is left alone. Refuses a root the
+   * stored row could not hold, since a row over the limit would not load back.
+   */
+  addPeerRoots(botId: string, id: string, roots: readonly string[], publication?: {assertCurrent():Promise<void>}): Promise<void>;
   settlePeerReferences(botId:string,id:string,apply:(facts:{settled:string[];pending:string[]})=>Promise<void>,at:number):Promise<void>;
   forgetBot(botId: string): Promise<void>;
   /** Every row this Bot kept, newest first. */
@@ -144,7 +156,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
   const coveredBy = optionalText(value.coveredBy, 160);
   const quiet = value.quiet === true;
   const peerRootIds=value.peerRootIds;
-  if(peerRootIds!==undefined&&(!Array.isArray(peerRootIds)||peerRootIds.length>200||peerRootIds.some(id=>typeof id!=="string"||!/^[-A-Za-z0-9._:]{1,160}$/u.test(id))))return undefined;
+  if(peerRootIds!==undefined&&(!Array.isArray(peerRootIds)||peerRootIds.length>BOT_DELIVERY_PEER_ROOTS_MAX||peerRootIds.some(id=>typeof id!=="string"||!/^[-A-Za-z0-9._:]{1,160}$/u.test(id))))return undefined;
   return {
     id,
     botId,
@@ -159,6 +171,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
     createdAt,
     deliverAfter,
     ...(suppressed ? { suppressed: true } : {}),
+    ...(timestamp(value.releasedAt) !== undefined ? { releasedAt: value.releasedAt as number } : {}),
     ...(macSentAt !== undefined ? { macSentAt } : {}),
     ...(telegramSentAt !== undefined ? { telegramSentAt } : {}),
     ...(sentAt !== undefined ? { sentAt } : {}),
@@ -182,6 +195,15 @@ function parseFile(text: string, botId: string): BotDeliveryRow[] {
     .map((row) => parseRow(row, botId))
     .filter((row): row is BotDeliveryRow => row !== undefined)
     .slice(0, BOT_DELIVERIES_MAX);
+}
+
+/** Already delivered rows from older releases retain their original feed cursor. */
+export function deliveryVisibleAt(row: BotDeliveryRow): number | undefined {
+  if (row.releasedAt !== undefined) return row.releasedAt;
+  if (row.deliverAfter <= row.createdAt || row.macSentAt !== undefined || row.telegramSentAt !== undefined || row.sentAt !== undefined) {
+    return row.deliverAfter;
+  }
+  return undefined;
 }
 
 export function createBotDeliveryLog(options: { profileDir(): string; now?(): number }): BotDeliveryLog {
@@ -239,16 +261,28 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
     async due(since, at) {
       const due: BotDeliveryRow[] = [];
       for (const botId of await botIds()) {
-        for (const row of await load(botId)) {
+        for (const row of await serial(botId, () => load(botId))) {
           // A suppressed row is kept for the record, never for a person.
           if (row.suppressed === true) continue;
-          if (row.deliverAfter > at) continue;
-          if (since !== undefined && row.deliverAfter <= since) continue;
+          const visibleAt = deliveryVisibleAt(row);
+          if (visibleAt === undefined || visibleAt > at) continue;
+          if (since !== undefined && visibleAt <= since) continue;
           due.push(row);
         }
       }
       due.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
       return due.slice(0, BOT_DELIVERIES_DUE_MAX);
+    },
+
+    releaseHeld(botId, ids, at, suppressed, publication) {
+      return serial(botId, async () => {
+        if (forgotten.has(botId)) return;
+        const wanted = new Set(ids);
+        const rows = await load(botId);
+        const releasedAt = Math.max(at, now());
+        await save(botId, rows.map((row) => wanted.has(row.id) && deliveryVisibleAt(row) === undefined
+          ? { ...row, releasedAt, ...(suppressed.has(row.id) && { suppressed: true }) } : row), publication);
+      });
     },
 
     markChannel(botId, id, channel, at,publication) {
@@ -277,6 +311,24 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
         const next = [...rows];
         next[index] = { ...row, sentAt: at };
         await save(botId, next,publication);
+      });
+    },
+
+    addPeerRoots(botId, id, roots, publication) {
+      return serial(botId, async () => {
+        if (forgotten.has(botId)) return;
+        const rows = await load(botId);
+        const index = rows.findIndex((row) => row.id === id);
+        if (index < 0) return;
+        const row = rows[index]!;
+        if (row.sentAt !== undefined) return;
+        const known = row.peerRootIds ?? [];
+        const merged = [...new Set([...known, ...roots])];
+        if (merged.length === known.length) return;
+        if (merged.length > BOT_DELIVERY_PEER_ROOTS_MAX) throw new BotDeliveryHistoryFullError();
+        const next = [...rows];
+        next[index] = { ...row, peerRootIds: merged };
+        await save(botId, next, publication);
       });
     },
 

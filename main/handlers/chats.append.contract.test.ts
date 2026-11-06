@@ -155,6 +155,8 @@ async function fixture(
     artifactRecoveryMessage: (message) => message,
     workspaceMutationGate: new WorkspaceMutationGate(),
     skillRegistry: { resolveFresh: async () => assert.fail("no skill is invoked here") },
+    designModeEnabled: () => false,
+    broadcastDesignModeChanged: () => assert.fail("no design mode change is made here"),
   });
   return { chatStore, chatApplicationService, handlers, admission, owner };
 }

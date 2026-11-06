@@ -80,7 +80,6 @@ export const contextLifecycleService = new ContextLifecycleService({
         usageSource: "chat",
         interactionSurface: audience.kind === "telegram" ? "telegram" : undefined,
         bot: Boolean(chat.botId),
-        design: chat.owner !== undefined,
         assistant: persistedChatWorkspaceId(chat.workspaceId) === ASSISTANT_WORKSPACE_ID,
         harnessProvider: Boolean(chat.providerId && isAcpHarnessProvider(chat.providerId)),
       })

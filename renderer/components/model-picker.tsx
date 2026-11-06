@@ -803,7 +803,10 @@ export function ModelPicker({
           variant="transparent"
           size="small"
           disabled={disabled || !hasModels}
-          className="min-w-0 shrink max-w-[min(14rem,45vw)] gap-1.5"
+          className={cn(
+            "min-w-0 shrink max-w-[min(14rem,45vw)] gap-1.5",
+            selected && "composer-model-trigger",
+          )}
           aria-label={
             hasUnavailableSelection
               ? "Selected model is unavailable. Choose a model."
@@ -830,7 +833,8 @@ export function ModelPicker({
               className="size-4 text-tertiary"
             />
           ) : null}
-          <span className="min-w-0 truncate">
+          {/* With a provider icon to stand in, a narrow composer drops the label (see styles.css). */}
+          <span className={cn("min-w-0 truncate", selected && "composer-model-label")}>
             {selected
               ? selected.label
               : hasUnavailableSelection
