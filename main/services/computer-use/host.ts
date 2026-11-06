@@ -12,7 +12,7 @@ import {
   buildCuaDriverEnvironment,
 } from "./contract.js";
 import { verifyCuaDriverBridgeProcess } from "./binary.js";
-import { runCuaDriverCommand, terminateDirectChild } from "./process.js";
+import { isChildReaped, runCuaDriverCommand, terminateDirectChild } from "./process.js";
 import { CuaDriverSession } from "./session.js";
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
@@ -142,6 +142,14 @@ async function readBridgeReady(
   });
 }
 
+const UNCONFIRMED_EXIT_POLL_MS = 1_000;
+
+interface UnconfirmedExit {
+  children: readonly (ChildProcess | null | undefined)[];
+  tempDirectory: string;
+  runtime?: SessionRuntime;
+}
+
 export class CuaDriverHost {
   private readonly env: Record<string, string>;
   private manifest: CuaDriverManifest | null = null;
@@ -153,6 +161,8 @@ export class CuaDriverHost {
   private cleanupPromise: Promise<void> = Promise.resolve();
   private pendingCleanupDirectories = new Set<string>();
   private readonly cleanupRetryFailures = new Map<string, number>();
+  /** Children not yet seen exiting. Each is rechecked, never settled by one look. */
+  private readonly unconfirmedExits = new Set<UnconfirmedExit>();
 
   constructor(private readonly options: CuaDriverHostOptions) {
     const unsafeOptions = options as CuaDriverHostOptions & {
@@ -181,6 +191,11 @@ export class CuaDriverHost {
   /** Overridden only by the Node-test harness, which is not imported by production. */
   protected directBrokerInvocation(): CuaDriverInvocation | null {
     return null;
+  }
+
+  /** A child that never spawned has nothing to wait for. */
+  protected exitConfirmed(child: ChildProcess): boolean {
+    return !child.pid || isChildReaped(child);
   }
 
   /** Production always validates the exact live bridge process. */
@@ -380,12 +395,14 @@ export class CuaDriverHost {
           await terminateDirectChild(bridge).catch(() => {});
         }
         if (brokerLauncher) await terminateDirectChild(brokerLauncher).catch(() => {});
-        this.pendingCleanupDirectories.add(tempDirectory);
-        try {
-          await this.removeDirectory(tempDirectory);
-          this.pendingCleanupDirectories.delete(tempDirectory);
-        } catch {
-          // Retried by shutdown or before the next session.
+        if (this.childrenExited({ children: [bridge, brokerLauncher], tempDirectory })) {
+          this.pendingCleanupDirectories.add(tempDirectory);
+          try {
+            await this.removeDirectory(tempDirectory);
+            this.pendingCleanupDirectories.delete(tempDirectory);
+          } catch {
+            // Retried by shutdown or before the next session.
+          }
         }
       }
       if (this.shutdownPromise) {
@@ -432,6 +449,44 @@ export class CuaDriverHost {
     await this.cleanupPromise;
     await this.retryPendingCleanup();
     this.manifest = null;
+    if (this.unconfirmedExits.size > 0) {
+      this.reclaimWhenExited();
+      throw new CuaDriverError("cleanup_unconfirmed", "A Computer Use process may still be running.");
+    }
+  }
+
+  /** A timeout after SIGKILL proves nothing, so an unseen exit stays on record. */
+  private childrenExited(owner: UnconfirmedExit): boolean {
+    if (this.allExited(owner)) return true;
+    this.unconfirmedExits.add(owner);
+    return false;
+  }
+
+  private allExited(owner: UnconfirmedExit): boolean {
+    return owner.children.every((child) => !child || this.exitConfirmed(child));
+  }
+
+  /** A rejected shutdown is cached and its caller moves on, so this keeps watching. */
+  private reclaimWhenExited(): void {
+    const timer = setTimeout(() => {
+      void this.retryPendingCleanup().finally(() => {
+        // Pending directories stop by themselves at MAX_CLEANUP_RETRIES.
+        if (this.unconfirmedExits.size > 0 || this.pendingCleanupDirectories.size > 0) {
+          this.reclaimWhenExited();
+        }
+      });
+    }, UNCONFIRMED_EXIT_POLL_MS);
+    timer.unref();
+  }
+
+  /** Reclaims what was held for a child that has since been seen exiting. */
+  private reconcileUnconfirmedExits(): void {
+    for (const owner of this.unconfirmedExits) {
+      if (!this.allExited(owner)) continue;
+      this.unconfirmedExits.delete(owner);
+      if (owner.runtime) this.runtimes.delete(owner.runtime);
+      this.pendingCleanupDirectories.add(owner.tempDirectory);
+    }
   }
 
   private scheduleRuntimeCleanup(runtime: SessionRuntime): void {
@@ -462,6 +517,13 @@ export class CuaDriverHost {
     if (runtime.brokerLauncher) {
       await terminateDirectChild(runtime.brokerLauncher).catch(() => {});
     }
+    // Keep the runtime and its lease directory: a live bridge could still hold them.
+    const owner = {
+      children: [runtime.bridge, runtime.brokerLauncher],
+      tempDirectory: runtime.tempDirectory,
+      runtime,
+    };
+    if (!this.childrenExited(owner)) return;
     this.runtimes.delete(runtime);
     this.pendingCleanupDirectories.add(runtime.tempDirectory);
     try {
@@ -484,6 +546,7 @@ export class CuaDriverHost {
   // number of times and then left behind.
   private async retryPendingCleanup(): Promise<void> {
     await this.cleanupPromise;
+    this.reconcileUnconfirmedExits();
     for (const directory of [...this.pendingCleanupDirectories]) {
       try {
         await this.removeDirectory(directory);
