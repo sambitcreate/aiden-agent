@@ -3,7 +3,7 @@
 // follow the audio level every frame without re-rendering React.
 
 import * as React from "react";
-import { prefersReducedMotion } from "../../lib/appearance-runtime";
+import { APPEARANCE_CHANGE_EVENT, prefersReducedMotion } from "../../lib/appearance-runtime";
 import type { AidenLiveRibbonColors } from "../../shared/aiden-live-settings";
 
 export type LiveRibbonMotion = "listening" | "thinking" | "speaking" | "waiting";
@@ -141,7 +141,13 @@ export function LiveRibbonWave({
     canvas.width = Math.round(width * scale);
     canvas.height = Math.round(height * scale);
     context.setTransform(scale, 0, 0, scale, 0, 0);
-    const palette = ribbonPalette(canvas, colors);
+    let palette = ribbonPalette(canvas, colors);
+    // A theme or accent change swaps the CSS tokens without changing props.
+    const onAppearance = () => {
+      palette = ribbonPalette(canvas, colors);
+      if (prefersReducedMotion()) still();
+    };
+    window.addEventListener(APPEARANCE_CHANGE_EVENT, onAppearance);
     const dim = motion === "thinking" || motion === "waiting";
     const still = () =>
       // One complete still pose; only the words around it change.
@@ -173,6 +179,7 @@ export function LiveRibbonWave({
     if (prefersReducedMotion()) still();
     frame = window.requestAnimationFrame(draw);
     return () => {
+      window.removeEventListener(APPEARANCE_CHANGE_EVENT, onAppearance);
       window.cancelAnimationFrame(frame);
       if (recheck) clearTimeout(recheck);
     };

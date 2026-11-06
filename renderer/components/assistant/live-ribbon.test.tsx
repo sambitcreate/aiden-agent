@@ -587,3 +587,34 @@ test("waiting for playback reports a cancelled wait without ending anything", as
   abort.abort();
   assert.equal(await waiting, "cancelled");
 });
+
+test("a Theme accent ribbon redraws in the new accent when the appearance changes", async () => {
+  const { LiveRibbonWave } = await import("./live-ribbon-wave");
+  const { APPEARANCE_CHANGE_EVENT } = await import("../../lib/appearance-runtime");
+  const stops: string[] = [];
+  const gradient = { addColorStop: (_offset: number, color: string) => stops.push(color) };
+  const context = new Proxy({} as Record<string, unknown>, {
+    get: (target, key) => (key in target ? target[key as string] : key === "createLinearGradient" ? () => gradient : () => undefined),
+    set: (target, key, value) => ((target[key as string] = value), true),
+  });
+  const canvasPrototype = Object.getPrototypeOf(document.createElement("canvas")) as HTMLCanvasElement;
+  const original = canvasPrototype.getContext;
+  canvasPrototype.getContext = (() => context) as unknown as typeof original;
+  const root = document.documentElement;
+  root.dataset.reduceMotion = "true";
+  try {
+    const { container } = render(<LiveRibbonWave motion="listening" level={() => 0} colors="accent" width={200} height={40} />);
+    const canvas = container.querySelector("canvas")!;
+    assert.ok(!stops.includes("#D6336C"));
+    stops.length = 0;
+    // The theme swaps the token; the test DOM has no inheritance, so set it on the canvas.
+    canvas.style.setProperty("--accent", "#D6336C");
+    act(() => {
+      window.dispatchEvent(new CustomEvent(APPEARANCE_CHANGE_EVENT));
+    });
+    assert.ok(stops.includes("#D6336C"), "the still pose is redrawn in the new accent");
+  } finally {
+    canvasPrototype.getContext = original;
+    delete root.dataset.reduceMotion;
+  }
+});
