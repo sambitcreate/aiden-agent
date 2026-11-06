@@ -158,3 +158,16 @@ test("speech captured before a fence stays before it however long the backlog th
   const fresh = onsets.claim();
   assert.ok(fresh !== null && fresh > fence, "captured after the fence");
 });
+
+test("with capture times, speech captured after a fence is fresh at once, even while a queue drains", () => {
+  const bus = new LiveSessionBus();
+  const onsets = new LiveSpeechOnsets(() => bus.beginVoiceInput());
+  bus.onVoiceInputFence((fence) => onsets.fenced(fence, 20));
+  const fence = bus.voiceInputFence();
+  // Only 100 ms of audio has been handled since the fence, but this speech
+  // was captured a second after it.
+  for (let elapsed = 0; elapsed < 100; elapsed += PACKET_MS) onsets.packet(QUIET, PACKET_MS, 20.9);
+  for (let elapsed = 0; elapsed < 300; elapsed += PACKET_MS) onsets.packet(SPEECH, PACKET_MS, 21);
+  const mark = onsets.claim();
+  assert.ok(mark !== null && mark > fence);
+});
