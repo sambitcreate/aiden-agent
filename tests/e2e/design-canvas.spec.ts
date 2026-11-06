@@ -663,10 +663,18 @@ test("the drawing tools make text, an artboard, shapes, an arrow that follows it
   await expect(tools.getByRole("button", { name: "Draw: Pencil" })).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("Shift+P");
   await expect(tools.getByRole("button", { name: "Draw: Pen" })).toHaveAttribute("aria-pressed", "true");
-  await clickOnCanvas(page, { x: 380, y: 620 });
+  // Each press shows its point. The path stays within 640 px of the top, so a
+  // window the screen keeps shorter than 900 px (a Mac runner) still holds it.
+  const penPoints = page.locator(".design-draft-point");
+  const pane = await canvas.locator(".react-flow__pane").boundingBox();
+  const where = `canvas pane ${JSON.stringify(pane)}`;
+  await clickOnCanvas(page, { x: 380, y: 560 });
+  await expect(penPoints, where).toHaveCount(1);
   // A drag from the second point gives it a curve.
-  await dragOnCanvas(page, { x: 480, y: 720 }, { x: 540, y: 720 });
-  await clickOnCanvas(page, { x: 600, y: 630 });
+  await dragOnCanvas(page, { x: 480, y: 640 }, { x: 540, y: 640 });
+  await expect(penPoints, where).toHaveCount(2);
+  await clickOnCanvas(page, { x: 600, y: 570 });
+  await expect(penPoints, where).toHaveCount(3);
   await page.keyboard.press("Enter");
   await expect
     .poll(async () =>
