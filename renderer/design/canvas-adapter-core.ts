@@ -14,6 +14,7 @@ import {
   translateConnector,
   type DesignPoint,
 } from "../shared/design-canvas/connectors";
+import { commentsWithoutFrames } from "../shared/design-canvas/comments";
 import { clampCoord, clampSize } from "../shared/design-canvas/placement";
 import {
   DESIGN_CANVAS_LIMITS,
@@ -144,11 +145,7 @@ export function applyNodeChanges(
     frames.push(next);
   }
   if (!changed) return doc;
-  // A removed frame takes its comments with it.
-  const comments =
-    removed.size > 0 && doc.comments.some((comment) => comment.frameId !== undefined && removed.has(comment.frameId))
-      ? doc.comments.filter((comment) => comment.frameId === undefined || !removed.has(comment.frameId))
-      : doc.comments;
+  const comments = removed.size > 0 ? commentsWithoutFrames(doc.comments, removed) : doc.comments;
   // Arrows follow the frames that moved, and let go of the ones removed where they last were.
   return syncConnectors({ ...doc, frames, comments });
 }

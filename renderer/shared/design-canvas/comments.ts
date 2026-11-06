@@ -13,6 +13,12 @@ import {
   type DesignRect,
 } from "./schema.js";
 
+/** A removed frame takes its comments with it. Returns the same list when none were on those frames. */
+export function commentsWithoutFrames(comments: readonly DesignComment[], removed: ReadonlySet<string>): DesignComment[] {
+  if (!comments.some((comment) => comment.frameId !== undefined && removed.has(comment.frameId))) return comments as DesignComment[];
+  return comments.filter((comment) => comment.frameId === undefined || !removed.has(comment.frameId));
+}
+
 /** Where a new comment goes. */
 export type DesignCommentPlace =
   /** On a frame, `x` and `y` from its top left in canvas units; `anchor` when an element of a live page was picked. */

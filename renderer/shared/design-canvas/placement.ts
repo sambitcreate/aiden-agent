@@ -95,4 +95,3 @@ export function placeFrame(
   // A new arrow takes its place on the frames it joins.
   return { id, doc: syncConnectors({ ...doc, frames: [...doc.frames, placed] }) };
 }
-

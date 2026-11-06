@@ -158,6 +158,7 @@ It serves workspace files into frames. URL: `aiden-design://<grant>/<relative-pa
   - **Libraries:** the vendored generative-ui libraries (`chart.js`, `plotly.js`, `katex`, and `aiden-ui.css`) are available under `aiden-design://<grant>/__aiden/lib/<name>`.
 - **Bridge:** main injects one bridge script into every HTML response. It is served from `__aiden/bridge.js`, its contents are fixed, and it is listed in the CSP.
 - **Sandbox:** frames are iframes with `sandbox="allow-scripts"` only. They have no same origin, no forms, no popups and no top navigation.
+- **Frame navigation:** a sandboxed frame can still navigate itself. The window's own CSP (`frame-src 'self' aiden-genui: aiden-design:`) refuses the web, and main's `will-frame-navigate` guard (`main/services/design-canvas/frame-navigation.ts`) keeps a frame that was sent to an `aiden-design:` page on that same host, so it cannot swap itself for another grant, a generated UI page or an app page that would then post frame messages from the same window. The iframe is keyed by grant, so a new grant gets a new frame.
 - **Main window:**
   - Its `frame-src` adds `aiden-design:`.
   - The navigation guards refuse `aiden-design:` as a top-level destination.

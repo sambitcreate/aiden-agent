@@ -8,7 +8,7 @@ import {
   type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
-import { useDesignCanvas } from "./use-design-canvas";
+import { DESIGN_CANVAS_CLOSED_RETRY_MS, useDesignCanvas } from "./use-design-canvas";
 
 type Controller = ReturnType<typeof useDesignCanvas>;
 type SaveReply =
@@ -131,6 +131,17 @@ test("an edit that conflicts twice is not retried forever", async () => {
   assert.equal(saves().length, 2);
   assert.equal(controller.status, "error");
   assert.deepEqual(ids(controller.doc), ["a", "c", "d"], "the latest stored canvas is shown");
+  assert.equal(xOf(controller.doc, "a"), 300, "with this window's edit still on top");
+
+  // The next edit saves both, on the newest stored revision.
+  await act(async () => controller.change(addNote("b")));
+  await tick(800);
+  assert.equal(saves().length, 3);
+  const [, doc, base] = saves()[2]!.args as [string, DesignCanvas, number];
+  assert.equal(base, 6);
+  assert.deepEqual(ids(doc), ["a", "c", "d", "b"]);
+  assert.equal(xOf(doc, "a"), 300, "the edit that conflicted twice is not lost");
+  assert.equal(controller.status, "ready");
 });
 
 test("an update from elsewhere reloads an idle canvas but waits while an edit is pending", async () => {
@@ -169,6 +180,56 @@ test("leaving the canvas saves a pending edit at once", async () => {
   await settle();
   assert.equal(saves().length, 1, "saved without waiting for the debounce");
   assert.deepEqual(ids(saves()[0]!.args[1] as DesignCanvas), ["a", "b"]);
+});
+
+test("an edit that cannot be saved as the canvas closes keeps trying, and is saved once the app can", async () => {
+  const view = await mount();
+  saveReplies.push(() => {
+    throw new Error("store busy");
+  });
+  await act(async () => controller.change(addNote("b")));
+  view.unmount();
+  await settle();
+  assert.equal(saves().length, 1, "leaving tried at once");
+  assert.deepEqual(ids(stored), ["a"]);
+
+  await tick(DESIGN_CANVAS_CLOSED_RETRY_MS[0]!);
+  assert.equal(saves().length, 2, "and again after the canvas closed");
+  assert.deepEqual(ids(stored), ["a", "b"], "the edit reached the store");
+  await tick(60_000);
+  assert.equal(saves().length, 2, "nothing more once it is saved");
+});
+
+test("a closed canvas gives up on edits it cannot save after a few tries", async () => {
+  const view = await mount();
+  for (let index = 0; index < 20; index += 1) {
+    saveReplies.push(() => {
+      throw new Error("chat is gone");
+    });
+  }
+  await act(async () => controller.change(addNote("b")));
+  view.unmount();
+  await settle();
+  for (const delay of DESIGN_CANVAS_CLOSED_RETRY_MS) await tick(delay);
+  const tries = saves().length;
+  assert.equal(tries, DESIGN_CANVAS_CLOSED_RETRY_MS.length + 1);
+  await tick(120_000);
+  assert.equal(saves().length, tries, "no retry loop");
+});
+
+test("quitting while a closed canvas still holds unsaved edits saves them", async () => {
+  const view = await mount();
+  saveReplies.push(() => {
+    throw new Error("store busy");
+  });
+  await act(async () => controller.change(addNote("b")));
+  view.unmount();
+  await settle();
+  assert.deepEqual(ids(stored), ["a"]);
+  await act(async () => {
+    await window.__aidenFlushPendingSaves?.();
+  });
+  assert.deepEqual(ids(stored), ["a", "b"], "the app's own flush before quitting saved it");
 });
 
 test("undo and redo step through recorded edits, and unrecorded edits fold into the last one", async () => {

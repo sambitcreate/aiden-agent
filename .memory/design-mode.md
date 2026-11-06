@@ -166,3 +166,9 @@ Deviations from the P1 plan:
 - Format bar `nodes/format-bar.tsx` in an xyflow `NodeToolbar`; its menus/popover carry `data-design-format-bar` so the editor's blur into them keeps editing, and `onCloseAutoFocus` restores the editor selection.
 - Gotchas: the app's command system listens on document capture, so ⌘K (palette) and ⌘B (sidebar) win even in editable fields. The editor takes ⌘B/I/U in a window capture listener and preventDefaults (the command system skips defaultPrevented). No ⌘K for links.
 - Notes gained size (default small), color, fill (note colour via `designFillVar`); `CanvasNodeChrome` got a `tint` prop. Shape labels stay plain.
+
+## PR #778 review fixes (2026-11-06)
+
+- Pullfrog review on 022686e5e. Frame navigation: the window CSP already refuses https in frames (a self-navigation lands on ERR_BLOCKED_BY_CSP), but other aiden-design hosts, aiden-genui: and 'self' were open. `frame-navigation.ts` guards `will-frame-navigate` on the main window: a design frame stays on its own host. `will-frame-navigate` does not fire for about:blank (a dead end with no script, so harmless). E2E: design-containment "cannot navigate its own frame away".
+- Saves: a second conflict in a row now keeps the edits on the newest canvas (status error, retried by the next edit). A closed canvas keeps trying unsaved edits at 2/5/15/30 s and stays registered with the lifecycle flush until saved or given up.
+- Agent `canvas_remove_frame` drops the frame's comments, through the shared `commentsWithoutFrames` (also used by the canvas adapter).

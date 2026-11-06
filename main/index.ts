@@ -133,6 +133,7 @@ import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.j
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
 import { createImagesEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
+import { createDesignFrameNavigationGuard } from "./services/design-canvas/frame-navigation.js";
 import { startDesignProtocol } from "./services/design-canvas/protocol-main.js";
 import { createImagesRuntime } from "./services/create-images/main.js";
 import { ImageQuitCoverage, imageRunsAllowQuit } from "./services/create-images/quit-confirm-core.js";
@@ -1875,6 +1876,15 @@ async function createMainWindow(
   createdWindow.webContents.on("will-redirect", (event, url) => {
     event.preventDefault();
     openExternalUrl(url);
+  });
+  // A design canvas frame runs a workspace page's own scripts; it must never leave its
+  // aiden-design: host for the web or a blank page that keeps the frame's window.
+  const designFrames = createDesignFrameNavigationGuard();
+  createdWindow.webContents.on("did-navigate", () => designFrames.reset());
+  createdWindow.webContents.on("will-frame-navigate", (event) => {
+    if (designFrames.allows(event)) return;
+    event.preventDefault();
+    logger.warn("design", "Blocked a design canvas frame from leaving its workspace page");
   });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });

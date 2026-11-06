@@ -7,9 +7,12 @@
 // revision conflict (the same chat edited in another window, or by Aiden) can
 // take the stored canvas and replay this window's edits on top: neither
 // side's change is lost. That replay happens once; a second conflict in a row
-// shows the stored canvas and reports an error rather than looping. A save the
-// app cannot deliver also reports an error, and its edits wait for the next
-// edit (or leaving the canvas) to try again.
+// keeps the edits on top of the newest stored canvas and reports an error
+// rather than looping. A save the app cannot deliver also reports an error.
+// Either way the edits wait for the next edit to try again. Leaving the canvas
+// saves at once, and edits that still cannot be saved keep trying a few times
+// after the canvas has closed (and when the app quits or reloads) before they
+// are given up.
 //
 // Undo and redo are saved as the frames they change, not as whole canvases,
 // and taking in another writer's canvas clears the history, so neither can
@@ -22,6 +25,8 @@ import type { DesignCanvas } from "../shared/design-canvas/schema";
 import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
 
 export const DESIGN_CANVAS_SAVE_DELAY_MS = 800;
+/** How long a closed canvas waits before each further try at edits it could not save. */
+export const DESIGN_CANVAS_CLOSED_RETRY_MS: readonly number[] = [2_000, 5_000, 15_000, 30_000];
 
 type Mutation = (doc: DesignCanvas) => DesignCanvas;
 export type DesignCanvasStatus = "loading" | "ready" | "saving" | "error";
@@ -98,15 +103,12 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
         } else if (result.reason === "conflict") {
           server = result.doc;
           history = EMPTY_HISTORY;
-          if (replayed) {
-            // Conflicted again straight after a replay: show what is stored, keep only newer edits.
-            local = replay(server, unsent);
-            failed = true;
-          } else {
-            unsent = [...batch, ...unsent];
-            local = replay(server, unsent);
-            retryNow = true;
-          }
+          unsent = [...batch, ...unsent];
+          local = replay(server, unsent);
+          // Conflicted again straight after a replay: keep the edits on the newest canvas,
+          // report it, and leave the next try to the next edit instead of looping.
+          if (replayed) failed = true;
+          else retryNow = true;
         } else {
           // The store refused the canvas itself; retrying the same edits cannot help.
           failed = true;
@@ -155,6 +157,15 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     );
   }
 
+  const flush = async () => {
+    cancelTimer();
+    while (inFlight) await inFlight;
+    if (unsent.length > 0) await save();
+    while (inFlight) await inFlight;
+  };
+  // Quit, close and reload save pending edits first, including a closed canvas's still trying.
+  const unregisterFlush = registerLifecycleFlush(flush);
+
   const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
     if (update.chatId !== chatId) return;
     announced = Math.max(announced, update.revision);
@@ -194,19 +205,21 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       if (!step) return;
       apply(changesBetween(local, step.doc), null, step.history);
     },
-    async flush() {
-      cancelTimer();
-      while (inFlight) await inFlight;
-      if (unsent.length > 0) await save();
-      while (inFlight) await inFlight;
-    },
+    flush,
     dispose() {
       unsubscribe();
-      // Leaving the canvas saves what is pending now, not after the debounce.
-      void this.flush().finally(() => {
+      // Leaving the canvas saves what is pending now, not after the debounce. Edits the
+      // app could not save try again a few times before the session lets them go.
+      void (async () => {
+        for (const delay of [...DESIGN_CANVAS_CLOSED_RETRY_MS, null]) {
+          await flush().catch(() => undefined);
+          if (unsent.length === 0 || delay === null) break;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
         disposed = true;
         cancelTimer();
-      });
+        unregisterFlush();
+      })();
     },
   };
 }
@@ -235,10 +248,8 @@ export function useDesignCanvas(chatId: string): {
       if (mounted) setState(next);
     });
     sync.current = current;
-    const unregister = registerLifecycleFlush(() => current.flush());
     return () => {
       mounted = false;
-      unregister();
       if (sync.current === current) sync.current = null;
       current.dispose();
     };

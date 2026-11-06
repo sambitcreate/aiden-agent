@@ -175,3 +175,87 @@ test("a workspace page on the design canvas cannot reach the network or the app'
   ).toBe(windowCount);
   await expect(designCanvas(page)).toBeVisible();
 });
+
+/**
+ * A workspace page that tries to send its own frame to another page the app's
+ * window would let a frame show: a page under another grant, then a generated
+ * UI page. Either would leave a page that is not this workspace page holding
+ * the frame's window, and so able to post the canvas's frame messages. (The
+ * web is already out of reach: the window's own policy refuses it.) The page
+ * marks its body once it has had time to leave, so only a page that stayed
+ * can say so.
+ */
+const WANDERER = `<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>Wanderer</title></head>
+  <body>
+    <h1>Navigation probe</h1>
+    <script>
+      setTimeout(() => { location.href = "aiden-design://another-grant/design/elsewhere.html"; }, 200);
+      setTimeout(() => { location.href = "aiden-genui://artifact/page.html"; }, 600);
+      setTimeout(() => { document.body.dataset.stayed = "1"; }, 1500);
+    </script>
+  </body>
+</html>
+`;
+
+test("a workspace page on the design canvas cannot navigate its own frame away", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir } = aiden;
+  const wanderer = path.join(workspaceDir, "design", "wanderer.html");
+  await mkdir(path.dirname(wanderer), { recursive: true });
+  await writeFile(wanderer, WANDERER);
+
+  await finishLmStudioOnboarding(page);
+  await waitForToastsToClear(page);
+  await setDisplayWidth(app, 1440);
+  await setWindowWidth(app, page, 1440);
+  await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
+  await sendFirstMessage(page, "Check the wandering page");
+  await typeSlashCommand(page, "/design");
+  await expect(
+    designCanvas(page).getByText(
+      "Ask Aiden to design something, or add a note.",
+    ),
+  ).toBeVisible();
+
+  // Any request to example.com is recorded and cancelled, so nothing reaches the internet.
+  await app.evaluate(({ session }) => {
+    const seen: string[] = [];
+    (globalThis as { __wandererRequests?: string[] }).__wandererRequests = seen;
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      const outside = /^[a-z]+:\/\/([^/]*\.)?example\.com/iu.test(details.url);
+      if (outside) seen.push(details.url);
+      callback({ cancel: outside });
+    });
+  });
+  await app.evaluate(({ dialog }, chosen) => {
+    dialog.showOpenDialog = (async () => ({
+      canceled: false,
+      filePaths: [chosen],
+    })) as unknown as typeof dialog.showOpenDialog;
+  }, wanderer);
+  await designCanvas(page).getByRole("button", { name: "Add" }).click();
+  const fileItem = page.getByRole("menuitem", { name: "File…" });
+  await expect(fileItem).toBeEnabled();
+  await fileItem.click();
+
+  const body = designCanvas(page)
+    .frameLocator('iframe[title="wanderer.html"]')
+    .locator("body");
+  await expect(body.getByRole("heading", { name: "Navigation probe" })).toBeVisible();
+  // Both attempts were stopped before they left: the page is still there to mark itself.
+  await expect(body).toHaveAttribute("data-stayed", "1", { timeout: 10_000 });
+  const frameUrls = page
+    .frames()
+    .map((frame) => frame.url())
+    .filter((url) => /wanderer\.html|example\.com/u.test(url));
+  expect(frameUrls.length).toBeGreaterThan(0);
+  expect(frameUrls.every((url) => url.startsWith("aiden-design:"))).toBe(true);
+  expect(
+    await app.evaluate(
+      () => (globalThis as { __wandererRequests?: string[] }).__wandererRequests ?? [],
+    ),
+  ).toEqual([]);
+});

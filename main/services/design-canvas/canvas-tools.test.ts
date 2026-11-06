@@ -99,12 +99,16 @@ test("frames may only show files that exist inside the workspace", async (t) => 
 
 test("a frame the person added is removed only with confirm, and removing a group keeps its frames", async (t) => {
   const { store, call } = await setup(t);
+  const commentOn = (id: string, frameId: string) => ({
+    id, frameId, x: 10, y: 10, note: id, state: "open" as const, anchorState: "anchored" as const, pageId: "page-1", createdAt: "2026-11-05T00:00:00Z",
+  });
   await store.update("chat-1", (doc) => ({
     ...doc,
     frames: [
       { id: "group-p", kind: "group", title: "Mine", x: 0, y: 0, w: 1000, h: 800, pageId: "page-1", createdBy: "person" },
       { id: "note-p", kind: "note", title: "Mine", text: "keep", x: 40, y: 60, w: 240, h: 160, groupId: "group-p", pageId: "page-1", createdBy: "person" },
     ],
+    comments: [commentOn("on-group", "group-p"), commentOn("on-note", "note-p")],
   }));
   const refused = await call("canvas_remove_frame", { id: "note-p" });
   assert.equal(refused.status, "error");
@@ -114,6 +118,11 @@ test("a frame the person added is removed only with confirm, and removing a grou
   assert.deepEqual(removed, { status: "removed", id: "group-p", personFrame: true });
   const doc = await store.get("chat-1");
   assert.deepEqual(doc.frames.map((frame) => [frame.id, frame.groupId]), [["note-p", undefined]]);
+  assert.deepEqual(
+    doc.comments.map((comment) => [comment.id, comment.frameId]),
+    [["on-note", "note-p"]],
+    "the removed frame's comments go with it; the kept frame's stay",
+  );
 
   const unknown = await call("canvas_remove_frame", { id: "gone" });
   assert.equal(unknown.status, "error");

@@ -129,6 +129,8 @@ export function FileFrame({
         style={{ pointerEvents: entered ? undefined : "none" }}
       >
         <iframe
+          // Main keeps a design frame on its own host, so another grant gets a new frame.
+          key={grant ?? ""}
           ref={iframeRef}
           data-frame-id={frame.id}
           title={frame.title}

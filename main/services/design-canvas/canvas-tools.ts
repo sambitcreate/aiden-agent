@@ -10,6 +10,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import { canvasView, describeCanvas, summarizeFrame } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import { commentsWithoutFrames } from "../../../renderer/shared/design-canvas/comments.js";
 import { canAttachTo, syncConnectors, translateConnector } from "../../../renderer/shared/design-canvas/connectors.js";
 import {
   clampCoord,
@@ -578,8 +579,10 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   const { groupId: _groupId, ...rest } = entry;
                   return rest;
                 });
+              // Its comments go with it, as when the person removes a frame.
+              const comments = commentsWithoutFrames(doc.comments, new Set([frame.id]));
               return {
-                doc: syncConnectors({ ...doc, frames }),
+                doc: syncConnectors({ ...doc, frames, comments }),
                 value: { status: "removed", id: frame.id, ...(frame.createdBy === "person" ? { personFrame: true } : {}) },
               };
             });
