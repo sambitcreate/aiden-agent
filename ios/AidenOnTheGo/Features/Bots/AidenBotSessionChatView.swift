@@ -984,7 +984,8 @@ struct AidenBotSessionChatView: View {
                 sendLabel: sendLabel(model),
                 canStop: canWrite && !model.isStopping && !model.inFlight.contains(.stop),
                 stopLabel: String(localized: "Stop"),
-                fieldIsDisabled: !canCompose || composerIsHeld(model)
+                fieldIsDisabled: !canCompose || composerIsHeld(model),
+                micIsEnabled: canCompose
             ),
             focus: $composerFocused,
             onSend: { submit(model, whenBusy: nil) },

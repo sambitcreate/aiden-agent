@@ -320,6 +320,29 @@ final class AidenChatDockTests: XCTestCase {
         XCTAssertEqual(AidenDockContent.resolve(model.dockInput), .composer(busy: true))
     }
 
+    func testAnOldHostStillShowsAQuestionItCanTakeAnAnswerTo() async throws {
+        try makeCoordinator(.oldHost)
+        await coordinator.start()
+        let model = try chatModel()
+        model.streamState = .running
+        model.pendingQuestion = Self.question
+
+        XCTAssertEqual(AidenDockContent.resolve(model.dockInput), .question)
+    }
+
+    func testARevokedMachineStillOutranksAQuestion() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        let model = try chatModel(owner: "laptop")
+        model.setViewPresent(true)
+        await coordinator.switchInstallation(to: "studio")
+        try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).markRevokedWithPurgePending()
+        model.pendingQuestion = Self.question
+
+        XCTAssertEqual(AidenDockContent.resolve(model.dockInput), .cannotRespond(AidenDockCopy.machineRevoked))
+        model.setViewPresent(false)
+    }
+
     func testARevokedMachineCannotRespond() async throws {
         try makeCoordinator(.four)
         await coordinator.start()
@@ -367,6 +390,67 @@ final class AidenChatDockTests: XCTestCase {
         XCTAssertNil(model.pendingSend, "A revoked machine can't take a retry")
         XCTAssertEqual(model.presentedError, AidenDockCopy.machineRevoked)
         XCTAssertEqual(AidenDockContent.resolve(model.dockInput), .cannotRespond(AidenDockCopy.machineRevoked))
+        model.setViewPresent(false)
+    }
+
+    func testARunInputOnARevokedMachineBringsTheDraftBack() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let store = AidenChatDraftStore(root: root.appending(path: "drafts", directoryHint: .isDirectory))
+        let model = try chatModel(owner: "laptop", draftStore: store)
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        await reachOwner("laptop")
+        responder.reply(
+            instanceId: "laptop",
+            method: "POST",
+            path: "/streams/stream_1/inputs",
+            status: 401,
+            json: Self.revokedJSON
+        )
+        model.streamState = .running
+        model.activeStreamID = "stream_1"
+        model.draft = "Keep these words"
+        XCTAssertTrue(model.canSubmitRunInput)
+
+        await model.submitRunInput(.steer)
+
+        XCTAssertEqual(try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).isPurgePending, true)
+        XCTAssertEqual(model.draft, "Keep these words")
+        XCTAssertNil(model.pendingSend, "A revoked machine can't take a retry")
+        XCTAssertEqual(model.presentedError, AidenDockCopy.machineRevoked)
+        let session = await store.beginSession(instanceId: "laptop", chatId: "c1")
+        let saved = try await store.loadPendingSend(session: session, deviceId: model.owner.deviceId)
+        XCTAssertNil(saved, "The refused input would be offered again")
+        model.setViewPresent(false)
+    }
+
+    /// A retry's words are in the pending send and nowhere else.
+    func testARetriedRunInputOnARevokedMachineKeepsItsWords() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let model = try chatModel(owner: "laptop")
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        await reachOwner("laptop")
+        responder.reply(instanceId: "laptop", method: "POST", path: "/streams/stream_1/inputs", status: 503, json: Data("{}".utf8))
+        model.streamState = .running
+        model.activeStreamID = "stream_1"
+        model.draft = "Keep these words"
+        await model.submitRunInput(.steer)
+        XCTAssertNotNil(model.pendingSend)
+        model.draft = ""
+        XCTAssertTrue(model.canRetrySend)
+        responder.reply(instanceId: "laptop", method: "POST", path: "/streams/stream_1/inputs", status: 401, json: Self.revokedJSON)
+
+        await model.send(retry: true)
+
+        XCTAssertNil(model.pendingSend)
+        XCTAssertEqual(model.draft, "Keep these words", "The only copy of the words was settled away")
         model.setViewPresent(false)
     }
 
@@ -574,6 +658,94 @@ final class AidenChatDockTests: XCTestCase {
         XCTAssertNotNil(model.presentedError)
     }
 
+    /// The cache refuses a receipt only once the chat is removed, so a refusal
+    /// reaches neither the chat's revision nor the list.
+    func testARenameOfAChatRemovedMeanwhileReachesNoList() async throws {
+        try makeCoordinator(.one)
+        await coordinator.start()
+        transcript(on: "studio")
+        let cache = AidenChatCache(root: root.appending(path: "chats", directoryHint: .isDirectory))
+        var published: [AidenChat] = []
+        let model = try chatModel(cache: cache) { published.append($0) }
+        await model.load(observeProgress: false)
+        published = []
+        let revision = model.chat.revision
+        responder.reply(
+            instanceId: "studio",
+            method: "PATCH",
+            path: "/chats/c1",
+            status: 200,
+            json: Self.chatJSON(title: "New name", revision: "r9")
+        )
+        let release = responder.hold(instanceId: "studio", path: "/chats/c1")
+
+        let renaming = Task { await model.rename(to: "New name") }
+        for _ in 0..<300 where !responder.requests(instanceId: "studio").contains("PATCH /chats/c1") {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await cache.removeChat(instanceId: "studio", chatId: "c1")
+        release()
+        await renaming.value
+
+        XCTAssertEqual(model.chat.revision, revision)
+        XCTAssertTrue(published.isEmpty, "A receipt the cache refused reached the list")
+    }
+
+    func testARenameRefusedByRevocationPutsTheTitleBack() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let model = try chatModel(owner: "laptop")
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).adopt(connectionState: .connected)
+        let title = model.chat.displayTitle
+        responder.reply(instanceId: "laptop", method: "PATCH", path: "/chats/c1", status: 401, json: Self.revokedJSON)
+
+        await model.rename(to: "New name")
+
+        XCTAssertEqual(try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).isPurgePending, true)
+        XCTAssertEqual(model.chat.displayTitle, title)
+        model.setViewPresent(false)
+    }
+
+    // MARK: - Spending
+
+    func testAllowMoreGoesToTheMachineThatOwnsTheChat() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let model = try chatModel(owner: "laptop")
+        await model.load(observeProgress: false)
+        await coordinator.switchInstallation(to: "studio")
+        await reachOwner("laptop")
+        for id in ["laptop", "studio"] {
+            let connection = try XCTUnwrap(coordinator.hosts.connection(for: id))
+            connection.adopt(server: try Self.withSpendingLimits(XCTUnwrap(connection.server)))
+            connection.adopt(connectionState: .connected)
+            responder.reply(instanceId: id, path: "/chats/c1/spending", status: 200, json: Data(#"{"spending":null}"#.utf8))
+        }
+
+        let transport = try XCTUnwrap(model.spendingTransport)
+        _ = try await transport.spending(owner: .chat("c1"))
+
+        XCTAssertTrue(responder.requests(instanceId: "laptop").contains("GET /chats/c1/spending"))
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /chats/c1/spending"), "Asked the selected machine")
+    }
+
+    func testNoSpendingTransportWhenTheOwnerHasNoLimitsButTheSelectionDoes() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        let model = try chatModel(owner: "laptop")
+        await coordinator.switchInstallation(to: "studio")
+        await reachOwner("laptop")
+        let studio = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        studio.adopt(server: try Self.withSpendingLimits(XCTUnwrap(studio.server)))
+
+        XCTAssertNil(model.spendingTransport)
+    }
+
     func testTheSheetForksFromTheLatestReply() throws {
         try makeCoordinator(.one)
         let model = try chatModel()
@@ -594,6 +766,22 @@ final class AidenChatDockTests: XCTestCase {
     private static let revokedJSON = Data(
         #"{"error":{"code":"credential_revoked","message":"Pair this device again.","requestId":"revoked","retryable":false}}"#.utf8
     )
+
+    /// A machine that isn't selected only knows its server once it's been reached.
+    private func reachOwner(_ instanceId: String) async {
+        await coordinator.hosts.connection(for: instanceId)?.connect(over: .probe)
+    }
+
+    /// The same server, advertising spending limits.
+    private static func withSpendingLimits(_ server: AidenServer) throws -> AidenServer {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(server)) as? [String: Any])
+        object["features"] = ((object["features"] as? [String]) ?? []) + [AidenServer.spendingLimitsFeature]
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(AidenServer.self, from: JSONSerialization.data(withJSONObject: object))
+    }
 
     /// Answers both transcript routes, for machines with and without windows.
     private func transcript(on instanceId: String) {
@@ -622,7 +810,10 @@ final class AidenChatDockTests: XCTestCase {
 
     private func chatModel(
         owner instanceId: String = "studio",
-        messages: [AidenChatMessage] = []
+        messages: [AidenChatMessage] = [],
+        cache: AidenChatCache? = nil,
+        draftStore: AidenChatDraftStore? = nil,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) throws -> AidenChatViewModel {
         let date = Date(timeIntervalSince1970: 1_793_000_000)
         return AidenChatViewModel(
@@ -632,10 +823,11 @@ final class AidenChatDockTests: XCTestCase {
                 messages: messages, createdAt: date, updatedAt: date, revision: "r0"
             ),
             owner: try coordinator.ownerContext(for: instanceId),
-            cache: AidenChatCache(root: root.appending(path: "chats", directoryHint: .isDirectory)),
-            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts", directoryHint: .isDirectory)),
+            cache: cache ?? AidenChatCache(root: root.appending(path: "chats", directoryHint: .isDirectory)),
+            draftStore: draftStore ?? AidenChatDraftStore(root: root.appending(path: "drafts", directoryHint: .isDirectory)),
             modelPreferenceStore: AidenModelPreferenceStore(defaults: AidenDemoHosts.isolatedDefaults()),
-            visualDocumentCache: AidenVisualDocumentCache(root: root.appending(path: "visuals", directoryHint: .isDirectory))
+            visualDocumentCache: AidenVisualDocumentCache(root: root.appending(path: "visuals", directoryHint: .isDirectory)),
+            onChatUpdated: onChatUpdated
         )
     }
 

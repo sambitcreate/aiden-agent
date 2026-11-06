@@ -520,10 +520,7 @@ struct AidenChatDetailView: View {
         model.chat.botId.map(AidenSpendingOwner.bot) ?? .chat(model.chat.id)
     }
 
-    private var spendingTransport: AidenSpendingTransport? {
-        guard let coordinator, coordinator.server?.supportsSpendingLimits == true else { return nil }
-        return try? coordinator.remoteClient()
-    }
+    private var spendingTransport: AidenSpendingTransport? { model.spendingTransport }
 
     /// Revision 49: a Workspace chat's background jobs, once this phone holds `chat:jobs`.
     private var backgroundJobsTransport: AidenBackgroundJobTransport? {
@@ -564,8 +561,8 @@ struct AidenChatDetailView: View {
     private var spendingRefreshKey: String {
         [
             model.chat.id,
-            coordinator?.activeInstanceId ?? "",
-            String(coordinator?.server?.supportsSpendingLimits == true),
+            model.owner.instanceId,
+            String(model.ownerServer?.supportsSpendingLimits == true),
             String(model.isStreaming),
             String(model.chat.messages.count),
             model.sendRecoveryMessage ?? "",

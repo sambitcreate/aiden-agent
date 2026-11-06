@@ -286,6 +286,12 @@ extension AidenChatViewModel {
 
     var isOwnerRevoked: Bool { AidenDockInput.isRevoked(ownerHostConnection) }
 
+    /// The owner's, since this chat can stay on screen across a machine switch.
+    var spendingTransport: AidenSpendingTransport? {
+        guard !isReadOnlyFixture, ownerServer?.supportsSpendingLimits == true else { return nil }
+        return try? coordinator.remoteClient(for: owner)
+    }
+
     /// A read-only fixture has no machine behind it.
     private var ownerHostConnection: AidenHostConnection? {
         isReadOnlyFixture ? nil : coordinator.hosts.connection(for: owner.instanceId)
@@ -293,8 +299,9 @@ extension AidenChatViewModel {
 
     private func cannotRespondReason(_ connection: AidenHostConnection?) -> String? {
         if AidenDockInput.isRevoked(connection) { return AidenDockCopy.machineRevoked }
-        // A machine that hasn't answered yet may still take run input.
-        if isStreaming, let server = connection?.server, !server.supportsChatRunInput {
+        // A machine that hasn't answered yet may still take run input. An open
+        // question is its own way in, and an answer isn't run input.
+        if pendingQuestion == nil, isStreaming, let server = connection?.server, !server.supportsChatRunInput {
             return AidenDockCopy.noRunInput
         }
         return nil

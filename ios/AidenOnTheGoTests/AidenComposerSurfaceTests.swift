@@ -473,6 +473,85 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertGreaterThan(probe.follows, 0)
     }
 
+    // MARK: - A real follow controller beside the composer
+
+    /// Fits at first. The composer then grows over its last words, which moves
+    /// only the inset: no offset or content size changes to report it.
+    func testAComposerGrowingOverAFittingChatReachesItsLastWords() throws {
+        let probe = AidenFollowProbe()
+        let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 500))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > 0 }))
+        drainMainLoop()
+        XCTAssertLessThan(probe.distanceFromBottom, 0, "The chat should start out fitting")
+
+        probe.composerHeight = 300
+
+        XCTAssertTrue(
+            runMainLoop(until: { abs(probe.distanceFromBottom) <= 1 }, timeout: 2),
+            "The last words are under the composer, \(probe.distanceFromBottom) pt away"
+        )
+    }
+
+    /// The same, with the size anchor out of the way so that only the follow
+    /// can reach the bottom. The anchor would hide a follow that gave up.
+    func testAFollowSeesAnInsetMoveThatChangedNothingElse() throws {
+        let probe = AidenFollowProbe()
+        let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 500, usesSizeAnchor: false))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > 0 }))
+        drainMainLoop()
+        XCTAssertLessThan(probe.distanceFromBottom, 0, "The chat should start out fitting")
+
+        probe.composerHeight = 300
+
+        XCTAssertTrue(
+            runMainLoop(until: { abs(probe.distanceFromBottom) <= 1 }, timeout: 2),
+            "The follow gave up on a stale fit, \(probe.distanceFromBottom) pt from the bottom"
+        )
+    }
+
+    func testAComposerGrowingBesideAShortChatWithAFollowLeavesItAtTheTop() throws {
+        let probe = AidenFollowProbe()
+        let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 300))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > 0 }))
+        drainMainLoop()
+
+        let inset = probe.bottomInset
+        probe.composerHeight = 300
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > inset }))
+        drainMainLoop()
+
+        XCTAssertEqual(probe.scrolledFromTop, 0, accuracy: 1)
+    }
+
+    /// Nothing has moved since the chat first laid out, so nothing has changed
+    /// to report: the first measurement has to count.
+    func testAFollowOnAChatThatNeverMovedLeavesAShortOneAtTheTop() throws {
+        let probe = AidenFollowProbe()
+        let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 300))
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { probe.bottomInset > 0 }))
+        drainMainLoop()
+
+        probe.followRequests += 1
+        drainMainLoop()
+
+        XCTAssertEqual(probe.scrolledFromTop, 0, accuracy: 1, "The short chat dropped away from the top")
+    }
+
+    func testALongChatReachesItsEndOnItsFirstFollow() throws {
+        let probe = AidenFollowProbe()
+        let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 1_500, startsAtTop: true, usesSizeAnchor: false))
+        defer { close(window) }
+
+        XCTAssertTrue(
+            runMainLoop(until: { probe.bottomInset > 0 && abs(probe.distanceFromBottom) <= 1 }, timeout: 2),
+            "A long chat didn't follow, \(probe.distanceFromBottom) pt away"
+        )
+    }
+
     /// Grows a composer from one line's height to a tall one beside a transcript.
     private func growComposer(contentHeight: CGFloat) throws -> AidenComposerInsetProbe {
         let probe = AidenComposerInsetProbe()
@@ -634,6 +713,84 @@ private struct AidenComposerInsetHost: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, inset in
                 probe.bottomInset = inset
             }
+        }
+    }
+}
+
+@MainActor
+@Observable
+private final class AidenFollowProbe {
+    var composerHeight: CGFloat = 60
+    var followRequests = 0
+    var bottomInset: CGFloat = 0
+    var scrolledFromTop: CGFloat = 0
+    /// Negative while the content ends above the composer.
+    var distanceFromBottom: CGFloat = 0
+}
+
+/// A transcript wired as the two conversation screens wire theirs: the real
+/// observer and controller, the size anchor, and the inset follow.
+private struct AidenFollowingTranscriptHost: View {
+    let probe: AidenFollowProbe
+    let contentHeight: CGFloat
+    var startsAtTop = false
+    var usesSizeAnchor = true
+    @State private var follow = AidenTranscriptFollowController()
+    @State private var session = AidenComposerSession(voice: AidenComposerFakeVoice())
+
+    var body: some View {
+        AidenTranscriptScaffold(dock: AidenChatDock(
+            content: .composer(busy: false),
+            session: session,
+            config: .chat(model: nil),
+            actions: AidenDockActions(),
+            slots: AidenDockSlots(composer: { _ in
+                Color.clear.frame(height: probe.composerHeight)
+            })
+        )) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: contentHeight)
+                        Color.clear.frame(height: 1).id(AidenChatScrollPolicy.transcriptBottomAnchorID)
+                    }
+                    .background {
+                        AidenChatScrollObserver(
+                            onFollowEvent: { follow.handle($0) },
+                            onMetrics: { follow.updateMetrics($0) }
+                        )
+                    }
+                }
+                .defaultScrollAnchor(
+                    startsAtTop ? .top : AidenChatScrollPolicy.initialTranscriptAnchor,
+                    for: .initialOffset
+                )
+                .defaultScrollAnchor(
+                    AidenChatScrollPolicy.sizeChangeAnchor(shouldFollowLatest: usesSizeAnchor && follow.isFollowing),
+                    for: .sizeChanges
+                )
+                .aidenOnComposerInsetChange { followLatest(proxy) }
+                .onChange(of: probe.followRequests) { followLatest(proxy) }
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, inset in
+                    probe.bottomInset = inset
+                }
+                .onScrollGeometryChange(for: CGFloat.self) {
+                    $0.contentOffset.y + $0.contentInsets.top
+                } action: { _, offset in
+                    probe.scrolledFromTop = offset
+                }
+                .onScrollGeometryChange(for: CGFloat.self) {
+                    $0.contentSize.height - ($0.contentOffset.y + $0.contentInsets.top) - $0.containerSize.height
+                } action: { _, distance in
+                    probe.distanceFromBottom = distance
+                }
+            }
+        }
+    }
+
+    private func followLatest(_ proxy: ScrollViewProxy) {
+        follow.scheduleFollowScroll(isUserInitiated: false, animated: false) { _ in
+            proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
         }
     }
 }

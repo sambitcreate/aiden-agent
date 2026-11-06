@@ -790,16 +790,23 @@ final class AidenChatViewModel {
             let cutoff = cache.reserveChatWrite()
             let admitted = await cache.acceptRename(updated, instanceId: instanceId, origin: origin, cutoff: cutoff)
             guard !isRemoved, coordinator.isLive(context) else { return }
+            guard let admitted else {
+                chat.localTitleOverride = previousOverride
+                return
+            }
             chat.title = updated.title
             chat.revision = updated.revision
-            chat.localTitleOverride = admitted?.localTitleOverride
+            chat.localTitleOverride = admitted.localTitleOverride
             if ownerIsSelected { onChatUpdated(chat) }
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard !isRemoved, coordinator.isLive(context) else { return }
             chat.localTitleOverride = previousOverride
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            if await coordinator.handleCredentialRevocation(error, context: context) {
+                chat.localTitleOverride = previousOverride
+                return
+            }
             guard !isRemoved, coordinator.isLive(context) else { return }
             chat.localTitleOverride = previousOverride
             presentedError = error.localizedDescription
@@ -2561,7 +2568,26 @@ final class AidenChatViewModel {
                 coordinator.haptics.play(.error, scope: hapticScope)
             }
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
+            if await coordinator.handleCredentialRevocation(error, context: context) {
+                // As in `send`: another machine's record stays while this chat is
+                // on screen, so the words come back. Nothing can retry them.
+                guard !isRemoved, coordinator.isRetained(context) else { return }
+                if retry {
+                    // A retry's words are in the pending send alone, so they
+                    // reach the saved draft before that send is settled.
+                    draft = AidenDraftSendReconciliation.failedDraft(submitted: text, current: draft)
+                    if let session = draftSession { _ = try? await draftStore.save(draft, session: session) }
+                } else {
+                    restoreDraft()
+                }
+                if let session = draftSession { await draftStore.settlePendingSend(key: key, session: session) }
+                pendingSend = nil
+                isPendingSendRefusedBecauseBusy = false
+                if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
+                presentedError = AidenDockCopy.machineRevoked
+                coordinator.haptics.play(.error, scope: hapticScope)
+                return
+            }
             guard coordinator.isLive(context) else { return }
             restoreDraft()
             presentedError = String(localized: "The run input was not confirmed. Your draft is back — check the chat before trying again.")
