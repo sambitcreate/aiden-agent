@@ -147,12 +147,16 @@ export function parseAssistantLiveToolResultIntent(value: unknown): AssistantLiv
 export interface AssistantLiveNoteIntent {
   sessionId: string;
   text: string;
+  /** Answer only once the note has reached Live, or false if it never does. */
+  awaitDelivery?: true;
 }
 
 export function parseAssistantLiveNoteIntent(value: unknown): AssistantLiveNoteIntent {
+  const awaitDelivery = isRecord(value) && "awaitDelivery" in value;
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["sessionId", "text"]) ||
+    !exactKeys(value, awaitDelivery ? ["awaitDelivery", "sessionId", "text"] : ["sessionId", "text"]) ||
+    (awaitDelivery && value.awaitDelivery !== true) ||
     !validSessionId(value.sessionId) ||
     typeof value.text !== "string" ||
     value.text.trim().length === 0 ||
@@ -160,5 +164,7 @@ export function parseAssistantLiveNoteIntent(value: unknown): AssistantLiveNoteI
   ) {
     throw new Error("Invalid Assistant Live note.");
   }
-  return { sessionId: value.sessionId, text: value.text };
+  return awaitDelivery
+    ? { sessionId: value.sessionId, text: value.text, awaitDelivery: true }
+    : { sessionId: value.sessionId, text: value.text };
 }

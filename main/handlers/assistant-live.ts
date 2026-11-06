@@ -75,6 +75,8 @@ export function registerAssistantLiveHandlers(): void {
   });
   ipcMain.handle("assistant-live:note", (event, input: unknown) => {
     const intent = parseAssistantLiveNoteIntent(input);
-    return geminiLiveService.sendNote(owner(event), intent.sessionId, intent.text);
+    return intent.awaitDelivery
+      ? geminiLiveService.deliverNote(owner(event), intent.sessionId, intent.text)
+      : geminiLiveService.sendNote(owner(event), intent.sessionId, intent.text);
   });
 }

@@ -1028,6 +1028,7 @@
         "renderer/lib/chat-message-queue.test.ts",
         "renderer/lib/live-activity.test.ts",
         "renderer/lib/live-app-control.test.ts",
+        "renderer/lib/live-speech-onsets.test.ts",
         "renderer/lib/live-session-bus.test.ts",
         "renderer/lib/live-open-chat.test.ts",
         "renderer/lib/live-time-stretch.test.ts",
