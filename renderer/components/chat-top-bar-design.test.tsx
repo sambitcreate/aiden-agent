@@ -147,7 +147,7 @@ const STUB_PANEL = {
 } as unknown as EnvironmentPanelContextValue;
 
 /** The header at `width` px of content, with Quick View and Terminal as the chat pane passes them. */
-function renderToolbarAt(width: number, selected: string[]) {
+function renderToolbarAt(width: number, selected: string[], designOn = true) {
   const realWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
@@ -171,18 +171,22 @@ function renderToolbarAt(width: number, selected: string[]) {
     render(
       <QueryClientProvider client={queryClient}>
         <CommandSystemProvider>
-          <EnvironmentPanelContext.Provider value={STUB_PANEL}>
-            <div data-toolbar>
-              <WorkspaceToolButtons
-                chatId="plain-chat"
-                hasWorkspace
-                hasFolder
-                hasFolderAccess
-                isRepo={false}
-                foldable={[action("quick-view", "Show Quick View"), action("terminal", "Show terminal")]}
-              />
-            </div>
-          </EnvironmentPanelContext.Provider>
+          <DesignModeControlsContext.Provider
+            value={{ chatId: "plain-chat", on: designOn, set: () => {}, toggle: () => {} }}
+          >
+            <EnvironmentPanelContext.Provider value={STUB_PANEL}>
+              <div data-toolbar>
+                <WorkspaceToolButtons
+                  chatId="plain-chat"
+                  hasWorkspace
+                  hasFolder
+                  hasFolderAccess
+                  isRepo={false}
+                  foldable={[action("quick-view", "Show Quick View"), action("terminal", "Show terminal")]}
+                />
+              </div>
+            </EnvironmentPanelContext.Provider>
+          </DesignModeControlsContext.Provider>
         </CommandSystemProvider>
       </QueryClientProvider>,
     );
@@ -192,7 +196,7 @@ function renderToolbarAt(width: number, selected: string[]) {
   }
 }
 
-test("a tight header, like the design chat column, moves Quick View and Terminal into the tools menu", async () => {
+test("a tight header in design mode, like its chat column, moves Quick View and Terminal into the tools menu", async () => {
   const selected: string[] = [];
   renderToolbarAt(1000, selected);
   assert.ok(screen.getByRole("button", { name: "Show Quick View" }), "a roomy header keeps both buttons");
@@ -217,6 +221,12 @@ test("a tight header, like the design chat column, moves Quick View and Terminal
     fireEvent.click(items[1]);
   });
   assert.deepEqual(selected, ["terminal"], "the menu row does what the button did");
+  cleanup();
+
+  // Outside design mode a narrow window keeps both buttons in the header.
+  renderToolbarAt(360, selected, false);
+  assert.ok(screen.getByRole("button", { name: "Show Quick View" }), "Quick View stays without design mode");
+  assert.ok(screen.getByRole("button", { name: "Show terminal" }));
 });
 
 test("a truncated chat title keeps its full text as the name and on hover", () => {

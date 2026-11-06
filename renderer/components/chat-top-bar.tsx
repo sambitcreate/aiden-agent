@@ -543,7 +543,7 @@ export interface FoldableToolbarAction {
  * workspace gets none. `leading` sits before the tools and `end` after the
  * overflow menu; both stay visible when the tools fold into that menu.
  * `foldable` actions (Quick View, Terminal) sit at the start of the tools and
- * fold into the menu as well once the header is tight.
+ * fold into the menu as well once the header is tight in design mode.
  */
 export function WorkspaceToolButtons({
   chatId,
@@ -573,7 +573,10 @@ export function WorkspaceToolButtons({
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const density = useToolbarDensity(anchorRef);
   const compact = density !== "regular";
-  const tight = density === "tight";
+  // Only design mode's chat column folds Quick View and Terminal away; a
+  // narrow window outside design mode keeps both buttons, as it always has.
+  const designOn = useDesignModeControls(chatId)?.on === true;
+  const tight = density === "tight" && designOn;
   const available = (id: EnvironmentPanelTab): boolean => {
     if (!hasWorkspace) return false;
     if (id === "review") return hasFolder && isRepo;
