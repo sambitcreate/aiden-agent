@@ -64,6 +64,7 @@ export class LiveSessionBus {
   private transport: LiveSessionTransport | null = null;
   private readonly sessionListeners = new Set<Listener<string | null>>();
   private readonly voiceListeners = new Set<Listener<LiveVoiceInput>>();
+  private readonly fenceListeners = new Set<Listener<number>>();
   private readonly tools = new Map<string, LiveRendererToolHandler>();
   private readonly inFlight = new Map<string, { abort: AbortController; committed: boolean; reported: boolean }>();
   private lastVoiceInputId = 0;
@@ -102,7 +103,15 @@ export class LiveSessionBus {
 
   /** Latest start mark: only speech that begins after this point has a larger `startedAt`. */
   voiceInputFence(): number {
-    return this.lastVoiceStart;
+    const fence = this.lastVoiceStart;
+    for (const listener of [...this.fenceListeners]) listener(fence);
+    return fence;
+  }
+
+  /** Called with each fence as it is taken (the microphone's onset tracker listens). */
+  onVoiceInputFence(listener: Listener<number>): () => void {
+    this.fenceListeners.add(listener);
+    return () => this.fenceListeners.delete(listener);
   }
 
   /** Publishes a finished utterance; without a start mark it counts as starting now. */
