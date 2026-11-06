@@ -18,6 +18,10 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { checkWorktreeAllocation } from "./managed-worktree-capacity.js";
+import {
+  managedWorktreeRemovalPhaseAllowed,
+  type ManagedWorktreeRemovalPhase,
+} from "./managed-worktree-removal-core.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
 import { resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
@@ -232,14 +236,7 @@ interface GitWorktreeAdminIdentity {
 
 interface GitWorktreeRemovalJournal {
   version: 3 | 4;
-  phase:
-    | "prepared"
-    | "quarantined"
-    | "checkout_cleanup_started"
-    | "checkout_complete"
-    | "admin_cleanup_started"
-    | "needs_review"
-    | "filesystem_complete";
+  phase: ManagedWorktreeRemovalPhase;
   adminDevice: number;
   adminGitdirContents: string;
   adminInode: number;
@@ -4596,6 +4593,12 @@ export class GitService {
     > = {},
   ): Promise<GitWorktreeRemovalJournal> {
     await this.readWorktreeRemovalJournal(journalPath, expected);
+    if (!managedWorktreeRemovalPhaseAllowed(expected.phase, phase)) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion journal cannot move to that phase.",
+      );
+    }
     const next = { ...expected, ...updates, phase };
     const temporaryPath = `${journalPath}.tmp-${randomUUID()}`;
     let handle: fs.FileHandle | undefined;

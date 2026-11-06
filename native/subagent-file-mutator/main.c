@@ -42,10 +42,28 @@ enum Result {
   RESULT_INDETERMINATE = 4,
 };
 
+/*
+ * One file mutation. The phase only moves forward, except that a commit which
+ * proves it undid its own publication returns to PREPARED before it is cleared.
+ *
+ *   IDLE -> INSPECTED -> PREPARED -> COMMITTED -> IDLE (finalize or preserve)
+ *   IDLE -> PREPARED (prepare without a prior inspect)
+ *   INSPECTED or PREPARED -> IDLE (cancel, or a commit refused before publishing)
+ *
+ * COMMITTED starts at the rename, the namespace publication, so it does not
+ * mean durable. recovery_unlinked and commit_parent_synced track what durability
+ * work is done, independently of the phase, and an indeterminate result stays
+ * COMMITTED so the recovery file is never treated as disposable.
+ */
+enum TransactionPhase {
+  PHASE_IDLE = 0,
+  PHASE_INSPECTED,
+  PHASE_PREPARED,
+  PHASE_COMMITTED,
+};
+
 struct Transaction {
-  int active;
-  int prepared;
-  int committed;
+  enum TransactionPhase phase;
   int expected_absent;
   int parent_fd;
   int expected_fd;
@@ -1008,7 +1026,7 @@ static int prepare_transaction(int root_fd, const char *root_path,
                                const char *request_id, const char *expected,
                                const char *encoded_path,
                                const char *encoded_contents) {
-  if (transaction->active)
+  if (transaction->phase != PHASE_IDLE)
     return RESULT_CONFLICT;
   int root_result = revalidate_root(root_fd, root_path);
   if (root_result != RESULT_OK)
@@ -1089,8 +1107,7 @@ static int prepare_transaction(int root_fd, const char *root_path,
     free(contents);
     return RESULT_IO;
   }
-  candidate.active = 1;
-  candidate.prepared = 1;
+  candidate.phase = PHASE_PREPARED;
   candidate.contents = contents;
   candidate.content_length = content_length;
   memcpy(candidate.request_id, request_id, strlen(request_id) + 1);
@@ -1102,7 +1119,7 @@ static int inspect_transaction(int root_fd, const char *root_path,
                                struct Transaction *transaction,
                                const char *request_id,
                                const char *encoded_path) {
-  if (transaction->active)
+  if (transaction->phase != PHASE_IDLE)
     return RESULT_CONFLICT;
   int root_result = revalidate_root(root_fd, root_path);
   if (root_result != RESULT_OK)
@@ -1173,7 +1190,7 @@ static int inspect_transaction(int root_fd, const char *root_path,
       return RESULT_CONFLICT;
     }
   }
-  candidate.active = 1;
+  candidate.phase = PHASE_INSPECTED;
   memcpy(candidate.request_id, request_id, strlen(request_id) + 1);
   *transaction = candidate;
   return RESULT_OK;
@@ -1239,7 +1256,7 @@ static int prepare_inspected_transaction(
     int root_fd, const char *root_path, struct Transaction *transaction,
     const char *request_id, const char *expected,
     const char *encoded_contents) {
-  if (!transaction->active || transaction->prepared || transaction->committed ||
+  if (transaction->phase != PHASE_INSPECTED ||
       strcmp(transaction->request_id, request_id) != 0 ||
       !(strcmp(expected, "absent") == 0 || valid_hex_digest(expected)))
     return RESULT_INVALID;
@@ -1291,7 +1308,7 @@ static int prepare_inspected_transaction(
   transaction->contents = contents;
   transaction->content_length = content_length;
   memcpy(transaction->content_digest, content_digest, sizeof(content_digest));
-  transaction->prepared = 1;
+  transaction->phase = PHASE_PREPARED;
   if (test_pause("AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_AFTER_PREPARE") != 0)
     return RESULT_IO;
   return RESULT_OK;
@@ -1321,7 +1338,7 @@ static int rollback_swap(struct Transaction *transaction,
 
 static int commit_transaction(int root_fd, const char *root_path,
                               struct Transaction *transaction) {
-  if (!transaction->active || !transaction->prepared || transaction->committed)
+  if (transaction->phase != PHASE_PREPARED)
     return RESULT_INVALID;
   if (test_pause("AIDEN_SUBAGENT_FILE_MUTATOR_TEST_PAUSE_BEFORE_STAGE") != 0)
     return RESULT_IO;
@@ -1422,7 +1439,7 @@ static int commit_transaction(int root_fd, const char *root_path,
       (void)unlinkat(transaction->parent_fd, stage_name, 0);
       return failure == EEXIST ? RESULT_CONFLICT : RESULT_IO;
     }
-    transaction->committed = 1;
+    transaction->phase = PHASE_COMMITTED;
     transaction->recovery_identity = staged_identity;
     int installed = verify_named_file(
         transaction->parent_fd, transaction->leaf, &staged_identity,
@@ -1437,7 +1454,7 @@ static int commit_transaction(int root_fd, const char *root_path,
                     fsync(transaction->parent_fd) == 0;
       close(stage_fd);
       if (removed) {
-        transaction->committed = 0;
+        transaction->phase = PHASE_PREPARED;
         return RESULT_CONFLICT;
       }
       return RESULT_INDETERMINATE;
@@ -1458,7 +1475,7 @@ static int commit_transaction(int root_fd, const char *root_path,
     (void)unlinkat(transaction->parent_fd, stage_name, 0);
     return RESULT_IO;
   }
-  transaction->committed = 1;
+  transaction->phase = PHASE_COMMITTED;
   memcpy(transaction->recovery_name, stage_name, strlen(stage_name) + 1);
   int installed = verify_named_file(
       transaction->parent_fd, transaction->leaf, &staged_identity,
@@ -1494,7 +1511,7 @@ static int commit_transaction(int root_fd, const char *root_path,
                                     &displaced_entry) == 0;
     close(stage_fd);
     if (rolled_back)
-      transaction->committed = 0;
+      transaction->phase = PHASE_PREPARED;
     return rolled_back ? RESULT_CONFLICT : RESULT_INDETERMINATE;
   }
   transaction->recovery_identity = displaced;
@@ -1544,7 +1561,7 @@ static int verify_recovery(struct Transaction *transaction,
 }
 
 static int finalize_transaction(struct Transaction *transaction) {
-  if (!transaction->active || !transaction->committed)
+  if (transaction->phase != PHASE_COMMITTED)
     return RESULT_INVALID;
   if (transaction->expected_absent) {
     if (verify_named_file(transaction->parent_fd, transaction->leaf,
@@ -1576,7 +1593,7 @@ static int finalize_transaction(struct Transaction *transaction) {
 }
 
 static int preserve_transaction(struct Transaction *transaction) {
-  if (!transaction->active || !transaction->committed)
+  if (transaction->phase != PHASE_COMMITTED)
     return RESULT_INVALID;
   if (transaction->expected_absent || transaction->recovery_unlinked)
     return RESULT_INDETERMINATE;
@@ -1704,7 +1721,7 @@ static int serve(int root_fd, const char *root_path) {
     } else if (strcmp(command, "commit") == 0) {
       char *request_id = strtok_r(NULL, " ", &save);
       char *extra = strtok_r(NULL, " ", &save);
-      if (request_id == NULL || extra != NULL || !transaction.active ||
+      if (request_id == NULL || extra != NULL || transaction.phase == PHASE_IDLE ||
           strcmp(request_id, transaction.request_id) != 0) {
         print_error(RESULT_INVALID);
       } else {
@@ -1719,7 +1736,7 @@ static int serve(int root_fd, const char *root_path) {
             clear_transaction(&transaction);
         } else {
           print_error(result);
-          if (result != RESULT_INDETERMINATE && !transaction.committed)
+          if (result != RESULT_INDETERMINATE && transaction.phase != PHASE_COMMITTED)
             clear_transaction(&transaction);
         }
       }
@@ -1727,7 +1744,7 @@ static int serve(int root_fd, const char *root_path) {
       char *request_id = strtok_r(NULL, " ", &save);
       char *extra = strtok_r(NULL, " ", &save);
       enum Result result =
-          request_id != NULL && extra == NULL && transaction.active &&
+          request_id != NULL && extra == NULL && transaction.phase != PHASE_IDLE &&
                   strcmp(request_id, transaction.request_id) == 0
               ? finalize_transaction(&transaction)
               : RESULT_INVALID;
@@ -1738,7 +1755,7 @@ static int serve(int root_fd, const char *root_path) {
     } else if (strcmp(command, "preserve") == 0) {
       char *request_id = strtok_r(NULL, " ", &save);
       char *extra = strtok_r(NULL, " ", &save);
-      if (request_id == NULL || extra != NULL || !transaction.active ||
+      if (request_id == NULL || extra != NULL || transaction.phase == PHASE_IDLE ||
           strcmp(request_id, transaction.request_id) != 0) {
         print_error(RESULT_INVALID);
       } else {
@@ -1751,8 +1768,8 @@ static int serve(int root_fd, const char *root_path) {
     } else if (strcmp(command, "cancel") == 0) {
       char *request_id = strtok_r(NULL, " ", &save);
       char *extra = strtok_r(NULL, " ", &save);
-      if (request_id == NULL || extra != NULL || !transaction.active ||
-          transaction.committed ||
+      if (request_id == NULL || extra != NULL || transaction.phase == PHASE_IDLE ||
+          transaction.phase == PHASE_COMMITTED ||
           strcmp(request_id, transaction.request_id) != 0) {
         print_error(RESULT_INVALID);
       } else {
