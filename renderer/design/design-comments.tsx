@@ -553,9 +553,26 @@ type LayerProps = {
 };
 
 /** Pins and the open comment box, drawn in canvas space above the frames. */
+/** Room a comment box needs beside its pin, in screen pixels. */
+const BOX_SPACE = { w: 340, h: 200 } as const;
+type BoxSide = { left: boolean; up: boolean };
+
 function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing, onDraw, onStrokes, ...actions }: LayerProps) {
   const zoom = useStore((state) => state.transform[2]) || 1;
+  const panX = useStore((state) => state.transform[0]);
+  const panY = useStore((state) => state.transform[1]);
+  const viewWidth = useStore((state) => state.width);
+  const viewHeight = useStore((state) => state.height);
   const numbers = React.useMemo(() => commentNumbers(doc), [doc]);
+  /** Which way a box opens from its pin, so it stays inside the canvas. */
+  const sideOf = (x: number, y: number): BoxSide => {
+    const screenX = x * zoom + panX;
+    const screenY = y * zoom + panY;
+    return {
+      left: viewWidth > 0 && screenX + BOX_SPACE.w > viewWidth && screenX - BOX_SPACE.w > 0,
+      up: viewHeight > 0 && screenY + BOX_SPACE.h > viewHeight && screenY - BOX_SPACE.h > 0,
+    };
+  };
   const comments = doc.comments.filter(
     (comment) => comment.pageId === doc.activePageId && (comment.state !== "resolved" || comment.id === openId),
   );
@@ -608,6 +625,7 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
                   key={comment.id}
                   label={commentLabel(doc, comment)}
                   comment={comment}
+                  side={sideOf(place.x, place.y)}
                   hidden={capturing}
                   onClose={actions.onClose}
                   pen={pen}
@@ -622,10 +640,15 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
         })}
         {draft && draftPlace ? (
           <div style={at(draftPlace.x, draftPlace.y)}>
-            <CommentPin number={0} open label={draft.label} />
+            <CommentPin
+              number={doc.comments.filter((comment) => comment.pageId === doc.activePageId).length + 1}
+              open
+              label={draft.label}
+            />
             <CommentBox
               key={draft.id}
               label={draft.label}
+              side={sideOf(draftPlace.x, draftPlace.y)}
               hidden={capturing}
               onClose={actions.onClose}
               pen={pen}
@@ -724,6 +747,7 @@ function CommentBox({
   label,
   comment,
   hidden,
+  side = { left: false, up: false },
   onClose,
   onNote,
   onSave,
@@ -736,6 +760,8 @@ function CommentBox({
   /** Absent for a new comment. */
   comment?: DesignComment;
   hidden: boolean;
+  /** Opens to the pin's left or upward near the canvas's edges. */
+  side?: BoxSide;
   onClose(): void;
   pen?: { drawing: boolean; hasMarks: boolean; onDraw(drawing: boolean): void; onClear(): void };
   onNote?(note: string): void;
@@ -763,7 +789,9 @@ function CommentBox({
       role="dialog"
       aria-label={comment ? "Comment" : "New comment"}
       className={cn(
-        "nodrag nopan nowheel pointer-events-auto absolute left-9 top-[-1.75rem] w-72 select-text rounded-button bg-popover p-2 text-primary shadow-composer",
+        "nodrag nopan nowheel pointer-events-auto absolute w-72 select-text rounded-button bg-popover p-2 text-primary shadow-composer",
+        side.left ? "right-2" : "left-9",
+        side.up ? "bottom-9" : "top-[-1.75rem]",
         hidden && "invisible",
       )}
       onPointerDown={(event) => event.stopPropagation()}

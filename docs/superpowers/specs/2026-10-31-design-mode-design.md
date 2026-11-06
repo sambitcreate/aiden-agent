@@ -164,19 +164,22 @@ It serves workspace files into frames. URL: `aiden-design://<grant>/<relative-pa
 
 The bridge talks to the canvas over `postMessage`. Every message carries the frame's nonce, and the canvas checks `event.source === iframe.contentWindow`.
 
+As built in P4e, the canvas never hands the page the pointer: it keeps the clicks and asks the page about points, so pan, zoom and Escape stay the canvas's. The bridge answers only messages whose source is its parent. Every message type starts with `aiden-design:`.
+
 - **Messages from the frame:**
-  - `ready {docHeight}`;
-  - `pick {selector, text, tag, rect, sourcePath?, commentId?}`;
-  - `anchors {commentId → rect | null}`;
-  - `resize {docHeight}`.
+  - `ready {docHeight}` and `resize {docHeight}`;
+  - `scroll {x, y}`, when the page scrolls, so pins follow;
+  - `picked {requestId, element | null, point}`, where `element` is `{selector, text, tag, rect, sourcePath?, commentId?}` with the rect and point in document pixels;
+  - `anchors {requestId, results}`, with each comment's element found by its `data-aiden-comment` id (`byId`) or, failing that, `candidates` (same tag, same text, or matching the stored selector, marked `selectorMatch`) that the canvas scores.
 - **Messages to the frame:**
-  - `pick-mode on|off`;
-  - `locate {commentIds[], fallbacks[]}`;
-  - `highlight {selector | commentId}`.
+  - `hover-at {x, y, wide?}` or `{clear}`, which outlines the element under a point in a neutral colour drawn inside the page;
+  - `pick-at {requestId, x, y, wide?}`;
+  - `locate {requestId, items: [{commentId, selector, text, tag}]}`;
+  - `highlight {commentId, selector?}` or `{clear}`.
 - **Picking:**
   - It uses the element under the pointer.
   - Alt widens the pick to the parent.
-  - Shift adds to a lasso selection.
+  - A lasso selection with Shift is not built.
 - **Source stamps:** when Aiden writes HTML it adds `data-aiden-src="<file>:<line>"` to meaningful elements, and the bridge reports the nearest stamp. Files without stamps still work, with a selector and text only.
 
 ### 5.6 Comments, pointing and annotating
@@ -184,23 +187,27 @@ The bridge talks to the canvas over `postMessage`. Every message carries the fra
 People comment on the canvas, and Aiden turns comments into edits.
 
 - **Comment tool (C):**
-  - **On a live frame:** a click picks an element through the bridge, and a pin with a text box appears on it.
+  - **On a live page:** a click picks an element through the bridge, and a pin with a comment box appears on it.
+  - **On any other frame:** a click pins that spot of the frame.
   - **Elsewhere:** a click drops a free pin at canvas coordinates.
-- **Draw tool (D):**
+  - The comment box says what the comment is attached to (`Hero › h1 "Ship faster"`), takes the note (with the microphone, as in the composer), and has **Send to Aiden**, on by default.
+- **Marks:** as built in P4e, the comment box has a pen instead of a separate Draw tool (D):
   - It draws freehand marks over a frame or the canvas.
-  - Marks are stored as points normalised to 0..1 inside their frame, or in canvas coordinates if they are drawn outside one.
-  - A set of marks becomes one annotation, with an optional note.
+  - Marks are stored as points normalised to 0..1 inside their frame, or in canvas coordinates for a comment on the canvas.
+  - The marks belong to the comment, which can have a note.
 - **Anchoring:**
   - On save, Aiden is asked to write `data-aiden-comment="<uuid>"` onto the picked element in the source, and to keep it on later edits.
   - Until that happens, and whenever the ID goes missing, the pin re-anchors with a fuzzy score: selector 4, text 2, tag 1, and up to 1 for distance from the last position. A score of 2 or more counts as a match.
   - Pins have three states: **anchored**, **stale** (re-anchored by score) and **lost** (shown as a ghost pin at the last position with "Element not found").
 - **Sending:**
-  - Open comments collect in a tray above the composer, and **Send N comments** sends them as one message.
-  - Each comment becomes a `BrowserAnnotation`-style chip: a text attachment plus a `capturePage` crop of the frame region.
-  - The model receives an `<attached-design-comments>` block that lists the frame file, the selector, the source stamp, the comment ID and the note. It adds: "Change only these elements unless told otherwise."
+  - Comments saved with Send to Aiden collect in a tray above the composer ("2 comments for Aiden", with **Send** and a list to open or take out each one). They also go with the next message the person sends; Steer, which takes text only, leaves them waiting.
+  - The message carries one text attachment, "Design comments.txt", and, when the model takes images and there is room, a picture of each commented spot taken with `capturePage` when the comment was saved (its marks on screen, its box hidden). Pictures live in memory only.
+  - The model receives an `<attached-design-comments>` block that lists each comment's ID, page, note, frame, file, and the element's tag, text, selector and source stamp (or the spot, for a pin without an element), and its marks. It adds: "Change only these elements unless told otherwise." Values are JSON with `<` escaped, so nothing in a note or a page can close the block.
+  - A failed send keeps the comments in the tray.
 - **After sending:**
   - Sent comments turn into a quiet "sent" state.
-  - When Aiden's turn ends and the frame reloads, they resolve if their element still anchors. People can reopen them.
+  - When the frame reloads after its file changed since the send, they resolve if their element is still found. People can resolve or reopen them by hand.
+- **All comments:** a toolbar list with Open, Sent and Resolved filters; choosing a comment shows its page, brings its pin on screen and opens it.
 - **Comment storage:** comments live in the canvas document, not the source. Only the comment ID is written into the source.
 
 ### 5.7 The canvas document
@@ -230,10 +237,18 @@ type DesignFrame = {
 };
 type DesignComment = {
   id: string; pageId: string; frameId?: string; x: number; y: number;
-  anchor?: { commentId: string; selector: string; text: string; tag: string; sourcePath?: string };
+  // x, y: from the frame's top left for a comment on a frame, canvas units otherwise
+  anchor?: {
+    commentId: string; selector: string; text: string; tag: string;
+    sourcePath?: string;              // "file:line", the nearest data-aiden-src
+    rect?: { x: number; y: number; w: number; h: number }; // where the element was, page pixels
+    point?: [number, number];         // the pin, page pixels; moves with the element
+  };
   marks?: { points: [number, number][] }[];
   note: string; state: "open" | "sent" | "resolved"; anchorState: "anchored" | "stale" | "lost";
   createdAt: string;
+  queued?: true;                      // open, waiting in the tray (since P4e)
+  sentAt?: string; resolvedAt?: string;
 };
 ```
 
@@ -254,7 +269,7 @@ The canvas tools are host-owned and registered only for desktop turns in a chat 
 
 | Tool | Does | Returns |
 |---|---|---|
-| `canvas_read` | Describes one page of the canvas (the one on screen unless `page` names another) and lists every page. | The viewport, the frames in view with their kind, title, path, box, group and open comments, a summary of the frames outside the view clustered by group, and the selection. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px). |
+| `canvas_read` | Describes one page of the canvas (the one on screen unless `page` names another) and lists every page. | The viewport, the frames in view with their kind, title, path, box, group and open comments, a summary of the frames outside the view clustered by group, the selection, and (since P4e) the page's open and sent comments with what each points at. With `{snapshot: true}` it also attaches a downscaled screenshot of the canvas region (longest side at most 1 568 px). |
 | `canvas_place_frame` | Adds a frame. It takes `{kind: "file" \| "image" \| "note" \| "group", path?, text?, title, x?, y?, w?, h?, groupId?, designWidth?, page?}`. | The new frame's ID and box. If x and y are left out, the frame goes to the right of the last frame in its group, or of the current view, with a 64 px gap. |
 | `canvas_update_frame` | Moves, resizes, retitles or regroups a frame. | The frame. |
 | `canvas_remove_frame` | Removes a frame Aiden created. Removing a person's frame needs `confirm: true` and shows a one-line notice in chat. | `removed`. |

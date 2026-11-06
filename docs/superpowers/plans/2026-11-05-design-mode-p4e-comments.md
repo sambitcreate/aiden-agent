@@ -1,6 +1,6 @@
 # Design mode P4e: point, comment and send to Aiden
 
-Status: in progress 2026-11-05 (owner approved P4a and said continue). Parent plan: [P4 the full canvas](2026-11-05-design-mode-p4-full-canvas.md). Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5 and §5.6. Branch: `claude/project-thread-29fzrr` (PR #778).
+Status: built 2026-11-06, awaiting the owner's screenshot OK (owner approved P4a and said continue on 2026-11-05). Parent plan: [P4 the full canvas](2026-11-05-design-mode-p4-full-canvas.md). Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5 and §5.6. Branch: `claude/project-thread-29fzrr` (PR #778).
 
 **Goal:** a person points at something on the canvas, writes what should change, and Aiden gets it as a scoped request. This is the core loop of design mode.
 
@@ -35,3 +35,13 @@ Status: in progress 2026-11-05 (owner approved P4a and said continue). Parent pl
 9. **E2E** in `tests/e2e/design-canvas.spec.ts` (pick an element on a live page, comment, send, see the block reach the fake model, resolve after an edit), docs (`docs/keyboard.md`, the spec, `.memory/design-mode.md`, the plans index) and light and dark screenshots.
 
 Analytics (`design_comments_sent`) lands with the other design mode events in P5.
+
+## As built (2026-11-06)
+
+- All nine tasks are built. Differences from the plan:
+  - The canvas keeps the pointer in comment mode and asks the page what is under a point (`hover-at`, `pick-at`), instead of switching the page into a pick mode, so pan, zoom and Escape stay with the canvas. The spec's §5.5 lists the messages.
+  - The fuzzy score runs in the renderer on candidates the page reports, so it is tested as plain TypeScript.
+  - A sent comment resolves when its page reloads after its file changed since the send (and the element is still found), not only at the end of Aiden's turn. Versions are counted per app run, so after a restart a sent comment resolves only by hand.
+  - Steer, which takes text only, leaves queued comments waiting for the next send.
+- Tests: `comments.test.ts`, `bridge-source.test.ts`, `comment-geometry.test.ts`, the canvas tests in `design-canvas.test.tsx`, two mounted composer tests, `canvas-tools.test.ts`, and the E2E "a comment on a page's element goes to Aiden…" in `tests/e2e/design-canvas.spec.ts`.
+- Screenshots: `/mnt/project-files/design-mode/p4e/`.

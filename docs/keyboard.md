@@ -80,7 +80,10 @@ On the design canvas (with the canvas focused, not a note or an entered
 page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection, `⌫` or
 `Delete` removes it, `⇧1` fits everything, `⇧2` fits the selection, `⇧0`
 resets the zoom, `+` / `-` zoom, `V` / `H` pick the Select or Hand tool,
-`N` adds a note, `F2` renames the selected frame (as does a double-click on
+`N` adds a note, `C` turns on the comment tool (a click on an element of a
+live page, a frame or the canvas opens a comment there; `⌥` picks the
+element's parent; in the comment box `↩` saves and `Esc` closes; `Esc` again
+leaves the tool), `F2` renames the selected frame (as does a double-click on
 its title; `↩` keeps the name, `Esc` cancels) and `M` shows the minimap.
 The ⌘/ list shows these under **Design canvas** while design mode is
 available. `↩` or a double-click enters the selected page;

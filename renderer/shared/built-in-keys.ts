@@ -123,6 +123,14 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     requiresCapability: "designMode",
   },
   {
+    id: "canvas-comment",
+    title: "Comment tool",
+    description: "Click an element of a page, a frame or the canvas to comment. Alt picks the element's parent; Esc leaves.",
+    keys: ["C"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
     id: "canvas-rename",
     title: "Rename the selected frame",
     description: "Or double-click its title. Return keeps the name, Esc cancels.",

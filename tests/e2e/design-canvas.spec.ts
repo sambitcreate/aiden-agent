@@ -436,3 +436,112 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
       secondPage: ["Second page"],
     });
 });
+
+/** Whether the fake model was sent this text in any completion request. */
+function modelSaw(requests: Array<{ body: unknown }>, text: string): boolean {
+  return requests.some((request) => JSON.stringify(request.body ?? "").includes(text));
+}
+
+/** The saved comments of the first canvas. */
+async function savedComments(userDataDir: string): Promise<Array<{ note: string; state: string; anchorState: string; queued?: boolean; anchor?: { tag: string; text: string } }>> {
+  const [doc] = (await savedCanvases(userDataDir)) as unknown as Array<{ comments: Array<{ note: string; state: string; anchorState: string; queued?: boolean; anchor?: { tag: string; text: string } }> }>;
+  return doc?.comments ?? [];
+}
+
+test("a comment on a page's element goes to Aiden with the next send and resolves after the page changes", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir, lmStudio } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const hero = path.join(designDir, "hero.html");
+  await writeFile(hero, page_("Hero", "Ship faster", "#3b6cf6"));
+  await openDesignChat(app, page);
+  await answerNextPick(app, hero);
+  await addFromMenu(page, "File…");
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toHaveText("Ship faster");
+  await zoomToFrame(page, "hero.html");
+  await clickEmptyCanvas(page);
+
+  // C turns on the comment tool; a click on the headline picks it inside the live page.
+  await designCanvas(page).getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(designCanvas(page).getByRole("button", { name: "Comment", exact: true })).toHaveAttribute("aria-pressed", "true");
+  const iframe = (await designCanvas(page).locator('iframe[title="hero.html"]').boundingBox())!;
+  const scale = iframe.width / 1280;
+  // The headline sits about 160 px down a 1280 px wide page, 100 px in.
+  await page.mouse.move(iframe.x + 140 * scale, iframe.y + 165 * scale);
+  await page.mouse.click(iframe.x + 140 * scale, iframe.y + 165 * scale);
+  const box = designCanvas(page).getByRole("dialog", { name: "New comment" });
+  await expect(box).toContainText('hero.html › h1 "Ship faster"');
+  await expect(box.getByRole("checkbox", { name: "Send to Aiden" })).toBeChecked();
+  await box.getByRole("textbox", { name: "Comment" }).fill("Make the headline bigger and warmer");
+  await capture(page, "1440-comment-box");
+  await box.getByRole("textbox", { name: "Comment" }).press("Enter");
+  await expect(box).toHaveCount(0);
+
+  const pin = designCanvas(page).getByRole("button", { name: /^Comment 1 on hero\.html › h1 "Ship faster"$/u });
+  await expect(pin).toBeVisible();
+  const tray = page.getByRole("region", { name: "Design comments for Aiden" });
+  await expect(tray).toContainText("1 comment for Aiden");
+  await tray.getByRole("button", { name: "1 comment for Aiden" }).click();
+  await expect(tray).toContainText("Make the headline bigger and warmer");
+  await capture(page, "1440-comment-tray");
+
+  await expect
+    .poll(() => savedComments(userDataDir))
+    .toEqual([
+      expect.objectContaining({ note: "Make the headline bigger and warmer", state: "open", queued: true, anchor: expect.objectContaining({ tag: "h1", text: "Ship faster" }) }),
+    ]);
+
+  // Send gives Aiden the comments block; the comment turns sent and leaves the tray.
+  await tray.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => modelSaw(lmStudio.requests, "attached-design-comments")).toBe(true);
+  expect(modelSaw(lmStudio.requests, "Make the headline bigger and warmer")).toBe(true);
+  expect(modelSaw(lmStudio.requests, "Change only these elements unless told otherwise")).toBe(true);
+  await expect(tray).toHaveCount(0);
+  await expect(designCanvas(page).getByRole("button", { name: /^Comment 1 on .*, sent to Aiden$/u })).toBeVisible();
+  await expect.poll(async () => (await savedComments(userDataDir))[0]?.state).toBe("sent");
+
+  // Aiden's edit reloads the page; the headline is still there, so the comment resolves.
+  await writeFile(hero, page_("Hero", "Ship faster", "#c2410c"));
+  await expect.poll(async () => (await savedComments(userDataDir))[0]?.state, { timeout: 10_000 }).toBe("resolved");
+  await expect(designCanvas(page).getByRole("button", { name: /^Comment 1 on / })).toHaveCount(0);
+
+  // All comments lists it under Resolved, and it can be opened and reopened.
+  await designCanvas(page).getByRole("button", { name: "All comments" }).click();
+  const panel = page.getByRole("dialog", { name: "All comments" });
+  await panel.getByRole("radio", { name: "Resolved" }).click();
+  await expect(panel).toContainText("Make the headline bigger and warmer");
+  await capture(page, "1440-comment-all-resolved");
+  await panel.getByRole("button", { name: /Make the headline bigger and warmer/u }).click();
+  const opened = designCanvas(page).getByRole("dialog", { name: "Comment" });
+  await expect(opened).toContainText("Resolved");
+  await opened.getByRole("button", { name: "Reopen" }).click();
+  await expect.poll(async () => (await savedComments(userDataDir))[0]?.state).toBe("open");
+
+  // A free pin on the canvas, with a mark drawn, kept as a plain comment.
+  await page.keyboard.press("Escape");
+  await expect(opened).toHaveCount(0);
+  await zoomToolbar(page).getByRole("button", { name: "Fit to screen" }).click();
+  await zoomToolbar(page).getByRole("button", { name: "Zoom out" }).click();
+  await zoomToolbar(page).getByRole("button", { name: "Zoom out" }).click();
+  const pane = designCanvas(page).locator(".react-flow__pane");
+  const paneBox = (await pane.boundingBox())!;
+  const spot = { x: paneBox.x + 90, y: paneBox.y + paneBox.height - 150 };
+  await page.mouse.click(spot.x, spot.y);
+  const free = designCanvas(page).getByRole("dialog", { name: "New comment" });
+  await expect(free).toContainText("Canvas");
+  await free.getByRole("button", { name: "Draw marks" }).click();
+  await page.mouse.move(spot.x - 40, spot.y - 40);
+  await page.mouse.down();
+  await page.mouse.move(spot.x + 30, spot.y - 70, { steps: 4 });
+  await page.mouse.move(spot.x + 100, spot.y - 40, { steps: 4 });
+  await page.mouse.up();
+  await free.getByRole("checkbox", { name: "Send to Aiden" }).click();
+  await free.getByRole("textbox", { name: "Comment" }).fill("Room for a testimonial here");
+  await capture(page, "1440-comment-free-pin-marks");
+  await free.getByRole("button", { name: "Save" }).click();
+  await expect.poll(async () => (await savedComments(userDataDir)).length).toBe(2);
+  await expect(page.getByRole("region", { name: "Design comments for Aiden" })).toHaveCount(0);
+  await capture(page, "1440-comment-pins");
+});
