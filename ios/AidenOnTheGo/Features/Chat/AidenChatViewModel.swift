@@ -3034,6 +3034,9 @@ final class AidenChatViewModel {
     /// chat stopped, from the sequence it had reached.
     func setViewPresent(_ present: Bool) {
         isViewGone = !present
+        if !isReadOnlyFixture {
+            coordinator.setOnScreen(present, view: self, instanceId: owner.instanceId)
+        }
         guard present, let work = leftBehindWork else { return }
         leftBehindWork = nil
         guard !isRemoved, activeStreamID == work.streamID, let context = liveOwner else { return }

@@ -518,6 +518,36 @@ final class AidenOwnerScopeTests: XCTestCase {
         try await assertNoNewRequests(on: "studio")
     }
 
+    func testAChatOnARevokedMachineStaysUntilItsViewGoes() async throws {
+        await coordinator.switchInstallation(to: "laptop")
+        let a = try model(owner: "studio")
+        a.setViewPresent(true)
+        let context = a.owner
+        let revoked = json(["error": [
+            "code": "credential_revoked",
+            "message": "Pair this device again.",
+            "requestId": "request-revoked",
+            "retryable": false,
+        ]])
+        responder.reply(instanceId: "studio", path: "/chats/c1/messages", status: 401, json: revoked)
+        responder.reply(instanceId: "studio", path: "/chats/c1", status: 401, json: revoked)
+
+        await a.load()
+
+        let studio = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        XCTAssertTrue(studio.isRevoked)
+        XCTAssertTrue(studio.isPurgePending)
+        XCTAssertFalse(coordinator.isLive(context))
+        XCTAssertTrue(coordinator.isRetained(context), "The record stays while the chat is on screen")
+        XCTAssertNil(coordinator.presentedError)
+
+        a.setViewPresent(false)
+
+        try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "studio") == nil }
+        XCTAssertFalse(coordinator.isRetained(context))
+        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+    }
+
     func testALeftBehindReconciliationEndsWhenItsMachineStopsAnswering() async throws {
         let a = try model(owner: "studio")
         let release = try await sendHeldTurn(on: a)

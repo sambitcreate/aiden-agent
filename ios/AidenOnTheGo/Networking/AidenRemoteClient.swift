@@ -1316,6 +1316,11 @@ final class AidenRemoteClient: @unchecked Sendable {
         simulatorTransportTrust = nil
     }
 
+    /// How this client's request/response calls behave on a bad network.
+    var requestPolicy: (waitsForConnectivity: Bool, requestTimeout: TimeInterval) {
+        (session.configuration.waitsForConnectivity, session.configuration.timeoutIntervalForRequest)
+    }
+
     deinit {
         // Let in-flight work finish, then release the sessions and their
         // delegates. Without this every replaced client leaks both.

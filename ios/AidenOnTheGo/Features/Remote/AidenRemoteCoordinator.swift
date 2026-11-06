@@ -147,6 +147,16 @@ final class AidenRemoteCoordinator {
     let botMessaging = AidenBotMessagingModel()
     typealias ClientFactory = (AidenInstallation, String) throws -> AidenRemoteClient
 
+    /// Connect checks and Inbox polling give up rather than wait for a network.
+    static let probeClientFactory: ClientFactory = {
+        try AidenRemoteClient(
+            installation: $0,
+            credential: $1,
+            waitsForConnectivity: false,
+            requestTimeout: AidenHostConnectScheduler.probeTimeout
+        )
+    }
+
     let installationStore: AidenInstallationStore
     let haptics: any AidenHapticEmitting
     private let clientFactory: ClientFactory
@@ -204,6 +214,9 @@ final class AidenRemoteCoordinator {
     private let workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache
     private let installationDataGate = AidenInstallationDataGate()
     private var pendingManagedWorktreeDeletionKeys: [String: UUID] = [:]
+    /// The views showing each machine's data. A revoked machine keeps its data
+    /// until its entry here empties.
+    @ObservationIgnored private var onScreenViews: [String: Set<ObjectIdentifier>] = [:]
     private var connectionGeneration: Int {
         selectedConnection?.connectionGeneration ?? 0
     }
@@ -227,12 +240,18 @@ final class AidenRemoteCoordinator {
         workspaceEnvironmentCache = .shared
         let clientFactory: ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
         self.clientFactory = clientFactory
-        hosts = Self.makeHosts(installationStore: installationStore, clientFactory: clientFactory)
+        hosts = Self.makeHosts(
+            installationStore: installationStore,
+            clientFactory: clientFactory,
+            probeClientFactory: Self.probeClientFactory
+        )
         unselected = .init(connectionState: installationStore.activeInstallation == nil ? .needsPairing : .connecting)
         hosts.delegate = self
         syncSelectedConnection()
     }
 
+    /// `probeClientFactory` defaults to `clientFactory`, so a test's one fake
+    /// transport carries both.
     init(
         installationStore: AidenInstallationStore,
         workspaceArchiveStore: AidenWorkspaceArchiveStore? = nil,
@@ -241,7 +260,8 @@ final class AidenRemoteCoordinator {
         scheduledTaskCache: AidenScheduledTaskCache = .shared,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache = .shared,
         haptics: (any AidenHapticEmitting)? = nil,
-        clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
+        clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) },
+        probeClientFactory: ClientFactory? = nil
     ) {
         self.installationStore = installationStore
         self.haptics = haptics ?? AidenHapticCenter()
@@ -251,7 +271,11 @@ final class AidenRemoteCoordinator {
         self.scheduledTaskCache = scheduledTaskCache
         self.workspaceEnvironmentCache = workspaceEnvironmentCache
         self.clientFactory = clientFactory
-        hosts = Self.makeHosts(installationStore: installationStore, clientFactory: clientFactory)
+        hosts = Self.makeHosts(
+            installationStore: installationStore,
+            clientFactory: clientFactory,
+            probeClientFactory: probeClientFactory ?? clientFactory
+        )
         unselected = .init(connectionState: installationStore.activeInstallation == nil ? .needsPairing : .connecting)
         hosts.delegate = self
         syncSelectedConnection()
@@ -360,6 +384,9 @@ final class AidenRemoteCoordinator {
             throw AidenRemoteContractError.invalidPairingExchange
         }
         try Task.checkCancellation()
+        // A revoked connection never comes back, so a purge still waiting on its
+        // views ends here and the new pairing gets a connection of its own.
+        await completeRevokedPurge(instanceId: exchange.instanceId)?.value
         let previousDeviceId = installationStore.installations.first {
             $0.id == exchange.instanceId
         }?.deviceId
@@ -408,6 +435,12 @@ final class AidenRemoteCoordinator {
             updateIntentCatalog(for: nil)
             return
         }
+        // Selecting a machine revoked in the background: its credential is dead,
+        // so it takes the selected machine's path rather than a connect.
+        if connection.isPurgePending {
+            await hostConnectionWasRevoked(connection)
+            return
+        }
         await connection.connect()
     }
 
@@ -426,8 +459,12 @@ final class AidenRemoteCoordinator {
             if previousInstallationId != activeInstanceId {
                 advanceActivationGeneration()
             }
-            server = nil
-            workspaces = []
+            // A machine that is already connected keeps what it holds. The
+            // connect below still checks it.
+            if connectionState != .connected {
+                server = nil
+                workspaces = []
+            }
             updateIntentCatalog(for: nil)
             await connectActiveInstallation()
             guard activeInstanceId == installationId else { return .stale }
@@ -450,21 +487,20 @@ final class AidenRemoteCoordinator {
         isMutating = true
         defer { isMutating = false }
         do {
-            let previousInstallationId = activeInstanceId
-            let knownWorkspaceIds = previousInstallationId == installationId
-                ? Set(workspaces.map(\.id))
-                : []
+            let wasSelected = activeInstanceId == installationId
+            let knownWorkspaceIds = Set(hosts.connection(for: installationId)?.workspaces.map(\.id) ?? [])
             try installationStore.remove(installationId)
             syncSelectedConnection()
-            if previousInstallationId != activeInstanceId {
+            if wasSelected {
                 advanceActivationGeneration()
+                settleArrivingMachine()
             }
-            advanceConnectionGeneration()
-            server = nil
-            workspaces = []
             await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
             updateIntentCatalog(for: installationId)
-            await start()
+            // Forgetting another machine leaves the selected one alone.
+            if wasSelected {
+                await start()
+            }
             guard !installationStore.installations.contains(where: { $0.id == installationId }) else {
                 return .failure
             }
@@ -839,16 +875,55 @@ final class AidenRemoteCoordinator {
 
     /// Bot feature calls use the remote client directly so their DTO state can
     /// stay feature-local. This keeps credential revocation on the same
-    /// immediate purge path as coordinator-owned Workspace operations.
+    /// immediate purge path as coordinator-owned Workspace operations. A 401
+    /// from any paired machine reaches that machine's own connection. A context
+    /// from before a re-pairing is neither current nor live, so an old
+    /// credential's answer can't end the new pairing.
     func handleCredentialRevocation(
         _ error: Error,
         context: AidenRemoteRequestContext
     ) async -> Bool {
-        guard isCurrent(context),
+        guard isCurrent(context) || isLive(context),
               let clientError = error as? AidenRemoteClientError,
-              clientError.isCredentialRevoked else { return false }
-        await handleConnectionError(error, installationId: context.instanceId)
+              clientError.isCredentialRevoked,
+              let connection = hosts.connection(for: context.instanceId) else { return false }
+        await connection.handleConnectionError(error)
         return true
+    }
+
+    /// Records that `view` is or isn't showing `instanceId`'s data. The last
+    /// view leaving a revoked machine ends its wait for the purge.
+    func setOnScreen(_ onScreen: Bool, view: AnyObject, instanceId: String) {
+        if onScreen {
+            onScreenViews[instanceId, default: []].insert(ObjectIdentifier(view))
+            return
+        }
+        onScreenViews[instanceId]?.remove(ObjectIdentifier(view))
+        guard onScreenViews[instanceId]?.isEmpty == true else { return }
+        onScreenViews[instanceId] = nil
+        completeRevokedPurge(instanceId: instanceId)
+    }
+
+    /// Removes a revoked machine and its cached data. The returned task is for
+    /// a caller that needs to wait, and is nil when no purge is pending.
+    @discardableResult
+    func completeRevokedPurge(instanceId: String) -> Task<Void, Never>? {
+        guard let connection = hosts.connection(for: instanceId), connection.isPurgePending else { return nil }
+        connection.purgeStarted()
+        return Task { await purgeRevokedMachine(connection) }
+    }
+
+    private func purgeRevokedMachine(_ connection: AidenHostConnection) async {
+        guard !hostConnectionIsSelected(connection) else {
+            await hostConnectionWasRevoked(connection)
+            return
+        }
+        let installationId = connection.instanceId
+        let knownWorkspaceIds = Set(connection.workspaces.map(\.id))
+        try? installationStore.remove(installationId)
+        syncSelectedConnection()
+        await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
+        updateIntentCatalog(for: installationId)
     }
 
     private func activeClient() throws -> AidenRemoteClient {
@@ -873,6 +948,9 @@ final class AidenRemoteCoordinator {
         hosts.sync(with: installationStore.installations)
         let connection = installationStore.activeInstallationId.flatMap { hosts.connection(for: $0) }
         if selectedConnection !== connection {
+            // An attempt the person was waiting on stops with the selection, so
+            // its late answer can't land on a machine they have left.
+            selectedConnection?.cancelConnect()
             selectedConnection = connection
         }
         return connection
@@ -880,7 +958,8 @@ final class AidenRemoteCoordinator {
 
     private static func makeHosts(
         installationStore store: AidenInstallationStore,
-        clientFactory: @escaping ClientFactory
+        clientFactory: @escaping ClientFactory,
+        probeClientFactory: @escaping ClientFactory
     ) -> AidenHostRegistry {
         AidenHostRegistry(
             credential: { instanceId in
@@ -890,7 +969,8 @@ final class AidenRemoteCoordinator {
                 }
                 return credential
             },
-            clientFactory: clientFactory
+            clientFactory: clientFactory,
+            probeClientFactory: probeClientFactory
         )
     }
 
@@ -902,6 +982,20 @@ final class AidenRemoteCoordinator {
 
     private func advanceConnectionGeneration() {
         selectedConnection?.advanceConnectionGeneration()
+    }
+
+    /// The selection reached this machine because the one before it went, and
+    /// a connect follows once that machine's data is purged. Until then a
+    /// connected machine keeps showing its own data, and any other shows the
+    /// connect it is about to get rather than a state left from earlier.
+    private func settleArrivingMachine() {
+        guard let selectedConnection else { return }
+        selectedConnection.advanceConnectionGeneration()
+        guard selectedConnection.connectionState != .connected else { return }
+        server = nil
+        workspaces = []
+        connectionIssue = nil
+        connectionState = .connecting
     }
 
     private func mutateOutcome(
@@ -1122,6 +1216,7 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         let knownWorkspaceIds = previousInstallationId == installationId
             ? Set(workspaces.map(\.id))
             : []
+        connection.purgeStarted()
         try? installationStore.remove(installationId)
         if !installationStore.installations.contains(where: { $0.id == installationId }) {
             connection.markRevoked()
@@ -1129,10 +1224,12 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         syncSelectedConnection()
         if previousInstallationId != activeInstanceId {
             advanceActivationGeneration()
+            settleArrivingMachine()
+        } else {
+            advanceConnectionGeneration()
+            server = nil
+            workspaces = []
         }
-        advanceConnectionGeneration()
-        server = nil
-        workspaces = []
         await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
         updateIntentCatalog(for: installationId)
         connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
@@ -1140,5 +1237,36 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
             await connectActiveInstallation()
         }
         presentedError = revocationMessage
+    }
+
+    /// Nothing here reaches the person: not the error, not the pairing screen.
+    /// With nothing on screen the purge runs now, as it does for the selected
+    /// machine, because the credential is dead and no view needs the data.
+    func hostConnectionWasRevokedInBackground(_ connection: AidenHostConnection) async {
+        guard !connection.isRevoked else { return }
+        connection.markRevokedWithPurgePending()
+        guard onScreenViews[connection.instanceId] == nil else { return }
+        await completeRevokedPurge(instanceId: connection.instanceId)?.value
+    }
+
+    /// Pairing shows only when no machine remains to fall back on.
+    func hostConnectionNeedsPairing(_ connection: AidenHostConnection) {
+        guard hostConnectionIsSelected(connection),
+              let next = machine(after: connection),
+              (try? installationStore.setActive(next.instanceId)) != nil else { return }
+        syncSelectedConnection()
+        advanceActivationGeneration()
+        settleArrivingMachine()
+        updateIntentCatalog(for: nil)
+        Task { await connectActiveInstallation() }
+    }
+
+    /// The next machine in pairing order that could still connect.
+    private func machine(after connection: AidenHostConnection) -> AidenHostConnection? {
+        let ordered = hosts.ordered
+        let position = ordered.firstIndex { $0 === connection } ?? 0
+        return (ordered[position...].dropFirst() + ordered[..<position]).first {
+            !$0.isRevoked && $0.connectionState != .needsPairing
+        }
     }
 }

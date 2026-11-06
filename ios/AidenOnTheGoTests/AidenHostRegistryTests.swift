@@ -505,7 +505,7 @@ final class AidenHostRegistryTests: XCTestCase {
         XCTAssertTrue(coordinator.isCurrent(context))
     }
 
-    func testALateAnswerOnANonSelectedConnectionIsDropped() async throws {
+    func testANonSelectedMachinesOwnConnectLandsOnItsOwnConnection() async throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         await coordinator.start()
         let laptop = try connection("laptop", in: coordinator)
@@ -514,9 +514,41 @@ final class AidenHostRegistryTests: XCTestCase {
 
         await laptop.connect()
 
-        XCTAssertNil(laptop.server, "A non-selected answer waits for Task 13")
-        XCTAssertEqual(coordinator.installationStore.installations.first { $0.id == "laptop" }, saved)
+        XCTAssertEqual(laptop.server?.instanceId, "laptop")
+        XCTAssertFalse(laptop.workspaces.isEmpty)
+        XCTAssertEqual(laptop.connectionState, .connected)
+        XCTAssertNotEqual(coordinator.installationStore.installations.first { $0.id == "laptop" }, saved)
         XCTAssertEqual(coordinator.workspaceSnapshotRevision, revision)
+        XCTAssertEqual(coordinator.server?.instanceId, "studio")
+    }
+
+    func testAnAnswerFromBeforeLeavingAndComingBackIsDropped() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        let studio = try connection("studio", in: coordinator)
+        let installation = studio.installation
+        let release = responder.hold(instanceId: "studio", path: "/server")
+        let starting = Task { await coordinator.start() }
+        try await waitForRequest("GET /server", instanceId: "studio")
+
+        await coordinator.switchInstallation(to: "laptop")
+        // The way back gets its own answer. The first attempt's is still held.
+        responder.hold(instanceId: "studio", path: "/server")()
+        await coordinator.switchInstallation(to: "studio")
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        let saved = coordinator.installationStore.installations.first { $0.id == "studio" }
+        let revision = coordinator.workspaceSnapshotRevision
+
+        var renamed = installation
+        renamed.name = "From the old attempt"
+        _ = AidenDemoHosts.coordinator(installations: [renamed], responder: responder)
+        release()
+        await starting.value
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(studio.server?.name, installation.name)
+        XCTAssertEqual(coordinator.installationStore.installations.first { $0.id == "studio" }, saved)
+        XCTAssertEqual(coordinator.workspaceSnapshotRevision, revision)
+        XCTAssertEqual(coordinator.connectionState, .connected)
     }
 }
 #endif

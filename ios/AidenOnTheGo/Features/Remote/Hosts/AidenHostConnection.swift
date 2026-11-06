@@ -52,7 +52,8 @@ extension AidenRemoteRequestContext {
 /// persist.
 @MainActor
 protocol AidenHostConnectionDelegate: AnyObject {
-    /// False stops late answers from landing, as a moved selection always has.
+    /// False keeps this connection's results out of app-wide state. They still
+    /// land on the connection itself.
     func hostConnectionIsSelected(_ connection: AidenHostConnection) -> Bool
     /// The saved record for this connection, or nil once it was forgotten.
     func hostConnectionSavedInstallation(_ connection: AidenHostConnection) -> AidenInstallation?
@@ -66,7 +67,13 @@ protocol AidenHostConnectionDelegate: AnyObject {
     ) throws
     func hostConnectionDidApplyWorkspaceSnapshot(_ connection: AidenHostConnection)
     func hostConnection(_ connection: AidenHostConnection, didFailWith error: Error)
+    /// The selected machine's credential was revoked.
     func hostConnectionWasRevoked(_ connection: AidenHostConnection) async
+    /// A machine other than the selected one had its credential revoked. Its
+    /// cached data stays for as long as a view is showing it.
+    func hostConnectionWasRevokedInBackground(_ connection: AidenHostConnection) async
+    /// The machine can't go on without being paired again.
+    func hostConnectionNeedsPairing(_ connection: AidenHostConnection)
 }
 
 /// One paired machine's live connection: its state, its client, and the
@@ -74,11 +81,36 @@ protocol AidenHostConnectionDelegate: AnyObject {
 @MainActor
 @Observable
 final class AidenHostConnection {
+    /// How an attempt reaches the machine. A person waits on `interactive`, and
+    /// its failure is theirs to see. `probe` is a background check: it gives up
+    /// rather than waits, and it never touches the app-wide error.
+    enum ConnectRoute {
+        case interactive
+        case probe
+    }
+
     private struct ActiveClientKey: Equatable {
         let instanceId: String
         let deviceId: String
         let credentialScope: String
         let generation: Int
+    }
+
+    private struct CachedClient {
+        let key: ActiveClientKey
+        let client: AidenRemoteClient
+    }
+
+    private struct ConnectInFlight {
+        let attempt: Int
+        let work: Task<Void, Never>
+    }
+
+    /// Where the machine stood before an attempt, so stopping that attempt
+    /// doesn't leave it saying "Connecting".
+    private struct SettledState {
+        let connectionState: AidenRemoteConnectionState
+        let connectionIssue: AidenConnectionIssue?
     }
 
     let instanceId: String
@@ -100,16 +132,26 @@ final class AidenHostConnection {
     /// is dropped.
     private(set) var connectionGeneration: Int
     private(set) var isRevoked = false
+    /// Revoked with its cached data still in place, because a view is showing
+    /// it. `completeRevokedPurge(instanceId:)` ends this.
+    private(set) var isPurgePending = false
     @ObservationIgnored weak var delegate: (any AidenHostConnectionDelegate)?
 
     private let loadCredential: () throws -> String
     private let clientFactory: AidenRemoteCoordinator.ClientFactory
-    private var cachedClient: (key: ActiveClientKey, client: AidenRemoteClient)?
+    private let probeClientFactory: AidenRemoteCoordinator.ClientFactory
+    private var cachedClient: CachedClient?
+    private var cachedProbeClient: CachedClient?
+    private var connectInFlight: ConnectInFlight?
+    private var settledState: SettledState?
 
+    /// `probeClientFactory` defaults to `clientFactory`, so a test's one fake
+    /// transport carries both.
     init(
         installation: AidenInstallation,
         credential: @escaping () throws -> String,
         clientFactory: @escaping AidenRemoteCoordinator.ClientFactory,
+        probeClientFactory: AidenRemoteCoordinator.ClientFactory? = nil,
         generation: Int = 0,
         hostGeneration: Int = 0,
         connectionGeneration: Int = 0
@@ -118,24 +160,66 @@ final class AidenHostConnection {
         self.installation = installation
         loadCredential = credential
         self.clientFactory = clientFactory
+        self.probeClientFactory = probeClientFactory ?? clientFactory
         self.generation = generation
         self.hostGeneration = hostGeneration
         self.connectionGeneration = connectionGeneration
     }
 
-    func connect() async {
+    /// `timeout` bounds the whole attempt. Past it, a machine that hasn't
+    /// answered goes offline and whatever is still running stops.
+    func connect(over route: ConnectRoute = .interactive, timeout: TimeInterval? = nil) async {
         guard !isRevoked else { return }
         connectionGeneration &+= 1
         let attempt = connectionGeneration
+        if connectionState != .connecting {
+            settledState = SettledState(connectionState: connectionState, connectionIssue: connectionIssue)
+        }
         connectionState = .connecting
         connectionIssue = nil
-        delegate?.hostConnectionWillConnect(self)
-        await seedSavedWorkspaces(attempt: attempt)
-        do {
-            try await load(credential: nonEmptyCredential(), attempt: attempt)
-        } catch {
-            guard isCurrent(attempt: attempt) else { return }
-            await handleConnectionError(error)
+        if route == .interactive {
+            delegate?.hostConnectionWillConnect(self)
+        }
+        let work = Task { await run(attempt: attempt, over: route) }
+        connectInFlight = ConnectInFlight(attempt: attempt, work: work)
+        let deadline = timeout.map { timeout in
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await expire(attempt: attempt, over: route)
+                work.cancel()
+            }
+        }
+        await withTaskCancellationHandler {
+            await work.value
+        } onCancel: {
+            work.cancel()
+        }
+        deadline?.cancel()
+        if connectInFlight?.attempt == attempt {
+            connectInFlight = nil
+        }
+    }
+
+    /// True while the newest attempt is running. `connectionState` can't say:
+    /// it starts at `.connecting`, and `disconnect()` returns it there, with
+    /// nothing in flight either time.
+    var isConnectInFlight: Bool {
+        connectInFlight?.attempt == connectionGeneration
+    }
+
+    /// Stops the attempt in flight and puts the machine back where it stood
+    /// before it. Only `connectionGeneration` moves, so every live context stays
+    /// live. A machine that had never settled stays at `.connecting`, with
+    /// `isConnectInFlight` false, until something connects it again.
+    func cancelConnect() {
+        guard isConnectInFlight else { return }
+        connectInFlight?.work.cancel()
+        connectInFlight = nil
+        connectionGeneration &+= 1
+        if let settledState {
+            connectionState = settledState.connectionState
+            connectionIssue = settledState.connectionIssue
         }
     }
 
@@ -146,6 +230,8 @@ final class AidenHostConnection {
         hostGeneration &+= 1
         connectionGeneration &+= 1
         cachedClient = nil
+        cachedProbeClient = nil
+        settledState = nil
         server = nil
         workspaces = []
         connectionIssue = nil
@@ -184,32 +270,22 @@ final class AidenHostConnection {
         return try client(credential: nonEmptyCredential())
     }
 
+    /// For connect checks and Inbox polling. It fails fast rather than waits
+    /// for a network, so one unreachable machine can't hold a connect slot. The
+    /// client from `client()` keeps the interactive policy.
+    func probeClient() throws -> AidenRemoteClient {
+        guard !isRevoked else { throw AidenRemoteClientError.missingCredential }
+        if let cachedProbeClient, cachedProbeClient.key == clientKey {
+            return cachedProbeClient.client
+        }
+        return try probeClient(credential: nonEmptyCredential())
+    }
+
     func handleConnectionError(_ error: Error) async {
-        guard isSelected else { return }
-        if let clientError = error as? AidenRemoteClientError, clientError.isCredentialRevoked {
-            if let delegate {
-                await delegate.hostConnectionWasRevoked(self)
-            } else {
-                markRevoked()
-                disconnect()
-                connectionState = .needsPairing
-            }
-            return
-        }
-        if let clientError = error as? AidenRemoteClientError,
-           case .server = clientError, connectionState != .connecting {
-            connectionIssue = nil
-            connectionState = .connected
-        } else {
-            let issue = AidenConnectionIssue.classify(error)
-            connectionIssue = issue
-            connectionState = .offline(message: issue.message)
-        }
-        delegate?.hostConnection(self, didFailWith: error)
+        await record(error, over: .interactive)
     }
 
     func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace]) {
-        guard isSelected else { return }
         self.workspaces = workspaces
         delegate?.hostConnectionDidApplyWorkspaceSnapshot(self)
     }
@@ -265,6 +341,10 @@ final class AidenHostConnection {
 
     func adopt(connectionState: AidenRemoteConnectionState) {
         self.connectionState = connectionState
+        settledState = nil
+        if connectionState == .needsPairing {
+            delegate?.hostConnectionNeedsPairing(self)
+        }
     }
 
     func adopt(connectionIssue: AidenConnectionIssue?) {
@@ -299,11 +379,24 @@ final class AidenHostConnection {
         hostGeneration &+= 1
     }
 
-    // MARK: Private
+    /// Revoked, with the purge held back until the views showing this machine
+    /// have gone. Nothing here reconnects it, so it stops at `.needsPairing`.
+    func markRevokedWithPurgePending() {
+        markRevoked()
+        isPurgePending = true
+        connectionIssue = nil
+        adopt(connectionState: .needsPairing)
+    }
 
-    private var isSelected: Bool {
+    func purgeStarted() {
+        isPurgePending = false
+    }
+
+    var isSelected: Bool {
         delegate?.hostConnectionIsSelected(self) ?? true
     }
+
+    // MARK: Private
 
     private var savedInstallation: AidenInstallation? {
         guard let delegate else { return installation }
@@ -319,8 +412,59 @@ final class AidenHostConnection {
         )
     }
 
+    /// Every attempt lands on this machine's own connection, selected or not.
+    /// The selection leaving stops a running attempt through `cancelConnect()`.
     private func isCurrent(attempt: Int) -> Bool {
-        isSelected && connectionGeneration == attempt
+        connectionGeneration == attempt
+    }
+
+    private func run(attempt: Int, over route: ConnectRoute) async {
+        await seedSavedWorkspaces(attempt: attempt)
+        do {
+            let credential = try nonEmptyCredential()
+            let client = route == .probe
+                ? try probeClient(credential: credential)
+                : try client(credential: credential)
+            try await load(using: client, attempt: attempt)
+        } catch {
+            guard isCurrent(attempt: attempt) else { return }
+            await record(error, over: route)
+        }
+    }
+
+    private func expire(attempt: Int, over route: ConnectRoute) async {
+        guard isCurrent(attempt: attempt), connectionState == .connecting else { return }
+        connectionGeneration &+= 1
+        await record(URLError(.timedOut), over: route)
+    }
+
+    private func record(_ error: Error, over route: ConnectRoute) async {
+        if let clientError = error as? AidenRemoteClientError, clientError.isCredentialRevoked {
+            if let delegate {
+                if isSelected {
+                    await delegate.hostConnectionWasRevoked(self)
+                } else {
+                    await delegate.hostConnectionWasRevokedInBackground(self)
+                }
+            } else {
+                markRevoked()
+                disconnect()
+                connectionState = .needsPairing
+            }
+            return
+        }
+        if let clientError = error as? AidenRemoteClientError,
+           case .server = clientError, connectionState != .connecting {
+            connectionIssue = nil
+            connectionState = .connected
+        } else {
+            let issue = AidenConnectionIssue.classify(error)
+            connectionIssue = issue
+            connectionState = .offline(message: issue.message)
+        }
+        if route == .interactive {
+            delegate?.hostConnection(self, didFailWith: error)
+        }
     }
 
     private func nonEmptyCredential() throws -> String {
@@ -335,12 +479,21 @@ final class AidenHostConnection {
             return cachedClient.client
         }
         let client = try clientFactory(installation, credential)
-        cachedClient = (key, client)
+        cachedClient = CachedClient(key: key, client: client)
         return client
     }
 
-    private func load(credential: String, attempt: Int) async throws {
-        let client = try client(credential: credential)
+    private func probeClient(credential: String) throws -> AidenRemoteClient {
+        let key = clientKey
+        if let cachedProbeClient, cachedProbeClient.key == key {
+            return cachedProbeClient.client
+        }
+        let client = try probeClientFactory(installation, credential)
+        cachedProbeClient = CachedClient(key: key, client: client)
+        return client
+    }
+
+    private func load(using client: AidenRemoteClient, attempt: Int) async throws {
         async let serverRequest = client.server()
         async let workspaceRequest = client.workspaces()
         let (server, workspaces) = try await (serverRequest, workspaceRequest)

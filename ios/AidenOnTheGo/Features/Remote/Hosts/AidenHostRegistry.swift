@@ -15,6 +15,7 @@ final class AidenHostRegistry {
 
     @ObservationIgnored private let loadCredential: (String) throws -> String
     @ObservationIgnored private let clientFactory: AidenRemoteCoordinator.ClientFactory
+    @ObservationIgnored private let probeClientFactory: AidenRemoteCoordinator.ClientFactory
     // Where the next connection's counters start. They stay above every
     // connection that has left, so a machine forgotten and paired again can't
     // reissue an old context or accept an answer from an old attempt.
@@ -31,10 +32,12 @@ final class AidenHostRegistry {
     /// `credential` takes an instance ID and reads the saved record's credential.
     init(
         credential: @escaping (String) throws -> String,
-        clientFactory: @escaping AidenRemoteCoordinator.ClientFactory
+        clientFactory: @escaping AidenRemoteCoordinator.ClientFactory,
+        probeClientFactory: @escaping AidenRemoteCoordinator.ClientFactory
     ) {
         loadCredential = credential
         self.clientFactory = clientFactory
+        self.probeClientFactory = probeClientFactory
     }
 
     func connection(for instanceId: String) -> AidenHostConnection? {
@@ -64,6 +67,7 @@ final class AidenHostRegistry {
             installation: installation,
             credential: { try loadCredential(instanceId) },
             clientFactory: clientFactory,
+            probeClientFactory: probeClientFactory,
             generation: firstGeneration,
             hostGeneration: firstHostGeneration,
             connectionGeneration: firstConnectionGeneration

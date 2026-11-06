@@ -82,6 +82,7 @@ struct ContentView: View {
     @State private var sceneConnectionRefreshInProgress = false
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
     @State private var connectionRecoveryDestination: ConnectionRecoveryDestination?
+    @State private var connectScheduler: AidenHostConnectScheduler?
 
     var body: some View {
         Group {
@@ -121,6 +122,15 @@ struct ContentView: View {
             }
         }
         .task { await coordinator.start() }
+        .task {
+            guard connectScheduler == nil else { return }
+            let scheduler = AidenHostConnectScheduler(
+                registry: coordinator.hosts,
+                pathChanges: AidenNetworkPathMonitor.shared.pathChanges()
+            )
+            connectScheduler = scheduler
+            await scheduler.foregrounded()
+        }
         .onOpenURL { url in
             _ = foregroundIntents.take()
             guard let request = AidenDeepLink.request(from: url) else {
@@ -182,6 +192,10 @@ struct ContentView: View {
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
             }
+            // A machine the selection left mid-connect had that attempt stopped.
+            if scenePhase == .active {
+                Task { await connectScheduler?.foregrounded() }
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             switch sceneRefreshGate.transition(to: phase) {
@@ -205,7 +219,11 @@ struct ContentView: View {
                         )
                     }
                 }
+                // Runs beside the wait above, which stays on the selected machine
+                // alone, so no other machine can hold up the links it releases.
+                Task { await connectScheduler?.foregrounded() }
             case .suspend:
+                connectScheduler?.backgrounded()
                 externalNewChats.invalidate()
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
