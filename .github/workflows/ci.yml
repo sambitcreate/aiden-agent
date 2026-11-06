@@ -220,16 +220,24 @@ jobs:
     needs: changes
     # Catalog refreshes run these too: the runtime takes model limits from it.
     if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
-    runs-on: macos-26
+    # macOS slots are the scarce runner, so pull requests keep only the macos
+    # lane there. Main runs every lane on macOS to catch what Ubuntu cannot see.
+    runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        lane: [core-git, runtime-subagents, renderer-other]
+        lane: [core-git, runtime-subagents, renderer-other, macos]
         include:
           - lane: core-git
+            runner: ubuntu-24.04
             chromium: true
+          - lane: runtime-subagents
+            runner: ubuntu-24.04
           - lane: renderer-other
+            runner: ubuntu-24.04
+          - lane: macos
+            runner: macos-26
             chromium: true
     steps:
       - name: Check out source
@@ -239,11 +247,14 @@ jobs:
         with:
           node-version: 22.23.4
           cache: npm
+      - name: Install Linux test dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11
       - name: Install locked dependencies
         run: npm ci
       - name: Install Playwright Chromium for containment
         if: ${{ matrix.chromium == true }}
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
       - name: Run assigned regression tests and prerequisites
         env:
           AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"

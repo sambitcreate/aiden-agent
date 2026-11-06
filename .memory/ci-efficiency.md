@@ -16,7 +16,7 @@
   then simulator) and `test-without-building`. DerivedData caching deferred.
 - Android gradlew calls pass `--build-cache`.
 - `release-consumers.yml` concurrency never cancels main runs.
-- `npm test` = `node scripts/run-ci-tests.mjs --parallel` (prereqs, three lanes
+- `npm test` = `node scripts/run-ci-tests.mjs --parallel` (prereqs, four lanes
   concurrently, preserved commands). The old chain is `pretest:serial` /
   `test:serial`; registry `sourceScripts` point at those. Root
   `pretest`/`posttest` hooks are rejected by `validateRegistry`.
@@ -57,6 +57,24 @@ Four single-worker shards now preserve the 20-minute job budget, retries and fai
 
 After independent Sol high review cleared the measured allocation, published head `b278f4e4b` run 41801806234 completed all four Electron jobs successfully in 13m25s, 12m28s, 13m16s and 13m03s respectively. The 20-minute budget and flake policy were unchanged. These are whole-job elapsed times, including runner setup and cleanup. Other required surfaces also passed; a separately observed Linux x64 job was still running when recorded. This establishes the first hosted four-shard result, not the final PR head.
 
+## macOS demand (2026-11-05, perf/ci-macos-demand)
+
+GitHub caps macOS at 5 concurrent jobs on Free, Pro and Team, whatever the repo's visibility. In the week of Oct 29 to Nov 5 macOS sat at exactly 5 for about 52% of the time and at least one job was waiting 63% of the time. Ubuntu queue p90 was 0.2 min. A Support request to raise the limit went in on 2026-11-05.
+
+- PRs run `core-git`, `runtime-subagents` and `renderer-other` on Ubuntu. The `macos` lane stays on macOS and main runs all four there.
+- A Linux probe's failure list is not enough to pick that lane: 16 tests skip off macOS and about 40 more `return` early, which reads as a pass. Check for both when moving tests.
+- Worktree test failures on Linux (`managed-worktree-lifecycle`, `workspace-worktree-application-service`) were never root-caused; those files stay on macOS.
+- iOS routing: `renderer/shared/` and `scripts/ci-test-registry.json` no longer select iOS, and a scripts-only `package.json` change does not either. A real week had 58 of 116 iOS selections with no iOS, protocol or Remote server change.
+- Replay of that week with a 6-minute `macos` lane: PR wait p50 106 to about 50 min, p90 294 to about 169; main p50 115 to about 74. Moving main's lanes too would give about 43/152 for PRs, but main would never run those tests on macOS. The replay is a model: check real timings after a week.
+- Before push the split passed in Ubuntu 24.04 arm64 (14,034 tests, none failed or skipped) and the `macos` lane passed on a Mac. The first hosted x64 run then failed one `core-git` test: the image catalog single-flight test counted event-loop turns while the runtime read settings from disk, and it now waits for the request itself. Later hosted runs passed all four lanes.
+- Not done: trimming PR macOS E2E, which should wait for a week of real runs.
+
 ## Linux E2E shards (2026-11-05, perf/ci-linux-e2e-shards)
 
 Linux x64 ran packaging then a 22-minute serial E2E step, about 36 minutes plus Fedora, which set the floor on a PR once macOS stopped queueing. `linux-e2e` now runs the shards from `scripts/ci-e2e-shards.mjs` beside packaging, using macOS-derived weights. `diagnostics-production.spec.ts` is left out of shards, and it only skipped on Linux before. The `linux-required` gate reads both jobs, so the ruleset's contexts did not change.
+
+## PR726 integration after macOS-demand PR775 — 2026-11-05
+
+Preserved the historical four Mac E2E shards and three Linux shards, all 1,313 branch tests and all 1,269 incoming tests (44 branch additions retained). PR headless lanes move to Ubuntu while main keeps Mac coverage. Independent review found a native-routing gap: comment-derived mirrors missed public Remote parsers, DTOs and limits, including continuity watches, Open work, routine models, peers, resume, and existing Bot, subagent and background-job contracts. Added explicit public paths and behavioral classifier cases; generic host helpers retain the lighter route. Shared public contract edits alone now select both native clients. No production, wire or native implementation changes.
+
+CI policy tests passed 79/79, image-generation runtime tests passed 27/27, and root ES2020 types and final scoped lint passed. Initial lint caught two imports made unused when the comment-grep test was replaced with behavioral cases; removed them and verified lint again. GPT-6.1 Sol high independent review is CLEAR (`/tmp/aiden-pr726-main775-ci-review.md`). The privacy fix in 6d02ff1a0 and native fixtures are unchanged by this main merge. Hosted CI on the new exact head remains required before merging PR726.
