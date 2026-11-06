@@ -216,7 +216,7 @@ export function ComputerUseAccessApproval({
     .join(" ");
 
   return (
-    <div>
+    <div data-live-guard="you">
       <p className="sr-only" role="status">
         {`Approval needed for Computer Use${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
       </p>

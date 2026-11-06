@@ -390,7 +390,8 @@ export function ChatApprovalCard({
   const plainCommand = plainApproval ? approvalCommand(pending) : undefined;
 
   return (
-    <div className="flex min-h-0 flex-col">
+    // Approvals are the user's: Aiden Live can never press Allow or Always allow.
+    <div data-live-guard="you" className="flex min-h-0 flex-col">
       <p className="sr-only" role="status">
         {invalidPendingPrivilegedApproval
           ? "Invalid privileged approval blocked"

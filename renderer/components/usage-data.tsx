@@ -331,6 +331,7 @@ export function UsageDataSettings() {
         }
       >
         <Switch
+          data-live-guard="you"
           aria-label={USAGE_DATA_LABEL}
           checked={Boolean(status?.enabled && !status.envDisabled)}
           disabled={!status || status.envDisabled}
@@ -376,6 +377,7 @@ export function UsageDataOnboardingRow({ onDisplay }: { onDisplay?: (enabled: bo
         <UsageDataSheetLink layer="onboarding" className="mt-1" />
       </div>
       <Switch
+        data-live-guard="you"
         aria-label={USAGE_DATA_LABEL}
         checked={Boolean(status?.enabled && !status.envDisabled)}
         disabled={!status || status.envDisabled}

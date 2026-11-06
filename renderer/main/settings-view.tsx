@@ -269,7 +269,10 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
               <SettingsAnchorContext.Provider value={section === "links" ? { section, request: anchorRequest ?? 0 } : null}>
-                <ActiveSection />
+                {/* Aiden Live never changes its own switches or Computer Use; only the user does. */}
+                <div className="contents" data-live-guard={section === "geminiLive" || section === "computerUse" ? "you" : undefined}>
+                  <ActiveSection />
+                </div>
               </SettingsAnchorContext.Provider>
             </SettingsPageTabs>
           </SettingsPage>

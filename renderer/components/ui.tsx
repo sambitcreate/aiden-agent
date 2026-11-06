@@ -92,6 +92,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       ref={ref}
       type={asChild ? undefined : type}
       data-slot="button"
+      // Aiden Live asks the user before pressing a destructive button.
+      data-live-guard={variant === "destructive" ? "confirm" : undefined}
       className={cn(
         "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale,translate] duration-(--motion-duration) ease-standard focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         pressFeedback && "button-press-feedback",
@@ -1925,6 +1927,7 @@ export const DropdownMenuItem = React.forwardRef<
   return (
     <DropdownMenuPrimitive.Item
       ref={ref}
+      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
       className={cn(menuItemClass, color === "red" && "text-red",
         color === "status-red" && "text-status-red",
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
@@ -2106,6 +2109,7 @@ export const ContextMenuItem = React.forwardRef<
   return (
     <ContextMenuPrimitive.Item
       ref={ref}
+      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
       className={cn(menuItemClass, color === "red" && "text-red",
         color === "status-red" && "text-status-red",
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}

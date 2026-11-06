@@ -231,7 +231,8 @@ export function BotApprovalCard({
         iconTone="warning"
         title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
         actions={
-          <>
+          // Approvals are the user's: Aiden Live can never answer them by pressing.
+          <div data-live-guard="you" className="contents">
             <Button
               variant="transparent"
               size="small"
@@ -259,7 +260,7 @@ export function BotApprovalCard({
                 {hint("allow")}
               </Button>
             )}
-          </>
+          </div>
         }
       >
         {prompt.always ? <p className="text-tertiary">{`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`}</p> : null}
