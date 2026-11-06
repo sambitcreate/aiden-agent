@@ -1189,6 +1189,31 @@ test("Live notes are bounded, spaced out, and a burst beyond the queue is refuse
   subject.service.stop(owner);
 });
 
+test("a note sent while Live resumes waits and goes out once the session reopens", async () => {
+  const subject = serviceHarness();
+  const owner = new FakeOwner(54, "54:1:live-notes-resume");
+  const session = await subject.service.start(owner, intent);
+  const received = subject.servers[0]!.latest.received;
+  const notes = () =>
+    received
+      .filter((message) => message.type === "realtime_input" && typeof message.value.text === "string")
+      .map((message) => (message.value as { text: string }).text);
+  const owned = subject.service.sessions.get(owner)!;
+  owned.state = "resuming";
+  assert.equal(subject.service.sendNote(owner, session.sessionId!, "Tests passed."), true, "accepted while resuming");
+  assert.deepEqual(notes(), [], "nothing is sent on a rotating transport");
+  (
+    subject.service as unknown as {
+      handleProtocolEvent(session: typeof owned, event: { type: "state"; state: "open" }): void;
+    }
+  ).handleProtocolEvent(owned, { type: "state", state: "open" });
+  assert.deepEqual(notes(), ["[Aiden update, not spoken by the user] Tests passed."]);
+  owned.state = "closing";
+  assert.equal(subject.service.sendNote(owner, session.sessionId!, "Late."), false, "a closing session takes no notes");
+  owned.state = "open";
+  subject.service.stop(owner);
+});
+
 test("Live reads the chosen voice at each start, so a change applies next time", async () => {
   let voice: string | null = "Kore";
   const subject = serviceHarness(undefined, { resolveVoice: () => voice });

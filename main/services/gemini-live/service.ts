@@ -625,11 +625,11 @@ export class GeminiLiveService {
    */
   sendNote(owner: RendererDocumentOwner, sessionId: string, text: string): boolean {
     const session = this.sessions.get(owner);
+    // A resuming session queues the note; flushNotes sends it once it reopens.
     if (
       !session ||
       session.sessionId !== sessionId ||
-      session.state !== "open" ||
-      !session.protocol
+      (session.state !== "open" && session.state !== "resuming")
     )
       return false;
     const trimmed = text.trim();
