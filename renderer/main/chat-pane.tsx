@@ -149,6 +149,7 @@ import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ChatApprovalCard } from "../components/chat-approval-card";
+import { liveOpenChat } from "../lib/live-open-chat";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
   chatsApi,
@@ -1121,6 +1122,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const contextLiveGeneration = isGenerating || isStartingGeneration;
+  // Aiden Live reads which chat is on screen (title, workspace, busy, stream).
+  const liveOpenChatOwner = React.useMemo(() => Symbol("chat-pane"), []);
+  const liveOpenChatTitle = chat.data?.title ?? "New agent";
+  const liveOpenChatStreamId = generationRef.current?.streamId ?? null;
+  React.useEffect(() => {
+    liveOpenChat.publish(liveOpenChatOwner, {
+      chatId,
+      title: liveOpenChatTitle,
+      workspaceId: chatWorkspaceId ?? null,
+      busy: contextLiveGeneration,
+      streamId: liveOpenChatStreamId,
+    });
+  }, [chatId, chatWorkspaceId, contextLiveGeneration, liveOpenChatOwner, liveOpenChatStreamId, liveOpenChatTitle]);
+  React.useEffect(() => () => liveOpenChat.clear(liveOpenChatOwner), [liveOpenChatOwner]);
   // A run this pane did not start (a paired phone's turn) streams in live
   // once main reports the chat busy, and stays until its saved reply lands.
   // A draft or this pane's own turn stops it; an idle chat holds nothing.

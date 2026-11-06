@@ -1,3 +1,9 @@
+import {
+  LiveRendererToolBroker,
+  LiveToolRegistry,
+  type LiveToolPrepareInput,
+  type LiveToolProvider,
+} from "./live-tools.js";
 import { randomUUID } from "node:crypto";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
@@ -118,6 +124,11 @@ export interface GeminiLiveServiceOptions {
     begin(input: { id: string; model: string; computerUseEnabled: boolean }): Promise<void>;
     finish(id: string, outcome: "stopped" | "failed" | "disconnected"): Promise<void>;
   };
+  /**
+   * Live tools other than Computer Use (chat, app control, ending the
+   * session). Called once per start after Computer Use is prepared.
+   */
+  prepareTools?(input: LiveToolPrepareInput): Promise<readonly LiveToolProvider[]>;
   prepareComputerUse?(input: {
     authorization: string | null;
     threadId: string;
@@ -155,6 +166,11 @@ interface OwnedLiveSession {
   resumptionFrame: Uint8Array | null;
   model?: string;
   computerUse: GeminiLiveComputerUseBridge | null;
+  tools: LiveToolRegistry | null;
+  rendererTools: LiveRendererToolBroker | null;
+  lastNoteAt: number;
+  noteQueue: string[];
+  noteTimer: ReturnType<typeof setTimeout> | null;
   approveComputerUse:
     | ((
         approvalId: string,
@@ -269,6 +285,11 @@ export class GeminiLiveSessionStore {
     return [...this.sessions.values()];
   }
 }
+
+export const GEMINI_LIVE_MAX_NOTE_CHARS = 2_000;
+export const GEMINI_LIVE_NOTE_INTERVAL_MS = 2_000;
+/** Notes waiting for the interval; a burst beyond this is refused. */
+export const GEMINI_LIVE_MAX_QUEUED_NOTES = 4;
 
 export class GeminiLiveService {
   readonly sessions = new GeminiLiveSessionStore();
@@ -389,6 +410,11 @@ export class GeminiLiveService {
       resumptionAudio: [],
       resumptionFrame: null,
       computerUse: null,
+      tools: null,
+      rendererTools: null,
+      lastNoteAt: Number.NEGATIVE_INFINITY,
+      noteQueue: [],
+      noteTimer: null,
       approveComputerUse: null,
       threadRecorded: false,
       threadBegin: null,
@@ -434,6 +460,34 @@ export class GeminiLiveService {
       session.computerUse = computerUse?.bridge ?? null;
       session.approveComputerUse = computerUse?.approve ?? null;
 
+      const rendererTools = new LiveRendererToolBroker(session.sessionId, (request) =>
+        this.send(session, request),
+      );
+      session.rendererTools = rendererTools;
+      const providers = this.options.prepareTools
+        ? await this.options.prepareTools({
+            owner,
+            sessionId: session.sessionId,
+            signal: session.abort.signal,
+            renderer: rendererTools,
+          })
+        : [];
+      if (!this.sessions.isCurrent(session) || session.abort.signal.aborted) {
+        for (const provider of providers) provider.close?.();
+        throw new Error("The Assistant Live start was superseded.");
+      }
+      const registry = new LiveToolRegistry(providers, {
+        sessionId: session.sessionId,
+        owner,
+      });
+      session.tools = registry;
+      const liveTools: NonNullable<GeminiLiveProtocolOptions["tools"]> = [
+        ...(computerUse?.tools ?? []),
+        ...(registry.functionDeclarations().length > 0
+          ? [{ functionDeclarations: registry.functionDeclarations() }]
+          : []),
+      ];
+
       session.threadRecorded = Boolean(this.options.threads);
       if (session.threadRecorded) this.pendingThreadFinalization.add(session);
       session.threadBegin =
@@ -452,7 +506,8 @@ export class GeminiLiveService {
         model,
         signal: session.abort.signal,
         onEvent: (event) => this.handleProtocolEvent(session, event),
-        tools: computerUse?.tools,
+        tools: liveTools.length > 0 ? liveTools : undefined,
+        instructions: registry.instructions(),
       });
       computerUse?.bindSendResult((result) => {
         if (!this.sessions.isCurrent(session) || session.abort.signal.aborted) return;
@@ -531,6 +586,66 @@ export class GeminiLiveService {
       // the renderer and before closing the provider transport.
       this.closeSession(session, true, "stopped");
     }
+  }
+
+  /** Settles one renderer-executed Live tool request for the owner's current session. */
+  rendererToolResult(
+    owner: RendererDocumentOwner,
+    sessionId: string,
+    requestId: string,
+    response: unknown,
+  ): boolean {
+    const session = this.sessions.get(owner);
+    if (!session || session.sessionId !== sessionId || !session.rendererTools) return false;
+    return session.rendererTools.resolve(requestId, response);
+  }
+
+  /**
+   * Tells Live about something that happened in Aiden (a chat finished, an
+   * approval is waiting) so it can say so. Notes are bounded and sent at most
+   * one every two seconds; a few more wait their turn, and false means the
+   * note was refused.
+   */
+  sendNote(owner: RendererDocumentOwner, sessionId: string, text: string): boolean {
+    const session = this.sessions.get(owner);
+    if (
+      !session ||
+      session.sessionId !== sessionId ||
+      session.state !== "open" ||
+      !session.protocol
+    )
+      return false;
+    const trimmed = text.trim();
+    if (trimmed.length === 0 || trimmed.length > GEMINI_LIVE_MAX_NOTE_CHARS) return false;
+    if (session.noteQueue.length >= GEMINI_LIVE_MAX_QUEUED_NOTES) return false;
+    session.noteQueue.push(trimmed);
+    this.flushNotes(session);
+    return true;
+  }
+
+  private flushNotes(session: OwnedLiveSession): void {
+    if (session.noteTimer || session.noteQueue.length === 0) return;
+    const wait = session.lastNoteAt + GEMINI_LIVE_NOTE_INTERVAL_MS - Date.now();
+    if (wait > 0) {
+      session.noteTimer = setTimeout(() => {
+        session.noteTimer = null;
+        if (this.sessions.isCurrent(session)) this.flushNotes(session);
+      }, wait);
+      return;
+    }
+    const note = session.noteQueue.shift()!;
+    // While the transport rotates, the note waits for the session to reopen.
+    if (session.state !== "open" || !session.protocol) {
+      session.noteQueue.unshift(note);
+      return;
+    }
+    try {
+      session.protocol.sendText(`[Aiden update, not spoken by the user] ${note}`);
+    } catch {
+      // A note is advisory; a closed transport simply loses it.
+    }
+    session.lastNoteAt = Date.now();
+    this.flushNotes(session);
   }
 
   sendAudio(
@@ -637,6 +752,21 @@ export class GeminiLiveService {
       );
     }
     if (event.type === "function_call") {
+      if (session.tools?.has(event.name)) {
+        const protocol = session.protocol;
+        void session.tools
+          .dispatch({ id: event.id, name: event.name, args: event.args })
+          .then((response) => {
+            if (!this.sessions.isCurrent(session) || session.protocol !== protocol) return;
+            try {
+              protocol?.sendToolResult({ id: event.id, name: event.name, response });
+            } catch {
+              // A call cancelled by the provider or orphaned by a transport
+              // rotation cannot be answered; see the Computer Use bridge path.
+            }
+          });
+        return;
+      }
       if (!session.computerUse) {
         session.protocol?.sendToolResult({
           id: event.id,
@@ -655,12 +785,14 @@ export class GeminiLiveService {
       return;
     }
     if (event.type === "function_cancel") {
+      session.tools?.cancel(event.id);
       session.computerUse?.cancel(event.id);
       return;
     }
     if (event.type === "playback_flush") {
       // A VAD interruption revokes action authority before renderer playback is flushed.
       session.computerUse?.interrupt();
+      session.tools?.interrupt();
     }
     if (event.type === "state") {
       writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: `Live state: ${event.state}` } });
@@ -678,6 +810,7 @@ export class GeminiLiveService {
           this.closeSession(session);
           return;
         }
+        this.flushNotes(session);
       }
       this.send(session, {
         type: "snapshot",
@@ -721,6 +854,13 @@ export class GeminiLiveService {
     session.computerUse?.close();
     session.computerUse = null;
     session.approveComputerUse = null;
+    session.tools?.close();
+    session.tools = null;
+    session.rendererTools?.close();
+    session.rendererTools = null;
+    if (session.noteTimer) clearTimeout(session.noteTimer);
+    session.noteTimer = null;
+    session.noteQueue = [];
     session.state = "closed";
     session.resumptionAudio = [];
     session.resumptionFrame = null;

@@ -1,0 +1,143 @@
+// Shared renderer seam for Aiden Live. The Live hook publishes the current
+// session and the user's finalized speech here; chat panes, the approval
+// layer and app control subscribe without importing the hook, and register the
+// renderer-side tools main asks for.
+
+export type LiveRendererToolResult = Record<string, unknown>;
+
+export interface LiveRendererToolContext {
+  sessionId: string;
+  signal: AbortSignal;
+}
+
+export type LiveRendererToolHandler = (
+  args: Record<string, unknown>,
+  context: LiveRendererToolContext,
+) => Promise<LiveRendererToolResult> | LiveRendererToolResult;
+
+export interface LiveSessionTransport {
+  toolResult(sessionId: string, requestId: string, response: LiveRendererToolResult): Promise<boolean>;
+  note(sessionId: string, text: string): Promise<boolean>;
+}
+
+/** One finalized utterance from the user's microphone, in arrival order. */
+export interface LiveVoiceInput {
+  /** Monotonic within the renderer; later speech always has a larger id. */
+  id: number;
+  text: string;
+}
+
+type Listener<T> = (value: T) => void;
+
+function toolError(code: string, message: string): LiveRendererToolResult {
+  return { ok: false, error: { code, message } };
+}
+
+export class LiveSessionBus {
+  private sessionId: string | null = null;
+  private transport: LiveSessionTransport | null = null;
+  private readonly sessionListeners = new Set<Listener<string | null>>();
+  private readonly voiceListeners = new Set<Listener<LiveVoiceInput>>();
+  private readonly tools = new Map<string, LiveRendererToolHandler>();
+  private readonly inFlight = new Map<string, AbortController>();
+  private lastVoiceInputId = 0;
+
+  /** Called by the Live hook whenever its session starts or ends. */
+  setSession(sessionId: string | null, transport: LiveSessionTransport | null): void {
+    if (this.sessionId === sessionId && this.transport === transport) return;
+    if (this.sessionId !== sessionId) {
+      for (const abort of this.inFlight.values()) abort.abort();
+      this.inFlight.clear();
+    }
+    this.sessionId = sessionId;
+    this.transport = sessionId ? transport : null;
+    for (const listener of [...this.sessionListeners]) listener(sessionId);
+  }
+
+  currentSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  onSession(listener: Listener<string | null>): () => void {
+    this.sessionListeners.add(listener);
+    return () => this.sessionListeners.delete(listener);
+  }
+
+  /** Latest voice input id seen so far; speech after a prompt has a larger id. */
+  latestVoiceInputId(): number {
+    return this.lastVoiceInputId;
+  }
+
+  publishVoiceInput(text: string): LiveVoiceInput {
+    const input = { id: ++this.lastVoiceInputId, text };
+    for (const listener of [...this.voiceListeners]) listener(input);
+    return input;
+  }
+
+  onVoiceInput(listener: Listener<LiveVoiceInput>): () => void {
+    this.voiceListeners.add(listener);
+    return () => this.voiceListeners.delete(listener);
+  }
+
+  /** Sends a short spoken-update note to Live; false when no session or it was dropped. */
+  async note(text: string): Promise<boolean> {
+    const sessionId = this.sessionId;
+    const transport = this.transport;
+    if (!sessionId || !transport) return false;
+    try {
+      return await transport.note(sessionId, text);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Registers the window-side handler for one Live tool; the last registration wins. */
+  registerTool(name: string, handler: LiveRendererToolHandler): () => void {
+    this.tools.set(name, handler);
+    return () => {
+      if (this.tools.get(name) === handler) this.tools.delete(name);
+    };
+  }
+
+  hasTool(name: string): boolean {
+    return this.tools.has(name);
+  }
+
+  /** Runs one tool request from main and reports its result exactly once. */
+  async runToolRequest(request: {
+    sessionId: string;
+    requestId: string;
+    name: string;
+    args: Record<string, unknown>;
+  }): Promise<void> {
+    const transport = this.transport;
+    if (!transport || request.sessionId !== this.sessionId) return;
+    const handler = this.tools.get(request.name);
+    const abort = new AbortController();
+    this.inFlight.set(request.requestId, abort);
+    let response: LiveRendererToolResult;
+    try {
+      response = handler
+        ? await handler(request.args, { sessionId: request.sessionId, signal: abort.signal })
+        : toolError("tool_unavailable", "That part of Aiden is not open right now.");
+    } catch {
+      response = toolError("tool_failed", "The action could not finish.");
+    } finally {
+      if (this.inFlight.get(request.requestId) === abort) this.inFlight.delete(request.requestId);
+    }
+    if (abort.signal.aborted || request.sessionId !== this.sessionId) return;
+    try {
+      await transport.toolResult(request.sessionId, request.requestId, response);
+    } catch {
+      // Main times the request out on its side.
+    }
+  }
+
+  cancelToolRequest(sessionId: string, requestId: string): void {
+    if (sessionId !== this.sessionId) return;
+    this.inFlight.get(requestId)?.abort();
+    this.inFlight.delete(requestId);
+  }
+}
+
+export const liveSessionBus = new LiveSessionBus();

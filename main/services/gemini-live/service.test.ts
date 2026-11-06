@@ -52,7 +52,7 @@ function serviceHarness(
   overrides: Partial<
     Pick<
       ConstructorParameters<typeof GeminiLiveService>[0],
-      "screenShareEnabled" | "prepareComputerUse" | "acceptanceEvidence"
+      "screenShareEnabled" | "prepareComputerUse" | "acceptanceEvidence" | "prepareTools"
     >
   > = {},
 ) {
@@ -919,9 +919,10 @@ test("the model gate is explicit-experimental and media has no persistence or lo
   assert.match(mainSource, /actionPolicy: "session"/u);
   assert.doesNotMatch(mainSource, /ToolApprovalCoordinator|say Allow once or Deny/u);
   assert.doesNotMatch(serviceSource, /DataStore|writeFile|appendFile|logger|writeDevLog/u);
-  // Bounded screen frames now cross a dedicated channel by name; credentials,
-  // raw tool data, and unbounded media still never reach the handler layer.
-  assert.doesNotMatch(handlerSource, /jpeg|credential|apiKey|tool/u);
+  // Bounded screen frames and bounded renderer tool results cross dedicated
+  // channels by name (their parsers are tested in assistant-live-parse.test.ts);
+  // credentials and unbounded media still never reach the handler layer.
+  assert.doesNotMatch(handlerSource, /jpeg|credential|apiKey/u);
 });
 
 test("microphone PCM is admitted only for the current consenting exact-document session", async () => {
@@ -1111,4 +1112,74 @@ test("a Live session that became available counts once, and one with no credenti
   await service.start(owner, intent);
   await service.stop(owner);
   assert.deepEqual(sent, [{ event: "voice_used", props: { mode: "live", engine: "cloud" } }]);
+});
+
+test("a Live tool runs in the window and its result goes back to Live for that call", async () => {
+  const subject = serviceHarness(undefined, {
+    prepareTools: async ({ renderer }) => [
+      {
+        declarations: [{ name: "read_open_chat", description: "Reads the chat on screen." }],
+        instructions: ["You can read the chat that is open in Aiden."],
+        handle: (call, context) => renderer.request(call.name, call.args, context.signal),
+      },
+    ],
+  });
+  const owner = new FakeOwner(51, "51:1:live-chat-tools");
+  const session = await subject.service.start(owner, intent);
+  const server = subject.servers[0]!;
+  const tools = server.latest.params.config?.tools as Array<{ functionDeclarations?: Array<{ name?: string }> }>;
+  assert.deepEqual(tools.flatMap((tool) => tool.functionDeclarations ?? []).map((d) => d.name), ["read_open_chat"]);
+
+  server.latest.emit({
+    toolCall: { functionCalls: [{ id: "call-1", name: "read_open_chat", args: { limit: 5 } }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const request = owner.events.find((event) => event.type === "tool_request");
+  assert.ok(request && request.type === "tool_request");
+  assert.equal(request.name, "read_open_chat");
+  assert.deepEqual(request.args, { limit: 5 });
+
+  // Another document or another session cannot answer it.
+  assert.equal(subject.service.rendererToolResult(new FakeOwner(52, "52:1:other"), session.sessionId!, request.requestId, { ok: true }), false);
+  assert.equal(subject.service.rendererToolResult(owner, "session-other", request.requestId, { ok: true }), false);
+  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, request.requestId, { ok: true, title: "Fix login" }), true);
+  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, request.requestId, { ok: true }), false);
+  await new Promise((resolve) => setImmediate(resolve));
+  const reply = server.latest.received.find((message) => message.type === "tool_response");
+  assert.ok(reply && reply.type === "tool_response");
+  assert.deepEqual(reply.value.functionResponses, {
+    id: "call-1",
+    name: "read_open_chat",
+    response: { ok: true, title: "Fix login" },
+  });
+  subject.service.stop(owner);
+});
+
+test("Live notes are bounded, spaced out, and a burst beyond the queue is refused", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const subject = serviceHarness();
+  const owner = new FakeOwner(53, "53:1:live-notes");
+  const session = await subject.service.start(owner, intent);
+  const server = subject.servers[0]!;
+  const notes = () =>
+    server.latest.received
+      .filter((message) => message.type === "realtime_input" && typeof message.value.text === "string")
+      .map((message) => (message.value as { text: string }).text);
+
+  assert.equal(subject.service.sendNote(owner, session.sessionId!, "   "), false);
+  assert.equal(subject.service.sendNote(owner, session.sessionId!, "x".repeat(2_001)), false);
+  assert.equal(subject.service.sendNote(owner, "session-other", "Tests passed."), false);
+  assert.equal(subject.service.sendNote(owner, session.sessionId!, "Tests passed."), true);
+  assert.deepEqual(notes(), ["[Aiden update, not spoken by the user] Tests passed."]);
+
+  for (const text of ["two", "three", "four", "five"]) {
+    assert.equal(subject.service.sendNote(owner, session.sessionId!, text), true);
+  }
+  assert.equal(subject.service.sendNote(owner, session.sessionId!, "six"), false);
+  assert.equal(notes().length, 1, "later notes wait for the interval");
+  t.mock.timers.tick(2_000);
+  assert.equal(notes().length, 2);
+  for (let step = 0; step < 3; step += 1) t.mock.timers.tick(2_000);
+  assert.deepEqual(notes().slice(1).map((note) => note.replace(/^\[[^\]]+\] /u, "")), ["two", "three", "four", "five"]);
+  subject.service.stop(owner);
 });

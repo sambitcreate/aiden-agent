@@ -46,6 +46,15 @@ export type AssistantLiveRendererEvent =
     }
   | { type: "model_text"; sessionId: string; text: string }
   | { type: "computer_use_state"; sessionId: string; active: boolean }
+  /** Main asks the attended window to run one renderer-side Live tool (see live-renderer-tools). */
+  | {
+      type: "tool_request";
+      sessionId: string;
+      requestId: string;
+      name: string;
+      args: Record<string, unknown>;
+    }
+  | { type: "tool_cancel"; sessionId: string; requestId: string }
   | {
       type: "turn";
       sessionId: string;
@@ -69,3 +78,8 @@ export type AssistantLiveRendererEvent =
       sessionId: string;
       reason: "resumption_unavailable" | "resume_failed" | "unexpected_disconnect";
     };
+
+/** Largest renderer tool result main accepts, in UTF-8 bytes of its JSON. */
+export const ASSISTANT_LIVE_MAX_TOOL_RESULT_BYTES = 32_768;
+/** Largest note the renderer may send to Live, in characters. */
+export const ASSISTANT_LIVE_MAX_NOTE_CHARS = 2_000;

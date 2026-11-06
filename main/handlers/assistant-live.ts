@@ -14,6 +14,8 @@ import {
   parseAssistantLiveFrameIntent,
   parseAssistantLiveDisplayReleaseIntent,
   parseAssistantLiveStopIntent,
+  parseAssistantLiveToolResultIntent,
+  parseAssistantLiveNoteIntent,
 } from "./assistant-live-parse.js";
 import { invokeAssistantLiveStart } from "./assistant-live-start.js";
 import { invokeAssistantLiveStatus } from "./assistant-live-status.js";
@@ -61,5 +63,18 @@ export function registerAssistantLiveHandlers(): void {
   ipcMain.handle("assistant-live:frame", (event, input: unknown) => {
     const intent = parseAssistantLiveFrameIntent(input);
     return geminiLiveService.sendFrame(owner(event), intent.sessionId, intent.frame);
+  });
+  ipcMain.handle("assistant-live:tool-result", (event, input: unknown) => {
+    const intent = parseAssistantLiveToolResultIntent(input);
+    return geminiLiveService.rendererToolResult(
+      owner(event),
+      intent.sessionId,
+      intent.requestId,
+      intent.response,
+    );
+  });
+  ipcMain.handle("assistant-live:note", (event, input: unknown) => {
+    const intent = parseAssistantLiveNoteIntent(input);
+    return geminiLiveService.sendNote(owner(event), intent.sessionId, intent.text);
   });
 }

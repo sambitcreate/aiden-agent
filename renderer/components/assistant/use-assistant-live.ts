@@ -23,6 +23,7 @@ import type {
   AssistantLiveSnapshot,
 } from "../../shared/assistant-live";
 import { assistantLiveVoiceApprovalDecision } from "./assistant-live-voice-approval";
+import { liveSessionBus } from "../../lib/live-session-bus";
 
 export interface AssistantLiveCaption {
   id: number;
@@ -312,6 +313,8 @@ interface AssistantLiveApi {
   bindDisplay?(): Promise<string | null>;
   releaseDisplay?(bindingId: string): Promise<boolean>;
   sendFrame?(sessionId: string, frame: Uint8Array): Promise<boolean>;
+  toolResult?(sessionId: string, requestId: string, response: Record<string, unknown>): Promise<boolean>;
+  note?(sessionId: string, text: string): Promise<boolean>;
   onEvent(handler: (event: AssistantLiveRendererEvent) => void): () => void;
 }
 
@@ -520,6 +523,18 @@ export function useAssistantLiveWithDependencies(
     reason: "live_model_unverified",
     state: "idle",
   });
+  const liveApi = dependencies.api;
+  const busSessionId = activeSnapshot(snapshot) ? (snapshot.sessionId ?? null) : null;
+  React.useEffect(() => {
+    const { toolResult, note } = liveApi;
+    liveSessionBus.setSession(
+      busSessionId,
+      busSessionId && toolResult && note
+        ? { toolResult: toolResult.bind(liveApi), note: note.bind(liveApi) }
+        : null,
+    );
+  }, [busSessionId, liveApi]);
+  React.useEffect(() => () => liveSessionBus.setSession(null, null), []);
   const [setupOpen, setSetupOpenState] = React.useState(false);
   const [microphone, setMicrophone] = React.useState(true);
   const [microphoneActive, setMicrophoneActive] = React.useState(false);
@@ -642,6 +657,14 @@ export function useAssistantLiveWithDependencies(
         return;
       }
       if (event.sessionId !== sessionRef.current) return;
+      if (event.type === "tool_request") {
+        void liveSessionBus.runToolRequest(event);
+        return;
+      }
+      if (event.type === "tool_cancel") {
+        liveSessionBus.cancelToolRequest(event.sessionId, event.requestId);
+        return;
+      }
       if (event.type === "audio" && event.pcm instanceof Uint8Array) {
         if (receivedAudioSession.current !== event.sessionId) {
           receivedAudioSession.current = event.sessionId;
@@ -656,6 +679,7 @@ export function useAssistantLiveWithDependencies(
         // the caption render, but an immediately following approval notification must
         // still fence every utterance that arrived before the prompt.
         if (event.direction === "input" && event.final) {
+          liveSessionBus.publishVoiceInput(event.text);
           const receipt = { id: ++voiceApprovalReceiptId.current, text: event.text };
           setVoiceApprovalReceipts((current) => {
             const next = [...current, receipt];
