@@ -1308,10 +1308,10 @@ export class BrowserService {
       this.hide(tab);
       return;
     }
-    this.detach(tab);
     const window = this.mainWindow(tab.state.workspaceId);
+    if (tab.attached !== window) this.detach(tab);
     for (const candidate of this.tabs.values())
-      if (candidate !== tab && candidate.attached === window) this.hide(candidate);
+      if (candidate !== tab && candidate.visible && candidate.attached === window) this.hide(candidate);
     const scale = window.webContents.getZoomFactor();
     const area = window.getContentBounds();
     const b = tab.bounds;
@@ -1321,7 +1321,8 @@ export class BrowserService {
     const height = Math.max(1, Math.min(Math.round(b.height * scale), area.height - y));
     tab.view.setBounds({ x, y, width, height });
     tab.view.setVisible(true);
-    window.contentView.addChildView(tab.view);
+    // A bounds update on an already presented guest must preserve focus and its compositor.
+    if (!tab.visible || tab.attached !== window) window.contentView.addChildView(tab.view);
     tab.attached = window;
     tab.visible = true;
     tab.state.visible = true;
@@ -1951,9 +1952,11 @@ export class BrowserService {
   private activateTab(tab: LiveTab): void {
     const workspace = this.workspace(tab.state.workspaceId);
     const previous = workspace.state.activeTabId ? this.tabs.get(workspace.state.activeTabId) : undefined;
-    if (previous && previous !== tab && previous.state.floating) {
-      this.floating(previous, false, false);
-      this.floating(tab, true, false);
+    if (previous && previous !== tab) {
+      if (previous.state.floating) {
+        this.floating(previous, false, false);
+        this.floating(tab, true, false);
+      } else if (previous.visible) this.hide(previous);
     }
     workspace.state.activeTabId = tab.state.id;
   }
@@ -2699,7 +2702,9 @@ export class BrowserService {
         if (command.action === "annotate" && !command.enabled && !tab.picking) break;
         if (context.source === "user" && command.action !== "present") tab.queue.interrupt();
         if (command.action === "present") {
-          this.present(tab, command.visible, command.bounds);
+          // A delayed layout report from the old tab must never cover the selected page.
+          if (!command.visible || workspace.state.activeTabId === tab.state.id)
+            this.present(tab, command.visible, command.bounds);
           break;
         }
         if (command.action === "select") {

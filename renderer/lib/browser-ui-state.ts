@@ -4,12 +4,11 @@ import { BROWSER_VIEWPORT_PRESETS } from "../shared/browser";
 /** Chromium's standard device catalog, matching the reference browser. */
 export const BROWSER_DEVICE_PRESETS = BROWSER_VIEWPORT_PRESETS.map((preset) => [preset.name, preset.width, preset.height] as const);
 
-const presentationQueues = new Map<string, Promise<void>>();
-/** A remount cannot let its predecessor's delayed hide overtake its show. */
-export function enqueueBrowserPresentation(key: string, operation: () => Promise<unknown>): Promise<void> {
-  const next = (presentationQueues.get(key) ?? Promise.resolve()).catch(() => undefined).then(operation).then(() => undefined);
-  presentationQueues.set(key, next);
-  void next.finally(() => { if (presentationQueues.get(key) === next) presentationQueues.delete(key); }).catch(() => undefined);
+// Each renderer owns one native stacking order, including when it switches workspaces.
+let lastPresentation = Promise.resolve();
+export function enqueueBrowserPresentation(operation: () => Promise<unknown>): Promise<void> {
+  const next = lastPresentation.then(operation).then(() => undefined);
+  lastPresentation = next.catch(() => undefined);
   return next;
 }
 

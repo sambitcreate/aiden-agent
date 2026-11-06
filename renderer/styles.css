@@ -153,13 +153,6 @@
 .browser-recent-row span, .browser-recent-row small { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-recent-row span { font-size: var(--ui-font-size); }
 .browser-recent-row small { color: var(--text-tertiary); font-size: calc(var(--ui-font-size) - 2px); }
-.browser-more-menu { max-width: min(320px, calc(100vw - 24px)); max-height: min(720px, 80vh); overflow-y: auto; }
-.browser-more-menu [role="menuitem"] { font-size: calc(var(--ui-font-size) - 1px); }
-.browser-more-menu [role="menuitem"] > svg { width: 15px; height: 15px; }
-.browser-zoom-row { display: flex; align-items: center; gap: 4px; padding: 1px 7px; font-size: calc(var(--ui-font-size) - 1px); }
-.browser-zoom-row > span { flex: 1; }
-.browser-zoom-reset { min-width: 42px; padding: 5px; border: 0; border-radius: 7px; background: transparent; font-variant-numeric: tabular-nums; }
-.browser-zoom-reset:hover { background: var(--surface-list-hover); }
 .browser-device-toolbar { display: flex; height: 34px; flex: 0 0 auto; align-items: center; gap: 3px; padding: 2px 7px; border-bottom: 1px solid var(--border-separator); overflow-x: auto; color: var(--text-secondary); font-size: calc(var(--ui-font-size) - 2px); }
 .browser-device-toolbar .browser-select { min-width: 85px; max-width: 140px; flex: 1; }
 .browser-device-toolbar input { width: 48px; height: 25px; padding: 2px; border: 1px solid var(--border-field); border-radius: 6px; background: transparent; color: var(--text-primary); text-align: center; outline: none; appearance: textfield; }
@@ -210,7 +203,7 @@
 .browser-annotation-color input[type="color"] { width: 26px; flex: 0 0 auto; padding: 0; border: 0; background: transparent; }
 .browser-annotation-style-field input[type="range"] { accent-color: var(--text-secondary); }
 .browser-annotation-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.browser-tab-select:focus-visible, .browser-tab-close:focus-visible, .browser-select:focus-visible, .browser-zoom-reset:focus-visible, .browser-recent-row > button:focus-visible, .browser-annotation-details summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.browser-tab-select:focus-visible, .browser-tab-close:focus-visible, .browser-select:focus-visible, .browser-recent-row > button:focus-visible, .browser-annotation-details summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 @keyframes browser-loading { 0% { transform: scaleX(.08); opacity: .45; } 75% { transform: scaleX(.8); opacity: .7; } 100% { transform: scaleX(1); opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .browser-chrome[data-loading="true"]::after { animation: none; opacity: .55; } }
 
