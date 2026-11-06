@@ -1,6 +1,6 @@
 # Design mode P4: the full canvas
 
-Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 and approved by the owner; P4e built 2026-11-06 ([P4e plan](2026-11-05-design-mode-p4e-comments.md)) and approved; P4b built and approved 2026-11-06; P4c built 2026-11-06 and approved; P4d and P4f built 2026-11-06. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
+Status: planned 2026-11-05; owner answered 1a, 2b, 3a (with a Copy button), 4a. P4a built 2026-11-05 and approved by the owner; P4e built 2026-11-06 ([P4e plan](2026-11-05-design-mode-p4e-comments.md)) and approved; P4b built and approved 2026-11-06; P4c built 2026-11-06 and approved; P4d, P4f and P4g built 2026-11-06. Spec: [design mode](../specs/2026-10-31-design-mode-design.md) §5.5–§5.7. Branch: `claude/project-thread-29fzrr` (PR #778), on top of P0–P3.
 
 **Goal:** the canvas does everything in the owner's 2026-11-05 reference screenshots of a design canvas (owner chose "add everything shown"). That is the original P4 (point, comment, draw, and send comments to Aiden) plus:
 - drawing tools;
@@ -168,7 +168,7 @@ A panel on the canvas's right edge with three tabs. It opens with the toggle or 
 - **Tweaks:** see P4g.
 
 As built (2026-11-06):
-- The panel opens with the side-panel button at the canvas's top right or `I` (not ⌥⌘I, which the menu keeps for Toggle Developer Tools). It sits at the canvas's right edge, 320 px wide, and is remembered per device. It is hidden while presenting.
+- The panel opens with the side-panel button at the canvas's top right or `I` (not ⌥⌘I, which the menu keeps for Toggle Developer Tools). It sits at the canvas's right edge, 352 px wide, and is remembered per device. It is hidden while presenting.
 - **Properties** (`renderer/design/design-side-panel.tsx`) shows the selected item's name and kind, then only the sections that apply: X, Y, Width and Height; Design width (390, 768, 1280, 1440; changing it scales the frame's width); Background and Corners for artboards (`fill`, `radius`, default 4 px); Corners for rectangles; Fill, Outline or Colour and Stroke width for shapes and lines; PDF paper and layout for pages and artifacts (they also stay in the Download menu); and a **Layout guide** (4, 8 or 12 columns with 16 px gutters and margins, or an 8 px grid) on pages, artifacts and artboards (`guide`). The guide is drawn only on the canvas (`nodes/layout-guide.tsx`) and is never in an export or the presentation.
 - **Layers** lists the page's items front-most first, with an artboard's or group's members under it (`renderer/design/layers-core.ts`). A click selects; a double-click or F2 renames; dragging a row above or below another reorders it; ⌥↑ and ⌥↓ step it forward or back. Only siblings trade places, so a container always stays behind its items. Each row has **Hide** and **Lock**. A hidden item is not drawn (a hidden container hides its members), not presented and not live; a locked item cannot be moved, resized or deleted on the canvas, and a duplicate is not locked.
 - **Code** shows a page's file or an artifact's HTML, read-only and highlighted, with **Copy code**. Main reads it (`designCanvas:source`) from the granted workspace or the artifact store and cuts it at 512 KiB.
@@ -178,6 +178,13 @@ As built (2026-11-06):
 
 - **Dark switch** on any file or artifact frame. The bridge sets `color-scheme` and `data-theme="dark"` on the page root, and the `aiden-design` skill teaches Aiden to write pages that follow both.
 - **Page-declared tweaks:** a page can declare simple controls (switch, choice, number, colour) in a `<script type="application/aiden-tweaks">` JSON block. The bridge applies the values as CSS variables or data attributes, and the frame saves its values in `tweaks`. Nothing is written to the source.
+
+As built (2026-11-06):
+- A fourth side-panel tab, **Tweaks**, for the selected page or artifact. The panel is now 352 px wide so the four tabs fit.
+- **Dark** (`dark` on the frame). On a page, the bridge sets `data-theme="dark"` and `color-scheme: dark` on the root element, and the iframe's own color scheme follows, so a page that uses `prefers-color-scheme` follows it too. Switching off puts back whatever the page had. On an artifact, Dark draws it with the dark variant of the person's theme even while Aiden is light (`renderer/design/artifact-theme.ts`); off, it follows Aiden's appearance as before.
+- **The page's tweaks** are read from the page's file (`renderer/shared/design-canvas/tweaks.ts`): a switch, a choice (segmented for up to three short options, otherwise a menu), a number slider and a colour well, at most 24. Each sets one CSS variable or one `data-*` attribute on the root element: a number on a variable gets its unit, and a switch sets a variable to 1 or 0 or an attribute to "true" or "false". The frame keeps only the values that differ from the page's defaults, keyed by target (`tweaks`), so **Reset tweaks** and going back to a default both leave the page as its file says. A slider and the colour well change the page when they are let go, so one drag is one undo step.
+- Values reach a live page as a `set-tweaks` message; a page's first load and each reload after a change on disk carry them on the address (`aiden-dark=1`, `aiden-tweaks=…`), which the bridge applies before the page draws. Export uses the same address, and a dark artifact exports with the dark theme.
+- The `aiden-design` skill tells Aiden to give every page a dark look under `:root[data-theme="dark"]` and how to declare tweaks; `canvas_read` reports a frame's `dark`, `tweaks` and `hidden`.
 
 ### P4h: editing text inside a page
 

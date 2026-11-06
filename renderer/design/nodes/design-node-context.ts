@@ -31,6 +31,8 @@ export type DesignFramePatch = Partial<
     | "guide"
     | "hidden"
     | "locked"
+    | "dark"
+    | "tweaks"
   >
 >;
 

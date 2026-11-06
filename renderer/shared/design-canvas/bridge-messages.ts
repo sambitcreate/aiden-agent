@@ -5,6 +5,7 @@
 
 import type { DesignLocateResult, DesignPageElement } from "./comments.js";
 import { isSourceStamp, type DesignRect } from "./schema.js";
+import type { DesignTweakState } from "./tweaks.js";
 
 export type DesignBridgeMessage =
   | { type: "ready" | "resize"; docHeight: number }
@@ -121,7 +122,8 @@ export type DesignBridgeCommand =
   | { type: "pick-at"; requestId: string; x: number; y: number; wide?: boolean }
   | { type: "locate"; requestId: string; items: { commentId: string; selector: string; text: string; tag: string }[] }
   | { type: "highlight"; commentId: string; selector?: string }
-  | { type: "highlight"; clear: true };
+  | { type: "highlight"; clear: true }
+  | ({ type: "set-tweaks" } & DesignTweakState);
 
 /** Posts a command to a page. Pages are sandboxed without an origin, so the target is `*`. */
 export function postToDesignPage(target: Window | null | undefined, command: DesignBridgeCommand): void {

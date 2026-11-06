@@ -82,6 +82,7 @@ async function fixture(
   const saveDialogs: DesignCanvasSaveOptions[] = [];
   const renders: DesignFrameRenderRequest[] = [];
   const artifactExports: string[] = [];
+  const artifactThemes: unknown[] = [];
   registerDesignCanvasHandlers({
     enabled: () => enabled,
     handle: (channel, handler) => {
@@ -115,7 +116,8 @@ async function fixture(
       renders.push(request);
       return options.renderFrame ? options.renderFrame(request) : new TextEncoder().encode(`${request.format}:${request.url}`);
     },
-    artifactPreview: async (_chatId, mediaId) => {
+    artifactPreview: async (_chatId, mediaId, theme) => {
+      artifactThemes.push(theme);
       const src = options.artifacts?.[mediaId];
       return src ? { src } : undefined;
     },
@@ -147,6 +149,7 @@ async function fixture(
     saveDialogs,
     renders,
     artifactExports,
+    artifactThemes,
     disable: () => (enabled = false),
   };
 }
@@ -579,6 +582,42 @@ test("an artifact downloads from its preview, and its original goes through the 
   assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "source"), { saved: true });
   assert.deepEqual(artifactExports, ["chat-1/media-1"]);
   assert.equal(saveDialogs.length, 1, "the artifact export shows its own dialog");
+});
+
+test("a dark, tweaked page exports with its tweaks on its address, and only a dark artifact takes the canvas's theme", async (t) => {
+  let destination = "";
+  const harness = await exportCanvas(t, {
+    saveFile: () => destination,
+    artifacts: { "media-1": "aiden-genui://preview/abc" },
+  });
+  const { invoke, out, renders, artifactThemes, issuedGrants } = harness;
+  destination = path.join(out, "x.png");
+  const theme = { colorScheme: "dark", vars: {} };
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png", theme), { saved: true });
+  assert.deepEqual(artifactThemes, [undefined], "a light artifact keeps the default theme");
+
+  const stored = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const doc: DesignCanvas = {
+    ...stored,
+    frames: stored.frames.map((frame) =>
+      frame.id === "page"
+        ? { ...frame, dark: true, tweaks: { "--accent": "#ff0055", "data-density": "compact" } }
+        : frame.id === "chart"
+          ? { ...frame, dark: true }
+          : frame,
+    ),
+  };
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", doc, stored.revision), { ok: true, revision: stored.revision + 1 });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png", theme), { saved: true });
+  assert.deepEqual(artifactThemes[1], theme);
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), { saved: true });
+  const url = new URL(renders[renders.length - 1]!.url.replace(/^aiden-design:/u, "https:"));
+  assert.equal(renders[renders.length - 1]!.url.startsWith(`aiden-design://${issuedGrants[issuedGrants.length - 1]}/design/hero%20page.html?`), true);
+  assert.equal(url.searchParams.get("aiden-dark"), "1");
+  assert.deepEqual(JSON.parse(url.searchParams.get("aiden-tweaks")!), {
+    vars: { "--accent": "#ff0055" },
+    attrs: { "data-density": "compact" },
+  });
 });
 
 test("nothing is saved when the dialog is cancelled, the file is gone, or drawing fails", async (t) => {

@@ -87,7 +87,7 @@ export function registerDesignCanvasIpc(): void {
       return result.canceled || !result.filePath ? null : result.filePath;
     },
     renderFrame: renderDesignFrame,
-    artifactPreview: (chatId, mediaId) => wrapStoredHtmlArtifact({ chatId, mediaId }),
+    artifactPreview: (chatId, mediaId, theme) => wrapStoredHtmlArtifact({ chatId, mediaId, theme }),
     artifactHtml: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
     exportArtifactSource: async (event, chatId, mediaId) => {
       const parent = BrowserWindow.fromWebContents(event.sender);

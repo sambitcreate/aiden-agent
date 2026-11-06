@@ -10,7 +10,8 @@ import { FrameActions } from "./frame-actions";
 import { FrameTitle } from "./frame-title";
 import { LayoutGuide } from "./layout-guide";
 import { cn } from "../../lib/ui-utils";
-import { parseDesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
+import { parseDesignBridgeMessage, postToDesignPage } from "../../shared/design-canvas/bridge-messages";
+import { designTweakState, withDesignTweakQuery, type DesignTweakState } from "../../shared/design-canvas/tweaks";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 import { designUrl } from "../../shared/design-canvas/url";
 import type { DesignNode } from "../canvas-adapter-core";
@@ -64,7 +65,19 @@ export function FileFrame({
   const designWidth = frame.designWidth ?? DESIGN_DEFAULT_WIDTH;
   const scale = frame.w / designWidth;
   const contentHeight = Math.max(0, frame.h - DESIGN_FRAME_HEADER_PX);
-  const src = grant && frame.path ? withVersion(designUrl(grant, frame.path), version) : null;
+  const address = grant && frame.path ? withVersion(designUrl(grant, frame.path), version) : null;
+  // The Dark switch and tweaks ride on the address the page first loads
+  // with, so it never draws untweaked; later changes are posted to the page
+  // instead, so a change never reloads it.
+  const tweaks = designTweakState(frame);
+  const tweakKey = JSON.stringify(tweaks);
+  const [boot, setBoot] = React.useState(() => ({ address, tweakKey }));
+  if (boot.address !== address) setBoot({ address, tweakKey });
+  const src = address === null ? null : withDesignTweakQuery(address, JSON.parse(boot.tweakKey) as DesignTweakState);
+  const tweaksRef = React.useRef(tweaks);
+  React.useLayoutEffect(() => {
+    tweaksRef.current = tweaks;
+  });
 
   const [docHeight, setDocHeight] = React.useState<number | null>(null);
   const [missingVersion, setMissingVersion] = React.useState<number | null>(null);
@@ -99,11 +112,17 @@ export function FileFrame({
       if (!message || (message.type !== "ready" && message.type !== "resize")) return;
       reportedFor.current = iframeRef.current?.getAttribute("src") ?? null;
       clearMissingTimer();
+      if (message.type === "ready") postToDesignPage(guest, { type: "set-tweaks", ...tweaksRef.current });
       setDocHeight(Math.round(message.docHeight));
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, [showIframe]);
+
+  React.useEffect(() => {
+    if (!showIframe) return;
+    postToDesignPage(iframeRef.current?.contentWindow, { type: "set-tweaks", ...(JSON.parse(tweakKey) as DesignTweakState) });
+  }, [showIframe, tweakKey]);
 
   // A new address (a newer version, another grant) has to report in again.
   React.useEffect(() => {
@@ -150,6 +169,8 @@ export function FileFrame({
             height: `${scale > 0 ? contentHeight / scale : 0}px`,
             transform: `scale(${scale})`,
             transformOrigin: "0 0",
+            // A page that follows prefers-color-scheme follows the Dark switch too.
+            colorScheme: frame.dark ? "dark" : "light",
           }}
         />
       </div>

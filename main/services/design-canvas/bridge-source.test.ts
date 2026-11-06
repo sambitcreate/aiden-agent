@@ -15,8 +15,8 @@ type Page = {
   pointAt(selector: string | null): void;
 };
 
-function page(html: string): Page {
-  const window = new Window({ url: "aiden-design://grant/design/page.html" });
+function page(html: string, url = "aiden-design://grant/design/page.html"): Page {
+  const window = new Window({ url });
   window.document.write(html);
   const sent: DesignBridgeMessage[] = [];
   const parent = {
@@ -156,4 +156,66 @@ test("the canvas refuses malformed bridge messages", () => {
   assert.ok(picked?.type === "picked");
   assert.equal(picked.element?.text.length, 200);
   assert.equal(picked.element?.sourcePath, undefined);
+});
+
+const THEMED = `<!doctype html><html data-theme="light" data-density="cozy" style="--accent: #111111"><head></head><body><p>Hi</p></body></html>`;
+
+test("set-tweaks puts dark mode and the values on the root, and anything left out goes back to what the page had", () => {
+  const view = page(THEMED);
+  const root = view.window.document.documentElement;
+  view.send({
+    type: "aiden-design:set-tweaks",
+    dark: true,
+    vars: { "--accent": "#ff0055", "--radius": "12px" },
+    attrs: { "data-density": "compact", "data-promo": "false" },
+  });
+  assert.equal(root.getAttribute("data-theme"), "dark");
+  assert.equal(root.style.colorScheme, "dark");
+  assert.equal(root.style.getPropertyValue("--accent"), "#ff0055");
+  assert.equal(root.style.getPropertyValue("--radius"), "12px");
+  assert.equal(root.getAttribute("data-density"), "compact");
+  assert.equal(root.getAttribute("data-promo"), "false");
+
+  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: { "--radius": "4px" }, attrs: {} });
+  assert.equal(root.getAttribute("data-theme"), "light", "the page's own theme comes back");
+  assert.equal(root.style.getPropertyValue("--accent"), "#111111");
+  assert.equal(root.style.getPropertyValue("--radius"), "4px");
+  assert.equal(root.getAttribute("data-density"), "cozy");
+  assert.equal(root.hasAttribute("data-promo"), false);
+
+  view.send({ type: "aiden-design:set-tweaks", dark: true, vars: {}, attrs: {} });
+  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: {} });
+  assert.equal(root.getAttribute("data-theme"), "light", "a second round trip still restores the page's theme");
+  assert.equal(root.style.getPropertyValue("--radius"), "");
+});
+
+test("set-tweaks takes only safe names and values, and only from the canvas", () => {
+  const view = page(THEMED);
+  const root = view.window.document.documentElement;
+  view.send({
+    type: "aiden-design:set-tweaks",
+    dark: false,
+    vars: { "--ok": "1", color: "red", "--bad": "red; background: url(x)" },
+    attrs: { onclick: "alert(1)", "data-x": "<b>", "data-y": "yes" },
+  });
+  assert.equal(root.style.getPropertyValue("--ok"), "1");
+  assert.equal(root.style.getPropertyValue("--bad"), "");
+  assert.equal(root.hasAttribute("onclick"), false);
+  assert.equal(root.hasAttribute("data-x"), false);
+  assert.equal(root.getAttribute("data-y"), "yes");
+
+  view.send({ type: "aiden-design:set-tweaks", dark: true, vars: {}, attrs: {} }, { postMessage() {} });
+  assert.equal(root.getAttribute("data-theme"), "light", "another window cannot change the page");
+});
+
+test("the page's address carries the same state, applied before the page draws", () => {
+  const state = encodeURIComponent(JSON.stringify({ vars: { "--accent": "#00aa00" }, attrs: { "data-density": "compact" } }));
+  const view = page(THEMED, `aiden-design://grant/design/page.html?v=2&aiden-dark=1&aiden-tweaks=${state}`);
+  const root = view.window.document.documentElement;
+  assert.equal(root.getAttribute("data-theme"), "dark");
+  assert.equal(root.style.getPropertyValue("--accent"), "#00aa00");
+  assert.equal(root.getAttribute("data-density"), "compact");
+  view.send({ type: "aiden-design:set-tweaks", dark: false, vars: {}, attrs: {} });
+  assert.equal(root.getAttribute("data-theme"), "light");
+  assert.equal(root.style.getPropertyValue("--accent"), "#111111");
 });

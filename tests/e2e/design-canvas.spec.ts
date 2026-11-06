@@ -569,6 +569,8 @@ type SavedFrame = {
   guide?: string;
   hidden?: boolean;
   locked?: boolean;
+  dark?: boolean;
+  tweaks?: Record<string, string>;
 };
 
 async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
@@ -1083,4 +1085,110 @@ test("the side panel edits the selected item, lists the page's layers to hide, l
   await expect(panel).toHaveCount(0);
   await canvas.getByRole("button", { name: "Show side panel" }).click();
   await expect(panel.getByRole("radio", { name: "Code" })).toHaveAttribute("aria-checked", "true");
+});
+
+function tweakablePage(headline: string): string {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tweaks</title>
+    <script type="application/aiden-tweaks">
+    { "controls": [
+      { "id": "accent", "label": "Accent", "type": "color", "default": "#3b6cf6", "var": "--accent" },
+      { "id": "density", "label": "Density", "type": "choice", "options": ["compact", "cozy"], "default": "cozy", "attr": "data-density" },
+      { "id": "promo", "label": "Promo banner", "type": "switch", "default": true, "attr": "data-promo" },
+      { "id": "radius", "label": "Corners", "type": "number", "min": 0, "max": 24, "step": 2, "unit": "px", "default": 8, "var": "--radius" }
+    ] }
+    </script>
+    <style>
+      :root { --bg: #fbfaf7; --ink: #1d1d1f; --accent: #3b6cf6; --radius: 8px; }
+      :root[data-theme="dark"] { --bg: #16171a; --ink: #f2f2f4; }
+      body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+      .promo { padding: 10px 48px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+      :root[data-promo="false"] .promo { display: none; }
+      main { padding: 72px 48px; }
+      :root[data-density="compact"] main { padding: 24px 48px; }
+      h1 { margin: 0 0 16px; font-size: 56px; line-height: 1.05; }
+      a.cta { display: inline-block; margin-top: 24px; padding: 12px 22px; border-radius: var(--radius); background: var(--accent); color: white; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <div class="promo">Spring launch: 20% off this week</div>
+    <main>
+      <h1>${headline}</h1>
+      <p>Plan, build and ship with one calm workspace for the whole team.</p>
+      <a class="cta" href="#">Get started</a>
+    </main>
+  </body>
+</html>
+`;
+}
+
+test("the Tweaks tab shows a page dark and changes the page's own controls, kept on the frame and not in its file", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const file = path.join(designDir, "tweaks.html");
+  const original = tweakablePage("Ship faster");
+  await writeFile(file, original);
+
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  await answerNextPick(app, file);
+  await addFromMenu(page, "File…");
+  const live = pageInFrame(page, "tweaks.html");
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+  const root = live.locator("html");
+  const styleOf = (selector: string, property: string) =>
+    live.locator(selector).evaluate((element, name) => getComputedStyle(element).getPropertyValue(name), property);
+
+  await frame(page, "tweaks.html").click({ position: { x: 200, y: 12 } });
+  await canvas.focus();
+  await page.keyboard.press("i");
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("radio", { name: "Tweaks" }).click();
+  await expect(panel.getByRole("switch", { name: "Promo banner" })).toBeVisible();
+
+  // Dark: the page's own dark look, through data-theme on its root.
+  await panel.getByRole("switch", { name: "Dark" }).click();
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => styleOf("body", "background-color")).toBe("rgb(22, 23, 26)");
+  await expect.poll(async () => (await savedFrames(userDataDir))[0]?.dark).toBe(true);
+
+  // The page's declared controls.
+  await panel.getByRole("radio", { name: "compact" }).click();
+  await expect(root).toHaveAttribute("data-density", "compact");
+  await panel.getByRole("switch", { name: "Promo banner" }).click();
+  await expect(live.locator(".promo")).toBeHidden();
+  await panel.getByLabel("Accent").fill("#e5484d");
+  await expect.poll(() => styleOf("a.cta", "background-color")).toBe("rgb(229, 72, 77)");
+  const corners = panel.getByRole("slider", { name: "Corners" });
+  await corners.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => styleOf("a.cta", "border-top-left-radius")).toBe("12px");
+  await expect
+    .poll(async () => (await savedFrames(userDataDir))[0]?.tweaks)
+    .toEqual({ "data-density": "compact", "data-promo": "false", "--accent": "#e5484d", "--radius": "12px" });
+  await capture(page, "1440-tweaks");
+  expect(await readFile(file, "utf8")).toBe(original);
+
+  // A change on disk reloads the page, and it comes back dark and tweaked.
+  await writeFile(file, tweakablePage("Ship sooner"));
+  await expect(live.getByRole("heading", { name: "Ship sooner" })).toBeVisible();
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect(root).toHaveAttribute("data-density", "compact");
+  await expect(live.locator(".promo")).toBeHidden();
+
+  // Reset puts back what the file says; Dark stays until it is switched off.
+  await panel.getByRole("button", { name: "Reset tweaks" }).click();
+  await expect(root).not.toHaveAttribute("data-density", "compact");
+  await expect(live.locator(".promo")).toBeVisible();
+  await expect.poll(async () => (await savedFrames(userDataDir))[0]?.tweaks).toBeUndefined();
+  await panel.getByRole("switch", { name: "Dark" }).click();
+  await expect(root).not.toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => styleOf("body", "background-color")).toBe("rgb(251, 250, 247)");
 });

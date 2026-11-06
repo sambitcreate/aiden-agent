@@ -18,6 +18,7 @@ import {
   type DesignExportFormat,
 } from "../../renderer/shared/design-canvas/frame-export.js";
 import { designUrl } from "../../renderer/shared/design-canvas/url.js";
+import { designTweakState, withDesignTweakQuery } from "../../renderer/shared/design-canvas/tweaks.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
 import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
@@ -145,7 +146,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   /** Draws a page in a hidden window and returns the PNG or PDF bytes. */
   renderFrame(request: DesignFrameRenderRequest): Promise<Uint8Array>;
   /** An artifact's preview address, or undefined when it is gone. */
-  artifactPreview(chatId: string, mediaId: string): Promise<{ src: string } | undefined>;
+  artifactPreview(chatId: string, mediaId: string, theme?: unknown): Promise<{ src: string } | undefined>;
   /** Saves an artifact as a standalone HTML file through its own save dialog. */
   exportArtifactSource(event: Event, chatId: string, mediaId: string): Promise<{ saved: boolean; canceled: boolean }>;
   /** An artifact's own HTML, or undefined when it is gone. */
@@ -254,7 +255,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // renderer, so only a page this chat really shows can be exported.
   deps.handle(
     "designCanvas:export",
-    async (event, chatId, frameId, format): Promise<DesignCanvasExportResult> => {
+    async (event, chatId, frameId, format, theme): Promise<DesignCanvasExportResult> => {
       if (!deps.enabled()) throw new Error(UNAVAILABLE);
       assertDesignCanvasChatId(chatId);
       if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
@@ -280,7 +281,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
             return { error: "failed" };
           }
         }
-        const preview = await deps.artifactPreview(chat.id, frame.mediaId);
+        // The theme is the renderer's and untrusted; the preview reads only what it knows, and only for a dark frame.
+        const preview = await deps.artifactPreview(chat.id, frame.mediaId, frame.dark ? theme : undefined);
         if (!preview) return { error: "missing" };
         url = preview.src;
       } else {
@@ -290,7 +292,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
         if (!resolved.ok) return { error: "missing" };
         source = resolved.absolute;
-        url = designUrl(deps.grants.issue(chat.id, root), frame.path);
+        url = withDesignTweakQuery(designUrl(deps.grants.issue(chat.id, root), frame.path), designTweakState(frame));
       }
 
       const name = designExportFileName(frame, kind);

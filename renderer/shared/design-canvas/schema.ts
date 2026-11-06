@@ -7,6 +7,7 @@
 // as version 2, so the next save writes the new shape.
 
 import { syncConnectors } from "./connectors.js";
+import { parseDesignTweakValues, type DesignTweakValues } from "./tweaks.js";
 
 export type DesignFrameKind =
   | "file"
@@ -97,6 +98,10 @@ export type DesignFrame = {
   paper?: DesignPaper;
   /** file, artifact and artboard: a layout guide drawn over it. */
   guide?: DesignGuide;
+  /** file and artifact: drawn in dark mode (`data-theme="dark"` and a dark color scheme on the page). */
+  dark?: true;
+  /** file: the page's own tweak values the person changed, by target (see `tweaks.ts`). */
+  tweaks?: DesignTweakValues;
   /** Not drawn on the canvas (it stays in the layer list). */
   hidden?: true;
   /** Cannot be moved, resized or removed until it is unlocked. */
@@ -471,6 +476,11 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
   }
   if (value.hidden === true) frame.hidden = true;
   if (value.locked === true) frame.locked = true;
+  if (isDesignPrintable(frame.kind) && value.dark === true) frame.dark = true;
+  if (frame.kind === "file") {
+    const tweaks = parseDesignTweakValues(value.tweaks);
+    if (tweaks) frame.tweaks = tweaks;
+  }
   if (frame.kind === "shape" || frame.kind === "text" || frame.kind === "note" || isDesignLine(frame.kind)) {
     if (isColor(value.color)) frame.color = value.color;
   }

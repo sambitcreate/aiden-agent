@@ -15,7 +15,12 @@
 // - `pick-at` {requestId, x, y, wide}: describe the element under a point,
 //   or its parent when `wide`;
 // - `locate` {requestId, items: [{commentId, selector, text, tag}]};
-// - `highlight` {commentId} | {clear}.
+// - `highlight` {commentId} | {clear};
+// - `set-tweaks` {dark, vars, attrs}: the Dark switch and the page's tweak
+//   values, set on the root element. Names and values left out go back to
+//   what the page had. The page's address can carry the same state
+//   (`aiden-dark=1`, `aiden-tweaks={vars, attrs}`), applied before the page
+//   draws, so an export or a first load never shows it untweaked.
 // Points are in the frame's viewport CSS pixels; rects and points sent back
 // are in document CSS pixels (scroll included).
 
@@ -39,6 +44,69 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
     return root ? Math.ceil(root.scrollHeight) : 0;
   };
   const post = (type) => send(type, { docHeight: height() });
+
+  const root = doc.documentElement;
+  const VAR_NAME = /^--[A-Za-z0-9_-]{1,60}$/;
+  const ATTR_NAME = /^data-[a-z0-9-]{1,60}$/;
+  const UNSAFE = /[;{}<>\\\\"']|url\\(|expression\\(/i;
+  const MAX_TWEAKS = 24;
+  const originals = new Map();
+  let applied = new Set();
+  const read = (key) => {
+    if (key === "theme") return root.getAttribute("data-theme");
+    if (key === "scheme") return root.style.colorScheme || "";
+    if (key.indexOf("v:") === 0) return root.style.getPropertyValue(key.slice(2));
+    return root.getAttribute(key.slice(2));
+  };
+  const write = (key, value) => {
+    if (key === "theme") {
+      if (value === null) root.removeAttribute("data-theme");
+      else root.setAttribute("data-theme", value);
+    } else if (key === "scheme") root.style.colorScheme = value || "";
+    else if (key.indexOf("v:") === 0) {
+      if (value) root.style.setProperty(key.slice(2), value);
+      else root.style.removeProperty(key.slice(2));
+    } else if (value === null) root.removeAttribute(key.slice(2));
+    else root.setAttribute(key.slice(2), value);
+  };
+  const set = (next, key, value) => {
+    if (!originals.has(key)) originals.set(key, read(key));
+    write(key, value);
+    next.add(key);
+  };
+  const safe = (value) => typeof value === "string" && value.length <= 100 && !UNSAFE.test(value);
+  const applyTweaks = (state) => {
+    if (!root || !state || typeof state !== "object") return;
+    const next = new Set();
+    if (state.dark === true) {
+      set(next, "theme", "dark");
+      set(next, "scheme", "dark");
+    }
+    const vars = state.vars && typeof state.vars === "object" ? state.vars : {};
+    for (const name of Object.keys(vars).slice(0, MAX_TWEAKS)) {
+      if (VAR_NAME.test(name) && safe(vars[name])) set(next, "v:" + name, vars[name]);
+    }
+    const attrs = state.attrs && typeof state.attrs === "object" ? state.attrs : {};
+    for (const name of Object.keys(attrs).slice(0, MAX_TWEAKS)) {
+      if (ATTR_NAME.test(name) && safe(attrs[name])) set(next, "a:" + name, attrs[name]);
+    }
+    for (const key of applied) {
+      if (next.has(key)) continue;
+      write(key, originals.get(key));
+      originals.delete(key);
+    }
+    applied = next;
+  };
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const boot = { dark: params.get("aiden-dark") === "1" };
+    const raw = params.get("aiden-tweaks");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") Object.assign(boot, { vars: parsed.vars, attrs: parsed.attrs });
+    }
+    applyTweaks(boot);
+  } catch {}
   if (doc.readyState === "complete") post("ready");
   else window.addEventListener("load", () => post("ready"), { once: true });
   let scheduled = false;
@@ -228,6 +296,8 @@ export const DESIGN_BRIDGE_SOURCE = `(() => {
         }
       })() : null;
       outline("highlight", element || fallback, STRONG);
+    } else if (type === "set-tweaks") {
+      applyTweaks(data);
     }
   });
 })();

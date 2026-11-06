@@ -382,3 +382,24 @@ test("the side panel's fields: an artboard keeps its background, radius and guid
   assert.deepEqual(field("note"), { fill: undefined, radius: undefined, guide: undefined, hidden: undefined, locked: undefined });
   assert.deepEqual(field("odd"), { fill: undefined, radius: 0, guide: undefined, hidden: undefined, locked: undefined });
 });
+
+test("tweaks: pages and artifacts keep the Dark switch, and only pages keep tweak values, read safely", () => {
+  const { doc } = parsed(
+    canvas({
+      frames: [
+        frame({ id: "page", kind: "file", path: "a.html", dark: true, tweaks: { "--accent": "#ff0055", "data-x": "a;b", color: "red" } }),
+        frame({ id: "chart", kind: "artifact", mediaId: "media-1", dark: true, tweaks: { "--accent": "#ff0055" } }),
+        frame({ id: "note", kind: "note", dark: true }),
+        frame({ id: "plain", kind: "file", path: "b.html", dark: "yes", tweaks: { color: "red" } }),
+      ],
+    }),
+  );
+  const field = (id: string) => {
+    const entry = doc.frames.find((item) => item.id === id)!;
+    return { dark: entry.dark, tweaks: entry.tweaks };
+  };
+  assert.deepEqual(field("page"), { dark: true, tweaks: { "--accent": "#ff0055" } });
+  assert.deepEqual(field("chart"), { dark: true, tweaks: undefined });
+  assert.deepEqual(field("note"), { dark: undefined, tweaks: undefined });
+  assert.deepEqual(field("plain"), { dark: undefined, tweaks: undefined });
+});

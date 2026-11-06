@@ -37,6 +37,7 @@ import {
   type DesignNode,
   type PlaceFrameInput,
 } from "./canvas-adapter-core";
+import { readDesignArtifactTheme } from "./artifact-theme";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
 import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
@@ -685,12 +686,21 @@ function LoadedDesignCanvas({
     [change],
   );
 
+  const readSource = React.useCallback(
+    // A frame added a moment ago is not saved yet, and main reads the saved canvas.
+    (frameId: string) =>
+      flush()
+        .catch(() => undefined)
+        .then(() => designCanvasApi.designFrameSource(chatId, frameId)),
+    [chatId, flush],
+  );
+
   const download = React.useCallback(
     (id: string, format: DesignExportFormat) => {
       // Main exports what is saved, so a frame added a moment ago is saved first.
       void flush()
         .catch(() => undefined)
-        .then(() => designCanvasApi.exportDesignFrame(chatId, id, format))
+        .then(() => designCanvasApi.exportDesignFrame(chatId, id, format, readDesignArtifactTheme(true)))
         .then(
         (result) => {
           if ("saved" in result) toast.success(format === "source" ? "Saved the original file." : `Saved the ${format.toUpperCase()}.`);
@@ -942,7 +952,7 @@ function LoadedDesignCanvas({
       </div>
       {panel.open && !presentation ? (
         <DesignSidePanel
-          chatId={chatId}
+          readSource={readSource}
           doc={doc}
           selection={selection}
           tab={panel.tab}
