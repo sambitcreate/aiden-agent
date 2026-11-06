@@ -703,6 +703,20 @@ test("stop() halts polling and clears the queue", async () => {
   assert.equal(service.getStatus().status, "disabled");
 });
 
+test("stop() clears a failed start, so an off bridge no longer reads as failed", async () => {
+  const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
+  api.getMe = async () => {
+    throw new Error("401: Unauthorized");
+  };
+
+  await service.start();
+  await waitFor(() => service.getStatus().lastError === "401: Unauthorized");
+
+  service.stop();
+
+  assert.equal(service.getStatus().lastError, undefined);
+});
+
 test("connect() throws when no bot token is configured", async () => {
   const { service, api } = harness({ enabled: true, hasToken: false });
 

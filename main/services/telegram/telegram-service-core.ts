@@ -409,6 +409,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
   function stop(): void {
     started = false;
+    lastError = undefined;
     abortController?.abort();
     abortController = undefined;
     queue.clear();

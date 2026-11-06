@@ -1,4 +1,4 @@
-// Telegram settings — bot token, enable toggle, pairing status, provider/model
+// Telegram settings — bot token, Connect and Disconnect, pairing status, provider/model
 // picker, and connection controls. The bot token is stored encrypted via
 // safeStorage and never returned to the renderer.
 
@@ -104,6 +104,7 @@ export function TelegramSettings() {
   };
 
   const disconnect = async () => {
+    setConnectionError(null);
     await telegramApi.setEnabled(false);
     await invalidate();
     toast.success("Telegram turned off.");
@@ -247,7 +248,7 @@ export function TelegramSettings() {
         </div>
       </Field>
       {telegram.data ? (
-        <Field orientation="vertical">
+        <Field orientation="vertical" className="justify-center">
           <Disclosure key={String(hasToken)} title="How to connect" defaultOpen={!hasToken}>
             <ol className="text-secondary list-decimal space-y-1 py-2 pl-6 text-regular">
               <li>
@@ -261,9 +262,9 @@ export function TelegramSettings() {
                 If you want workspace topics, enable Threaded Mode for the bot in{" "}
                 <strong>@BotFather</strong>.
               </li>
-              <li>Choose a provider in step 2 (or set one up in Settings → Providers).</li>
+              <li>Choose a provider under Review model and access (or set one up in Settings → Providers).</li>
               <li>
-                Choose Connect in step 3, review access, then send <code>/start</code> to your bot from Telegram to pair.
+                Choose Connect under Connect and pair your account, review access, then send <code>/start</code> to your bot from Telegram to pair.
               </li>
             </ol>
           </Disclosure>
@@ -397,7 +398,7 @@ export function TelegramSettings() {
         </Field>
       )}
 
-      {!hasToken ? <Text as="p" variant="small" color="secondary" className="p-4">Save your bot token in step 1 to connect.</Text> : null}
+      {!hasToken ? <Text as="p" variant="small" color="secondary" className="p-4">Save your bot token in section 1 to connect.</Text> : null}
       {connectionError ? <Callout color="red" role="alert">{connectionError}</Callout> : null}
       {allowedUserId !== undefined && (
         <Field
@@ -429,7 +430,7 @@ export function TelegramSettings() {
         </p>
       </Field>
     </FieldSet>
-    <Disclosure title="Advanced Telegram settings" className="mb-7">
+    <Disclosure title="Advanced Telegram settings" className="mb-7" contentClassName="pl-0">
       <FieldSet className="mt-2 mb-0">
       <Field
         label="Bot profile"

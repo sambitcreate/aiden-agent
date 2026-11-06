@@ -28,6 +28,10 @@ function mount(initial: Partial<TelegramStatus>) {
   };
   const calls = installBotTestIpc({
     "telegram:get": () => status,
+    "telegram:setKey": () => {
+      status = { ...status, hasToken: true };
+      return { hasKey: true };
+    },
     "telegram:setEnabled": (enabled: unknown) => {
       status = { ...status, enabled: enabled as boolean };
       return enabled;
@@ -58,15 +62,13 @@ test("a bridge that is off has nothing to disconnect", async () => {
   assert.equal(disconnect.hasAttribute("disabled"), true);
 });
 
-test("the bridge has one on and off control, in step 3", async () => {
+test("Connect and Disconnect are the only way to turn the bridge on and off", async () => {
   mount({ hasToken: true });
   await screen.findByRole("button", { name: "Connect" });
+  screen.getByRole("button", { name: "Disconnect" });
   fireEvent.click(screen.getByRole("button", { name: "Advanced Telegram settings" }));
-  const switches = await screen.findAllByRole("switch");
-  assert.deepEqual(
-    switches.map((control) => control.getAttribute("aria-label")),
-    ["Live answer drafts", "Private-chat threads"],
-  );
+  await screen.findByRole("switch", { name: "Live answer drafts" });
+  assert.equal(screen.queryByRole("switch", { name: /enable|telegram/iu }), null);
 });
 
 test("connection steps stay open until a token is saved", async () => {
@@ -78,6 +80,15 @@ test("connection steps stay open until a token is saved", async () => {
   assert.equal(screen.queryByText(/Copy the bot token/u), null);
   fireEvent.click(screen.getByRole("button", { name: "How to connect" }));
   await screen.findByText(/Copy the bot token/u);
+});
+
+test("saving a token folds the connection steps away", async () => {
+  mount({ hasToken: false });
+  await screen.findByText(/Copy the bot token/u);
+  fireEvent.change(screen.getByPlaceholderText(/Paste your bot token/u), { target: { value: "123:abc" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(screen.queryByText(/Copy the bot token/u) === null, true));
+  screen.getByRole("button", { name: "How to connect" });
 });
 
 test("the unattended-authority notice shows without opening anything", async () => {

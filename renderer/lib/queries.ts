@@ -933,8 +933,18 @@ export function useWebFetch() {
   return useQuery({ queryKey: queryKeys.webFetch, queryFn: webFetchApi.get });
 }
 
+const TELEGRAM_PAIRING_POLL_MS = 3_000;
+
 export function useTelegramSettings() {
-  return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
+  return useQuery({
+    queryKey: queryKeys.telegram,
+    queryFn: telegramApi.get,
+    // Nothing announces a rejected token or a finished /start, so watch while the bridge waits to pair.
+    refetchInterval: (query) =>
+      query.state.data?.enabled && query.state.data.allowedUserId === undefined
+        ? TELEGRAM_PAIRING_POLL_MS
+        : false,
+  });
 }
 
 // Each Remote snapshot runs the Tailscale CLI twice. Settings changes arrive as

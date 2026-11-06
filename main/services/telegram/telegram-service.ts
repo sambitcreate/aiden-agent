@@ -1027,7 +1027,8 @@ export function createTelegramProfileManager() {
         await telegramBotBindings.assertHealthy();
         await serviceFor(activeProfile).start();
       } else {
-        serviceFor(activeProfile).stop();
+        // Turning the bridge off also ends the unattended turn it started.
+        await serviceFor(activeProfile).stopAndSettle();
       }
     },
     connect: () => serviceFor(activeProfile).connect(),
