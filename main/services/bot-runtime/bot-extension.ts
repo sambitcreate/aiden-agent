@@ -915,7 +915,15 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       }
       const current = await deps.checkPolicy(botId, call.name, { ...check, skipPlanCoverage: true, skipAllowList: true, approvalProbe: true });
       if (!current.allowed) return { block: current.reason };
-      if (decision.approval === undefined && (current.approval !== undefined || current.handoff !== undefined)) {
+      // A plan permit and an allow-list entry recheck themselves when used, and
+      // this probe skips both. A routine's go-ahead has no such check, so it
+      // must still stand here. An ordinary approval is rechecked after its card.
+      const goAhead = decision.approval?.preapproved === true && decision.approval.planPermit === undefined && decision.approval.requirements === undefined;
+      if (
+        current.handoff !== undefined ||
+        (decision.approval === undefined && current.approval !== undefined) ||
+        (goAhead && current.approval?.preapproved !== true)
+      ) {
         return authorizeTool(call, api, context, true, attempt + 1);
       }
     }

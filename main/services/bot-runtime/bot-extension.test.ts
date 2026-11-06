@@ -31,7 +31,7 @@ import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-ro
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import { MAX_STOP_HOOK_CONTINUATIONS } from "../agent-surface-hooks.js";
 import type { HookDispatcher, HookEvent, HookOutcome, HookPayload, HookScope } from "../hooks/hook-types.js";
-import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
+import { createBotRegistry, type BotExtensionDeps, type BotPolicyDecision, type BotRegistry } from "./bot-extension.js";
 import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
 import { recordRuleHandoffEntry } from "./bot-handoffs.js";
 import { createBotSessionService } from "./bot-session-service.js";
@@ -1095,6 +1095,60 @@ test("(hk3d) a rule that changes while a hook's card waits is decided afresh, wi
   assert.deepEqual(nowAsks.deps.approvals.map((request) => /Hook mail-guard/u.test(request.summary)), [true, false], "one hook card, then the rule's");
   assert.equal(nowAsks.hooks.runs.filter((run) => run.event === "PreToolUse").length, 1);
   assert.equal(nowAsks.tool.executions.length, 1);
+});
+
+test("(hk3e) a routine's go-ahead that ends while a hook holds the call is decided afresh", async () => {
+  const preapproved = { allowed: true as const, approval: { summary: "Send mail", preapproved: true as const } };
+  const turn = async (before: BotPolicyDecision, after: BotPolicyDecision) => {
+    const tool = countingTool("send");
+    const fauxModels = createFauxModels([
+      fauxAssistantMessage([fauxToolCall("send", { text: "x" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    let hookRan = false;
+    const hooks = fakeHooks({
+      PreToolUse: () => {
+        hookRan = true;
+        return { decision: "allow", ranHooks: ["slow-guard"] };
+      },
+    });
+    const deps = withHooks(recordingDeps({
+      tools: [{ tool, replay: "unsafe" }],
+      policy: () => (hookRan ? after : before),
+      approve: async () => "deny",
+      handoff: async () => ({ outcome: "skipped" }),
+    }), hooks);
+    const { harness, root } = await memoryHarness(deps, fauxModels);
+    try {
+      await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+      return { tool, deps, hooks };
+    } finally {
+      await harness.close(ctx);
+    }
+  };
+
+  const withdrawn = await turn(preapproved, { allowed: true, approval: { summary: "Send mail" } });
+  assert.equal(withdrawn.deps.approvals.length, 1, "the person is asked after all");
+  assert.deepEqual(withdrawn.tool.executions, []);
+  assert.equal(withdrawn.hooks.runs.filter((run) => run.event === "PreToolUse").length, 1);
+
+  const handedOff = await turn(preapproved, RULE_HANDOFF());
+  assert.equal(handedOff.deps.handoffs.length, 1);
+  assert.deepEqual(handedOff.tool.executions, []);
+
+  const stands = await turn(preapproved, preapproved);
+  assert.deepEqual(stands.deps.approvals, []);
+  assert.equal(stands.tool.executions.length, 1);
+
+  // The recheck can't see an allow-list entry, which proves itself in onAllow.
+  let entryChecks = 0;
+  const entry = await turn(
+    { allowed: true, approval: { summary: "Send mail", preapproved: true, requirements: {} as never, onAllow: async () => { entryChecks += 1; } } },
+    { allowed: true, approval: { summary: "Send mail" } },
+  );
+  assert.deepEqual(entry.deps.approvals, []);
+  assert.equal(entryChecks, 1);
+  assert.equal(entry.tool.executions.length, 1);
 });
 
 test("(hk4) a Stop hook that always says keep going ends after the shared cap", async () => {

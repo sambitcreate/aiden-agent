@@ -881,8 +881,10 @@ export function createHookService(deps: HookServiceDeps): HookService {
           workspaceFiles.push({ workspaceRoot: root, present: file.present, problems: file.problems, warnings: file.warnings });
         }
         hooks.push(...listings.map(withLastRun));
-        // A guard with a row of its own (shown as changed) is cleared from that row.
-        const hasRow = (record: HookApprovalRecord) => listings.some((listing) => listing.status !== "active" && listing.id === record.hookId);
+        // A saved hook's changed row can clear its guard with Delete. A repo hook's
+        // changed row has nothing to delete, so its guard keeps a row of its own.
+        const hasRow = (record: HookApprovalRecord) =>
+          listings.some((listing) => listing.status !== "active" && listing.id === record.hookId && listing.source !== "workspace-file");
         hooks.push(...unmetGuards(scope, listings).filter((record) => !hasRow(record)).map((record) => missingGuardListing(scope, record)));
       }
       return { hooks, paused: trust.paused, disabledByEnvironment: disabledByEnvironment(), workspaceFiles };

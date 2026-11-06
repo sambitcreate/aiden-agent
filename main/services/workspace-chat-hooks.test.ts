@@ -524,6 +524,49 @@ test("continue: false from PreToolUse or PostToolUse lets the tool finish, then 
   }
 });
 
+test("after a rewrite only the check of the new input can end the turn or add context", async () => {
+  const rewritten = (payload: HookPayload) => (payload.tool_input as Record<string, unknown>).note === "safe";
+  const rewrite = (payload: HookPayload) => ({ ...(payload.tool_input as Record<string, unknown>), note: "safe" });
+  const messages: string[][] = [];
+  const staleFirst = fakeDispatcher({
+    PreToolUse: (payload): HookOutcome => rewritten(payload)
+      ? { additionalContext: fenced("about the new input"), ranHooks: ["rewrite"] }
+      : {
+          decision: "allow",
+          updatedInput: rewrite(payload),
+          stopTurn: true,
+          stopReason: "that input is frozen",
+          additionalContext: fenced("about the old input"),
+          ranHooks: ["rewrite"],
+        },
+  });
+  const hooks = createWorkspaceChatHooks({ chatId: "c" }, staleFirst.dispatcher, { onMessages: (lines) => messages.push(lines) });
+  const { modelRequests, toolText } = await runHookedTurn(hooks);
+  assert.equal(staleFirst.calls.filter((call) => call.event === "PreToolUse").length, 2);
+  assert.equal(modelRequests, 2, "what stopped the turn was not what ran");
+  assert.equal(hooks.stopRequested(), undefined);
+  assert.deepEqual(messages, []);
+  assert.ok(toolText.includes(fenced("about the new input")));
+  assert.ok(!toolText.includes("about the old input"));
+
+  // The check can still end the turn.
+  const checkedStops = fakeDispatcher({
+    PreToolUse: (payload): HookOutcome => rewritten(payload)
+      ? { stopTurn: true, stopReason: "this one is frozen too", ranHooks: ["gate"] }
+      : { decision: "allow", updatedInput: rewrite(payload), ranHooks: ["rewrite"] },
+  });
+  const stopped = createWorkspaceChatHooks({ chatId: "c" }, checkedStops.dispatcher);
+  assert.equal((await runHookedTurn(stopped)).modelRequests, 1);
+  assert.match(stopped.stopRequested() ?? "", /this one is frozen too/u);
+
+  // A rewrite that never ran leaves the first answer standing, stop included.
+  const invalid = fakeDispatcher({ PreToolUse: { updatedInput: { file_path: 42 }, stopTurn: true, stopReason: "stop here", ranHooks: ["broken"] } });
+  const blocked = createWorkspaceChatHooks({ chatId: "c" }, invalid.dispatcher);
+  const args = { path: "src/a.ts", old_text: "a", new_text: "b" };
+  assert.equal((await blocked.preToolUse({ toolCallId: "3", toolName: "edit_file", args, tools: [editTool] })).kind, "block");
+  assert.match(blocked.stopRequested() ?? "", /stop here/u);
+});
+
 test("hook messages and Aiden's notices go to the person, never into the tool result", async () => {
   const messages: string[][] = [];
   const { dispatcher } = fakeDispatcher({

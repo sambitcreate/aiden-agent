@@ -67,6 +67,19 @@ function emptyTrust(): HookTrustState {
   return { version: 1, paused: false, approvals: {}, disabled: [], failures: {} };
 }
 
+function isApprovalRecord(item: unknown): item is HookApprovalRecord {
+  if (!item || typeof item !== "object") return false;
+  const record = item as HookApprovalRecord;
+  return (
+    typeof record.hookId === "string" &&
+    typeof record.digest === "string" &&
+    DIGEST.test(record.digest) &&
+    isHookEvent(record.event) &&
+    typeof record.matcher === "string" &&
+    (record.blocksWhenFailing === undefined || record.blocksWhenFailing === true)
+  );
+}
+
 function sanitizeTrust(raw: unknown): HookTrustState {
   const state = emptyTrust();
   const approvals = (raw as { approvals?: unknown } | null | undefined)?.approvals;
@@ -74,18 +87,11 @@ function sanitizeTrust(raw: unknown): HookTrustState {
   const record = raw as Record<string, unknown>;
   state.paused = record.paused === true;
   for (const [scope, list] of Object.entries(approvals as Record<string, unknown>)) {
-    if (!Array.isArray(list)) continue;
-    const kept = list.filter(
-      (item): item is HookApprovalRecord =>
-        !!item &&
-        typeof item === "object" &&
-        typeof (item as HookApprovalRecord).hookId === "string" &&
-        typeof (item as HookApprovalRecord).digest === "string" &&
-        DIGEST.test((item as HookApprovalRecord).digest) &&
-        isHookEvent((item as HookApprovalRecord).event) &&
-        typeof (item as HookApprovalRecord).matcher === "string",
-    );
-    if (kept.length > 0) state.approvals[scope] = kept.map((item) => ({ ...item, approvedAt: Number(item.approvedAt) || 0 }));
+    // A record skipped here could be a blocking hook's approval, and losing it
+    // would lift the block, so anything unreadable fails the whole load.
+    if (!Array.isArray(list)) throw new Error(`the approvals for ${JSON.stringify(scope)} are not a list`);
+    if (!list.every(isApprovalRecord)) throw new Error(`an approval for ${JSON.stringify(scope)} is unreadable`);
+    if (list.length > 0) state.approvals[scope] = list.map((item) => ({ ...item, approvedAt: Number(item.approvedAt) || 0 }));
   }
   // Flags saved under the older id keys are dropped: they could point at another hook now.
   if (Array.isArray(record.disabled)) {

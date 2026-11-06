@@ -333,9 +333,8 @@ export function createWorkspaceChatHooks(
       const first = await dispatch("PreToolUse", toolPayload(toolName, args, toolCallId), { idempotencyKey, signal });
       if (!first) return { kind: "none" };
       let outcome = first;
-      // `continue: false` lets this call finish (unless denied) and then ends the turn.
-      requestStop(outcome);
       if (outcome.decision === "deny") {
+        requestStop(outcome);
         return { kind: "block", reason: `Blocked by ${hooksLabel(outcome)}: ${modelReason(outcome, "no reason given")}` };
       }
       if (outcome.updatedInput && hookMayRewriteInput(toolName) && isRecord(args)) {
@@ -352,19 +351,21 @@ export function createWorkspaceChatHooks(
           }) as Record<string, unknown>;
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
+          requestStop(outcome);
           return {
             kind: "block",
             reason: `Blocked by ${hooksLabel(outcome)}: its updated input does not fit ${toolName} (${detail}).`,
           };
         }
         // The other hooks judged the original input, so they judge what will
-        // really run too. Its answer is the one that counts, and a hook that
-        // keeps changing the input has no stable input to approve.
+        // really run too. Only this answer counts, its stop and context included,
+        // and a hook that keeps changing the input has no stable input to approve.
         const checked = await dispatch("PreToolUse", toolPayload(toolName, validated, toolCallId), {
           idempotencyKey: toolCallIdempotencyKey(`PreToolUse:${target.chatId}`, toolCallId, validated),
           signal,
         });
         if (!checked) {
+          requestStop(outcome);
           return { kind: "block", reason: `Blocked by ${hooksLabel(outcome)}: its updated input could not be checked.` };
         }
         requestStop(checked);
@@ -375,8 +376,10 @@ export function createWorkspaceChatHooks(
           return { kind: "block", reason: `Blocked by ${hooksLabel(checked)}: it changed the tool's input again, so there is no settled input to run.` };
         }
         replaceArgsInPlace(args, validated);
-        const context = [...new Set([outcome.additionalContext, checked.additionalContext].filter(Boolean))].join("\n");
-        outcome = { ...checked, ...(context ? { additionalContext: context } : {}) };
+        outcome = checked;
+      } else {
+        // `continue: false` lets this call finish and then ends the turn.
+        requestStop(outcome);
       }
       if (outcome.additionalContext) preToolContext.set(toolCallId, outcome.additionalContext);
       if (outcome.decision === "ask") {
