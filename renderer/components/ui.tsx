@@ -451,7 +451,7 @@ export function SettingsDisclosure({
   return (
     <details open={open} className={cn("settings-card group mb-7 overflow-hidden rounded-card bg-well", className)}>
       <summary
-        className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-list-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden"
+        className="flex min-h-14 cursor-default list-none items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-list-hover [--keyboard-focus-offset:-2px] [&::-webkit-details-marker]:hidden"
         onClick={(event) => {
           event.preventDefault();
           setTouched(true);

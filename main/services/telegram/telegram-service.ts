@@ -1026,8 +1026,9 @@ export function createTelegramProfileManager() {
     },
     async setEnabled(enabled: boolean): Promise<void> {
       if (enabled) {
-        await setProfileSettings(activeProfile, { telegramEnabled: true });
+        // Check first: a failed Connect must not leave the bridge saved as on.
         await telegramBotBindings.assertHealthy();
+        await setProfileSettings(activeProfile, { telegramEnabled: true });
         await serviceFor(activeProfile).start();
         return;
       }

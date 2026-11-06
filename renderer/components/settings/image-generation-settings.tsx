@@ -935,6 +935,7 @@ function AddModelDialog({
   const [referenceField, setReferenceField] = React.useState(NO_REFERENCE_FIELD);
   const [editEndpoint, setEditEndpoint] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  const idInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const changeProvider = (next: ImageGenerationProviderId) => {
     setProvider(next);
@@ -943,6 +944,11 @@ function AddModelDialog({
     setEditEndpoint("");
     setError(null);
   };
+
+  // The fields are disabled while adding, which drops focus; a failed add brings it back.
+  React.useEffect(() => {
+    if (error && !busy) idInputRef.current?.focus();
+  }, [error, busy]);
 
   const submit = async () => {
     if (busy || !id.trim()) return;
@@ -1008,6 +1014,7 @@ function AddModelDialog({
             Model ID
           </Text>
           <Input
+            ref={idInputRef}
             value={id}
             onChange={(event) => {
               setId(event.target.value);

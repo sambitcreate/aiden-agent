@@ -266,6 +266,7 @@ test("adding a model by ID keeps the dialog open on the main process's error", a
     [{ provider: "openrouter", id: "not-a-model" }],
   ]);
   assert.equal((screen.getByLabelText("Model ID") as HTMLInputElement).value, "not-a-model");
+  await waitFor(() => assert.ok(document.activeElement === screen.getByLabelText("Model ID")));
 });
 
 test("the page keeps its model form behind the button until asked for", async () => {

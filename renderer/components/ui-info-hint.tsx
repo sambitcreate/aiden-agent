@@ -34,6 +34,7 @@ export function InfoHint({
   const pinnedRef = React.useRef(false);
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
   const contentId = React.useId();
 
   const clearTimer = () => {
@@ -90,7 +91,10 @@ export function InfoHint({
           onFocus={() => {
             if (!open) show(false);
           }}
-          onBlur={hide}
+          onBlur={(event) => {
+            // Pressing the hint's own text moves focus into it; that isn't leaving.
+            if (!contentRef.current?.contains(event.relatedTarget)) hide();
+          }}
           onClick={toggle}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
@@ -104,6 +108,7 @@ export function InfoHint({
       </PopoverPrimitive.Anchor>
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
+          ref={contentRef}
           id={contentId}
           role="tooltip"
           side={side}

@@ -108,7 +108,7 @@ export function AssistantDockPresentation({
   rightInset?: number;
   /** Settings → Voice & Speech → Aiden Live. Off renders nothing and ignores the Live command. */
   enabled?: boolean;
-  /** Settings → Show Live button. Off hides only the idle pill. */
+  /** Settings → Voice & Speech → Aiden Live → Show Live button. Off hides only the idle pill. */
   buttonVisible?: boolean;
   onOpenSettings?: (section: "providers" | "computerUse" | "scheduledTasks") => void;
   useCommand?: typeof useCommandHandler;

@@ -1033,6 +1033,8 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(second).toBeVisible();
 
   await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
+  await palette.getByRole("combobox").fill("Control this device");
+  await expect(palette.getByRole("option").filter({ hasText: "Control this device" })).toContainText("Connections");
   await palette.getByRole("combobox").fill("Go to Scheduled");
   await palette.getByRole("combobox").press("Enter");
   await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();

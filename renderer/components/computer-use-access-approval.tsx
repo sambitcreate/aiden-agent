@@ -11,7 +11,7 @@ import type { ComputerUseStatus } from "../lib/types";
 import type { ChatApprovalDecisionOptions } from "./chat-approval-card";
 
 export const COMPUTER_USE_ALWAYS_ALLOW_HINT =
-  "Allow Computer Use in every chat. Turn this off in Settings → Computers & VMs → Computer Use.";
+  "Allow Computer Use in every chat. Turn this off under Computer Use in Settings.";
 
 export const COMPUTER_USE_RESTART_NOTE =
   "If macOS asks you to quit and reopen Aiden, do that, then click Continue in this chat.";

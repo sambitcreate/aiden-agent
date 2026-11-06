@@ -61,6 +61,19 @@ test("keyboard focus shows the hint without moving focus, and blur hides it", as
   await waitFor(() => assert.ok(!hintText()));
 });
 
+test("pressing inside a clicked hint keeps it open, and moving elsewhere closes it", async () => {
+  const button = renderHint();
+  act(() => button.focus());
+  fireEvent.click(button);
+  const tooltip = await screen.findByRole("tooltip");
+  act(() => tooltip.focus());
+  assert.ok(document.activeElement === tooltip, "the press moved focus into the hint");
+  assert.ok(hintText());
+
+  act(() => screen.getByRole("button", { name: "Elsewhere" }).focus());
+  await waitFor(() => assert.ok(!hintText()));
+});
+
 test("hovering opens the hint after a short delay and leaving closes an unpinned hint", () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   const button = renderHint();

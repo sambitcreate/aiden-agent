@@ -166,7 +166,7 @@ test("turning page reading off hides the extract setup", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("switch", { name: "Read web pages" }));
   });
-  await waitFor(() => assert.equal(screen.queryByRole("switch", { name: "Extract only the values asked for" }), null));
+  await waitFor(() => assert.equal(screen.queryByRole("switch", { name: "Extract only the values asked for" }) === null, true));
   assert.equal(server.current().enabled, false);
 });
 
