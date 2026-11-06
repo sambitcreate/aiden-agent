@@ -1,0 +1,126 @@
+/* Resize handles for selected design frames: small neutral squares on the
+   corners and invisible edge lines, drawn with the theme's tokens. */
+.studio-canvas .react-flow__resize-control.design-resize-handle {
+  width: 9px;
+  height: 9px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--color-background);
+  box-shadow: var(--shadow-control);
+}
+
+.studio-canvas .react-flow__resize-control.design-resize-line {
+  border-color: transparent;
+}
+
+/* The comment tool: frames take the click as a whole, so a click on a note
+   or a page drops a pin instead of typing or entering it. */
+.design-commenting .studio-canvas .react-flow__node > * {
+  pointer-events: none;
+}
+
+.design-commenting .studio-canvas .react-flow__pane,
+.design-commenting .studio-canvas .react-flow__node {
+  cursor: crosshair;
+}
+
+/* Marks drawn on a comment: the accent colour, a constant width on screen. */
+.studio-canvas .design-mark {
+  fill: none;
+  stroke: var(--color-fill-accent);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.studio-canvas .design-mark-quiet {
+  opacity: 0.45;
+}
+
+/* Arrows, lines and drawings take the pointer only along the line. The hit
+   band is invisible; a selected line shows a soft neutral band under it. */
+.studio-canvas .design-line-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: stroke;
+}
+
+.studio-canvas .design-line-halo {
+  fill: none;
+  stroke: var(--color-list-selection);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.studio-canvas .design-line-end {
+  fill: var(--color-background);
+  stroke: var(--color-secondary);
+  stroke-width: 1.5px;
+  pointer-events: all;
+  cursor: grab;
+}
+
+/* The drawing tools: the canvas takes the pointer as a whole, so a drag over
+   a page or a note draws instead of moving or typing. */
+.design-drawing .studio-canvas .react-flow__node > *,
+.design-drawing .studio-canvas .react-flow__node .design-line-hit {
+  pointer-events: none;
+}
+
+.design-drawing .studio-canvas .react-flow__pane,
+.design-drawing .studio-canvas .react-flow__node {
+  cursor: crosshair;
+}
+
+.design-drawing[data-draw-tool="text"] .studio-canvas .react-flow__pane,
+.design-drawing[data-draw-tool="text"] .studio-canvas .react-flow__node {
+  cursor: text;
+}
+
+/* What a drawing tool is about to make, while the pointer is down. */
+.studio-canvas .design-draft {
+  fill: color-mix(in srgb, var(--color-fill-accent) 10%, transparent);
+  stroke: var(--color-fill-accent);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.studio-canvas .design-draft-line {
+  fill: none;
+  stroke: var(--color-fill-accent);
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.studio-canvas .design-draft-point {
+  fill: var(--color-background);
+  stroke: var(--color-fill-accent);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Words in notes and text items: lists and links from the Markdown subset. */
+.studio-canvas .design-rich-text ul,
+.studio-canvas .design-rich-text ol {
+  margin: 0;
+  padding-left: 1.3em;
+}
+.studio-canvas .design-rich-text ul {
+  list-style: disc;
+}
+.studio-canvas .design-rich-text ol {
+  list-style: decimal;
+}
+.studio-canvas .design-rich-text a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.studio-canvas .design-rich-text b {
+  font-weight: 600;
+}

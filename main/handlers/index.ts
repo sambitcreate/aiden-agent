@@ -9,6 +9,7 @@ import { appHandlers } from "./app.js";
 import { registerProviderHandlers } from "./providers.js";
 import { registerAcpHarnessHandlers } from "./acp-harnesses.js";
 import { registerChatHistoryHandlers } from "./chats.js";
+import { registerDesignWindowHandlers } from "./design-window.js";
 import { registerChatGenerationHandlers } from "./chat.js";
 import { registerWorkspaceHandlers } from "./workspaces.js";
 import { registerPullRequestHandlers } from "./pull-requests.js";
@@ -62,8 +63,8 @@ import { registerBtwHandlers } from "./btw.js";
 import { registerFollowThroughHandlers } from "./follow-through.js";
 import { registerTtsHandlers } from "./tts.js";
 import { registerDeviceHandlers } from "./devices.js";
-import { registerDesignHandlers } from "./design/register.js";
 import { registerCreateImagesIpc } from "./create-images/index.js";
+import { registerDesignCanvasIpc } from "./design-canvas-main.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 import { modelPaceRecorder } from "../services/model-pace-runtime.js";
@@ -89,6 +90,7 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   registerAppControlHandlers();
   registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
+  registerDesignWindowHandlers();
   registerChatPendingAttentionIpc();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
@@ -163,9 +165,8 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   registerFollowThroughHandlers();
   registerTtsHandlers();
   registerDeviceHandlers();
-  // A no-op unless the designStudio capability is on.
-  registerDesignHandlers();
   registerCreateImagesIpc();
+  registerDesignCanvasIpc();
 
   logger.info("handlers", "✓ IPC handlers registered");
 }

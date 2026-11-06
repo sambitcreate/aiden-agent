@@ -121,7 +121,13 @@ import {
   DeviceTabRenameInput,
   useDeviceTabs,
 } from "./device-workspace-tabs";
-import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "./workbench-panel";
+import {
+  WorkbenchPanel,
+  useWorkbenchWidth,
+  type WorkbenchTab,
+  type WorkbenchView,
+  type WorkbenchWidthState,
+} from "./workbench-panel";
 
 // The browser and simulator tabs carry their own heavy dependencies and are
 // rarely opened, so their code loads with the panel instead of at startup.
@@ -188,6 +194,12 @@ export interface EnvironmentPanelContextValue {
   reportSurfaceLayout: (
     layout: { inline: boolean; width: number; stacked?: boolean } | null,
   ) => void;
+  /**
+   * How far from the right edge design mode wants the Live pill, or null when
+   * design mode is not showing its canvas. Split, this is the canvas width, so
+   * the pill sits at the chat column's edge clear of the canvas controls.
+   */
+  reportDesignDockInset: (inset: number | null) => void;
   setTab: (tab: EnvironmentPanelTab) => void;
   /** `returnTarget` is where focus goes when the panel closes, for callers whose own control is about to unmount. */
   showTools: (tab?: EnvironmentPanelTab, returnTarget?: HTMLElement | null) => void;
@@ -443,6 +455,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     },
     [],
   );
+
+  const [designDockInset, setDesignDockInset] = React.useState<number | null>(null);
+  const reportDesignDockInset = React.useCallback((inset: number | null) => {
+    setDesignDockInset(inset !== null && Number.isFinite(inset) && inset >= 0 ? Math.round(inset) : null);
+  }, []);
 
   const reportSurfaceLayout = React.useCallback(
     (layout: { inline: boolean; width: number; stacked?: boolean } | null) => {
@@ -1114,7 +1131,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       : "tools-floating";
   // Floating layouts do not have enough guaranteed room for both the tools
   // surface and Assistant. Let Assistant layer at the normal chat edge there.
-  const dockRightInset = surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0;
+  // Design mode keeps the pill clear of its canvas controls.
+  const dockRightInset =
+    designDockInset ?? (surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0);
   const toolsPresented =
     surfaceState.toolsOpen && (!surfaceLayout.stacked || surfaceState.frontSurface === "tools");
 
@@ -1144,6 +1163,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       closeTools,
       closeQuickView,
       reportSurfaceLayout,
+      reportDesignDockInset,
       setTab,
       showTools,
       showQuickView,
@@ -1220,6 +1240,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       reviewMode,
       retrySubagentDetail,
       reportSurfaceLayout,
+      reportDesignDockInset,
       stopSubagent,
       selectSubagent,
       selectedSubagentRunId,
@@ -2017,9 +2038,90 @@ function useChatColumnMetrics(): { maxWidth: number; gutter: number } {
   return metrics;
 }
 
+/** Where the panel stood when design mode began, kept so a reload mid-design still restores it. */
+const DESIGN_SAVED_WORKBENCH_STORAGE_KEY = "aiden-agent.design.saved-workbench";
+
+interface SavedWorkbench {
+  version: 1;
+  tab: EnvironmentPanelTab;
+  toolsOpen: boolean;
+  quickViewOpen: boolean;
+  width: number;
+}
+
+function readSavedWorkbench(): SavedWorkbench | null {
+  try {
+    const raw = localStorage.getItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<SavedWorkbench> | null;
+    const tab = parseEnvironmentPanelTab(typeof value?.tab === "string" ? value.tab : null);
+    if (value?.version !== 1 || !tab || typeof value.width !== "number" || !Number.isFinite(value.width)) {
+      return null;
+    }
+    return { version: 1, tab, toolsOpen: value.toolsOpen === true, quickViewOpen: value.quickViewOpen === true, width: value.width };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a design-mode chat is showing, and so owns the space the panel would take. */
+export type WorkbenchDesignState = "active" | "inactive" | "pending";
+
+/**
+ * Always closes the panel and Quick View when design mode begins and puts
+ * their tab, width and open state back when it ends. It reacts to the current state, not
+ * to a transition, so switching between a design chat and a normal chat (or a
+ * reload in design mode) lands in the right place. It runs before paint, so
+ * the wrong layout never shows.
+ */
+function useDesignWorkbenchSuspension(
+  design: WorkbenchDesignState,
+  panel: EnvironmentPanelContextValue,
+  panelWidth: WorkbenchWidthState,
+): void {
+  const { tab, toolsOpen, quickViewOpen, showTools, closeTools, showQuickView, closeQuickView } = panel;
+  const { preferredWidth, commitPreferredWidth } = panelWidth;
+  React.useLayoutEffect(() => {
+    if (design === "pending") return;
+    const saved = readSavedWorkbench();
+    if (design === "active") {
+      // A saved snapshot outlives a reload (or crash) mid-design; it still holds
+      // what the person had before entry only while both surfaces are still
+      // closed. An open surface means it is stale, so the current state wins.
+      if (!saved || toolsOpen || quickViewOpen) {
+        const snapshot: SavedWorkbench = { version: 1, tab, toolsOpen, quickViewOpen, width: preferredWidth };
+        try {
+          localStorage.setItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY, JSON.stringify(snapshot));
+        } catch {
+          // Without storage the panel still closes; it reopens as it was only in this window.
+        }
+      }
+      if (toolsOpen) closeTools();
+      if (quickViewOpen) closeQuickView();
+      return;
+    }
+    if (!saved) return;
+    localStorage.removeItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY);
+    if (Math.round(saved.width) !== Math.round(preferredWidth)) commitPreferredWidth(saved.width);
+    if (saved.toolsOpen) {
+      if (!toolsOpen || tab !== saved.tab) showTools(saved.tab);
+    } else if (tab !== saved.tab) {
+      // Select the saved tab without leaving the panel open.
+      showTools(saved.tab);
+      closeTools();
+    } else if (toolsOpen) {
+      closeTools();
+    }
+    if (saved.quickViewOpen && !quickViewOpen) showQuickView();
+    else if (!saved.quickViewOpen && quickViewOpen) closeQuickView();
+    // Only a change of design state acts; the panel values are read as they are then.
+  }, [design]);
+}
+
 export function EnvironmentWorkbench({
   children,
   suppressed = false,
+  design = "inactive",
 }: React.PropsWithChildren<{
   /**
    * Hides the Environment and Quick View surfaces without changing whether
@@ -2027,6 +2129,12 @@ export function EnvironmentWorkbench({
    * and for Bots pages, which have their own panel.
    */
   suppressed?: boolean;
+  /**
+   * While design mode is active the canvas takes the panel's place: the panel
+   * closes on entry, is restored on exit and, if opened meanwhile, floats over
+   * the canvas instead of squeezing it. `pending` waits for the chat to load.
+   */
+  design?: WorkbenchDesignState;
 }>) {
   const panel = useEnvironmentPanel();
   useBrowserSurface(!suppressed);
@@ -2035,12 +2143,12 @@ export function EnvironmentWorkbench({
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
   const panelWidth = useWorkbenchWidth(WIDTH_STORAGE_KEY);
+  useDesignWorkbenchSuspension(design, panel, panelWidth);
   const resizing = panelWidth.resizing;
   const fullOpen = toolsOpen;
-  const { width: renderedWidth, inline } = resolveEnvironmentPanelLayout(
-    panelWidth.preferredWidth,
-    containerWidth,
-  );
+  const layout = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
+  const renderedWidth = layout.width;
+  const inline = layout.inline && design !== "active";
   const quickViewLayout = resolveQuickViewLayout(
     containerWidth,
     toolsOpen,
@@ -2056,9 +2164,9 @@ export function EnvironmentWorkbench({
   const inlineToolsWidth = fullOpen && inline ? renderedWidth : 0;
   const chatColumn = useChatColumnMetrics();
   // Quick View docks beside the chat when it is the visible card and no floating
-  // tools surface already covers the chat.
+  // tools surface already covers the chat. In design mode it floats over the canvas.
   const chatCardInset =
-    quickViewPresented && (inline || !toolsPresented)
+    design !== "active" && quickViewPresented && (inline || !toolsPresented)
       ? resolveChatCardInset({
           chatWidth: containerWidth - inlineToolsWidth,
           maxColumnWidth: chatColumn.maxWidth,
@@ -2205,9 +2313,10 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
   );
 }
 
-function QuickViewIcon() {
+export function QuickViewIcon({ className }: { className?: string }) {
   return (
     <svg
+      className={className}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

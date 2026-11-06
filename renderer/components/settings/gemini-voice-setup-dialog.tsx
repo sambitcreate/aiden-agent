@@ -8,6 +8,7 @@ import { useAppCapabilities } from "../../lib/app-capabilities";
 
 interface GeminiVoiceSetupDialogProps {
   open: boolean;
+  returnFocus?: () => HTMLElement | null;
   scope: GeminiUsageScope;
   hasKey: boolean;
   activatesVoice?: boolean;
@@ -46,6 +47,7 @@ const choices: Array<{
 
 export function GeminiVoiceSetupDialog({
   open,
+  returnFocus,
   scope,
   hasKey,
   activatesVoice = true,
@@ -62,6 +64,7 @@ export function GeminiVoiceSetupDialog({
   return (
     <Dialog
       open={open}
+      returnFocus={returnFocus}
       onOpenChange={onOpenChange}
       layer={layer}
       title={activatesVoice ? "Use Google Gemini for voice?" : "Set up Google Gemini access?"}

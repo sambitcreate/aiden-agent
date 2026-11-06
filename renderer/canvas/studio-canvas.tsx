@@ -13,7 +13,7 @@ import {
 import * as React from "react";
 import { CanvasToolRail } from "./canvas-tool-rail";
 import { CanvasZoomControls } from "./canvas-zoom-controls";
-import { resolveCanvasKey, type CanvasTool } from "./canvas-keymap-core";
+import { resolveCanvasKey, type CanvasKeyEvent, type CanvasTool } from "./canvas-keymap-core";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "./canvas-viewport-core";
 
 export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> = Omit<
@@ -26,6 +26,16 @@ export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> = Om
   minimap: boolean;
   onMinimapChange(visible: boolean): void;
   emptyState?: React.ReactNode;
+  /**
+   * Runs before the shared keymap. Return true when the key was handled; the
+   * canvas then prevents its default and the shared keymap does not run.
+   */
+  resolveKey?(event: CanvasKeyEvent, context: { editable: boolean }): boolean;
+  /**
+   * Replaces the default vertical Select/Hand rail with the caller's own
+   * toolbar, drawn at the top left.
+   */
+  toolbar?: React.ReactNode;
 };
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -52,6 +62,9 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
   minimap,
   onMinimapChange,
   emptyState,
+  resolveKey,
+  toolbar,
+  children,
   nodes,
   nodesDraggable,
   elementsSelectable,
@@ -69,19 +82,22 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
-    const command = resolveCanvasKey(
-      {
-        key: event.key,
-        code: event.code,
-        metaKey: event.metaKey,
-        ctrlKey: event.ctrlKey,
-        altKey: event.altKey,
-        shiftKey: event.shiftKey,
-        repeat: event.repeat,
-        isComposing: event.nativeEvent.isComposing,
-      },
-      { editable: isEditableTarget(event.target) },
-    );
+    const key: CanvasKeyEvent = {
+      key: event.key,
+      code: event.code,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      repeat: event.repeat,
+      isComposing: event.nativeEvent.isComposing,
+    };
+    const editable = isEditableTarget(event.target);
+    if (resolveKey?.(key, { editable })) {
+      event.preventDefault();
+      return;
+    }
+    const command = resolveCanvasKey(key, { editable });
     if (!command) return;
     event.preventDefault();
     if (command.type === "tool") onToolChange(command.tool);
@@ -115,15 +131,20 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} />
         {minimap ? <MiniMap pannable zoomable ariaLabel="Canvas overview" /> : null}
+        {children}
       </ReactFlow>
       {(nodes?.length ?? 0) === 0 && emptyState ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           {emptyState}
         </div>
       ) : null}
-      <div className="absolute left-3 top-1/2 -translate-y-1/2">
-        <CanvasToolRail tool={tool} onToolChange={onToolChange} />
-      </div>
+      {toolbar === undefined ? (
+        <div className="absolute left-3 top-1/2 -translate-y-1/2">
+          <CanvasToolRail tool={tool} onToolChange={onToolChange} />
+        </div>
+      ) : (
+        <div className="absolute left-3 top-3 max-w-[calc(100%-1.5rem)]">{toolbar}</div>
+      )}
       <div className="absolute bottom-3 right-3">
         <CanvasZoomControls
           zoom={zoom}

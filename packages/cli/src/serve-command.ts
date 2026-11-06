@@ -1,4 +1,5 @@
 import type { AidenRemoteDesktopPairing, AidenRemotePairingWindowStatus } from "../../../main/services/aiden-remote-pairing.js";
+import { reportServerRejection, serverAnalyticsContext, showServerNoticeInTerminal, startServerAnalytics } from "./server-analytics.ts";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 
 export const SERVE_USAGE = "Usage: aiden serve [--no-remote] [--pair lan|tailscale | --no-pair] [--daemon] | serve stop | serve status";
@@ -128,7 +129,7 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
 
 /** `aiden serve ...`. Prints its own output and returns when serving stops. */
 export async function serveCommand(agentDir: string, args: string[]): Promise<void> {
-  const { daemonStatus, startDaemon, stopDaemon } = await import("./serve-lifecycle.ts");
+  const { DETACHED_SERVE_ENV, daemonStatus, startDaemon, stopDaemon } = await import("./serve-lifecycle.ts");
   if (args[0] === "stop" || args[0] === "status") {
     if (args.length !== 1) throw new Error(`Usage: aiden serve ${args[0]}`);
     let result: unknown;
@@ -141,21 +142,31 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
     return;
   }
   const flags = parseServeFlags(args);
+  const analyticsContext = serverAnalyticsContext(agentDir);
   if (flags.daemon) {
+    // The detached child has no terminal, so the notice belongs here, before it starts.
+    showServerNoticeInTerminal(analyticsContext);
     const started = await startDaemon(agentDir, { remote: flags.remote });
     process.stdout.write(JSON.stringify({ ...started, remote: await daemonRemoteSummary(agentDir) }, null, 2) + "\n");
     return;
   }
+  const { runsUnderServiceManager } = await import("./service.ts");
+  const launch = process.env[DETACHED_SERVE_ENV] === "1" ? "daemon" : runsUnderServiceManager(process.env, process.stderr.isTTY === true) ? "service" : "foreground";
+  const analytics = startServerAnalytics(launch, analyticsContext);
   const controller = new AbortController();
   const stop = () => controller.abort();
   // SIGHUP (terminal or ssh pane closed) drains like SIGINT/SIGTERM instead of killing live turns.
   // A stray rejection in one turn is logged rather than crashing every other turn the daemon serves.
-  const rejected = (reason: unknown) => { process.stderr.write(`aiden: Unhandled daemon rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`); };
+  const rejected = (reason: unknown) => {
+    process.stderr.write(`aiden: Unhandled daemon rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`);
+    reportServerRejection(reason);
+  };
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const name of signals) process.once(name, stop);
   process.on("unhandledRejection", rejected);
   let pairing: Promise<unknown> | undefined;
   const onReady = () => {
+    analytics.ready();
     if (!flags.remote || flags.pair === "off") return;
     // The QR and manual code carry a single-use secret: show them only to a
     // person at a terminal, never to a log (Docker, systemd, redirected output).
@@ -170,6 +181,7 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   } finally {
     controller.abort();
     await pairing;
+    await analytics.finish();
     for (const name of signals) process.removeListener(name, stop);
     process.removeListener("unhandledRejection", rejected);
   }

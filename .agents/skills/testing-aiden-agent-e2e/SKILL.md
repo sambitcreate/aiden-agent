@@ -26,7 +26,7 @@ It needs the `cua` CLI (`curl -fsSL https://cua.ai/install.sh | DO_NOT_TRACK=1 s
 Follow CI's Linux E2E step: install its apt packages (`xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11`), then `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `sudo sysctl -w kernel.core_pattern=core`, `ulimit -c 0`, and `xvfb-run --auto-servernum npm run test:e2e`. Without the first sysctl, Ubuntu 24.04 leaves Electron with no usable sandbox and it aborts; without the second, a spec's intentional renderer crash pipes a core to apport and stalls past the test timeout.
 
 ### Checks that need no window
-- Install: `npm ci` (Node `>=22.19`, per `package.json` `engines`; CI pins 22.23.4).
+- Install: `npm ci` (Node `>=22.22`, per `package.json` `engines`; CI pins 22.23.4).
 - Type-check specs: `npm run type-check:e2e`.
 - Confirm new specs and titles are collected: `npm run test:e2e:list`.
 - Non-Electron unit suites and lint (see the `test:*` scripts in `package.json`).

@@ -40,7 +40,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { type AgentContext, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
@@ -63,6 +63,7 @@ import {
 import type { PreparedBrowserFile } from "./browser/files.js";
 import { createBrowserDiscovery } from "./browser-discovery.js";
 import { resolveBrowserAgentAccess } from "../../renderer/shared/browser.js";
+import { chatRunRefusal } from "../../renderer/shared/chat-visibility.js";
 import {
   canUseDeviceTools,
   createDeviceAgentTools,
@@ -142,6 +143,7 @@ import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
+import { DESIGN_CANVAS_SKILLS } from "./design-canvas/skill.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -253,7 +255,6 @@ import {
   projectVisibleHistoryWithoutSkills,
   ensurePiForkSummary,
   type PiVisibleTurnLease,
-  appendPiMessages,
 } from "./pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createInMemoryPiSession } from "./pi-session-repository-port.js";
@@ -475,15 +476,6 @@ import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
 import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
-import { createGenerationHarness } from "./generation-harness.js";
-import {
-  resolveGenerationProfile,
-  selectRuntimeExtensions,
-  type DesignRunBinding,
-  type GenerationProfile,
-} from "./generation-profile.js";
-import { designGenerationWiring, designRunOutcome } from "./design/design-generation.js";
-import type { DesignRunOutcome } from "./design/store-core.js";
 import {
   createAskUserQuestionExtension,
   resolveAskUserQuestionTimeoutMs,
@@ -513,6 +505,20 @@ import { todoSnapshotDiagnostic } from "./rpiv-todo/diagnostics.js";
 import { todoSnapshotForRenderer } from "../../renderer/shared/todo.js";
 import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
+import { randomUUID } from "node:crypto";
+import { designModeEnabled } from "./studio/feature-flags.js";
+import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent } from "./design-canvas/main.js";
+import {
+  createDesignCanvasTools,
+  DESIGN_MODE_PROMPT_SECTION,
+  designCanvasToolsAllowed,
+  designModeToolAllowed,
+} from "./design-canvas/canvas-tools.js";
+import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
+import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+import { canvasPromptLine } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import { placeArtifactsOnCanvas, type CanvasArtifact } from "./design-canvas/artifact-frames.js";
+import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 subagentRuntimeRegistry.setLimits({
@@ -586,8 +592,6 @@ export interface GenerationExecutionOptions {
   visualAudience?: "remote";
   /** Main-owned stable principal used for the versioned Bot Full Access notice. */
   botAudienceId?: string;
-  /** Main-only Design Studio run; parseParams can never produce it (ADR-DS §4). */
-  designRun?: DesignRunBinding;
   /**
    * Main-owned follow-up turn nobody is watching (a background job ended, a
    * followed pull request or a "done when" check needs the agent). Approvals
@@ -626,8 +630,6 @@ interface ActiveGeneration {
   loadMonitor?: LoadMonitorState;
   releaseSkillReservation: () => void;
   releaseBotAuthority: () => void;
-  /** Runs that take no mid-flight input (Design Studio). */
-  inputClosed: boolean;
   /** A steered send stops this run's still-running subagents. */
   stopSubagentsForGuidance?: () => void;
 }
@@ -1150,58 +1152,6 @@ async function prepareGeneration(
     botContext?.prepared.runtime ??
     (await resolveModelRuntime(params.providerId, params.model, signal, chat.id));
 
-  if (options.designRun) {
-    // A design run composes exactly its binding's extension (designGenerationWiring);
-    // createGenerationHarness refuses any other extension, tool or skill (ADR-DS §4).
-    const designSettings = await configStore.getSettings();
-    const designModel = runtime.model;
-    return {
-      runtime: { ...runtime, model: designModel },
-      agentsInstructions: undefined,
-      agentsInstructionRoots: undefined,
-      browserDiscovery: undefined,
-      browserSelection: { initialized: false } as { initialized: boolean; tabId?: string },
-      browserFileApprovals: new Map<string, PreparedBrowserFile>(),
-      browserActionApprovals: new Map<
-        string,
-        { approval: BrowserToolApproval; args: Record<string, unknown> }
-      >(),
-      permission: "none" as GenerationPermission,
-      folderPath: undefined,
-      git: await generationGitContext(undefined, signal),
-      tools: [] as AgentTool[],
-      generationExtensions,
-      modelImageReferences,
-      lateMcpDiscovery: NO_LATE_MCP_DISCOVERY as McpLateDiscovery,
-      displayedImages,
-      displayedHtmlArtifacts,
-      appPanels,
-      htmlArtifactPlacements,
-      imagePlacements,
-      displayedUiVisuals,
-      uiVisualPlacements,
-      supportsImages: runtimeSupportsImages(designModel),
-      thinkingLevel: resolveGenerationThinkingLevel(
-        params.providerId,
-        designModel,
-        params.thinkingLevel ?? savedGenerationThinkingLevel(designSettings, params.providerId, params.model, runtime.provider),
-      ),
-      computerUse: undefined,
-      formFill: undefined,
-      googleWorkspaceSnapshot: undefined,
-      skillSnapshot: undefined,
-      workspaceId: undefined,
-      subagentSupervisor: undefined,
-      showLocalModelReasoning: designSettings.showLocalModelReasoning,
-      compactionEngine: compactionEngineFrom(designSettings.compactionEngine),
-      compactionModelOverrides: designSettings.compactionModelOverrides,
-      cacheWarmingEnabled: false,
-      sharedImages,
-      botContext: undefined,
-      botApprovedRoots: [] as string[],
-      botMutatingToolNames: new Set<string>(),
-    };
-  }
   const botBound = botContext !== undefined;
   const botApprovedRoots = botContext
     ? await resolveBotRuntimeApprovedRoots(botContext.admission.authority)
@@ -1612,6 +1562,22 @@ async function prepareGeneration(
   // exact MCP identities. Computer Use, skills, and delegation stay out.
   // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
   // Telegram and Bot turns get neither the tool nor its skill.
+  // Design mode: the canvas tools and the aiden-design skill go together.
+  const designTurn = {
+    flagEnabled: designModeEnabled(),
+    localRenderer: rendererOwner && browserOwner?.kind !== "remote",
+    ...(botContext ? { botId: botContext.admission.authority.botId } : {}),
+    assistant: assistantMode,
+    telegram: options.interactionSurface === "telegram",
+    hasWorkspaceFolder: Boolean(folderPath) && permission !== "none",
+  };
+  const designCanvasOffered =
+    !options.excludeToolNames?.has("canvas_place_frame") &&
+    designCanvasToolsAllowed({ ...designTurn, designMode: chat.designMode });
+  // Offered whether design mode is on (to leave) or off (to ask to enter).
+  const designModeToolOffered =
+    !options.excludeToolNames?.has(DESIGN_MODE_TOOL_NAME) &&
+    designModeToolAllowed({ ...designTurn, regularChat: chatSurface(chat) === "regular", inlineVisuals: params.inlineVisuals });
   const offerWorkspaceArtifacts =
     !botContext &&
     !assistantMode &&
@@ -1625,6 +1591,9 @@ async function prepareGeneration(
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
   if (skillSnapshot && !offerWorkspaceArtifacts) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
+  }
+  if (skillSnapshot && !designCanvasOffered && !designModeToolOffered) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESIGN_CANVAS_SKILLS);
   }
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
@@ -2283,6 +2252,87 @@ async function prepareGeneration(
       },
     }).filter((tool) => !options.excludeToolNames?.has(tool.name)));
   }
+  /** Set while this turn may use the canvas: puts its committed visuals there. */
+  let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
+  /** Canvas tools held back until the person enters design mode from Aiden's card mid-reply. */
+  let heldCanvasTools: AgentTool[] = [];
+  let enteredDesignModeThisTurn = false;
+  if (folderPath && (designCanvasOffered || designModeToolOffered)) {
+    const canvasRoot = folderPath;
+    const designModeOn = async () => (await chatStore.getMeta(params.chatId))?.designMode === true;
+    const canvasTools = createDesignCanvasTools({
+      chatId: params.chatId,
+      workspaceRoot: canvasRoot,
+      store: designCanvasStore,
+      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+      focus: (frameIds) => {
+        if (!browserOwner.isDestroyed()) browserOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
+      },
+      snapshot: async (toolSignal) =>
+        supportsImages
+          ? designCanvasSnapshots.request({ chatId: params.chatId, owner: browserOwner, signal: toolSignal ?? signal })
+          : null,
+      // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
+      stillAvailable: async () => {
+        if (signal.aborted) return false;
+        const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+        return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
+      },
+    }).filter((tool) => !options.excludeToolNames?.has(tool.name));
+    if (canvasTools.length > 0) {
+      placeCanvasArtifacts = async (artifacts) => {
+        if (!(await designModeOn())) return;
+        await placeArtifactsOnCanvas({
+          chatId: params.chatId,
+          artifacts,
+          store: designCanvasStore,
+          broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+          newId: randomUUID,
+        });
+      };
+    }
+    const designModeTool = designModeToolOffered
+      ? [
+          createDesignModeTool({
+            isOn: designModeOn,
+            requestEnter: async (reason, toolSignal) => {
+              const answer = await designModeConsent.request({
+                chatId: params.chatId,
+                reason,
+                owner: browserOwner,
+                signal: toolSignal ?? signal,
+              });
+              if (answer === "entered") enteredDesignModeThisTurn = true;
+              return answer;
+            },
+            exit: async () => {
+              await chatStore.setDesignMode(params.chatId, false);
+              designGrants.revokeChat(params.chatId);
+              ipcMain.broadcast("chats:design-mode-changed", { chatId: params.chatId, designMode: false });
+            },
+          }),
+        ]
+      : [];
+    if (designCanvasOffered && canvasTools.length > 0) {
+      const canvas = await designCanvasStore.get(params.chatId);
+      generationExtensions.push({
+        id: "aiden.design-canvas",
+        systemPrompt: DESIGN_MODE_PROMPT_SECTION,
+        volatileSystemPrompt: canvasPromptLine(canvas),
+        tools: [...canvasTools, ...designModeTool],
+      });
+    } else {
+      heldCanvasTools = canvasTools;
+      if (designModeTool.length > 0) generationExtensions.push({ id: "aiden.design-mode", tools: designModeTool });
+    }
+  }
+  /** Declares the held canvas tools from the step after the person entered design mode. */
+  const withEnteredCanvasTools = (context: AgentContext): AgentContext => {
+    if (!enteredDesignModeThisTurn || heldCanvasTools.length === 0) return context;
+    const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
+    const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
+    return additions.length > 0 ? { ...context, tools: [...(context.tools ?? []), ...additions] } : context;
+  };
   let googleWorkspaceSnapshot: string | undefined;
   if (
     params.providerId === GOOGLE_PROVIDER_ID &&
@@ -2322,6 +2372,8 @@ async function prepareGeneration(
     lateMcpDiscovery,
     displayedImages,
     displayedHtmlArtifacts,
+    placeCanvasArtifacts,
+    withEnteredCanvasTools,
     appPanels,
     htmlArtifactPlacements,
     imagePlacements,
@@ -2473,8 +2525,6 @@ export const llmClient = {
     computerUseGateSnapshot: ReturnType<ComputerUseGenerationGate["snapshot"]>,
     escape: GenerationEscape,
   ): Promise<boolean> {
-    const designRun = options.designRun;
-    const designWiring = designRun ? designGenerationWiring(designRun, appendPiMessages) : undefined;
     options.onTurnAccepted?.();
     if (options.unattended) {
       // Nobody is there to answer: every approval or question this turn would
@@ -2491,7 +2541,6 @@ export const llmClient = {
     let authoritativeBot: BotDefinition | undefined;
     let botContext: BotGenerationAuthorityContext | undefined;
     let authoritativeMode: ChatStartParams["mode"];
-    let generationProfile: GenerationProfile = { kind: "default" };
     const initializationTerminalState = { attempted: false };
     const persistInitializationTerminal = async (
       status: "failed" | "cancelled",
@@ -2532,9 +2581,12 @@ export const llmClient = {
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
-      // A design-owned chat runs only with its own project's main-built binding.
-      // It throws before authoritativeChat is set, so no failure turn is written.
-      generationProfile = resolveGenerationProfile(chat, options);
+      // A feature-owned chat never runs as an ordinary agent. It throws before
+      // authoritativeChat is set, so no failure turn is written.
+      const runRefusal = chatRunRefusal(chat);
+      if (runRefusal) {
+        throw new Error(runRefusal);
+      }
       authoritativeChat = chat;
       authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
       if (chat.botId && !hostPlatformCapabilities().bots) {
@@ -2716,6 +2768,8 @@ export const llmClient = {
       lateMcpDiscovery,
       displayedImages,
       displayedHtmlArtifacts,
+      placeCanvasArtifacts,
+      withEnteredCanvasTools,
       appPanels,
       htmlArtifactPlacements,
       imagePlacements,
@@ -2947,9 +3001,7 @@ export const llmClient = {
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage
               ? storedPiAssistantMessage(
-                  designWiring
-                    ? designWiring.storedAssistantMessage(lastAssistantMessage)
-                    : lastAssistantMessage,
+                  lastAssistantMessage,
                 )
               : undefined,
             providerFailure,
@@ -3010,6 +3062,16 @@ export const llmClient = {
             );
           } catch (error) {
             logger.warn("pi", `Could not commit HTML artifacts for stream ${streamId}.`, error);
+          }
+        }
+        if (placeCanvasArtifacts && displayedHtmlArtifacts.length > 0) {
+          // Design mode: the turn's visuals land on the canvas too. Never fails the reply.
+          try {
+            await placeCanvasArtifacts(
+              displayedHtmlArtifacts.map(({ mediaId, title }) => ({ mediaId, title })),
+            );
+          } catch (error) {
+            logger.warn("pi", `Could not place visuals on the design canvas for stream ${streamId}.`, error);
           }
         }
         if (messageId && (displayedHtmlArtifacts.length > 0 || displayedUiVisuals.length > 0)) {
@@ -3096,9 +3158,9 @@ export const llmClient = {
         tools: [createVccRecallTool(async () => piSession!)],
       };
       let memoryExtension: PiAgentRuntimeExtension | undefined;
-      // Design runs never read or write durable memory. Bots keep their own
-      // memory files (`bot-memory/`) and never use the workspace store.
-      if (generationProfile.kind === "default" && !generationChat.botId) {
+      // Bots keep their own memory files (`bot-memory/`) and never use the
+      // workspace store.
+      if (!generationChat.botId) {
         try {
           const memoryEligible = piUpgradeMemoryEligible(piUpgradePolicy, generationChat, {
             development: !isPackagedRuntime(),
@@ -3190,10 +3252,7 @@ export const llmClient = {
       // Only the explicitly admitted task extension and history recall enter
       // Bot prompts and schemas.
       const baseRuntimeExtensions: readonly PiAgentRuntimeExtension[] =
-        generationProfile.kind === "design"
-          ? // Exactly the binding's extension; an empty base fails the composition check.
-            [...(designWiring?.extensions ?? [])]
-          : preparedBotContext
+        preparedBotContext
         ? [
             ...(todoRuntimeExtension ? [todoRuntimeExtension] : []),
             // Journalless runs must not offer VCC recall over an empty
@@ -3227,9 +3286,7 @@ export const llmClient = {
         tools,
         baseRuntimeExtensions,
       ).tools;
-      // A design run composes exactly its own extension: no advisor, codemode or
-      // other base extension may join it (ADR-DS §4).
-      const advisorExtension = generationProfile.kind === "design" ? undefined : await advisorRuntime.extensionForGeneration({
+      const advisorExtension = await advisorRuntime.extensionForGeneration({
         scope: {
           usageSource: options.usageSource,
           interactionSurface: options.interactionSurface,
@@ -3280,9 +3337,7 @@ export const llmClient = {
           : {}),
       });
       const codemodeExtension: PiAgentRuntimeExtension | undefined =
-        generationProfile.kind === "design"
-          ? undefined
-          : workspaceCodemodeEnabled({
+        workspaceCodemodeEnabled({
             workspaceId,
             folderPath,
             bot: Boolean(preparedBotContext),
@@ -3306,10 +3361,11 @@ export const llmClient = {
               }).toolSearch] : [])],
             }
           : undefined;
-      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = selectRuntimeExtensions(
-        generationProfile,
-        { base: baseRuntimeExtensions, advisor: advisorExtension, codemode: codemodeExtension },
-      );
+      const runtimeExtensions: readonly PiAgentRuntimeExtension[] = [
+        ...baseRuntimeExtensions,
+        ...(advisorExtension ? [advisorExtension] : []),
+        ...(codemodeExtension ? [codemodeExtension] : []),
+      ];
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -3335,9 +3391,7 @@ export const llmClient = {
       const telegramInteractive = options.interactionSurface === "telegram";
       let hostPromptSkills: string | undefined;
       const baseSystemPrompt =
-        generationProfile.kind === "design"
-          ? (designWiring?.baseSystemPrompt ?? "")
-          : authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
+        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsPages: assistantSettingsPages({
                 computerUse: hostPlatformCapabilities().computerUse,
@@ -3682,7 +3736,7 @@ export const llmClient = {
             }),
           );
       const promptCacheTtl = promptCacheTtlMs(model);
-      candidate = createGenerationHarness(generationProfile, {
+      candidate = new PiAgentRuntimeHarness({
         contributions: { ...runtimeContributions, tools: runtimeTools },
         deferredTools,
         contextPromptSections,
@@ -3766,8 +3820,6 @@ export const llmClient = {
           compactionReserveTokens: compactionInputReserveTokens,
           signal: initialization.controller.signal,
           effects: { store: piRuntimeEffectStore, chatId: params.chatId },
-          // Design HTML lives in the project store, never in the Pi journal (ADR-DS §10).
-          ...(designWiring ? { appendMessages: designWiring.journalAppend } : {}),
           beforeQueuedUser: async (message, signal) => {
             if (message.role !== "user" || typeof message.content !== "string" || !message.content.trim()) {
               throw new Error("Queued guidance must contain text.");
@@ -3851,6 +3903,7 @@ export const llmClient = {
                 : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
+            prepared = withEnteredCanvasTools(prepared);
             if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);
             return mcpServersSection.apply(prepared);
           },
@@ -4768,7 +4821,6 @@ export const llmClient = {
       promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
-      inputClosed: designWiring?.inputClosed ?? false,
       ...(subagentSupervisor
         ? {
             stopSubagentsForGuidance: () => {
@@ -4910,8 +4962,6 @@ export const llmClient = {
             }),
           )
         : undefined;
-    // A throw before the outcome is known is Aiden's failure, not the provider's.
-    let designOutcome: DesignRunOutcome = "host_failed";
     // The completion task below ends the run on every path from here.
     escape.settle = async () => {};
     const completion = (async () => {
@@ -5010,7 +5060,6 @@ export const llmClient = {
           }
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
-        let replyNotSaved = false;
         const terminal = decideGenerationTerminal({
           runtime: runtimeOutcome,
           emergencyError,
@@ -5020,8 +5069,7 @@ export const llmClient = {
             full,
             uniqueResponseImages(sharedImages, displayedImages).length +
               displayedHtmlArtifacts.length +
-              displayedUiVisuals.length +
-              (designRun?.acceptedCount() ?? 0),
+              displayedUiVisuals.length,
           ),
         });
         if (terminal.kind === "failed") {
@@ -5070,7 +5118,6 @@ export const llmClient = {
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
-          replyNotSaved = Boolean(persisted.error);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
               streamId,
@@ -5089,14 +5136,6 @@ export const llmClient = {
             }));
           }
         }
-        // Only after persistence: a reply that throws while saving stays host_failed.
-        designOutcome = designRunOutcome({
-          runtimeKind: runtimeOutcome.kind,
-          emergency: Boolean(emergencyError),
-          cancelled: wasCancelled,
-          cancellationOrigin: activeGeneration.cancellationOrigin,
-          persistenceFailed: replyNotSaved,
-        });
       } catch (error) {
         pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         collectUndeliveredGuidance();
@@ -5132,12 +5171,7 @@ export const llmClient = {
               () => invalidateChatContextJournal(params.chatId),
             ]);
           } finally {
-            try {
-              settleGeneration(streamId, params, activeGeneration, active);
-            } finally {
-              // Exactly once per started run; pre-run failures reach DesignRunService through start().
-              designRun?.onSettled(designOutcome);
-            }
+            settleGeneration(streamId, params, activeGeneration, active);
           }
         }
       }
@@ -5296,7 +5330,7 @@ export const llmClient = {
     input: { text: string; notice: AgentNoticeV1 },
   ): Promise<ChatRunInputAdmissionResult | null> {
     const streamId = [...active.entries()].find(
-      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested && !entry.inputClosed,
+      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested,
     )?.[0];
     if (!streamId) return null;
     return runInputAdmission.admit({
