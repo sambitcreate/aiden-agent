@@ -89,6 +89,7 @@ export function McpSecretFields({
               </div>
             ) : (
               <Input
+                data-live-guard="you"
                 aria-label={`Value of ${label}`}
                 className="min-w-0 flex-1 font-mono"
                 type={field.visible ? "text" : "password"}

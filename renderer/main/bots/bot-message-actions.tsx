@@ -52,6 +52,8 @@ export function BotMessageActions({
         <div
           className={`group relative flex min-w-0 items-start gap-1 ${align === "end" ? "flex-row-reverse" : ""}`}
           data-bot-message
+          // Aiden Live counts a Bot transcript by its messages.
+          data-live-item=""
           // The Bot's own messages are the replies ⌥↑ and ⌥↓ step through.
           data-transcript-reply={align === "start" ? "" : undefined}
         >

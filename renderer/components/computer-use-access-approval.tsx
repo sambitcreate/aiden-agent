@@ -9,6 +9,7 @@ import { queryKeys, useComputerUseStatus } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import type { ComputerUseStatus } from "../lib/types";
 import type { ChatApprovalDecisionOptions } from "./chat-approval-card";
+import { LiveGuard } from "./live-guard";
 
 export const COMPUTER_USE_ALWAYS_ALLOW_HINT =
   "Allow Computer Use in every chat. Turn this off under Computer Use in Settings.";
@@ -216,7 +217,7 @@ export function ComputerUseAccessApproval({
     .join(" ");
 
   return (
-    <div>
+    <LiveGuard guard="you">
       <p className="sr-only" role="status">
         {`Approval needed for Computer Use${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
       </p>
@@ -301,7 +302,7 @@ export function ComputerUseAccessApproval({
           ) : null}
         </div>
       </section>
-    </div>
+    </LiveGuard>
   );
 }
 

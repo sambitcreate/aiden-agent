@@ -3525,7 +3525,8 @@ textarea {
      carries its own fill, ink and control tokens and re-scopes the shared
      control tokens for the buttons inside it.
    - --live-spectrum-1..5: the Spectrum ribbon colours, read by the ribbon
-     canvas and the onboarding art. "Theme accent" uses --accent instead. */
+     canvas, the onboarding art and the Live window outline. "Theme accent"
+     uses --accent instead. */
 :root {
   --live-spectrum-1: #ff5a5f;
   --live-spectrum-2: #ffb020;
@@ -3860,3 +3861,71 @@ textarea {
   animation: image-scan-live 1.4s ease-in-out infinite;
 }
 @keyframes image-scan-live { 50% { opacity: 0.25; } }
+
+/* Live outline: a soft glow around the window edges while Aiden Live moves
+   through Aiden. It never takes input; the ribbon carries Take over. Spectrum
+   follows the ribbon's default colours, "accent" follows the theme accent.
+   Reduce Motion leaves the complete ring still. */
+@property --live-outline-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+.live-outline {
+  --live-outline-colors: var(--live-spectrum-1), var(--live-spectrum-2), var(--live-spectrum-3),
+    var(--live-spectrum-4), var(--live-spectrum-5), var(--live-spectrum-1);
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  animation:
+    live-outline-in var(--motion-duration) var(--motion-easing) both,
+    live-outline-turn 8s linear infinite;
+}
+.live-outline[data-live-outline="accent"] {
+  --live-outline-colors: var(--accent), color-mix(in srgb, var(--accent) 30%, transparent), var(--accent),
+    color-mix(in srgb, var(--accent) 30%, transparent), var(--accent);
+}
+.live-outline::before,
+.live-outline-glow::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(from var(--live-outline-angle), var(--live-outline-colors));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.live-outline::before {
+  padding: 2px;
+  opacity: 0.9;
+}
+.live-outline-glow {
+  position: absolute;
+  inset: 0;
+  filter: blur(14px);
+  opacity: 0.6;
+}
+.live-outline-glow::before {
+  padding: 12px;
+}
+@keyframes live-outline-turn {
+  to {
+    --live-outline-angle: 360deg;
+  }
+}
+@keyframes live-outline-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-outline {
+    animation: none;
+  }
+}
+:root[data-reduce-motion="true"] .live-outline {
+  animation: none !important;
+}

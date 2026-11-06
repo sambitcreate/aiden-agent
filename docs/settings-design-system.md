@@ -83,6 +83,8 @@ Settings → Voice & Speech → Aiden Live opens with an "Availability" group of
 
 While Live is on, a "Voice and look" group (`aiden-live-voice-settings.tsx`) follows Audio devices with three trailing selects: Voice (each prebuilt voice with its character; applies the next time Live starts), Speaking speed (0.75× to 2×, pitch kept) and Ribbon colours (Spectrum or Theme accent). They save the same `aidenLiveVoice`, `aidenLiveSpeed` and `aidenLiveRibbonColors` fields as the ribbon's ••• menu.
 
+An "In Aiden" group after Voice and look holds one trailing switch, **Let Live move through Aiden** (`aidenLiveAppControl`, omitted means on); its row lives in `live-app-control-settings.tsx`. Pages that grant access, pair devices, set approvals or spending, add MCP servers, schedule work, choose providers, endpoints or where recordings and speech go, fetch catalogs, download models or install updates (including Aiden Live, Voice, Speech and Computer Use) are wrapped in `LiveGuard guard="you"` by `settings-view.tsx`, so Live can show them but never change them, portaled menus and dialogs included. Every other switch and checkbox is the user's too, except on the Appearance and Links pages, which are marked `data-live-safe`.
+
 ## Page notes
 
 - **Text to Speech** has three groups: Setup, Voice and delivery, and Privacy and storage.

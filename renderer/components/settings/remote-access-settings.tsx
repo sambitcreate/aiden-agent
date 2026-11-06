@@ -569,6 +569,7 @@ export function RemoteAccessSettings() {
               onCheckedChange={(enabled) => void mutate("enabled", () => aidenRemoteApi.setEnabled(enabled))}
               disabled={busy !== null}
               aria-label="Enable Aiden Remote Access"
+              data-live-guard="you"
             />
           </div>
         </Field>

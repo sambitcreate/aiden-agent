@@ -12,6 +12,7 @@
 // Floating over a narrow chat, it repeats a waiting hand-off card's buttons.
 
 import * as React from "react";
+import { LiveGuard } from "../../components/live-guard";
 import { CalendarClock, Files, Globe, ListChecks, Monitor } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
@@ -160,6 +161,8 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
     icon: TAB_META[id].icon,
     selected: tab === id,
     closable: false,
+    // Opening Computer starts the Bot's VM: only the person does that, never Aiden Live.
+    ...(id === "computer" ? { dataAttributes: { "data-live-guard": "you" } } : {}),
   }));
   const body = (id: BotPanelTab, active: boolean): React.ReactNode => {
     if (!bot) return null;
@@ -169,15 +172,27 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
       case "files":
         return <BotPanelFiles botId={bot.id} botName={bot.name} active={active} request={fileRequest} />;
       case "memory":
-        return <BotMemoryContent bot={bot} compact />;
+        // Editing or deleting what the Bot remembers is the person's to do.
+        return (
+          <LiveGuard guard="you">
+            <BotMemoryContent bot={bot} compact />
+          </LiveGuard>
+        );
       case "routines":
-        return <BotRoutines bot={bot} compact />;
+        // Routines run prompts in the background: the user's to change.
+        return (
+          <LiveGuard guard="you">
+            <BotRoutines bot={bot} compact />
+          </LiveGuard>
+        );
       case "browser":
         return browser.workspaceId === null ? null : (
           <BotBrowserTab workspaceId={browser.workspaceId} botName={bot.name} active={active} />
         );
       case "computer":
+        // The VM's screen, sign-in and hand-back are the person's own.
         return computer.computer ? (
+          <LiveGuard guard="you">
           <BotComputerTab
             bot={bot}
             computer={computer.computer}
@@ -187,6 +202,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
             onDock={() => setComputerFloating(false)}
             start={computerStart}
           />
+          </LiveGuard>
         ) : null;
     }
   };
@@ -265,6 +281,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         onClose={close}
       />
       {bot && computer.computer && computerFloating ? (
+        <LiveGuard guard="you">
         <BotComputerFloat
           bot={bot}
           computer={computer.computer}
@@ -275,6 +292,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
           }}
           onClose={() => setComputerFloating(false)}
         />
+        </LiveGuard>
       ) : null}
     </div>
   );

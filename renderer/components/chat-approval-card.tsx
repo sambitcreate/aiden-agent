@@ -44,6 +44,7 @@ import {
   type ToolApprovalScope,
 } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
+import { LiveGuard } from "./live-guard";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -390,6 +391,8 @@ export function ChatApprovalCard({
   const plainCommand = plainApproval ? approvalCommand(pending) : undefined;
 
   return (
+    // Approvals are the user's: Aiden Live can never press Allow, Always allow or their menu.
+    <LiveGuard guard="you">
     <div className="flex min-h-0 flex-col">
       <p className="sr-only" role="status">
         {invalidPendingPrivilegedApproval
@@ -555,5 +558,6 @@ export function ChatApprovalCard({
         </div>
       </section>
     </div>
+    </LiveGuard>
   );
 }

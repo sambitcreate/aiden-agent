@@ -22,6 +22,7 @@ import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
 import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
+import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
 import { subscribeWorkspaceFilesSync } from "../lib/workspace-files-sync";
@@ -637,6 +638,7 @@ function RootContent() {
           onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
+        <LiveAppControlLayer />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
         <WindowControls />
         <KeyboardRegions />

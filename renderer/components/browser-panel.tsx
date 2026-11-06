@@ -286,7 +286,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     return () => window.removeEventListener("keydown", keyboard, true);
   }, [surfaceActive, annotate, tab, run]);
 
-  const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId}>
+  const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId} data-live-content="web">
     <div className="browser-tab-strip">
       <div style={integratedTabs && !tab?.floating ? { display: "none" } : undefined} className="browser-tabs" role="tablist" aria-label="Browser tabs">
         {visibleState?.tabs.map((item, index) => <div key={item.id} className="browser-tab" data-selected={item.id === tab?.id}>
