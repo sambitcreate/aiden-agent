@@ -94,7 +94,7 @@ Aiden stores chats, settings, workspace metadata, and downloaded speech models l
 
 Apart from the release update check and the usage data described below, network access happens only when the selected feature needs it: hosted models receive the conversation content sent to them, cloud transcription receives selected audio, Exa receives search queries, sites the agent reads receive a plain page request (never one to this computer or a private network), Cloudflare receives the page text and field names when extract mode is on, remote MCP servers receive tool requests, model downloads contact their upstream host, and a pull request that a chat follows is read from GitHub every few minutes until the follow ends. A fully local session can use a local model, on-device voice, no remote MCP servers, and web search disabled.
 
-Release builds of the desktop app send anonymous usage data to PostHog: app launches, daily use, setup, updates, which big features are used and sanitized crash reports, with a random install ID and never chats, files, paths, or keys. It is on by default; turn it off in Settings → About → Usage data or with `DO_NOT_TRACK=1`, and see every event and field Aiden can send under **What's sent**. Development builds never send. See [Usage data and crash reports](docs/analytics.md).
+Release builds of the desktop app send anonymous usage data to PostHog: app launches, daily use, setup, updates, which big features are used and sanitized crash reports, with a random install ID and never chats, files, paths, or keys. It is on by default; turn it off in Settings → About → Usage data or with `DO_NOT_TRACK=1`, and see every event and field Aiden can send under **What's sent**. Development builds never send, and neither does a headless server built from a clone; a distributed server build has its own switch, `aiden telemetry off`. See [Usage data and crash reports](docs/analytics.md).
 
 On macOS, Computer Use is an opt-in beta with a global switch, permission checks, and exact target binding. The model's first Computer Use call in a chat raises one access card (Deny, Allow for this chat, or Always allow); an allowed chat then acts without per-action cards, and Settings can turn off Always allow or reset chat permissions. It is omitted from Linux builds. See the [Computer Use security design](docs/computer-use-integration.md) for the complete boundary.
 
@@ -122,7 +122,7 @@ Core technologies include Electron 43, React 19, TypeScript, Vite, Tailwind CSS,
 ### Requirements
 
 - macOS or a glibc 2.34+ x64/arm64 Linux desktop
-- Node.js 22.19 or newer and npm (CI pins 22.23.4; use the newest release of your Node line)
+- Node.js 22.22 or newer and npm (CI pins 22.23.4; use the newest release of your Node line)
 - Rust and Cargo (rustup, in `~/.cargo/bin` or on `PATH`, or set `CARGO`) only for macOS Computer Use helper tests and packaged macOS builds
 - A full Xcode 26 or newer only for macOS Apple Foundation Models builds
 - An Apple signing identity only for packaged macOS distribution builds

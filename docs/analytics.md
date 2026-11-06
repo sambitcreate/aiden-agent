@@ -1,6 +1,6 @@
 # Usage data and crash reports
 
-Aiden's desktop app sends anonymous usage data so we can see how many people use it, which big features they use and what breaks. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
+Aiden's desktop app, and distributed builds of its headless server, send anonymous usage data so we can see how many people use it, which big features they use and what breaks. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
 
 ## What is sent
 
@@ -9,7 +9,7 @@ Only the events and fields in `main/services/analytics/analytics-events.ts`. Set
 Every event carries:
 
 - a random install ID, created on this device and deleted when you turn usage data off;
-- the app version, platform, CPU architecture, OS major version (on Linux, the kernel major version), surface (`desktop`) and build channel.
+- the app version, platform, CPU architecture, OS major version (on Linux and on the server, the kernel major version), surface (`desktop` or `server`) and build channel.
 
 Lifecycle events:
 
@@ -20,6 +20,7 @@ Lifecycle events:
 | `onboarding_finished` | Setup completed or deferred | `outcome`, and `provider_id` (a built-in Aiden id, otherwise `custom`) |
 | `app_updated` | First launch on a new version | `from_version`, `to_version` |
 | `analytics_disabled` | When you turn usage data off (the last event sent) | none |
+| `server_started` | Each time `aiden serve` is ready to serve | `launch`: foreground, daemon or service |
 
 Feature events fire once, at the moment the action succeeded, from the service that owns it, so an action from a paired phone counts the same way as one on the Mac. A refused, cancelled or failed action sends nothing, and a subagent's own turns are not messages. Nothing is sent until the notice or the onboarding row has been shown, so actions during first-run setup aren't counted: the first provider appears only as `provider_id` on `onboarding_finished`. An action in the first moments of a launch waits in memory, up to 100 events, until usage data has started, and is dropped if sending isn't allowed. Delayed metadata lookups keep the action's original consent: a later disclosure or opt-in cannot authorize an earlier action, and a consent change or shutdown discards its unfinished report. New feature reports stop as soon as that change or shutdown is requested, including while an earlier settings write finishes.
 
@@ -56,7 +57,7 @@ Bot continuity integration: host-issued watch/routine and approved-peer task/res
 
 ## Crash reports
 
-Aiden reports crashes and uncaught errors only. A failure the app handles (a provider request that failed, a rejected key, a routine or tool error, an error an interface boundary caught) stays on your device.
+The desktop app reports crashes and uncaught errors only. A failure the app handles (a provider request that failed, a rejected key, a routine or tool error, an error an interface boundary caught) stays on your device. The headless server's crash reports are narrower and are described under [Headless server](#headless-server-aiden-serve).
 
 | What happened | Sent as | Fields |
 | --- | --- | --- |
@@ -99,7 +100,7 @@ Chats, prompts, replies, file names or contents, paths, API keys or other creden
 
 ## Where it goes
 
-PostHog's US cloud, project "aiden", at the fixed host `https://us.i.posthog.com`. Requests reject redirects. Only the Electron main process sends; the renderer has no PostHog code. Data is kept for PostHog's default retention.
+PostHog's US cloud, project "aiden", at the fixed host `https://us.i.posthog.com`. Requests reject redirects. Only the Electron main process and the server process send; the renderer has no PostHog code. Data is kept for PostHog's default retention.
 
 ## Turning it off
 
@@ -110,8 +111,21 @@ PostHog's US cloud, project "aiden", at the fixed host `https://us.i.posthog.com
 
 ## Builds that never send
 
-Only distribution builds carry the project key, injected from the `AIDEN_POSTHOG_PROJECT_KEY` release secret (the release workflow fails without it). `npm run dev`, unpacked builds, tests and E2E have no key and never create a client. Release smoke and acceptance launches set `AIDEN_ANALYTICS=0`. For local testing, `AIDEN_ANALYTICS_DEBUG=1` in an unpackaged build writes would-be events to the dev log instead of sending them.
+Only distribution builds carry the project key, injected from the `AIDEN_POSTHOG_PROJECT_KEY` release secret (the release workflow fails without it). `npm run dev`, unpacked builds, tests and E2E have no key and never create a client. Release smoke and acceptance launches set `AIDEN_ANALYTICS=0`. For local testing, `AIDEN_ANALYTICS_DEBUG=1` in an unpackaged build writes would-be events to the dev log instead of sending them; a keyless server build writes them to stderr.
 
-## Phone apps and CLI
+## Headless server (`aiden serve`)
 
-The iOS and Android apps contain no analytics. The CLI does not send usage data yet; when it does, it will follow the same list and switches.
+The server follows the same event list and sends with `surface: "server"`. Only the `aiden serve` process sends: admin commands such as `aiden workspace list` send nothing and never load the analytics client. The one exception is `aiden telemetry off`, which sends the single `analytics_disabled` described below. Only a build made with `npm run cli:dist` can send, and the `Build keyed server bundle` workflow, which builds for Linux x64, is the one place that happens. A server built from a clone (`npm run cli:build`) and the Docker image have no key, send nothing and show no notice.
+
+A keyed server adds `server_started`, crash reports and the shared events its own work triggers, apart from its own chat paths, which do not report `chat_message_sent` yet. A crash report covers an uncaught exception or rejection and carries only the error's type, its sanitized stack frames and a system error code from a fixed list, such as `ENOENT`, never its message: a server's messages can quote file names, hosts and prompt text that redaction cannot recognize. Any other code is dropped, and the final check before sending admits a bare code only on a server's report. Frames are read only from a stack whose first line is the error's name and current message, so a stack that outlived a changed message sends no frames. As on the desktop, an error type outside the fixed list is sent as `Error`. A crash waits at most one second for its report, then exits exactly as it would have. A rejection the server logs and survives is reported as an error. At most 25 crashes are reported per day, so a service restarting in a loop cannot flood the project; after that the server sends nothing until the next day. The server has no `app_active` event; `server_started` covers it. `server_started` is sent once the server is ready, so a server that fails to start is not counted.
+
+Consent and a separate random install ID live in `aiden-analytics.json` in the agent directory (`~/.aiden/agent`, or `AIDEN_CODING_AGENT_DIR`):
+
+- **Notice:** one line on stderr at `aiden service install`, and at the first `aiden serve` on a terminal: "This Aiden server sends anonymous usage and crash data. Turn off: aiden telemetry off". `aiden serve --daemon` shows it in the terminal that starts it. A server that never showed the notice sends nothing, so a container or a script that runs `aiden serve` without a terminal stays silent.
+- **`aiden telemetry status|on|off`:** `off` saves the choice, sends one `analytics_disabled` with the old ID, and forgets the ID. A running server re-reads the file before every event and request, so it stops too and drops its queue. The switch and each request share a lock, so once `off` returns no new request starts; one already on the wire finishes. A server that can't get the lock quickly sends nothing, and if a stuck process holds it, `off` says so and changes nothing, so run it again. `on` also answers the notice; a running server starts sending again at its next start, with a new ID. A consent file that cannot be read counts as off, since it may have held your opt-out; `on` replaces it.
+- **Environment:** `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0` work as on the desktop, and with `CI` set nothing is ever sent. These are read per process: a service started by systemd or launchd does not see your shell's environment, so use `aiden telemetry off` for a service.
+- `--version`, help and every other admin command never show the notice or send.
+
+## Phone apps
+
+The iOS and Android apps contain no analytics.
