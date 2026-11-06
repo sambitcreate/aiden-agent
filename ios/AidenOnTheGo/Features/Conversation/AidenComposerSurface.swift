@@ -25,7 +25,7 @@ struct AidenComposerConfig: Equatable {
         Self(
             placeholder: "Message",
             showsModelChip: false,
-            showsMic: false,
+            showsMic: true,
             showsAttachments: true,
             maxLines: 6
         )
@@ -545,10 +545,9 @@ extension View {
         modifier(AidenComposerSoftScrollEdge())
     }
 
-    /// The composer is the transcript's bottom inset, and an inset moving scrolls
-    /// nothing: without this the latest words slide under a composer that grew.
-    /// A transcript that fits between the insets (`containerSize` is that space)
-    /// has nothing to keep in view, and scrolling it would pull it down from the top.
+    /// Tells the follow whether the transcript fits between the insets
+    /// (`containerSize` is that space). A transcript that fits has nothing to keep
+    /// in view, and scrolling it would pull it down from the top.
     func aidenReportsTranscriptFit(to follow: AidenTranscriptFollowController) -> some View {
         onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentSize.height <= geometry.containerSize.height
@@ -557,6 +556,8 @@ extension View {
         }
     }
 
+    /// The composer is the transcript's bottom inset, and an inset moving scrolls
+    /// nothing: without this the latest words slide under a composer that grew.
     func aidenOnComposerInsetChange(_ action: @escaping () -> Void) -> some View {
         onScrollGeometryChange(for: CGFloat?.self) { geometry in
             geometry.contentSize.height > geometry.containerSize.height ? geometry.contentInsets.bottom : nil

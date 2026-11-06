@@ -15,52 +15,207 @@ struct AidenChronologicalTranscript: View {
     /// Draws a live `generate_image` placeholder beneath its step.
     var imageSlotContent: ((String) -> AnyView)? = nil
 
+    /// Tells one run's groups from another's in the expansion state: the run's
+    /// generation ID, which is the same for the live reply and the settled one.
+    let groupScope: String
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(rows) { row in
-                switch row.kind {
-                case .text:
-                    AidenMessageTextView(role: .assistant, content: row.text, isStreaming: active)
-                        .foregroundStyle(palette.foreground)
-                case .reasoning:
-                    if let step = row.steps.first {
-                        let label = step.finishedAt == nil ? "Thinking" : "Thought \(AidenAgentActivityPresentation.duration(step.durationMs))"
-                        if row.text.isEmpty {
-                            AidenActivityPhaseCard(label: label, active: active && step.finishedAt == nil)
-                        } else {
-                            AidenReasoningCard(text: row.text, label: label, active: active && step.finishedAt == nil)
-                        }
-                    }
-                case .tool:
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(row.steps) { step in
-                            AidenActivityStepLine(step: step, shimmer: active && step.isActive)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                case .questionnaire:
-                    if let recap = row.steps.first?.questionnaire {
-                        AidenQuestionnaireRecapView(recap: recap)
-                    }
-                case .extraction:
-                    if let recap = row.steps.first?.extraction {
-                        AidenWebExtractRecapView(recap: recap)
-                    }
-                case .recording:
-                    if let recording = row.steps.first?.recording {
-                        AidenBrowserRecordingCardView(recording: recording, load: loadRecording)
-                    }
-                case .visual(let visual):
-                    visualContent?(visual)
-                case .images(let images):
-                    imageContent?(images)
-                case .imageSlot(let call):
-                    imageSlotContent?(call)
+            ForEach(rows.groupedForDisplay(scope: groupScope, active: active)) { block in
+                switch block {
+                case .row(let row):
+                    rowView(row)
+                case .toolGroup(let group):
+                    AidenToolStepGroupView(group: group, active: active)
+                        .equatable()
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: AidenChronologicalRow) -> some View {
+        switch row.kind {
+        case .text:
+            AidenMessageTextView(role: .assistant, content: row.text, isStreaming: active)
+                .foregroundStyle(palette.foreground)
+        case .reasoning:
+            if let step = row.steps.first {
+                let label = step.finishedAt == nil ? "Thinking" : "Thought \(AidenAgentActivityPresentation.duration(step.durationMs))"
+                if row.text.isEmpty {
+                    AidenActivityPhaseCard(label: label, active: active && step.finishedAt == nil)
+                } else {
+                    AidenReasoningCard(text: row.text, label: label, active: active && step.finishedAt == nil)
+                }
+            }
+        case .tool:
+            AidenToolStepBox(steps: row.steps, active: active)
+        case .questionnaire:
+            if let recap = row.steps.first?.questionnaire {
+                AidenQuestionnaireRecapView(recap: recap)
+            }
+        case .extraction:
+            if let recap = row.steps.first?.extraction {
+                AidenWebExtractRecapView(recap: recap)
+            }
+        case .recording:
+            if let recording = row.steps.first?.recording {
+                AidenBrowserRecordingCardView(recording: recording, load: loadRecording)
+            }
+        case .visual(let visual):
+            visualContent?(visual)
+        case .images(let images):
+            imageContent?(images)
+        case .imageSlot(let call):
+            imageSlotContent?(call)
+        }
+    }
+}
+
+/// Which groups the reader has opened or closed. It lives above the rows, so a
+/// lazy stack rebuilding a row, or the live reply handing over to the settled
+/// one, doesn't forget a choice. It isn't observed: a group that is toggled
+/// redraws itself and no other group does.
+///
+/// A group nobody has chosen for shows open only when it has a failure. A
+/// choice always wins, so a failed group the reader closed stays closed through
+/// every later update, and one the reader opened stays open.
+@MainActor
+final class AidenToolStepGroupExpansion {
+    private var opened = Set<String>()
+    private var closed = Set<String>()
+    /// Runs just before a group opens or closes, so the screen can stop
+    /// following the end: the reader tapped a line, and the line shouldn't
+    /// leave their screen when the group changes height.
+    private let onToggle: (() -> Void)?
+
+    init(onToggle: (() -> Void)? = nil) {
+        self.onToggle = onToggle
+    }
+
+    func isExpanded(_ group: AidenToolStepGroup) -> Bool {
+        if opened.contains(group.id) { return true }
+        if closed.contains(group.id) { return false }
+        return group.hasFailure
+    }
+
+    /// The reader's tap.
+    func toggle(_ group: AidenToolStepGroup) {
+        let expanded = !isExpanded(group)
+        onToggle?()
+        setExpanded(expanded, for: group.id)
+    }
+
+    func setExpanded(_ expanded: Bool, for id: String) {
+        if expanded {
+            opened.insert(id)
+            closed.remove(id)
+        } else {
+            closed.insert(id)
+            opened.remove(id)
+        }
+    }
+}
+
+private struct AidenToolGroupExpansionKey: EnvironmentKey {
+    static let defaultValue: AidenToolStepGroupExpansion? = nil
+}
+
+extension EnvironmentValues {
+    var aidenToolGroupExpansion: AidenToolStepGroupExpansion? {
+        get { self[AidenToolGroupExpansionKey.self] }
+        set { self[AidenToolGroupExpansionKey.self] = newValue }
+    }
+}
+
+/// The step lines of one tool row, or of an open group.
+private struct AidenToolStepBox: View {
+    @Environment(\.aidenPalette) private var palette
+    let steps: [AidenAgentStep]
+    let active: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(steps) { step in
+                AidenActivityStepLine(step: step, shimmer: active && step.isActive)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// A run of tool steps as one line: what it did, a chevron, and the latest step
+/// while it runs. Open, it lists the steps. No glass: it's content, not a control layer.
+struct AidenToolStepGroupView: View, Equatable {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.aidenToolGroupExpansion) private var sharedExpansion
+    /// Used only where nothing above holds the state, such as a bare preview.
+    @State private var ownExpansion = AidenToolStepGroupExpansion()
+    /// Bumped on a toggle, so this group redraws and no other does.
+    @State private var toggles = 0
+    let group: AidenToolStepGroup
+    let active: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.group == rhs.group && lhs.active == rhs.active
+    }
+
+    private var expansion: AidenToolStepGroupExpansion { sharedExpansion ?? ownExpansion }
+
+    var body: some View {
+        let _ = toggles
+        let isExpanded = expansion.isExpanded(group)
+        VStack(alignment: .leading, spacing: 4) {
+            header(isExpanded: isExpanded)
+            if isExpanded {
+                AidenToolStepBox(steps: group.steps.flatMap(\.steps), active: active)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func header(isExpanded: Bool) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                expansion.toggle(group)
+                toggles += 1
+            }
+        } label: {
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.summary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .aidenActivityShimmer(active && group.isRunning)
+                    if let line = group.runningLine {
+                        Text(line)
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if group.failureCount > 0 {
+                    Text("\(group.failureCount) failed")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.danger)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(group.accessibilityLabel(isExpanded: isExpanded))
+        .accessibilityHint(isExpanded ? "Hides the steps" : "Shows the steps")
     }
 }
 

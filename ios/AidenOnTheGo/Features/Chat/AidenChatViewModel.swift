@@ -859,29 +859,9 @@ final class AidenChatViewModel {
         guard !isRemoved, !Task.isCancelled else { throw CancellationError() }
         let context = owner
         let client = try coordinator.remoteClient(for: context)
-        let status = try await client.speechStatus()
-        guard !isRemoved, !Task.isCancelled, coordinator.isLive(context) else { throw CancellationError() }
-        guard status.engine.ready else {
-            throw NSError(
-                domain: "AidenVoiceInput",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The desktop speech engine is unavailable.")]
-            )
+        return try await aidenTranscribeSpeech(pcm16, on: client) {
+            !isRemoved && coordinator.isLive(context)
         }
-        guard let model = status.models.first(where: { $0.id == status.selectedModelId && $0.installed })
-            ?? status.models.first(where: { $0.installed && $0.recommended })
-            ?? status.models.first(where: { $0.installed }) else {
-            throw NSError(
-                domain: "AidenVoiceInput",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a desktop speech model in App Settings before using this option.")]
-            )
-        }
-        if status.selectedModelId != model.id { _ = try await client.selectSpeechModel(model.id) }
-        guard !isRemoved, !Task.isCancelled, coordinator.isLive(context) else { throw CancellationError() }
-        let result = try await client.transcribeSpeech(pcm16: pcm16, modelId: model.id)
-        guard !isRemoved, !Task.isCancelled, coordinator.isLive(context) else { throw CancellationError() }
-        return result.text
     }
 
     private var turnModelSelection: AidenChatModelSelection {

@@ -278,21 +278,47 @@ final class AidenComposerSurfaceTests: XCTestCase {
                     defer { close(window) }
                     XCTAssertTrue(runMainLoop(until: { host.probe.surface != .zero }), context)
                     drainMainLoop()
-                    if isBusy {
-                        try assertControlsFit(
-                            ["Add attachment", "Queue message", "Stop"],
-                            in: window,
-                            surface: host.probe.surface,
-                            width: width,
-                            context: context
-                        )
-                    }
+                    try assertControlsFit(
+                        isBusy ? ["Add attachment", "Queue message", "Stop"] : ["Add attachment", "Start voice input", "Send message"],
+                        in: window,
+                        surface: host.probe.surface,
+                        width: width,
+                        context: context
+                    )
                     return host.probe.surface
                 }
 
                 let idle = try surface(isBusy: false)
                 let busy = try surface(isBusy: true)
                 XCTAssertEqual(busy.height, idle.height, accuracy: 1, "A run made the composer jump: \(context)")
+            }
+        }
+    }
+
+    /// A dictation begun before the run keeps its stop beside the busy controls.
+    func testABotRecordingThroughARunKeepsEveryControlInReach() async throws {
+        for textSize: DynamicTypeSize in [.large, .xxxLarge, .accessibility5] {
+            for width: CGFloat in [390, 375] {
+                let context = "Bot recording at \(textSize), \(width)"
+                let session = AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice())
+                await session.toggleVoice()
+                let host = AidenComposerBotFitHost(
+                    isBusy: true,
+                    probe: AidenComposerFitProbe(),
+                    textSize: textSize,
+                    session: session
+                )
+                let window = try show(host, width: width)
+                defer { close(window) }
+                XCTAssertTrue(runMainLoop(until: { host.probe.surface != .zero }), context)
+                drainMainLoop()
+                try assertControlsFit(
+                    ["Add attachment", "Stop voice input", "Queue message", "Stop"],
+                    in: window,
+                    surface: host.probe.surface,
+                    width: width,
+                    context: context
+                )
             }
         }
     }
@@ -526,8 +552,6 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertEqual(probe.scrolledFromTop, 0, accuracy: 1)
     }
 
-    /// Nothing has moved since the chat first laid out, so nothing has changed
-    /// to report: the first measurement has to count.
     /// The gate reads fit from the scroll geometry: held while the chat fits
     /// between the insets, released the moment a taller dock makes it overflow.
     func testAFollowWaitsUntilTheChatNoLongerFits() throws {
@@ -558,6 +582,8 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertEqual(probe.scrolledFromTop, 0, accuracy: 1, "The short chat dropped away from the top")
     }
 
+    /// Nothing has moved since the chat first laid out, so nothing has changed
+    /// to report: the first measurement has to count.
     func testALongChatReachesItsEndOnItsFirstFollow() throws {
         let probe = AidenFollowProbe()
         let window = try show(AidenFollowingTranscriptHost(probe: probe, contentHeight: 1_500, startsAtTop: true, usesSizeAnchor: false))
@@ -895,18 +921,18 @@ private struct AidenComposerFitHost: View {
     }
 }
 
-/// A Bot's composer: no chip and no mic, with its own busy pill beside Stop.
+/// A Bot's composer: no chip, with its own busy pill beside Stop in the mic's place.
 private struct AidenComposerBotFitHost: View {
     let isBusy: Bool
     let probe: AidenComposerFitProbe
     let textSize: DynamicTypeSize
-    @State private var session = AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice())
+    var session = AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice())
 
     var body: some View {
         AidenComposerSurface(
             session: session,
             config: .bot(),
-            controls: AidenComposerControls(stopLabel: "Stop"),
+            controls: AidenComposerControls(stopLabel: "Stop", offersMic: !isBusy),
             onSend: {},
             onStop: isBusy ? {} : nil,
             attachButton: {

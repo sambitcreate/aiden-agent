@@ -79,6 +79,7 @@ struct AidenChatDetailView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
+        owner: AidenRemoteRequestContext? = nil,
         autoStartVoice: Bool = false,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
@@ -91,7 +92,7 @@ struct AidenChatDetailView: View {
         let model = AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
-            owner: (try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? "")) ?? .noMachine,
+            owner: Self.owner(owner, coordinator: coordinator),
             allowsMutations: allowsMutations,
             onChatUpdated: onChatUpdated,
             onChatActivityChanged: onChatActivityChanged
@@ -105,6 +106,14 @@ struct AidenChatDetailView: View {
         })
         self.autoStartVoice = autoStartVoice
         self.allowsMutations = allowsMutations
+    }
+
+    /// The machine the chat was opened for, or else the selected one.
+    static func owner(
+        _ owner: AidenRemoteRequestContext?,
+        coordinator: AidenRemoteCoordinator
+    ) -> AidenRemoteRequestContext {
+        owner ?? (try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? "")) ?? .noMachine
     }
 
 #if DEBUG
@@ -241,7 +250,7 @@ struct AidenChatDetailView: View {
         .sheet(isPresented: $showsBackgroundJobs) {
             AidenBackgroundJobsSheet(
                 model: backgroundJobs,
-                canStop: allowsMutations && coordinator?.server?.capabilities.contains(.chatWrite) == true,
+                canStop: allowsMutations && model.ownerServer?.capabilities.contains(.chatWrite) == true,
                 onStop: { jobId in Task { await backgroundJobs.stop(jobId, transport: backgroundJobsTransport) } }
             )
         }
@@ -444,7 +453,10 @@ struct AidenChatDetailView: View {
     private func messageList(_ proxy: ScrollViewProxy) -> some View {
         AidenTranscriptRowStack(
             spacing: presentationStyle == .botMessages ? 3 : 18,
-            bottomAnchorID: AidenChatScrollPolicy.transcriptBottomAnchorID
+            bottomAnchorID: AidenChatScrollPolicy.transcriptBottomAnchorID,
+            // A group that opens or closes changes height under a reader who is
+            // following the end, and that would push the line they tapped away.
+            onGroupToggle: { [follow] in follow.handle(.userScrollBegin) }
         ) {
             if let forkLabel = model.forkSource.label {
                 AidenChatForkLineageRow(label: forkLabel)

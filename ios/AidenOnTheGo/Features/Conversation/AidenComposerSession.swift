@@ -18,8 +18,55 @@ protocol AidenComposerVoiceCapture: AnyObject {
 
 extension ComposerVoiceInputController: AidenComposerVoiceCapture {}
 
-/// Holds the words that get saved. A chat's model is one, so its `draft` stays
-/// the only copy: restoring, persisting and clearing after Send all happen there.
+/// The paired machine's side of voice input. `AidenRemoteClient` is the real one.
+protocol AidenMacSpeechTransport: Sendable {
+    func speechStatus() async throws -> AidenSpeechStatus
+    func selectSpeechModel(_ modelId: String) async throws -> AidenSpeechStatus
+    func transcribeSpeech(pcm16: Data, modelId: String) async throws -> AidenSpeechTranscription
+}
+
+extension AidenRemoteClient: AidenMacSpeechTransport {}
+
+/// Turns a recording into text on the paired machine, with the machine's chosen
+/// model or the best one installed. `isWanted` is asked after every wait: words
+/// nobody is waiting for any more are dropped, not delivered.
+@MainActor
+func aidenTranscribeSpeech(
+    _ pcm16: Data,
+    on speech: any AidenMacSpeechTransport,
+    isWanted: () -> Bool
+) async throws -> String {
+    func ensureWanted() throws {
+        guard !Task.isCancelled, isWanted() else { throw CancellationError() }
+    }
+    let status = try await speech.speechStatus()
+    try ensureWanted()
+    guard status.engine.ready else {
+        throw NSError(
+            domain: "AidenVoiceInput",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The desktop speech engine is unavailable.")]
+        )
+    }
+    guard let model = status.models.first(where: { $0.id == status.selectedModelId && $0.installed })
+        ?? status.models.first(where: { $0.installed && $0.recommended })
+        ?? status.models.first(where: { $0.installed }) else {
+        throw NSError(
+            domain: "AidenVoiceInput",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a desktop speech model in App Settings before using this option.")]
+        )
+    }
+    if status.selectedModelId != model.id { _ = try await speech.selectSpeechModel(model.id) }
+    try ensureWanted()
+    let result = try await speech.transcribeSpeech(pcm16: pcm16, modelId: model.id)
+    try ensureWanted()
+    return result.text
+}
+
+/// Holds the words that get saved. A chat's model and a Bot's are each one, so
+/// its `draft` stays the only copy: restoring, persisting and clearing after
+/// Send all happen there.
 @MainActor
 protocol AidenComposerDraftOwner: AnyObject {
     var draft: String { get set }
@@ -44,7 +91,8 @@ protocol AidenComposerAttachmentOwner: AnyObject {
 @Observable
 final class AidenComposerSession {
     var attachmentOwner: (any AidenComposerAttachmentOwner)?
-    private let draftOwner: (any AidenComposerDraftOwner)?
+    /// A Bot's screen is there before its model is, so this can arrive late.
+    var draftOwner: (any AidenComposerDraftOwner)?
     @ObservationIgnored private let voice: any AidenComposerVoiceCapture
     private var localText: String
     private let localAttachments: [AidenAttachmentReference]
@@ -117,4 +165,4 @@ final class AidenComposerSession {
 }
 
 extension AidenChatViewModel: AidenComposerDraftOwner, AidenComposerAttachmentOwner {}
-extension AidenBotSessionModel: AidenComposerAttachmentOwner {}
+extension AidenBotSessionModel: AidenComposerDraftOwner, AidenComposerAttachmentOwner {}

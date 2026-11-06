@@ -99,6 +99,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
   "AidenOnTheGo/Features/Conversation/AidenTranscriptScaffold.swift",
+  "AidenOnTheGo/Features/Shell/AidenMachinesView.swift",
+  "AidenOnTheGo/Features/Shell/AidenMachineDetailView.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
@@ -114,6 +116,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
+  "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
+  "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnection.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostRegistry.swift",
   "AidenOnTheGo/Features/Remote/AidenInboxViews.swift",
@@ -241,6 +245,7 @@ const testSources = [
   "AidenBotAllowedTests.swift",
   "AidenDemoHostsTests.swift",
   "AidenHostConnectionTests.swift",
+  "AidenAppShellTests.swift",
   "AidenHostConnectSchedulerTests.swift",
   "AidenHostRegistryTests.swift",
   "AidenOwnerScopeTests.swift",
@@ -248,6 +253,7 @@ const testSources = [
   "AidenMachinePreferencesTests.swift",
   "AidenUnifiedInboxTests.swift",
   "AidenUnifiedInboxStoreTests.swift",
+  "AidenMachineDetailTests.swift",
   "AidenBotContractTests.swift",
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotHomeProfileTests.swift",
@@ -273,6 +279,7 @@ const testSources = [
   "AidenBackgroundJobsTests.swift",
   "AidenNewWorktreeTests.swift",
   "AidenStreamingPerformanceTests.swift",
+  "AidenToolStepGroupingTests.swift",
   "AidenVisualViewerTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
 ];
@@ -358,6 +365,13 @@ test("the Bot-first mobile rollout flag fails closed across pairing and product 
   assert.match(
     appConfig,
     /botFirstMobileEnabled:[\s\S]*?guard let value = Bundle\.main\.object[\s\S]*?return false/u,
+  );
+  // The tab shell ships off until the rollout turns it on.
+  assert.equal([...project.matchAll(/AIDEN_TAB_SHELL_ENABLED = NO;/gu)].length, 2);
+  assert.doesNotMatch(project, /AIDEN_TAB_SHELL_ENABLED = YES;/u);
+  assert.match(
+    info,
+    /<key>AidenTabShellEnabled<\/key>\s*<string>\$\(AIDEN_TAB_SHELL_ENABLED\)<\/string>/u,
   );
   assert.match(
     remoteClient,
@@ -537,6 +551,35 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(chat, /AidenApprovalCard\([\s\S]*?\.disabled\(!model\.isConnected \|\| model\.isReadOnlyPresentation \|\| model\.isRespondingToApproval \|\| model\.isStopping\)/u);
 });
 
+
+test("both conversation screens draw their rows through the one transcript row stack", async () => {
+  // On iOS 26.5 with the keyboard up, the end-of-transcript row as the last child of the
+  // lazy stack blanks the transcript. No hosted test can show it, so the source is held.
+  const [scaffold, chatScreen, botScreen] = await Promise.all([
+    readFile(`${iosRoot}AidenOnTheGo/Features/Conversation/AidenTranscriptScaffold.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Chat/AidenChatDetailView.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Bots/AidenBotSessionChatView.swift`, "utf8"),
+  ]);
+  const count = (source, pattern) => [...source.matchAll(pattern)].length;
+
+  // The lazy stack closes after the rows, and the bottom anchor row follows it inside a VStack.
+  assert.match(
+    scaffold,
+    /VStack\(alignment: \.leading, spacing: spacing\) \{\s*LazyVStack\(alignment: \.leading, spacing: spacing\) \{ rows \}\s*Color\.clear\.frame\(height: 1\)\.id\(bottomAnchorID\)\s*\}/u,
+  );
+  assert.equal(count(scaffold, /LazyVStack\(/gu), 1);
+  assert.equal(count(scaffold, /\.id\(bottomAnchorID\)/gu), 1);
+
+  for (const [name, source] of [["chat", chatScreen], ["Bot", botScreen]]) {
+    assert.equal(count(source, /AidenTranscriptRowStack\(/gu), 1, `${name} screen draws its rows through the stack`);
+    assert.equal(count(source, /LazyVStack\(/gu), 0, `${name} screen has its own lazy stack`);
+    assert.doesNotMatch(
+      source,
+      /\.id\(\s*(?:AidenChatScrollPolicy\.transcriptBottomAnchorID|"bottom"|"chat-bottom")\s*\)/u,
+      `${name} screen puts its own id on the bottom anchor`,
+    );
+  }
+});
 
 test("iOS bundles every reviewed Aiden provider logo", async () => {
   const desktopLogos = (await readdir(desktopProviderLogoDirectory))

@@ -28,11 +28,23 @@ struct AidenTranscriptRowStack<Rows: View>: View {
     private let spacing: CGFloat
     private let bottomAnchorID: String
     private let rows: Rows
+    /// Which tool-step groups the reader has opened, held above the rows so a
+    /// row the lazy stack rebuilds keeps its choice.
+    @State private var toolGroupExpansion: AidenToolStepGroupExpansion
 
-    init(spacing: CGFloat, bottomAnchorID: String, @ViewBuilder rows: () -> Rows) {
+    /// `onGroupToggle` runs when the reader opens or closes a tool-step group.
+    /// It is read once, when the stack first appears, so it should capture
+    /// objects that live as long as the screen does.
+    init(
+        spacing: CGFloat,
+        bottomAnchorID: String,
+        onGroupToggle: (() -> Void)? = nil,
+        @ViewBuilder rows: () -> Rows
+    ) {
         self.spacing = spacing
         self.bottomAnchorID = bottomAnchorID
         self.rows = rows()
+        _toolGroupExpansion = State(initialValue: AidenToolStepGroupExpansion(onToggle: onGroupToggle))
     }
 
     var body: some View {
@@ -40,6 +52,7 @@ struct AidenTranscriptRowStack<Rows: View>: View {
             LazyVStack(alignment: .leading, spacing: spacing) { rows }
             Color.clear.frame(height: 1).id(bottomAnchorID)
         }
+        .environment(\.aidenToolGroupExpansion, toolGroupExpansion)
     }
 }
 

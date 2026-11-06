@@ -196,7 +196,8 @@ struct AidenLiveResponseView: View {
                             AidenImageGenerationPlaceholderView(item: item)
                                 .transition(.opacity)
                         })
-                    }
+                    },
+                    groupScope: model.activityTimeline?.generationId ?? ""
                 )
                     .contextMenu {
                         if !visibleText.isEmpty {
