@@ -563,6 +563,8 @@ type SavedFrame = {
   size?: string;
   color?: string;
   fill?: string;
+  paper?: string;
+  printMode?: string;
 };
 
 async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
@@ -822,4 +824,128 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
   await expect(reloaded.locator("b")).toHaveText("Launch plan");
   await expect(reloaded.locator('a[href="https://example.com/brief"]')).toHaveText("brief");
   await expect(designCanvas(aiden.page).getByRole("group", { name: "Text: Checkout" }).locator("i")).toHaveText("Checkout");
+});
+
+/** Answers the next Save dialog with this path, the way a person choosing it would. */
+async function answerNextSave(app: ElectronApplication, file: string): Promise<void> {
+  await app.evaluate(({ dialog }, chosen) => {
+    dialog.showSaveDialog = (async () => ({ canceled: false, filePath: chosen })) as unknown as typeof dialog.showSaveDialog;
+  }, file);
+}
+
+/**
+ * The presented page fills the window along one side once its move settles,
+ * and nothing else in the app (the sidebar, the Live control) draws over it.
+ */
+async function expectPresentedAlone(page: Page, title: string): Promise<void> {
+  const frame = page.locator(`iframe[title="${title}"]`);
+  await expect.poll(async () => {
+    const first = await frame.boundingBox();
+    await page.waitForTimeout(100);
+    const second = await frame.boundingBox();
+    if (!first || !second || first.x !== second.x || first.width !== second.width) return "moving";
+    const [width, height] = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+    const fits = second.x >= -1 && second.y >= -1 && second.x + second.width <= width + 1 && second.y + second.height <= height + 1;
+    const fills = second.width >= width * 0.85 || second.height >= height * 0.85;
+    return fits && fills ? "fitted" : `at ${JSON.stringify(second)}`;
+  }, { timeout: 10_000 }).toBe("fitted");
+  const covered = await page.evaluate(() => {
+    const wrapper = document.querySelector("[data-presenting]");
+    // Where the sidebar, the middle of the page and the Live control would be.
+    const points = [[60, 400], [window.innerWidth / 2, window.innerHeight / 2], [window.innerWidth * 0.45, window.innerHeight - 32]];
+    return points.filter(([x, y]) => !wrapper?.contains(document.elementFromPoint(x!, y!) ?? null)).length;
+  });
+  expect(covered).toBe(0);
+}
+
+test("a page downloads as a PNG, a PDF and its own file, and Present walks the page and comes back", async ({ aiden }) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  const outDir = path.join(userDataDir, "downloads-test");
+  await mkdir(designDir, { recursive: true });
+  await mkdir(outDir, { recursive: true });
+  const hero = path.join(designDir, "hero.html");
+  await writeFile(hero, page_("Hero", "Ship faster", "#3b6cf6"));
+  await writeFile(path.join(designDir, "pricing.html"), page_("Pricing", "Simple pricing", "#1f9d6b"));
+
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  await answerNextPick(app, hero);
+  await addFromMenu(page, "File…");
+  await answerNextPick(app, path.join(designDir, "pricing.html"));
+  await addFromMenu(page, "File…");
+  await addNote(page);
+  await page.keyboard.type("Ship the pricing page next.");
+  await clickEmptyCanvas(page);
+
+  // Download: a 2× picture of the whole page, a PDF on A4, and the file itself.
+  const heroFrame = frame(page, "hero.html");
+  const pngPath = path.join(outDir, "hero.png");
+  await answerNextSave(app, pngPath);
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await capture(page, "1440-frame-download-menu");
+  await page.getByRole("menuitem", { name: "PNG image" }).click();
+  await expect.poll(async () => (await readFile(pngPath).catch(() => Buffer.alloc(0))).length, { timeout: 30_000 }).toBeGreaterThan(1000);
+  const png = await readFile(pngPath);
+  expect(png.subarray(1, 4).toString("latin1")).toBe("PNG");
+  // A 1 280 px design width drawn at twice its pixels.
+  expect(png.readUInt32BE(16)).toBe(2560);
+
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await page.getByRole("menuitemradio", { name: "A4" }).click();
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.title === "hero.html")?.paper)
+    .toBe("a4");
+  const pdfPath = path.join(outDir, "hero.pdf");
+  await answerNextSave(app, pdfPath);
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await page.getByRole("menuitem", { name: "PDF" }).click();
+  await expect.poll(async () => (await readFile(pdfPath).catch(() => Buffer.alloc(0))).subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  // A4 is 595 × 842 points.
+  expect((await readFile(pdfPath)).toString("latin1")).toMatch(/MediaBox\s*\[\s*0 0 595(?:\.\d+)? 842/u);
+
+  const sourcePath = path.join(outDir, "hero-copy.html");
+  await answerNextSave(app, sourcePath);
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await page.getByRole("menuitem", { name: "Original file" }).click();
+  await expect.poll(async () => readFile(sourcePath, "utf8").catch(() => "")).toBe(await readFile(hero, "utf8"));
+
+  // Present fills the window and walks the page in reading order, then gives the canvas back.
+  const before = (await savedCanvases(userDataDir))[0]!.pages[0]!.viewport;
+  await canvas.getByRole("button", { name: "Present this page" }).click();
+  const bar = canvas.getByRole("toolbar", { name: "Presentation" });
+  await expect(bar).toContainText("1 of 3 · hero.html");
+  await expect(canvas.getByRole("toolbar", { name: "Canvas tools" })).toHaveCount(0);
+  const wrapperBox = async () =>
+    page.locator('[data-presenting="page"]').evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return [rect.width, rect.height, window.innerWidth, window.innerHeight];
+    });
+  await expect.poll(async () => {
+    const [w, h, iw, ih] = await wrapperBox();
+    return w === iw && h === ih;
+  }).toBe(true);
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
+  await expectPresentedAlone(page, "hero.html");
+  await capture(page, "1440-present");
+  await page.keyboard.press("ArrowRight");
+  await expect(bar).toContainText("2 of 3 · pricing.html");
+  await page.keyboard.press("End");
+  await expect(bar).toContainText("3 of 3 · Note");
+  await expect(bar.getByRole("button", { name: "Next frame" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(bar).toHaveCount(0);
+  await expect(canvas.getByRole("toolbar", { name: "Canvas tools" })).toBeVisible();
+  expect((await savedCanvases(userDataDir))[0]!.pages[0]!.viewport).toEqual(before);
+
+  // Open full window shows one page alone, taking input, until Close.
+  await heroFrame.getByRole("button", { name: "Open hero.html in a full window" }).click();
+  const single = canvas.getByRole("toolbar", { name: "Full window" });
+  await expect(single).toContainText("hero.html");
+  await expect(page.locator('[data-presenting="frame"]')).toBeVisible();
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
+  await expectPresentedAlone(page, "hero.html");
+  await capture(page, "1440-open-full-window");
+  await single.getByRole("button", { name: "Close full window" }).click();
+  await expect(single).toHaveCount(0);
 });

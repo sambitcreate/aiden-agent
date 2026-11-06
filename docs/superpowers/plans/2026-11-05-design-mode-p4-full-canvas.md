@@ -126,6 +126,16 @@ As built (2026-11-06):
 - **Present:** a full-window walk through the page's top-level frames in reading order. The arrow keys move between frames, Escape leaves, and Reduce Motion is respected.
 - **Print mode and paper:** Flow or Fixed, Letter or A4, set on artboard and file frames (side panel) and used by PDF export.
 
+As built (2026-11-06):
+- Pages, artifacts and images get two buttons at the end of their title row (`renderer/design/nodes/frame-actions.tsx`): **Open full window** and **Download**.
+- **Open full window** shows that one frame alone, filling the window, with a small bar that names it and a Close button (Esc also closes). A page or artifact is live and takes input there. This replaces the plan's in-app browser panel: the browser panel would load the page outside the `aiden-design:` sandbox, and the full window keeps the same no-network page.
+- **Download** offers **PNG image**, **PDF** and **Original file**; images offer only the original file. Below them, **PDF paper** (Letter or A4) and **PDF layout** (Flow to the paper, or Fixed at design width) are kept on the frame (`paper`, `printMode`; only pages and artifacts carry them). They live in this menu until the P4f side panel exists.
+- Export runs in main (`designCanvas:export`, `main/handlers/design-canvas.ts`): the frame is read from the stored canvas (the renderer saves first), a save dialog asks where, and a hidden, sandboxed window with no preload draws the page from its own `aiden-design:` or artifact address (`main/services/design-canvas/frame-render.ts`). PNG is twice the CSS pixels, at the page's design width (artifacts use their box width, 320 to 1440 px) and its full height up to 8,000 px. PDF uses `printToPDF` with 0.4 in margins: Flow prints at full size and lets the page wrap; Fixed scales the design width to the paper's printable width (at most 2×). The original file is copied; an artifact saves as its standalone HTML.
+- The PNG is drawn by zooming the hidden window 2× and capturing it, not through the DevTools protocol, which never answers in a hidden window on Linux.
+- Artboards, notes, text, shapes and lines have no Download yet: an artboard is a box on the canvas, not a page, so it needs a canvas renderer of its own. That is left for later.
+- **Present** (top right of the canvas) fills the window and walks the page's top-level frames row by row from the top and left to right within a row (`renderer/shared/design-canvas/presentation.ts`); lines, drawn strokes and frames inside groups are skipped. → ↓ Space Enter PageDown go on, ← ↑ Backspace PageUp go back, Home and End jump, Esc stops. A bar at the bottom shows "2 of 5 · name" with Previous, Next and Exit. Each frame is fitted to the window (no animation under Reduce Motion); the page's saved view is not changed, and the canvas goes back to where it was on Exit. On a narrow canvas the Present button shows only its icon.
+- On Linux without a desktop title bar, the canvas's top row now stops short of Aiden's own window buttons.
+
 ### P4e: point, comment, draw marks, send to Aiden (the original P4)
 
 Detailed plan: [P4e](2026-11-05-design-mode-p4e-comments.md).

@@ -16,7 +16,9 @@ import {
   type DesignCanvasCaptureWindow,
   type DesignCanvasChat,
   type DesignCanvasPickOptions,
+  type DesignCanvasSaveOptions,
   type DesignCanvasUpdated,
+  type DesignFrameRenderRequest,
 } from "./design-canvas.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
@@ -48,6 +50,9 @@ async function fixture(
     workspaceRoot?: (chat: DesignCanvasChat) => Promise<string | null>;
     windowFor?: (event: unknown) => DesignCanvasCaptureWindow | null;
     pickFile?: (event: unknown, options: DesignCanvasPickOptions) => Promise<string | null>;
+    saveFile?: (options: DesignCanvasSaveOptions) => string | null;
+    renderFrame?: (request: DesignFrameRenderRequest) => Promise<Uint8Array>;
+    artifacts?: Record<string, string>;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -72,6 +77,9 @@ async function fixture(
   const roots = options.roots ?? { "workspace-1": "/work/site" };
   const watched: Array<[string, string, string[]] | ["clear", string]> = [];
   const dialogs: DesignCanvasPickOptions[] = [];
+  const saveDialogs: DesignCanvasSaveOptions[] = [];
+  const renders: DesignFrameRenderRequest[] = [];
+  const artifactExports: string[] = [];
   registerDesignCanvasHandlers({
     enabled: () => enabled,
     handle: (channel, handler) => {
@@ -97,6 +105,22 @@ async function fixture(
       dialogs.push(pickOptions);
       return options.pickFile ? options.pickFile(event, pickOptions) : null;
     },
+    saveFile: async (_event, saveOptions) => {
+      saveDialogs.push(saveOptions);
+      return options.saveFile ? options.saveFile(saveOptions) : null;
+    },
+    renderFrame: async (request) => {
+      renders.push(request);
+      return options.renderFrame ? options.renderFrame(request) : new TextEncoder().encode(`${request.format}:${request.url}`);
+    },
+    artifactPreview: async (_chatId, mediaId) => {
+      const src = options.artifacts?.[mediaId];
+      return src ? { src } : undefined;
+    },
+    exportArtifactSource: async (_event, chatId, mediaId) => {
+      artifactExports.push(`${chatId}/${mediaId}`);
+      return { saved: true, canceled: false };
+    },
   });
   const invokeFrom = async (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -117,6 +141,9 @@ async function fixture(
     invokeFrom,
     watched,
     dialogs,
+    saveDialogs,
+    renders,
+    artifactExports,
     disable: () => (enabled = false),
   };
 }
@@ -471,4 +498,112 @@ test("a chat that cannot frame workspace files never opens the dialog", async (t
   assert.deepEqual(await invoke("designCanvas:pickFile", "off", "file"), { error: "unavailable" });
   await assert.rejects(invoke("designCanvas:pickFile", "off", "video"));
   assert.deepEqual(dialogs, []);
+});
+
+/** A canvas with a workspace page, an image, an artifact and a note, saved for chat-1. */
+async function exportCanvas(
+  t: TestContext,
+  options: Parameters<typeof fixture>[1] = {},
+): Promise<Awaited<ReturnType<typeof fixture>> & { site: string; out: string }> {
+  const { site } = await pickWorkspace(t);
+  const out = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-export-"));
+  t.after(() => fs.rm(out, { recursive: true, force: true }));
+  const harness = await fixture(t, { roots: { "workspace-1": site }, ...options });
+  const frame = { x: 0, y: 0, w: 640, h: 436, pageId: "page-1", createdBy: "person" as const };
+  const doc: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    frames: [
+      { ...frame, id: "page", kind: "file", title: "Hero: Pricing", path: "design/hero page.html", designWidth: 768, paper: "a4", printMode: "fixed" },
+      { ...frame, id: "logo", kind: "image", title: "logo.png", path: "design/img/logo.png" },
+      { ...frame, id: "chart", kind: "artifact", title: "Sales chart", mediaId: "media-1" },
+      { ...frame, id: "gone", kind: "file", title: "Gone", path: "design/missing.html" },
+      { ...frame, id: "n", kind: "note", title: "Note", text: "hi" },
+    ],
+  };
+  assert.deepEqual(await harness.invoke("designCanvas:save", "chat-1", doc, 0), { ok: true, revision: 1 });
+  return { ...harness, site, out };
+}
+
+test("a page downloads as a PNG or a PDF drawn from its own address, with its paper and layout", async (t) => {
+  let destination = "";
+  const harness = await exportCanvas(t, { saveFile: () => destination });
+  const { invoke, out, renders, saveDialogs, issuedGrants } = harness;
+  destination = path.join(out, "hero.png");
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), { saved: true });
+  assert.equal(saveDialogs[0]?.defaultPath, "Hero-Pricing.png");
+  assert.deepEqual(saveDialogs[0]?.filters, [{ name: "PNG image", extensions: ["png"] }]);
+  const grant = issuedGrants[issuedGrants.length - 1];
+  assert.deepEqual(renders[0], {
+    url: `aiden-design://${grant}/design/hero%20page.html`,
+    width: 768,
+    format: "png",
+    paper: "a4",
+    printMode: "fixed",
+  });
+  assert.equal(await fs.readFile(destination, "utf8"), `png:aiden-design://${grant}/design/hero%20page.html`);
+
+  destination = path.join(out, "hero.pdf");
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "pdf"), { saved: true });
+  assert.equal(renders[1]?.format, "pdf");
+  assert.ok((await fs.readFile(destination, "utf8")).startsWith("pdf:"));
+});
+
+test("the original file of a page or an image is copied as it is on disk", async (t) => {
+  let destination = "";
+  const { invoke, out, site, renders, saveDialogs } = await exportCanvas(t, { saveFile: () => destination });
+  destination = path.join(out, "copy.html");
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), { saved: true });
+  assert.equal(saveDialogs[0]?.defaultPath, "hero page.html");
+  assert.deepEqual(
+    await fs.readFile(destination),
+    await fs.readFile(path.join(site, "design", "hero page.html")),
+  );
+  destination = path.join(out, "logo.png");
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "logo", "source"), { saved: true });
+  assert.deepEqual(await fs.readFile(destination), await fs.readFile(path.join(site, "design", "img", "logo.png")));
+  assert.deepEqual(renders, [], "copying never draws the page");
+});
+
+test("an artifact downloads from its preview, and its original goes through the artifact export", async (t) => {
+  let destination = "";
+  const { invoke, out, renders, artifactExports, saveDialogs } = await exportCanvas(t, {
+    saveFile: () => destination,
+    artifacts: { "media-1": "aiden-genui://preview/abc" },
+  });
+  destination = path.join(out, "chart.png");
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png"), { saved: true });
+  assert.deepEqual(renders[0], { url: "aiden-genui://preview/abc", width: 640, format: "png" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "source"), { saved: true });
+  assert.deepEqual(artifactExports, ["chat-1/media-1"]);
+  assert.equal(saveDialogs.length, 1, "the artifact export shows its own dialog");
+});
+
+test("nothing is saved when the dialog is cancelled, the file is gone, or drawing fails", async (t) => {
+  let destination: string | null = null;
+  const { invoke, out, renders } = await exportCanvas(t, {
+    saveFile: () => destination,
+    renderFrame: async () => {
+      throw new Error("crashed");
+    },
+  });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), { canceled: true });
+  assert.deepEqual(renders, [], "a cancelled dialog draws nothing");
+  destination = path.join(out, "x.png");
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "gone", "png"), { error: "missing" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "pdf"), { error: "missing" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), { error: "failed" });
+  await assert.rejects(fs.access(destination));
+});
+
+test("only a frame the stored canvas holds exports, and only in the formats its kind has", async (t) => {
+  const { invoke, saveDialogs, chats } = await exportCanvas(t, { saveFile: () => "/nowhere" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "n", "png"), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "logo", "pdf"), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "nope", "png"), { error: "unavailable" });
+  await assert.rejects(invoke("designCanvas:export", "chat-1", "page", "svg"));
+  await assert.rejects(invoke("designCanvas:export", "chat-1", 7, "png"));
+  // Out of design mode the workspace may no longer be framed, so its files stay put.
+  chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), { error: "unavailable" });
+  assert.deepEqual(saveDialogs, []);
 });

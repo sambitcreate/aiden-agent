@@ -93,6 +93,10 @@ its words; `Esc` or `⌘↩` finishes. `Esc` turns a drawing tool off.
 Inside a note or text item, `⌘B`, `⌘I` and `⌘U` make the selected words bold,
 italic or underlined (the editor takes `⌘B` before the sidebar does); links,
 lists, size and colours are on the formatting bar above it.
+While presenting (the **Present** button at the canvas's top right), `→`,
+`↓`, `Space`, `↩` or `PageDown` go to the next frame, `←`, `↑`, `⌫` or
+`PageUp` to the previous one, `Home` and `End` to the first and last, and
+`Esc` stops presenting (or closes a frame opened in a full window).
 The ⌘/ list shows these under **Design canvas** while design mode is
 available. `↩` or a double-click enters the selected page;
 `Esc` with the canvas focused, or a click on the canvas, leaves. Keys typed

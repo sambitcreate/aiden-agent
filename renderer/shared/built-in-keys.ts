@@ -179,6 +179,14 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     requiresCapability: "designMode",
   },
   {
+    id: "canvas-present",
+    title: "Next / previous frame while presenting",
+    description: "Space and Enter also go on, Home and End jump to the first and last frame, Esc stops presenting.",
+    keys: ["Right", "Left"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
     id: "canvas-undo",
     title: "Undo / redo on the canvas",
     description: "Moves, edits, pages and renames.",

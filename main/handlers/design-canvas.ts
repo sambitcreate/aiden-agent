@@ -7,7 +7,17 @@ import * as fs from "node:fs/promises";
 import {
   isDesignRelativePath,
   type DesignCanvas,
+  type DesignPaper,
+  type DesignPrintMode,
 } from "../../renderer/shared/design-canvas/schema.js";
+import {
+  DESIGN_EXPORT_FORMATS,
+  designExportFileName,
+  designExportFormats,
+  designExportWidth,
+  type DesignExportFormat,
+} from "../../renderer/shared/design-canvas/frame-export.js";
+import { designUrl } from "../../renderer/shared/design-canvas/url.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
 import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
@@ -76,6 +86,32 @@ const PICK_FILTER_NAMES: Readonly<Record<DesignCanvasPickKind, string>> = {
   image: "Images",
 };
 
+/** `designCanvas:export` reply. */
+export type DesignCanvasExportResult =
+  | { saved: true }
+  | { canceled: true }
+  | { error: "unavailable" | "missing" | "failed" };
+
+/** What the hidden export window draws: a page at its width, as a picture or a PDF. */
+export type DesignFrameRenderRequest = {
+  url: string;
+  width: number;
+  format: "png" | "pdf";
+  paper?: DesignPaper;
+  printMode?: DesignPrintMode;
+};
+
+/** How the save dialog is shown for an export. */
+export type DesignCanvasSaveOptions = {
+  defaultPath: string;
+  filters: Array<{ name: string; extensions: string[] }>;
+};
+
+const EXPORT_FILTERS: Readonly<Record<"png" | "pdf", { name: string; extensions: string[] }>> = {
+  png: { name: "PNG image", extensions: ["png"] },
+  pdf: { name: "PDF", extensions: ["pdf"] },
+};
+
 /** A frame snapshot's longest side, in pixels. */
 export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 
@@ -96,6 +132,14 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   watcher: Pick<DesignFileWatcher, "set" | "clear">;
   /** Shows the open dialog over the asking window; the chosen absolute path, or null. */
   pickFile(event: Event, options: DesignCanvasPickOptions): Promise<string | null>;
+  /** Shows the save dialog over the asking window; the chosen absolute path, or null. */
+  saveFile(event: Event, options: DesignCanvasSaveOptions): Promise<string | null>;
+  /** Draws a page in a hidden window and returns the PNG or PDF bytes. */
+  renderFrame(request: DesignFrameRenderRequest): Promise<Uint8Array>;
+  /** An artifact's preview address, or undefined when it is gone. */
+  artifactPreview(chatId: string, mediaId: string): Promise<{ src: string } | undefined>;
+  /** Saves an artifact as a standalone HTML file through its own save dialog. */
+  exportArtifactSource(event: Event, chatId: string, mediaId: string): Promise<{ saved: boolean; canceled: boolean }>;
 }): void {
   if (!deps.enabled()) return;
 
@@ -194,6 +238,80 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (chosen === null) return { cancelled: true };
     return validatePickedFile(root, chosen, kind);
   });
+
+  // Saves one frame as a picture, a PDF or its original file, wherever the
+  // person chooses. The frame is read from the stored canvas, never from the
+  // renderer, so only a page this chat really shows can be exported.
+  deps.handle(
+    "designCanvas:export",
+    async (event, chatId, frameId, format): Promise<DesignCanvasExportResult> => {
+      if (!deps.enabled()) throw new Error(UNAVAILABLE);
+      assertDesignCanvasChatId(chatId);
+      if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
+        throw new Error("Invalid design frame.");
+      }
+      if (!(DESIGN_EXPORT_FORMATS as readonly unknown[]).includes(format)) throw new Error("Invalid export format.");
+      const kind = format as DesignExportFormat;
+      const chat = await deps.getChat(chatId);
+      if (!chat || !attended(chat)) return { error: "unavailable" };
+      const doc = await deps.store.get(chat.id);
+      const frame = doc.frames.find((entry) => entry.id === frameId);
+      if (!frame || !designExportFormats(frame).includes(kind)) return { error: "unavailable" };
+
+      let url: string;
+      let source: string | null = null;
+      if (frame.kind === "artifact") {
+        if (!frame.mediaId) return { error: "unavailable" };
+        if (kind === "source") {
+          try {
+            const result = await deps.exportArtifactSource(event, chat.id, frame.mediaId);
+            return result.saved ? { saved: true } : { canceled: true };
+          } catch {
+            return { error: "failed" };
+          }
+        }
+        const preview = await deps.artifactPreview(chat.id, frame.mediaId);
+        if (!preview) return { error: "missing" };
+        url = preview.src;
+      } else {
+        // Workspace files go out only while the chat may still frame its folder.
+        const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+        if (!root || !frame.path) return { error: "unavailable" };
+        const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
+        if (!resolved.ok) return { error: "missing" };
+        source = resolved.absolute;
+        url = designUrl(deps.grants.issue(chat.id, root), frame.path);
+      }
+
+      const name = designExportFileName(frame, kind);
+      const extension = path.extname(name).slice(1).toLowerCase();
+      const destination = await deps.saveFile(event, {
+        defaultPath: name,
+        filters:
+          kind === "source"
+            ? [{ name: "Original file", extensions: extension ? [extension] : [] }]
+            : [EXPORT_FILTERS[kind]],
+      });
+      if (destination === null) return { canceled: true };
+      try {
+        if (kind === "source") {
+          await fs.copyFile(source!, destination);
+        } else {
+          const bytes = await deps.renderFrame({
+            url,
+            width: designExportWidth(frame),
+            format: kind,
+            ...(frame.paper ? { paper: frame.paper } : {}),
+            ...(frame.printMode ? { printMode: frame.printMode } : {}),
+          });
+          await fs.writeFile(destination, bytes);
+        }
+      } catch {
+        return { error: "failed" };
+      }
+      return { saved: true };
+    },
+  );
 
   // Snapshots a frame's rectangle of the asking window's own page, so a frame
   // that leaves the live set keeps a picture instead of going blank. A window

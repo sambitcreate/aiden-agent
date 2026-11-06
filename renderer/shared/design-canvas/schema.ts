@@ -36,6 +36,9 @@ export const DESIGN_COLORS = [
 ] as const satisfies readonly DesignColor[];
 
 export type DesignShapeKind = "rect" | "oval";
+/** How a page prints: reflowed to the paper (flow), or laid out at its design width and scaled to fit (fixed). */
+export type DesignPrintMode = "flow" | "fixed";
+export type DesignPaper = "letter" | "a4";
 export type DesignTextSize = "small" | "medium" | "large";
 export type DesignSide = "top" | "right" | "bottom" | "left";
 
@@ -83,10 +86,19 @@ export type DesignFrame = {
   handles?: [number, number][];
   /** stroke drawn with the pen: the path returns to its first point. */
   closed?: true;
+  /** file and artifact: how its PDF lays out (flow when left out). */
+  printMode?: DesignPrintMode;
+  /** file and artifact: the PDF's paper (Letter when left out). */
+  paper?: DesignPaper;
   /** The page the frame is on. */
   pageId: string;
   createdBy: "person" | "aiden";
 };
+
+/** Kinds that print and export as a page: a workspace page or an artifact. */
+export function isDesignPrintable(kind: DesignFrameKind): boolean {
+  return kind === "file" || kind === "artifact";
+}
 
 /** Kinds other frames can sit in, with `groupId`: a group, or an empty artboard drawn with the Frame tool. */
 export function isDesignContainer(kind: DesignFrameKind): boolean {
@@ -448,6 +460,10 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     if (!from || !to) return null;
     frame.ends = [from, to];
     if (value.arrow === "end" || value.arrow === "both") frame.arrow = value.arrow;
+  }
+  if (isDesignPrintable(frame.kind)) {
+    if (value.printMode === "flow" || value.printMode === "fixed") frame.printMode = value.printMode;
+    if (value.paper === "letter" || value.paper === "a4") frame.paper = value.paper;
   }
   if (frame.kind === "stroke") {
     const points = parseFractions(value.points);

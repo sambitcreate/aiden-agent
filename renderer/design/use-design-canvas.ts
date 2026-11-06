@@ -262,6 +262,8 @@ export function useDesignCanvas(chatId: string): {
   change(mutate: Mutation, opts?: { record?: boolean }): void;
   undo(): void;
   redo(): void;
+  /** Saves what is pending now, so main reads the canvas as the person sees it. */
+  flush(): Promise<void>;
   canUndo: boolean;
   canRedo: boolean;
 } {
@@ -292,6 +294,10 @@ export function useDesignCanvas(chatId: string): {
   }, []);
   const undoEdit = React.useCallback(() => sync.current?.undo(), []);
   const redoEdit = React.useCallback(() => sync.current?.redo(), []);
+  /** Saves what is pending now, so main reads the canvas as the person sees it. */
+  const flush = React.useCallback(async () => {
+    await sync.current?.flush();
+  }, []);
 
-  return { ...state, change, undo: undoEdit, redo: redoEdit };
+  return { ...state, change, undo: undoEdit, redo: redoEdit, flush };
 }

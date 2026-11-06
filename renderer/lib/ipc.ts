@@ -2323,6 +2323,14 @@ export type DesignCanvasSaveResult =
 /** The per-chat design canvas. Available only while design mode's flag is on. */
 export const designCanvasApi = {
   getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
+  /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. */
+  exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source") =>
+    invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
+      "designCanvas:export",
+      chatId,
+      frameId,
+      format,
+    ),
   /** Compare-and-swap: lands only if `baseRevision` is still the stored revision. */
   saveDesignCanvas: (chatId: string, doc: DesignCanvas, baseRevision: number) =>
     invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),

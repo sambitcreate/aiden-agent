@@ -4,6 +4,7 @@
 
 import * as React from "react";
 import type { DesignPoint } from "../../shared/design-canvas/connectors";
+import type { DesignExportFormat } from "../../shared/design-canvas/frame-export";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 
 /** Height of a frame's title bar; a page frame's content box is the rest. */
@@ -27,9 +28,13 @@ export type DesignNodeContextValue = {
   /** Edits one frame; a key set to undefined is taken off. `record` adds an undo step. */
   update(
     id: string,
-    patch: Partial<Pick<DesignFrame, "text" | "title" | "h" | "size" | "color" | "fill">>,
+    patch: Partial<Pick<DesignFrame, "text" | "title" | "h" | "size" | "color" | "fill" | "paper" | "printMode">>,
     options: { record: boolean },
   ): void;
+  /** Shows one frame alone, filling the window, until the person closes it. */
+  openFullWindow(id: string): void;
+  /** Saves a frame as a PNG, a PDF or its original file, through the save dialog. */
+  download(id: string, format: DesignExportFormat): void;
   /** Opens a new comment on a frame, as the Comment tool would. */
   comment(id: string): void;
   /** Puts one end of an arrow or line at `point`, on the frame there if there is one. */

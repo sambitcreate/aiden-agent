@@ -1,10 +1,11 @@
 // Loaded on demand so React Flow and its CSS stay out of the entry chunk.
 import "../canvas/styles";
 import "./design-canvas.css";
-import { type NodeChange, type ReactFlowInstance, type Viewport } from "@xyflow/react";
+import { getViewportForBounds, type NodeChange, type ReactFlowInstance, type Viewport } from "@xyflow/react";
 import * as React from "react";
 import { StudioCanvas, type CanvasTool } from "../canvas";
 import type { CanvasKeyEvent } from "../canvas/canvas-keymap-core";
+import { CANVAS_MIN_ZOOM } from "../canvas/canvas-viewport-core";
 import { EmptyState, toast } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
@@ -18,6 +19,8 @@ import {
   showPage,
 } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
+import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
+import { presentationOrder } from "../shared/design-canvas/presentation";
 import { containerAt, regroupFrames } from "../shared/design-canvas/drawing";
 import {
   activeDesignPage,
@@ -39,9 +42,15 @@ import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRe
 import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { useDesignComments } from "./design-comments";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
+import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { selectLiveFrames } from "./live-set-core";
-import { DesignNodeContext, DESIGN_DEFAULT_WIDTH, type DesignNodeContextValue } from "./nodes/design-node-context";
+import {
+  DesignNodeContext,
+  DESIGN_DEFAULT_WIDTH,
+  DESIGN_FRAME_HEADER_PX,
+  type DesignNodeContextValue,
+} from "./nodes/design-node-context";
 import { designNodeTypes } from "./nodes/registry";
 import { useDesignCanvas } from "./use-design-canvas";
 
@@ -84,6 +93,12 @@ function basename(path: string) {
   return path.slice(path.lastIndexOf("/") + 1) || path;
 }
 
+const EXPORT_ERRORS = {
+  unavailable: "This frame can't be downloaded.",
+  missing: "This frame's file is gone, so it can't be downloaded.",
+  failed: "The download couldn't be saved. Try again.",
+} as const;
+
 const PICK_ERRORS = {
   "outside-workspace": "Choose a file inside this chat's workspace.",
   unsupported: "That file can't be shown on the canvas.",
@@ -104,7 +119,7 @@ function LoadedDesignCanvas({
   doc: CanvasDocument;
   canvas: CanvasHandle;
 }) {
-  const { change, undo, redo } = canvas;
+  const { change, undo, redo, flush } = canvas;
   const [tool, setTool] = React.useState<CanvasTool>("select");
   const [minimap, setMinimap] = React.useState(false);
   const [selection, setSelection] = React.useState<ReadonlySet<string>>(() => new Set());
@@ -119,6 +134,9 @@ function LoadedDesignCanvas({
   const [viewport, setViewport] = React.useState<Viewport>(() => activeDesignPage(doc).viewport);
   const [viewSize, setViewSize] = React.useState({ w: 0, h: 0 });
   const [live, setLive] = React.useState<ReadonlySet<string>>(() => new Set());
+  const [presentation, setPresentation] = React.useState<DesignPresentation | null>(null);
+  const presentingRef = React.useRef(false);
+  presentingRef.current = presentation !== null;
 
   const wrapper = React.useRef<HTMLDivElement | null>(null);
   const flow = React.useRef<ReactFlowInstance<DesignNode> | null>(null);
@@ -539,6 +557,13 @@ function LoadedDesignCanvas({
   };
 
   const resolveKey = (event: CanvasKeyEvent, context: { editable: boolean }) => {
+    if (presentation) {
+      const key = presentationKey(event);
+      if (key === "exit") stopPresenting();
+      else if (key !== null) step(key);
+      // While presenting, the canvas's own keys (tools, zoom) do nothing.
+      return true;
+    }
     const command = resolveDesignCanvasKey(event, {
       editable: context.editable,
       platform: isMacPlatform() ? "darwin" : "other",
@@ -628,6 +653,101 @@ function LoadedDesignCanvas({
     }
   };
 
+  const download = React.useCallback(
+    (id: string, format: DesignExportFormat) => {
+      // Main exports what is saved, so a frame added a moment ago is saved first.
+      void flush()
+        .catch(() => undefined)
+        .then(() => designCanvasApi.exportDesignFrame(chatId, id, format))
+        .then(
+        (result) => {
+          if ("saved" in result) toast.success(format === "source" ? "Saved the original file." : `Saved the ${format.toUpperCase()}.`);
+          else if ("error" in result) toast.error(EXPORT_ERRORS[result.error]);
+        },
+        () => toast.error(EXPORT_ERRORS.failed),
+      );
+    },
+    [chatId, flush],
+  );
+
+  /**
+   * Present: the canvas fills the window and walks through the page's frames
+   * in reading order. With `single`, it shows just one frame (Open full
+   * window), which takes input like an entered frame.
+   */
+  function present(fromId: string | null, options: { single?: boolean } = {}) {
+    const current = latestDoc.current;
+    const ids = options.single && fromId ? [fromId] : presentationOrder(framesOnPage(current));
+    if (ids.length === 0) {
+      toast("There's nothing on this page to present yet.");
+      return;
+    }
+    const index = Math.max(0, fromId ? ids.indexOf(fromId) : 0);
+    comments.setActive(false);
+    setDrawTool(null);
+    setEditing(null);
+    setRenaming(null);
+    setSelection((selected) => (selected.size === 0 ? selected : new Set()));
+    const frame = current.frames.find((entry) => entry.id === ids[index]);
+    setEntered(options.single && (frame?.kind === "file" || frame?.kind === "artifact") ? frame.id : null);
+    setPresentation({ ids, index, single: options.single === true, restore: latestViewport.current });
+  }
+
+  const presentRef = React.useRef(present);
+  presentRef.current = present;
+
+  function step(to: "next" | "previous" | "first" | "last") {
+    setPresentation((current) => {
+      if (!current) return current;
+      const last = current.ids.length - 1;
+      const index =
+        to === "first" ? 0 : to === "last" ? last : Math.min(last, Math.max(0, current.index + (to === "next" ? 1 : -1)));
+      return index === current.index ? current : { ...current, index };
+    });
+  }
+
+  function stopPresenting() {
+    const current = presentation;
+    if (!current) return;
+    setPresentation(null);
+    setEntered(null);
+    latestViewport.current = current.restore;
+    setViewport(current.restore);
+    void flow.current?.setViewport(current.restore, { duration: 0 });
+    requestAnimationFrame(() =>
+      wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true }),
+    );
+  }
+
+  // Each step fits its frame to the window, once the window-filling layout has been measured.
+  const presentedId = presentation ? presentation.ids[presentation.index] : null;
+  React.useEffect(() => {
+    if (!presentedId || viewSize.w === 0) return;
+    const frame = requestAnimationFrame(() => {
+      const instance = flow.current;
+      if (!instance) return;
+      // Set straight away rather than through fitView, which waits for the next
+      // node update and could land after Exit has put the canvas back.
+      const bounds = { ...instance.getNodesBounds([presentedId]) };
+      // A page, artifact or image is shown without its title row (design-canvas.css).
+      const kind = latestDoc.current.frames.find((frame) => frame.id === presentedId)?.kind;
+      if ((kind === "file" || kind === "artifact" || kind === "image") && bounds.height > DESIGN_FRAME_HEADER_PX) {
+        bounds.y += DESIGN_FRAME_HEADER_PX;
+        bounds.height -= DESIGN_FRAME_HEADER_PX;
+      }
+      if (bounds.width > 0 && bounds.height > 0) {
+        const fitted = getViewportForBounds(bounds, viewSize.w, viewSize.h, CANVAS_MIN_ZOOM, 4, 0.06);
+        void instance.setViewport(fitted, { duration: prefersReducedMotion() ? 0 : 350 });
+      }
+      wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [presentedId, viewSize]);
+  // A frame that goes away (Aiden removed it, say) ends a presentation that is only it.
+  React.useEffect(() => {
+    if (presentation && presentation.ids.every((id) => !doc.frames.some((frame) => frame.id === id))) stopPresenting();
+  });
+
   const update = React.useCallback<DesignNodeContextValue["update"]>(
     (id, patch, { record }) =>
       change(
@@ -672,8 +792,10 @@ function LoadedDesignCanvas({
       editing,
       edit: setEditing,
       comment: comments.commentOn,
+      openFullWindow: (id) => presentRef.current(id, { single: true }),
+      download,
     }),
-    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming, moveEnd, editing, comments.commentOn],
+    [chatId, grant, live, entered, versionOf, autoFocusId, removeFrames, update, renaming, moveEnd, editing, comments.commentOn, download],
   );
 
   return (
@@ -681,8 +803,15 @@ function LoadedDesignCanvas({
     <div
       ref={wrapper}
       data-typing-surface="canvas"
+      data-presenting={presentation ? (presentation.single ? "frame" : "page") : undefined}
       className={
-        comments.active ? "design-commenting h-full w-full" : drawTool ? "design-drawing h-full w-full" : "h-full w-full"
+        presentation
+          ? "design-presenting fixed inset-0 z-[70] bg-background"
+          : comments.active
+            ? "design-commenting h-full w-full"
+            : drawTool
+              ? "design-drawing h-full w-full"
+              : "h-full w-full"
       }
       data-draw-tool={drawTool ?? undefined}
       onPointerDownCapture={noteInteraction}
@@ -714,11 +843,14 @@ function LoadedDesignCanvas({
           }}
           onMoveEnd={(_event, next) => {
             latestViewport.current = next;
+            // Present moves the view for itself; the page keeps where the person left it.
+            if (presentingRef.current) return;
             change((current) => withActiveViewport(current, { x: next.x, y: next.y, zoom: next.zoom }), {
               record: false,
             });
           }}
           onPaneClick={(event) => {
+            if (presentation) return;
             if (comments.onPaneClick(event)) return;
             setEntered(null);
           }}
@@ -733,6 +865,18 @@ function LoadedDesignCanvas({
           elevateNodesOnSelect={false}
           zoomOnDoubleClick={false}
           resolveKey={resolveKey}
+          presenting={presentation !== null}
+          actions={<DesignPresentButton onPresent={() => present(null)} />}
+          overlay={
+            presentation ? (
+              <DesignPresentBar
+                presentation={presentation}
+                title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
+                onStep={step}
+                onExit={stopPresenting}
+              />
+            ) : null
+          }
           emptyState={<DesignCanvasEmpty />}
           toolbar={
             <DesignToolbar
@@ -750,8 +894,8 @@ function LoadedDesignCanvas({
             />
           }
         >
-          {comments.layer}
-          {drawing.layer}
+          {presentation ? null : comments.layer}
+          {presentation ? null : drawing.layer}
         </StudioCanvas>
       </DesignNodeContext.Provider>
     </div>

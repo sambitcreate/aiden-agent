@@ -12,6 +12,8 @@ import {
   designModeConsent,
 } from "../services/design-canvas/main.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
+import { renderDesignFrame } from "../services/design-canvas/frame-render.js";
+import { exportStoredHtmlArtifact, wrapStoredHtmlArtifact } from "../services/gui-artifact-recovery.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, registerDesignCanvasHandlers } from "./design-canvas.js";
@@ -69,6 +71,26 @@ export function registerDesignCanvasIpc(): void {
           ? await dialog.showOpenDialog(window, dialogOptions)
           : await dialog.showOpenDialog(dialogOptions);
       return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
+    saveFile: async (event, options) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const dialogOptions: Electron.SaveDialogOptions = {
+        defaultPath: options.defaultPath,
+        filters: options.filters,
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+      };
+      const result =
+        window && !window.isDestroyed()
+          ? await dialog.showSaveDialog(window, dialogOptions)
+          : await dialog.showSaveDialog(dialogOptions);
+      return result.canceled || !result.filePath ? null : result.filePath;
+    },
+    renderFrame: renderDesignFrame,
+    artifactPreview: (chatId, mediaId) => wrapStoredHtmlArtifact({ chatId, mediaId }),
+    exportArtifactSource: async (event, chatId, mediaId) => {
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      if (!parent || parent.isDestroyed()) throw new Error("The export window is unavailable.");
+      return exportStoredHtmlArtifact({ chatId, mediaId, parent });
     },
   });
 }

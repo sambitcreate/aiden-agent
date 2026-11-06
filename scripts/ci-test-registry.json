@@ -1091,6 +1091,7 @@
         "renderer/shared/design-canvas/drawing.test.ts",
         "renderer/shared/design-canvas/rich-text.test.ts",
         "renderer/design/rich-text-dom.test.ts",
+        "renderer/shared/design-canvas/frame-export.test.ts",
         "main/services/design-canvas/bridge-source.test.ts",
         "renderer/design/comment-geometry.test.ts",
         "renderer/design/design-mode-consent.test.tsx",

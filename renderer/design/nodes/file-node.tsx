@@ -6,6 +6,7 @@
 import type { NodeProps } from "@xyflow/react";
 import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
+import { FrameActions } from "./frame-actions";
 import { FrameTitle } from "./frame-title";
 import { cn } from "../../lib/ui-utils";
 import { parseDesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
@@ -42,6 +43,8 @@ export type FileFrameProps = {
   onRemove(): void;
   /** The editable title the canvas draws; a plain title without it. */
   titleSlot?: React.ReactNode;
+  /** Buttons at the end of the title row. */
+  actions?: React.ReactNode;
 };
 
 export function FileFrame({
@@ -55,6 +58,7 @@ export function FileFrame({
   onMissing,
   onRemove,
   titleSlot,
+  actions,
 }: FileFrameProps) {
   const designWidth = frame.designWidth ?? DESIGN_DEFAULT_WIDTH;
   const scale = frame.w / designWidth;
@@ -163,6 +167,7 @@ export function FileFrame({
         selected={selected}
         flush
         status={docHeight === null ? `${designWidth}` : `${designWidth} × ${docHeight}`}
+        toolbar={actions}
       >
         <div ref={contentRef} className="h-full w-full overflow-hidden rounded-b-button">
           {body}
@@ -190,6 +195,7 @@ export function FileNode({ id, data, selected }: NodeProps<DesignNode>) {
         onMissing={() => canvas.markMissing(id, version)}
         onRemove={() => canvas.remove(id)}
         titleSlot={<FrameTitle frame={frame} />}
+        actions={<FrameActions frame={frame} />}
       />
     </>
   );
