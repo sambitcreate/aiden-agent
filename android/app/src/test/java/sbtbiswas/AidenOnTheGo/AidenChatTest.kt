@@ -4798,6 +4798,7 @@ class AidenChatTest {
             model.fork("user-2", AidenChatForkPosition.BEFORE)
 
             assertEquals(fork.id, withTimeout(5_000) { model.forkNavigation.first { it != null } })
+            assertEquals("private-fork-home", harness.cache.loadChat("instance-fork", fork.id)?.workspaceId)
             val request = withContext(Dispatchers.IO) { forkRequests.poll(5, TimeUnit.SECONDS) }!!
             assertEquals("source-r1", request.getHeader("If-Match"))
             val body = json.parseToJsonElement(request.body.readUtf8()).jsonObject
@@ -5216,7 +5217,7 @@ class AidenChatTest {
     )
 
     private fun forkChat(lineage: AidenChatForkLineage) = AidenChat(
-        id = "chat-fork", workspaceId = "workspace-fork", title = "Parser review",
+        id = "chat-fork", workspaceId = "private-fork-home", title = "Parser review",
         messages = listOf(
             AidenChatMessage("fork-user-1", AidenChatRole.USER, "Review the parser.", createdAt = Instant.EPOCH),
             AidenChatMessage("fork-assistant-1", AidenChatRole.ASSISTANT, "Starting.", createdAt = Instant.EPOCH)

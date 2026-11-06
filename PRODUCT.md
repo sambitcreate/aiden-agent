@@ -20,9 +20,11 @@ Aiden combines a native-feeling desktop workspace with Pi-based agent extensibil
 
 ## Operating Context
 
-The primary application is an Electron desktop app for macOS and Linux. People work in folder-backed workspaces or in No workspace chats (global settings, with a hidden per-chat folder Aiden manages), use chats and Bots, review files and Git changes, run tools with explicit permissions, and may connect native iOS or Android clients to a paired desktop for remote access.
+The primary application is an Electron desktop app for macOS and Linux. People work in folder-backed workspaces or in No workspace chats (global settings, with a hidden per-chat folder Aiden manages), use chats and Bots, review files and Git changes, run tools with explicit permissions, and may connect native iOS or Android clients to a paired desktop for remote access. Copies and forks keep independent private folders and access.
 
 ## Capabilities and Constraints
+
+First-run setup and Settings → Providers share an account, API key and local-model chooser. Providers lists saved connections first. Advanced contains private endpoints, chat-title routing and manual catalog updates. The final setup stage offers the first Bot and feature tour alongside the usage-data choice.
 
 - Supports local and hosted model providers without making one provider the product authority.
 - Reuses local skill folders and explicitly enabled installed plugin skills under the active workspace permission.

@@ -21,6 +21,7 @@ Task progress and delegated-agent inspection are separately negotiated, read-onl
 The complete planned product includes:
 
 - Multiple paired Aiden installations with QR or 100-bit setup-code pairing, Keychain credentials, discovery, manual URL entry, switching, and revocation handling.
+- No workspace forks follow the returned hidden workspace ID and retain separate private folders and access on the host.
 - Chat list/open/create/rename/delete, bounded attachments, provider/model/thinking selection, atomic turn start, resumable streaming, cancel, reasoning/tool/timeline status, and allow/deny approvals.
 - Workspace registry list/create/update/unregister, including folderless, managed scratch, and folders selected through a server-approved desktop directory browser.
 - Workspace Settings from the conversation toolbar ellipsis. Workspace permission is never a composer control.

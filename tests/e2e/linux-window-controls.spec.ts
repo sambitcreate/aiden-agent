@@ -5,7 +5,7 @@ import {
   E2E_PROFILE_NAME,
   expect,
   finishLmStudioOnboarding,
-  skipBotsOnboardingStep,
+  connectOnboardingLmStudio,
   test,
   waitForToastsToClear,
 } from "./fixtures";
@@ -159,9 +159,7 @@ test.describe("Aiden title bar during setup", () => {
     const onboarding = page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
-    await onboarding.getByRole("button", { name: /^Next/u }).click();
-    await skipBotsOnboardingStep(onboarding);
+    await connectOnboardingLmStudio(onboarding);
     await onboarding.getByRole("button", { name: "What’s sent" }).click();
     const sheet = page.getByRole("dialog", { name: "What’s sent" });
     await expect(sheet).toBeVisible();

@@ -465,22 +465,41 @@ test("a paired device's chat in a No workspace folder that holds another chat ge
     workspace({ id: "default", name: "No workspace", folderPath: "/data/chat-folders/home", noWorkspace: true }),
     workspace({ id: "project", folderPath: "/code/project" }),
   ]);
-  assert.equal(await app.service.workspaceForNoWorkspaceChat("default"), "default", "an unused hidden folder is used");
+  const first = await app.service.reserveNoWorkspaceChat("default");
+  assert.equal(first.workspaceId, "default", "an unused hidden folder is used");
+  first.release();
   assert.equal(app.registry.size, 2);
 
   app.chatsIn.set("default", ["older"]);
-  const fresh = await app.service.workspaceForNoWorkspaceChat("default");
+  const fresh = (await app.service.reserveNoWorkspaceChat("default")).workspaceId;
   assert.notEqual(fresh, "default");
   assert.equal(app.registry.get(fresh)?.noWorkspace, true);
 
   app.chatsIn.set("project", ["a", "b"]);
-  assert.equal(await app.service.workspaceForNoWorkspaceChat("project"), "project", "a real workspace is shared");
+  assert.equal((await app.service.reserveNoWorkspaceChat("project")).workspaceId, "project", "a real workspace is shared");
 
   // A phone still aims at a hidden home that was released with its last chat.
-  const replacement = await app.service.workspaceForNoWorkspaceChat("released-home");
+  const replacement = (await app.service.reserveNoWorkspaceChat("released-home")).workspaceId;
   assert.notEqual(replacement, "released-home");
   assert.equal(app.registry.get(replacement)?.noWorkspace, true, "a gone home gets a fresh hidden folder");
   assert.equal(app.registry.has("released-home"), false);
+});
+
+test("private workspace assignment excludes concurrent drafts and forks until commit settles", async (t) => {
+  const app = await noWorkspaceFixture(t, [workspace({ id: "home", folderPath: "/data/chat-folders/home", noWorkspace: true, permission: "none" })]);
+  const [first, second] = await Promise.all([
+    app.service.reserveNoWorkspaceChat("home"), app.service.reserveNoWorkspaceChat("home"),
+  ]);
+  assert.equal(first.workspaceId, "home");
+  assert.notEqual(second.workspaceId, first.workspaceId);
+  assert.equal(app.registry.get(first.workspaceId)?.permission, "none", "chosen draft access stays on its unused home");
+  // A newly published private target is not free while its owning copy prepares.
+  const third = await app.service.reserveNoWorkspaceChat(second.workspaceId);
+  assert.notEqual(third.workspaceId, second.workspaceId);
+  first.release(); second.release(); third.release();
+  const retried = await app.service.reserveNoWorkspaceChat("home");
+  assert.equal(retried.workspaceId, "home", "a failed uncommitted claim becomes reusable");
+  retried.release();
 });
 
 test("each way of adding a workspace counts once, and a failed save counts nothing", async (t) => {

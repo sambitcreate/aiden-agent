@@ -668,8 +668,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.
               target: async (workspaceId) => {
-                const target = await workspaceApplicationService.workspaceForNoWorkspaceChat(workspaceId);
-                if (target !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+                const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
+                if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
                 return target;
               },
               release: async (workspaceId) => {

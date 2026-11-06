@@ -18,11 +18,13 @@ import { DEFAULT_BOT_AVATAR, type BotDefinition } from "../../shared/bots";
 export function BotStarterCarousel({
   onCreateOwn,
   onOpenChat,
+  onBusyChange,
   presets = BOT_PRESETS,
 }: {
   /** Omitted where the create flow is not offered (onboarding). */
   onCreateOwn?(): void;
   onOpenChat(bot: BotDefinition): void;
+  onBusyChange?(busy: boolean): void;
   presets?: readonly BotPreset[];
 }) {
   const qc = useQueryClient();
@@ -32,6 +34,7 @@ export function BotStarterCarousel({
   const start = async (preset: BotPreset) => {
     if (pending) return;
     setPending(preset.id);
+    onBusyChange?.(true);
     try {
       const { bot } = await botsApi.createFromPreset({ presetId: preset.id });
       // Listed and opened now; the list reread follows.
@@ -42,6 +45,7 @@ export function BotStarterCarousel({
       toast.error(userFacingErrorMessage(error, `Aiden couldn’t start ${preset.name}.`));
     } finally {
       setPending(null);
+      onBusyChange?.(false);
     }
   };
 

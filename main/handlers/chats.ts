@@ -122,6 +122,18 @@ export function registerChatHistoryHandlers(): void {
     },
     getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
     resolveSkill: (workspaceId, invocationId) => skillRegistry.resolveFresh(workspaceId, invocationId),
+    prepareWorkspace: async (workspaceId) => {
+      // Resolve after startup: the workspace service also depends on chat/LLM services.
+      const { workspaceApplicationService } = await import("../services/workspace-application-service-main.js");
+      const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
+      if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+      return target;
+    },
+    releaseUnusedWorkspace: async (workspaceId) => {
+      const { workspaceApplicationService } = await import("../services/workspace-application-service-main.js");
+      await workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId);
+      ipcMain.broadcast("workspaces:changed", {});
+    },
   });
   const commitFirstMessageInWorktree = createWorktreeFirstMessageCommitter({
     commit: commitFirstMessage,
