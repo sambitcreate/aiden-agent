@@ -17,13 +17,27 @@ export type LiveRendererToolHandler = (
 
 export interface LiveSessionTransport {
   toolResult(sessionId: string, requestId: string, response: LiveRendererToolResult): Promise<boolean>;
-  note(sessionId: string, text: string): Promise<boolean>;
+  note(sessionId: string, text: string, options?: LiveNoteOptions): Promise<boolean>;
+}
+
+export interface LiveNoteOptions {
+  /**
+   * Resolve only once main has handed this note to Live, and false if it was
+   * refused, dropped or cleared first. Without it, true means only "queued".
+   */
+  awaitDelivery?: boolean;
 }
 
 /** One finalized utterance from the user's microphone, in arrival order. */
 export interface LiveVoiceInput {
   /** Monotonic within the renderer; later speech always has a larger id. */
   id: number;
+  /**
+   * Start mark taken when the utterance's first fragment arrived, on the
+   * same counter as `voiceInputFence()`. Speech already under way at a fence
+   * has a mark at or below it, however late it finishes.
+   */
+  startedAt: number;
   text: string;
 }
 
@@ -41,6 +55,7 @@ export class LiveSessionBus {
   private readonly tools = new Map<string, LiveRendererToolHandler>();
   private readonly inFlight = new Map<string, AbortController>();
   private lastVoiceInputId = 0;
+  private lastVoiceStart = 0;
 
   /** Called by the Live hook whenever its session starts or ends. */
   setSession(sessionId: string | null, transport: LiveSessionTransport | null): void {
@@ -68,8 +83,19 @@ export class LiveSessionBus {
     return this.lastVoiceInputId;
   }
 
-  publishVoiceInput(text: string): LiveVoiceInput {
-    const input = { id: ++this.lastVoiceInputId, text };
+  /** Called on an utterance's first fragment; its mark goes with the finished input. */
+  beginVoiceInput(): number {
+    return ++this.lastVoiceStart;
+  }
+
+  /** Latest start mark: only speech that begins after this point has a larger `startedAt`. */
+  voiceInputFence(): number {
+    return this.lastVoiceStart;
+  }
+
+  /** Publishes a finished utterance; without a start mark it counts as starting now. */
+  publishVoiceInput(text: string, startedAt?: number): LiveVoiceInput {
+    const input = { id: ++this.lastVoiceInputId, startedAt: startedAt ?? this.beginVoiceInput(), text };
     for (const listener of [...this.voiceListeners]) listener(input);
     return input;
   }
@@ -80,12 +106,12 @@ export class LiveSessionBus {
   }
 
   /** Sends a short spoken-update note to Live; false when no session or it was dropped. */
-  async note(text: string): Promise<boolean> {
+  async note(text: string, options?: LiveNoteOptions): Promise<boolean> {
     const sessionId = this.sessionId;
     const transport = this.transport;
     if (!sessionId || !transport) return false;
     try {
-      return await transport.note(sessionId, text);
+      return await (options ? transport.note(sessionId, text, options) : transport.note(sessionId, text));
     } catch {
       return false;
     }

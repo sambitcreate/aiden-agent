@@ -176,6 +176,10 @@ interface OwnedLiveSession {
   rendererTools: LiveRendererToolBroker | null;
   lastNoteAt: number;
   noteQueue: string[];
+  /** Settles a delivery-awaited note, by queue entry id, once it is sent or lost. */
+  noteDeliveries: Map<number, (delivered: boolean) => void>;
+  /** Queue entry ids, parallel to noteQueue. */
+  noteIds: number[];
   noteTimer: ReturnType<typeof setTimeout> | null;
   approveComputerUse:
     | ((
@@ -306,6 +310,7 @@ export class GeminiLiveService {
   private shuttingDown = false;
   private readonly pendingThreadFinalization = new Set<OwnedLiveSession>();
   private activeStarts = 0;
+  private lastNoteId = 0;
   private readonly startWaiters = new Set<() => void>();
 
   constructor(private readonly options: GeminiLiveServiceOptions) {}
@@ -420,6 +425,8 @@ export class GeminiLiveService {
       rendererTools: null,
       lastNoteAt: Number.NEGATIVE_INFINITY,
       noteQueue: [],
+      noteDeliveries: new Map(),
+      noteIds: [],
       noteTimer: null,
       approveComputerUse: null,
       threadRecorded: false,
@@ -623,7 +630,12 @@ export class GeminiLiveService {
    * one every two seconds; a few more wait their turn, and false means the
    * note was refused.
    */
-  sendNote(owner: RendererDocumentOwner, sessionId: string, text: string): boolean {
+  sendNote(
+    owner: RendererDocumentOwner,
+    sessionId: string,
+    text: string,
+    onDelivered?: (delivered: boolean) => void,
+  ): boolean {
     const session = this.sessions.get(owner);
     // A resuming session queues the note; flushNotes sends it once it reopens.
     if (
@@ -636,8 +648,29 @@ export class GeminiLiveService {
     if (trimmed.length === 0 || trimmed.length > GEMINI_LIVE_MAX_NOTE_CHARS) return false;
     if (session.noteQueue.length >= GEMINI_LIVE_MAX_QUEUED_NOTES) return false;
     session.noteQueue.push(trimmed);
+    const noteId = ++this.lastNoteId;
+    session.noteIds.push(noteId);
+    if (onDelivered) session.noteDeliveries.set(noteId, onDelivered);
     this.flushNotes(session);
     return true;
+  }
+
+  /**
+   * Like sendNote, but resolves only once the note has been handed to Live:
+   * true when it was sent, false when it was refused, failed to send or was
+   * cleared with the session before its turn.
+   */
+  deliverNote(owner: RendererDocumentOwner, sessionId: string, text: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!this.sendNote(owner, sessionId, text, resolve)) resolve(false);
+    });
+  }
+
+  private settleNote(session: OwnedLiveSession, noteId: number | undefined, delivered: boolean): void {
+    if (noteId === undefined) return;
+    const settle = session.noteDeliveries.get(noteId);
+    session.noteDeliveries.delete(noteId);
+    settle?.(delivered);
   }
 
   private flushNotes(session: OwnedLiveSession): void {
@@ -651,16 +684,21 @@ export class GeminiLiveService {
       return;
     }
     const note = session.noteQueue.shift()!;
+    const noteId = session.noteIds.shift();
     // While the transport rotates, the note waits for the session to reopen.
     if (session.state !== "open" || !session.protocol) {
       session.noteQueue.unshift(note);
+      if (noteId !== undefined) session.noteIds.unshift(noteId);
       return;
     }
+    let sent = true;
     try {
       session.protocol.sendText(`[Aiden update, not spoken by the user] ${note}`);
     } catch {
       // A note is advisory; a closed transport simply loses it.
+      sent = false;
     }
+    this.settleNote(session, noteId, sent);
     session.lastNoteAt = Date.now();
     this.flushNotes(session);
   }
@@ -878,6 +916,7 @@ export class GeminiLiveService {
     if (session.noteTimer) clearTimeout(session.noteTimer);
     session.noteTimer = null;
     session.noteQueue = [];
+    for (const id of session.noteIds.splice(0)) this.settleNote(session, id, false);
     session.state = "closed";
     session.resumptionAudio = [];
     session.resumptionFrame = null;
