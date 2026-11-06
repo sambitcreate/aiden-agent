@@ -1,8 +1,8 @@
-// The design canvas's toolbar, at its top left: the page picker, the Select
-// and Hand tools, a sticky note, and the Add menu for groups, workspace pages
-// and images. Drawing tools join it in later slices.
+// The design canvas's toolbar, at its top left: the page picker, the Select,
+// Hand and Comment tools, a sticky note, and the Add menu for groups,
+// workspace pages and images. Drawing tools join it in later slices.
 
-import { ChevronDown, Hand, MousePointer2, Plus, StickyNote } from "lucide-react";
+import { ChevronDown, Hand, MessageCircle, MousePointer2, Plus, StickyNote } from "lucide-react";
 import * as React from "react";
 import { CANVAS_TOOL_SHORTCUTS, type CanvasTool } from "../canvas/canvas-keymap-core";
 import {
@@ -19,6 +19,7 @@ import {
   Input,
 } from "../components/ui";
 import { canAddPage } from "../shared/design-canvas/pages";
+import { DesignCommentsPanel } from "./design-comments-panel";
 import { activeDesignPage, DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../shared/design-canvas/schema";
 
 export type DesignAddKind = "note" | "group" | "file" | "image";
@@ -32,6 +33,7 @@ export type DesignPageAction =
   | { type: "move"; id: string; step: -1 | 1 };
 
 export const DESIGN_NOTE_SHORTCUT = "N";
+export const DESIGN_COMMENT_SHORTCUT = "C";
 
 const TOOLS = [
   { tool: "select", label: "Select", Icon: MousePointer2 },
@@ -42,6 +44,9 @@ export function DesignToolbar({
   doc,
   tool,
   onToolChange,
+  commenting,
+  onComment,
+  onOpenComment,
   canAddFiles,
   onAdd,
   onPage,
@@ -49,6 +54,11 @@ export function DesignToolbar({
   doc: DesignCanvas;
   tool: CanvasTool;
   onToolChange(tool: CanvasTool): void;
+  /** The comment tool is on; it replaces the Select tool while it is. */
+  commenting: boolean;
+  onComment(): void;
+  /** Brings a comment on screen and opens it. */
+  onOpenComment(id: string): void;
   /** False while the chat's grant loads, or when its workspace cannot be framed. */
   canAddFiles: boolean;
   onAdd(kind: DesignAddKind): void;
@@ -64,13 +74,14 @@ export function DesignToolbar({
       <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
       {TOOLS.map(({ tool: item, label, Icon }) => {
         const shortcut = CANVAS_TOOL_SHORTCUTS[item];
+        const on = tool === item && !commenting;
         return (
           <Button
             key={item}
-            variant={tool === item ? "muted" : "transparent"}
+            variant={on ? "muted" : "transparent"}
             iconOnly
             aria-label={label}
-            aria-pressed={tool === item}
+            aria-pressed={on}
             aria-keyshortcuts={shortcut}
             title={`${label} (${shortcut})`}
             onClick={() => onToolChange(item)}
@@ -79,6 +90,18 @@ export function DesignToolbar({
           </Button>
         );
       })}
+      <Button
+        variant={commenting ? "muted" : "transparent"}
+        iconOnly
+        aria-label="Comment"
+        aria-pressed={commenting}
+        aria-keyshortcuts={DESIGN_COMMENT_SHORTCUT}
+        title={`Comment (${DESIGN_COMMENT_SHORTCUT})`}
+        onClick={onComment}
+      >
+        <MessageCircle />
+      </Button>
+      <DesignCommentsPanel doc={doc} onOpen={onOpenComment} />
       <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />
       <Button
         variant="transparent"

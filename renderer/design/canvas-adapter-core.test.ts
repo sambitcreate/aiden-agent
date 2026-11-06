@@ -99,12 +99,17 @@ test("removing a group keeps its frames and clears their group", () => {
   assert.deepEqual(box(byId(next, "a")), box(byId(grouped, "a")));
 });
 
-test("removing a frame drops only that frame", () => {
-  const next = applyNodeChanges(grouped, [{ type: "remove", id: "b" }]);
+test("removing a frame drops only that frame, with its comments", () => {
+  const comment = (id: string, frameId?: string) => ({
+    id, pageId: "page-1", ...(frameId ? { frameId } : {}), x: 0, y: 0, note: id, state: "open" as const, anchorState: "anchored" as const, createdAt: "2026-11-05T10:00:00.000Z",
+  });
+  const withComments = { ...grouped, comments: [comment("on-b", "b"), comment("on-a", "a"), comment("free")] };
+  const next = applyNodeChanges(withComments, [{ type: "remove", id: "b" }]);
   assert.deepEqual(
     next.frames.map((entry) => entry.id),
     ["a", "g", "loose"],
   );
+  assert.deepEqual(next.comments.map((entry) => entry.id), ["on-a", "free"]);
 });
 
 test("a new frame on an empty canvas is centred in the view", () => {

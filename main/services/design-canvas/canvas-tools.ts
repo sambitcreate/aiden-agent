@@ -254,7 +254,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_read",
         label: "Read design canvas",
         description:
-          "Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, open comments) and a count of frames elsewhere. Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.",
+          "Read the design canvas beside this chat: its pages, and on one page (the one the person is looking at unless you name another) the visible area, the frames in it (id, kind, title, path, box, group, open comments), a count of frames elsewhere, and the page's open and sent comments (each with its commentId, note, frame, file and the element it points at). Boxes are in canvas units. Pass snapshot: true to also see a picture of the canvas as the person sees it.",
         parameters: Type.Object({
           page: Type.Optional(Type.String({ maxLength: 128, description: "A page's name or id." })),
           snapshot: Type.Optional(Type.Boolean()),

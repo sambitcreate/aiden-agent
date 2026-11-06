@@ -119,7 +119,7 @@ test("a frame the person added is removed only with confirm, and removing a grou
   assert.equal(unknown.status, "error");
 });
 
-test("canvas_read lists what is in view, with open comments, and counts the rest by group", async (t) => {
+test("canvas_read lists what is in view, the page's waiting comments, and counts the rest by group", async (t) => {
   const { store, call } = await setup(t);
   await store.update("chat-1", (doc) => ({
     ...doc,
@@ -129,11 +129,32 @@ test("canvas_read lists what is in view, with open comments, and counts the rest
       { id: "far-note", kind: "note", title: "Far", text: "x", x: 50_100, y: 100, w: 240, h: 160, groupId: "far-group", pageId: "page-1", createdBy: "person" },
     ],
     comments: [
-      { id: "c1", frameId: "page", x: 10, y: 10, note: "Bigger", state: "open", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" },
+      {
+        id: "c1", frameId: "page", x: 10, y: 10, note: "Bigger", state: "open", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z",
+        anchor: { commentId: "c1", selector: "main > h1", text: "Welcome", tag: "h1", sourcePath: "design/home.html:4" },
+      },
       { id: "c2", frameId: "page", x: 10, y: 10, note: "Done", state: "resolved", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" },
+      { id: "c3", x: 5, y: 5, note: "A footer", state: "sent", pageId: "page-1", anchorState: "anchored", createdAt: "2026-11-05T01:00:00Z", sentAt: "2026-11-05T01:00:00Z" },
     ],
   }));
   const answer = await call("canvas_read");
+  assert.deepEqual(
+    answer.comments,
+    [
+      { commentId: "c3", page: "Page 1", note: "A footer", at: { x: 5, y: 5, on: "canvas" }, state: "sent" },
+      {
+        commentId: "c1",
+        page: "Page 1",
+        note: "Bigger",
+        frame: "Home",
+        frameId: "page",
+        file: "design/home.html",
+        element: { tag: "h1", text: "Welcome", selector: "main > h1", source: "design/home.html:4", found: "anchored" },
+        state: "open",
+      },
+    ],
+    "open and sent comments, newest first, with what each points at; resolved ones are left out",
+  );
   assert.equal(answer.frameCount, 3);
   assert.equal(answer.openComments, 1);
   assert.deepEqual(answer.inView.map((frame: { id: string }) => frame.id), ["page"]);

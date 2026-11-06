@@ -2,6 +2,7 @@
 // and the one-line summary in the design mode prompt section. Pure, so main
 // and tests share it.
 
+import { describeComment } from "./comments.js";
 import { activeDesignPage, type DesignCanvas, type DesignFrame } from "./schema.js";
 
 /**
@@ -13,6 +14,8 @@ export const DESIGN_REFERENCE_VIEW = { w: 1200, h: 800 } as const;
 
 /** At most this many frames are listed one by one; the rest are counted. */
 export const CANVAS_READ_FRAME_LIMIT = 60;
+/** At most this many comments are listed, newest first. */
+export const CANVAS_READ_COMMENT_LIMIT = 40;
 
 export type CanvasView = { x: number; y: number; w: number; h: number };
 
@@ -45,6 +48,8 @@ export type CanvasReadAnswer = {
   outsideView: { groupId: string; title: string; frames: number }[];
   /** Listed frames past `CANVAS_READ_FRAME_LIMIT`, left out. */
   omitted: number;
+  /** The page's open and sent comments, newest first; present when there are any. */
+  comments?: Record<string, unknown>[];
 };
 
 /** The canvas area a page's stored viewport shows (the page on screen by default), in canvas units. */
@@ -132,7 +137,17 @@ export function describeCanvas(
     inView: visible.slice(0, CANVAS_READ_FRAME_LIMIT).map((frame) => summarizeFrame(frame, comments.get(frame.id))),
     outsideView: [...outside.values()],
     omitted: Math.max(0, visible.length - CANVAS_READ_FRAME_LIMIT),
+    ...commentsOn(doc, page.id),
   };
+}
+
+function commentsOn(doc: DesignCanvas, pageId: string): { comments?: Record<string, unknown>[] } {
+  const waiting = doc.comments
+    .filter((comment) => comment.pageId === pageId && comment.state !== "resolved")
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+    .slice(0, CANVAS_READ_COMMENT_LIMIT);
+  if (waiting.length === 0) return {};
+  return { comments: waiting.map((comment) => ({ ...describeComment(doc, comment), state: comment.state })) };
 }
 
 /** The canvas in one line, for the design mode prompt section. */

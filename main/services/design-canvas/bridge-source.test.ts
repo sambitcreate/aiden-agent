@@ -27,7 +27,7 @@ function page(html: string): Page {
     },
   };
   Object.defineProperty(window, "parent", { value: parent, configurable: true });
-  let pointed: Element | null = null;
+  let pointed: unknown = null;
   window.document.elementFromPoint = () => pointed as never;
   new Function("window", DESIGN_BRIDGE_SOURCE)(window);
   return {
@@ -43,6 +43,8 @@ function page(html: string): Page {
     },
   };
 }
+
+const last = <T,>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 const HERO = `<!doctype html><html><head><title>Hero</title></head><body>
   <main>
@@ -68,20 +70,20 @@ test("a pick describes the element under the point: selector, text, tag, nearest
 
   view.pointAt("#pricing button");
   view.send({ type: "aiden-design:pick-at", requestId: "r2", x: 1, y: 1 });
-  const button = view.sent.at(-1);
+  const button = last(view.sent);
   assert.ok(button?.type === "picked");
   assert.equal(button.element?.selector, "#pricing > button");
   assert.equal(button.element?.text, "Buy now", "an element without text is named by its label");
   assert.equal(button.element?.commentId, "c-old");
 
   view.send({ type: "aiden-design:pick-at", requestId: "r3", x: 1, y: 1, wide: true });
-  const wide = view.sent.at(-1);
+  const wide = last(view.sent);
   assert.ok(wide?.type === "picked");
   assert.equal(wide.element?.selector, "#pricing", "Alt picks the parent");
 
   view.pointAt(null);
   view.send({ type: "aiden-design:pick-at", requestId: "r4", x: 1, y: 1 });
-  const nothing = view.sent.at(-1);
+  const nothing = last(view.sent);
   assert.ok(nothing?.type === "picked");
   assert.equal(nothing.element, null);
 });
@@ -122,7 +124,7 @@ test("the hover outline and highlight are drawn inside the page and never picked
   assert.equal(boxes(), 2);
   view.pointAt("[data-aiden-bridge]");
   view.send({ type: "aiden-design:pick-at", requestId: "r", x: 5, y: 5 });
-  const picked = view.sent.at(-1);
+  const picked = last(view.sent);
   assert.ok(picked?.type === "picked");
   assert.equal(picked.element, null, "the outline itself is not an element of the design");
   view.send({ type: "aiden-design:highlight", clear: true });

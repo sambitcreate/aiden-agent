@@ -115,7 +115,13 @@ export function applyNodeChanges(
     if (next !== frame) changed = true;
     frames.push(next);
   }
-  return changed ? { ...doc, frames } : doc;
+  if (!changed) return doc;
+  // A removed frame takes its comments with it.
+  const comments =
+    removed.size > 0 && doc.comments.some((comment) => comment.frameId !== undefined && removed.has(comment.frameId))
+      ? doc.comments.filter((comment) => comment.frameId === undefined || !removed.has(comment.frameId))
+      : doc.comments;
+  return { ...doc, frames, comments };
 }
 
 /**

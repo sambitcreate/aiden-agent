@@ -57,7 +57,9 @@ function withHeadingComment(doc = canvas(), queued = true): DesignCanvas {
   return next;
 }
 
-function element(extra: Partial<DesignPageElement> = {}): DesignPageElement & { selectorMatch: boolean } {
+function element(
+  extra: Partial<DesignPageElement & { selectorMatch: boolean }> = {},
+): DesignPageElement & { selectorMatch: boolean } {
   return { selector: "main > h1", text: "Ship faster", tag: "h1", rect: { x: 40, y: 80, w: 400, h: 60 }, selectorMatch: false, ...extra };
 }
 
@@ -231,4 +233,17 @@ test("the parser keeps tray and sent fields only where they make sense", () => {
   assert.equal(b!.queued, true);
   assert.equal(b!.resolvedAt, undefined);
   assert.equal(c!.anchor?.sourcePath, undefined, "a stamp outside the workspace is dropped");
+});
+
+test("marks go into the block as a few rounded points per stroke", () => {
+  let doc = withHeadingComment();
+  const points = Array.from({ length: 100 }, (_, index) => [index / 99, 0.123456] as [number, number]);
+  doc = editComment(doc, "c1", { marks: [{ points }] });
+  const block = designCommentsBlock(doc, doc.comments);
+  assert.match(block, /Marks are strokes the person drew/u);
+  const json = JSON.parse(block.slice(block.indexOf("["), block.lastIndexOf("]") + 1)) as { marks: [number, number][][] }[];
+  const [stroke] = json[0]!.marks;
+  assert.equal(stroke!.length, 24);
+  assert.deepEqual(stroke![0], [0, 0.123]);
+  assert.deepEqual(stroke![23], [1, 0.123], "both ends are kept");
 });

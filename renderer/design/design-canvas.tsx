@@ -30,6 +30,7 @@ import {
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
 import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
+import { useDesignComments } from "./design-comments";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { selectLiveFrames } from "./live-set-core";
 import { DesignNodeContext, DESIGN_DEFAULT_WIDTH, type DesignNodeContextValue } from "./nodes/design-node-context";
@@ -240,6 +241,19 @@ function LoadedDesignCanvas({
   }, [doc, missing, versionOf, viewport, viewSize, selection, entered]);
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
+  const comments = useDesignComments({ chatId, doc, change, flow, wrapper, live, versionOf });
+  const toggleComments = () => {
+    const next = !comments.active;
+    comments.setActive(next);
+    if (!next) return;
+    setTool("select");
+    setEntered(null);
+    setSelection((current) => (current.size === 0 ? current : new Set()));
+  };
+  const changeTool = (next: CanvasTool) => {
+    comments.setActive(false);
+    setTool(next);
+  };
 
   // Aiden's canvas_focus: fit the frames it names once they have arrived,
   // unless the person moved around the canvas in the last few seconds.
@@ -484,7 +498,11 @@ function LoadedDesignCanvas({
       case "addNote":
         onAdd("note");
         return true;
+      case "comment":
+        toggleComments();
+        return true;
       case "escape":
+        if (comments.escape()) return true;
         if (entered !== null) setEntered(null);
         else if (selection.size > 0) setSelection(new Set());
         else return false;
@@ -539,7 +557,7 @@ function LoadedDesignCanvas({
     <div
       ref={wrapper}
       data-typing-surface="canvas"
-      className="h-full w-full"
+      className={comments.active ? "design-commenting h-full w-full" : "h-full w-full"}
       onPointerDownCapture={noteInteraction}
       onWheelCapture={noteInteraction}
       onKeyDownCapture={noteInteraction}
@@ -548,7 +566,7 @@ function LoadedDesignCanvas({
         <StudioCanvas<DesignNode>
           label="Design canvas"
           tool={tool}
-          onToolChange={setTool}
+          onToolChange={changeTool}
           minimap={minimap}
           onMinimapChange={setMinimap}
           nodes={nodes}
@@ -573,7 +591,17 @@ function LoadedDesignCanvas({
               record: false,
             });
           }}
-          onPaneClick={() => setEntered(null)}
+          onPaneClick={(event) => {
+            if (comments.onPaneClick(event)) return;
+            setEntered(null);
+          }}
+          onNodeClick={(event, node) => {
+            comments.onNodeClick(event, node);
+          }}
+          onNodeMouseMove={comments.onNodeMouseMove}
+          onNodeMouseLeave={comments.onNodeMouseLeave}
+          nodesDraggable={!comments.active}
+          elementsSelectable={!comments.active}
           deleteKeyCode={null}
           elevateNodesOnSelect={false}
           zoomOnDoubleClick={false}
@@ -583,13 +611,18 @@ function LoadedDesignCanvas({
             <DesignToolbar
               doc={doc}
               tool={tool}
-              onToolChange={setTool}
+              onToolChange={changeTool}
+              commenting={comments.active}
+              onComment={toggleComments}
+              onOpenComment={comments.open}
               canAddFiles={grant !== null}
               onAdd={onAdd}
               onPage={onPage}
             />
           }
-        />
+        >
+          {comments.layer}
+        </StudioCanvas>
       </DesignNodeContext.Provider>
     </div>
   );

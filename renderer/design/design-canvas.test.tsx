@@ -4,12 +4,14 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { Toaster } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
+import { designCommentTray } from "./comment-tray-store";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
@@ -60,7 +62,11 @@ function measureCanvasAt1000x800() {
 }
 
 async function mount() {
-  render(<DesignCanvasRegion chatId="chat-1" width={1000} placement="split" hidden={false} />);
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <DesignCanvasRegion chatId="chat-1" width={1000} placement="split" hidden={false} />
+    </QueryClientProvider>,
+  );
   // The landmark shows while the canvas loads; wait until the loaded canvas replaces the skeleton.
   await waitFor(() => assert.equal(screen.queryByRole("status", { name: "Loading canvas" }) === null, true), SAVE_WAIT);
   const region = screen.getByRole("region", { name: "Design canvas" });
@@ -384,4 +390,127 @@ test("double-clicking a frame's title renames it; Escape keeps the old name and 
   region.focus();
   fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
   assert.ok(await screen.findByRole("group", { name: "Sticky" }), "the rename is one undo step");
+});
+
+test("the comment tool drops a pin on the canvas, and a saved comment waits in the tray for Aiden", async () => {
+  measureCanvasAt1000x800();
+  const { saved } = setup(canvasWith());
+  const region = await mount();
+  region.focus();
+  fireEvent.keyDown(region, { key: "c", code: "KeyC" });
+  assert.equal(screen.getByRole("button", { name: "Comment" }).getAttribute("aria-pressed"), "true", "C turns on the comment tool");
+
+  fireEvent.click(document.querySelector(".react-flow__pane")!, { clientX: 300, clientY: 200 });
+  const box = await screen.findByRole("dialog", { name: "New comment" });
+  assert.ok(box.textContent?.includes("Canvas"), "the box says what the comment is attached to");
+  const field = screen.getByRole("textbox", { name: "Comment" });
+  assert.equal(document.activeElement, field);
+  assert.equal((screen.getByRole("checkbox", { name: "Send to Aiden" }) as HTMLElement).getAttribute("aria-checked"), "true");
+  fireEvent.change(field, { target: { value: "Add a footer here" } });
+  fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
+
+  await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
+  const comment = saved()!.comments[0]!;
+  assert.deepEqual([comment.x, comment.y, comment.note, comment.queued, comment.frameId], [300, 200, "Add a footer here", true, undefined]);
+  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas" }));
+
+  const tray = designCommentTray("chat-1");
+  assert.deepEqual(tray?.comments.map((entry) => [entry.label, entry.note]), [["Canvas", "Add a footer here"]]);
+  assert.match(tray!.block, /"note": "Add a footer here"/u);
+
+  act(() => tray!.markSent([comment.id]));
+  await waitFor(() => assert.equal(saved()?.comments[0]?.state, "sent"), SAVE_WAIT);
+  assert.equal(designCommentTray("chat-1"), null, "a sent comment leaves the tray");
+  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Canvas, sent to Aiden" }));
+});
+
+test("a comment on a frame keeps its spot on the frame; with Send to Aiden off it stays a comment", async () => {
+  measureCanvasAt1000x800();
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 100, y: 100, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
+  const { saved } = setup(canvasWith(sticky));
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+  fireEvent.click(screen.getByRole("group", { name: "Sticky" }).closest(".react-flow__node")!, { clientX: 140, clientY: 150 });
+  await screen.findByRole("dialog", { name: "New comment" });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Send to Aiden" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Shorter" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
+  const comment = saved()!.comments[0]!;
+  assert.deepEqual([comment.frameId, comment.x, comment.y, comment.queued], ["n1", 40, 50, undefined]);
+  assert.equal(designCommentTray("chat-1"), null);
+
+  // Opening it again shows the note; Escape closes the box, a second Escape leaves the tool.
+  fireEvent.click(await screen.findByRole("button", { name: "Comment 1 on Sticky" }));
+  const field = await screen.findByRole("textbox", { name: "Comment" });
+  assert.equal((field as HTMLTextAreaElement).value, "Shorter");
+  fireEvent.keyDown(field, { key: "Escape", code: "Escape" });
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+});
+
+test("removing a frame removes its comments, and undo brings both back", async () => {
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", pageId: "page-1", createdBy: "person" };
+  const doc = canvasWith(sticky);
+  doc.comments = [{ id: "c1", pageId: "page-1", frameId: "n1", x: 10, y: 10, note: "Bigger", state: "open", anchorState: "anchored", createdAt: "2026-11-05T10:00:00.000Z" }];
+  setup(doc);
+  const region = await mount();
+  assert.ok(screen.getByRole("button", { name: "Comment 1 on Sticky" }));
+  fireEvent.click(screen.getByRole("group", { name: "Sticky" }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "Delete", code: "Delete" });
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Comment 1 on Sticky" }), null));
+  fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
+  assert.ok(await screen.findByRole("button", { name: "Comment 1 on Sticky" }));
+});
+
+test("All comments lists comments by state, and choosing one shows its page and opens it", async () => {
+  measureCanvasAt1000x800();
+  const doc = canvasWith();
+  doc.pages = [...doc.pages, { id: "p2", name: "Pricing", viewport: { x: 0, y: 0, zoom: 1 } }];
+  const at = "2026-11-05T10:00:00.000Z";
+  doc.comments = [
+    { id: "c1", pageId: "page-1", x: 10, y: 10, note: "Warmer colours", state: "open", anchorState: "anchored", createdAt: at },
+    { id: "c2", pageId: "p2", x: 40, y: 40, note: "Show yearly prices", state: "open", anchorState: "anchored", createdAt: "2026-11-05T11:00:00.000Z" },
+    { id: "c3", pageId: "page-1", x: 0, y: 0, note: "Done already", state: "resolved", anchorState: "anchored", createdAt: at, resolvedAt: at },
+  ];
+  const { saved } = setup(doc);
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "All comments, 2 open" }));
+  const panel = await screen.findByRole("dialog", { name: "All comments" });
+  assert.ok(panel.textContent?.includes("Warmer colours"));
+  assert.ok(panel.textContent?.includes("Pricing · Canvas"), "with several pages each comment names its page");
+  assert.equal(panel.textContent?.includes("Done already"), false);
+  fireEvent.click(screen.getByRole("radio", { name: "Resolved" }));
+  assert.ok(panel.textContent?.includes("Done already"));
+  fireEvent.click(screen.getByRole("radio", { name: "Open" }));
+
+  fireEvent.click(screen.getByRole("button", { name: /Show yearly prices/u }));
+  await waitFor(() => assert.equal(saved()?.activePageId, "p2"), SAVE_WAIT);
+  const box = await screen.findByRole("dialog", { name: "Comment" });
+  assert.equal((screen.getByRole("textbox", { name: "Comment" }) as HTMLTextAreaElement).value, "Show yearly prices");
+  assert.ok(box);
+});
+
+test("the pen in the comment box draws marks over a frame, saved as fractions of it", async () => {
+  measureCanvasAt1000x800();
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 100, y: 100, w: 200, h: 100, text: "hello", pageId: "page-1", createdBy: "person" };
+  const { saved } = setup(canvasWith(sticky));
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+  fireEvent.click(screen.getByRole("group", { name: "Sticky" }).closest(".react-flow__node")!, { clientX: 120, clientY: 120 });
+  await screen.findByRole("dialog", { name: "New comment" });
+  fireEvent.click(screen.getByRole("button", { name: "Draw marks" }));
+  const surface = document.querySelector("[data-design-draw]")!;
+  fireEvent.pointerDown(surface, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  fireEvent.pointerMove(surface, { pointerId: 1, clientX: 200, clientY: 150 });
+  fireEvent.pointerMove(surface, { pointerId: 1, clientX: 300, clientY: 200 });
+  fireEvent.pointerUp(surface, { pointerId: 1 });
+  assert.ok(screen.getByRole("button", { name: "Clear marks" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Comment" }), { target: { value: "Circle this" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() => assert.equal(saved()?.comments.length, 1), SAVE_WAIT);
+  assert.deepEqual(saved()!.comments[0]!.marks, [{ points: [[0, 0], [0.5, 0.5], [1, 1]] }]);
+  assert.equal(document.querySelector("[data-design-draw]"), null, "saving puts the pen away");
 });

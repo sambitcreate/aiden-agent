@@ -12,3 +12,28 @@
 .studio-canvas .react-flow__resize-control.design-resize-line {
   border-color: transparent;
 }
+
+/* The comment tool: frames take the click as a whole, so a click on a note
+   or a page drops a pin instead of typing or entering it. */
+.design-commenting .studio-canvas .react-flow__node > * {
+  pointer-events: none;
+}
+
+.design-commenting .studio-canvas .react-flow__pane,
+.design-commenting .studio-canvas .react-flow__node {
+  cursor: crosshair;
+}
+
+/* Marks drawn on a comment: the accent colour, a constant width on screen. */
+.studio-canvas .design-mark {
+  fill: none;
+  stroke: var(--color-fill-accent);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.studio-canvas .design-mark-quiet {
+  opacity: 0.45;
+}

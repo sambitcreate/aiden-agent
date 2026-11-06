@@ -40,6 +40,8 @@ import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
 import { useAppearancePreference } from "../lib/use-appearance-preference";
 import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
+import { commentCrop, designCommentAttachments, useDesignCommentTray } from "../design/comment-tray-store";
+import { DesignCommentTray } from "../design/design-comment-tray";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { FollowThroughChips } from "./follow-through-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
@@ -663,6 +665,8 @@ export function Composer({
     !composerInputLocked &&
     !(isGenerating && stoppingGeneration);
   const settings = useSettings();
+  // Design comments waiting to go to Aiden; they go with the next send.
+  const commentTray = useDesignCommentTray(chatId);
   // Read at transcript time so dictionary edits apply to an in-flight recording.
   const dictationDictionaryRef = React.useRef<unknown>(undefined);
   dictationDictionaryRef.current = settings.data?.dictationDictionary;
@@ -748,7 +752,7 @@ export function Composer({
   // While live words show, the draft on screen is not the draft that would be
   // sent, so sending waits for the final text.
   const canSend =
-    (text.trim().length > 0 || attachments.length > 0) &&
+    (text.trim().length > 0 || attachments.length > 0 || commentTray !== null) &&
     submissionAllowed &&
     !composing &&
     !dictationPreviewing &&
@@ -1933,7 +1937,7 @@ export function Composer({
       blockSend("Message text exceeds the 1 MB limit.");
       return;
     }
-    if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    if ((!trimmed && attachments.length === 0 && !commentTray) || !submissionAllowed) return;
     // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
     const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text, slashCommands) : null;
     if (submittedCommand) {
@@ -1973,17 +1977,44 @@ export function Composer({
       blockSend("Switch to a vision-capable model before sending these images.");
       return;
     }
+    // Steer takes text only, so queued design comments wait for the next send.
+    const trayComments = commentTray && mode !== "steer" ? commentTray : null;
+    let sendText = trimmed;
+    let sendAttachments = attachments;
+    if (trayComments) {
+      const extra = designCommentAttachments({
+        block: trayComments.block,
+        pictures: trayComments.comments.map((comment) => commentCrop(chatId, comment.id)),
+        existing: attachments,
+        supportsImages: visionSupported !== false,
+        id: crypto.randomUUID(),
+      });
+      if (!extra) {
+        blockSend("Remove some attachments to send your design comments with this message.");
+        return;
+      }
+      sendAttachments = [...attachments, ...extra];
+      if (!sendText) {
+        sendText =
+          trayComments.comments.length === 1
+            ? "Please make the change in my design comment."
+            : "Please make the changes in my design comments.";
+      }
+    } else if (!trimmed && attachments.length === 0) {
+      return;
+    }
     try {
-      await sendComposerPayload({
+      const sent = await sendComposerPayload({
         draftText: text,
-        sendText: trimmed,
-        attachments,
+        sendText,
+        attachments: sendAttachments,
         selectedSkill,
         skillRevision: skillSelection.revision,
         mode,
         afterCompaction: !isGenerating && queueDuringCompaction,
         afterForkSummary: !isGenerating && !queueDuringCompaction && queueForForkSummary,
       });
+      if (sent && trayComments) trayComments.markSent(trayComments.comments.map((comment) => comment.id));
     } catch (error) {
       // Cancelling a worktree send puts the text back without an error.
       if (isWorktreeSendCancelled(error)) return;
@@ -2198,6 +2229,9 @@ export function Composer({
             ) : null}
           </ComposerSlashPalettePresence>
           {queuedMessages}
+          {commentTray ? (
+            <DesignCommentTray tray={commentTray} disabled={sending || !submissionAllowed} onSend={() => void submit()} />
+          ) : null}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           {surfaces.localContext ? (
           <ComposerContextBar mode={contextChips.barMode} inputRef={inputRef}>
