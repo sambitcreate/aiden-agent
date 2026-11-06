@@ -108,11 +108,16 @@ test("Live transcript follows only when the viewport remains near the latest tur
   assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 700, 200), false);
 });
 
-test("voice approvals accept only the two explicit finalized command phrases", () => {
+test("voice approvals accept only a whole allow or deny phrase, in any Live language", () => {
   assert.equal(assistantLiveVoiceApprovalDecision("Allow once."), "allow");
   assert.equal(assistantLiveVoiceApprovalDecision("  DENY! "), "deny");
-  assert.equal(assistantLiveVoiceApprovalDecision("allow"), null);
-  assert.equal(assistantLiveVoiceApprovalDecision("yes, allow once"), null);
+  assert.equal(assistantLiveVoiceApprovalDecision("allow"), "allow");
+  assert.equal(assistantLiveVoiceApprovalDecision("Permitir"), "allow");
+  assert.equal(assistantLiveVoiceApprovalDecision("अनुमति दो"), "allow");
+  assert.equal(assistantLiveVoiceApprovalDecision("拒绝"), "deny");
+  assert.equal(assistantLiveVoiceApprovalDecision("yes"), null);
+  assert.equal(assistantLiveVoiceApprovalDecision("go ahead"), null);
+  assert.equal(assistantLiveVoiceApprovalDecision("yes, allow once please"), null);
   assert.equal(assistantLiveVoiceApprovalDecision("do not deny"), null);
   assert.equal(assistantLiveVoiceApprovalDecision("Allow once?"), null);
   assert.equal(assistantLiveVoiceApprovalDecision("deny？ "), null);

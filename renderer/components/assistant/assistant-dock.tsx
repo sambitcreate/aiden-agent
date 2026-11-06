@@ -21,6 +21,7 @@ import type { AidenLivePreferences } from "../../shared/aiden-live-settings";
 import { LiveRibbon } from "./live-ribbon";
 import { useLiveVoiceEnding } from "./live-ribbon-session";
 import { useAidenLivePreferences, type AidenLivePreferencesPatch } from "./use-aiden-live-preferences";
+import { useLiveChatVoiceApprovals } from "./use-live-chat-voice-approvals";
 
 const SESSION_ACTIONS: AssistantLiveApprovals = {
   approvals: [],
@@ -83,6 +84,7 @@ export function AssistantDock({ rightInset = 0 }: { rightInset?: number }): Reac
   const navigate = useNavigate();
   const live = useAssistantLive(null);
   const settings = useSettings();
+  useLiveChatVoiceApprovals(settings.data);
   // Until settings load, keep Live off so a disabled feature never flashes on.
   const enabled = settings.data ? settings.data.aidenLiveEnabled !== false : false;
   const buttonVisible = settings.data?.aidenLiveButtonVisible !== false;
