@@ -441,3 +441,17 @@ test("a Bot's own-wake-ups switch is on by default, stays off once turned off, a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('messaging switches store only off and survive unrelated edits',async()=>{
+ const {root,store}=await fixture();
+ try {
+  const bot=await store.create({name:'Ada',instructions:'help',avatar:DEFAULT_BOT_AVATAR});
+  const base={id:bot.id,name:bot.name,instructions:bot.instructions,avatar:bot.avatar};
+  const off=await store.update({...base,expectedRevision:bot.revision,acceptsBotMessages:false,messagesOtherBots:false});
+  const renamed=await store.update({...base,expectedRevision:off.revision,name:'New Ada'});
+  assert.equal(renamed.acceptsBotMessages,false);assert.equal(renamed.messagesOtherBots,false);
+  const on=await store.update({...base,expectedRevision:renamed.revision,acceptsBotMessages:true,messagesOtherBots:true});
+  assert.equal(Object.prototype.hasOwnProperty.call(on,'acceptsBotMessages'),false);assert.equal(Object.prototype.hasOwnProperty.call(on,'messagesOtherBots'),false);
+  const stored=await createBotStore({root:()=>root}).get(bot.id);assert.equal(stored?.revision,on.revision);
+ } finally {await rm(root,{recursive:true,force:true});}
+});

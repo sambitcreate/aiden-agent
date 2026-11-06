@@ -42,6 +42,7 @@ import type {
 import type { ChatStore } from "./chat-store-core.js";
 import type { Chat } from "./types.js";
 import type { BotStore } from "./bot-store-core.js";
+import { inspectBotRoutineModelGrant, type BotRoutineModelGrant } from "./bot-routine-models.js";
 
 /** Fixed, renderer-safe classifications. Causes and private inventory never cross this boundary. */
 export const BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES = Object.freeze({
@@ -310,13 +311,12 @@ function customBinding(
   admission: BotCapabilityAdmission,
   snapshot: BotCapabilityCatalogSnapshot,
   skillsEnabled: boolean,
+  routineModelGrant?: BotRoutineModelGrant,
 ): BoundBotCustomSelection {
   if (!admission.effectiveCustom) fail("access_unavailable");
   try {
     return bindBotCustomSelection({
-      selection: skillsEnabled
-        ? admission.effectiveCustom
-        : { ...admission.effectiveCustom, skillIds: [] },
+      selection: { ...admission.effectiveCustom, ...(!skillsEnabled ? { skillIds: [] } : {}), ...(routineModelGrant ? { providerId: inspectBotRoutineModelGrant(routineModelGrant).binding.providerOption.id, modelId: inspectBotRoutineModelGrant(routineModelGrant).binding.modelOption.id } : {}) },
       catalogRevision: snapshot.catalog.revision,
       snapshot,
     });
@@ -350,6 +350,7 @@ function buildAuthority(input: {
   admission: BotCapabilityAdmission;
   snapshot: BotCapabilityCatalogSnapshot;
   skillsEnabled: boolean;
+  routineModelGrant?: BotRoutineModelGrant;
 }): BotRuntimeEffectiveAuthority {
   const { admission, snapshot, chat } = input;
   if (!admission.chat) fail("access_unavailable");
@@ -359,7 +360,7 @@ function buildAuthority(input: {
   // The Chat fields are a durable execution mirror and must agree exactly;
   // they must never become an authority fallback when the Bot binding is absent.
   const provider = providerAuthority(admission.modelAuthority.binding);
-  assertProviderMatchesChat(chat, provider);
+  if (!input.routineModelGrant) assertProviderMatchesChat(chat, provider);
 
   // Effective Custom access may come from either the Bot or its canonical
   // Chat reduction. Keep accessMode and all non-model grants based on that
@@ -393,7 +394,7 @@ function buildAuthority(input: {
       )
       .map(otherAuthority);
   } else {
-    const binding = customBinding(admission, snapshot, input.skillsEnabled);
+    const binding = customBinding(admission, snapshot, input.skillsEnabled, input.routineModelGrant);
     files = fileAuthority(binding.fileScopes);
     shell = binding.shell
       ? {
@@ -530,6 +531,7 @@ export class BotRuntimeAuthorityResolver {
     audienceId: string;
     botId: string;
     chatId: string;
+    routineModelGrant?: BotRoutineModelGrant;
   }): Promise<BotRuntimeAuthorityAdmission> {
     for (let attempt = 1; ; attempt += 1) {
       try {
@@ -541,7 +543,7 @@ export class BotRuntimeAuthorityResolver {
   }
 
   private async admitOnce(
-    input: { audienceId: string; botId: string; chatId: string },
+    input: { audienceId: string; botId: string; chatId: string; routineModelGrant?: BotRoutineModelGrant },
     canRetry: boolean,
   ): Promise<BotRuntimeAuthorityAdmission> {
     let lease: BotCapabilityAuthorityLease | undefined;
@@ -551,6 +553,8 @@ export class BotRuntimeAuthorityResolver {
       const skillsEnabled = await (this.deps.skillsEnabled?.() ?? Promise.resolve(true));
       inventoryLease.assertCurrent();
       const { bot, chat } = await resolveIdentities(this.deps, input.botId, input.chatId);
+      const routine = input.routineModelGrant ? inspectBotRoutineModelGrant(input.routineModelGrant) : undefined;
+      if (routine) { if (routine.claim.botId !== input.botId) fail("provider_mismatch"); await routine.assertCurrent(); }
       let workspace: BotManagedWorkspaceResolution;
       try {
         workspace = await this.deps.managedWorkspace.resolve(input.botId);
@@ -565,7 +569,7 @@ export class BotRuntimeAuthorityResolver {
         snapshot = await this.deps.catalog.snapshotForRuntime({
           botId: input.botId,
           retainedBindings: await retainedBinding(this.deps, input.botId),
-          retainedProviders: await retainedProviders(this.deps, input.botId, chat),
+          retainedProviders: [...await retainedProviders(this.deps, input.botId, chat), ...(routine ? [{ sourceProviderId: routine.binding.sourceProviderId, sourceModelId: routine.binding.sourceModelId }] : [])],
         });
       } catch {
         fail("capability_changed");
@@ -579,6 +583,7 @@ export class BotRuntimeAuthorityResolver {
           chatId: input.chatId,
           snapshot,
           skillsEnabled,
+          routineModelGrant: input.routineModelGrant,
         });
       } catch (error) {
         if (
@@ -599,6 +604,7 @@ export class BotRuntimeAuthorityResolver {
         admission: capabilityAdmission,
         snapshot,
         skillsEnabled,
+        routineModelGrant: input.routineModelGrant,
       });
       let released = false;
       const signal = AbortSignal.any([lease.signal, inventoryLease.signal]);
@@ -621,7 +627,10 @@ export class BotRuntimeAuthorityResolver {
               fail("capability_changed");
             }
             const current = await resolveIdentities(this.deps, input.botId, input.chatId);
-            if (!sameIdentity(current.bot, current.chat, authority)) fail("capability_changed");
+            if (routine) {
+              await routine.assertCurrent();
+              if (current.bot.id !== bot.id || current.chat.id !== chat.id || current.chat.botId !== bot.id || current.chat.providerId !== chat.providerId || current.chat.model !== chat.model) fail("capability_changed");
+            } else if (!sameIdentity(current.bot, current.chat, authority)) fail("capability_changed");
             const [botPolicy, chatPolicy] = await Promise.all([
               this.deps.capabilityStore.getBotPolicy(input.botId),
               this.deps.capabilityStore.getChatPolicy(input.chatId),
@@ -635,7 +644,7 @@ export class BotRuntimeAuthorityResolver {
             const currentSnapshot = await this.deps.catalog.snapshotForRuntime({
               botId: input.botId,
               retainedBindings: await retainedBinding(this.deps, input.botId),
-              retainedProviders: await retainedProviders(this.deps, input.botId, current.chat),
+              retainedProviders: [...await retainedProviders(this.deps, input.botId, current.chat), ...(routine ? [{ sourceProviderId: routine.binding.sourceProviderId, sourceModelId: routine.binding.sourceModelId }] : [])],
             });
             if (currentSnapshot.catalog.revision !== authority.catalogRevision) {
               fail("capability_changed");
@@ -646,6 +655,7 @@ export class BotRuntimeAuthorityResolver {
                 chatId: input.chatId,
                 snapshot: currentSnapshot,
                 skillsEnabled,
+                routineModelGrant: input.routineModelGrant,
               });
             } catch (error) {
               fail(bindingDriftClassification(error));

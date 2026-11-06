@@ -19,7 +19,7 @@ const VAD_WINDOW = 512;
 export class ModelMissingError extends Error {
   override name = "ModelMissingError";
   constructor() {
-    super("The selected voice model isn't downloaded. Download it in Settings → Voice.");
+    super("The selected voice model isn't downloaded. Download it in Settings → Voice & Speech.");
   }
 }
 

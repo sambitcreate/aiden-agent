@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 import {
   BOT_ISSUE_ENTRY_KIND,
   BOT_ISSUE_STATUS_ENTRY_KIND,
+  botIssueStatusOf,
   type BotIssue,
   type BotIssueAction,
 } from "../../../renderer/shared/bot-issues.js";
@@ -16,6 +17,7 @@ import {
   type BotIssueResumeResult,
   type BotIssueService,
 } from "./service.js";
+import { BotAccessRequestStaleError } from "../bot-runtime/bot-access-requests.js";
 import { createBotIssueStore } from "./store.js";
 
 const BOT_ID = "bot:ada";
@@ -58,6 +60,7 @@ function setup(
     resume?: () => Promise<BotIssueResumeResult>;
     /** Hold chat writes until the test releases them, so a raise can start mid-attempt. */
     holdAppends?: boolean;
+    allowFolder?: import("./service.js").BotIssueServiceActions["allowFolder"];
   } = {},
 ) {
   const profile = tempProfile();
@@ -103,6 +106,7 @@ function setup(
       },
     },
     actions: {
+      ...(options.allowFolder ? { allowFolder: options.allowFolder } : {}),
       resumeRoutine: async (botId, id) => {
         calls.push(`resume:${botId}:${id}`);
         return options.resume ? await options.resume() : "resumed";
@@ -139,8 +143,52 @@ function setup(
   };
 }
 
+const ACCESS_ISSUE = {
+  botId: BOT_ID, kind: "access_needed" as const, dedupeKey: "access:folder:/Taxes", title: "Needs Taxes", body: "Prepare a return", actions: [{ kind: "dismiss_access" as const }, { kind: "allow_folder" as const }],
+  access: { label: "Taxes", folderPath: "/Taxes", authorization: { policyRevision: "original-rev", requestIds: ["routine:r1:1"], target: "folder" as const, root: "/Taxes", identity: { device: "1", inode: "2" }, choices: ["not_now", "always", "once"] as const } },
+};
+test("allow_folder claims the saved authorization once, keeps the card open until committed and strips private data", async () => {
+  let release!: () => void, called!: () => void;
+  const entered = new Promise<void>((resolve) => { called = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const calls: unknown[] = [];
+  const app = setup({ allowFolder: async (...args) => { calls.push(args); called(); await gate; return "added"; } });
+  const issue = await app.issues.raise(ACCESS_ISSUE);
+  assert.equal("access" in issue, false);
+  assert.equal(JSON.stringify(app.appends).includes("authorization"), false);
+  const first = app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" });
+  await entered;
+  assert.equal((await app.issues.list(BOT_ID, { open: true })).length, 1, "a crash before commit leaves the decision answerable");
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "not_open");
+  release(); assert.equal(await first, "done");
+  assert.deepEqual(calls, [[BOT_ID, { folderPath: "/Taxes", authorization: ACCESS_ISSUE.access.authorization }, issue.id]]);
+  assert.equal((await app.issues.list(BOT_ID))[0]!.resolution, "fixed");
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "not_open");
+  assert.equal((await app.store.read(BOT_ID))[0]!.access?.authorization.policyRevision, "original-rev");
+  assert.equal(JSON.stringify(await app.issues.list(BOT_ID)).includes("authorization"), false);
+});
+test("a failed folder grant leaves the issue open and retry uses the same operation id", async () => {
+  let count = 0; const operations: string[] = [];
+  const app = setup({ allowFolder: async (_botId, access, operationId) => {
+    operations.push(operationId); assert.equal(access.authorization.policyRevision, "original-rev");
+    if (++count === 1) throw new Error("saved policy changed"); return "already_allowed";
+  } });
+  const issue = await app.issues.raise(ACCESS_ISSUE);
+  await assert.rejects(app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), /saved policy changed/u);
+  assert.equal((await app.issues.list(BOT_ID, { open: true })).length, 1);
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "done");
+  assert.deepEqual(operations, [issue.id, issue.id]);
+});
+test("Whole Mac issues offer settings only and cannot run allow_folder", async () => {
+  const app = setup({ allowFolder: async () => { throw new Error("must never grant"); } });
+  const issue = await app.issues.raise({ ...ACCESS_ISSUE, actions: [{ kind: "open_settings", section: "access" }], access: { label: "your whole Mac", authorization: { policyRevision: "rev1", requestIds: ["routine:r1:1"], target: "whole_mac", root: "/", choices: ["not_now", "once"] } } });
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "allow_folder" }), "invalid");
+  await assert.rejects(app.issues.raise({ ...ACCESS_ISSUE, dedupeKey: "bad-access", access: { ...ACCESS_ISSUE.access, folderPath: undefined } }), /persistable folder/u);
+  assert.equal((await app.issues.list(BOT_ID, { open: true })).length, 1);
+});
+
 function statusEntries(appends: readonly Appended[]) {
-  return appends.filter((entry) => entry.kind === BOT_ISSUE_STATUS_ENTRY_KIND);
+  return appends.filter((entry) => entry.kind === BOT_ISSUE_STATUS_ENTRY_KIND).map(entry => ({ ...entry, data: botIssueStatusOf(entry.data) }));
 }
 
 test("raise dedupes by key and appends one chat entry", async () => {
@@ -429,3 +477,257 @@ test("deleting a routine settles the issues that asked about it", async () => {
     { issueId: paused.id, resolution: "dismissed", resolvedAt: settled?.resolvedAt },
   ]);
 });
+
+test("an access issue's delivery obligation carries its durable audience gate without authorization", async () => {
+  const app = setup();
+  await app.issues.raise(ACCESS_ISSUE);
+  assert.equal(app.deliveries.length, 1);
+  assert.equal(app.deliveries[0]!.requiredCapability, "bot:access-requests");
+  assert.equal(JSON.stringify(app.deliveries).includes("authorization"), false);
+  assert.equal(JSON.stringify(app.deliveries).includes("/Taxes"), false);
+  await app.issues.raise(ISSUE);
+  assert.equal(app.deliveries[1]!.requiredCapability, undefined);
+});
+
+test("access Not now dismisses with status and notification, without grant, stop or snooze", async () => {
+  const app = setup({ allowFolder: async () => { throw new Error("must not grant"); } });
+  const issue = await app.issues.raise({ ...ACCESS_ISSUE, actions: [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }], access: { label: "your whole Mac", authorization: { policyRevision: "rev1", requestIds: ["routine:r1:1"], target: "whole_mac", root: "/", choices: ["not_now", "once"] } } });
+  const changes: string[] = []; app.issues.onChange(id => changes.push(id));
+  assert.equal(await app.issues.act(BOT_ID, issue.id, { kind: "dismiss_access" }), "done");
+  assert.deepEqual(await app.issues.list(BOT_ID, { open: true }), []);
+  assert.deepEqual(app.calls, []);
+  assert.deepEqual(statusEntries(app.appends).map(entry => entry.data), [{issueId: issue.id, resolution: "dismissed", resolvedAt: 1000}]);
+  assert.ok(changes.includes(BOT_ID));
+});
+test("a changed authorization creates a new immutable issue; a new run alone dedupes", async () => {
+  const operations: string[] = [];
+  const app = setup({ allowFolder: async (_id, _access, operationId) => { operations.push(operationId); return "added"; } });
+  const old = await app.issues.raise(ACCESS_ISSUE);
+  const anotherRun = { ...ACCESS_ISSUE, access: { ...ACCESS_ISSUE.access, authorization: { ...ACCESS_ISSUE.access.authorization, requestIds: ["routine:r2:1"] } } };
+  assert.equal((await app.issues.raise(anotherRun)).id, old.id);
+  const fresh = await app.issues.raise({ ...anotherRun, access: { ...anotherRun.access, authorization: { ...anotherRun.access.authorization, policyRevision: "fresh-rev" } } });
+  assert.notEqual(fresh.id, old.id);
+  assert.equal((await app.store.read(BOT_ID)).find(row => row.id === old.id)?.access?.authorization.policyRevision, "original-rev");
+  assert.equal(await app.issues.act(BOT_ID, old.id, {kind: "allow_folder"}), "not_open");
+  assert.equal(await app.issues.act(BOT_ID, fresh.id, {kind: "allow_folder"}), "done");
+  assert.deepEqual(operations, [fresh.id]);
+});
+test("authoritative dismissal wins against later allow; in-flight allow cannot be dismissed mid-publication", async () => {
+  let entered!: () => void, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; }); let grants = 0;
+  const app = setup({ allowFolder: async () => { entered(); await gate; grants++; return "added"; } });
+  const first = await app.issues.raise(ACCESS_ISSUE);
+  await app.issues.act(BOT_ID, first.id, { kind: "dismiss_access" });
+  assert.equal(await app.issues.act(BOT_ID, first.id, {kind:"allow_folder"}), "not_open");
+  assert.equal(grants, 0);
+  const next = await app.issues.raise(ACCESS_ISSUE);
+  const allowing = app.issues.act(BOT_ID, next.id, {kind:"allow_folder"}); await started;
+  assert.equal(await app.issues.act(BOT_ID, next.id, {kind:"dismiss_access"}), "not_open");
+  release(); await allowing;
+  assert.equal((await app.issues.list(BOT_ID)).find(row => row.id === next.id)?.resolution, "fixed");
+});
+test("issue reads and unrelated raises survive a failed settlement status append", async () => {
+  const app = setup();
+  const old = await app.issues.raise(ACCESS_ISSUE);
+  await app.store.change(BOT_ID, rows => ({ issues: rows.map(row => row.id === old.id ? { ...row, resolvedAt: 2000, resolution: "superseded" as const, statusAppended: false } : row), result: undefined }));
+  const restarted = createBotIssueService({ store: app.store, now: () => 3000,
+    appendEntry: async (botId, kind, data) => {
+      if (kind === BOT_ISSUE_STATUS_ENTRY_KIND) throw new Error("status disk busy");
+      app.appends.push({ botId, kind, data });
+    },
+    funnel: { deliver: async () => "sent" },
+    actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },
+  });
+  assert.deepEqual(await restarted.list(BOT_ID, { open: true }), []);
+  const ordinary = await restarted.raise(ISSUE);
+  assert.deepEqual((await restarted.list(BOT_ID, { open: true })).map(row => row.id), [ordinary.id]);
+  assert.equal((await app.store.read(BOT_ID)).find(row => row.id === old.id)?.statusAppended, false);
+  assert.equal(app.appends.some(entry => entry.kind === BOT_ISSUE_ENTRY_KIND && (entry.data as { id: string }).id === ordinary.id), true);
+});
+
+test("restart repairs supersession status without withholding replacement and never mutates old private authority", async () => {
+  const app = setup(); const old = await app.issues.raise(ACCESS_ISSUE);
+  let failStatus = true;
+  let reportFailure!: () => void;
+  const failed = new Promise<void>(resolve => { reportFailure = resolve; });
+  const service = () => createBotIssueService({ store: app.store, now: () => 2000,
+    appendEntry: async (botId, kind, data) => { if (kind === BOT_ISSUE_STATUS_ENTRY_KIND && failStatus) throw new Error("status disk busy"); app.appends.push({botId, kind, data}); },
+    onError: () => reportFailure(),
+    funnel: {deliver: async () => "sent"}, actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} } });
+  const nextInput = { ...ACCESS_ISSUE, access: { ...ACCESS_ISSUE.access, authorization: {...ACCESS_ISSUE.access.authorization, policyRevision:"rev2"} } };
+  const first = service();
+  const replacement = await first.raise(nextInput);
+  assert.notEqual(replacement.id, old.id);
+  // Wait for the failed background attempt before restoring storage.
+  await failed;
+  failStatus = false;
+  const restarted = service();
+  const repaired = new Promise<void>(resolve => restarted.onChange(() => resolve()));
+  const open = await restarted.list(BOT_ID, {open:true});
+  await repaired;
+  assert.equal(open.length, 1); assert.notEqual(open[0]!.id, old.id);
+  assert.equal(statusEntries(app.appends).some(entry => (entry.data as {issueId:string}).issueId === old.id), true);
+  const fresh = await restarted.raise(nextInput); assert.equal(fresh.id, open[0]!.id);
+  assert.equal(app.appends.filter(entry => entry.kind === BOT_ISSUE_ENTRY_KIND && (entry.data as {id:string}).id === fresh.id).length, 1);
+  assert.equal((await app.store.read(BOT_ID)).find(row=>row.id===old.id)?.access?.authorization.policyRevision, "original-rev");
+});
+
+test("listing issues does not wait for a held transcript status write", async () => {
+  const app = setup();
+  const issue = await app.issues.raise(ISSUE);
+  await app.store.change(BOT_ID, rows => ({ issues: rows.map(row => ({ ...row, resolvedAt: 2000, resolution: "fixed" as const, statusAppended: false })), result: undefined }));
+  let started!: () => void, release!: () => void;
+  const writing = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const restarted = createBotIssueService({ store: app.store, now: () => 3000,
+    appendEntry: async () => { started(); await held; },
+    funnel: { deliver: async () => "sent" },
+    actions: { resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },
+  });
+  const repaired = new Promise<void>(resolve => restarted.onChange(() => resolve()));
+  const listing = restarted.list(BOT_ID, { open: true });
+  await writing;
+  try {
+    assert.deepEqual(await listing, []);
+    assert.equal((await app.store.read(BOT_ID)).find(row => row.id === issue.id)?.statusAppended, false);
+  } finally { release(); }
+  await repaired;
+  assert.equal((await app.store.read(BOT_ID)).find(row => row.id === issue.id)?.statusAppended, true);
+});
+
+test("pending settlement survives retention and restart until its transcript status is repaired", async () => {
+  const app = setup();
+  const rows = Array.from({length:55},(_,index)=>({...ACCESS_ISSUE,id:`settled-${index}`,createdAt:1000-index,resolvedAt:2000,resolution:"superseded" as const,statusAppended:true}));
+  await app.store.change(BOT_ID,()=>({issues:[...rows,{...ACCESS_ISSUE,id:"pending-status",createdAt:1,resolvedAt:2000,resolution:"superseded" as const,statusAppended:false}],result:undefined}));
+  const reopened = createBotIssueStore({profileDir:()=>app.profile});
+  assert.equal((await reopened.read(BOT_ID)).some(row=>row.id==="pending-status"&&row.statusAppended===false),true);
+  const statuses: unknown[]=[];
+  const restarted=createBotIssueService({store:reopened,now:()=>3000,appendEntry:async(_id,kind,data)=>{if(kind===BOT_ISSUE_STATUS_ENTRY_KIND)statuses.push(botIssueStatusOf(data));},funnel:{deliver:async()=>"sent"},actions:{resumeRoutine:async()=>"missing",stopRun:async()=>{},snoozeStall(){},openSettings(){}}});
+  const repaired = new Promise<void>(resolve => restarted.onChange(() => resolve()));
+  await restarted.list(BOT_ID);
+  await repaired;
+  assert.deepEqual(statuses,[{issueId:"pending-status",resolution:"superseded",resolvedAt:2000}]);
+  assert.equal((await reopened.read(BOT_ID)).length,50);
+});
+
+test("known stale folder action supersedes only its old issue while a fresh authorization remains answerable", async () => {
+  let entered!:()=>void,release!:()=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const app=setup({allowFolder:async(_id,access)=>{if(access.authorization.policyRevision==="original-rev"){entered();await gate;throw new BotAccessRequestStaleError("policy changed");}return"added";}});
+  const old=await app.issues.raise(ACCESS_ISSUE);
+  const action=app.issues.act(BOT_ID,old.id,{kind:"allow_folder"});
+  const refused=assert.rejects(action,BotAccessRequestStaleError); await started;
+  const fresh=await app.issues.raise({...ACCESS_ISSUE,access:{...ACCESS_ISSUE.access,authorization:{...ACCESS_ISSUE.access.authorization,policyRevision:"fresh-rev"}}});
+  release();await refused;
+  assert.deepEqual((await app.issues.list(BOT_ID,{open:true})).map(issue=>issue.id),[fresh.id]);
+  assert.equal(await app.issues.act(BOT_ID,fresh.id,{kind:"allow_folder"}),"done");
+});
+
+for (const kind of ["dismiss_access", "allow_folder"] as const) {
+  for (const ownStatusFails of [false, true]) {
+    test(`${kind} settles despite unrelated pending status failure; own status failure ${ownStatusFails}`, async () => {
+      const app = setup();
+      const current = await app.issues.raise(ACCESS_ISSUE);
+      // A newer unrelated row would be visited first by a global repair.
+      const other = await app.issues.raise({ ...ISSUE, dedupeKey: "other-pending" });
+      await app.store.change(BOT_ID, rows => ({
+        issues: rows.map(row => row.id === other.id ? { ...row, resolvedAt: 2000, resolution: "fixed" as const, statusAppended: false } : row),
+        result: undefined,
+      }));
+      let storageRecovered = false;
+      let grants = 0;
+      const errors: unknown[] = [];
+      let failed!: () => void;
+      const nextFailure = () => new Promise<void>(resolve => { failed = resolve; });
+      const initialFailure = nextFailure();
+      const service = createBotIssueService({
+        store: app.store, now: () => 3000,
+        appendEntry: async (botId, entryKind, data) => {
+          const id = (data as { issueId?: string }).issueId;
+          if (!storageRecovered && entryKind === BOT_ISSUE_STATUS_ENTRY_KIND && (id === other.id || ownStatusFails)) throw new Error("status disk busy");
+          app.appends.push({ botId, kind: entryKind, data });
+        },
+        onError: error => { errors.push(error); failed(); },
+        funnel: { deliver: async () => "sent" },
+        actions: { allowFolder: async () => { grants++; return "added"; }, resumeRoutine: async () => "missing", stopRun: async () => { throw new Error("must not stop"); }, snoozeStall() { throw new Error("must not snooze"); }, openSettings() {} },
+      });
+      const changes: string[] = [];
+      service.onChange(id => { changes.push(id); });
+      if (ownStatusFails) await assert.rejects(service.act(BOT_ID, current.id, { kind }), /status disk busy/u);
+      else assert.equal(await service.act(BOT_ID, current.id, { kind }), "done");
+      await initialFailure;
+      const rows = await app.store.read(BOT_ID);
+      const settled = rows.find(row => row.id === current.id)!;
+      assert.equal(settled.resolution, kind === "dismiss_access" ? "dismissed" : "fixed");
+      assert.equal(settled.resolvedAt, 3000);
+      assert.equal(settled.statusAppended, !ownStatusFails);
+      assert.equal(rows.find(row => row.id === other.id)?.statusAppended, false);
+      assert.ok(changes.includes(BOT_ID), "a durable settlement notifies the host even if its transcript write fails");
+      assert.equal(grants, kind === "allow_folder" ? 1 : 0);
+      // Observe each explicitly requested background attempt at its error
+      // callback, after its file reads and serializer cleanup have completed.
+      const listingFailure = nextFailure();
+      assert.deepEqual(await service.list(BOT_ID, { open: true }), []);
+      await listingFailure;
+      const retryFailure = nextFailure();
+      assert.equal(await service.act(BOT_ID, current.id, { kind }), "not_open");
+      await retryFailure;
+      assert.equal(grants, kind === "allow_folder" ? 1 : 0, "retry cannot regrant");
+      assert.equal(errors.length, 3, "only the three requested repairs failed");
+      storageRecovered = true;
+      let remainingMarkers = ownStatusFails ? 2 : 1;
+      const repaired = new Promise<void>(resolve => {
+        service.onChange(() => { if (--remainingMarkers === 0) resolve(); });
+      });
+      await service.list(BOT_ID);
+      await repaired;
+      assert.equal((await app.store.read(BOT_ID)).every(row => row.statusAppended === true), true);
+      assert.equal(statusEntries(app.appends).filter(entry => (entry.data as { issueId: string }).issueId === current.id).length, 1);
+    });
+  }
+}
+
+for (const kind of ["dismiss_access", "allow_folder"] as const) {
+  test(`${kind} claims during a held unrelated repair and writes its own status after that repair fails`, async () => {
+    const app = setup();
+    const current = await app.issues.raise(ACCESS_ISSUE);
+    const other = await app.issues.raise(ISSUE);
+    await app.store.change(BOT_ID, rows => ({ issues: rows.map(row => row.id === other.id ? { ...row, resolvedAt: 2000, resolution: "fixed" as const, statusAppended: false } : row), result: undefined }));
+    let entered!: () => void, release!: () => void, claimed!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const changed = new Promise<void>(resolve => { claimed = resolve; });
+    let active = 0, maximumActive = 0, grants = 0;
+    const service = createBotIssueService({
+      store: app.store, now: () => 3000,
+      appendEntry: async (botId, entryKind, data) => {
+        active++;
+        maximumActive = Math.max(maximumActive, active);
+        try {
+          if ((data as { issueId: string }).issueId === other.id) {
+            entered(); await held; throw new Error("unrelated status failed");
+          }
+          app.appends.push({ botId, kind: entryKind, data });
+        } finally { active--; }
+      },
+      funnel: { deliver: async () => "sent" },
+      actions: { allowFolder: async () => { grants++; return "added"; }, resumeRoutine: async () => "missing", stopRun: async () => {}, snoozeStall() {}, openSettings() {} },
+    });
+    service.onChange(() => claimed());
+    const acting = service.act(BOT_ID, current.id, { kind });
+    try {
+      await started;
+      await changed;
+      assert.equal((await app.store.read(BOT_ID)).find(row => row.id === current.id)?.resolvedAt, 3000, "claim and host notification happen while unrelated transcript work is held");
+      assert.equal(statusEntries(app.appends).length, 0, "strict status effects remain serialized");
+      release();
+      assert.equal(await acting, "done", "an unrelated rejection does not reject our own successful append");
+      assert.equal(maximumActive, 1);
+      assert.equal(grants, kind === "allow_folder" ? 1 : 0);
+      assert.equal((await app.store.read(BOT_ID)).find(row => row.id === current.id)?.statusAppended, true);
+      assert.equal((await app.store.read(BOT_ID)).find(row => row.id === other.id)?.statusAppended, false);
+    } finally { release(); }
+  });
+}

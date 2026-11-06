@@ -286,7 +286,7 @@ export async function sendTelegramTurn(
   if (!provider) {
     return {
       content: "",
-      error: "No Telegram provider or model is available. Choose one in Aiden → Settings → Telegram.",
+      error: "No Telegram provider or model is available. Choose one in Aiden → Settings → Connections → Telegram.",
       ok: false,
     };
   }

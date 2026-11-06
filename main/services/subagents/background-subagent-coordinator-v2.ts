@@ -1,4 +1,5 @@
 import type { SubagentRunStateV2 } from "../../../renderer/shared/subagent-runs.js";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import type { SubagentAuthorityV2 } from "./authority-v2.js";
 import {
   BackgroundSubagentLifecycleV2,
@@ -260,6 +261,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
     // sent during launch is judged against the revision its sender saw.
     releaseWaiters();
     queueMicrotask(() => void this.execute(entry));
+    reportAnalyticsEvent("subagent_launched", { role: prepared.snapshot.role });
   }
 
   async manage(value: unknown): Promise<BackgroundSubagentRunV2> {

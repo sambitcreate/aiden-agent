@@ -13,6 +13,8 @@ export interface PostHogTransport extends AnalyticsTransport {
   revokeQueue(): void;
   // Revokes the normal queue and sends only the final opt-out on a separate client.
   captureOptOut(message: AnalyticsMessage): Promise<void>;
+  // Sends one message on its own, now. True only when the request succeeded.
+  captureNow(message: AnalyticsMessage): Promise<boolean>;
   flush(): Promise<void>;
   // Flushes what is queued within the timeout, then stops.
   shutdown(timeoutMs?: number): Promise<void>;
@@ -87,12 +89,15 @@ export function createPostHogTransport(options: PostHogTransportOptions): PostHo
   const client = createClient();
   let optOut: AidenPostHog | undefined;
   let stopped = false;
+  let revoked = false;
 
   const toEvent = (message: AnalyticsMessage) => ({
     distinctId: message.distinctId,
     event: message.event,
     properties: message.properties,
     disableGeoip: true,
+    ...(message.uuid === undefined ? {} : { uuid: message.uuid }),
+    ...(message.timestamp === undefined ? {} : { timestamp: new Date(message.timestamp) }),
   });
 
   // A failed send (offline, rejected batch) never reaches the caller: the
@@ -107,7 +112,10 @@ export function createPostHogTransport(options: PostHogTransportOptions): PostHo
   };
 
   return {
-    revokeQueue: () => client.stopWithoutFlushing(),
+    revokeQueue: () => {
+      revoked = true;
+      client.stopWithoutFlushing();
+    },
     capture(message) {
       if (!stopped) client.capture(toEvent(message));
     },
@@ -121,6 +129,23 @@ export function createPostHogTransport(options: PostHogTransportOptions): PostHo
       const final = createClient();
       optOut = final;
       await quietly(() => final.captureImmediate(toEvent(message)));
+    },
+    async captureNow(message) {
+      // A stopped client resolves without sending anything.
+      if (stopped || revoked) return false;
+      // The SDK resolves a failed immediate send and reports it only through
+      // "error". A failure from another request in flight just means this
+      // record is sent again later under the same id.
+      let failed = false;
+      const stopListening = client.on("error", () => { failed = true; });
+      try {
+        await client.captureImmediate(toEvent(message));
+        return !failed;
+      } catch {
+        return false;
+      } finally {
+        stopListening();
+      }
     },
     async flush() {
       if (!stopped) await quietly(() => client.flush());

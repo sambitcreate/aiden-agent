@@ -76,7 +76,7 @@ export function LinkOpenDialog({
             <span>Remember my choice</span>
           </label>
           <Text as="p" id="link-open-remember-hint" variant="small" color="tertiary" className="m-0 mt-1 ml-6">
-            You can change this in Settings → Links.
+            You can change this in Settings → Appearance.
           </Text>
         </>
       ) : null}

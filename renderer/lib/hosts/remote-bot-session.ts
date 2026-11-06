@@ -57,6 +57,12 @@ function withTime<T extends object>(entry: T, createdAt: string | undefined): T 
 /** One host entry as a transcript entry, or null for one this Mac does not draw. */
 export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): BotTranscriptEntry | null {
   switch (entry.type) {
+    case "peer":
+      return withTime({
+        id: entry.id, type: "peer" as const, exchangeId: entry.exchangeId,
+        direction: entry.direction, peerBotId: entry.peerBotId, peerName: entry.peerName,
+        messageKind: entry.messageKind, ...(entry.final ? { final: true as const } : {}),
+      }, entry.createdAt);
     case "message":
       if (entry.role === "assistant")
         return withTime(
@@ -222,6 +228,10 @@ export function applyRemoteBotSessionEvent(
       return next({});
     case "handoff":
       return { ...next({}), handoff: event.payload.handoff };
+    case "plan":
+    case "access_request":
+      // Paired desktops remain a legacy audience and use the host notice line.
+      return next({});
     case "issues":
       // Contract revision 42: Bot issue cards are a phone surface in this
       // revision; the Mac reads the same cards from its own Bot transcript.

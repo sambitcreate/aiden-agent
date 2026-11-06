@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
+import * as analyticsFeatureReports from "../services/analytics/analytics-feature-reports.js";
+import * as analyticsIds from "../services/analytics/analytics-ids.js";
+import { analyticsSettled, captureAnalyticsEvents } from "../services/analytics/test-support.js";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parseParams } from "./chat-params.js";
@@ -19,7 +22,8 @@ import {
 
 const base = { chatId: "c1", providerId: "p", model: "m" };
 
-test("registered chat:start forwards foreground delegation and the appended turn to generation", async () => {
+test("registered chat:start forwards foreground delegation and the appended turn to generation", async (t) => {
+  const sent = captureAnalyticsEvents(t);
   type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
   const handlers = new Map<string, Handler>();
   const admission = new ChatTurnAdmission();
@@ -56,9 +60,11 @@ test("registered chat:start forwards foreground delegation and the appended turn
     "../services/llm-client.js": { llmClient: { start } },
     "../services/chat-generation-owner.js": { chatGenerationOwner: (received: unknown) => { assert.equal(received, event); return owner; } },
     "../services/chat-title.js": { chatTitleService: { startForFirstTurn: () => { titles++; } } },
-    "../services/config-store.js": { configStore: { setSettings: async () => {} } },
+    "../services/config-store.js": { configStore: { setSettings: async () => {}, getWorkspace: async () => ({}) } },
     "../services/gemini-live/service-main.js": { geminiLiveService: {} },
     "../services/tool-approval-rules-main.js": { toolApprovalRules: {} },
+    "../services/analytics/analytics-feature-reports.js": analyticsFeatureReports,
+    "../services/analytics/analytics-ids.js": analyticsIds,
   };
   // Bundle the real handler and pure helpers; replace only Electron/service ports.
   // No source rewriting, network, profile reads, or model calls are involved.
@@ -88,6 +94,11 @@ test("registered chat:start forwards foreground delegation and the appended turn
     assert.equal(titles, 1);
     await assert.rejects(handler(event, "stream-1", base, undefined), /Invalid chat message turn identifier/u);
     assert.equal(starts, 1);
+    await analyticsSettled();
+    assert.deepEqual(sent, [{
+      event: "chat_message_sent",
+      props: { provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "desktop" },
+    }]);
   } finally {
     lease.release();
   }
