@@ -45,8 +45,11 @@ function render(extra: Partial<ToolApprovalSettingsViewProps> = {}): string {
   );
 }
 
+/** The section's info hint stays usable in every state, so only the actions count here. */
 function buttons(html: string): string[] {
-  return [...html.matchAll(/<button\b[^>]*>/gu)].map((match) => match[0]);
+  return [...html.matchAll(/<button\b[^>]*>/gu)]
+    .map((match) => match[0])
+    .filter((tag) => !/aria-label="About /u.test(tag));
 }
 
 test("each always-allow rule shows exactly what it covers with its own revoke action", () => {

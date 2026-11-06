@@ -456,6 +456,7 @@ test("the overview keeps enablement, recipients, readiness, and cost visible", a
     /sent sequentially to Exa, Brave Search; Aiden never fans out/u,
   );
   assert.equal(within(setup).queryByRole("alert"), null);
+  assert.equal((document.body.textContent ?? "").split("sent sequentially").length - 1, 1);
 
   fireEvent.click(toggle);
   await waitFor(() =>

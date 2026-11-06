@@ -1059,7 +1059,7 @@ test("on a routine or Telegram turn a rule never waits: it blocks with what the 
   }
 });
 
-/** One ruled turn from `requestId`, with Settings → Bots' routines setting. */
+/** One ruled turn from `requestId`, with Settings → Bots & Approvals' routines setting. */
 async function goAheadTurn(options: Parameters<typeof ruledTurn>[0], requestId?: string) {
   let handoffAsked = false;
   const turn = ruledTurn({

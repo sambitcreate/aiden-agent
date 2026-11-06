@@ -8,9 +8,10 @@ import { DEVICE_HUB, DeviceNodeUnavailableError, deviceToolPaths } from "../../.
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 import type { DeviceServiceState, DeviceToolchainState } from "../../shared/devices.js";
 import {
-  assistantSettingsSections,
+  assistantSettingsPages,
   availableSettingsDestinations,
   SETTINGS_DESTINATIONS,
   SETTINGS_SECTIONS,
@@ -69,10 +70,9 @@ function switchFor(html: string, label: string): string {
   return match[0];
 }
 
-test("Simulator is an Agent settings destination hidden without the devices capability", () => {
+test("Simulator is a settings destination hidden without the devices capability", () => {
   assert.ok((SETTINGS_SECTIONS as readonly string[]).includes("simulator"));
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "simulator");
-  assert.equal(destination?.group, "Agent");
   assert.ok(destination?.keywords.includes("ios"));
   // The settings nav and the command palette both filter through this helper.
   const hasSimulator = (devices: boolean) =>
@@ -81,8 +81,8 @@ test("Simulator is an Agent settings destination hidden without the devices capa
   assert.equal(hasSimulator(true), true);
   assert.match(read("../../main/settings-view.tsx"), /simulator: SimulatorSettings/u);
   // The assistant prompt lists Simulator only when the devices feature is on.
-  assert.equal(assistantSettingsSections({ devices: false, botComputers: true }).includes("simulator"), false);
-  assert.equal(assistantSettingsSections({ devices: true, botComputers: true }).includes("simulator"), true);
+  assert.equal(assistantSettingsPages({ computerUse: true, devices: false, botComputers: true }).includes("Simulator"), false);
+  assert.equal(assistantSettingsPages({ computerUse: true, devices: true, botComputers: true }).includes("Simulator"), true);
 });
 
 test("a build without the devices capability reads nothing and says so", () => {
@@ -220,4 +220,35 @@ test("Settings offers Retry for the real service's missing-Node setup error and 
     await service.stop();
     await rm(baseDir, { recursive: true, force: true });
   }
+});
+
+test("helper tools fold away when current, and open with the update state when one is waiting", () => {
+  const parse = (markup: string) => {
+    const { document } = new Window();
+    document.body.innerHTML = markup;
+    return document;
+  };
+  const tools = (installed: string[]): DeviceToolchainState => ({
+    tools: [{ id: "hub", name: "expo-device-hub", pinned: "0.12.0", installed }],
+  });
+  const hostTools = (installedVersions: string[]) => ({
+    hub: { requiredVersion: "0.12.0", installedVersions, runningVersion: null },
+    agent: { requiredVersion: "0.21.12", installedVersions: [], runningVersion: null },
+  });
+  const local = (installedVersions: string[]) =>
+    state({ hosts: [{ id: "local", kind: "local", name: "This Mac", status: "ready", tools: hostTools(installedVersions) }] });
+
+  const current = parse(view({ state: local(["0.12.0"]), toolchain: tools(["0.12.0"]) }));
+  const fold = current.querySelector("details")!;
+  assert.equal(fold.hasAttribute("open"), false);
+  assert.match(fold.querySelector("summary")!.textContent ?? "", /Up to date.*1 pinned package installed/u);
+
+  const outdated = parse(view({ state: local(["0.11.0"]), toolchain: tools(["0.11.0"]) }));
+  const open = outdated.querySelector("details")!;
+  assert.equal(open.hasAttribute("open"), true);
+  assert.match(open.querySelector("summary")!.textContent ?? "", /Update available.*Older versions installed/u);
+
+  // Removing the helpers is destructive, so it never hides inside the fold.
+  assert.equal(fold.textContent?.includes("Remove installed tools"), false);
+  assert.equal(current.body.textContent?.includes("Remove installed tools"), true);
 });

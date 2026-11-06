@@ -266,9 +266,6 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
   assert.match(providersSettingsSource, />Built into Aiden</u);
   assert.doesNotMatch(providersSettingsSource, /Built into Pi|Pi model|Pi-native/u);
   assert.match(providersSettingsSource, /className="providers-settings flex flex-col gap-6"/u);
-  assert.match(providersSettingsSource, /<ProviderInfo[\s\S]*About providers built into Aiden/u);
-  assert.match(providersSettingsSource, /<details className="group border-t border-separator">/u);
-  assert.match(providersSettingsSource, /Chat title generation/u);
   assert.match(providersSettingsSource, /customProviders\.length > 0/u);
 });
 

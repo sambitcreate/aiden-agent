@@ -17,7 +17,7 @@ import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calend
 //   rule hands the call to the person instead of running it. On a turn nobody
 //   is watching (routine, Telegram) neither waits: the call is blocked with
 //   what the person needs to do.
-// - Routines go ahead (Settings → Bots, off by default): on a run made only of
+// - Routines go ahead (Settings → Bots & Approvals, off by default): on a run made only of
 //   routine inputs, an approval (today's or a rule's Ask first) is granted
 //   without a card. Hand-offs, the locked rules, Computer Use on the person's
 //   Mac and every turn a person or Telegram joined are unchanged.
@@ -136,7 +136,7 @@ export interface BotToolAssemblyPorts {
   rules?(botId: string): Promise<readonly BotRule[]>;
   /** The Bot's name, for the hand-off card's "why". */
   botName?(botId: string): Promise<string | undefined>;
-  /** Settings → Bots, read fresh on every call: routine runs go ahead without asking. Absent: off. */
+  /** Settings → Bots & Approvals, read fresh on every call: routine runs go ahead without asking. Absent: off. */
   routinesGoAhead?(): Promise<boolean>;
   plans?: Pick<BotPlans, "cover" | "admit">;
 }

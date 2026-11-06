@@ -98,3 +98,41 @@ test("after saving a new override, choosing another unconfigured model starts bl
   assert.equal(reserveInput().value, "", "a/x's saved numbers do not carry over to b/y");
   assert.equal(recentInput().value, "");
 });
+
+const fold = () => screen.getByText("Model compaction budgets").closest("details")!;
+const budgets = (overrides: CompactionModelOverrides) => (
+  <CompactionBudgetSettings overrides={overrides} modelKeys={[]} disabled={false} onSave={async () => {}} />
+);
+
+test("with no overrides the form stays folded and the summary says defaults apply", () => {
+  mount({});
+  assert.equal(fold().open, false);
+  assert.notEqual(screen.queryByText("No overrides · models use automatic defaults"), null);
+});
+
+test("saved overrides open the form, including when they load after the page", () => {
+  const view = render(budgets({}));
+  assert.equal(fold().open, false);
+  view.rerender(budgets({ "a/x": { reserveTokens: 50000 } }));
+  assert.equal(fold().open, true);
+  assert.notEqual(screen.queryByText("1 model has a saved budget"), null);
+});
+
+test("resetting the last override leaves the form open where the person is working", () => {
+  const view = render(budgets({ "a/x": { reserveTokens: 50000 } }));
+  view.rerender(budgets({}));
+  assert.equal(fold().open, true);
+});
+
+test("a person who closed the form keeps it closed, with what they typed intact", () => {
+  const view = render(budgets({}));
+  const toggle = fold().querySelector("summary")!;
+  fireEvent.click(toggle);
+  assert.equal(fold().open, true);
+  fireEvent.change(modelInput(), { target: { value: "b/y" } });
+  fireEvent.click(toggle);
+  assert.equal(fold().open, false);
+  assert.equal(modelInput().value, "b/y");
+  view.rerender(budgets({ "a/x": { reserveTokens: 50000 } }));
+  assert.equal(fold().open, false);
+});

@@ -1292,7 +1292,7 @@ function feedRowLineage(row: Record<string, unknown> | undefined): ChatForkLinea
 export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: string }) {
   const navigate = useNavigate();
   const manage = React.useCallback(() => {
-    void navigate({ to: "/settings", search: { section: "remoteAccess" } });
+    void navigate({ to: "/settings", search: { section: "peerHosts" } });
   }, [navigate]);
   const removed = React.useCallback(() => {
     void navigate({ to: "/" });
@@ -1311,7 +1311,7 @@ export function RemoteChatView({ hostId, chatId }: { hostId: string; chatId: str
 export interface RemoteChatRouteProps {
   hostId: string;
   chatId: string;
-  /** Opens Settings → Remote Access. */
+  /** Opens Settings → Connections. */
   onManage(): void;
   /** Leaves the route after the open chat was deleted. */
   onRemoved(): void;
@@ -1371,7 +1371,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
           title="This Mac is not connected"
-          description="Pair it again or turn it back on in Settings → Remote Access to open its chats."
+          description="Pair it again or turn it back on in Settings → Connections → Control other devices to open its chats."
         />
       </div>
     );

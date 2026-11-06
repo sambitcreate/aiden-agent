@@ -508,7 +508,8 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     listModels: listTelegramModels,
     abortChat: async (chatId) => {
       lifecycle.cancelChat(chatId);
-      await llmClient.cancelChat(chatId);
+      // The chat stays, so this is a Stop, not the deletion cleanup behind llmClient.cancelChat.
+      if (!(await llmClient.stopChatWork(chatId))) throw new Error("The running turn did not stop in time.");
     },
     admitRunInput: async (input) => {
       const result = await llmClient.admitChatRunInput(input);
@@ -1024,13 +1025,9 @@ export function createTelegramProfileManager() {
       else await secrets.deleteKey(key);
     },
     async setEnabled(enabled: boolean): Promise<void> {
-      await setProfileSettings(activeProfile, { telegramEnabled: enabled });
-      if (enabled) {
-        await telegramBotBindings.assertHealthy();
-        await serviceFor(activeProfile).start();
-      } else {
-        serviceFor(activeProfile).stop();
-      }
+      // Check first: a failed Connect must not leave the bridge saved as on.
+      if (enabled) await telegramBotBindings.assertHealthy();
+      await serviceFor(activeProfile).setEnabled(enabled);
     },
     connect: () => serviceFor(activeProfile).connect(),
     disconnect: () => serviceFor(activeProfile).disconnect(),

@@ -680,7 +680,7 @@ test("hybrid unmappable shortcut latches toggle and ignores release", async () =
   assert.equal(subject.coordinator.currentStage, "transcribing");
 });
 
-const SETUP_MESSAGE = "Download a voice model in Settings → Voice.";
+const SETUP_MESSAGE = "Download a voice model in Settings → Voice & Speech.";
 
 test("needs-setup never starts recording and shows the setup message", async () => {
   let shows = 0;
