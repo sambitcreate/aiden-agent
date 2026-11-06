@@ -43,6 +43,8 @@ import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { useDesignComments } from "./design-comments";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
+import { DesignPanelButton, DesignSidePanel, type DesignPanelTab } from "./design-side-panel";
+import { reorderLayer, stepLayer, type DesignLayerPlace } from "./layers-core";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { selectLiveFrames } from "./live-set-core";
 import {
@@ -135,6 +137,8 @@ function LoadedDesignCanvas({
   const [viewSize, setViewSize] = React.useState({ w: 0, h: 0 });
   const [live, setLive] = React.useState<ReadonlySet<string>>(() => new Set());
   const [presentation, setPresentation] = React.useState<DesignPresentation | null>(null);
+  const [panel, setPanel] = React.useState(readPanelState);
+  React.useEffect(() => writePanelState(panel), [panel]);
   const presentingRef = React.useRef(false);
   presentingRef.current = presentation !== null;
 
@@ -264,7 +268,8 @@ function LoadedDesignCanvas({
 
   // At most six frames run a real page; the rest show their snapshots.
   React.useEffect(() => {
-    const frames = framesOnPage(doc).filter((frame) => missing.get(frame.id) !== versionOf(frame.path));
+    // A hidden frame is not drawn, so it never runs its page.
+    const frames = framesOnPage(doc).filter((frame) => !frame.hidden && missing.get(frame.id) !== versionOf(frame.path));
     setLive((previous) => {
       const next = selectLiveFrames({ frames, viewport, view: viewSize, selected: selection, entered, previous });
       return sameSet(previous, next) ? previous : next;
@@ -636,6 +641,9 @@ function LoadedDesignCanvas({
       case "comment":
         toggleComments();
         return true;
+      case "panel":
+        setPanel((current) => ({ ...current, open: !current.open }));
+        return true;
       case "draw":
         chooseDrawTool(command.tool);
         return true;
@@ -652,6 +660,30 @@ function LoadedDesignCanvas({
         return false;
     }
   };
+
+  // The side panel's edits go through the same paths as a drag on the canvas,
+  // so a moved artboard carries its items and arrows follow what they join.
+  const moveTo = React.useCallback(
+    (id: string, x: number, y: number) =>
+      change((current) => applyNodeChanges(current, [{ type: "position", id, position: { x, y } }])),
+    [change],
+  );
+  const resizeTo = React.useCallback(
+    (id: string, w: number, h: number) =>
+      change((current) =>
+        applyNodeChanges(current, [{ type: "dimensions", id, dimensions: { width: w, height: h }, setAttributes: true }]),
+      ),
+    [change],
+  );
+  const reorder = React.useCallback(
+    (id: string, targetId: string, place: DesignLayerPlace) =>
+      change((current) => reorderLayer(current, id, targetId, place)),
+    [change],
+  );
+  const stepOrder = React.useCallback(
+    (id: string, direction: "forward" | "backward") => change((current) => stepLayer(current, id, direction)),
+    [change],
+  );
 
   const download = React.useCallback(
     (id: string, format: DesignExportFormat) => {
@@ -799,105 +831,160 @@ function LoadedDesignCanvas({
   );
 
   return (
-    // Its letter, digit and +/- keys are the canvas's own, so the chat's composer leaves them alone.
-    <div
-      ref={wrapper}
-      data-typing-surface="canvas"
-      data-presenting={presentation ? (presentation.single ? "frame" : "page") : undefined}
-      className={
-        presentation
-          ? "design-presenting fixed inset-0 z-[70] bg-background"
-          : comments.active
-            ? "design-commenting h-full w-full"
-            : drawTool
-              ? "design-drawing h-full w-full"
-              : "h-full w-full"
-      }
-      data-draw-tool={drawTool ?? undefined}
-      onPointerDownCapture={noteInteraction}
-      onWheelCapture={noteInteraction}
-      onKeyDownCapture={noteInteraction}
-    >
-      <DesignNodeContext.Provider value={context}>
-        <StudioCanvas<DesignNode>
-          label="Design canvas"
-          tool={tool}
-          onToolChange={changeTool}
-          minimap={minimap}
-          onMinimapChange={setMinimap}
-          nodes={nodes}
-          edges={NO_EDGES}
-          nodeTypes={designNodeTypes}
-          onNodesChange={onNodesChange}
-          onInit={(instance) => {
-            flow.current = instance;
-          }}
-          defaultViewport={activeDesignPage(doc).viewport}
-          onMove={(_event, next) => {
-            latestViewport.current = next;
-            if (moveFrame.current !== null) return;
-            moveFrame.current = requestAnimationFrame(() => {
-              moveFrame.current = null;
-              setViewport(latestViewport.current);
-            });
-          }}
-          onMoveEnd={(_event, next) => {
-            latestViewport.current = next;
-            // Present moves the view for itself; the page keeps where the person left it.
-            if (presentingRef.current) return;
-            change((current) => withActiveViewport(current, { x: next.x, y: next.y, zoom: next.zoom }), {
-              record: false,
-            });
-          }}
-          onPaneClick={(event) => {
-            if (presentation) return;
-            if (comments.onPaneClick(event)) return;
-            setEntered(null);
-          }}
-          onNodeClick={(event, node) => {
-            comments.onNodeClick(event, node);
-          }}
-          onNodeMouseMove={comments.onNodeMouseMove}
-          onNodeMouseLeave={comments.onNodeMouseLeave}
-          nodesDraggable={!comments.active && drawTool === null}
-          elementsSelectable={!comments.active && drawTool === null}
-          deleteKeyCode={null}
-          elevateNodesOnSelect={false}
-          zoomOnDoubleClick={false}
-          resolveKey={resolveKey}
-          presenting={presentation !== null}
-          actions={<DesignPresentButton onPresent={() => present(null)} />}
-          overlay={
-            presentation ? (
-              <DesignPresentBar
-                presentation={presentation}
-                title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
-                onStep={step}
-                onExit={stopPresenting}
+    <div className="flex h-full w-full">
+      {/* Its letter, digit and +/- keys are the canvas's own, so the chat's composer leaves them alone. */}
+      <div
+        ref={wrapper}
+        data-typing-surface="canvas"
+        data-presenting={presentation ? (presentation.single ? "frame" : "page") : undefined}
+        className={
+          presentation
+            ? "design-presenting fixed inset-0 z-[70] bg-background"
+            : comments.active
+              ? "design-commenting h-full min-w-0 flex-1"
+              : drawTool
+                ? "design-drawing h-full min-w-0 flex-1"
+                : "h-full min-w-0 flex-1"
+        }
+        data-draw-tool={drawTool ?? undefined}
+        onPointerDownCapture={noteInteraction}
+        onWheelCapture={noteInteraction}
+        onKeyDownCapture={noteInteraction}
+      >
+        <DesignNodeContext.Provider value={context}>
+          <StudioCanvas<DesignNode>
+            label="Design canvas"
+            tool={tool}
+            onToolChange={changeTool}
+            minimap={minimap}
+            onMinimapChange={setMinimap}
+            nodes={nodes}
+            edges={NO_EDGES}
+            nodeTypes={designNodeTypes}
+            onNodesChange={onNodesChange}
+            onInit={(instance) => {
+              flow.current = instance;
+            }}
+            defaultViewport={activeDesignPage(doc).viewport}
+            onMove={(_event, next) => {
+              latestViewport.current = next;
+              if (moveFrame.current !== null) return;
+              moveFrame.current = requestAnimationFrame(() => {
+                moveFrame.current = null;
+                setViewport(latestViewport.current);
+              });
+            }}
+            onMoveEnd={(_event, next) => {
+              latestViewport.current = next;
+              // Present moves the view for itself; the page keeps where the person left it.
+              if (presentingRef.current) return;
+              change((current) => withActiveViewport(current, { x: next.x, y: next.y, zoom: next.zoom }), {
+                record: false,
+              });
+            }}
+            onPaneClick={(event) => {
+              if (presentation) return;
+              if (comments.onPaneClick(event)) return;
+              setEntered(null);
+            }}
+            onNodeClick={(event, node) => {
+              comments.onNodeClick(event, node);
+            }}
+            onNodeMouseMove={comments.onNodeMouseMove}
+            onNodeMouseLeave={comments.onNodeMouseLeave}
+            nodesDraggable={!comments.active && drawTool === null}
+            elementsSelectable={!comments.active && drawTool === null}
+            deleteKeyCode={null}
+            elevateNodesOnSelect={false}
+            zoomOnDoubleClick={false}
+            resolveKey={resolveKey}
+            presenting={presentation !== null}
+            actions={
+              <>
+                <DesignPresentButton onPresent={() => present(null)} />
+                <DesignPanelButton
+                  open={panel.open}
+                  onToggle={() => setPanel((current) => ({ ...current, open: !current.open }))}
+                />
+              </>
+            }
+            overlay={
+              presentation ? (
+                <DesignPresentBar
+                  presentation={presentation}
+                  title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
+                  onStep={step}
+                  onExit={stopPresenting}
+                />
+              ) : null
+            }
+            emptyState={<DesignCanvasEmpty />}
+            toolbar={
+              <DesignToolbar
+                doc={doc}
+                tool={tool}
+                onToolChange={changeTool}
+                commenting={comments.active}
+                onComment={toggleComments}
+                onOpenComment={comments.open}
+                canAddFiles={grant !== null}
+                onAdd={onAdd}
+                onPage={onPage}
+                drawTool={drawTool}
+                onDraw={chooseDrawTool}
               />
-            ) : null
-          }
-          emptyState={<DesignCanvasEmpty />}
-          toolbar={
-            <DesignToolbar
-              doc={doc}
-              tool={tool}
-              onToolChange={changeTool}
-              commenting={comments.active}
-              onComment={toggleComments}
-              onOpenComment={comments.open}
-              canAddFiles={grant !== null}
-              onAdd={onAdd}
-              onPage={onPage}
-              drawTool={drawTool}
-              onDraw={chooseDrawTool}
-            />
-          }
-        >
-          {presentation ? null : comments.layer}
-          {presentation ? null : drawing.layer}
-        </StudioCanvas>
-      </DesignNodeContext.Provider>
+            }
+          >
+            {presentation ? null : comments.layer}
+            {presentation ? null : drawing.layer}
+          </StudioCanvas>
+        </DesignNodeContext.Provider>
+      </div>
+      {panel.open && !presentation ? (
+        <DesignSidePanel
+          chatId={chatId}
+          doc={doc}
+          selection={selection}
+          tab={panel.tab}
+          onTab={(tab) => setPanel((current) => ({ ...current, tab }))}
+          onClose={() => {
+            setPanel((current) => ({ ...current, open: false }));
+            wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
+          }}
+          versionOf={versionOf}
+          onSelect={(ids) => setSelection(new Set(ids))}
+          update={update}
+          moveTo={moveTo}
+          resizeTo={resizeTo}
+          reorder={reorder}
+          step={stepOrder}
+        />
+      ) : null}
     </div>
   );
+}
+
+const PANEL_STORAGE_KEY = "aiden.design.sidePanel";
+const PANEL_TABS: readonly DesignPanelTab[] = ["properties", "layers", "code"];
+
+/** Whether the side panel was open, and on which tab, the last time on this device. */
+function readPanelState(): { open: boolean; tab: DesignPanelTab } {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(PANEL_STORAGE_KEY) ?? "null") as unknown;
+    if (saved && typeof saved === "object") {
+      const { open, tab } = saved as { open?: unknown; tab?: unknown };
+      return { open: open === true, tab: PANEL_TABS.includes(tab as DesignPanelTab) ? (tab as DesignPanelTab) : "properties" };
+    }
+  } catch {
+    // Storage that cannot be read starts the panel closed.
+  }
+  return { open: false, tab: "properties" };
+}
+
+function writePanelState(state: { open: boolean; tab: DesignPanelTab }): void {
+  try {
+    window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Not remembered; it still works for this session.
+  }
 }

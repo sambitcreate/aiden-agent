@@ -24,6 +24,7 @@ export function ShapeNode({ data, selected }: NodeProps<DesignNode>) {
         data-selected={selected ? "true" : "false"}
         className={cn("flex h-full w-full items-center justify-center overflow-hidden p-2", oval ? "rounded-full" : "rounded-[8px]")}
         style={{
+          ...(!oval && frame.radius !== undefined ? { borderRadius: frame.radius } : {}),
           background: frame.fill ? designFillVar(frame.fill) : "transparent",
           boxShadow: outline ? `inset 0 0 0 ${frame.strokeWidth ?? 2}px ${outline}` : undefined,
         }}

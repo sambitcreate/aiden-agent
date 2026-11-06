@@ -16,6 +16,19 @@ const COLOR_VARS: Record<DesignColor, string> = {
   pink: "var(--chart-7)",
 };
 
+/** What each palette colour is called in menus; ink is the theme's own text colour. */
+export const DESIGN_COLOR_NAMES: Readonly<Record<DesignColor, string>> = {
+  ink: "Default",
+  gray: "Gray",
+  blue: "Blue",
+  green: "Green",
+  yellow: "Yellow",
+  red: "Red",
+  purple: "Purple",
+  teal: "Teal",
+  pink: "Pink",
+};
+
 /** A palette colour as a CSS colour. */
 export function designColorVar(color: DesignColor): string {
   return COLOR_VARS[color];

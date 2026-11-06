@@ -565,6 +565,10 @@ type SavedFrame = {
   fill?: string;
   paper?: string;
   printMode?: string;
+  radius?: number;
+  guide?: string;
+  hidden?: boolean;
+  locked?: boolean;
 };
 
 async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
@@ -948,4 +952,135 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   await capture(page, "1440-open-full-window");
   await single.getByRole("button", { name: "Close full window" }).click();
   await expect(single).toHaveCount(0);
+});
+
+test("the side panel edits the selected item, lists the page's layers to hide, lock, rename and reorder, and shows a page's code", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const hero = path.join(designDir, "hero.html");
+  await writeFile(hero, page_("Hero", "Ship faster", "#3b6cf6"));
+
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  await answerNextPick(app, hero);
+  await addFromMenu(page, "File…");
+  await addNote(page);
+  await page.keyboard.type("Launch plan");
+  await clickEmptyCanvas(page);
+  const tools = canvas.getByRole("toolbar", { name: "Canvas tools" });
+  await tools.getByRole("button", { name: "Frame", exact: true }).click();
+  // Below the page, so nothing covers it.
+  await dragOnCanvas(page, { x: 60, y: 690 }, { x: 420, y: 850 });
+  await page.keyboard.press("r");
+  await dragOnCanvas(page, { x: 100, y: 720 }, { x: 240, y: 800 });
+  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind)).toEqual([
+    "file",
+    "note",
+    "frame",
+    "rect",
+  ]);
+
+  // I opens the panel; Properties follows the selection.
+  await canvas.focus();
+  await page.keyboard.press("i");
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await expect(panel).toBeVisible();
+  await expect(canvas.getByRole("button", { name: "Hide side panel" })).toHaveAttribute("aria-pressed", "true");
+  const rectangle = canvas.getByRole("group", { name: "Rectangle" });
+  await rectangle.click();
+  await expect(panel).toContainText("Rectangle");
+  await panel.getByRole("textbox", { name: "Width", exact: true }).fill("300");
+  await page.keyboard.press("Enter");
+  await panel.getByRole("textbox", { name: "Radius" }).fill("24");
+  await page.keyboard.press("Enter");
+  await panel.getByRole("combobox", { name: "Fill" }).click();
+  await page.getByRole("option", { name: "Green" }).click();
+  await expect
+    .poll(async () => {
+      const rect = (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect");
+      return rect && { w: rect.w, radius: rect.radius, fill: rect.fill };
+    })
+    .toEqual({ w: 300, radius: 24, fill: "green" });
+  await capture(page, "1440-side-panel-properties");
+
+  // An artboard takes a background and a layout guide drawn over it.
+  await canvas.getByRole("group", { name: "Frame", exact: true }).click({ position: { x: 320, y: 140 } });
+  await expect(panel).toContainText("Artboard");
+  await panel.getByRole("combobox", { name: "Layout guide" }).click();
+  await page.getByRole("option", { name: "12 columns" }).click();
+  await panel.getByRole("combobox", { name: "Background" }).click();
+  await page.getByRole("option", { name: "Teal" }).click();
+  await expect
+    .poll(async () => {
+      const board = (await savedFrames(userDataDir)).find((entry) => entry.kind === "frame");
+      return board && { guide: board.guide, fill: board.fill };
+    })
+    .toEqual({ guide: "columns-12", fill: "teal" });
+  await expect(canvas.locator('[data-design-guide="columns-12"] > *')).toHaveCount(12);
+
+  // Layers: front-most first, the rectangle under its artboard.
+  await panel.getByRole("radio", { name: "Layers" }).click();
+  const layers = panel.getByRole("list", { name: "Layers" });
+  const rows = async () => layers.locator("[data-layer-name]").allTextContents();
+  await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
+  await expect(panel.getByRole("list", { name: "In Frame" })).toContainText("Rectangle");
+  await capture(page, "1440-side-panel-layers");
+
+  // ⌥↓ sends the note behind the page; dragging it onto the page's top half brings it back in front.
+  await layers.getByRole("button", { name: "Launch plan", exact: true }).focus();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect.poll(rows).toEqual(["hero.html", "Launch plan", "Frame", "Rectangle"]);
+  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind).slice(0, 2)).toEqual(["note", "file"]);
+  const heroRow = layers.locator("[data-layer-id]").filter({ hasText: "hero.html" });
+  await layers.locator("[data-layer-id]").filter({ hasText: "Launch plan" }).dragTo(heroRow, { targetPosition: { x: 60, y: 4 } });
+  await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
+
+  // Hide takes a page off the canvas until Show; it stays in the list.
+  await layers.getByRole("button", { name: "Hide hero.html" }).click();
+  await expect(frame(page, "hero.html")).toHaveCount(0);
+  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "file")?.hidden).toBe(true);
+  await layers.getByRole("button", { name: "Show hero.html" }).click();
+  await expect(frame(page, "hero.html")).toBeVisible();
+
+  // A locked rectangle can still be selected, but stays where it is and survives Delete.
+  await layers.getByRole("button", { name: "Lock Rectangle" }).click();
+  await layers.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect")?.locked).toBe(true);
+  const before = (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect")!;
+  const box = (await rectangle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 60, { steps: 8 });
+  await page.mouse.up();
+  await expect(rectangle).toHaveAttribute("data-selected", "true");
+  await canvas.focus();
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(1000);
+  const after = (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect");
+  expect(after && { x: after.x, y: after.y }).toEqual({ x: before.x, y: before.y });
+
+  // A double-click renames from the list.
+  await layers.getByRole("button", { name: "Frame", exact: true }).dblclick();
+  await panel.getByRole("textbox", { name: "Name" }).fill("Mobile home");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "frame")?.title).toBe("Mobile home");
+
+  // Code: the selected page's file, read only, and Copy puts it on the clipboard.
+  await layers.getByRole("button", { name: "hero.html", exact: true }).click();
+  await panel.getByRole("radio", { name: "Code" }).click();
+  const code = panel.getByRole("region", { name: "Code" }).or(panel.locator('pre[aria-label="Code"]'));
+  await expect(code).toContainText("Ship faster");
+  await capture(page, "1440-side-panel-code");
+  await panel.getByRole("button", { name: "Copy code" }).click();
+  await expect.poll(async () => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(await readFile(hero, "utf8"));
+
+  // I again closes it, and it comes back on the tab it was on.
+  await canvas.focus();
+  await page.keyboard.press("i");
+  await expect(panel).toHaveCount(0);
+  await canvas.getByRole("button", { name: "Show side panel" }).click();
+  await expect(panel.getByRole("radio", { name: "Code" })).toHaveAttribute("aria-checked", "true");
 });

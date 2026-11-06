@@ -84,7 +84,9 @@ resets the zoom, `+` / `-` zoom, `V` / `H` pick the Select or Hand tool,
 live page, a frame or the canvas opens a comment there; `⌥` picks the
 element's parent; in the comment box `↩` saves and `Esc` closes; `Esc` again
 leaves the tool), `F2` renames the selected frame (as does a double-click on
-its title; `↩` keeps the name, `Esc` cancels) and `M` shows the minimap.
+its title; `↩` keeps the name, `Esc` cancels), `M` shows the minimap and
+`I` shows or hides the side panel (in its Layers list, `F2` renames a row and
+`⌥↑` / `⌥↓` bring the item forward or send it back).
 The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
 `L` a line, `⇧L` an arrow, `P` the pencil and `⇧P` the pen (hold `⇧` while
 dragging for a square box or a 45° line; `↩`, `Esc` or a double-click

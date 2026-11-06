@@ -49,6 +49,8 @@ export function nodesFromCanvas(doc: DesignCanvas, selection: ReadonlySet<string
   return [...containers, ...others].map((frame): DesignNode => {
     const geometry = frame.kind === "connector" ? connectorGeometry(byId, frame) : undefined;
     const box = geometry?.box ?? frame;
+    // An item in a hidden group or artboard is hidden with it.
+    const hidden = frame.hidden === true || (frame.groupId !== undefined && byId.get(frame.groupId)?.hidden === true);
     return {
       id: frame.id,
       type: frame.kind,
@@ -56,6 +58,9 @@ export function nodesFromCanvas(doc: DesignCanvas, selection: ReadonlySet<string
       width: box.w,
       height: box.h,
       selected: selection.has(frame.id),
+      ...(hidden ? { hidden: true } : {}),
+      // A locked item can be selected (to unlock it) but not moved, resized or removed.
+      ...(frame.locked ? { draggable: false, deletable: false, className: "design-locked" } : {}),
       data: geometry ? { frame, ends: geometry.ends } : { frame },
       // A line takes the pointer only where it is drawn, so what is under its box stays reachable.
       ...(isDesignLine(frame.kind) ? { style: { pointerEvents: "none" as const } } : {}),
@@ -87,7 +92,7 @@ export function applyNodeChanges(
 
   for (const change of changes) {
     if (change.type === "add" || change.type === "replace" || change.type === "select") continue;
-    if (!original.has(change.id)) continue;
+    if (!original.has(change.id) || original.get(change.id)!.locked) continue;
     if (change.type === "remove") {
       removed.add(change.id);
     } else if (change.type === "position") {
@@ -188,8 +193,9 @@ export function duplicateFrames(
       if (target) return { ...end, frameId: target };
       return { x: clampCoord(end.x + DESIGN_DUPLICATE_OFFSET), y: clampCoord(end.y + DESIGN_DUPLICATE_OFFSET) };
     }) as DesignFrame["ends"];
+    const { locked: _locked, ...unlocked } = frame;
     added.push({
-      ...frame,
+      ...unlocked,
       id: copies.get(frame.id)!,
       x: clampCoord(frame.x + DESIGN_DUPLICATE_OFFSET),
       y: clampCoord(frame.y + DESIGN_DUPLICATE_OFFSET),

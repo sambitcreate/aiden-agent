@@ -11,6 +11,7 @@ import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { DesignCanvasStore } from "../services/design-canvas/store.js";
 import {
   DESIGN_CAPTURE_MAX_SIDE,
+  DESIGN_SOURCE_MAX_BYTES,
   registerDesignCanvasHandlers,
   type DesignCanvasCaptureImage,
   type DesignCanvasCaptureWindow,
@@ -53,6 +54,7 @@ async function fixture(
     saveFile?: (options: DesignCanvasSaveOptions) => string | null;
     renderFrame?: (request: DesignFrameRenderRequest) => Promise<Uint8Array>;
     artifacts?: Record<string, string>;
+    artifactHtml?: Record<string, string>;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -117,6 +119,7 @@ async function fixture(
       const src = options.artifacts?.[mediaId];
       return src ? { src } : undefined;
     },
+    artifactHtml: async (_chatId, mediaId) => options.artifactHtml?.[mediaId],
     exportArtifactSource: async (_event, chatId, mediaId) => {
       artifactExports.push(`${chatId}/${mediaId}`);
       return { saved: true, canceled: false };
@@ -606,4 +609,24 @@ test("only a frame the stored canvas holds exports, and only in the formats its 
   chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
   assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), { error: "unavailable" });
   assert.deepEqual(saveDialogs, []);
+});
+
+test("the Code tab reads a page's file or an artifact's HTML, cut at 512 KiB, and nothing else", async (t) => {
+  const harness = await exportCanvas(t, { artifactHtml: { "media-1": "<svg>chart</svg>" } });
+  const { invoke, site } = harness;
+  const page = path.join(site, "design/hero page.html");
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "page"), {
+    text: await fs.readFile(page, "utf8"),
+    truncated: false,
+  });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "chart"), { text: "<svg>chart</svg>", truncated: false });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "gone"), { error: "missing" });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "n"), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "nowhere"), { error: "unavailable" });
+  await assert.rejects(invoke("designCanvas:source", "chat-1", ""), /Invalid design frame/);
+
+  await fs.writeFile(page, "a".repeat(DESIGN_SOURCE_MAX_BYTES + 10));
+  const big = (await invoke("designCanvas:source", "chat-1", "page")) as { text: string; truncated: boolean };
+  assert.equal(big.truncated, true);
+  assert.equal(big.text.length, DESIGN_SOURCE_MAX_BYTES);
 });

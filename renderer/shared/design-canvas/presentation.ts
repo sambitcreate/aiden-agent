@@ -1,14 +1,15 @@
 // The order Present walks through a page: its top-level frames, row by row
 // from the top, and left to right within a row, the way a page of designs is
-// read. Lines and drawn strokes are skipped; they are part of what is around them.
+// read. Lines and drawn strokes are skipped; they are part of what is around
+// them. Hidden frames are skipped too.
 
 import { isDesignLine, type DesignFrame } from "./schema.js";
 
-type Box = Pick<DesignFrame, "id" | "kind" | "x" | "y" | "w" | "h" | "groupId">;
+type Box = Pick<DesignFrame, "id" | "kind" | "x" | "y" | "w" | "h" | "groupId" | "hidden">;
 
 /** The ids of the frames Present shows, in the order it shows them. */
 export function presentationOrder(frames: readonly Box[]): string[] {
-  const shown = frames.filter((frame) => frame.groupId === undefined && !isDesignLine(frame.kind));
+  const shown = frames.filter((frame) => frame.groupId === undefined && !frame.hidden && !isDesignLine(frame.kind));
   const byTop = [...shown].sort((a, b) => a.y - b.y || a.x - b.x);
   const rows: Box[][] = [];
   let row: Box[] = [];

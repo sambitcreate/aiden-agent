@@ -146,3 +146,13 @@ main:has(.design-presenting) {
   background: transparent;
   box-shadow: none;
 }
+
+/* A locked item shows its selection but has no resize handles. */
+.studio-canvas .react-flow__node.design-locked .react-flow__resize-control {
+  display: none;
+}
+
+/* Layout guides help while designing; a presentation shows the page alone. */
+.design-presenting [data-design-guide] {
+  display: none;
+}

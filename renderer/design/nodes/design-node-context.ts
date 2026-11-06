@@ -12,6 +12,28 @@ export const DESIGN_FRAME_HEADER_PX = 36;
 /** A page frame drawn without a design width is laid out at this width. */
 export const DESIGN_DEFAULT_WIDTH = 1280;
 
+/** The fields one edit can change; a key set to undefined is taken off. */
+export type DesignFramePatch = Partial<
+  Pick<
+    DesignFrame,
+    | "text"
+    | "title"
+    | "w"
+    | "h"
+    | "size"
+    | "color"
+    | "fill"
+    | "paper"
+    | "printMode"
+    | "designWidth"
+    | "strokeWidth"
+    | "radius"
+    | "guide"
+    | "hidden"
+    | "locked"
+  >
+>;
+
 export type DesignNodeContextValue = {
   chatId: string;
   /** The chat's aiden-design grant, or null while it loads or when the chat cannot frame files. */
@@ -26,11 +48,7 @@ export type DesignNodeContextValue = {
   markMissing(id: string, version: number): void;
   remove(id: string): void;
   /** Edits one frame; a key set to undefined is taken off. `record` adds an undo step. */
-  update(
-    id: string,
-    patch: Partial<Pick<DesignFrame, "text" | "title" | "h" | "size" | "color" | "fill" | "paper" | "printMode">>,
-    options: { record: boolean },
-  ): void;
+  update(id: string, patch: DesignFramePatch, options: { record: boolean }): void;
   /** Shows one frame alone, filling the window, until the person closes it. */
   openFullWindow(id: string): void;
   /** Saves a frame as a PNG, a PDF or its original file, through the save dialog. */

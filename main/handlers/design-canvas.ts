@@ -92,6 +92,14 @@ export type DesignCanvasExportResult =
   | { canceled: true }
   | { error: "unavailable" | "missing" | "failed" };
 
+/** `designCanvas:source` reply: a page's or artifact's code, for the side panel's Code tab. */
+export type DesignCanvasSourceResult =
+  | { text: string; truncated: boolean }
+  | { error: "unavailable" | "missing" };
+
+/** The most of a file the Code tab shows. */
+export const DESIGN_SOURCE_MAX_BYTES = 512 * 1024;
+
 /** What the hidden export window draws: a page at its width, as a picture or a PDF. */
 export type DesignFrameRenderRequest = {
   url: string;
@@ -140,6 +148,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   artifactPreview(chatId: string, mediaId: string): Promise<{ src: string } | undefined>;
   /** Saves an artifact as a standalone HTML file through its own save dialog. */
   exportArtifactSource(event: Event, chatId: string, mediaId: string): Promise<{ saved: boolean; canceled: boolean }>;
+  /** An artifact's own HTML, or undefined when it is gone. */
+  artifactHtml(chatId: string, mediaId: string): Promise<string | undefined>;
 }): void {
   if (!deps.enabled()) return;
 
@@ -312,6 +322,46 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       return { saved: true };
     },
   );
+
+  // The Code tab: a page's file (read, never written) or an artifact's HTML,
+  // cut at 512 KiB. Like export, a workspace file is read only while the
+  // chat may still frame its folder.
+  deps.handle("designCanvas:source", async (_event, chatId, frameId): Promise<DesignCanvasSourceResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    assertDesignCanvasChatId(chatId);
+    if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
+      throw new Error("Invalid design frame.");
+    }
+    const chat = await deps.getChat(chatId);
+    if (!chat || !attended(chat)) return { error: "unavailable" };
+    const doc = await deps.store.get(chat.id);
+    const frame = doc.frames.find((entry) => entry.id === frameId);
+    if (frame?.kind === "artifact" && frame.mediaId) {
+      const html = await deps.artifactHtml(chat.id, frame.mediaId).catch(() => undefined);
+      if (html === undefined) return { error: "missing" };
+      const bytes = Buffer.from(html, "utf8");
+      const truncated = bytes.length > DESIGN_SOURCE_MAX_BYTES;
+      return { text: truncated ? bytes.subarray(0, DESIGN_SOURCE_MAX_BYTES).toString("utf8") : html, truncated };
+    }
+    if (frame?.kind !== "file" || !frame.path) return { error: "unavailable" };
+    const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+    if (!root) return { error: "unavailable" };
+    const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
+    if (!resolved.ok) return { error: "missing" };
+    try {
+      const handle = await fs.open(resolved.absolute, "r");
+      try {
+        const buffer = Buffer.alloc(DESIGN_SOURCE_MAX_BYTES + 1);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        const truncated = bytesRead > DESIGN_SOURCE_MAX_BYTES;
+        return { text: buffer.subarray(0, Math.min(bytesRead, DESIGN_SOURCE_MAX_BYTES)).toString("utf8"), truncated };
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      return { error: "missing" };
+    }
+  });
 
   // Snapshots a frame's rectangle of the asking window's own page, so a frame
   // that leaves the live set keeps a picture instead of going blank. A window

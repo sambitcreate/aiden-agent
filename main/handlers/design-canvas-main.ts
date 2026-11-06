@@ -14,6 +14,7 @@ import {
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { renderDesignFrame } from "../services/design-canvas/frame-render.js";
 import { exportStoredHtmlArtifact, wrapStoredHtmlArtifact } from "../services/gui-artifact-recovery.js";
+import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, registerDesignCanvasHandlers } from "./design-canvas.js";
@@ -87,6 +88,7 @@ export function registerDesignCanvasIpc(): void {
     },
     renderFrame: renderDesignFrame,
     artifactPreview: (chatId, mediaId) => wrapStoredHtmlArtifact({ chatId, mediaId }),
+    artifactHtml: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
     exportArtifactSource: async (event, chatId, mediaId) => {
       const parent = BrowserWindow.fromWebContents(event.sender);
       if (!parent || parent.isDestroyed()) throw new Error("The export window is unavailable.");

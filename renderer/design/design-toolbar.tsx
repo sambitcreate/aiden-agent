@@ -108,7 +108,7 @@ export function DesignToolbar({
     <div
       role="toolbar"
       aria-label="Canvas tools"
-      className="glass-surface nodrag flex max-w-full items-center gap-0.5 overflow-x-auto rounded-button p-1 shadow-control"
+      className="glass-surface nodrag flex max-w-full flex-wrap items-center gap-0.5 rounded-button p-1 shadow-control"
     >
       <DesignPageMenu doc={doc} onPage={onPage} />
       <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-separator" />

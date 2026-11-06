@@ -2324,6 +2324,8 @@ export type DesignCanvasSaveResult =
 export const designCanvasApi = {
   getDesignCanvas: (chatId: string) => invoke<DesignCanvas>("designCanvas:get", chatId),
   /** Saves one frame as a PNG, a PDF or its original file, through the save dialog. */
+  designFrameSource: (chatId: string, frameId: string) =>
+    invoke<{ text: string; truncated: boolean } | { error: "unavailable" | "missing" }>("designCanvas:source", chatId, frameId),
   exportDesignFrame: (chatId: string, frameId: string, format: "png" | "pdf" | "source") =>
     invoke<{ saved: true } | { canceled: true } | { error: "unavailable" | "missing" | "failed" }>(
       "designCanvas:export",

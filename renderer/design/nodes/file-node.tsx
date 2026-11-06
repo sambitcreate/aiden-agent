@@ -8,6 +8,7 @@ import * as React from "react";
 import { CanvasNodeChrome } from "../../canvas";
 import { FrameActions } from "./frame-actions";
 import { FrameTitle } from "./frame-title";
+import { LayoutGuide } from "./layout-guide";
 import { cn } from "../../lib/ui-utils";
 import { parseDesignBridgeMessage } from "../../shared/design-canvas/bridge-messages";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
@@ -169,8 +170,9 @@ export function FileFrame({
         status={docHeight === null ? `${designWidth}` : `${designWidth} × ${docHeight}`}
         toolbar={actions}
       >
-        <div ref={contentRef} className="h-full w-full overflow-hidden rounded-b-button">
+        <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
           {body}
+          {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}
         </div>
       </CanvasNodeChrome>
     </div>

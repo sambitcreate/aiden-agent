@@ -337,3 +337,29 @@ test("duplicating boxes with the arrow between them joins the copied arrow to th
     { x: 432, y: 62 },
   ]);
 });
+
+test("a hidden frame is not drawn, and an artboard's items hide with it", () => {
+  const doc = canvas(
+    frame("board", { kind: "frame", hidden: true }),
+    frame("inside", { groupId: "board" }),
+    frame("shown"),
+  );
+  const hidden = new Map(nodesFromCanvas(doc, new Set()).map((node) => [node.id, node.hidden === true]));
+  assert.deepEqual(Object.fromEntries(hidden), { board: true, inside: true, shown: false });
+});
+
+test("a locked frame does not move, resize or go away, and its copy is unlocked", () => {
+  const doc = canvas(frame("pinned", { locked: true, x: 10, y: 20 }), frame("free"));
+  const after = applyNodeChanges(doc, [
+    { type: "position", id: "pinned", position: { x: 500, y: 500 } },
+    { type: "dimensions", id: "pinned", dimensions: { width: 900, height: 900 }, resizing: true },
+    { type: "remove", id: "pinned" },
+  ]);
+  assert.equal(after, doc);
+  assert.deepEqual(box(byId(applyNodeChanges(doc, [{ type: "remove", id: "free" }]), "pinned")), { x: 10, y: 20, w: 200, h: 120 });
+  const node = nodesFromCanvas(doc, new Set(["pinned"])).find((entry) => entry.id === "pinned")!;
+  assert.equal(node.draggable, false);
+  assert.equal(node.deletable, false);
+  const copied = duplicateFrames(doc, ["pinned"], newId);
+  assert.equal(copied.frames[copied.frames.length - 1]!.locked, undefined);
+});

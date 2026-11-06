@@ -54,7 +54,7 @@ test("flow prints at full size; fixed scales the design width to the paper's pri
   assert.equal(designPdfLayout({ width: 300, printMode: "fixed" }).scale, 2);
 });
 
-test("Present reads a page row by row from the top, left to right, and skips lines and grouped items", () => {
+test("Present reads a page row by row from the top, left to right, and skips lines, grouped items and hidden frames", () => {
   const frames = [
     box("right-top", 600, 0, 400, 300),
     box("left-top", 0, 40, 400, 200),
@@ -62,6 +62,7 @@ test("Present reads a page row by row from the top, left to right, and skips lin
     box("below-right", 300, 380),
     box("arrow", 50, 50, 300, 5, { kind: "connector" }),
     box("in-group", 10, 10, 50, 50, { groupId: "left-top" }),
+    box("hidden", 900, 0, 100, 100, { hidden: true }),
   ];
   assert.deepEqual(presentationOrder(frames), ["left-top", "right-top", "below", "below-right"]);
   assert.deepEqual(presentationOrder([]), []);
