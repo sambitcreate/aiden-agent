@@ -10,7 +10,7 @@ import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import { assertBotRuntimeProviderSelection } from "../../../main/services/bot-runtime-authority.js";
 import { mkdirSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -28,6 +28,7 @@ import { parseAttachments, withReadableImages } from "../../../main/services/att
 import { createCliModelRuntime } from "./providers.ts";
 import { acquireLease } from "./state.ts";
 import { DaemonGenerationRun, DaemonTurnOwner } from "./daemon-turn-lifecycle.ts";
+import { createDaemonApprovals } from "./daemon-approvals.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
@@ -68,12 +69,10 @@ export function createDaemonChats(agentDir: string) {
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
   const turns = new DaemonTurnOwner<DaemonGenerationRun<AgentSession>>({ admission, isDeleting: (id) => deletion.isDeleting(id) });
-  const approvals = new Map<string, { ownerId: string; resolve(allowed: boolean): void }>();
-  const settleApproval = (id: string, decision: "allow" | "deny", ownerId?: string) => {
-    const pending = approvals.get(id); if (!pending || (ownerId !== undefined && pending.ownerId !== ownerId)) return false;
-    recorders.recordRunAttentionResolved(runs, id, { kind: "approval", decision });
-    approvals.delete(id); pending.resolve(decision === "allow"); return true;
-  };
+  const approvals = createDaemonApprovals({
+    raised: (prompt) => activity.requestAttention(prompt.approvalId, prompt.streamId, "approval"),
+    resolved: (id, decision) => { recorders.recordRunAttentionResolved(runs, id, { kind: "approval", decision }); activity.resolveAttention(id); },
+  });
   const sessionPath = (id: string) => join(root, "journals", `${createHash("sha256").update(id).digest("hex")}.jsonl`);
   const llmClient = {
     beginChatTurn: (chatId: string, streamId: string, ownerId: string) => turns.begin(chatId, streamId, ownerId),
@@ -85,9 +84,8 @@ export function createDaemonChats(agentDir: string) {
     },
     /** A Bot the person paused: its reply ends as their Stop, and the chat is kept. */
     async stopChatWork(id: string) { await llmClient.cancelChat(id, "user_stop"); return llmClient.waitForChatIdle(id); },
-    approve: (id: string, decision: "allow" | "deny", ownerId: string) => settleApproval(id, decision, ownerId),
-    /** A paired desktop holding `runs:control` answers any run's approval, as the desktop host's own controls do. */
-    approveAsHost: (id: string, decision: "allow" | "deny") => settleApproval(id, decision),
+    approve: approvals.approve,
+    approveAsHost: approvals.approveAsHost,
     cancel(streamId: string, ownerId: string) {
       const found = turns.findRun((run) => run.streamId === streamId && run.ownerId === ownerId);
       if (!found) return false;
@@ -234,22 +232,10 @@ export function createDaemonChats(agentDir: string) {
               const original = JSON.stringify(event.input);
               if (Buffer.byteLength(original) > 1_700) return { block: true, reason: "The tool request exceeds the remote approval display budget." };
               timeline.toolAwaitingApproval(event.toolCallId);
-              const approvalId = `approval_${randomUUID()}`;
-              const allowed = await new Promise<boolean>((resolve) => {
-                const settle = (result: boolean) => { clearTimeout(expiry); entry.abort.signal.removeEventListener("abort", cancel); approvals.delete(approvalId); activity.resolveAttention(approvalId); resolve(result); };
-                const lapse = (decision: "expired" | "cancelled") => { if (approvals.has(approvalId)) recorders.recordRunAttentionResolved(runs, approvalId, { kind: "approval", decision }); settle(false); };
-                const cancel = () => lapse("cancelled");
-                const expiry = setTimeout(() => lapse("expired"), 300_000);
-                approvals.set(approvalId, { ownerId: owner.documentId, resolve: settle });
-                entry.abort.signal.addEventListener("abort", cancel, { once: true });
-                if (entry.abort.signal.aborted) cancel();
-                else {
-                  activity.requestAttention(approvalId, streamId, "approval");
-                  send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
-                }
-              });
+              const outcome = await approvals.request({ streamId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) }, entry.abort.signal, owner.documentId,
+                ({ approvalId, toolCallId, toolName, summary }) => send("chat:approval", { streamId, approvalId, toolCallId, toolName, summary }));
               await assertAuthority();
-              if (!allowed || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
+              if (outcome !== "allowed" || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
             }
             catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
           }); } }],
