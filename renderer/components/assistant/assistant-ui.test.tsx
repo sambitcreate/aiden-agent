@@ -196,8 +196,11 @@ test("a disconnected Live error stays visible and microphone status is screen-re
     />,
   );
   assert.match(render({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }), /The Live provider sent an invalid event\./);
-  assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /Listening · mic on/);
-  assert.match(render({ ...idleLive, state: "open", active: true, microphoneActive: true }), /class="sr-only"/);
+  assert.equal(ribbonStatus(render({ ...idleLive, state: "open", active: true, microphoneActive: true })), "Listening");
+  assert.equal(
+    ribbonStatus(render({ ...idleLive, state: "open", active: true, microphoneActive: true, microphoneMuted: true })),
+    "Live · mic off",
+  );
 });
 
 function renderDock(
@@ -229,6 +232,11 @@ function renderDock(
   return { markup, commandEnabled };
 }
 
+/** The running session's screen-reader status, read from the floating ribbon. */
+function ribbonStatus(markup: string): string | null {
+  return /<section class="live-ribbon"[\s\S]*<span role="status"[^>]*class="sr-only">([^<]*)</u.exec(markup)?.[1] ?? null;
+}
+
 function triggerLabel(markup: string): string | null {
   return /class="aiden-live-trigger-label">([^<]*)</u.exec(markup)?.[1] ?? null;
 }
@@ -243,30 +251,39 @@ test("the idle Live trigger is a pill labelled Live with its setup name", () => 
   assert.equal(triggerLabel(renderDock({ ...idleLive, available: false, setupComplete: false }).markup), "Live");
 });
 
-test("the Live pill names each session state", () => {
-  const open = { ...idleLive, active: true, state: "open" as const, microphoneActive: true };
+test("the Live pill names each state outside a session, and the ribbon names each state in one", () => {
   const cases: Array<[string, AssistantLiveController, boolean?]> = [
-    ["Connecting…", { ...idleLive, active: true, busy: true, state: "connecting" }],
-    ["Listening", open],
-    ["Thinking", { ...open, captions: [{ id: 1, direction: "input", text: "Hi", final: true, sealed: false }] }],
-    ["Speaking", { ...open, captions: [{ id: 1, direction: "output", text: "Hi", final: false, sealed: false }] }],
-    ["Working", { ...open, computerUseActing: true }],
-    ["Approve", open, true],
+    ["Connecting…", { ...idleLive, busy: true, state: "connecting" }],
     ["Disconnected", { ...idleLive, state: "disconnected", error: "Connection lost." }],
-    ["Stopping…", { ...idleLive, active: true, busy: true, state: "closing" }],
+    ["Stopping…", { ...idleLive, busy: true, state: "closing" }],
   ];
   for (const [label, live, approvalPending] of cases) {
     const { markup } = renderDock(live, { approvalPending });
     assert.equal(triggerLabel(markup), label, label);
+    assert.equal(ribbonStatus(markup), null, `${label}: no ribbon outside a session`);
     // Label in name: voice control must be able to target what the pill shows.
     const name = /<button[^>]*class="aiden-live-trigger[^"]*"[^>]*aria-label="([^"]*)"/u.exec(markup)?.[1] ?? "";
     assert.ok(name.toLowerCase().includes(label.toLowerCase()), `${label} not in accessible name "${name}"`);
   }
-  assert.match(renderDock(open, { approvalPending: true }).markup, /aiden-live-trigger-badge/u);
   assert.match(
-    renderDock({ ...idleLive, active: true, busy: true, state: "closing" }).markup,
+    renderDock({ ...idleLive, busy: true, state: "closing" }).markup,
     /<button[^>]*class="aiden-live-trigger[^"]*"[^>]*disabled=""/u,
   );
+
+  const open = { ...idleLive, active: true, state: "open" as const, microphoneActive: true };
+  const sessionCases: Array<[string, AssistantLiveController, boolean?]> = [
+    ["Listening", open],
+    ["Thinking", { ...open, captions: [{ id: 1, direction: "input", text: "Hi", final: true, sealed: false }] }],
+    ["Speaking", { ...open, captions: [{ id: 1, direction: "output", text: "Hi", final: false, sealed: false }] }],
+    ["Working", { ...open, computerUseActing: true }],
+    ["Needs you", open, true],
+    ["Connecting…", { ...open, state: "resuming" }],
+  ];
+  for (const [label, live, approvalPending] of sessionCases) {
+    const { markup } = renderDock(live, { approvalPending });
+    assert.equal(ribbonStatus(markup), label, label);
+    assert.equal(triggerLabel(markup), null, `${label}: the ribbon replaces the corner pill`);
+  }
   assert.equal(liveTriggerLabel("listening", false, true), "Stop");
   assert.equal(liveTriggerLabel("listening", true, true), "Stopping…");
 });
@@ -284,7 +301,8 @@ test("hiding the Live button removes only the idle pill; the shortcut still work
     ["approval", active, true],
     ["error", { ...idleLive, state: "failed" as const, error: "The Live provider sent an invalid event." }, false],
   ] as const) {
-    assert.notEqual(triggerLabel(renderDock(live, { buttonVisible: false, approvalPending }).markup), null, name);
+    const { markup } = renderDock(live, { buttonVisible: false, approvalPending });
+    assert.ok(triggerLabel(markup) !== null || ribbonStatus(markup) !== null, name);
   }
   assert.match(
     renderDock({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }, { buttonVisible: false }).markup,
