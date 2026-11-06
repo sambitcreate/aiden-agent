@@ -170,7 +170,8 @@ test("onboarding explains plan approvals and draws the checklist in its Bots til
   await onboarding.getByRole("button", { name: /LM Studio.*Use models running in LM Studio/u }).click();
   await next.click();
   await expect(onboarding.getByRole("heading", { name: "Meet your first Bot" })).toBeVisible();
-  await expect(onboarding.getByText("Bots hand you the steps only you should do, follow rules you set, and can ask you to approve a whole plan at once.", { exact: true })).toBeVisible();
+  await expect(onboarding.getByText(/approve a whole plan/u)).toBeVisible();
+  await expect(onboarding.getByText(/track accepted tasks in Open work/u)).toBeVisible();
   await onboarding.getByRole("button", { name: "Skip", exact: true }).click();
   await expect(onboarding.getByRole("heading", { name: "Everything Aiden brings together" })).toBeVisible();
   const botsTile = onboarding.locator('article[data-onboarding-feature="bots"]');

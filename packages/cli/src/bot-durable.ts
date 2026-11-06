@@ -35,6 +35,7 @@ import { renderBotMemorySection } from "../../../main/services/bot-memory/prompt
 import { botMemoryToolEntry, withBotMemoryIngress } from "../../../main/services/bot-memory/tool.js";
 import { botRecallToolEntry } from "../../../main/services/bot-memory/recall.js";
 import { botIngressAllowsTool } from "../../../main/services/bot-runtime/bot-tool-policy.js";
+import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../../../main/services/composio-service-tool.js";
 import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import type { createBotApplicationService } from "../../../main/services/bot-application-service.js";
@@ -192,10 +193,12 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
           ...(offer ? [{ ...await messageBotCandidate(bot.id, { roster, descriptionRoster: available, post: (input) => messages.post(input) }), replay: "safe" as const }] : []),
         ];
       },
-      checkPolicy: async (botId, name) => admitted(botId, async (lease) => {
+      checkPolicy: async (botId, name, call) => admitted(botId, async (lease) => {
         if (name === "bot_memory" || name === "bot_recall" || name === "message_bot") return { allowed: true };
         const tool = (await ports.tools(lease, { attachments: [], loadChat: async () => null })).find((candidate) => candidate.name === name);
         if (!tool) return { allowed: false, reason: "This Bot tool is no longer available." };
+        if (composioServiceCallRequiresForeground(call?.args) && isComposioServiceToolDescriptor(mcpAgentToolDescriptor(tool))
+          && !botIngressAllowsTool("sign_in", call?.requestIds ?? [])) return { allowed: false, reason: "Composio connection setup needs the person in the foreground." };
         // An MCP descriptor is treated conservatively: all connection calls
         // ask the person, including providers without effect annotations.
         return { allowed: true, ...(mcpAgentToolDescriptor(tool) ? { approval: { summary: `Allow ${tool.label ?? name}?` } } : {}) };

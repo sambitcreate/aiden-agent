@@ -504,6 +504,42 @@ test("MCP validates transports and redacts configured secrets from listing", asy
   await api.mcpCommand(dir, ["remove", "local"]); assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
 });
 
+test("CLI Composio offers one service and follows vendor operations while revoked keys fence old tools", async (t) => {
+  const dir = temporary(t);
+  const server = { id: "preset-composio", presetId: "composio", name: "Composio", transport: "http", url: "https://connect.composio.dev/mcp", enabled: true, headers: { "x-consumer-api-key": "synthetic-consumer-key" } };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [server]);
+  const raw = (name, field) => ({ name, inputSchema: { type: "object", properties: { [field]: { type: "string" } }, required: [field], additionalProperties: false } });
+  let tools = [raw("COMPOSIO_SEARCH_TOOLS", "query")];
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    assert.equal(request.url, server.url, "this synthetic transport never reaches another endpoint");
+    if (request.method !== "POST") return new Response(null, { status: 405 });
+    const message = await request.json();
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    let result;
+    if (message.method === "initialize") result = { protocolVersion: message.params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "Synthetic Composio", version: "1" } };
+    else if (message.method === "tools/list") result = { tools };
+    else if (message.method === "tools/call") { calls.push(message.params.name); result = { content: [{ type: "text", text: `Answer ${Object.values(message.params.arguments)[0]}` }] }; }
+    else throw new Error(`Unexpected synthetic method ${message.method}`);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }), { headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const pool = api.createCliMcpPool(dir); t.after(() => pool.close());
+  const inventory = await pool.inspectTools(server);
+  assert.deepEqual(inventory.map((tool) => tool.name), ["composio"]);
+  const offered = await pool.agentTools(server);
+  assert.equal(offered.length, 1); assert.equal(offered[0].name, "composio");
+  assert.match(JSON.stringify(await offered[0].execute("first", { action: "call", tool: "COMPOSIO_SEARCH_TOOLS", arguments: { query: "mail" } })), /Answer mail/);
+  tools = [raw("COMPOSIO_GET_TOOL_SCHEMAS", "slug")];
+  await assert.rejects(offered[0].execute("removed", { action: "call", tool: "COMPOSIO_SEARCH_TOOLS", arguments: { query: "mail" } }), /no longer enabled/);
+  assert.match(JSON.stringify(await offered[0].execute("current", { action: "call", tool: "COMPOSIO_GET_TOOL_SCHEMAS", arguments: { slug: "calendar" } })), /Answer calendar/);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...server, headers: { "x-consumer-api-key": "rotated-synthetic-consumer-key" } }]);
+  await assert.rejects(offered[0].execute("revoked", { action: "describe" }), /changed or was disabled/);
+  assert.deepEqual(calls, ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS"]);
+});
+
 test("MCP presets leave out Mac app connectors, which the desktop app sets up", async (t) => {
   const dir = temporary(t);
   const presets = await api.mcpCommand(dir, ["presets"]);
@@ -902,10 +938,12 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
 
 test("a paused Bot stops its running turn, refuses new ones and runs again once unpaused", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir), requests = [];
-  let holdFirst = true, held;
+  let holdFirst = true, held, observedFirstRequest;
+  const firstRequest = new Promise((resolve) => { observedFirstRequest = resolve; });
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     requests.push(JSON.parse(body));
+    observedFirstRequest();
     response.writeHead(200, { "content-type": "text/event-stream" });
     const chunk = (delta, finish_reason = null) => response.write(`data: ${JSON.stringify({ id: "bot", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     chunk({ role: "assistant", content: "Working" });
@@ -937,7 +975,7 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
 
   // Pausing while a reply streams stops it where it is.
   const running = await runTurn("before-pause");
-  for (let tries = 0; requests.length === 0 && tries < 200; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  await firstRequest;
   assert.equal(requests.length, 1);
   const paused = await runtime.command(["pause", bot.id]);
   assert.deepEqual(Object.keys(paused).sort(), ["botId", "paused", "since"]);

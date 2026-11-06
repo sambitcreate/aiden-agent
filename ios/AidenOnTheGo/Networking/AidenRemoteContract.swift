@@ -676,6 +676,11 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 49 adds `chat:jobs`, asked for alone.
     /// Contract revision 50 adds `attachments:raw`, asked for alone.
     /// Contract revision 53 adds `chat:new-worktree`, asked for alone.
+    /// Contract revision 59 adds `bot:watches`, asked for alone.
+    /// Contract revision 59 adds `bot:open-work`, asked for alone.
+    /// Contract revision 59 adds `bot:routine-models`, asked for alone.
+    /// Contract revision 59 adds `bot:peers`, asked for alone.
+
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
@@ -688,6 +693,10 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "chat:jobs"),
         Self(rawValue: "attachments:raw"),
         Self(rawValue: "chat:new-worktree"),
+        Self(rawValue: "bot:watches"),
+        Self(rawValue: "bot:open-work"),
+        Self(rawValue: "bot:routine-models"),
+        Self(rawValue: "bot:peers"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -762,6 +771,17 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// It grants no authority. A Mac on an earlier revision refuses the name,
     /// so the device asks for it alone, after any other negotiation.
     static let botIssues = Self(rawValue: "bot:issues")
+
+    /// Connector-watch management; reads also need bot:read, changes need bot:write.
+    static let botWatches = Self(rawValue: "bot:watches")
+
+    /// Open work metadata and owned evidence; also needs Bot and chat read.
+    static let botOpenWork = Self(rawValue: "bot:open-work")
+
+    /// Revision 59: routine-only models, run facts and explicit unknown-cost Resume.
+    static let botRoutineModels = Self(rawValue: "bot:routine-models")
+    /// Revision 59: approved pairs and bounded linked exchanges.
+    static let botPeers = Self(rawValue: "bot:peers")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -2853,6 +2873,8 @@ private enum AidenBotPrivateResponseValidator {
             for (key, child) in object {
                 let normalizedKey = normalize(key)
                 if (normalizedPrivateKeys.contains(normalizedKey)
+                    || (root.hasPrefix("botOpenWork") && ["url", "filepath", "sourcepath", "resultpath", "transcript", "rawresponse", "rawentries", "messages", "binding", "bindings", "toolname"].contains(normalizedKey))
+                    || (root.hasPrefix("botWatch") && ["accountid", "resourceid", "serverid", "toolname", "binding", "bindings", "sourceid", "fingerprint"].contains(normalizedKey))
                     || isPrivateChildProjectionKey(normalizedKey)
                     || (root == "chatSummaries" && chatSummaryForbiddenKeys.contains(normalizedKey))),
                    !isAllowedKnownIdentityKey(key, root: root, parentPath: path),
@@ -2954,6 +2976,14 @@ private enum AidenBotPrivateResponseValidator {
         if root == "botIssues", key == "result" {
             return parentPath.isEmpty
                 || ["act.response.result", "notOpen.result"].contains((parentPath + [key]).joined(separator: "."))
+        }
+        if key == "prompt", (root == "botWatch" && parentPath.isEmpty
+            || root == "botWatches" && parentPath == ["watches", "[]"]) { return true }
+        if key == "result", root == "botWatchTest", parentPath.isEmpty { return true }
+        if key == "result" {
+            if root == "botOpenWork", parentPath == ["items", "[]", "completion"] { return true }
+            if root == "botOpenWorkResult", parentPath == ["snapshot", "items", "[]", "completion"] { return true }
+            if root == "botOpenWorkItem", parentPath == ["completion"] { return true }
         }
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if root == "botDetail" || root == "botMessagingDetail" {

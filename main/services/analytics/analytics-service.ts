@@ -24,6 +24,7 @@ import {
   type RunStart,
 } from "./analytics-crash.js";
 import type { AnalyticsEventName, AnalyticsEventProps, AnalyticsSuperProperties } from "./analytics-events.js";
+import type { AnalyticsReporter } from "./analytics-report.js";
 import { sanitizeException } from "./analytics-sanitize.js";
 
 // Lifecycle of product analytics in the desktop main process: read consent,
@@ -84,6 +85,8 @@ export interface AnalyticsService {
   // A feature event, dropped unless sending is allowed right now. Synchronous
   // and never throws, so the action it observes neither waits nor fails.
   track<E extends AnalyticsEventName>(event: E, props: AnalyticsEventProps<E>): void;
+  /** Bind delayed metadata to the action's current consent and initial-startup authority. */
+  actionReporter(): AnalyticsReporter;
   // Sends what is queued within the timeout, then stops the transport.
   shutdown(timeoutMs?: number): Promise<void>;
   // Synchronous last step of a clean quit: the next launch is not a crash.
@@ -193,6 +196,10 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   // Bumped on every stop so an activation that started before it cannot
   // bring a transport back to life.
   let generation = 0;
+  // Invalidated when consent is requested, before its asynchronous write or transport teardown.
+  let actionEpoch = 0;
+  let pendingConsentChanges = 0;
+  let shutdownRequested = false;
   // Set only while analytics_disabled is tracked, so it goes out on its own.
   let sendNow: ((message: AnalyticsMessage) => void) | undefined;
   // Consent changes run one at a time, in the order they were asked for, so
@@ -204,6 +211,13 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     const run = consentQueue.then(work, work);
     consentQueue = run.catch(() => undefined);
     return run;
+  }
+
+  function changeConsent<T>(work: () => Promise<T>): Promise<T> {
+    actionEpoch += 1;
+    heldUntilStarted = undefined;
+    pendingConsentChanges += 1;
+    return inOrder(work).finally(() => { pendingConsentChanges -= 1; });
   }
 
   function log(message: string, error?: unknown): void {
@@ -507,6 +521,15 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     }
   }
 
+  function trackFeature<E extends AnalyticsEventName>(event: E, props: AnalyticsEventProps<E>): void {
+    if (pendingConsentChanges !== 0 || shutdownRequested) return;
+    if (heldUntilStarted && heldUntilStarted.length < MAX_HELD_EVENTS) {
+      heldUntilStarted.push(() => core?.track(event, props));
+    } else {
+      core?.track(event, props);
+    }
+  }
+
   return {
     start() {
       startup ??= runStartup();
@@ -562,8 +585,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     status,
 
     setEnabled(enabled, isCurrent) {
-      heldUntilStarted = undefined;
-      return inOrder(async () => {
+      return changeConsent(async () => {
         if (isCurrent && !isCurrent()) throw new Error("Inactive usage data request.");
         try {
           if (enabled) {
@@ -583,8 +605,7 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     },
 
     markNoticeShown(choice, isCurrent) {
-      heldUntilStarted = undefined;
-      return inOrder(async () => {
+      return changeConsent(async () => {
         if (isCurrent && !isCurrent()) throw new Error("Inactive usage data request.");
         try {
           if (choice?.enabled === false) {
@@ -616,15 +637,22 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
       });
     },
 
-    track(event, props) {
-      if (heldUntilStarted && heldUntilStarted.length < MAX_HELD_EVENTS) {
-        heldUntilStarted.push(() => core?.track(event, props));
-      } else {
-        core?.track(event, props);
-      }
+    track: trackFeature,
+
+    actionReporter() {
+      const epoch = actionEpoch, activeGeneration = generation;
+      // Startup may authorize its original held actions. An inactive service
+      // after startup cannot borrow a later opt-in or disclosure.
+      const eligible = !shutdownRequested && pendingConsentChanges === 0 && (core !== undefined || heldUntilStarted !== undefined);
+      return (event, props) => {
+        if (!eligible || epoch !== actionEpoch || activeGeneration !== generation) return;
+        trackFeature(event, props);
+      };
     },
 
     async shutdown(timeoutMs = 1_500) {
+      shutdownRequested = true;
+      actionEpoch += 1;
       // A queued opt-in can create a fresh transport and activity timer.
       // Finish the accepted consent changes before shutting down either one.
       await within(consentQueue.then(async () => {
