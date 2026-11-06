@@ -18,10 +18,12 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 
 ## Status
 
-- P0/P1: done apart from review and CI. #735 admission, #736 generation settlement, #741 run input, #742 Pi run gate, #743 generation stream, #744 background launch, #745 side-question slot, plus the first-send PR. Dispositions are in `docs/state-machines/retained-p1-owners.md`.
-- P5a: shared process settlement and subagent shell are in PRs. `docs/state-machines/physical-teardown.md` records the contract.
-- P5b: Computer Use host in a PR. P5c: MCP stdio in a PR; Bot VM, ACP and subagent runtime kept as they are.
-- P5d: update-install withdrawal in a PR. Everything else in P5 is listed under "Not done in this slice" in `docs/state-machines/physical-teardown.md`, with reasons.
+- The whole stack (#736 to #769) is folded into #735, which lands it on `main` once CI is green on its final head.
+- P0/P1: #735 admission, #736 generation settlement, #741 run input, #742 Pi run gate, #743 generation stream, #744 background launch, #745 side-question slot, #755 first send. Dispositions are in `docs/state-machines/retained-p1-owners.md`.
+- P5a: shared process settlement (#757) and subagent shell (#756). `docs/state-machines/physical-teardown.md` records the contract.
+- P5b: Computer Use host (#766). P5c: MCP stdio (#767); Bot VM, ACP and subagent runtime kept as they are.
+- P5d: update-install withdrawal (#769). Everything else in P5 is listed under "Not done in this slice" in `docs/state-machines/physical-teardown.md`, with reasons.
+- Landing review found one bug, fixed in #744: a run accepted after an invalidation's `store.list()` scan stayed queued until the next startup. `install()` now rechecks `invalidated` after its status read.
 - Blocked: the shutdown and restart trace across P1 to P4 needs Lanes B and C merged.
 
 ## Lane overlap
@@ -49,6 +51,8 @@ Dropped in favor of `aiden serve`: `cli-native:C09`, `cli-native:C10`.
 - `bot-browser.spec.ts:22` flaked again on #745, at line 109: the masking check found `737` in a snapshot. Probably a chance match in a substring search, as in `69728320a`, but the run kept no snapshot, so a real leak is not ruled out. Needs the Bot browser owner.
 - `renderer/lib/use-voice-recorder.test.tsx` failed once on #736 at line 117: `recording` read right after waiting only for the transcript. Looks like a test race, unconfirmed, not fixed.
 - `chat-top-bar.spec.ts:563` flaked on #769: `notes.txt` was ENOENT while polling after Save, and the retry passed. Cause unknown. Worth checking whether a save can leave the file briefly missing.
+- `tests/e2e/interrupted-question-resume.spec.ts:8` flaked on #745 ("Resulting promise was garbage collected" at `fixtures.ts:676`, passed on retry). Same Playwright error as `chat-top-bar.spec.ts:104` on #756. Cause unknown, not fixed.
+- `guest-driver-install.test.ts:330`, "suspending removes the enabled file...", failed twice locally (20s, `null !== 0`) in `test:bot-computers` on the merged stack. This lane does not touch that file. Not checked against `main` locally.
 - A test that fails with an edited file open also reports "Electron shutdown timed out after 35000 ms". Reproduced with a throwaway spec on both `b96154694` and the unmodified base `bc663001f`, so not from this lane.
 
 ## Handed to the owner
