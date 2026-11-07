@@ -105,6 +105,8 @@ final class AidenBotCreateFlow {
         /// The pairing it was for.
         var instanceId = ""
         var deviceId = ""
+        /// Came back from an earlier launch: its words wait on disk until the person settles them.
+        var isParked = false
         /// The request that may have reached the Mac without an answer, and when it first went
         /// out: past the replay window, Try Again looks for its Bot instead of sending it again.
         var sent: AidenBotCreateRequest?
@@ -150,7 +152,7 @@ final class AidenBotCreateFlow {
     /// The disk writes, made one after another in the order they were asked for; each says whether it was kept.
     @ObservationIgnored private var writes: Task<Bool, Never>?
     /// Pairings this flow already looked on disk for; an earlier launch's create comes back once.
-    @ObservationIgnored private var restoredScopes: Set<String> = []
+    private var restoredScopes: Set<String> = []
     /// The look on disk under way for each pairing; a newer one supersedes it.
     @ObservationIgnored private var restoring: [String: UUID] = [:]
     /// Pairings a create of this launch is sending for, in any flow: theirs is never shown as cut off.
@@ -184,8 +186,14 @@ final class AidenBotCreateFlow {
         retrying: Failure? = nil,
         onCreated: @MainActor (AidenBotDetail) async -> Void
     ) async {
+        // What waits on disk comes back before a new ask can take its place: a pairing keeps one.
+        let scope = operations.scope
+        if retrying == nil, !hasLooked(scope) {
+            await restore(instanceId: operations.instanceId, deviceId: operations.deviceId)
+        }
+        let leavesParkedAskAlone = retrying != nil || (hasLooked(scope) && failures[scope]?.isParked != true)
         let ownMac = retrying.map { $0.instanceId == operations.instanceId && $0.deviceId == operations.deviceId } ?? true
-        guard pending == nil, ownMac else {
+        guard pending == nil, ownMac, leavesParkedAskAlone else {
             // Another Bot is still on its way (one is made at a time), or another Mac is the active
             // one now: nothing goes out. A Try Again's answers wait as they were, for their own Mac.
             if let retrying {
@@ -381,9 +389,19 @@ final class AidenBotCreateFlow {
             replays: saved.frozen != nil,
             instanceId: instanceId,
             deviceId: deviceId,
+            isParked: true,
             sent: unanswered,
             sentAt: unanswered == nil ? nil : saved.createdAt
         )
+    }
+
+    /// True once nothing an earlier launch left for this pairing can still come back.
+    func hasLooked(instanceId: String, deviceId: String) -> Bool {
+        hasLooked(Self.scope(instanceId: instanceId, deviceId: deviceId))
+    }
+
+    private func hasLooked(_ scope: String) -> Bool {
+        store == nil || restoredScopes.contains(scope) || !isFree(for: scope)
     }
 
     /// The person let the failed Bot go (OK, or New Bot closed after Try Again): it no
@@ -662,7 +680,7 @@ struct AidenBotCreateView: View {
 
     private var form: some View {
         Form {
-            if let picker, picker.showsPicker {
+            if let picker, picker.showsPicker || picker.refusalMessage != nil {
                 Section { AidenNewWorkMachinePicker(picker: picker) }
             }
             Section {
@@ -810,9 +828,13 @@ struct AidenBotCreateView: View {
 /// a skeleton face, and "Creating…".
 struct AidenBotPendingCreateRow: View {
     let pending: AidenBotCreateFlow.Pending
+    /// Named when it's on its way to a machine other than the default.
+    var machine: String?
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    private var status: String { machine.map(AidenBotCreateCopy.creating(on:)) ?? AidenBotCreateCopy.creating }
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -822,7 +844,7 @@ struct AidenBotPendingCreateRow: View {
                     .font(.headline)
                     .foregroundStyle(palette.foreground)
                     .lineLimit(1)
-                Text(AidenBotCreateCopy.creating)
+                Text(status)
                     .font(.body)
                     .foregroundStyle(palette.secondary)
                     .lineLimit(1)
@@ -832,11 +854,12 @@ struct AidenBotPendingCreateRow: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(pending.name), \(AidenBotCreateCopy.creating)")
+        .accessibilityLabel("\(pending.name), \(status)")
     }
 }
 
 enum AidenBotCreateCopy {
     static let creating = "Creating…"
+    static func creating(on machine: String) -> String { "Creating on \(machine)…" }
     static let failedTitle = "Couldn’t Create Bot"
 }

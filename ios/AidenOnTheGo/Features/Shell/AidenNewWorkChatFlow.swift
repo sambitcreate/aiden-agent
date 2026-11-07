@@ -4,13 +4,23 @@ import SwiftUI
 
 extension AidenRemoteCoordinator {
     /// Makes a chat on the target. The default stays where it is. Nil when the
-    /// machine refused, left, or revoked this phone while it was asked.
+    /// machine refused, left, or revoked this phone while it was asked, with the
+    /// reason in `presentedError`.
     func createChat(
         on target: AidenNewWorkTarget,
         in workspace: AidenWorkspace
     ) async throws -> (chat: AidenChat, id: AidenHostObjectID)? {
-        guard let connection = hosts.connection(for: target.instanceId),
-              AidenNewWorkKind.chat.refusal(on: connection.installation) == nil else { return nil }
+        guard let connection = hosts.connection(for: target.instanceId) else {
+            presentedError = AidenNewWorkMachine.noLongerPaired
+            return nil
+        }
+        if let refusal = AidenNewWorkKind.chat.refusal(on: connection.installation) {
+            presentedError = refusal.message(
+                machine: machineName(of: target.instanceId) ?? connection.installation.name,
+                canPickAnother: AidenNewWorkPicker(coordinator: self, kind: .chat).canPick(otherThan: target.instanceId)
+            )
+            return nil
+        }
         let owner = try ownerContext(for: target.instanceId)
         let chat: AidenChat
         do {
@@ -56,21 +66,14 @@ extension AidenRemoteCoordinator {
         to workspace: AidenWorkspace,
         on target: AidenNewWorkTarget
     ) async -> AidenWorkspaceDefaultApplication {
-        let raw = UserDefaults.standard.string(forKey: "aiden.defaults.workspacePermission")
-        let permission = raw.flatMap(AidenWorkspacePermission.init(rawValue:)) ?? .ask
-        guard permission != workspace.permission else {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
-        }
-        do {
-            let owner = try ownerContext(for: target.instanceId)
-            let updated = try await remoteClient(for: owner).updateWorkspace(
+        let raw = UserDefaults.standard.string(forKey: AidenWorkspaceDefaultApplication.permissionKey)
+        return await .applying(raw.flatMap(AidenWorkspacePermission.init(rawValue:)) ?? .ask, to: workspace) { permission in
+            guard let owner = try? ownerContext(for: target.instanceId) else { return nil }
+            return try? await remoteClient(for: owner).updateWorkspace(
                 id: workspace.id,
                 revision: workspace.revision,
                 patch: AidenWorkspacePatch(permission: permission)
             )
-            return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
-        } catch {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
         }
     }
 
@@ -123,10 +126,10 @@ final class AidenNewWorkChatFlow {
         picker.target.flatMap { coordinator.hosts.connection(for: $0.instanceId) }
     }
 
-    /// Compose stays available while any machine can take the chat, so an offline
-    /// default doesn't lock the person out of the others.
+    /// Compose opens with any machine paired, so a machine that can't take the
+    /// chat can say why (R15) and an offline default doesn't lock out the others.
     var isUnavailable: Bool {
-        isCreating || !picker.machines.contains(where: \.canBePicked)
+        isCreating || picker.machines.isEmpty
     }
 
     var canStart: Bool { !isCreating && picker.canStart }
@@ -224,7 +227,7 @@ final class AidenNewWorkChatFlow {
     private func reportUnavailable(_ target: AidenNewWorkTarget) {
         let name = picker.machines.first { $0.id == target.instanceId }?.name
         coordinator.presentedError = name.map { String(localized: "\($0) isn’t reachable right now. Try again once it’s connected.") }
-            ?? String(localized: "This machine is no longer paired. Pair it again to continue.")
+            ?? AidenNewWorkMachine.noLongerPaired
         coordinator.haptics.play(.error, scope: hapticScope)
     }
 

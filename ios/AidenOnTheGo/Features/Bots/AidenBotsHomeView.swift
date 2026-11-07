@@ -294,7 +294,6 @@ struct AidenBotsHomeView: View {
     /// The failed create New Bot reopens with after Try Again.
     @State private var createPrefill: AidenBotCreateFlow.Failure?
     /// The machine New Bot last sent to, when it was picked: its failure shows here too.
-    @State private var pickedPairing: (instanceId: String, deviceId: String)?
     @FocusState private var searchIsFocused: Bool
 
     private var loadID: AidenBotsHomeLoadID {
@@ -366,20 +365,22 @@ struct AidenBotsHomeView: View {
         coordinator.installationStore.activeInstallation.map { ($0.id, $0.deviceId) }
     }
 
-    /// The Bot on its way, when it is on its way to the Mac in use.
-    private var activePendingCreate: AidenBotCreateFlow.Pending? {
-        guard let pending = createFlow.pending, let pairing = activePairing,
-              pending.instanceId == pairing.instanceId, pending.deviceId == pairing.deviceId else { return nil }
-        return pending
+    /// The Bot on its way, and on the tab shell its machine when that isn't the default.
+    private var shownPendingCreate: (pending: AidenBotCreateFlow.Pending, machine: String?)? {
+        createFlow.shownPending(coordinator: coordinator)
     }
 
-    /// The failed create of the Mac in use; another Mac's waits for that Mac. It shows once no
-    /// other Bot is on its way, since one Bot is made at a time.
+    /// The failed create to show; on the old shell another Mac's waits for that Mac. It shows
+    /// once no other Bot is on its way, since one Bot is made at a time.
     private var activeCreateFailure: AidenBotCreateFlow.Failure? {
-        guard createFlow.pending == nil else { return nil }
-        return [pickedPairing, activePairing].lazy.compactMap { $0 }
-            .compactMap { createFlow.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
-            .first
+        guard !AppConfig.tabShellEnabled else { return createFlow.failureToShow(coordinator: coordinator) }
+        guard createFlow.pending == nil, let pairing = activePairing else { return nil }
+        return createFlow.failure(instanceId: pairing.instanceId, deviceId: pairing.deviceId)
+    }
+
+    /// Bots home looks for what every machine's New Bot left, not just the default's.
+    private var parkedAskScopes: [String] {
+        AppConfig.tabShellEnabled ? createFlow.parkedAskScopes(coordinator: coordinator) : []
     }
 
     /// New Bot opens at once, connected or not (R15); the Bot is made once the Mac answers.
@@ -392,9 +393,7 @@ struct AidenBotsHomeView: View {
     /// On the tab shell New Bot asks whichever machine it's picked for, so one that
     /// can't make Bots doesn't close it for the others.
     private var canOpenNewBot: Bool {
-        guard AppConfig.tabShellEnabled else { return canCreateBot }
-        return createFlow.pending == nil
-            && AidenNewWorkPicker(coordinator: coordinator, kind: .bot).machines.contains(where: \.canBePicked)
+        AppConfig.tabShellEnabled ? createFlow.canOpenNewBot(coordinator: coordinator) : canCreateBot
     }
 
     var body: some View {
@@ -483,15 +482,16 @@ struct AidenBotsHomeView: View {
             presenting: activeCreateFailure
         ) { failure in
             Button("Try Again") {
+                guard let pairing = failure.retryPairing(coordinator: coordinator) else { return }
                 switch createFlow.retry(
                     failure,
-                    instanceId: failure.instanceId,
-                    deviceId: failure.deviceId,
+                    instanceId: pairing.instanceId,
+                    deviceId: pairing.deviceId,
                     bots: listedBots(for: failure)
                 ) {
                 case let .send(input):
                     // An earlier launch's create: the same request, on the same key.
-                    startCreate(input, retrying: failure, on: pickedPairing?.instanceId == failure.instanceId
+                    startCreate(input, retrying: failure, on: AppConfig.tabShellEnabled
                         ? AidenNewWorkTarget(instanceId: failure.instanceId) : nil)
                 case let .reopen(reopened):
                     createPrefill = reopened
@@ -505,7 +505,7 @@ struct AidenBotsHomeView: View {
                 createFlow.discard(failure)
             }
         } message: { failure in
-            Text(failure.message)
+            Text(failure.shownMessage(coordinator: coordinator))
         }
         .alert(
             "Couldn’t Delete",
@@ -520,13 +520,18 @@ struct AidenBotsHomeView: View {
         }
         .task(id: loadID) {
             // A New Bot an earlier launch left on its way comes back with Try Again, on its own Mac only.
-            if loadID.isBotSurfaceActive, let context = try? coordinator.requestContext() {
+            if !AppConfig.tabShellEnabled, loadID.isBotSurfaceActive, let context = try? coordinator.requestContext() {
                 let coordinator = coordinator
                 await createFlow.restore(instanceId: context.instanceId, deviceId: context.deviceId) {
                     coordinator.isCurrent(context)
                 }
             }
             await load()
+        }
+        .task(id: parkedAskScopes) {
+            if !parkedAskScopes.isEmpty {
+                await createFlow.restoreEveryMachine(coordinator: coordinator)
+            }
         }
         .task(id: searchID) {
             await searchConversations()
@@ -658,19 +663,19 @@ struct AidenBotsHomeView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let pending = activePendingCreate {
-            AidenBotPendingCreateRow(pending: pending)
+        if let shown = shownPendingCreate {
+            AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
         }
         switch contentState {
         case .loading:
             AidenBotHomeSkeletonView(reduceMotion: reduceMotion)
-        case .empty where activePendingCreate != nil:
+        case .empty where shownPendingCreate != nil:
             EmptyView()
         case .empty where coordinator.connectionState == .connected && !presets.isEmpty:
             AidenBotMeetFirstBotView(
                 presets: presets,
                 isBusy: isStartingPreset,
-                canCreate: canCreateBot,
+                canCreate: canCreateBot && canOpenNewBot,
                 onStartChat: { preset in Task { await startChat(with: preset) } },
                 onCreateOwn: {
                     createPrefill = nil
@@ -816,10 +821,14 @@ struct AidenBotsHomeView: View {
         retrying: AidenBotCreateFlow.Failure? = nil,
         on target: AidenNewWorkTarget? = nil
     ) {
-        let picked = target.flatMap { try? coordinator.ownerContext(for: $0.instanceId) }
-        guard let context = picked ?? (try? coordinator.requestContext()) else { return }
+        let context: AidenRemoteRequestContext
+        do {
+            context = try AidenBotCreateOperations.context(for: target, coordinator: coordinator)
+        } catch {
+            if target != nil { coordinator.presentedError = AidenNewWorkMachine.noLongerPaired }
+            return
+        }
         createPrefill = nil
-        pickedPairing = picked.map { ($0.instanceId, $0.deviceId) }
         let operations = AidenBotCreateOperations.make(coordinator: coordinator, context: context)
         Task {
             await createFlow.submit(input, operations: operations, retrying: retrying) { created in

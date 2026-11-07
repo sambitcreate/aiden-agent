@@ -359,7 +359,77 @@ final class AidenNewWorkTargetTests: XCTestCase {
 
         try await takeOffline("laptop")
         try await takeOffline("mini")
-        XCTAssertTrue(flow.isUnavailable)
+        XCTAssertFalse(flow.isUnavailable, "It opens and says why (R15)")
+        XCTAssertFalse(flow.canStart)
+        XCTAssertEqual(flow.picker.refusalMessage, "Studio is offline. Try again once it’s back.")
+    }
+
+    func testOneOfflineMachineSaysWhyItCantTakeTheChat() async throws {
+        coordinator = makeCoordinator([AidenDemoHosts.installation(instanceId: "studio", name: "Studio")])
+        await connectAll()
+        try await takeOffline("studio")
+        let flow = flow()
+        XCTAssertFalse(flow.picker.showsPicker)
+        XCTAssertFalse(flow.isUnavailable)
+        XCTAssertFalse(flow.canStart)
+
+        let labels = try labels(of: AidenNewWorkMachinePicker(picker: flow.picker), showing: "offline")
+
+        XCTAssertTrue(labels.contains("Studio is offline. Try again once it’s back."), "\(labels)")
+    }
+
+    func testOneMachineThatCantMakeBotsSaysSoInNewBot() async throws {
+        var studio = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        studio.deviceCapabilities.removeAll { $0 == .botWrite }
+        coordinator = makeCoordinator([studio])
+        await connectAll()
+
+        let labels = try labels(of: AidenBotCreateView(coordinator: coordinator, tabShellEnabled: true), showing: "can’t create Bots")
+
+        XCTAssertTrue(labels.contains("Studio can’t create Bots from this phone."), "\(labels)")
+    }
+
+    func testALostChatWriteSaysSoInsteadOfDoingNothing() async throws {
+        var laptop = AidenDemoHosts.installation(instanceId: "laptop", name: "Laptop")
+        laptop.deviceCapabilities.removeAll { $0 == .chatWrite }
+        coordinator = makeCoordinator([AidenDemoHosts.installation(instanceId: "studio", name: "Studio"), laptop])
+        await connectAll()
+
+        let created = try await coordinator.createChat(on: AidenNewWorkTarget(instanceId: "laptop"), in: workspaceFixture())
+
+        XCTAssertNil(created)
+        XCTAssertEqual(coordinator.presentedError, "Laptop can’t start chats from this phone. Pick another machine.")
+        XCTAssertEqual(posts("/chats", on: "laptop"), 0)
+    }
+
+    func testAChatForAMachineThatLeftSaysSo() async throws {
+        await connectAll()
+
+        let created = try await coordinator.createChat(on: AidenNewWorkTarget(instanceId: "gone"), in: workspaceFixture())
+
+        XCTAssertNil(created)
+        XCTAssertEqual(coordinator.presentedError, "This machine is no longer paired. Pair it again to continue.")
+    }
+
+    func testTheDefaultPermissionIsAskedForOnceAndKeepsTheWorkspaceWhenRefused() async throws {
+        let workspace = try workspaceFixture()
+        var updates = 0
+
+        let same = await AidenWorkspaceDefaultApplication.applying(workspace.permission, to: workspace) { _ in
+            updates += 1
+            return nil
+        }
+        XCTAssertEqual(updates, 0)
+        XCTAssertEqual(same.feedback, .success)
+
+        let other: AidenWorkspacePermission = workspace.permission == .ask ? .full : .ask
+        let refused = await AidenWorkspaceDefaultApplication.applying(other, to: workspace) { _ in
+            updates += 1
+            return nil
+        }
+        XCTAssertEqual(updates, 1)
+        XCTAssertEqual(refused.feedback, .warning)
+        XCTAssertEqual(refused.workspace.id, workspace.id)
     }
 
     func testOpeningComposeAgainStartsOnTheDefaultMachine() async throws {
@@ -403,6 +473,147 @@ final class AidenNewWorkTargetTests: XCTestCase {
         let answered = await operations.waitForConnection(.milliseconds(300))
 
         XCTAssertFalse(answered, "The default being connected says nothing about the laptop")
+    }
+
+    private func botStoreRoot() -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AidenNewWorkTargetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        roots.append(root)
+        return root
+    }
+
+    private func botAsk(_ name: String) -> AidenBotCreateInput {
+        AidenBotCreateInput(name: name, purpose: "Plans my week", draft: nil)
+    }
+
+    /// A New Bot an earlier launch left waiting on `instanceId`.
+    private func parkAsk(_ name: String, on instanceId: String, in root: URL) async throws {
+        let context = try coordinator.ownerContext(for: instanceId)
+        let saved = await AidenBotOutboxStore(root: root).savePendingCreate(
+            AidenBotPendingCreate(input: botAsk(name), frozen: nil, createdAt: Date()),
+            instanceId: context.instanceId,
+            deviceId: context.deviceId
+        )
+        XCTAssertTrue(saved)
+    }
+
+    func testAParkedAskSurvivesANewPickOfItsMachine() async throws {
+        await connectAll()
+        let root = botStoreRoot()
+        try await parkAsk("Planner", on: "laptop", in: root)
+        let context = try coordinator.ownerContext(for: "laptop")
+        let flow = AidenBotCreateFlow(store: AidenBotOutboxStore(root: root))
+
+        await flow.submit(
+            botAsk("Reader"),
+            operations: .make(coordinator: coordinator, context: context)
+        ) { _ in XCTFail("Nothing should be made over a parked ask") }
+
+        let onDisk = await AidenBotOutboxStore(root: root).pendingCreate(instanceId: context.instanceId, deviceId: context.deviceId)
+        XCTAssertEqual(onDisk?.input.name, "Planner", "The words the person left are still there")
+        XCTAssertEqual(flow.failure(instanceId: context.instanceId, deviceId: context.deviceId)?.input.name, "Planner")
+        XCTAssertEqual(posts("/bots", on: "laptop"), 0)
+    }
+
+    func testAnAskParkedOnAnyMachineComesBackWithTheMachinesName() async throws {
+        await connectAll()
+        let root = botStoreRoot()
+        try await parkAsk("Planner", on: "laptop", in: root)
+        let flow = AidenBotCreateFlow(store: AidenBotOutboxStore(root: root))
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+
+        await flow.restoreEveryMachine(coordinator: coordinator)
+
+        let failure = try XCTUnwrap(flow.failureToShow(coordinator: coordinator), "A relaunch shows it, whichever machine is the default")
+        XCTAssertEqual(failure.input.name, "Planner")
+        XCTAssertEqual(failure.instanceId, "laptop")
+        XCTAssertEqual(failure.shownMessage(coordinator: coordinator), "Laptop: \(AidenBotCreateFlow.interrupted)")
+    }
+
+    func testAnAskOnTheDefaultNeedsNoMachineName() async throws {
+        await connectAll()
+        let root = botStoreRoot()
+        try await parkAsk("Planner", on: "studio", in: root)
+        let flow = AidenBotCreateFlow(store: AidenBotOutboxStore(root: root))
+
+        await flow.restoreEveryMachine(coordinator: coordinator)
+
+        let failure = try XCTUnwrap(flow.failureToShow(coordinator: coordinator))
+        XCTAssertEqual(failure.shownMessage(coordinator: coordinator), AidenBotCreateFlow.interrupted)
+    }
+
+    func testNewBotWaitsUntilEveryMachineHasBeenLookedAt() async throws {
+        await connectAll()
+        let flow = AidenBotCreateFlow(store: AidenBotOutboxStore(root: botStoreRoot()))
+
+        XCTAssertFalse(flow.canOpenNewBot(coordinator: coordinator))
+        await flow.restoreEveryMachine(coordinator: coordinator)
+
+        XCTAssertTrue(flow.canOpenNewBot(coordinator: coordinator))
+    }
+
+    func testNewBotOpensWithEveryMachineOfflineAndSaysWhyInside() async throws {
+        await connectAll()
+        for id in ["studio", "laptop", "mini"] { try await takeOffline(id) }
+        let flow = AidenBotCreateFlow(store: AidenBotOutboxStore(root: botStoreRoot()))
+        await flow.restoreEveryMachine(coordinator: coordinator)
+
+        XCTAssertTrue(flow.canOpenNewBot(coordinator: coordinator), "R15: it opens, connected or not")
+        let picker = picker(.bot)
+        XCTAssertFalse(picker.canStart)
+        XCTAssertEqual(picker.refusalMessage, "Studio is offline. Try again once it’s back.")
+    }
+
+    func testANewBotForAMachineThatLeftNeverFallsToTheDefault() async throws {
+        await connectAll()
+
+        XCTAssertThrowsError(try AidenBotCreateOperations.context(
+            for: AidenNewWorkTarget(instanceId: "gone"),
+            coordinator: coordinator
+        ))
+        XCTAssertEqual(try AidenBotCreateOperations.context(for: nil, coordinator: coordinator).instanceId, "studio")
+    }
+
+    func testABotOnItsWayToAnotherMachineShowsARow() async throws {
+        await connectAll()
+        let context = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/bot-capabilities")
+        let flow = AidenBotCreateFlow(store: nil)
+        let operations = AidenBotCreateOperations.make(coordinator: coordinator, context: context)
+        let making = Task { await flow.submit(self.botAsk("Planner"), operations: operations) { _ in } }
+        await assertSettles { flow.pending != nil }
+        defer { release() }
+
+        let shown = try XCTUnwrap(flow.shownPending(coordinator: coordinator, tabShellEnabled: true))
+        XCTAssertEqual(shown.pending.name, "Planner")
+        XCTAssertEqual(shown.machine, "Laptop")
+        XCTAssertEqual(AidenBotCreateCopy.creating(on: "Laptop"), "Creating on Laptop…")
+        XCTAssertNil(flow.shownPending(coordinator: coordinator, tabShellEnabled: false), "The old shell shows only the selected machine's")
+
+        release()
+        await making.value
+    }
+
+    func testTryAgainGoesToTheFailuresOwnMachineOnly() async throws {
+        await connectAll()
+        let root = botStoreRoot()
+        try await parkAsk("Planner", on: "laptop", in: root)
+        let flow = AidenBotCreateFlow(store: AidenBotOutboxStore(root: root))
+        await flow.restoreEveryMachine(coordinator: coordinator)
+        let failure = try XCTUnwrap(flow.failureToShow(coordinator: coordinator))
+
+        let pairing = try XCTUnwrap(failure.retryPairing(coordinator: coordinator, tabShellEnabled: true))
+        XCTAssertEqual(pairing.instanceId, "laptop")
+        XCTAssertEqual(pairing.deviceId, failure.deviceId)
+
+        var repaired = failure
+        repaired.deviceId = "another-device"
+        XCTAssertNil(repaired.retryPairing(coordinator: coordinator, tabShellEnabled: true), "A new pairing isn't the phone that asked")
+
+        let selected = try XCTUnwrap(failure.retryPairing(coordinator: coordinator, tabShellEnabled: false))
+        XCTAssertEqual(selected.instanceId, "studio", "The old shell still answers for the selected machine")
+        XCTAssertEqual(flow.retry(failure, instanceId: selected.instanceId, deviceId: selected.deviceId), .none, "So another machine's failure waits")
+        XCTAssertNotNil(flow.failure(instanceId: failure.instanceId, deviceId: failure.deviceId))
     }
 
     // MARK: Scheduled tasks and Usage
@@ -492,6 +703,62 @@ final class AidenNewWorkTargetTests: XCTestCase {
         "tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"cacheWrite1h":0,"reasoning":0,"total":0}},
         "days":[],"models":[]}
         """.utf8))
+    }
+
+    func testAnOfflineMachineStaysPickableForReading() async throws {
+        await connectAll()
+        try await takeOffline("laptop")
+        let picker = picker(.reading)
+
+        let laptop = try XCTUnwrap(picker.machines.first { $0.id == "laptop" })
+        XCTAssertTrue(laptop.canBePicked)
+        XCTAssertEqual(laptop.detail, "Offline", "It still says so")
+
+        XCTAssertTrue(picker.pick("laptop"))
+        XCTAssertTrue(picker.canStart)
+        XCTAssertNil(picker.refusalMessage, "Scheduled and Usage say what they show themselves")
+    }
+
+    func testAnOfflineDefaultStaysUsableForReading() async throws {
+        await connectAll()
+        try await takeOffline("studio")
+
+        let picker = picker(.reading)
+
+        XCTAssertTrue(picker.canStart)
+        XCTAssertEqual(picker.pickedMachine?.detail, "Default · Offline")
+    }
+
+    func testAnOfflineMachineStillShowsItsCachedScheduledTasks() async throws {
+        await connectAll()
+        replyToSchedules(on: "laptop")
+        let cache = scheduledCache()
+        let target = AidenNewWorkTarget(instanceId: "laptop")
+        let online = AidenScheduledTasksModel(coordinator: coordinator, cache: cache, machine: target)
+        await online.load()
+        try await cache.store(instanceId: "laptop", tasks: online.tasks, settings: online.settings)
+        try await takeOffline("laptop")
+        let picker = picker(.reading)
+
+        XCTAssertTrue(picker.pick("laptop"))
+        let model = AidenScheduledTasksModel(coordinator: coordinator, cache: cache, machine: picker.target)
+        await model.load()
+
+        XCTAssertEqual(model.tasks.map(\.id), ["task-laptop"])
+    }
+
+    func testAPickShowsNoOldUsageBeforeTheNewMachineAnswers() async throws {
+        await connectAll()
+        replyToUsage(on: "studio", requests: 1)
+        let model = AidenMachineUsageModel(coordinator: coordinator, preferences: preferences)
+        await model.load()
+        XCTAssertEqual(model.usage?.totals.requests, 1)
+
+        model.picker.pick("laptop")
+
+        XCTAssertNil(model.usage, "Another machine's numbers never show under this one's name")
+        XCTAssertTrue(model.providers.isEmpty)
+        XCTAssertFalse(model.loadFailed)
     }
 
     func testUsageStartsOnTheDefaultAndReadsThePickedMachine() async throws {
@@ -633,6 +900,90 @@ final class AidenNewWorkTargetTests: XCTestCase {
         )
     }
 
+    func testMovingTheDefaultLeavesAnOpenChatsToolsAlone() async throws {
+        await connectAll()
+        let before = AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: "studio")
+        let selected = AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: nil)
+
+        coordinator.setDefaultMachine("laptop")
+
+        XCTAssertEqual(AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: "studio"), before, "Read aloud keeps going")
+        XCTAssertNotEqual(AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: nil), selected, "The old shell's chat follows the selection")
+    }
+
+    func testAnOpenChatsToolsStopWhenItsOwnMachineChanges() async throws {
+        await connectAll()
+        let before = AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: "laptop")
+
+        try await takeOffline("laptop")
+
+        XCTAssertNotEqual(AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: "laptop"), before)
+    }
+
+    private func replyToBotCapabilities(on instanceId: String) throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let contract = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let catalog = try XCTUnwrap(contract["botCapabilityCatalog"])
+        responder.reply(
+            instanceId: instanceId,
+            path: "/bot-capabilities",
+            status: 200,
+            json: try JSONSerialization.data(withJSONObject: catalog)
+        )
+    }
+
+    func testFilesAreNotOfferedOnAMovedBot() async throws {
+        let responder = AidenDemoResponder()
+        self.responder = responder
+        coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
+        await connectAll()
+        let home = try XCTUnwrap(coordinator.defaultInstanceId)
+        try replyToBotCapabilities(on: home)
+        let next = try XCTUnwrap(coordinator.hosts.ordered.first { $0.instanceId != home }).instanceId
+        let tools = AidenBotChatToolsModel(chatID: "chat_bot_scout", botID: "bot_scout", cache: AidenBotCache(root: botStoreRoot()))
+        await tools.load(coordinator: coordinator)
+        XCTAssertNotNil(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true))
+
+        coordinator.setDefaultMachine(next)
+
+        XCTAssertNil(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true), "A sheet opened now would stay blank")
+    }
+
+    func testFilesComeBackWhenABotsMachineIsSelectedAgain() async throws {
+        let responder = AidenDemoResponder()
+        self.responder = responder
+        coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
+        await connectAll()
+        for connection in coordinator.hosts.ordered { try replyToBotCapabilities(on: connection.instanceId) }
+        let session = AidenComposerSession()
+        let window = try await show(AidenBotSessionChatView(
+            coordinator: coordinator,
+            botID: "bot_scout",
+            composerSession: session,
+            staysOnItsMachine: true
+        ))
+        defer { close(window) }
+        await assertSettles({ (session.draftOwner as? AidenBotSessionModel)?.hasLoaded == true }, timeout: 15)
+        let home = try XCTUnwrap((session.draftOwner as? AidenBotSessionModel)?.owner.instanceId)
+        let next = try XCTUnwrap(coordinator.hosts.ordered.first { $0.instanceId != home }).instanceId
+        func reads() -> Int { responder.requests(instanceId: home).filter { $0 == "GET /bot-capabilities" }.count }
+        await assertSettles({ reads() > 0 }, timeout: 15)
+        let before = reads()
+
+        coordinator.setDefaultMachine(next)
+        await settle()
+        coordinator.setDefaultMachine(home)
+
+        await assertSettles({ reads() > before }, timeout: 5)
+    }
+
+    func testAMovedBotOffersNoAdvancedUntilItCanReachIt() {
+        let config = AidenSessionSheetConfig.bot(title: "Bot", hasFiles: false, hasMemory: false, hasAdvanced: false, canDelete: false, isDeleting: false)
+
+        XCTAssertFalse(config.actions.contains(.advanced))
+        XCTAssertEqual(config.actions, [.profile])
+    }
+
     // MARK: The Settings row
 
     private func settingsLabels(tabShellEnabled: Bool) throws -> [String] {
@@ -743,6 +1094,16 @@ final class AidenNewWorkTargetTests: XCTestCase {
         }
         walk(root)
         return found
+    }
+
+    /// The labels a view gives VoiceOver, once one holding `text` shows.
+    private func labels(of view: some View, showing text: String) throws -> [String] {
+        Self.setAccessibilityAutomation(true)
+        defer { Self.setAccessibilityAutomation(false) }
+        let window = try showSynchronously(view)
+        defer { close(window) }
+        _ = runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel?.contains(text) == true } }, timeout: 2)
+        return accessibleElements(in: window).compactMap(\.accessibilityLabel)
     }
 
     private func runMainLoop(until condition: () -> Bool, timeout: TimeInterval = 5) -> Bool {

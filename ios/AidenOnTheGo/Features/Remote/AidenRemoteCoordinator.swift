@@ -160,7 +160,7 @@ final class AidenRemoteCoordinator {
     let installationStore: AidenInstallationStore
     let haptics: any AidenHapticEmitting
     /// The phone-local machine names, symbols and colours. A machine that leaves takes its entry with it.
-    private let machinePreferences: AidenMachinePreferencesStore
+    let machinePreferences: AidenMachinePreferencesStore
     private let clientFactory: ClientFactory
     /// One connection per paired machine, the selected one included.
     let hosts: AidenHostRegistry

@@ -11,8 +11,16 @@ struct AidenNewWorkTarget: Hashable, Sendable {
 enum AidenNewWorkKind {
     case chat
     case bot
-    /// Scheduled Tasks and Usage. The page itself says what a machine won't show.
+    /// Scheduled Tasks and Usage. The page itself says what a machine won't show,
+    /// so an offline machine stays pickable for its cached history.
     case reading
+
+    var refusesOffline: Bool {
+        switch self {
+        case .chat, .bot: true
+        case .reading: false
+        }
+    }
 
     func refusal(on installation: AidenInstallation) -> AidenNewWorkMachine.Refusal? {
         switch self {
@@ -42,29 +50,42 @@ struct AidenNewWorkMachine: Identifiable, Equatable {
             }
         }
 
-        func message(machine name: String) -> String {
-            switch self {
-            case .offline:
+        /// `canPickAnother` is false when no other machine could take the work.
+        func message(machine name: String, canPickAnother: Bool) -> String {
+            switch (self, canPickAnother) {
+            case (.offline, true):
                 String(localized: "\(name) is offline. Pick another machine, or try again once it’s back.")
-            case .cannotStartChats:
+            case (.offline, false):
+                String(localized: "\(name) is offline. Try again once it’s back.")
+            case (.cannotStartChats, true):
                 String(localized: "\(name) can’t start chats from this phone. Pick another machine.")
-            case .cannotCreateBots:
+            case (.cannotStartChats, false):
+                String(localized: "\(name) can’t start chats from this phone.")
+            case (.cannotCreateBots, true):
                 String(localized: "\(name) can’t create Bots from this phone. Pick another machine.")
+            case (.cannotCreateBots, false):
+                String(localized: "\(name) can’t create Bots from this phone.")
             }
         }
+    }
+
+    static var noLongerPaired: String {
+        String(localized: "This machine is no longer paired. Pair it again to continue.")
     }
 
     let id: String
     let name: String
     let symbol: AidenMachineSymbol
     let isDefault: Bool
+    let isOffline: Bool
     let refusal: Refusal?
 
     var canBePicked: Bool { refusal == nil }
 
     /// The second line of the row, when it has anything to say.
     var detail: String? {
-        let parts = [isDefault ? String(localized: "Default") : nil, refusal?.title].compactMap { $0 }
+        let status = refusal?.title ?? (isOffline ? AidenMachineStatus.offline.title : nil)
+        let parts = [isDefault ? String(localized: "Default") : nil, status].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
@@ -92,7 +113,7 @@ final class AidenNewWorkPicker {
     ) {
         self.coordinator = coordinator
         self.kind = kind
-        self.preferences = preferences ?? .shared
+        self.preferences = preferences ?? coordinator.machinePreferences
         self.pinnedMachine = pinnedMachine
         startOver()
     }
@@ -117,7 +138,12 @@ final class AidenNewWorkPicker {
     /// Why the machine the picker is on can't take the work.
     var refusalMessage: String? {
         guard let pickedMachine, let refusal = pickedMachine.refusal else { return nil }
-        return refusal.message(machine: pickedMachine.name)
+        return refusal.message(machine: pickedMachine.name, canPickAnother: canPick(otherThan: pickedMachine.id))
+    }
+
+    /// True while a machine besides `instanceId` could take the work.
+    func canPick(otherThan instanceId: String) -> Bool {
+        machines.contains { $0.id != instanceId && $0.canBePicked }
     }
 
     /// False, leaving the target alone, for a machine that can't take the work.
@@ -140,7 +166,7 @@ final class AidenNewWorkPicker {
     /// asked is the answer.
     private func refusal(of connection: AidenHostConnection) -> AidenNewWorkMachine.Refusal? {
         guard pinnedMachine == nil else { return nil }
-        return connection.isKnownOffline ? .offline : kind.refusal(on: connection.installation)
+        return connection.isKnownOffline && kind.refusesOffline ? .offline : kind.refusal(on: connection.installation)
     }
 
     /// What the Default machine row offers. An offline machine can be the default,
@@ -149,7 +175,7 @@ final class AidenNewWorkPicker {
         coordinator: AidenRemoteCoordinator,
         preferences: AidenMachinePreferencesStore? = nil
     ) -> [AidenNewWorkMachine] {
-        let preferences = preferences ?? .shared
+        let preferences = preferences ?? coordinator.machinePreferences
         return visibleConnections(coordinator: coordinator, preferences: preferences, keeping: coordinator.defaultInstanceId).map {
             machine($0, coordinator: coordinator, preferences: preferences, refusal: nil)
         }
@@ -180,8 +206,17 @@ final class AidenNewWorkPicker {
             name: saved?.nameOverride ?? connection.installation.name,
             symbol: saved?.symbol ?? .desktop,
             isDefault: connection.instanceId == coordinator.defaultInstanceId,
+            isOffline: connection.isKnownOffline,
             refusal: refusal
         )
+    }
+}
+
+extension AidenRemoteCoordinator {
+    /// The name this phone shows for a paired machine.
+    func machineName(of instanceId: String) -> String? {
+        guard let connection = hosts.connection(for: instanceId) else { return nil }
+        return machinePreferences.saved(for: instanceId)?.nameOverride ?? connection.installation.name
     }
 }
 
@@ -202,7 +237,7 @@ private struct AidenNewWorkMachineLabel: View {
 }
 
 /// Chooses the machine for one piece of work. With one machine to offer there is
-/// no choice to show.
+/// no choice to show, only the reason it can't take the work.
 struct AidenNewWorkMachinePicker: View {
     let picker: AidenNewWorkPicker
 
@@ -259,13 +294,20 @@ struct AidenNewWorkMachinePicker: View {
                 .accessibilityLabel("Machine")
                 .accessibilityValue(accessibilityValue)
                 .accessibilityHint("Chooses which machine this goes to.")
-                if let refusal = picker.refusalMessage {
-                    Text(refusal)
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                refusalLine
             }
+        } else {
+            refusalLine
+        }
+    }
+
+    @ViewBuilder
+    private var refusalLine: some View {
+        if let refusal = picker.refusalMessage {
+            Text(refusal)
+                .font(.caption)
+                .foregroundStyle(palette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

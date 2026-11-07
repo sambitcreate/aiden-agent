@@ -1,6 +1,15 @@
 import Foundation
 
 extension AidenBotCreateOperations {
+    /// The context a New Bot goes out on: a picked machine's own, or the selected
+    /// one's on the old shell. A picked machine that left throws, because the Bot
+    /// must never land on the default instead.
+    @MainActor
+    static func context(for target: AidenNewWorkTarget?, coordinator: AidenRemoteCoordinator) throws -> AidenRemoteRequestContext {
+        guard let target else { return try coordinator.requestContext() }
+        return try coordinator.ownerContext(for: target.instanceId)
+    }
+
     /// A create on the context's machine. An owner context stays good when the
     /// default moves; a selected one ends with the selection.
     @MainActor
@@ -27,5 +36,86 @@ extension AidenBotCreateOperations {
             isCurrent: { coordinator.holds(context) },
             handleRevocation: { error in await coordinator.handleCredentialRevocation(error, context: context) }
         )
+    }
+}
+
+extension AidenBotCreateFlow {
+    /// The pairings a create could wait on, in pairing order. A revoked machine,
+    /// or one that has to be paired again, keeps nothing that could go out.
+    private func pairings(_ coordinator: AidenRemoteCoordinator) -> [AidenRemoteRequestContext] {
+        coordinator.hosts.ordered.compactMap { connection in
+            guard !connection.isRevoked, connection.connectionState != .needsPairing else { return nil }
+            return try? connection.requestContext(scope: .owner)
+        }
+    }
+
+    /// Changes as machines are paired, so Bots home looks again.
+    func parkedAskScopes(coordinator: AidenRemoteCoordinator) -> [String] {
+        pairings(coordinator).map { Self.scope(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+    }
+
+    /// Brings back what an earlier launch left on any machine, since a new pick of
+    /// one has to find its ask rather than land on it.
+    func restoreEveryMachine(coordinator: AidenRemoteCoordinator) async {
+        for context in pairings(coordinator) {
+            await restore(instanceId: context.instanceId, deviceId: context.deviceId) {
+                coordinator.isRetained(context)
+            }
+        }
+    }
+
+    /// The failed create Bots home shows on the tab shell, whichever machine it's for.
+    func failureToShow(coordinator: AidenRemoteCoordinator) -> Failure? {
+        guard pending == nil else { return nil }
+        return pairings(coordinator).lazy
+            .compactMap { self.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+            .first
+    }
+
+    /// New Bot opens at once, connected or not (R15), and says inside why a machine
+    /// can't take the Bot. It waits only for what earlier launches left.
+    func canOpenNewBot(coordinator: AidenRemoteCoordinator) -> Bool {
+        pending == nil
+            && !AidenNewWorkPicker(coordinator: coordinator, kind: .bot).machines.isEmpty
+            && pairings(coordinator).allSatisfy { hasLooked(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+    }
+
+    /// The Bot on its way that Bots home shows, and its machine when that isn't the
+    /// default. The old shell shows only the selected machine's.
+    func shownPending(
+        coordinator: AidenRemoteCoordinator,
+        tabShellEnabled: Bool = AppConfig.tabShellEnabled
+    ) -> (pending: Pending, machine: String?)? {
+        guard let pending else { return nil }
+        guard tabShellEnabled else {
+            let active = coordinator.installationStore.activeInstallation
+            return pending.instanceId == active?.id && pending.deviceId == active?.deviceId ? (pending, nil) : nil
+        }
+        let isElsewhere = pending.instanceId != coordinator.defaultInstanceId
+        return (pending, isElsewhere ? coordinator.machineName(of: pending.instanceId) : nil)
+    }
+}
+
+extension AidenBotCreateFlow.Failure {
+    /// The pairing Try Again answers for. On the tab shell that's the failure's own,
+    /// while this phone is still paired to it; the old shell's is the active one, so
+    /// `retry` keeps another Mac's failure waiting.
+    @MainActor
+    func retryPairing(
+        coordinator: AidenRemoteCoordinator,
+        tabShellEnabled: Bool = AppConfig.tabShellEnabled
+    ) -> (instanceId: String, deviceId: String)? {
+        let installation = tabShellEnabled
+            ? coordinator.hosts.connection(for: instanceId)?.installation
+            : coordinator.installationStore.activeInstallation
+        guard let installation, !tabShellEnabled || installation.deviceId == deviceId else { return nil }
+        return (installation.id, installation.deviceId)
+    }
+
+    /// The alert's words, naming the machine when it isn't the default.
+    @MainActor
+    func shownMessage(coordinator: AidenRemoteCoordinator) -> String {
+        guard instanceId != coordinator.defaultInstanceId, let name = coordinator.machineName(of: instanceId) else { return message }
+        return "\(name): \(message)"
     }
 }

@@ -70,12 +70,17 @@ struct AidenUsagePendingView: View {
 @Observable
 final class AidenMachineUsageModel {
     let picker: AidenNewWorkPicker
-    private(set) var usage: AidenUsageSummary?
-    private(set) var providers: [AidenProvider] = []
-    private(set) var loadFailed = false
+    private var loadedUsage: AidenUsageSummary?
+    private var loadedProviders: [AidenProvider] = []
+    private var didFail = false
+    /// The machine those came from. Until a pick has loaded they aren't its numbers.
+    private var shown: AidenNewWorkTarget?
+
+    var usage: AidenUsageSummary? { shown == picker.target ? loadedUsage : nil }
+    var providers: [AidenProvider] { shown == picker.target ? loadedProviders : [] }
+    var loadFailed: Bool { shown == picker.target && didFail }
 
     @ObservationIgnored private let coordinator: AidenRemoteCoordinator
-    @ObservationIgnored private var shown: AidenNewWorkTarget?
 
     init(coordinator: AidenRemoteCoordinator, preferences: AidenMachinePreferencesStore? = nil) {
         self.coordinator = coordinator
@@ -102,9 +107,9 @@ final class AidenMachineUsageModel {
     func load() async {
         if shown != picker.target {
             shown = picker.target
-            usage = nil
-            providers = []
-            loadFailed = false
+            loadedUsage = nil
+            loadedProviders = []
+            didFail = false
         }
         guard let target = picker.target, let connection, isConnected, sharesUsage,
               let owner = try? coordinator.ownerContext(for: target.instanceId) else { return }
@@ -115,15 +120,15 @@ final class AidenMachineUsageModel {
             async let loadedCatalog = readsCatalog ? try? client.modelCatalog() : nil
             let values = try await (loadedUsage, loadedCatalog)
             guard picker.target == target, coordinator.isLive(owner) else { return }
-            usage = values.0
-            providers = values.1?.providers ?? providers
-            loadFailed = false
+            self.loadedUsage = values.0
+            loadedProviders = values.1?.providers ?? loadedProviders
+            didFail = false
         } catch let error where aidenIsCancellation(error) {
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: owner) { return }
             guard picker.target == target, coordinator.isLive(owner) else { return }
-            loadFailed = usage == nil
+            didFail = self.loadedUsage == nil
         }
     }
 }

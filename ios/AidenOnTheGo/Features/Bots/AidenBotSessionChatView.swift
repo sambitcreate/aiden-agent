@@ -88,6 +88,10 @@ struct AidenBotSessionChatView: View {
         aidenBotActivitySupported(server: ownerConnection?.server, installation: ownerConnection?.installation)
     }
 
+    /// False once the default moved off this chat's machine. Files and Advanced
+    /// read the selected machine, so they wait for it.
+    private var isOnSelectedMachine: Bool { machineID == coordinator.defaultInstanceId }
+
     private func machineContext() throws -> AidenRemoteRequestContext {
         try openedOn.map(coordinator.ownerContext(for:)) ?? coordinator.requestContext()
     }
@@ -96,16 +100,22 @@ struct AidenBotSessionChatView: View {
         ownerConnection?.connectionState == .connected && canCompose
     }
 
+    /// The chat's own machine; the old shell's chat asks the selected one.
+    private var supportsSpending: Bool {
+        (openedOn == nil ? coordinator.server : ownerConnection?.server)?.supportsSpendingLimits == true
+    }
+
     private var spendingTransport: AidenSpendingTransport? {
-        guard ownerConnection?.server?.supportsSpendingLimits == true,
-              let context = try? coordinator.ownerContext(for: model?.owner.instanceId ?? machineID) else { return nil }
+        guard supportsSpending else { return nil }
+        guard openedOn != nil else { return try? coordinator.remoteClient() }
+        guard let context = try? coordinator.ownerContext(for: model?.owner.instanceId ?? machineID) else { return nil }
         return try? coordinator.remoteClient(for: context)
     }
 
     private var spendingRefreshKey: String {
         [
             machineID,
-            String(ownerConnection?.server?.supportsSpendingLimits == true),
+            String(supportsSpending),
             String(model?.isRunning == true),
             String(model?.entries.count ?? 0),
             model?.errorMessage ?? "",
@@ -301,13 +311,16 @@ struct AidenBotSessionChatView: View {
     }
 
     private var filesGrant: AidenBotConversationFileGrant? {
-        filesTools?.fileGrant(coordinator: coordinator, hostAllowsMutations: canWrite)
+        openedOn == nil
+            ? filesTools?.fileGrant(coordinator: coordinator, hostAllowsMutations: canWrite)
+            : filesTools?.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: canWrite)
     }
 
     /// Looked up again once the chat has entries, since a brand-new Bot has
-    /// no conversation until its first message.
+    /// no conversation until its first message, and when the default comes back
+    /// here, since the Files read before it left ended with the selection.
     private var filesLookupKey: String {
-        "\(machineID)|\(model?.entries.isEmpty == false)"
+        "\(machineID)|\(model?.entries.isEmpty == false)|\(isOnSelectedMachine)"
     }
 
     /// Profile, Files, Memory, Advanced and Delete for this Bot.
@@ -326,7 +339,8 @@ struct AidenBotSessionChatView: View {
             title: bot?.name ?? "Bot",
             hasFiles: filesGrant != nil,
             hasMemory: isAdvertised(AidenBotHostFeature.memory),
-            canDelete: machineID == coordinator.defaultInstanceId && AidenBotDeletion.isAvailable(coordinator: coordinator),
+            hasAdvanced: isOnSelectedMachine,
+            canDelete: isOnSelectedMachine && AidenBotDeletion.isAvailable(coordinator: coordinator),
             isDeleting: isDeleting
         )
     }
@@ -378,7 +392,7 @@ struct AidenBotSessionChatView: View {
               let page = try? await client.botConversations(query: query),
               coordinator.isCurrent(context),
               let chatID = aidenBotSessionConversationChatID(botID: botID, conversations: page.conversations),
-              filesTools?.chatID != chatID else {
+              filesTools?.chatID != chatID || filesGrant == nil else {
             return
         }
         let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID)
@@ -912,7 +926,7 @@ struct AidenBotSessionChatView: View {
         if model.needsModel {
             AidenBotNeedsModelCard(
                 botName: bot?.name ?? "this Bot",
-                canSetUp: canWrite,
+                canSetUp: canWrite && isOnSelectedMachine,
                 onSetUp: { isShowingAdvanced = true }
             )
         } else if model.isPaused {
@@ -929,6 +943,7 @@ struct AidenBotSessionChatView: View {
                 canAct: canWrite,
                 onResume: { Task { await model.resume() } },
                 onDismiss: { Task { await model.dismiss() } },
+                canOpenAdvanced: isOnSelectedMachine,
                 onOpenAdvanced: { isShowingAdvanced = true }
             )
         }
@@ -1677,6 +1692,7 @@ struct AidenBotInterruptedCard: View {
     let canAct: Bool
     let onResume: () -> Void
     let onDismiss: () -> Void
+    var canOpenAdvanced = true
     var onOpenAdvanced: () -> Void = {}
 
     @Environment(\.aidenPalette) private var palette
@@ -1692,10 +1708,12 @@ struct AidenBotInterruptedCard: View {
             }
             HStack(spacing: 10) {
                 if isAccessBlocked {
-                    Button(AidenBotSessionCopy.openAdvanced, action: onOpenAdvanced)
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.capsule)
-                        .aidenSolidFillTint()
+                    if canOpenAdvanced {
+                        Button(AidenBotSessionCopy.openAdvanced, action: onOpenAdvanced)
+                            .buttonStyle(.borderedProminent)
+                            .buttonBorderShape(.capsule)
+                            .aidenSolidFillTint()
+                    }
                 } else {
                     Button(AidenBotSessionCopy.resume, action: onResume)
                         .buttonStyle(.borderedProminent)
