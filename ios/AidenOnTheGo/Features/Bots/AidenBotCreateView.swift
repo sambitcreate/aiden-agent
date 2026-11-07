@@ -79,9 +79,9 @@ struct AidenBotCreateOperations {
 /// made, and its Try Again sends the same request on the same key. When it can't be
 /// written nothing goes out, and the failure says so.
 ///
-/// Everything a create leaves behind is its pairing's alone: Bots home shows only the
-/// active pairing's, and Try Again sends only to the Mac it was for, so one Mac's
-/// answers never become a Bot on another.
+/// Everything a create leaves behind is its pairing's alone: the old shell's Bots home
+/// shows only the active pairing's, the tab shell's names the machine, and Try Again sends
+/// only to the Mac it was for, so one Mac's answers never become a Bot on another.
 @MainActor
 @Observable
 final class AidenBotCreateFlow {
@@ -89,7 +89,7 @@ final class AidenBotCreateFlow {
         let id: UUID
         let name: String
         let purpose: String
-        /// The pairing it is on its way to; Bots home shows it there only.
+        /// The pairing it is on its way to.
         let instanceId: String
         let deviceId: String
 
@@ -172,7 +172,7 @@ final class AidenBotCreateFlow {
 
     nonisolated static func scope(instanceId: String, deviceId: String) -> String { "\(instanceId)|\(deviceId)" }
 
-    /// The failed create Bots home shows for this pairing; another pairing's is never shown here.
+    /// This pairing's failed create; another pairing's is never returned here.
     func failure(instanceId: String, deviceId: String) -> Failure? {
         failures[Self.scope(instanceId: instanceId, deviceId: deviceId)]
     }
