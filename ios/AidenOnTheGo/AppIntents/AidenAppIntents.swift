@@ -271,6 +271,7 @@ final class AidenForegroundIntentRouter {
     /// stays queued and holds up nobody else.
     func openWaitingChats(
         coordinator: AidenRemoteCoordinator,
+        connect: @MainActor (String) -> Void = { _ in },
         isForeground: @MainActor () -> Bool = { AidenRunAlertNotifier.currentAppState() == .active },
         now: @MainActor () -> Date = { Date() }
     ) async {
@@ -280,12 +281,32 @@ final class AidenForegroundIntentRouter {
         while isForeground(), let (action, connection) = nextReadyAction(on: coordinator, now: now()) {
             await openChat(for: action, on: connection, coordinator: coordinator)
         }
+        guard isForeground() else { return }
+        // A machine that wakes with no change of network gives nothing else a
+        // reason to try it.
+        for action in actions {
+            if let connection = machine(for: action, on: coordinator), connection.connectionState != .connected {
+                connect(connection.instanceId)
+            }
+        }
+    }
+
+    /// How long until the next waiting intent runs out, so whoever's waiting
+    /// can come back then. Nil with none waiting.
+    func timeUntilNextExpiry(now: Date = Date()) -> TimeInterval? {
+        actions.map { max(0, Self.lifetime - now.timeIntervalSince($0.createdAt)) }.min()
     }
 
     private func nextReadyAction(
         on coordinator: AidenRemoteCoordinator,
         now: Date
     ) -> (Action, AidenHostConnection)? {
+        // Someone asked and is still here, so a chat that never comes needs saying.
+        for action in actions where !Self.isFresh(action.createdAt, now: now) {
+            if let name = machine(for: action, on: coordinator)?.installation.name {
+                coordinator.presentedError = String(localized: "\(name) didn’t connect in time, so the chat wasn’t started.")
+            }
+        }
         actions.removeAll { !Self.isFresh($0.createdAt, now: now) || machine(for: $0, on: coordinator) == nil }
         for (index, action) in actions.enumerated() {
             if let connection = machine(for: action, on: coordinator), connection.connectionState == .connected {
@@ -376,8 +397,10 @@ final class AidenForegroundIntentRouter {
             ?? (action.workspaceID == nil ? available.first : nil)
     }
 
+    private static let lifetime: TimeInterval = 60
+
     private static func isFresh(_ requestedAt: Date, now: Date) -> Bool {
-        (0..<60).contains(now.timeIntervalSince(requestedAt))
+        (0..<lifetime).contains(now.timeIntervalSince(requestedAt))
     }
 }
 

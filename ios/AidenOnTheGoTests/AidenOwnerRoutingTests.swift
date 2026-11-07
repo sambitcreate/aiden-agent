@@ -336,8 +336,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let release = responder.hold(instanceId: "laptop", path: "/chats/c1")
 
         let deleting = Task { await store.delete(id()) }
-        try await waitUntil("the delete to reach the machine") { self.requests("laptop").contains("GET /chats/c1") }
-        XCTAssertEqual(store.homeModel(for: "laptop")?.chats.isEmpty, true)
+        // Not the request: the Inbox's transcript prefetch reads this path too.
+        try await waitUntil("the row to go") { store.homeModel(for: "laptop")?.chats.isEmpty == true }
         deleting.cancel()
         await deleting.value
         release()
@@ -757,6 +757,56 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         XCTAssertNil(router.pending)
         XCTAssertEqual(router.routes.map(\.route), [.chat(id("c_new", on: "studio"))], "A stale intent shut out the new one")
+    }
+
+    func testAnIntentAsksItsOwnMachineToConnect() async throws {
+        let router = intents(for: "laptop")
+        try connection("laptop").adopt(connectionState: .offline(message: "Away"))
+        var asked: [String] = []
+
+        await router.openWaitingChats(coordinator: coordinator, connect: { asked.append($0) }, isForeground: { true })
+
+        XCTAssertEqual(asked, ["laptop"], "A machine that wakes without a path change would never be tried")
+        XCTAssertNotNil(router.pending)
+    }
+
+    func testAnIntentAsksNothingOfAConnectedMachine() async throws {
+        let router = intents(for: "laptop")
+        responder.reply(instanceId: "laptop", method: "POST", path: "/chats", status: 201, json: json(chatObject("c_new", text: "New")))
+        var asked: [String] = []
+
+        await router.openWaitingChats(coordinator: coordinator, connect: { asked.append($0) }, isForeground: { true })
+
+        XCTAssertEqual(asked, [])
+    }
+
+    func testAnIntentThatRanOutOfTimeSaysSo() async throws {
+        let router = intents(for: "laptop", at: Date().addingTimeInterval(-61))
+        try connection("laptop").adopt(connectionState: .offline(message: "Away"))
+
+        await router.openWaitingChats(coordinator: coordinator, isForeground: { true })
+
+        XCTAssertNil(router.pending)
+        XCTAssertEqual(coordinator.presentedError, "Laptop didn’t connect in time, so the chat wasn’t started.")
+    }
+
+    func testAnIntentRunsOutOfTimeOnlyInFrontOfThePerson() async throws {
+        let router = intents(for: "laptop", at: Date().addingTimeInterval(-61))
+        try connection("laptop").adopt(connectionState: .offline(message: "Away"))
+
+        await router.openWaitingChats(coordinator: coordinator, isForeground: { false })
+
+        XCTAssertNotNil(router.pending, "Nobody would see the message")
+        XCTAssertNil(coordinator.presentedError)
+    }
+
+    func testAWaitingIntentKnowsWhenItRunsOut() throws {
+        let start = Date()
+        let router = intents(for: "laptop", at: start)
+
+        XCTAssertEqual(try XCTUnwrap(router.timeUntilNextExpiry(now: start.addingTimeInterval(10))), 50, accuracy: 0.01)
+        XCTAssertEqual(router.timeUntilNextExpiry(now: start.addingTimeInterval(70)), 0)
+        XCTAssertNil(AidenForegroundIntentRouter(queuesActions: true).timeUntilNextExpiry())
     }
 
     func testTheMenuShellStillTakesOneIntentAtATime() {

@@ -285,6 +285,12 @@ struct ContentView: View {
                 showsNewChatConsent = false
             }
             await consumeForegroundIntentIfReady()
+            // One still waiting gets its answer when its minute is up, even if
+            // nothing else changes by then.
+            guard AppConfig.tabShellEnabled, let wait = foregroundIntents.timeUntilNextExpiry() else { return }
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled else { return }
+            await consumeForegroundIntentIfReady()
         }
         .onDisappear {
             externalNewChats.invalidate()
@@ -433,7 +439,11 @@ struct ContentView: View {
             // reconnect holds up nobody else.
             // Its own task: taking an action restarts the `.task(id:)` this may be
             // running in, and a chat being created must not be cancelled with it.
-            Task { await foregroundIntents.openWaitingChats(coordinator: coordinator) }
+            Task {
+                await foregroundIntents.openWaitingChats(coordinator: coordinator, connect: {
+                    connectScheduler?.connect(instanceId: $0)
+                })
+            }
             return
         }
         guard !sceneConnectionRefreshInProgress, coordinator.connectionState == .connected,
