@@ -10,7 +10,7 @@ struct AidenBotsTabView: View {
     let onOpenBot: (AidenHostObjectID, AidenBotSummary) -> Void
 
     @Environment(\.aidenPalette) private var palette
-    @State private var retainedCreateAttempt: AidenBotConversationCreateAttempt?
+    @State private var chatStarter = AidenBotChatStarter()
 
     private func route(botID: String) -> AidenHostObjectID? {
         guard let installation = coordinator.installationStore.activeInstallation else { return nil }
@@ -46,16 +46,38 @@ struct AidenBotsTabView: View {
                 isInTabShell: true
             )
             .onChange(of: coordinator.activeInstanceId) { _, _ in
-                retainedCreateAttempt = nil
+                chatStarter.forgetAttempt()
             }
         }
     }
 
-    /// A Bot's first chat, on a machine without durable sessions. A retry after an
-    /// unclear failure reuses its key, so one tap can't make two chats.
     @MainActor
     private func createConversation(_ bot: AidenBotSummary) async {
-        guard availability.canWrite else { return }
+        guard availability.canWrite,
+              await chatStarter.start(botID: bot.id, coordinator: coordinator),
+              let id = route(botID: bot.id) else { return }
+        navigation.open(.bot(id))
+    }
+}
+
+/// A Bot's first chat, on a machine without durable sessions. A retry after an
+/// unclear failure reuses its key, so one tap can't make two chats.
+@MainActor
+final class AidenBotChatStarter {
+    private let cache: AidenChatCache
+    private var retainedAttempt: AidenBotConversationCreateAttempt?
+
+    init(cache: AidenChatCache = .shared) {
+        self.cache = cache
+    }
+
+    /// The selected machine changed, so the next tap is a new chat.
+    func forgetAttempt() {
+        retainedAttempt = nil
+    }
+
+    /// True once the chat is made and saved, ready to open.
+    func start(botID: String, coordinator: AidenRemoteCoordinator) async -> Bool {
         var capturedContext: AidenRemoteRequestContext?
         var sentAttempt: AidenBotConversationCreateAttempt?
         do {
@@ -64,39 +86,38 @@ struct AidenBotsTabView: View {
             let client = try coordinator.remoteClient(for: context)
             let request = try AidenBotChatCreateRequest()
             let attempt = aidenBotConversationCreateAttempt(
-                retaining: retainedCreateAttempt,
+                retaining: retainedAttempt,
                 context: context,
-                botID: bot.id,
+                botID: botID,
                 request: request
             )
-            retainedCreateAttempt = attempt
+            retainedAttempt = attempt
             sentAttempt = attempt
             let chat = try await client.createBotChat(
-                botId: bot.id,
+                botId: botID,
                 request: request,
                 idempotencyKey: attempt.idempotencyKey
             )
-            guard coordinator.isCurrent(context), chat.botId == bot.id,
-                  retainedCreateAttempt == attempt else { return }
-            retainedCreateAttempt = nil
-            guard await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator) != nil,
-                  coordinator.isCurrent(context),
-                  let id = route(botID: bot.id) else { return }
-            navigation.open(.bot(id))
+            guard coordinator.isCurrent(context), chat.botId == botID,
+                  retainedAttempt == attempt else { return false }
+            retainedAttempt = nil
+            let saved = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator, cache: cache)
+            return saved != nil && coordinator.isCurrent(context)
         } catch is CancellationError {
-            return
+            return false
         } catch {
             if let context = capturedContext,
                await coordinator.handleCredentialRevocation(error, context: context) {
-                if retainedCreateAttempt == sentAttempt { retainedCreateAttempt = nil }
-                return
+                if retainedAttempt == sentAttempt { retainedAttempt = nil }
+                return false
             }
-            guard capturedContext.map({ coordinator.isCurrent($0) }) ?? false else { return }
-            if let sentAttempt, retainedCreateAttempt == sentAttempt,
+            guard capturedContext.map({ coordinator.isCurrent($0) }) ?? false else { return false }
+            if let sentAttempt, retainedAttempt == sentAttempt,
                !aidenBotConversationCreateFailureIsAmbiguous(error) {
-                retainedCreateAttempt = nil
+                retainedAttempt = nil
             }
             coordinator.presentedError = error.localizedDescription
+            return false
         }
     }
 }

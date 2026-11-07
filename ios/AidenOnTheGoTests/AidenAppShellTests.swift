@@ -154,6 +154,51 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.botsPath, [.bot(id("b1"))])
     }
 
+    /// Two screens of one chat would each hold a model and a draft of their own.
+    func testAChatOpenOnAnotherTabIsGoneBackTo() {
+        let navigation = AidenAppNavigation()
+        let chat = AidenAppRoute.chat(id("chat_1"))
+        navigation.open(.workspace(id("workspace_app")))
+        navigation.open(chat, on: .workspaces)
+        navigation.open(.settings)
+
+        navigation.open(chat)
+
+        XCTAssertEqual(navigation.tab, .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("workspace_app")), chat])
+        XCTAssertEqual(navigation.inboxPath, [.settings], "A second screen of the chat opened on the Inbox")
+    }
+
+    func testAChatOpenOnItsOwnTabIsNotOpenedAgainFromAnother() {
+        let navigation = AidenAppNavigation()
+        let chat = AidenAppRoute.chat(id("chat_1"))
+        navigation.open(chat)
+        navigation.tab = .workspaces
+
+        navigation.open(chat, on: .workspaces)
+
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.inboxPath, [chat])
+        XCTAssertEqual(navigation.workspacesPath, [])
+    }
+
+    func testAMachineChangeClosesThePagesThatReadTheOldMachine() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.settings)
+        navigation.open(.usage)
+        let chat = AidenAppRoute.chat(id("chat_1"))
+        navigation.open(chat, on: .workspaces)
+
+        navigation.leaveSelectedMachineRoutes()
+
+        XCTAssertEqual(navigation.inboxPath, [.settings], "Usage stayed open on the wrong machine")
+        XCTAssertEqual(navigation.workspacesPath, [chat], "A chat belongs to its own machine")
+
+        navigation.open(.scheduled)
+        navigation.leaveSelectedMachineRoutes()
+        XCTAssertEqual(navigation.inboxPath, [.settings])
+    }
+
     func testAVoiceLinkStartsTheMicOnceAndOnlyOnItsChat() {
         let navigation = AidenAppNavigation()
         let voice = id("chat_voice")
@@ -530,6 +575,113 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertTrue(allowsMutations)
     }
 
+    /// A Bot whose newest chat is on this phone, and a model to open it with.
+    private func savedBotChat() async throws -> AidenBotRouteModel {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AidenAppShellTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let botCache = AidenBotCache(root: root)
+        let activation = await botCache.activate(instanceId: "studio", deviceId: "demo-device")
+        let conversations = try AidenRemoteJSONDecoder.decode(AidenBotConversationPage.self, from: try conversationsJSON())
+        let stored = try await botCache.store(AidenBotCacheSnapshot(conversations: conversations), activation: activation)
+        XCTAssertTrue(stored)
+        let chatCache = temporaryCache()
+        let chat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: try botChatJSON())
+        let saved = try await chatCache.saveChat(chat, instanceId: "studio", writeToken: chatCache.reserveChatWrite())
+        XCTAssertTrue(saved)
+        return AidenBotRouteModel(id: id("bot_scout"), chatCache: chatCache, botCache: botCache)
+    }
+
+    func testASavedBotChatShowsAtOnceButSendingWaitsForTheLiveCheck() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let release = responder.hold(instanceId: "studio", path: "/bots/bot_scout")
+        let model = try await savedBotChat()
+
+        let load = Task { await model.load(coordinator: coordinator) }
+        let deadline = Date().addingTimeInterval(10)
+        while model.state == .loading, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+
+        guard case .chat(let saved, let allowsMutations) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(saved.id, "chat_bot")
+        XCTAssertFalse(allowsMutations, "Saved words granted sending with the live check out")
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /chats/chat_bot"), "The saved chat was read again")
+
+        release()
+        await load.value
+        guard case .chat(_, let live) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertTrue(live)
+    }
+
+    func testASavedBotChatOnAnOfflineMachineStaysReadOnly() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        await coordinator.connectActiveInstallation()
+        let model = try await savedBotChat()
+
+        await model.load(coordinator: coordinator)
+
+        guard case .chat(let saved, let allowsMutations) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(saved.id, "chat_bot")
+        XCTAssertFalse(allowsMutations)
+    }
+
+    func testARetryAfterAnUnclearFailureReusesItsKey() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let starter = AidenBotChatStarter(cache: temporaryCache())
+        responder.fail(instanceId: "studio", path: "/bots/bot_scout/chats", code: .timedOut)
+
+        let first = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(first)
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 201, json: try botChatJSON())
+        let second = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertTrue(second)
+        let third = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertTrue(third)
+
+        let keys = responder.idempotencyKeys(instanceId: "studio")
+        XCTAssertEqual(keys.count, 3)
+        XCTAssertEqual(keys[0], keys[1], "The machine may have made the chat, so the retry must name it")
+        XCTAssertNotEqual(keys[1], keys[2], "A chat that was made doesn't hold the key")
+    }
+
+    func testARetryAfterAClearRefusalGetsANewKey() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let starter = AidenBotChatStarter(cache: temporaryCache())
+        let refusal = Data("""
+        {"error":{"code":"invalid_request","message":"No.","requestId":"request-400","retryable":false}}
+        """.utf8)
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 400, json: refusal)
+
+        let first = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(first)
+        XCTAssertNotNil(coordinator.presentedError)
+        let second = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(second)
+
+        let keys = responder.idempotencyKeys(instanceId: "studio")
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertNotEqual(keys[0], keys[1])
+    }
+
+    func testAMachineChangeDropsTheKeptKey() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let starter = AidenBotChatStarter(cache: temporaryCache())
+        responder.fail(instanceId: "studio", path: "/bots/bot_scout/chats", code: .timedOut)
+
+        _ = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        starter.forgetAttempt()
+        _ = await starter.start(botID: "bot_scout", coordinator: coordinator)
+
+        let keys = responder.idempotencyKeys(instanceId: "studio")
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertNotEqual(keys[0], keys[1])
+    }
+
     func testABotChatStaysReadOnlyWhenThisPhoneCannotWrite() async throws {
         let responder = AidenDemoResponder()
         var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
@@ -656,10 +808,34 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertFalse(flow.isCreating)
     }
 
+    /// A receipt is the chat as it was made. Reopened later, it would hide what
+    /// has happened to the chat since.
+    func testANewChatForgetsItsReceiptWhenItsScreenCloses() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        await home.load(coordinator: coordinator)
+        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
+        let flow = flow(coordinator, home: home)
+        await flow.create(in: try workspace("workspace_app", in: coordinator))
+
+        flow.forgetReceipt(id("chat_other"))
+        XCTAssertNotNil(flow.receipt(for: id("chat_new")), "Another chat's screen took this chat's receipt")
+
+        flow.forgetReceipt(id("chat_new"))
+        XCTAssertNil(flow.receipt(for: id("chat_new")))
+    }
+
     func testANewChatTappedWhileConnectingWaitsForTheMachine() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
         responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
+        let target = try AidenRemoteJSONDecoder.decode(AidenWorkspace.self, from: Data("""
+        {"id":"workspace_app","name":"Aiden Agent","permission":"ask","memoryEnabled":true,"hasFolder":true,
+        "isManagedWorktree":false,"createdAt":"2026-11-05T09:00:00.000Z","updatedAt":"2026-11-05T09:00:00.000Z",
+        "revision":"workspace_revision_7"}
+        """.utf8))
         let release = responder.hold(instanceId: "studio", path: "/workspaces")
         let start = Task { await coordinator.start() }
         while coordinator.connectionState != .connecting { await Task.yield() }
@@ -668,15 +844,17 @@ final class AidenAppShellTests: XCTestCase {
         let flow = flow(coordinator, home: home) { opened.append($0) }
         XCTAssertFalse(flow.isUnavailable, "Compose stays usable while the machine connects")
 
-        let ready = Task { await flow.awaitReady() }
+        let creating = Task { await flow.create(in: target) }
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(flow.status, "Waiting for your machine…")
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("POST /chats"), "It sent before the machine was ready")
         release()
         await start.value
         await home.load(coordinator: coordinator)
 
-        let isReady = await ready.value
-        XCTAssertTrue(isReady)
+        await creating.value
+        XCTAssertTrue(responder.requests(instanceId: "studio").contains("POST /chats"), "The wait ended and no chat was made")
+        XCTAssertEqual(opened, [id("chat_new")])
         XCTAssertEqual(flow.status, "")
     }
 
@@ -785,6 +963,23 @@ final class AidenAppShellTests: XCTestCase {
     }
 
     // MARK: Bots
+
+    /// Nothing will ever answer, so a skeleton here would never end.
+    func testUsageOnAMachineThatKeepsItToItselfSaysSo() async throws {
+        let responder = AidenDemoResponder()
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.deviceCapabilities = installation.deviceCapabilities.filter { $0 != .serverRead }
+        installation.serverCapabilities = installation.serverCapabilities?.filter { $0 != .serverRead }
+        let coordinator = AidenDemoHosts.coordinator(installations: [installation], responder: responder)
+        await coordinator.start()
+        let model = AidenUsageRouteModel()
+
+        await model.load(coordinator: coordinator)
+
+        guard case .unavailable(let message) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertTrue(message.contains("machine"), message)
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /usage"))
+    }
 
     func testEveryUnavailableBotsStateExplainsItselfInTabCopy() {
         for state: AidenBotsAvailability in [.mobileDisabled, .unsupported, .notGranted] {

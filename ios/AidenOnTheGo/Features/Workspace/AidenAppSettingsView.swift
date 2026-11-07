@@ -5,7 +5,8 @@ struct AidenAppSettingsView: View {
     @Environment(AidenHapticCenter.self) private var haptics
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
-    let addInstallation: () -> Void
+    /// For the installations sheet, which the tab shell has no use for: Machines pairs there.
+    var addInstallation: () -> Void = {}
     /// True when a stack has pushed this page, so Back replaces Done.
     var isPushed = false
     var tabShellEnabled = AppConfig.tabShellEnabled
@@ -78,13 +79,7 @@ struct AidenAppSettingsView: View {
                         value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
                     )
                     if tabShellEnabled {
-                        NavigationLink {
-                            AidenMachinesView(
-                                coordinator: coordinator,
-                                preferences: .shared,
-                                addMachine: addInstallation
-                            )
-                        } label: {
+                        NavigationLink(value: AidenAppRoute.machines) {
                             LabeledContent {
                                 Text(machinesSummary)
                             } label: {

@@ -32,9 +32,13 @@ struct AidenInboxTabView: View {
     var onRetry: () -> Void = {}
     var onShowAllEarlier: () -> Void = {}
     var onLoadMore: () -> Void = {}
+    /// Whether a row's chat, in the workspace it names, can be deleted from here.
+    var canDelete: (AidenHostObjectID, String) -> Bool = { _, _ in false }
+    var onDelete: (AidenHostObjectID) -> Void = { _ in }
 
     @Environment(\.aidenPalette) private var palette
     @State private var snoozeCandidate: AidenHostObjectID?
+    @State private var chatPendingDelete: AidenHostObjectID?
 
     var body: some View {
         List {
@@ -70,6 +74,20 @@ struct AidenInboxTabView: View {
                 Button(option.label) { onAction(.snooze(option), id) }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Delete this chat?",
+            isPresented: Binding(
+                get: { chatPendingDelete != nil },
+                set: { if !$0 { chatPendingDelete = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: chatPendingDelete
+        ) { id in
+            Button("Delete chat", role: .destructive) { onDelete(id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This permanently removes the chat from its machine.")
         }
     }
 
@@ -111,7 +129,20 @@ struct AidenInboxTabView: View {
                 isPinned: row.isPinned,
                 open: { onOpen(row.id) }
             )
-            .contextMenu { contextMenu(for: row, actions: actions) }
+            .contextMenu {
+                contextMenu(for: row, actions: actions)
+                if canDelete(row.id, summary.workspaceId) {
+                    Button(role: .destructive) { chatPendingDelete = row.id } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(!row.isOnline)
+                }
+            }
+            .accessibilityActions {
+                if canDelete(row.id, summary.workspaceId), row.isOnline {
+                    Button("Delete chat") { chatPendingDelete = row.id }
+                }
+            }
         }
     }
 
@@ -258,6 +289,7 @@ struct AidenInboxTabRootView: View {
 
     let store: AidenUnifiedInboxStore
     let onOpen: (AidenHostObjectID) -> Void
+    let onDelete: (AidenHostObjectID) -> Void
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -278,7 +310,9 @@ struct AidenInboxTabRootView: View {
             onRefresh: { await store.refreshAll() },
             onRetry: { Task { await store.retry() } },
             onShowAllEarlier: { store.showsAllEarlier = true },
-            onLoadMore: { Task { await store.loadMoreChats() } }
+            onLoadMore: { Task { await store.loadMoreChats() } },
+            canDelete: { store.offersDelete($0, inWorkspace: $1) },
+            onDelete: onDelete
         )
         .navigationTitle("Inbox")
         .overlay(alignment: .top) { noticeBanner }

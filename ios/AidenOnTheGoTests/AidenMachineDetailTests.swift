@@ -370,9 +370,7 @@ final class AidenMachineDetailTests: XCTestCase {
     func testActivatingARowOpensThatMachinesPage() throws {
         let preferences = AidenMachinePreferencesStore(defaults: defaults)
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
-        let window = try show(NavigationStack {
-            AidenMachinesView(coordinator: coordinator, preferences: preferences, addMachine: {})
-        })
+        let window = try show(AidenMachinesInATabStack(coordinator: coordinator, preferences: preferences))
         defer { close(window) }
         XCTAssertTrue(runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel?.hasPrefix("Laptop") == true } }))
         let row = try XCTUnwrap(accessibleElements(in: window).first { $0.accessibilityLabel?.hasPrefix("Laptop") == true })
@@ -550,7 +548,9 @@ final class AidenMachineDetailTests: XCTestCase {
         let scene = try XCTUnwrap(connectedScene())
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
-        window.rootViewController = UIHostingController(rootView: view.environment(AidenHapticCenter()))
+        window.rootViewController = UIHostingController(
+            rootView: view.environment(AidenHapticCenter()).environment(AidenAppearanceStore())
+        )
         window.makeKeyAndVisible()
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         return window
@@ -609,3 +609,21 @@ private final class SaveFailingKeychain: KeychainStoring {
     }
 }
 #endif
+
+/// The page as the shell hosts it. The tab's path is typed, so only a route can be pushed.
+private struct AidenMachinesInATabStack: View {
+    let coordinator: AidenRemoteCoordinator
+    let preferences: AidenMachinePreferencesStore
+    @State private var path: [AidenAppRoute] = []
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            AidenMachinesView(coordinator: coordinator, preferences: preferences, addMachine: {})
+                .navigationDestination(for: AidenAppRoute.self) { route in
+                    if case .machine(let instanceId) = route {
+                        AidenMachineDetailView(instanceId: instanceId, coordinator: coordinator, preferences: preferences)
+                    }
+                }
+        }
+    }
+}

@@ -73,6 +73,11 @@ final class AidenNewChatFlow {
         latestReceipt?.id == id ? latestReceipt?.chat : nil
     }
 
+    /// The chat's screen closed, so whatever opens it next asks the machine.
+    func forgetReceipt(_ id: AidenHostObjectID) {
+        if latestReceipt?.id == id { latestReceipt = nil }
+    }
+
     func select(_ choice: AidenNewAgentChoice) async {
         switch choice {
         case .noWorkspace:

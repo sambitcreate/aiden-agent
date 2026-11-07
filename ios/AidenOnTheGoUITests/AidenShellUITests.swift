@@ -343,19 +343,22 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: offline).waitForExistence(timeout: 10))
         openInboxMenu(in: offline)
         offline.buttons["Settings"].firstMatch.tap()
-        let installations = offline.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Paired Installations")
-        ).firstMatch
-        XCTAssertTrue(installations.waitForExistence(timeout: 10))
-        installations.tap()
+        let machines = machinesRow(in: offline)
+        XCTAssertTrue(machines.waitForExistence(timeout: 10))
+        machines.tap()
         let laptop = offline.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch
         XCTAssertTrue(laptop.waitForExistence(timeout: 10), "No offline machine to select")
         laptop.tap()
+        let change = offline.buttons["Switch to this machine"].firstMatch
+        // Far down a lazy form: it isn't built until it's scrolled to.
+        for _ in 0..<6 where !change.waitForExistence(timeout: 1) { offline.swipeUp() }
+        XCTAssertTrue(change.exists, "No way to select the offline machine")
+        change.tap()
         let failure = offline.alerts.buttons["OK"].firstMatch
         if failure.waitForExistence(timeout: 5) { failure.tap() }
         Thread.sleep(forTimeInterval: 1)
         AidenStateMatrix.capture("tabs-offline-settings", in: self)
-        goBack(in: offline)
+        for _ in 0..<3 where !offline.navigationBars["Inbox"].exists { goBack(in: offline) }
         XCTAssertTrue(offline.navigationBars["Inbox"].waitForExistence(timeout: 10))
         Thread.sleep(forTimeInterval: 1)
         AidenStateMatrix.capture("tabs-offline-inbox", in: self)
@@ -430,6 +433,120 @@ final class AidenShellUITests: XCTestCase {
         choice.tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The new chat did not open")
         XCTAssertFalse(app.tabBars.firstMatch.isHittable, "The tab bar stayed over the new chat")
+        app.terminate()
+    }
+
+    /// Pushed Settings has no sheet of its own for pairing: it asks the shell for one.
+    func testPairAMachineOpensFromPushedSettings() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        openInboxMenu(in: app)
+        app.buttons["Settings"].firstMatch.tap()
+        let machines = machinesRow(in: app)
+        XCTAssertTrue(machines.waitForExistence(timeout: 10), "No Machines in Settings")
+        machines.tap()
+        let pair = app.buttons["Pair a machine"].firstMatch
+        XCTAssertTrue(pair.waitForExistence(timeout: 10), "No way to pair another machine")
+        pair.tap()
+        XCTAssertTrue(app.navigationBars["Pair Aiden"].waitForExistence(timeout: 10), "Pairing did not open")
+        app.terminate()
+    }
+
+    /// Every step is a route: the tab's stack holds nothing else.
+    func testAMachineOpensFromSettingsAndBackRetracesTheWay() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
+        openInboxMenu(in: app)
+        app.buttons["Settings"].firstMatch.tap()
+        let machines = machinesRow(in: app)
+        XCTAssertTrue(machines.waitForExistence(timeout: 10), "No Machines in Settings")
+        machines.tap()
+        let laptop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch
+        XCTAssertTrue(laptop.waitForExistence(timeout: 10), "No machine in the list")
+        laptop.tap()
+        XCTAssertTrue(app.navigationBars["Laptop"].waitForExistence(timeout: 10), "The machine did not open")
+
+        goBack(in: app)
+        XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "Back left Machines")
+        goBack(in: app)
+        XCTAssertTrue(app.navigationBars["App Settings"].waitForExistence(timeout: 10), "Back left Settings")
+        app.terminate()
+    }
+
+    func testAPushedRouteHidesTheTabBarAndBackReturnsIt() throws {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let row = openInbox(in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            try AidenStateMatrix.narrowTheWindow(of: app)
+        }
+        let tabBar = app.tabBars.firstMatch
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 10), "No tab bar at compact width")
+        XCTAssertTrue(tabBar.isHittable)
+
+        row.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertFalse(tabBar.isHittable, "The tab bar stayed over the chat")
+
+        goBack(in: app)
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "Back did not reach the Inbox")
+        let returned = expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: tabBar)
+        wait(for: [returned], timeout: 5)
+        app.terminate()
+    }
+
+    /// A window that changes size class rebuilds the shell. What's open stays open.
+    func testAnOpenChatSurvivesAResize() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "A phone's window can't change size")
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let row = openInbox(in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        try AidenStateMatrix.widenTheWindow(of: app)
+        hideOverlaySidebar(in: app)
+        row.tap()
+        let send = app.buttons["Send message"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "The chat did not open")
+
+        try AidenStateMatrix.narrowTheWindow(of: app)
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "Narrowing the window closed the chat")
+        XCTAssertFalse(app.navigationBars["Inbox"].exists, "Narrowing the window went back to the Inbox")
+
+        try AidenStateMatrix.widenTheWindow(of: app)
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "Widening the window closed the chat")
+        XCTAssertFalse(app.navigationBars["Inbox"].exists, "Widening the window went back to the Inbox")
+        hideOverlaySidebar(in: app)
+        goBack(in: app)
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "The stack did not survive")
+        app.terminate()
+    }
+
+    func testTheInboxSaysWhileItsMachineConnects() {
+        let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs, extraArguments: ["-AidenDemoSlowConnect", "YES"])
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
+        let hint = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Connecting to Studio Mac")
+        ).firstMatch
+        XCTAssertTrue(hint.waitForExistence(timeout: 10), "The Inbox gave no sign it was connecting")
+        app.terminate()
+    }
+
+    func testAChatWithoutAWorkspaceCanBeDeletedFromTheInbox() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs, extraArguments: ["-AidenDemoNoWorkspaceChat", "YES"])
+        let row = openInbox(in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat without a workspace in the Inbox")
+        hideOverlaySidebar(in: app)
+
+        row.press(forDuration: 1.2)
+        let delete = app.buttons["Delete"].firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), "The row's menu has no Delete")
+        delete.tap()
+        let confirm = app.buttons["Delete chat"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Delete did not ask first")
+        XCTAssertTrue(row.exists, "Delete went ahead before it was confirmed")
+        confirm.tap()
+
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: row)
+        wait(for: [gone], timeout: 5)
         app.terminate()
     }
 
@@ -651,6 +768,19 @@ final class AidenShellUITests: XCTestCase {
         menu.tap()
         // An open sidebar sits over the page in a narrow window: the first tap closes it.
         if !app.buttons["Settings"].firstMatch.waitForExistence(timeout: 2) { menu.tap() }
+    }
+
+    /// An open sidebar sits over the page in a narrow window and takes the next touch.
+    private func hideOverlaySidebar(in app: XCUIApplication) {
+        let toggle = app.buttons["ToggleSidebar"].firstMatch
+        if toggle.exists, toggle.label == "Hide Sidebar" {
+            toggle.tap()
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+
+    private func machinesRow(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Machines")).firstMatch
     }
 
     private func botRow(in app: XCUIApplication) -> XCUIElement {

@@ -1,6 +1,14 @@
 import Foundation
 import Observation
 
+enum AidenInboxDeletion: Equatable {
+    case deleted
+    /// The machine kept the chat, and a notice says so.
+    case failed
+    /// The pairing ended or the request was cancelled: there's nothing to report.
+    case abandoned
+}
+
 /// Every paired machine's chats in one Inbox (spec, "Feed"). Phones get no
 /// list-level live feed, so this polls each machine while the app is in the
 /// foreground, and only then. `start()` and `stop()` follow the scene.
@@ -151,6 +159,47 @@ final class AidenUnifiedInboxStore {
         case .undone: await triage(.done(false))
         case .snooze(let option): await triage(.snooze(until: option.until))
         case .wake: await triage(.wake)
+        }
+    }
+
+    /// A chat without a workspace has no workspace page, so its row carries Delete.
+    func offersDelete(_ id: AidenHostObjectID, inWorkspace workspaceID: String) -> Bool {
+        guard let (_, connection) = owner(of: id) else { return false }
+        return connection.workspaces.contains { $0.id == workspaceID && $0.noWorkspace }
+    }
+
+    /// The row leaves at once, and a failed delete reads the list, which puts it back.
+    func delete(_ id: AidenHostObjectID) async -> AidenInboxDeletion {
+        guard let (model, connection) = owner(of: id),
+              let context = try? connection.homeContext() else { return .abandoned }
+        let connectBefore = connection.connectionGeneration
+        machines.values.forEach { $0.model.inboxNotice = nil }
+        model.removeChat(id: id.objectId)
+        do {
+            let client = try connection.homeClient(for: context)
+            // The row's revision can lag a rename, so delete the chat as the machine has it now.
+            let current = try await client.chat(id: id.objectId)
+            guard connection.holdsHomeContext(context) else { return .abandoned }
+            try await client.removeChat(id: current.id, revision: current.revision)
+            guard connection.holdsHomeContext(context) else { return .abandoned }
+            await cache.removeChat(instanceId: id.instanceId, chatId: id.objectId)
+            await AidenChatDraftStore.shared.remove(instanceId: id.instanceId, chatId: id.objectId)
+            // The machine releases the chat's hidden folder with it. The chat is gone either way.
+            try? await connection.refreshWorkspacesForPoll()
+            return .deleted
+        } catch let error where aidenIsCancellation(error) {
+            if connection.holdsHomeContext(context) { await model.load(host: connection) }
+            return .abandoned
+        } catch let error as AidenRemoteClientError where error.isCredentialRevoked {
+            _ = await connection.handlePollError(error, sinceConnect: connectBefore)
+            return .abandoned
+        } catch {
+            guard connection.holdsHomeContext(context) else { return .abandoned }
+            await model.load(host: connection)
+            model.inboxNotice = AidenInboxNotice(
+                message: String(localized: "Couldn’t delete that chat. Try again once your machine is reachable.")
+            )
+            return .failed
         }
     }
 

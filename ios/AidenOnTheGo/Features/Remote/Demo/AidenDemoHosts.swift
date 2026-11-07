@@ -85,6 +85,7 @@ final class AidenDemoResponder: @unchecked Sendable {
     private var outcomes: [Route: Outcome] = [:]
     private var holds: [HoldKey: Hold] = [:]
     private var log: [String: [String]] = [:]
+    private var keyLog: [String: [String]] = [:]
     private let token = UUID().uuidString
 
     /// Pass this to clients. Its requests never leave the process.
@@ -150,6 +151,13 @@ final class AidenDemoResponder: @unchecked Sendable {
         return log[instanceId] ?? []
     }
 
+    /// Every `Idempotency-Key` the machine was sent, oldest first.
+    func idempotencyKeys(instanceId: String) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return keyLog[instanceId] ?? []
+    }
+
     fileprivate func handle(
         _ request: URLRequest,
         deliver: @escaping @Sendable (Result<(HTTPURLResponse, Data), URLError>) -> Void
@@ -164,6 +172,9 @@ final class AidenDemoResponder: @unchecked Sendable {
 
         lock.lock()
         log[instanceId, default: []].append("\(method) \(path)")
+        if let key = request.value(forHTTPHeaderField: "Idempotency-Key") {
+            keyLog[instanceId, default: []].append(key)
+        }
         let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
         if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)], !hold.isReleased {
             hold.waiting.append { [self] in
@@ -517,6 +528,12 @@ enum AidenDemoHosts {
             count: machine.rowCount,
             patternStart: machine.patternStart
         )
+        if AidenDemoRunOptions.connectsSlowly {
+            _ = responder.hold(instanceId: id, path: "/workspaces")
+        }
+        if AidenDemoRunOptions.hasNoWorkspaceChat, let chatId = rows.first?["id"] as? String {
+            responder.reply(instanceId: id, method: "DELETE", path: "/chats/\(chatId)", status: 204, json: Data())
+        }
         responder.reply(instanceId: id, path: "/server", status: 200, json: AidenDemoContent.serverJSON(for: installation))
         responder.reply(instanceId: id, path: "/workspaces", status: 200, json: AidenDemoContent.workspacesJSON())
         // Served for old hosts too, but only reached when a host advertises it.
@@ -814,6 +831,11 @@ private enum AidenDemoContent {
         ]])
     }
 
+    private static func workspaceId(ofRow index: Int) -> String {
+        if AidenDemoRunOptions.hasNoWorkspaceChat, index == 0 { return "default" }
+        return index % 3 == 2 ? "workspace_notes" : "workspace_app"
+    }
+
     /// Chat summaries, newest first. Row `n` takes pattern slot `patternStart + n`:
     /// needs approval, working, needs input, failed, unread, pinned, then read.
     static func rows(instanceId: String, count: Int, patternStart: Int) -> [[String: Any]] {
@@ -823,7 +845,7 @@ private enum AidenDemoContent {
             let createdAt = updatedAt.addingTimeInterval(-30 * 60)
             var row: [String: Any] = [
                 "id": "chat_\(instanceId)_\(index + 1)",
-                "workspaceId": index % 3 == 2 ? "workspace_notes" : "workspace_app",
+                "workspaceId": workspaceId(ofRow: index),
                 "title": titles[index % titles.count],
                 "titlePending": false,
                 "createdAt": timestamp(createdAt),
@@ -904,6 +926,19 @@ private enum AidenDemoContent {
 /// A long chat on the studio machine, served a window at a time, for screens
 /// and UI tests that need Load earlier. Only with `-AidenDemoLongChat YES`, so
 /// no other launch sees it. Its newest replies carry fenced code.
+/// What a UI test can ask of a demo run beyond its scenario.
+enum AidenDemoRunOptions {
+    /// Every machine stays on connecting.
+    static var connectsSlowly: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoSlowConnect")
+    }
+
+    /// Each machine's first chat sits under No workspace, and can be deleted.
+    static var hasNoWorkspaceChat: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoNoWorkspaceChat")
+    }
+}
+
 enum AidenDemoLongChat {
     static let chatId = "chat_studio_8"
 

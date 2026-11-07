@@ -160,19 +160,21 @@ final class AidenAppNavigation {
 
     /// The chat on screen: the top of the tab that's showing.
     var openChat: AidenHostObjectID? {
-        let path = switch tab {
-        case .inbox: inboxPath
-        case .bots: botsPath
-        case .workspaces: workspacesPath
-        case .search: [AidenAppRoute]()
-        }
-        guard case .chat(let id)? = path.last else { return nil }
+        guard case .chat(let id)? = path(of: tab).last else { return nil }
         return id
     }
 
-    /// Selects the route's tab and shows the route there. A route already on
-    /// that path is gone back to, so one chat never has two screens.
-    /// `startsVoice` is a voice shortcut's: the chat starts listening when it opens.
+    private func path(of tab: AidenAppTab) -> [AidenAppRoute] {
+        switch tab {
+        case .inbox: inboxPath
+        case .bots: botsPath
+        case .workspaces: workspacesPath
+        case .search: []
+        }
+    }
+
+    /// Selects the route's tab and shows the route there, or goes back to it
+    /// wherever it's already open. `startsVoice` is a voice shortcut's: the chat starts listening when it opens.
     func open(_ route: AidenAppRoute, startsVoice: Bool = false) {
         open(route, on: route.tab)
         if startsVoice, case .chat(let id) = route {
@@ -184,10 +186,14 @@ final class AidenAppNavigation {
         if chatStartingVoice == id { chatStartingVoice = nil }
     }
 
-    /// Shows the route on a tab other than its own: a chat started from the
-    /// Workspaces tab stays there, so Back returns to where it was started.
+    /// Shows the route on `tab`, which needn't be its own: a chat started from the
+    /// Workspaces tab stays there, so Back returns to where it was started. A route
+    /// already open on another tab is gone back to there, so one chat never has
+    /// two screens.
     func open(_ route: AidenAppRoute, on tab: AidenAppTab) {
         chatStartingVoice = nil
+        let holders = AidenAppTab.allCases.filter { path(of: $0).contains(route) }
+        let tab = holders.contains(tab) ? tab : holders.first ?? tab
         self.tab = tab
         switch tab {
         case .inbox: Self.show(route, on: &inboxPath)
@@ -203,6 +209,13 @@ final class AidenAppNavigation {
         Self.remove(route, from: &inboxPath)
         Self.remove(route, from: &botsPath)
         Self.remove(route, from: &workspacesPath)
+    }
+
+    /// The selected machine changed. Scheduled tasks and Usage read the machine
+    /// they opened on, so neither stays open on another.
+    func leaveSelectedMachineRoutes() {
+        leave(.scheduled)
+        leave(.usage)
     }
 
     /// Swaps a route that turned out to be something else for the right one.

@@ -289,7 +289,8 @@ struct AidenMachinesView: View {
             } else {
                 Section {
                     ForEach(model.rows) { row in
-                        NavigationLink(value: AidenMachineLink(instanceId: row.id)) {
+                        // A route: the tab's stack has a typed path, which holds nothing else.
+                        NavigationLink(value: AidenAppRoute.machine(instanceId: row.id)) {
                             AidenMachineRowView(row: row)
                         }
                         // Label and value only: hiding the children from a link drops its activation.
@@ -320,10 +321,6 @@ struct AidenMachinesView: View {
         }
         .navigationTitle("Machines")
         .navigationBarTitleDisplayMode(.inline)
-        // Built when a row is opened, not when the list is.
-        .navigationDestination(for: AidenMachineLink.self) { link in
-            AidenMachineDetailView(instanceId: link.instanceId, coordinator: coordinator, preferences: preferences)
-        }
         .task(id: model.machineIDs) { model.register() }
         .onAppear { model.activateHaptics(scope: hapticScope) }
         .onDisappear { model.deactivateHaptics(scope: hapticScope) }
@@ -377,11 +374,7 @@ struct AidenMachinesView: View {
 }
 
 /// What a row pushes. The page for it is built only when it is opened.
-private struct AidenMachineLink: Hashable {
-    let instanceId: String
-}
-
-/// The Machines page as a route of the tab shell, which has no sheet for pairing of its own.
+/// The Machines page as a route of the tab shell, with pairing as its own sheet.
 struct AidenMachinesRouteView: View {
     let coordinator: AidenRemoteCoordinator
     @State private var showsPairing = false

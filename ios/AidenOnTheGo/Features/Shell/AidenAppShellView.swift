@@ -51,7 +51,6 @@ struct AidenAppShellView: View {
     @State private var navigation: AidenAppNavigation
     @State private var newChat: AidenNewChatFlow
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
-    @State private var isShowingPairing = false
     @State private var searchText = ""
 
     init(
@@ -103,7 +102,10 @@ struct AidenAppShellView: View {
         TabView(selection: $navigation.tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 NavigationStack(path: $navigation.inboxPath) {
-                    AidenInboxTabRootView(store: inboxStore, onOpen: openChat)
+                    AidenInboxTabRootView(store: inboxStore, onOpen: openChat, onDelete: deleteChat)
+                        .safeAreaInset(edge: .top, spacing: 0) {
+                            AidenConnectionNotice(coordinator: coordinator)
+                        }
                         .toolbar { inboxToolbar }
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
@@ -142,9 +144,6 @@ struct AidenAppShellView: View {
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         .aidenNewChatPresentation(newChat)
-        .sheet(isPresented: $isShowingPairing) {
-            AidenPairingView(coordinator: coordinator, onPaired: { isShowingPairing = false })
-        }
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -185,14 +184,27 @@ struct AidenAppShellView: View {
             }
         }
         .onChange(of: coordinator.activeInstanceId) { _, _ in
-            // Scheduled tasks read the machine they opened on.
-            navigation.leave(.scheduled)
+            navigation.leaveSelectedMachineRoutes()
         }
         .task(id: archiveSyncID) {
             coordinator.setDeviceArchivedWorkspaceIDs(archiveSyncID.archivedIDs, for: archiveSyncID.instanceID)
         }
         .onAppear { coordinator.haptics.activate(scope: newChat.hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: newChat.hapticScope) }
+    }
+
+    private func deleteChat(_ id: AidenHostObjectID) {
+        navigation.leave(.chat(id))
+        Task {
+            switch await inboxStore.delete(id) {
+            case .deleted:
+                coordinator.haptics.play(.success, scope: newChat.hapticScope, dedupeKey: "chat-remove:\(id.objectId)")
+            case .failed:
+                coordinator.haptics.play(.error, scope: newChat.hapticScope)
+            case .abandoned:
+                break
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -235,7 +247,10 @@ struct AidenAppShellView: View {
                 },
                 onBotChat: { bot in navigation.replace(route, with: .bot(bot)) }
             )
-            .onDisappear { navigation.finishStartingVoice(id) }
+            .onDisappear {
+                navigation.finishStartingVoice(id)
+                newChat.forgetReceipt(id)
+            }
         case .bot(let id):
             AidenBotRouteView(coordinator: coordinator, id: id, initialSummary: botSummaries[id])
         case .workspace(let id):
@@ -257,7 +272,6 @@ struct AidenAppShellView: View {
             AidenAppSettingsView(
                 coordinator: coordinator,
                 appearance: appearance,
-                addInstallation: { isShowingPairing = true },
                 isPushed: true
             )
         case .scheduled:
@@ -293,6 +307,8 @@ final class AidenUsageRouteModel {
         case ready(AidenUsageSummary, providers: [AidenProvider])
         case offline
         case failed
+        /// The machine doesn't let this phone read its usage.
+        case unavailable(String)
     }
 
     private(set) var state = State.loading
@@ -300,7 +316,10 @@ final class AidenUsageRouteModel {
     func load(coordinator: AidenRemoteCoordinator) async {
         guard let context = try? coordinator.requestContext() else { return }
         let plan = AidenHomeLoadPlan(installation: coordinator.installationStore.activeInstallation)
-        guard plan.loadsUsage else { return }
+        guard plan.loadsUsage else {
+            state = .unavailable(String(localized: "This machine doesn’t share its usage with this phone."))
+            return
+        }
         switch coordinator.connectionState {
         case .connected:
             break
@@ -337,6 +356,7 @@ private struct AidenUsageRouteView: View {
     }
 
     let coordinator: AidenRemoteCoordinator
+    @Environment(\.aidenPalette) private var palette
     @State private var model = AidenUsageRouteModel()
 
     var body: some View {
@@ -344,6 +364,10 @@ private struct AidenUsageRouteView: View {
             switch model.state {
             case .ready(let usage, let providers):
                 AidenUsageView(usage: usage, providers: providers, isPushed: true)
+            case .unavailable(let message):
+                ContentUnavailableView("Usage unavailable", systemImage: "chart.bar.xaxis", description: Text(message))
+                    .background(palette.canvas.ignoresSafeArea())
+                    .navigationTitle("Usage")
             case .loading, .offline, .failed:
                 AidenUsagePendingView(
                     isOffline: model.state == .offline,

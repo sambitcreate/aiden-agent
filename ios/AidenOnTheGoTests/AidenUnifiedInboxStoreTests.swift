@@ -1253,6 +1253,82 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
     // MARK: Revocation and late answers
 
+    /// `loose` sits under the hidden No workspace record on `laptop`, and `kept`
+    /// in a workspace of its own.
+    private func noWorkspaceMachine() async throws -> (AidenRemoteCoordinator, AidenUnifiedInboxStore, AidenHostObjectID) {
+        let coordinator = coordinator("studio", "laptop")
+        await connectAll(coordinator)
+        serve([row("loose", age: 1, workspace: "default"), row("kept", age: 2)], on: "laptop")
+        responder.reply(instanceId: "laptop", path: "/chats/loose", status: 200, json: Data("""
+        {"id":"loose","workspaceId":"default","title":"loose","messages":[],"createdAt":"2026-11-01T10:00:00.000Z",
+        "updatedAt":"2026-11-01T10:00:00.000Z","revision":"chat_revision_current"}
+        """.utf8))
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/chats/loose", status: 204, json: Data())
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 2)
+        let installation = try connection("laptop", in: coordinator).installation
+        return (coordinator, store, AidenHostObjectID(instanceId: "laptop", deviceId: installation.deviceId, objectId: "loose"))
+    }
+
+    func testOnlyAChatWithoutAWorkspaceOffersDelete() async throws {
+        let (_, store, loose) = try await noWorkspaceMachine()
+
+        XCTAssertTrue(store.offersDelete(loose, inWorkspace: "default"))
+        XCTAssertFalse(store.offersDelete(loose, inWorkspace: "workspace_app"))
+        XCTAssertFalse(store.offersDelete(loose, inWorkspace: "workspace_gone"))
+        let oldPairing = AidenHostObjectID(instanceId: "laptop", deviceId: "other-device", objectId: "loose")
+        XCTAssertFalse(store.offersDelete(oldPairing, inWorkspace: "default"))
+        store.stop()
+    }
+
+    func testADeletedChatLeavesAtOnceOverItsOwnMachine() async throws {
+        let (coordinator, store, loose) = try await noWorkspaceMachine()
+        let selected = coordinator.activeInstanceId
+        let release = responder.hold(instanceId: "laptop", path: "/chats/loose")
+        let studioRequests = responder.requests(instanceId: "studio").count
+
+        let deletion = Task { await store.delete(loose) }
+        await waitUntil("the row to leave") { rowIDs(store.inbox, on: "laptop") == ["kept"] }
+        XCTAssertFalse(responder.requests(instanceId: "laptop").contains("DELETE /chats/loose"))
+        release()
+
+        let result = await deletion.value
+        XCTAssertEqual(result, .deleted)
+        let requests = responder.requests(instanceId: "laptop")
+        let read = try XCTUnwrap(requests.firstIndex(of: "GET /chats/loose"), "The row's revision can lag a rename")
+        let removal = try XCTUnwrap(requests.firstIndex(of: "DELETE /chats/loose"))
+        XCTAssertLessThan(read, removal)
+        XCTAssertEqual(requests.last, "GET /workspaces", "The chat's hidden folder stayed listed")
+        XCTAssertEqual(coordinator.activeInstanceId, selected, "Deleting moved the selection")
+        XCTAssertFalse(responder.requests(instanceId: "studio").dropFirst(studioRequests).contains { $0.contains("loose") })
+        store.stop()
+    }
+
+    func testAFailedDeleteBringsTheRowBackAndSaysSo() async throws {
+        let (_, store, loose) = try await noWorkspaceMachine()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/chats/loose", status: 500, json: serverErrorJSON)
+
+        let result = await store.delete(loose)
+
+        XCTAssertEqual(result, .failed)
+        await waitUntil("the row to return") { rowIDs(store.inbox, on: "laptop") == ["loose", "kept"] }
+        await waitUntil("the notice") { store.notice?.instanceId == "laptop" }
+        store.stop()
+    }
+
+    func testADeleteAnsweredWithARevocationEndsThePairing() async throws {
+        let (_, store, loose) = try await noWorkspaceMachine()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/chats/loose", status: 401, json: revokedJSON)
+
+        let result = await store.delete(loose)
+
+        XCTAssertEqual(result, .abandoned)
+        await waitUntil("the rows to drop") { rowIDs(store.inbox, on: "laptop").isEmpty }
+        XCTAssertTrue(try XCTUnwrap(store.snapshots["laptop"]).isBlocked)
+        XCTAssertNil(store.notice)
+        store.stop()
+    }
+
     func testARevokedMachinesRowsDropAtOnce() async throws {
         let coordinator = coordinator("studio", "laptop")
         await connectAll(coordinator)
