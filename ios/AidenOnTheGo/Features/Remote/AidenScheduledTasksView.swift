@@ -109,6 +109,9 @@ final class AidenScheduledTasksModel {
     private let coordinator: AidenRemoteCoordinator
     private let cache: AidenScheduledTaskCache
     private let activationContext: AidenRemoteRequestContext?
+    /// The machine this page was opened on. Nil keeps it on the selected machine,
+    /// ending when the selection moves.
+    let machine: AidenNewWorkTarget?
     private var pendingRunKeys: [String: UUID] = [:]
     private let hapticScope = UUID()
     private var taskStorage: [AidenScheduledTask] = []
@@ -127,16 +130,23 @@ final class AidenScheduledTasksModel {
 
     init(
         coordinator: AidenRemoteCoordinator,
-        cache: AidenScheduledTaskCache = .shared
+        cache: AidenScheduledTaskCache = .shared,
+        machine: AidenNewWorkTarget? = nil
     ) {
         self.coordinator = coordinator
         self.cache = cache
-        activationContext = try? coordinator.requestContext()
+        self.machine = machine
+        activationContext = machine.map { try? coordinator.ownerContext(for: $0.instanceId) }
+            ?? (try? coordinator.requestContext())
+    }
+
+    private var pickedConnection: AidenHostConnection? {
+        machine.flatMap { coordinator.hosts.connection(for: $0.instanceId) }
     }
 
     var isConnected: Bool {
-        coordinator.connectionState == .connected
-            && activationContext.map(coordinator.isCurrent) == true
+        (machine == nil ? coordinator.connectionState : pickedConnection?.connectionState) == .connected
+            && activationContext.map(coordinator.holds) == true
     }
     var canReadSchedules: Bool { currentAccess.canRead }
     var canWriteSchedules: Bool { currentAccess.canWrite }
@@ -147,7 +157,7 @@ final class AidenScheduledTasksModel {
     /// task already uses, so editing it still shows (and keeps) where it runs, as on the desktop.
     func workspaceChoices(keeping workspaceID: String?) -> [AidenWorkspace] {
         guard canManageSchedules else { return [] }
-        return AidenNoWorkspace.choices(coordinator.workspaces, keeping: workspaceID)
+        return AidenNoWorkspace.choices(machine == nil ? coordinator.workspaces : pickedConnection?.workspaces ?? [], keeping: workspaceID)
             .filter { $0.permission != .none }
     }
 
@@ -158,10 +168,10 @@ final class AidenScheduledTasksModel {
 
     private func access(for context: AidenRemoteRequestContext) -> AidenScheduledTaskAccess {
         AidenScheduledTaskAccess.resolve(
-            installation: coordinator.installationStore.activeInstallation,
+            installation: machine == nil ? coordinator.installationStore.activeInstallation : pickedConnection?.installation,
             instanceId: context.instanceId,
             deviceId: context.deviceId,
-            isCurrent: coordinator.isCurrent(context)
+            isCurrent: coordinator.holds(context)
         )
     }
 
@@ -193,7 +203,7 @@ final class AidenScheduledTasksModel {
     }
 
     private func requestContext() throws -> AidenRemoteRequestContext {
-        guard let activationContext, coordinator.isCurrent(activationContext) else {
+        guard let activationContext, coordinator.holds(activationContext) else {
             throw AidenRemoteClientError.installationChanged
         }
         return activationContext
@@ -293,7 +303,7 @@ final class AidenScheduledTasksModel {
             }
             scripts = loaded
         } catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             scripts = []
             presentedError = error.localizedDescription
         }
@@ -358,7 +368,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return false
         } catch {
-            guard coordinator.isCurrent(context) else { return false }
+            guard coordinator.holds(context) else { return false }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -417,7 +427,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return false
         } catch {
-            guard coordinator.isCurrent(context) else { return false }
+            guard coordinator.holds(context) else { return false }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -461,7 +471,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return
         } catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             if !Self.isAmbiguous(error) { pendingRunKeys[task.id] = nil }
             presentedError = error.localizedDescription
             coordinator.haptics.play(Self.isAmbiguous(error) ? .warning : .error, scope: hapticScope)
@@ -490,7 +500,7 @@ final class AidenScheduledTasksModel {
                 }
                 return retained
             }
-            guard coordinator.isCurrent(context) else {
+            guard coordinator.holds(context) else {
                 throw AidenRemoteClientError.installationChanged
             }
             throw error
@@ -530,7 +540,7 @@ final class AidenScheduledTasksModel {
         } catch let error where aidenIsCancellation(error) {
             return false
         } catch {
-            guard coordinator.isCurrent(context) else { return false }
+            guard coordinator.holds(context) else { return false }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -565,7 +575,7 @@ final class AidenScheduledTasksModel {
             return
         }
         catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             presentedError = error.localizedDescription
             coordinator.haptics.play(.error, scope: hapticScope)
             await load()
@@ -578,7 +588,7 @@ final class AidenScheduledTasksModel {
         taskStorage.append(task)
         taskStorage.sort(by: Self.sort)
         if let instanceId = activationContext?.instanceId,
-           activationContext.map(coordinator.isCurrent) == true {
+           activationContext.map(coordinator.holds) == true {
             let taskSnapshot = taskStorage
             let settingsSnapshot = settingsStorage
             Task {
@@ -642,14 +652,20 @@ struct AidenScheduledTasksView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: AidenScheduledTasksModel
+    /// Nil on the old shell, where the page belongs to the selected machine.
+    @State private var picker: AidenNewWorkPicker?
+    private let coordinator: AidenRemoteCoordinator
     @State private var editorTask: AidenScheduledTask?
     @State private var isCreating = false
     @State private var isShowingSettings = false
     @State private var searchText = ""
     @State private var filter: TaskFilter = .all
 
-    init(coordinator: AidenRemoteCoordinator) {
-        _model = State(initialValue: AidenScheduledTasksModel(coordinator: coordinator))
+    init(coordinator: AidenRemoteCoordinator, tabShellEnabled: Bool = AppConfig.tabShellEnabled) {
+        self.coordinator = coordinator
+        let picker = tabShellEnabled ? AidenNewWorkPicker(coordinator: coordinator, kind: .reading) : nil
+        _picker = State(initialValue: picker)
+        _model = State(initialValue: AidenScheduledTasksModel(coordinator: coordinator, machine: picker?.target))
     }
 
     private var visibleTasks: [AidenScheduledTask] {
@@ -671,6 +687,9 @@ struct AidenScheduledTasksView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let picker, picker.showsPicker {
+                    Section { AidenNewWorkMachinePicker(picker: picker) }
+                }
                 Section {
                     Label {
                         VStack(alignment: .leading, spacing: 4) {
@@ -800,7 +819,14 @@ struct AidenScheduledTasksView: View {
             )) { Button("OK") { model.presentedError = nil } } message: {
                 Text(model.presentedError ?? "")
             }
-            .task { await model.load() }
+            .task(id: picker?.target) {
+                if let picker, picker.target != model.machine {
+                    model.setHapticsActive(false)
+                    model = AidenScheduledTasksModel(coordinator: coordinator, machine: picker.target)
+                    model.setHapticsActive(true)
+                }
+                await model.load()
+            }
             .onChange(of: model.canReadSchedules) { _, _ in
                 Task { await model.reconcileAccess() }
             }

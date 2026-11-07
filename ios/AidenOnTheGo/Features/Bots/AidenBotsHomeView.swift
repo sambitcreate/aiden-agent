@@ -268,6 +268,8 @@ struct AidenBotsHomeView: View {
     let onCreateConversation: (AidenBotSummary) async -> Void
     /// Opens a Bot's durable session (`bot-durable-session-v1`).
     var onOpenBotSession: (AidenBotSummary) -> Void = { _ in }
+    /// A new Bot was made on a machine this list doesn't show.
+    var onCreatedElsewhere: (AidenHostObjectID, AidenBotSummary) -> Void = { _, _ in }
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -291,6 +293,8 @@ struct AidenBotsHomeView: View {
     @State private var createFlow = AidenBotCreateFlow()
     /// The failed create New Bot reopens with after Try Again.
     @State private var createPrefill: AidenBotCreateFlow.Failure?
+    /// The machine New Bot last sent to, when it was picked: its failure shows here too.
+    @State private var pickedPairing: (instanceId: String, deviceId: String)?
     @FocusState private var searchIsFocused: Bool
 
     private var loadID: AidenBotsHomeLoadID {
@@ -373,7 +377,9 @@ struct AidenBotsHomeView: View {
     /// other Bot is on its way, since one Bot is made at a time.
     private var activeCreateFailure: AidenBotCreateFlow.Failure? {
         guard createFlow.pending == nil else { return nil }
-        return activePairing.flatMap { createFlow.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+        return [pickedPairing, activePairing].lazy.compactMap { $0 }
+            .compactMap { createFlow.failure(instanceId: $0.instanceId, deviceId: $0.deviceId) }
+            .first
     }
 
     /// New Bot opens at once, connected or not (R15); the Bot is made once the Mac answers.
@@ -381,6 +387,14 @@ struct AidenBotsHomeView: View {
         availability.canWrite
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
             && createFlow.pending == nil
+    }
+
+    /// On the tab shell New Bot asks whichever machine it's picked for, so one that
+    /// can't make Bots doesn't close it for the others.
+    private var canOpenNewBot: Bool {
+        guard AppConfig.tabShellEnabled else { return canCreateBot }
+        return createFlow.pending == nil
+            && AidenNewWorkPicker(coordinator: coordinator, kind: .bot).machines.contains(where: \.canBePicked)
     }
 
     var body: some View {
@@ -420,9 +434,13 @@ struct AidenBotsHomeView: View {
         }) { sheet in
             switch sheet {
             case .create:
-                AidenBotCreateView(coordinator: coordinator, initial: createPrefill?.input) { input in
+                AidenBotCreateView(
+                    coordinator: coordinator,
+                    initial: createPrefill?.input,
+                    pinnedTo: createPrefill?.instanceId
+                ) { input, target in
                     // Reopened by Try Again: it goes only to the Mac it was for.
-                    startCreate(input, retrying: createPrefill)
+                    startCreate(input, retrying: createPrefill, on: target)
                 }
             case let .profile(bot):
                 AidenBotProfileView(
@@ -465,16 +483,16 @@ struct AidenBotsHomeView: View {
             presenting: activeCreateFailure
         ) { failure in
             Button("Try Again") {
-                guard let pairing = activePairing else { return }
                 switch createFlow.retry(
                     failure,
-                    instanceId: pairing.instanceId,
-                    deviceId: pairing.deviceId,
+                    instanceId: failure.instanceId,
+                    deviceId: failure.deviceId,
                     bots: listedBots(for: failure)
                 ) {
                 case let .send(input):
                     // An earlier launch's create: the same request, on the same key.
-                    startCreate(input, retrying: failure)
+                    startCreate(input, retrying: failure, on: pickedPairing?.instanceId == failure.instanceId
+                        ? AidenNewWorkTarget(instanceId: failure.instanceId) : nil)
                 case let .reopen(reopened):
                     createPrefill = reopened
                     presentedSheet = .create
@@ -592,7 +610,7 @@ struct AidenBotsHomeView: View {
                 createPrefill = nil
                 presentedSheet = .create
             }
-            .disabled(!canCreateBot)
+            .disabled(!canOpenNewBot)
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
@@ -672,7 +690,7 @@ struct AidenBotsHomeView: View {
                         : "Connect to your Mac to see your Bots."
                 )
             } actions: {
-                if canCreateBot {
+                if canOpenNewBot {
                     Button("New Bot") {
                         createPrefill = nil
                         presentedSheet = .create
@@ -680,7 +698,6 @@ struct AidenBotsHomeView: View {
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
                         .aidenSolidFillTint()
-                        .disabled(!canCreateBot)
                 }
             }
             .padding(.top, 54)
@@ -794,28 +811,28 @@ struct AidenBotsHomeView: View {
     /// Makes the Bot New Bot asked for, after the sheet closed (R15). `retrying` is the failure
     /// a Try Again came from: the flow sends it only to that failure's own Mac.
     @MainActor
-    private func startCreate(_ input: AidenBotCreateInput, retrying: AidenBotCreateFlow.Failure? = nil) {
-        guard let context = try? coordinator.requestContext() else { return }
+    private func startCreate(
+        _ input: AidenBotCreateInput,
+        retrying: AidenBotCreateFlow.Failure? = nil,
+        on target: AidenNewWorkTarget? = nil
+    ) {
+        let picked = target.flatMap { try? coordinator.ownerContext(for: $0.instanceId) }
+        guard let context = picked ?? (try? coordinator.requestContext()) else { return }
         createPrefill = nil
-        let coordinator = coordinator
-        let operations = AidenBotCreateOperations(
-            instanceId: context.instanceId,
-            deviceId: context.deviceId,
-            usesDurableSession: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator),
-            waitForConnection: { hold in await aidenBotWaitForConnection(coordinator, hold: hold) },
-            catalog: { try await coordinator.remoteClient(for: context).botCapabilityCatalog() },
-            create: { request, key in try await coordinator.remoteClient(for: context).createBot(request, idempotencyKey: key) },
-            createChat: { botID, request, key in
-                _ = try await coordinator.remoteClient(for: context).createBotChat(botId: botID, request: request, idempotencyKey: key)
-            },
-            readBot: { botID in try await coordinator.remoteClient(for: context).bot(id: botID) },
-            isCurrent: { coordinator.isCurrent(context) },
-            handleRevocation: { error in await coordinator.handleCredentialRevocation(error, context: context) }
-        )
+        pickedPairing = picked.map { ($0.instanceId, $0.deviceId) }
+        let operations = AidenBotCreateOperations.make(coordinator: coordinator, context: context)
         Task {
             await createFlow.submit(input, operations: operations, retrying: retrying) { created in
-                // The new Bot's chat opens from the create receipt; the list refreshes behind it.
-                openChat(for: AidenBotSummary(detail: created))
+                let bot = AidenBotSummary(detail: created)
+                if context.instanceId == coordinator.defaultInstanceId {
+                    // The new Bot's chat opens from the create receipt; the list refreshes behind it.
+                    openChat(for: bot)
+                } else {
+                    onCreatedElsewhere(
+                        AidenHostObjectID(instanceId: context.instanceId, deviceId: context.deviceId, objectId: bot.id),
+                        bot
+                    )
+                }
                 await load()
             }
         }

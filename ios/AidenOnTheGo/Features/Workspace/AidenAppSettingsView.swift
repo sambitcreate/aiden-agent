@@ -89,6 +89,7 @@ struct AidenAppSettingsView: View {
                                 Label("Machines", systemImage: "desktopcomputer")
                             }
                         }
+                        AidenDefaultMachineRow(coordinator: coordinator)
                     } else {
                         Button {
                             isShowingInstallations = true

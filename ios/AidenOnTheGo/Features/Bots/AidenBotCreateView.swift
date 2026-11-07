@@ -521,7 +521,8 @@ struct AidenBotCreateView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     /// What a Try Again brings back.
     var initial: AidenBotCreateInput?
-    var onCreate: (AidenBotCreateInput) -> Void = { _ in }
+    /// The Bot's answers and, on the tab shell, the machine to make it on.
+    var onCreate: (AidenBotCreateInput, AidenNewWorkTarget?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -535,14 +536,65 @@ struct AidenBotCreateView: View {
     /// A durable-session host lets a Bot start without an AI model; it then
     /// reports `needs_model` until one is chosen on the Mac.
     @State private var allowsModellessCreate = false
+    /// Nil on the old shell, where a Bot goes to the selected machine.
+    @State private var picker: AidenNewWorkPicker?
+    /// The machine the models on screen came from.
+    @State private var catalogTarget: AidenNewWorkTarget?
     @FocusState private var nameIsFocused: Bool
 
-    private var sessionIdentity: AidenBotCustomAccessSessionIdentity {
-        AidenBotCustomAccessSessionIdentity(coordinator: coordinator)
+    /// `pinnedTo` is a failed Bot's machine: its Try Again goes nowhere else.
+    init(
+        coordinator: AidenRemoteCoordinator,
+        initial: AidenBotCreateInput? = nil,
+        pinnedTo: String? = nil,
+        tabShellEnabled: Bool = AppConfig.tabShellEnabled,
+        onCreate: @escaping (AidenBotCreateInput, AidenNewWorkTarget?) -> Void = { _, _ in }
+    ) {
+        self.coordinator = coordinator
+        self.initial = initial
+        self.onCreate = onCreate
+        let picker = tabShellEnabled ? AidenNewWorkPicker(coordinator: coordinator, kind: .bot, pinnedTo: pinnedTo) : nil
+        _picker = State(initialValue: picker)
+        _catalogTarget = State(initialValue: picker?.target)
+    }
+
+    /// The target leads on the tab shell, where the selection moving changes nothing here.
+    private struct LoadID: Equatable {
+        let pairing: AidenBotCustomAccessSessionIdentity.Pairing?
+        let target: AidenNewWorkTarget?
+    }
+
+    private var loadID: LoadID {
+        picker.map { LoadID(pairing: nil, target: $0.target) }
+            ?? LoadID(pairing: AidenBotCustomAccessSessionIdentity(coordinator: coordinator).pairing, target: nil)
+    }
+
+    private var pickedConnection: AidenHostConnection? {
+        picker?.target.flatMap { coordinator.hosts.connection(for: $0.instanceId) }
+    }
+
+    private var installation: AidenInstallation? {
+        picker == nil ? coordinator.installationStore.activeInstallation : pickedConnection?.installation
+    }
+
+    private var isConnected: Bool {
+        (picker == nil ? coordinator.connectionState : pickedConnection?.connectionState) == .connected
+    }
+
+    private func requestContext() throws -> AidenRemoteRequestContext {
+        guard let picker else { return try coordinator.requestContext() }
+        guard let target = picker.target else { throw AidenRemoteClientError.installationChanged }
+        return try coordinator.ownerContext(for: target.instanceId)
     }
 
     private var usesDurableSession: Bool {
-        AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator)
+        guard let picker else {
+            return AidenBotHostFeature.isAdvertised(AidenBotHostFeature.durableSession, coordinator: coordinator)
+        }
+        return AidenBotHostFeature.isAdvertised(
+            AidenBotHostFeature.durableSession,
+            by: picker.target.flatMap { coordinator.knownServerFeatures(of: $0.instanceId) }
+        )
     }
 
     private var input: AidenBotCreateInput {
@@ -555,7 +607,7 @@ struct AidenBotCreateView: View {
     /// Valid answers are enough: the model is the picked one, or the Mac's
     /// recommended one once it answers.
     private var canCreate: Bool {
-        guard coordinator.installationStore.activeInstallation?.canWriteBots == true,
+        guard installation?.canWriteBots == true, picker?.canStart != false,
               (try? AidenBotCreateRequest(
                   name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                   purpose: purpose.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -584,24 +636,35 @@ struct AidenBotCreateView: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Create") {
-                            onCreate(input)
+                            onCreate(input, picker?.target)
                             dismiss()
                         }
                         .disabled(!canCreate)
                     }
                 }
         }
-        .task(id: sessionIdentity.pairing) {
+        .task(id: loadID) {
+            if catalogTarget != picker?.target {
+                // Each machine has its own models, so the last one's pick can't come along.
+                catalogTarget = picker?.target
+                catalog = nil
+                draft = nil
+                loadError = nil
+                allowsModellessCreate = false
+            }
             prefill()
             await load()
         }
-        .onChange(of: coordinator.connectionState == .connected) { _, connected in
+        .onChange(of: isConnected) { _, connected in
             if connected, catalog == nil || loadError != nil { Task { await load() } }
         }
     }
 
     private var form: some View {
         Form {
+            if let picker, picker.showsPicker {
+                Section { AidenNewWorkMachinePicker(picker: picker) }
+            }
             Section {
                 TextField("Name", text: $name)
                     .textContentType(.name)
@@ -707,23 +770,23 @@ struct AidenBotCreateView: View {
     /// The Mac's models, from the cache at once and then fresh. A picked model stays.
     @MainActor
     private func load() async {
-        let expected = sessionIdentity.pairing
-        guard let context = try? coordinator.requestContext() else { return }
+        let expected = loadID
+        guard let context = try? requestContext() else { return }
         if catalog == nil,
            let cached = await AidenBotCache.shared.load(instanceId: context.instanceId, deviceId: context.deviceId)?.catalog,
-           sessionIdentity.pairing == expected {
+           loadID == expected {
             adopt(cached)
         }
         do {
             let loaded = try await coordinator.remoteClient(for: context).botCapabilityCatalog()
-            guard coordinator.isCurrent(context), sessionIdentity.pairing == expected, !Task.isCancelled else { return }
+            guard coordinator.holds(context), loadID == expected, !Task.isCancelled else { return }
             loadError = nil
             adopt(loaded)
         } catch is CancellationError {
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard sessionIdentity.pairing == expected else { return }
+            guard loadID == expected else { return }
             if catalog == nil { loadError = aidenBotFriendlyLoadError(error) }
         }
     }

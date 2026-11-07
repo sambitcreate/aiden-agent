@@ -27,7 +27,8 @@ struct AidenAppShellView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
-    @State private var homeModel = AidenHomeModel()
+    @State private var homeModel: AidenHomeModel
+    @State private var newChat: AidenNewWorkChatFlow
     @State private var searchText = ""
 
     init(
@@ -42,10 +43,21 @@ struct AidenAppShellView: View {
         self.inboxBadge = inboxBadge
         self.navigationStore = navigationStore
         self.intents = intents ?? .shared
-        _navigation = State(initialValue: AidenAppNavigation(
+        let navigation = AidenAppNavigation(
             restoring: navigationStore.load(),
             installations: coordinator.installationStore.installations
-        ))
+        )
+        let home = AidenHomeModel()
+        _navigation = State(initialValue: navigation)
+        _homeModel = State(initialValue: home)
+        _newChat = State(initialValue: AidenNewWorkChatFlow(coordinator: coordinator) { chat, id in
+            // The Inbox lists the default machine, so a chat elsewhere isn't one of its rows.
+            if id.instanceId == coordinator.defaultInstanceId {
+                home.accept(chat)
+                home.markViewed(chatID: chat.id)
+            }
+            navigation.open(.chat(id))
+        })
     }
 
     private var botsAvailability: AidenBotsAvailability {
@@ -57,6 +69,11 @@ struct AidenAppShellView: View {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 NavigationStack(path: $navigation.inboxPath) {
                     AidenInboxRootView(coordinator: coordinator, model: homeModel, onOpen: openChat)
+                        .toolbar {
+                            ToolbarItem(placement: .primaryAction) {
+                                AidenNewWorkComposeButton(flow: newChat)
+                            }
+                        }
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
@@ -87,6 +104,7 @@ struct AidenAppShellView: View {
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
+        .aidenNewWorkPresentation(newChat, coordinator: coordinator)
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -148,7 +166,7 @@ struct AidenAppShellView: View {
         case .scheduled:
             AidenTabPlaceholderView(title: "Scheduled tasks", systemImage: "calendar")
         case .usage:
-            AidenTabPlaceholderView(title: "Usage", systemImage: "chart.bar")
+            AidenMachineUsageView(coordinator: coordinator)
         }
     }
 

@@ -75,6 +75,12 @@ final class AidenMachinePreferencesStore {
         return created
     }
 
+    /// What's saved for a machine, without assigning anything to one seen for the
+    /// first time. A view can call this from `body`.
+    func saved(for instanceId: String) -> AidenMachinePreferences? {
+        stored[instanceId]
+    }
+
     func update(_ instanceId: String, _ change: (inout AidenMachinePreferences) -> Void) {
         var value = preferences(for: instanceId)
         change(&value)

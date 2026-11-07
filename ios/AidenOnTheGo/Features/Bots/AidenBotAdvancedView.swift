@@ -832,6 +832,23 @@ func aidenBotIsRevisionConflict(_ error: Error) -> Bool {
     return status == 409 || body.code == AidenRemoteErrorCode(rawValue: "revision_conflict")
 }
 
+/// `aidenBotWaitForConnection`, for one machine rather than the selected one.
+@MainActor
+func aidenBotWaitForConnection(
+    _ coordinator: AidenRemoteCoordinator,
+    on instanceId: String,
+    hold: Duration
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: hold)
+    while coordinator.hosts.connection(for: instanceId)?.connectionState != .connected {
+        let state = coordinator.hosts.connection(for: instanceId)?.connectionState
+        if state == nil || state == .needsPairing || clock.now >= deadline || Task.isCancelled { return false }
+        try? await Task.sleep(for: .milliseconds(200))
+    }
+    return true
+}
+
 /// Waits for the Mac connection to come up, so an optimistic pick made while connecting
 /// still goes out. False once `hold` runs out, or when no Mac is paired.
 @MainActor

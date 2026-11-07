@@ -58,19 +58,38 @@ struct AidenBotSessionChatView: View {
         coordinator: AidenRemoteCoordinator,
         botID: String,
         initialSummary: AidenBotSummary? = nil,
-        composerSession: AidenComposerSession? = nil
+        composerSession: AidenComposerSession? = nil,
+        staysOnItsMachine: Bool = AppConfig.tabShellEnabled
     ) {
         self.coordinator = coordinator
         self.botID = botID
         self.initialSummary = initialSummary
         _composerSession = State(initialValue: composerSession ?? AidenComposerSession())
+        _openedOn = State(initialValue: staysOnItsMachine ? coordinator.defaultInstanceId : nil)
     }
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
-    /// The machine this chat belongs to. Before the chat starts, that's the selection.
+    /// The machine the chat opened on, so moving the default leaves it there. The
+    /// old shell's chat follows the selection instead.
+    @State private var openedOn: String?
+    private var machineID: String { openedOn ?? coordinator.defaultInstanceId ?? "" }
+
+    /// The machine this chat belongs to.
     private var ownerConnection: AidenHostConnection? {
-        coordinator.hosts.connection(for: model?.owner.instanceId ?? coordinator.activeInstanceId ?? "")
+        coordinator.hosts.connection(for: model?.owner.instanceId ?? machineID)
+    }
+
+    private func isAdvertised(_ feature: String) -> Bool {
+        AidenBotHostFeature.isAdvertised(feature, by: coordinator.knownServerFeatures(of: machineID))
+    }
+
+    private var activitySupported: Bool {
+        aidenBotActivitySupported(server: ownerConnection?.server, installation: ownerConnection?.installation)
+    }
+
+    private func machineContext() throws -> AidenRemoteRequestContext {
+        try openedOn.map(coordinator.ownerContext(for:)) ?? coordinator.requestContext()
     }
 
     private var canWrite: Bool {
@@ -78,14 +97,15 @@ struct AidenBotSessionChatView: View {
     }
 
     private var spendingTransport: AidenSpendingTransport? {
-        guard coordinator.server?.supportsSpendingLimits == true else { return nil }
-        return try? coordinator.remoteClient()
+        guard ownerConnection?.server?.supportsSpendingLimits == true,
+              let context = try? coordinator.ownerContext(for: model?.owner.instanceId ?? machineID) else { return nil }
+        return try? coordinator.remoteClient(for: context)
     }
 
     private var spendingRefreshKey: String {
         [
-            coordinator.activeInstanceId ?? "",
-            String(coordinator.server?.supportsSpendingLimits == true),
+            machineID,
+            String(ownerConnection?.server?.supportsSpendingLimits == true),
             String(model?.isRunning == true),
             String(model?.entries.count ?? 0),
             model?.errorMessage ?? "",
@@ -96,16 +116,16 @@ struct AidenBotSessionChatView: View {
 
     /// Answering a Bot's tool approval needs `approval:respond` beside Bot write.
     private var canRespondToApprovals: Bool {
-        canWrite && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
+        canWrite && ownerConnection?.installation.hasNegotiatedAccess(to: .approvalRespond) == true
     }
 
     /// Answering a routine proposal needs Bot write and `bot-proactive-v1`.
     private var canRespondToProposals: Bool {
-        canWrite && AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, coordinator: coordinator)
+        canWrite && isAdvertised(AidenBotHostFeature.proactive)
     }
 
     private var canRequestConnections: Bool {
-        canWrite && AidenBotHostFeature.isAdvertised(AidenBotHostFeature.connectionRequests, coordinator: coordinator)
+        canWrite && isAdvertised(AidenBotHostFeature.connectionRequests)
     }
 
     var body: some View {
@@ -217,7 +237,7 @@ struct AidenBotSessionChatView: View {
         } message: {
             Text(alertMessage ?? "Please try again.")
         }
-        .task(id: "\(coordinator.activeInstanceId ?? "")|\(startAttempt)") {
+        .task(id: "\(machineID)|\(startAttempt)") {
             await start()
         }
         .task(id: filesLookupKey) {
@@ -240,10 +260,10 @@ struct AidenBotSessionChatView: View {
             attachmentPicker.dismiss()
         }
         // The last-known capabilities stand in until the Mac answers (R21).
-        .onChange(of: aidenBotActivitySupported(coordinator: coordinator)) { _, supported in
+        .onChange(of: activitySupported) { _, supported in
             model?.activitySupported = supported
         }
-        .onChange(of: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)) { _, supported in
+        .onChange(of: isAdvertised(AidenBotHostFeature.attachments)) { _, supported in
             model?.attachmentsSupported = supported
             if !supported { attachmentPicker.dismiss() }
         }
@@ -252,7 +272,7 @@ struct AidenBotSessionChatView: View {
         // open from the saved features while the phone connects, before this
         // connection negotiated a grant (`bot:handoffs` after the Mac updates);
         // once it is negotiated, a feed that opened without it opens again.
-        .onChange(of: aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)) { _, grants in
+        .onChange(of: aidenBotSessionFeedGrants(ownerConnection?.installation)) { _, grants in
             guard let model, grants != feedOpenedWith else { return }
             feedOpenedWith = grants
             model.allowedSupported = grants.contains(.botAllowed)
@@ -287,7 +307,7 @@ struct AidenBotSessionChatView: View {
     /// Looked up again once the chat has entries, since a brand-new Bot has
     /// no conversation until its first message.
     private var filesLookupKey: String {
-        "\(coordinator.activeInstanceId ?? "")|\(model?.entries.isEmpty == false)"
+        "\(machineID)|\(model?.entries.isEmpty == false)"
     }
 
     /// Profile, Files, Memory, Advanced and Delete for this Bot.
@@ -305,8 +325,8 @@ struct AidenBotSessionChatView: View {
         .bot(
             title: bot?.name ?? "Bot",
             hasFiles: filesGrant != nil,
-            hasMemory: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.memory, coordinator: coordinator),
-            canDelete: AidenBotDeletion.isAvailable(coordinator: coordinator),
+            hasMemory: isAdvertised(AidenBotHostFeature.memory),
+            canDelete: machineID == coordinator.defaultInstanceId && AidenBotDeletion.isAvailable(coordinator: coordinator),
             isDeleting: isDeleting
         )
     }
@@ -350,7 +370,9 @@ struct AidenBotSessionChatView: View {
 
     @MainActor
     private func loadFilesTools() async {
+        // These tools read the selected machine, so they wait while it's another one.
         guard let context = try? coordinator.requestContext(),
+              context.instanceId == machineID,
               let client = try? coordinator.remoteClient(for: context),
               let query = try? AidenBotConversationQuery(botId: botID),
               let page = try? await client.botConversations(query: query),
@@ -417,7 +439,7 @@ struct AidenBotSessionChatView: View {
                             outgoingBubble(message, model: model)
                         }
                         ForEach(model.openIssues.filter { issue in
-                            issue.isAvailable(accessRequests: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAccessRequests) == true)
+                            issue.isAvailable(accessRequests: ownerConnection?.installation.hasNegotiatedAccess(to: .botAccessRequests) == true)
                         }) { issue in
                             // Revision 42: a "Needs you" card from the host.
                             AidenBotIssueCardView(
@@ -493,7 +515,7 @@ struct AidenBotSessionChatView: View {
     /// The Mac can't be reached right now: skeletons hold still instead of shimmering.
     private var isUnreachable: Bool {
         if startFailed { return true }
-        if case .offline = coordinator.connectionState { return true }
+        if case .offline = ownerConnection?.connectionState { return true }
         guard let model else { return false }
         if case .unreachable = aidenBotConnectionHint(for: model, nowMs: Int(Date().timeIntervalSince1970 * 1_000)) {
             return true
@@ -1116,7 +1138,7 @@ struct AidenBotSessionChatView: View {
 
     /// Revision 50: this phone holds `attachments:raw` on the connected Mac.
     private var rawImageUploadsGranted: Bool {
-        coordinator.server?.supportsRawUploads == true
+        ownerConnection?.server?.supportsRawUploads == true
     }
 
     private func attachSelectedPhotos(_ model: AidenBotSessionModel) {
@@ -1158,7 +1180,7 @@ struct AidenBotSessionChatView: View {
 
     @MainActor
     private func start() async {
-        guard let context = try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? ""),
+        guard let context = try? coordinator.ownerContext(for: machineID),
               let client = try? coordinator.remoteClient(for: context) else {
             // No way to reach the Mac yet: say so, with Try again, instead of an endless skeleton.
             if model == nil { startFailed = true }
@@ -1173,14 +1195,14 @@ struct AidenBotSessionChatView: View {
             owner: context,
             isOwnerLive: { [coordinator] in coordinator.isLive(context) },
             cacheKey: AidenBotSessionKey(instanceId: context.instanceId, deviceId: context.deviceId, botID: botID),
-            allowedSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botAllowed) == true,
-            plansSupported: coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .botPlans) == true,
+            allowedSupported: ownerConnection?.installation.hasNegotiatedAccess(to: .botAllowed) == true,
+            plansSupported: ownerConnection?.installation.hasNegotiatedAccess(to: .botPlans) == true,
             isOwnerRetained: { [coordinator] in coordinator.isRetained(context) },
             speech: client
         )
-        model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
-        model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
-        feedOpenedWith = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
+        model.activitySupported = activitySupported
+        model.attachmentsSupported = isAdvertised(AidenBotHostFeature.attachments)
+        feedOpenedWith = aidenBotSessionFeedGrants(ownerConnection?.installation)
         // G24: a hand-off that arrives while the person is away from this
         // chat (the app went to the background) alerts once, on this phone.
         let instanceID = context.instanceId
@@ -1216,14 +1238,14 @@ struct AidenBotSessionChatView: View {
 
     @MainActor
     private func loadSummary() async {
-        guard let context = try? coordinator.requestContext() else { return }
+        guard let context = try? machineContext() else { return }
         if summary == nil,
            let cached = await AidenBotCache.shared.load(instanceId: context.instanceId, deviceId: context.deviceId),
            let bot = cached.list?.bots.first(where: { $0.id == botID }) {
             summary = bot
         }
         if let detail = try? await coordinator.remoteClient(for: context).bot(id: botID),
-           coordinator.isCurrent(context) {
+           coordinator.holds(context) {
             summary = AidenBotSummary(detail: detail)
             model?.wording = detail.chatActivity?.wording ?? .follows
         }
