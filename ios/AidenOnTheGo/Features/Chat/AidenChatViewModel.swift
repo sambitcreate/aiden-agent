@@ -1937,6 +1937,7 @@ final class AidenChatViewModel {
                 startedActivity = true
                 await liveActivities.start(
                     instanceID: instanceId,
+                    deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
                     streamID: response.streamId
@@ -2882,6 +2883,7 @@ final class AidenChatViewModel {
             if !status.state.isTerminal {
                 await liveActivities.start(
                     instanceID: instanceId,
+                    deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
                     streamID: stream.streamId
