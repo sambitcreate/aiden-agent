@@ -186,12 +186,14 @@ final class AidenBotCreateFlow {
         retrying: Failure? = nil,
         onCreated: @MainActor (AidenBotDetail) async -> Void
     ) async {
-        // What waits on disk comes back before a new ask can take its place: a pairing keeps one.
+        // What waits on disk comes back before a new ask can take its place: a pairing keeps one,
+        // so only those same words can go out over it.
         let scope = operations.scope
         if retrying == nil, !hasLooked(scope) {
             await restore(instanceId: operations.instanceId, deviceId: operations.deviceId)
         }
-        let leavesParkedAskAlone = retrying != nil || (hasLooked(scope) && failures[scope]?.isParked != true)
+        let parked = failures[scope].flatMap { $0.isParked ? $0 : nil }
+        let leavesParkedAskAlone = retrying != nil || (hasLooked(scope) && (parked == nil || parked?.input == input))
         let ownMac = retrying.map { $0.instanceId == operations.instanceId && $0.deviceId == operations.deviceId } ?? true
         guard pending == nil, ownMac, leavesParkedAskAlone else {
             // Another Bot is still on its way (one is made at a time), or another Mac is the active
