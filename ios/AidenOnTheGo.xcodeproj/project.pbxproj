@@ -114,6 +114,8 @@
 		A0E100000000000000000046 /* AidenUnifiedInboxStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000056 /* AidenUnifiedInboxStoreTests.swift */; };
 		A0E100000000000000000041 /* AidenMachinesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000051 /* AidenMachinesView.swift */; };
 		A0E300000000000000000001 /* AidenNewWorkMachinePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */; };
+		A0E300000000000000000003 /* AidenNewWorkChatFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */; };
+		A0E300000000000000000004 /* AidenBotCreateOperations+Machine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000014 /* AidenBotCreateOperations+Machine.swift */; };
 		A0E100000000000000000042 /* AidenMachineDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000052 /* AidenMachineDetailView.swift */; };
 		A0E100000000000000000043 /* AidenMachineDetailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000053 /* AidenMachineDetailTests.swift */; };
 		A0E300000000000000000002 /* AidenNewWorkTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000012 /* AidenNewWorkTargetTests.swift */; };
@@ -373,6 +375,8 @@
 		A0E100000000000000000056 /* AidenUnifiedInboxStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenUnifiedInboxStoreTests.swift; sourceTree = "<group>"; };
 		A0E100000000000000000051 /* AidenMachinesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachinesView.swift; sourceTree = "<group>"; };
 		A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewWorkMachinePicker.swift; sourceTree = "<group>"; };
+		A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewWorkChatFlow.swift; sourceTree = "<group>"; };
+		A0E300000000000000000014 /* AidenBotCreateOperations+Machine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AidenBotCreateOperations+Machine.swift"; sourceTree = "<group>"; };
 		A0E100000000000000000052 /* AidenMachineDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachineDetailView.swift; sourceTree = "<group>"; };
 		A0E100000000000000000053 /* AidenMachineDetailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachineDetailTests.swift; sourceTree = "<group>"; };
 		A0E300000000000000000012 /* AidenNewWorkTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewWorkTargetTests.swift; sourceTree = "<group>"; };
@@ -689,6 +693,7 @@
 				A0E100000000000000000051 /* AidenMachinesView.swift */,
 				A0E100000000000000000052 /* AidenMachineDetailView.swift */,
 				A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */,
+				A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -709,6 +714,7 @@
 			isa = PBXGroup;
 			children = (
 				B0D400000000000000000011 /* AidenBotCreateView.swift */,
+				A0E300000000000000000014 /* AidenBotCreateOperations+Machine.swift */,
 				B0D300000000000000000011 /* AidenBotAdvancedView.swift */,
 				B0D200000000000000000011 /* AidenBotSettingsDraft.swift */,
 				B0D100000000000000000011 /* AidenBotCharacter.swift */,
@@ -1270,6 +1276,8 @@
 				A0E100000000000000000002 /* AidenMachinePreferences.swift in Sources */,
 				A0E100000000000000000041 /* AidenMachinesView.swift in Sources */,
 				A0E300000000000000000001 /* AidenNewWorkMachinePicker.swift in Sources */,
+				A0E300000000000000000003 /* AidenNewWorkChatFlow.swift in Sources */,
+				A0E300000000000000000004 /* AidenBotCreateOperations+Machine.swift in Sources */,
 				A0E100000000000000000042 /* AidenMachineDetailView.swift in Sources */,
 				A0E100000000000000000021 /* AidenUnifiedInbox.swift in Sources */,
 				A4B240000000000000000001 /* AidenSearchModel.swift in Sources */,

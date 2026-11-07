@@ -102,6 +102,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Shell/AidenMachinesView.swift",
   "AidenOnTheGo/Features/Shell/AidenMachineDetailView.swift",
   "AidenOnTheGo/Features/Shell/AidenNewWorkMachinePicker.swift",
+  "AidenOnTheGo/Features/Shell/AidenNewWorkChatFlow.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotCreateOperations+Machine.swift",
   "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
