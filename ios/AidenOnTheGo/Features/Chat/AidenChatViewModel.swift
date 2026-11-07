@@ -103,6 +103,7 @@ final class AidenChatViewModel {
     @ObservationIgnored var foreignRun: AidenForeignRunProjection?
     @ObservationIgnored var foreignRunIsLive = false
     @ObservationIgnored var foreignRunTask: Task<Void, Never>?
+    @ObservationIgnored var foreignRunLookupIsProbes = false
     @ObservationIgnored var foreignRunSettleTask: Task<Void, Never>?
     @ObservationIgnored var foreignRunGeneration: UInt64 = 0
     /// Bounded transcript recovery after a foreign run ended but its re-read failed.

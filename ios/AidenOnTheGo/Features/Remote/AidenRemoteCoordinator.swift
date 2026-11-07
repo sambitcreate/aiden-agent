@@ -447,8 +447,10 @@ final class AidenRemoteCoordinator {
             return
         }
         // Selecting a machine revoked in the background: its credential is dead,
-        // so it takes the selected machine's path rather than a connect.
+        // so it takes the selected machine's path rather than a connect. One
+        // held for its chat goes when that chat does, and not before.
         if connection.isPurgePending {
+            guard !isHeldForItsChat(connection) else { return }
             await revokeSelectedConnectionAndConnectNext(connection)
             return
         }
@@ -921,7 +923,11 @@ final class AidenRemoteCoordinator {
     /// True while the selected machine has revoked this phone and stays only for
     /// its chat on screen. The pairing screen waits, or it would take the chat away.
     var isHoldingRevokedChat: Bool {
-        holdsRevokedChats && selectedConnection?.isPurgePending == true
+        selectedConnection.map(isHeldForItsChat) == true
+    }
+
+    private func isHeldForItsChat(_ connection: AidenHostConnection) -> Bool {
+        holdsRevokedChats && connection.isPurgePending && onScreenViews[connection.instanceId] != nil
     }
 
     /// Records that `view` is or isn't showing `instanceId`'s data. The last

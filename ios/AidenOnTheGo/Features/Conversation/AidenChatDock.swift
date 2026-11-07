@@ -333,7 +333,8 @@ extension AidenChatViewModel {
 
     /// Safe to read from a view's body, unlike `simulatorsClient`.
     var offersSimulators: Bool {
-        !isReadOnlyFixture && ownerServer?.supportsMobileSimulators == true
+        !isReadOnlyFixture && ownerHostConnection?.isRevoked != true
+            && ownerServer?.supportsMobileSimulators == true
             && ownerInstallation?.hasNegotiatedAccess(to: .simulatorsMobile) == true
     }
 

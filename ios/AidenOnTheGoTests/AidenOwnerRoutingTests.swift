@@ -977,6 +977,55 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertNotNil(coordinator.presentedError)
     }
 
+    func testConnectingLeavesAHeldOnlyMachineAlone() async throws {
+        try await connect([studio], tabShell: true)
+        let model = try await sendRefusedByStudio()
+        model.setViewPresent(true)
+        await model.send()
+
+        await coordinator.connectActiveInstallation()
+
+        XCTAssertTrue(coordinator.isHoldingRevokedChat, "Back in the foreground, the purge took the chat")
+        XCTAssertTrue(coordinator.installationStore.installations.contains { $0.id == "studio" })
+        XCTAssertEqual(model.draft, "Keep these words")
+        XCTAssertNotNil(model.revokedMachineNotice)
+
+        model.setViewPresent(false)
+
+        try await waitUntil("the purge") { self.coordinator.installationStore.installations.isEmpty }
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+    }
+
+    func testSelectingAHeldMachineWaitsForItsChatToLeave() async throws {
+        try await connect([studio, laptop], tabShell: true)
+        let model = try await sendRefusedByStudio()
+        model.setViewPresent(true)
+        await model.send()
+        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+
+        await coordinator.switchInstallation(to: "studio")
+
+        XCTAssertNotNil(coordinator.hosts.connection(for: "studio"), "Purged with its chat on screen")
+        XCTAssertNotNil(model.revokedMachineNotice)
+
+        model.setViewPresent(false)
+
+        try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "studio") == nil }
+        try await waitUntil("the next machine") { self.coordinator.activeInstanceId == "laptop" }
+    }
+
+    func testSelectingARevokedMachineWithNothingOnScreenStillPurges() async throws {
+        try await connect([studio, laptop], tabShell: true)
+        let laptopChat = try chatModel()
+        laptopChat.setViewPresent(true)
+        await coordinator.hostConnectionWasRevokedInBackground(try connection("laptop"))
+        laptopChat.setViewPresent(false)
+
+        await coordinator.switchInstallation(to: "laptop")
+
+        try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "laptop") == nil }
+    }
+
     func testTheMenuShellNeverHoldsARevokedChat() async throws {
         let model = try await sendRefusedByStudio()
         model.setViewPresent(true)
@@ -1050,6 +1099,63 @@ final class AidenOwnerRoutingTests: XCTestCase {
         scheduler.connect(instanceId: "laptop")
 
         try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "laptop") == nil }
+    }
+
+    // Killed on the selected machine's chat. The selection has moved on if there
+    // was anywhere to go, so a launch finds that machine selected only if it's the only one.
+
+    private func killedOnStudiosChat(_ installations: [AidenInstallation]) async throws {
+        try await connect(installations, tabShell: true)
+        let model = try await sendRefusedByStudio()
+        model.setViewPresent(true)
+        await model.send()
+        XCTAssertNotNil(model.revokedMachineNotice)
+    }
+
+    /// `installations` are what's saved at the kill, the selected machine first.
+    private func relaunchRefusedByStudio(_ installations: [AidenInstallation]) {
+        pair(installations, tabShell: true)
+        responder.reply(instanceId: "studio", path: "/server", status: 401, json: Self.revokedJSON)
+    }
+
+    func testALaunchAfterBeingKilledOnTheSelectedMachinesChatFinishesThePurge() async throws {
+        try await killedOnStudiosChat([studio, laptop])
+        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+
+        relaunchRefusedByStudio([laptop, studio])
+        await launch()
+
+        try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "studio") == nil }
+        XCTAssertFalse(coordinator.installationStore.installations.contains { $0.id == "studio" })
+        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+    }
+
+    func testAKilledOnlyMachineWithNothingRestoredGoesToPairing() async throws {
+        try await killedOnStudiosChat([studio])
+
+        relaunchRefusedByStudio([studio])
+        await launch()
+
+        try await waitUntil("the purge") { self.coordinator.installationStore.installations.isEmpty }
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+    }
+
+    func testAnOnlyMachinesRestoredChatStaysThenGoesToPairing() async throws {
+        try await killedOnStudiosChat([studio])
+        relaunchRefusedByStudio([studio])
+        let model = try chatModel(owner: "studio")
+        model.setViewPresent(true)
+
+        await launch()
+
+        try await waitUntil("the machine to answer") { model.revokedMachineNotice != nil }
+        XCTAssertTrue(coordinator.isHoldingRevokedChat, "The pairing screen would take the chat away")
+        XCTAssertTrue(coordinator.installationStore.installations.contains { $0.id == "studio" })
+
+        model.setViewPresent(false)
+
+        try await waitUntil("the purge") { self.coordinator.installationStore.installations.isEmpty }
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
     }
 
     // MARK: Words on a machine that revoked this phone
@@ -1178,6 +1284,23 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(model.ownerConnectionState, .connecting, "The reload follows the selected machine")
         XCTAssertEqual(coordinator.connectionState, .connected)
         XCTAssertEqual(model.ownerServer?.serverTime, serverTime)
+    }
+
+    func testAChatHeldOnARevokedMachineOffersNoSimulators() async throws {
+        var withSimulators = laptop
+        withSimulators.serverFeatures.append(AidenServer.mobileSimulatorsFeature)
+        withSimulators.serverCapabilities?.append(.simulatorsMobile)
+        withSimulators.deviceCapabilities.append(.simulatorsMobile)
+        try await connect([studio, withSimulators])
+        let model = try chatModel()
+        model.setViewPresent(true)
+        XCTAssertTrue(model.offersSimulators)
+
+        await coordinator.hostConnectionWasRevokedInBackground(try connection("laptop"))
+
+        XCTAssertNotNil(model.revokedMachineNotice)
+        XCTAssertFalse(model.offersSimulators, "A device button with no client behind it")
+        model.setViewPresent(false)
     }
 
     func testAChatListsSimulatorsFromItsOwnMachine() async throws {
