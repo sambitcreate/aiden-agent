@@ -163,6 +163,12 @@ import type {
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
 } from "../shared/diagnostics";
+import type {
+  StorageCleanupPreview,
+  StorageCleanupRequest,
+  StorageCleanupResult,
+  StorageReport,
+} from "../shared/storage";
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service";
 import type {
   BotCreateInput,
@@ -790,6 +796,20 @@ export const diagnosticsApi = {
     invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>(
       "diagnostics:mode-enable",
     ),
+};
+
+// ── Settings → Storage (disk usage and cleanup) ───────────────────────
+export const storageApi = {
+  /** The cached inventory; a stale one refreshes in the background. */
+  report: () => invoke<StorageReport>("storage:report"),
+  /** Wait for a fresh scan (the page's Refresh button). */
+  refresh: () => invoke<StorageReport>("storage:refresh"),
+  preview: (request: StorageCleanupRequest) =>
+    invoke<StorageCleanupPreview>("storage:preview", request),
+  cleanup: (request: StorageCleanupRequest) =>
+    invoke<StorageCleanupResult>("storage:cleanup", request),
+  onChange: (handler: (event: { kind: "scan-started" | "scan-finished" }) => void) =>
+    onNotification<{ kind: "scan-started" | "scan-finished" }>("storage:changed", handler),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────

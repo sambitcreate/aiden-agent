@@ -15,6 +15,7 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
+import { storageUsageService } from "./services/storage-usage-main.js";
 import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
 import {
   registerInboxDockBadgeIpc,
@@ -406,6 +407,8 @@ function cleanupApplication(): void {
  * service already enforces on itself.
  */
 const SHUTDOWN_BUDGET_MS = {
+  // A Storage sweep stops before its next item; this waits for the one in hand.
+  storageCleanup: 6_000,
   geminiLive: 3_000,
   // Generation grace (6 s) plus the Gemini context-cache deletes that
   // llmClient.shutdown() runs after it. A delete still in flight at the
@@ -468,7 +471,7 @@ const PRE_SHUTDOWN_BUDGET_MS = {
 const SHUTDOWN_HARD_CEILING_MS = (() => {
   const b = SHUTDOWN_BUDGET_MS;
   const serial =
-    b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
+    b.storageCleanup + b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
     b.subagentRuntime + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
   const parallel = Math.max(
     b.providerSignIn,
@@ -550,6 +553,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
     }
   }
   const disarmShutdownCeiling = armShutdownCeiling();
+  // First, so no further chat or worktree is deleted while the rest of the app stops.
+  await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
   await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must

@@ -385,7 +385,9 @@
         "main/services/peer-project-file-io.test.ts",
         "main/handlers/peer-project-clone.test.ts",
         "renderer/shared/peer-project-clone.test.ts",
-        "renderer/main/peer-project-clone-dialog.test.tsx"
+        "renderer/main/peer-project-clone-dialog.test.tsx",
+        "main/services/storage-usage-core.test.ts",
+        "main/services/storage-usage.test.ts"
       ],
       "preserved": [
         "browser"
@@ -1375,7 +1377,8 @@
         "renderer/components/bots/plan-card.test.tsx",
         "renderer/shared/bot-plans.test.ts",
         "renderer/shared/bot-messages.test.ts",
-        "renderer/main/bots/bot-messaging-fields.test.tsx"
+        "renderer/main/bots/bot-messaging-fields.test.tsx",
+        "renderer/components/settings/storage-settings.test.ts"
       ],
       "preserved": [
         "ios-release-policy",

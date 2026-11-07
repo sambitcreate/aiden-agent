@@ -71,6 +71,19 @@ async function createRepository(t: test.TestContext): Promise<string> {
   return repository;
 }
 
+test("unpushed commits count what no remote holds, and an unreadable branch is never zero", async (t) => {
+  const repository = await createRepository(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  await git(repository, ["branch", "work"]);
+  assert.equal(await service.managedWorktreeUnpushedCommits(repository, "work"), 1, "no remote holds it");
+
+  await git(repository, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  assert.equal(await service.managedWorktreeUnpushedCommits(repository, "work"), 0);
+
+  // "Zero unpushed" lets a worktree be deleted, so a failed read must not say so.
+  await assert.rejects(service.managedWorktreeUnpushedCommits(repository, "no-such-branch"));
+});
+
 async function persistRemovalJournal(
   created: Awaited<ReturnType<GitService["createWorktree"]>>,
   phase:

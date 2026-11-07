@@ -390,6 +390,27 @@ test("delete removes only diagnostic allowlist files and dumps", async () => {
   });
 });
 
+test("delete reaches dumps Crashpad filed in subfolders, and follows no link out", async () => {
+  await fixture(async (root, logs, dumps) => {
+    await fs.mkdir(path.join(dumps, "completed"));
+    await fs.mkdir(path.join(dumps, "pending", "deep"), { recursive: true });
+    await fs.writeFile(path.join(dumps, "completed", "a.dmp"), "dump", "utf8");
+    await fs.writeFile(path.join(dumps, "pending", "deep", "b.dmp"), "dump", "utf8");
+    await fs.writeFile(path.join(dumps, "completed", "settings.dat"), "keep", "utf8");
+    const elsewhere = path.join(root, "elsewhere");
+    await fs.mkdir(elsewhere);
+    await fs.writeFile(path.join(elsewhere, "c.dmp"), "keep", "utf8");
+    await fs.symlink(elsewhere, path.join(dumps, "linked"));
+
+    await deleteAllDiagnosticData({ logsPath: logs, crashDumpsPath: dumps });
+
+    await assert.rejects(fs.stat(path.join(dumps, "completed", "a.dmp")), { code: "ENOENT" });
+    await assert.rejects(fs.stat(path.join(dumps, "pending", "deep", "b.dmp")), { code: "ENOENT" });
+    assert.equal(await fs.readFile(path.join(dumps, "completed", "settings.dat"), "utf8"), "keep");
+    assert.equal(await fs.readFile(path.join(elsewhere, "c.dmp"), "utf8"), "keep");
+  });
+});
+
 test("the per-install reference salt persists beside the journal and is replaced after delete", async () => {
   await fixture(async (_root, logs, dumps) => {
     initDiagnosticJournal({ targetPath: path.join(logs, "aiden.log"), profile: "production" });

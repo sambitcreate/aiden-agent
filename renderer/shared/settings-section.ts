@@ -23,6 +23,7 @@ export const SETTINGS_SECTIONS = [
   "links",
   "shortcut",
   "appearance",
+  "storage",
   "about",
 ] as const;
 
@@ -225,6 +226,30 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
   },
   {
+    id: "storage",
+    title: "Storage",
+    keywords: [
+      "disk",
+      "disk space",
+      "disk usage",
+      "storage",
+      "gigabytes",
+      "clean up",
+      "cleanup",
+      "worktrees",
+      "unused worktrees",
+      "chats",
+      "delete a chat",
+      "browser cache",
+      "clear cache",
+      "bot computers",
+      "voice models",
+      "logs",
+      "free space",
+      "hard drive",
+    ],
+  },
+  {
     id: "about",
     title: "About",
     keywords: ["version", "build", "github", "repository", "app information", "update", "diagnostics", "logs", "reset", "onboarding", "restart"],
@@ -263,6 +288,7 @@ export type SettingsPageId =
   | "connections"
   | "appearance"
   | "shortcut"
+  | "storage"
   | "about";
 
 export type SettingsPageEntry = {
@@ -293,6 +319,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "connections", title: "Connections", group: "Voice & Channels", tabs: ["remoteAccess", "peerHosts", "telegram"] },
   { id: "appearance", title: "Appearance", group: "App", tabs: ["appearance"], anchors: ["links"] },
   { id: "shortcut", title: "Keyboard shortcuts", group: "App", tabs: ["shortcut"] },
+  { id: "storage", title: "Storage", group: "App", tabs: ["storage"] },
   { id: "about", title: "About", group: "App", tabs: ["about"] },
 ];
 
