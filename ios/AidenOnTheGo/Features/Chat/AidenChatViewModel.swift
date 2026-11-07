@@ -48,6 +48,9 @@ final class AidenChatViewModel {
     /// reply can't land on another machine's chat with the same ID.
     let owner: AidenRemoteRequestContext
     private var allowsMutations: Bool
+    /// The tab shell's rows come from every machine, so it hears from a chat on
+    /// any of them. The old shell holds only the selected machine's.
+    private let reportsEveryMachine: Bool
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     let draftStore: AidenChatDraftStore
@@ -103,6 +106,7 @@ final class AidenChatViewModel {
     @ObservationIgnored var foreignRun: AidenForeignRunProjection?
     @ObservationIgnored var foreignRunIsLive = false
     @ObservationIgnored var foreignRunTask: Task<Void, Never>?
+    @ObservationIgnored var foreignRunLookupIsProbes = false
     @ObservationIgnored var foreignRunSettleTask: Task<Void, Never>?
     @ObservationIgnored var foreignRunGeneration: UInt64 = 0
     /// Bounded transcript recovery after a foreign run ended but its re-read failed.
@@ -294,7 +298,7 @@ final class AidenChatViewModel {
             let isActive = streamState.map { !$0.isTerminal } ?? false
             guard wasActive != isActive else { return }
             if !isActive { runInputMode = .queue }
-            if ownerIsSelected { onChatActivityChanged(chat.id, isActive ? .active : .idle) }
+            if reportsChanges { onChatActivityChanged(chat.id, isActive ? .active : .idle) }
         }
     }
     private var networkWaitStreamID: String?
@@ -440,19 +444,23 @@ final class AidenChatViewModel {
         return owner
     }
 
-    /// The shell on screen is showing this chat's machine. `onChatUpdated` and
-    /// `onChatActivityChanged` land in the shell's selected-machine state, so a
-    /// chat still running after the selection moved stays quiet until it's back.
+    /// The selection is on this chat's machine.
     private var ownerIsSelected: Bool {
         !isReadOnlyFixture && coordinator.activeInstanceId == owner.instanceId
     }
+
+    /// `onChatUpdated` and `onChatActivityChanged` have someone to tell. In the
+    /// old shell they land in the selected machine's state, so a chat still running
+    /// after the selection moved stays quiet until it's back. In the tab shell they
+    /// land on the chat's own machine, selected or not.
+    private var reportsChanges: Bool { reportsEveryMachine || ownerIsSelected }
 
     /// Nobody is looking at this chat and its machine isn't selected, so
     /// nothing will come back for it if its machine stops answering.
     private var isLeftBehind: Bool { isViewGone && !ownerIsSelected }
 
     private var ownerConnection: AidenHostConnection? {
-        coordinator.hosts.connection(for: owner.instanceId)
+        isReadOnlyFixture ? nil : coordinator.hosts.connection(for: owner.instanceId)
     }
 
     /// The owner's `/server` answer. Nil until that machine has connected,
@@ -494,12 +502,14 @@ final class AidenChatViewModel {
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         networkPath: AidenNetworkPathSource? = nil,
         allowsMutations: Bool = true,
+        reportsEveryMachine: Bool = AppConfig.tabShellEnabled,
         streamingRevealTick: @escaping @Sendable () async throws -> Void = {
             try await Task.sleep(for: AidenStreamingRevealGate.tick)
         },
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
+        self.reportsEveryMachine = reportsEveryMachine
         self.streamingRevealTick = streamingRevealTick
         self.owner = owner
         runtime = .live(
@@ -545,6 +555,7 @@ final class AidenChatViewModel {
         visualDocumentCache = .shared
         modelPreferenceStore = .shared
         hapticScope = UUID()
+        reportsEveryMachine = false
         onChatUpdated = { _ in }
         onChatActivityChanged = { _, _ in }
         streamingRevealTick = { try await Task.sleep(for: AidenStreamingRevealGate.tick) }
@@ -797,7 +808,7 @@ final class AidenChatViewModel {
             chat.title = updated.title
             chat.revision = updated.revision
             chat.localTitleOverride = admitted.localTitleOverride
-            if ownerIsSelected { onChatUpdated(chat) }
+            if reportsChanges { onChatUpdated(chat) }
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard !isRemoved, coordinator.isLive(context) else { return }
@@ -1812,6 +1823,20 @@ final class AidenChatViewModel {
             )
             streamState = nil
         }
+        /// A revoked machine's chat stays on screen until the person leaves it,
+        /// and however this send ended, nothing can retry it, so its words come
+        /// back. False when the chat is gone or the machine hasn't revoked this
+        /// phone. `told` is this send's own 401, which may be the first word of it.
+        func returnToRevokedChat(told: Bool = false) async -> Bool {
+            guard !isRemoved, coordinator.isRetained(context), told || isOwnerRevoked else { return false }
+            restoreFailedSend()
+            if let session = draftSession { await draftStore.settlePendingSend(key: attempt.key, session: session) }
+            pendingSend = nil
+            isPendingSendRefusedBecauseBusy = false
+            presentedError = AidenDockCopy.machineRevoked
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return true
+        }
         do {
             if makesWorktree {
                 // Revision 53: the Mac makes the worktree and moves this empty
@@ -1842,7 +1867,10 @@ final class AidenChatViewModel {
                     if AidenNewWorktreeRetry.spendsKey(error) { worktreeAttempt = nil }
                     throw error
                 }
-                guard !isRemoved, coordinator.isLive(context) else { return }
+                guard !isRemoved, coordinator.isLive(context) else {
+                    _ = await returnToRevokedChat()
+                    return
+                }
                 chat.workspaceId = moved.chat.workspaceId
                 chat.revision = moved.chat.revision
                 startsInNewWorktree = false
@@ -1862,7 +1890,10 @@ final class AidenChatViewModel {
                 draftSession = session
             }
             try await draftStore.savePendingSend(attempt, session: session)
-            guard !isRemoved, coordinator.isLive(context) else { return }
+            guard !isRemoved, coordinator.isLive(context) else {
+                _ = await returnToRevokedChat()
+                return
+            }
             pendingSend = attempt
             isPendingSendRefusedBecauseBusy = false
             guard attempt.canRetry(), coordinator.isLive(context) else { throw AidenRemoteClientError.invalidResponse }
@@ -1976,23 +2007,18 @@ final class AidenChatViewModel {
             coordinator.haptics.play(.actionStarted, scope: hapticScope, dedupeKey: "turn-start:\(response.streamId)")
             startStreaming(stream, context: context, feedbackPolicy: .localTurn)
         } catch let error where aidenIsCancellation(error) {
-            guard !isRemoved, coordinator.isLive(context) else { return }
-            restoreFailedSend()
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) {
-                // The selected machine leaves with its chats. Another machine's
-                // record stays while this chat is on screen, so the person gets
-                // their words back. Nothing can retry over a revoked pairing.
-                guard !isRemoved, coordinator.isRetained(context) else { return }
-                restoreFailedSend()
-                if let session = draftSession { await draftStore.settlePendingSend(key: attempt.key, session: session) }
-                pendingSend = nil
-                isPendingSendRefusedBecauseBusy = false
-                presentedError = AidenDockCopy.machineRevoked
-                coordinator.haptics.play(.error, scope: hapticScope)
+            guard !isRemoved, coordinator.isLive(context) else {
+                _ = await returnToRevokedChat()
                 return
             }
-            guard !isRemoved, coordinator.isLive(context) else { return }
+            restoreFailedSend()
+        } catch {
+            // The selected machine leaves with its chats. Another machine's
+            // record stays while this chat is on screen. The revocation may be
+            // this answer's, or another request's that got there first.
+            let told = await coordinator.handleCredentialRevocation(error, context: context)
+            if await returnToRevokedChat(told: told) { return }
+            guard !told, !isRemoved, coordinator.isLive(context) else { return }
             restoreFailedSend()
             if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
                let session = draftSession,
@@ -2549,10 +2575,10 @@ final class AidenChatViewModel {
                 coordinator.haptics.play(.error, scope: hapticScope)
             }
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) {
-                // As in `send`: another machine's record stays while this chat is
-                // on screen, so the words come back. Nothing can retry them.
-                guard !isRemoved, coordinator.isRetained(context) else { return }
+            // As in `send`: another machine's record stays while this chat is on
+            // screen, so the words come back. Nothing can retry them.
+            let told = await coordinator.handleCredentialRevocation(error, context: context)
+            if !isRemoved, coordinator.isRetained(context), told || isOwnerRevoked {
                 if retry {
                     // A retry's words are in the pending send alone, so they
                     // reach the saved draft before that send is settled.
@@ -2569,7 +2595,7 @@ final class AidenChatViewModel {
                 coordinator.haptics.play(.error, scope: hapticScope)
                 return
             }
-            guard coordinator.isLive(context) else { return }
+            guard !told, coordinator.isLive(context) else { return }
             restoreDraft()
             presentedError = String(localized: "The run input was not confirmed. Your draft is back — check the chat before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)
@@ -3757,7 +3783,7 @@ final class AidenChatViewModel {
         let presented = beforePublishing(admitted)
         chat = presented
         resolveModelSelection()
-        if ownerIsSelected { onChatUpdated(presented) }
+        if reportsChanges { onChatUpdated(presented) }
         reportChatViewed(presented)
         if scheduleTitleRefresh, presented.isTitlePending {
             schedulePendingTitleRefresh(context: context)

@@ -81,6 +81,12 @@ final class AidenMachinePreferencesStore {
         stored[instanceId]
     }
 
+    /// Whether the person hid the machine. Unlike `preferences(for:)` this
+    /// assigns nothing, so a view body can read it.
+    func isHidden(_ instanceId: String) -> Bool {
+        stored[instanceId]?.isHidden ?? false
+    }
+
     func update(_ instanceId: String, _ change: (inout AidenMachinePreferences) -> Void) {
         var value = preferences(for: instanceId)
         change(&value)

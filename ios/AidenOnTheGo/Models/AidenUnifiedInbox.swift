@@ -13,6 +13,9 @@ struct AidenHostInboxSnapshot: Equatable, Sendable {
     var isOnline: Bool
     var isBlocked: Bool
     var fetchedAt: Date?
+    /// What this machine takes from a row's swipes (`AidenInbox.rowOffer`).
+    var supportsReadState = false
+    var supportsTriage = false
 }
 
 /// Which machines the Inbox lists. `machine` carries an `instanceId`.
@@ -32,6 +35,10 @@ struct AidenUnifiedInboxRow: Identifiable, Equatable {
     /// False for a machine that is offline; its rows stay, dimmed.
     let isOnline: Bool
     let isPinned: Bool
+    /// From the row's own machine, because workspace ids repeat across machines.
+    let workspaceName: String?
+    /// What this row's swipes offer, on its own machine.
+    let offer: AidenInboxRowOffer
 }
 
 /// Every machine's chats merged into the Inbox sections (spec, "Inbox").
@@ -121,7 +128,15 @@ struct AidenUnifiedInbox: Equatable {
                             id: id,
                             content: .chat(row.summary, row.placement),
                             isOnline: snapshot.isOnline,
-                            isPinned: isPinned
+                            isPinned: isPinned,
+                            workspaceName: snapshot.workspaceNames[row.summary.workspaceId],
+                            offer: AidenInbox.rowOffer(
+                                for: row.summary,
+                                isOpen: row.id == openChatID,
+                                now: now,
+                                supportsReadState: snapshot.supportsReadState,
+                                supportsTriage: snapshot.supportsTriage
+                            )
                         ),
                         tier: row.placement.tier,
                         sortAt: row.placement.sortAt
@@ -184,4 +199,45 @@ struct AidenUnifiedInbox: Equatable {
         if left.deviceId != right.deviceId { return left.deviceId < right.deviceId }
         return left.objectId < right.objectId
     }
+}
+
+/// One machine's chat list as the Inbox sees it. `failure` is what a machine that
+/// answered said. A machine that can't be reached has none.
+struct AidenInboxMachineRead: Equatable {
+    var presentation: AidenReadPresentation
+    var failure: String?
+}
+
+/// What the Inbox shows. Everything but `rows` is why it has nothing to list, and
+/// each of those ends: only a machine still being read shows `loading`.
+enum AidenInboxListState: Equatable {
+    case rows
+    case loading
+    /// Chats exist, and none of them is asking for anything.
+    case caughtUp
+    case noChats
+    case offline(machines: Int)
+    case failed(String)
+    case allHidden
+
+    /// A machine that may yet bring rows outranks one that can't, and an answer
+    /// outranks a machine that gave none.
+    static func make(hasRows: Bool, machines: [AidenInboxMachineRead], hasHiddenMachines: Bool) -> Self {
+        if hasRows { return .rows }
+        if machines.isEmpty { return hasHiddenMachines ? .allHidden : .noChats }
+        let presentations = machines.map(\.presentation)
+        if presentations.contains(.content) { return .caughtUp }
+        if presentations.contains(.skeleton) { return .loading }
+        if presentations.contains(.empty) { return .noChats }
+        if let failure = machines.lazy.compactMap(\.failure).first { return .failed(failure) }
+        return .offline(machines: machines.count)
+    }
+}
+
+/// Whether there are older chats to read, on any machine the Inbox lists.
+enum AidenInboxMoreChats: Equatable {
+    case none
+    case available
+    case loading
+    case failed(String)
 }

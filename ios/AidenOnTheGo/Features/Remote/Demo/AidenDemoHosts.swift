@@ -57,6 +57,8 @@ final class AidenDemoResponder: @unchecked Sendable {
 
     private enum Outcome {
         case reply(status: Int, json: Data)
+        /// An answer that depends on the request, such as a search.
+        case computed(status: Int, json: @Sendable (URL) -> Data)
         case failure(URLError.Code)
     }
 
@@ -73,6 +75,7 @@ final class AidenDemoResponder: @unchecked Sendable {
     private struct HoldKey: Hashable {
         let instanceId: String
         let path: String
+        var query: String?
     }
 
     private final class Hold {
@@ -113,6 +116,19 @@ final class AidenDemoResponder: @unchecked Sendable {
         outcomes[Route(instanceId: instanceId, method: method, path: path, query: query)] = .reply(status: status, json: json)
     }
 
+    /// Answers `path` from the request's URL, for a route that reads a query.
+    func reply(
+        instanceId: String,
+        method: String = "GET",
+        path: String,
+        status: Int,
+        json: @escaping @Sendable (URL) -> Data
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        outcomes[Route(instanceId: instanceId, method: method, path: path)] = .computed(status: status, json: json)
+    }
+
     /// Fails every method on `path` with a transport error. `path: "*"` takes the
     /// whole machine offline and replaces its earlier answers.
     func fail(instanceId: String, path: String, code: URLError.Code) {
@@ -123,11 +139,12 @@ final class AidenDemoResponder: @unchecked Sendable {
     }
 
     /// Parks requests to `path` until the returned closure is called. Requests
-    /// that arrive after the release are answered at once.
-    func hold(instanceId: String, path: String) -> @Sendable () -> Void {
+    /// that arrive after the release are answered at once. `query` parks only
+    /// one exact query string, such as one page of a list.
+    func hold(instanceId: String, path: String, query: String? = nil) -> @Sendable () -> Void {
         let hold = Hold()
         lock.lock()
-        holds[HoldKey(instanceId: instanceId, path: path)] = hold
+        holds[HoldKey(instanceId: instanceId, path: path, query: query)] = hold
         lock.unlock()
         return { [weak self] in
             guard let self else { return }
@@ -162,7 +179,8 @@ final class AidenDemoResponder: @unchecked Sendable {
 
         lock.lock()
         log[instanceId, default: []].append("\(method) \(path)")
-        if let hold = holds[HoldKey(instanceId: instanceId, path: path)], !hold.isReleased {
+        let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
+        if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)], !hold.isReleased {
             hold.waiting.append { [self] in
                 deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
             }
@@ -198,6 +216,8 @@ final class AidenDemoResponder: @unchecked Sendable {
             return .failure(URLError(code))
         case .reply(let status, let json):
             return .success((Self.response(url: url, status: status), json))
+        case .computed(let status, let json):
+            return .success((Self.response(url: url, status: status), json(url)))
         case nil:
             return .success((Self.response(url: url, status: 404), AidenDemoContent.notFound()))
         }
@@ -319,6 +339,9 @@ enum AidenDemoHosts {
         /// Whether the machine has one Bot. The empty scenario has none, so the
         /// Bots empty state stays reachable.
         var hasBot = true
+        /// Whether the machine fails when asked for Bot conversations. Online
+        /// otherwise, so the Search tab has a machine that errors.
+        var botSearchFails = false
     }
 
     /// A paired machine as the app stores it after pairing and a first `/server`:
@@ -357,14 +380,16 @@ enum AidenDemoHosts {
             rows: Int,
             online: Bool = true,
             start: Int = 0,
-            hasBot: Bool = true
+            hasBot: Bool = true,
+            botSearchFails: Bool = false
         ) -> Machine {
             Machine(
                 installation: installation(instanceId: id, name: name),
                 rowCount: rows,
                 isOnline: online,
                 patternStart: start,
-                hasBot: hasBot
+                hasBot: hasBot,
+                botSearchFails: botSearchFails
             )
         }
         let studio = machine("studio", "Studio Mac", rows: 6)
@@ -385,7 +410,7 @@ enum AidenDemoHosts {
             machines = [
                 studio,
                 machine("laptop", "Laptop", rows: 3, online: false, start: 4),
-                mini,
+                machine("mini", "Home Mini", rows: 2, start: 4, botSearchFails: true),
                 machine("build", "Build Box", rows: 0, online: false),
             ]
         case .oldHost:
@@ -408,7 +433,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)? = nil,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         makeCoordinator(
             installations.map { Machine(installation: $0, rowCount: 4) },
@@ -416,7 +442,8 @@ enum AidenDemoHosts {
             haptics: haptics,
             keychain: keychain,
             workspaceEnvironmentCache: workspaceEnvironmentCache,
-            machinePreferences: machinePreferences
+            machinePreferences: machinePreferences,
+            tabShell: tabShell
         )
     }
 
@@ -429,7 +456,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)?,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         let store = AidenInstallationStore(keychain: keychain ?? AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
@@ -489,7 +517,8 @@ enum AidenDemoHosts {
                     credential: credential,
                     session: responder.session
                 )
-            }
+            },
+            tabShell: tabShell
         )
     }
 
@@ -539,8 +568,13 @@ enum AidenDemoHosts {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
             responder.reply(instanceId: id, path: botPath, status: 200, json: AidenDemoContent.botDetailJSON())
             responder.reply(instanceId: id, path: "\(botPath)/session", status: 200, json: AidenDemoContent.botSessionJSON())
+            let fails = machine.botSearchFails
+            responder.reply(instanceId: id, path: "/bot-conversations", status: fails ? 503 : 200) { url in
+                fails ? AidenDemoContent.notFound() : AidenDemoContent.botConversationsJSON(for: url)
+            }
         } else {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.emptyBotsJSON())
+            responder.reply(instanceId: id, path: "/bot-conversations", status: 200, json: Data(#"{"conversations":[]}"#.utf8))
         }
     }
 
@@ -690,6 +724,30 @@ private enum AidenDemoContent {
 
     static func botListJSON() -> Data {
         data(["bots": [botSummaryObject()], "maxBots": 256])
+    }
+
+    /// `GET /bot-conversations`: Scout's one chat, when it matches the `query` item.
+    static func botConversationsJSON(for url: URL) -> Data {
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "query" }?.value?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = "Scout"
+        let preview = "Flagged the flaky upload test again this week"
+        let matches = query.isEmpty
+            || title.localizedCaseInsensitiveContains(query)
+            || preview.localizedCaseInsensitiveContains(query)
+        let conversation: [String: Any] = [
+            "chatId": "chat_bot_scout",
+            "botId": botId,
+            "title": title,
+            "preview": preview,
+            "activityState": "idle",
+            "canRespondToApproval": false,
+            "createdAt": timestamp(Date().addingTimeInterval(-3 * 86_400)),
+            "updatedAt": timestamp(Date().addingTimeInterval(-3_600)),
+            "revision": "bot_conversation_revision_1",
+        ]
+        return data(["conversations": matches ? [conversation] : [Any]()])
     }
 
     static func botDetailJSON() -> Data {

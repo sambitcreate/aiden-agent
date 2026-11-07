@@ -57,6 +57,7 @@ extension AidenChatViewModel {
               chat.botId == nil || installation.hasNegotiatedAccess(to: .botRead) else { return }
         foreignRunGeneration &+= 1
         let generation = foreignRunGeneration
+        foreignRunLookupIsProbes = reason == .probe
         foreignRunTask = Task { [weak self] in
             await self?.observeForeignRun(context: context, generation: generation, reason: reason)
             self?.attachToTurnAnnouncedDuringObservation()
@@ -106,6 +107,11 @@ extension AidenChatViewModel {
         foreignRunProbeGeneration &+= 1
         foreignRunProbeTask?.cancel()
         foreignRunProbeTask = nil
+        // Its lookup goes too, or it asks the machine again after the chat has
+        // left. A run it found stays on, as any live run does.
+        guard foreignRunLookupIsProbes, foreignRunTask != nil, foreignRun == nil else { return }
+        foreignRunTask?.cancel()
+        endForeignRunObservation(preservingRecovery: true)
     }
 
     var isProbingForForeignRuns: Bool { foreignRunProbeTask != nil }
