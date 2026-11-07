@@ -23,6 +23,7 @@ struct AidenAppShellView: View {
     @Binding private var navigationRequest: AidenNavigationRequest?
     private let inboxStore: AidenUnifiedInboxStore
     private let navigationStore: AidenAppNavigationStore
+    private let intents: AidenForegroundIntentRouter
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
@@ -32,12 +33,14 @@ struct AidenAppShellView: View {
         coordinator: AidenRemoteCoordinator,
         inboxStore: AidenUnifiedInboxStore,
         navigationRequest: Binding<AidenNavigationRequest?> = .constant(nil),
-        navigationStore: AidenAppNavigationStore = AidenAppNavigationStore()
+        navigationStore: AidenAppNavigationStore = AidenAppNavigationStore(),
+        intents: AidenForegroundIntentRouter? = nil
     ) {
         self.coordinator = coordinator
         self.inboxStore = inboxStore
         _navigationRequest = navigationRequest
         self.navigationStore = navigationStore
+        self.intents = intents ?? .shared
         _navigation = State(initialValue: AidenAppNavigation(
             restoring: navigationStore.load(),
             installations: coordinator.installationStore.installations
@@ -117,6 +120,11 @@ struct AidenAppShellView: View {
             navigationRequest = nil
             open(request)
         }
+        .onChange(of: intents.routes, initial: true) {
+            for queued in intents.takeRoutes(openableOn: coordinator) {
+                navigation.open(queued.route, startsVoice: queued.startsVoice)
+            }
+        }
     }
 
     @ViewBuilder
@@ -126,6 +134,7 @@ struct AidenAppShellView: View {
             AidenChatRouteView(
                 coordinator: coordinator,
                 id: id,
+                autoStartVoice: navigation.chatStartingVoice == id,
                 onChatUpdated: { chat in
                     inboxStore.homeModel(for: id.instanceId)?.accept(chat)
                 },
@@ -133,6 +142,7 @@ struct AidenAppShellView: View {
                     inboxStore.homeModel(for: id.instanceId)?.setActivity(activity, forChatID: chatID)
                 }
             )
+            .onDisappear { navigation.finishStartingVoice(id) }
         case .bot(let id):
             let installation = coordinator.installationStore.installations.first { $0.id == id.instanceId }
             AidenBotsRootView(availability: AidenBotsAvailability.resolve(installation))
@@ -157,14 +167,12 @@ struct AidenAppShellView: View {
     }
 
     private func open(_ request: AidenNavigationRequest) {
-        if request.destination == .newChat {
-            navigation.tab = .workspaces
-        } else if let route = AidenAppRoute(
+        if let route = AidenAppRoute(
             request: request,
             installations: coordinator.installationStore.installations,
             activeInstanceId: coordinator.activeInstanceId
         ) {
-            navigation.open(route)
+            navigation.open(route, startsVoice: request.startsVoice)
         } else {
             coordinator.presentedError = String(localized: "This machine is no longer paired. Pair it again to continue.")
         }
@@ -269,6 +277,7 @@ final class AidenChatRouteModel {
 
 private struct AidenChatRouteView: View {
     let coordinator: AidenRemoteCoordinator
+    let autoStartVoice: Bool
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     @State private var model: AidenChatRouteModel
@@ -276,10 +285,12 @@ private struct AidenChatRouteView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         id: AidenHostObjectID,
+        autoStartVoice: Bool,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void,
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void
     ) {
         self.coordinator = coordinator
+        self.autoStartVoice = autoStartVoice
         self.onChatUpdated = onChatUpdated
         self.onChatActivityChanged = onChatActivityChanged
         _model = State(initialValue: AidenChatRouteModel(id: id))
@@ -305,6 +316,7 @@ private struct AidenChatRouteView: View {
                     coordinator: coordinator,
                     chat: chat,
                     owner: owner,
+                    autoStartVoice: autoStartVoice,
                     onChatUpdated: onChatUpdated,
                     onChatActivityChanged: onChatActivityChanged
                 )

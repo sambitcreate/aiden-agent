@@ -3,6 +3,7 @@ import AVFoundation
 import Foundation
 import SwiftUI
 import UIKit
+import UserNotifications
 import Vision
 import XCTest
 @testable import AidenOnTheGo
@@ -1127,7 +1128,875 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(decoded.status, .waitingForApproval)
         XCTAssertEqual(AgentRunActivityStateReducer.refreshedWaiting(state: decoded).status, .waitingForApproval)
     }
+
+#if DEBUG
+    // MARK: Routing by machine
+
+    func testTwoMachinesWithTheSameScheduleIDPostTwoNotifications() async throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let center = AidenNotificationCenterFake()
+        let notifier = AidenScheduledRunNotifier(defaults: defaults, center: center)
+        let run = scheduledRun(id: "run-1")
+
+        for instanceId in ["studio", "laptop"] {
+            // The first poll only sets a baseline, so the run comes on the second.
+            await notifier.deliver(instanceId: instanceId, client: AidenScheduledFeedFake(notifications: []))
+            await notifier.deliver(instanceId: instanceId, client: AidenScheduledFeedFake(notifications: [run]))
+        }
+
+        XCTAssertEqual(
+            center.posted.map(\.identifier),
+            ["aiden.schedule.studio.run-1", "aiden.schedule.laptop.run-1"]
+        )
+    }
+
+    func testTwoMachinesWithTheSameRoutineRunIDPostTwoNotifications() throws {
+        let item = try botRoutineNotification(id: "run-1")
+
+        XCTAssertEqual(
+            ["studio", "laptop"].map { AidenBotRoutineNotifier.request(for: item, instanceId: $0).identifier },
+            ["aiden.bot-routine.studio.run-1", "aiden.bot-routine.laptop.run-1"]
+        )
+    }
+
+    func testOldIdentifiersAreCancelledOnce() async throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let center = AidenNotificationCenterFake()
+        let notifier = AidenScheduledRunNotifier(defaults: defaults, center: center)
+        await notifier.deliver(instanceId: "studio", client: AidenScheduledFeedFake(notifications: []))
+        await notifier.deliver(
+            instanceId: "studio",
+            client: AidenScheduledFeedFake(notifications: [scheduledRun(id: "new-run")])
+        )
+        let oldBotContent = UNMutableNotificationContent()
+        oldBotContent.userInfo = [AidenRunAlertNotifier.deepLinkUserInfoKey: "aiden-otg://bot/bot_1/chat?instance=studio"]
+        center.posted += [
+            UNNotificationRequest(identifier: "aiden.schedule.old-run", content: UNNotificationContent(), trigger: nil),
+            // An old server's run ID can look just like a machine and a run.
+            UNNotificationRequest(identifier: "aiden.schedule.studio.old-run", content: UNNotificationContent(), trigger: nil),
+            UNNotificationRequest(identifier: "aiden.bot-routine.old-run", content: oldBotContent, trigger: nil),
+            AidenBotRoutineNotifier.request(for: try botRoutineNotification(id: "new-run"), instanceId: "studio"),
+            UNNotificationRequest(identifier: "aiden.run.completed.studio.s1", content: UNNotificationContent(), trigger: nil),
+        ]
+        let kept = ["aiden.schedule.studio.new-run", "aiden.bot-routine.studio.new-run", "aiden.run.completed.studio.s1"]
+
+        await AidenNotificationIdentifierMigration.runOnce(center: center, defaults: defaults)
+
+        XCTAssertEqual(center.posted.map(\.identifier), kept)
+        XCTAssertEqual(center.removalPasses, 1)
+
+        // A relaunch reads the same saved flag, and nothing is looked at again.
+        center.posted.append(
+            UNNotificationRequest(identifier: "aiden.schedule.unmarked", content: UNNotificationContent(), trigger: nil)
+        )
+        await AidenNotificationIdentifierMigration.runOnce(center: center, defaults: defaults)
+
+        XCTAssertEqual(center.posted.map(\.identifier), kept + ["aiden.schedule.unmarked"])
+        XCTAssertEqual(center.removalPasses, 1)
+    }
+
+    func testTheIdentifierMigrationFinishesOnlyOnceNothingOldRemains() async throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let center = AidenNotificationCenterFake()
+        center.posted = [
+            UNNotificationRequest(identifier: "aiden.schedule.old-run", content: UNNotificationContent(), trigger: nil),
+        ]
+        center.ignoresRemovals = true
+
+        await AidenNotificationIdentifierMigration.runOnce(center: center, defaults: defaults)
+
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.schedule.old-run"])
+        XCTAssertFalse(defaults.bool(forKey: AidenNotificationIdentifierMigration.completedKey))
+
+        // The next launch still finds it, and tries again.
+        center.ignoresRemovals = false
+        await AidenNotificationIdentifierMigration.runOnce(center: center, defaults: defaults)
+
+        XCTAssertEqual(center.posted, [])
+        XCTAssertTrue(defaults.bool(forKey: AidenNotificationIdentifierMigration.completedKey))
+    }
+
+    func testAnInstanceIDHoldingADotOrPercentKeepsItsNotificationsApart() async throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let center = AidenNotificationCenterFake()
+        let notifier = AidenScheduledRunNotifier(defaults: defaults, center: center)
+        let pairs = [["a.b", "c"], ["a", "b.c"], ["a%2Eb", "c"], ["a%b", "c.d"], ["a.b.c", "d.e"]]
+
+        for pair in pairs {
+            await notifier.deliver(instanceId: pair[0], client: AidenScheduledFeedFake(notifications: []))
+            await notifier.deliver(
+                instanceId: pair[0],
+                client: AidenScheduledFeedFake(notifications: [scheduledRun(id: pair[1])])
+            )
+        }
+        let schedules = center.posted.map(\.identifier)
+        let routines = try pairs.map {
+            AidenBotRoutineNotifier.request(for: try botRoutineNotification(id: $0[1]), instanceId: $0[0]).identifier
+        }
+
+        XCTAssertEqual(Set(schedules).count, pairs.count)
+        XCTAssertEqual(Set(routines).count, pairs.count)
+        XCTAssertEqual(try schedules.map { try machineAndRun(in: $0, after: "aiden.schedule.") }, pairs)
+        XCTAssertEqual(try routines.map { try machineAndRun(in: $0, after: "aiden.bot-routine.") }, pairs)
+    }
+
+    @MainActor
+    func testReconcileReachesEveryConnectedMachineAndNoOther() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        coordinator.hosts.connection(for: "mini")?.markRevoked()
+        let manager = AidenRemoteLiveActivityManager(defaults: AidenDemoHosts.isolatedDefaults(), drivesActivityKit: false)
+
+        // Build Box is offline, and Home Mini was revoked.
+        XCTAssertEqual(manager.reconcileTargets(of: coordinator).map(\.instanceId), ["studio", "laptop"])
+    }
+
+    @MainActor
+    func testReconcileKeepsActivitiesForNonDefaultMachines() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        let stream = "reconcile-\(UUID().uuidString)"
+        responder.reply(instanceId: "laptop", path: "/streams/\(stream)", status: 200, json: Data("""
+        {"streamId":"\(stream)","chatId":"chat_laptop_1","turnId":"turn-1",
+        "state":"running","lastSequence":3,"updatedAt":"2026-08-19T19:00:00.000Z"}
+        """.utf8))
+        let manager = AidenRemoteLiveActivityManager(defaults: AidenDemoHosts.isolatedDefaults())
+        await manager.start(instanceID: "laptop", chatID: "chat_laptop_1", title: "Laptop chat", streamID: stream)
+        guard let activity = Activity<AgentRunActivityAttributes>.activities.first(where: {
+            $0.attributes.streamID == stream
+        }) else {
+            return XCTFail("ActivityKit did not start the activity.")
+        }
+        await manager.markStale(instanceID: "laptop", streamID: stream)
+        _ = await deliveredContent(of: activity, expecting: "the stale state", where: { $0.isStale })
+
+        await manager.reconcileConnectedMachines(of: coordinator)
+
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertTrue(responder.requests(instanceId: "laptop").contains("GET /streams/\(stream)"))
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /streams/\(stream)"))
+        let reconciled = await deliveredContent(of: activity, expecting: "a live state", where: { !$0.isStale })
+        XCTAssertEqual(reconciled?.status, .responding)
+        await manager.endAll(forInstanceID: "laptop")
+        await assertDeliveredEnd(of: activity)
+    }
+
+    @MainActor
+    func testReconcileEndsAnActivityFromAnOlderPairing() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        let stream = "older-pairing-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(defaults: AidenDemoHosts.isolatedDefaults())
+        await manager.start(instanceID: "laptop", deviceID: "older-device", chatID: "c", title: "Chat", streamID: stream)
+        guard let activity = Activity<AgentRunActivityAttributes>.activities.first(where: {
+            $0.attributes.streamID == stream
+        }) else {
+            return XCTFail("ActivityKit did not start the activity.")
+        }
+        XCTAssertEqual(activity.attributes.deviceID, "older-device")
+
+        await manager.reconcileConnectedMachines(of: coordinator)
+
+        XCTAssertFalse(responder.requests(instanceId: "laptop").contains("GET /streams/\(stream)"))
+        await assertDeliveredEnd(of: activity)
+    }
+
+    func testLiveActivityAttributesFromAnOlderBuildStillDecode() throws {
+        let older = Data("""
+        {"instanceID":"studio","sessionID":"chat-1","sessionTitle":"Chat","streamID":"stream-1","startedAt":0}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AgentRunActivityAttributes.self, from: older)
+        XCTAssertEqual(decoded.instanceID, "studio")
+        XCTAssertEqual(decoded.streamID, "stream-1")
+        XCTAssertNil(decoded.deviceID)
+
+        let current = AgentRunActivityAttributes(
+            instanceID: "studio",
+            deviceID: "device-1",
+            sessionID: "chat-1",
+            sessionTitle: "Chat",
+            streamID: "stream-1",
+            startedAt: Date(timeIntervalSinceReferenceDate: 0)
+        )
+        let encoded = try JSONEncoder().encode(current)
+        XCTAssertEqual(try JSONDecoder().decode(AgentRunActivityAttributes.self, from: encoded).deviceID, "device-1")
+
+        // A widget process still on the older build reads what this one writes.
+        struct OlderAttributes: Decodable {
+            let instanceID: String
+            let sessionID: String
+            let sessionTitle: String
+            let streamID: String?
+            let startedAt: Date
+        }
+        XCTAssertEqual(try JSONDecoder().decode(OlderAttributes.self, from: encoded).instanceID, "studio")
+    }
+
+    @MainActor
+    func testANotificationTapOpensItsOwnMachine() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        let device = try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).installation.deviceId
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let taps = try await taps(from: "laptop")
+
+        for tap in taps {
+            tap.open(
+                coordinator: coordinator,
+                intents: intents,
+                tabShellEnabled: true,
+                openLink: { XCTFail("The tap took the link path: \($0)") }
+            )
+        }
+        let navigation = AidenAppNavigation()
+        for queued in intents.takeRoutes(openableOn: coordinator) {
+            navigation.open(queued.route, startsVoice: queued.startsVoice)
+        }
+
+        XCTAssertEqual(navigation.inboxPath, [
+            .chat(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "chat_laptop_1")),
+            .machine(instanceId: "laptop"),
+        ])
+        XCTAssertEqual(navigation.botsPath, [
+            .bot(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "bot_fixture_01")),
+        ])
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertNil(coordinator.presentedError)
+    }
+
+    @MainActor
+    func testWithTheFlagOffATapKeepsItsOldPath() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: AidenDemoResponder())
+        await coordinator.start()
+        let intents = AidenForegroundIntentRouter(queuesActions: false)
+        var opened: [URL] = []
+
+        for tap in try await taps(from: "laptop") {
+            tap.open(coordinator: coordinator, intents: intents, tabShellEnabled: false, openLink: { opened.append($0) })
+        }
+
+        XCTAssertEqual(opened, [
+            AidenDeepLink.chatURL(instanceId: "laptop", chatId: "chat_laptop_1"),
+            AidenDeepLink.botChatURL(instanceId: "laptop", botId: "bot_fixture_01"),
+        ])
+        XCTAssertEqual(intents.routes, [])
+    }
+
+    @MainActor
+    func testANotificationForAMachineNoLongerPairedOrRevokedDropsQuietly() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: AidenDemoResponder())
+        await coordinator.start()
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let forgotten = try await taps(from: "laptop")
+        let revoked = try await taps(from: "mini")
+        await coordinator.removeInstallation("laptop")
+        coordinator.hosts.connection(for: "mini")?.markRevoked()
+
+        for tap in forgotten + revoked {
+            tap.open(
+                coordinator: coordinator,
+                intents: intents,
+                tabShellEnabled: true,
+                openLink: { XCTFail("The tap took the link path: \($0)") }
+            )
+        }
+
+        XCTAssertEqual(intents.routes, [])
+        XCTAssertNil(coordinator.presentedError)
+    }
+
+    @MainActor
+    func testAQueuedRouteLeavesWithItsMachine() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: AidenDemoResponder())
+        await coordinator.start()
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        intents.submit(route: .machine(instanceId: "laptop"))
+        intents.submit(route: .machine(instanceId: "mini"))
+        intents.submit(route: .machine(instanceId: "studio"))
+
+        await coordinator.removeInstallation("laptop")
+        intents.dropUnopenable(on: coordinator)
+        XCTAssertEqual(intents.routes.map(\.route), [.machine(instanceId: "mini"), .machine(instanceId: "studio")])
+
+        // Revoked after it was queued, and caught only as the shell takes it.
+        coordinator.hosts.connection(for: "mini")?.markRevoked()
+        XCTAssertEqual(intents.takeRoutes(openableOn: coordinator).map(\.route), [.machine(instanceId: "studio")])
+        XCTAssertEqual(intents.routes, [])
+    }
+
+    @MainActor
+    func testTwoIntentsArrivingTogetherBothRoute() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["studio", "laptop"])
+        let device = try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).installation.deviceId
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+
+        intents.submit(instanceID: "studio", workspaceID: nil, startsVoice: false)
+        intents.submit(instanceID: "laptop", workspaceID: "workspace_app", startsVoice: false)
+        // The view asks again on every change, so a pass can start during a pass.
+        async let first: Void = intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+        async let second: Void = intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+        _ = await (first, second)
+
+        XCTAssertEqual(intents.actions, [])
+        let navigation = AidenAppNavigation()
+        for queued in intents.takeRoutes(openableOn: coordinator) {
+            navigation.open(queued.route, startsVoice: queued.startsVoice)
+        }
+        XCTAssertEqual(navigation.inboxPath, [
+            .chat(AidenHostObjectID(instanceId: "studio", deviceId: device, objectId: "chat_new_studio")),
+            .chat(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "chat_new_laptop")),
+        ])
+        XCTAssertEqual(coordinator.activeInstanceId, "studio", "An intent moved the selection")
+        XCTAssertEqual(responder.requests(instanceId: "studio").filter { $0 == "POST /chats" }.count, 1)
+        XCTAssertEqual(responder.requests(instanceId: "laptop").filter { $0 == "POST /chats" }.count, 1)
+    }
+
+    @MainActor
+    func testWithTheFlagOffASecondIntentStillYieldsToTheFirst() {
+        let intents = AidenForegroundIntentRouter(queuesActions: false)
+
+        intents.submit(instanceID: "studio", workspaceID: nil, startsVoice: false)
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false)
+
+        XCTAssertEqual(intents.actions.map(\.instanceID), ["studio"])
+    }
+
+    @MainActor
+    func testAnIntentWaitsForItsOwnMachineWithoutHoldingUpAnother() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        XCTAssertNotEqual(coordinator.hosts.connection(for: "laptop")?.connectionState, .connected)
+        replyToNewChats(responder, on: ["studio", "laptop"])
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let start = Date()
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false, now: start)
+        intents.submit(instanceID: "studio", workspaceID: nil, startsVoice: false, now: start)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true }, now: { start })
+
+        XCTAssertEqual(intents.routes.count, 1)
+        XCTAssertEqual(intents.actions.map(\.instanceID), ["laptop"])
+
+        await AidenHostConnectScheduler(registry: coordinator.hosts, pathChanges: AsyncStream { _ in }).foregrounded()
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true }, now: { start })
+
+        XCTAssertEqual(intents.routes.count, 2)
+        XCTAssertEqual(intents.actions, [])
+    }
+
+    @MainActor
+    func testAnIntentThatOutlivesItsMinuteCreatesNothing() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"])
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let start = Date()
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false, now: start)
+        await intents.openWaitingChats(
+            coordinator: coordinator,
+            isForeground: { true },
+            now: { start.addingTimeInterval(60) }
+        )
+
+        XCTAssertEqual(intents.actions, [])
+        XCTAssertEqual(intents.routes, [])
+        XCTAssertFalse(responder.requests(instanceId: "laptop").contains("POST /chats"))
+    }
+
+    @MainActor
+    func testAnIntentThatHasNotStartedSurvivesSuspendingAndCreatesOnReturn() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"])
+        let installation = try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).installation
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let start = Date()
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false, now: start)
+        intents.handleSuspend()
+        await intents.openWaitingChats(
+            coordinator: coordinator,
+            isForeground: { false },
+            now: { start.addingTimeInterval(1) }
+        )
+
+        XCTAssertEqual(intents.actions.count, 1)
+        XCTAssertFalse(responder.requests(instanceId: "laptop").contains("POST /chats"))
+
+        await intents.openWaitingChats(
+            coordinator: coordinator,
+            isForeground: { true },
+            now: { start.addingTimeInterval(59) }
+        )
+
+        XCTAssertEqual(intents.actions, [])
+        XCTAssertEqual(
+            intents.routes.map(\.route),
+            [.chat(AidenHostObjectID(instanceId: "laptop", deviceId: installation.deviceId, objectId: "chat_new_laptop"))]
+        )
+    }
+
+    @MainActor
+    func testAnIntentThatStaysSuspendedPastItsMinuteCreatesNothing() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"])
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let start = Date()
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false, now: start)
+        intents.handleSuspend()
+        XCTAssertEqual(intents.actions.count, 1)
+        await intents.openWaitingChats(
+            coordinator: coordinator,
+            isForeground: { true },
+            now: { start.addingTimeInterval(60) }
+        )
+
+        XCTAssertEqual(intents.actions, [])
+        XCTAssertEqual(intents.routes, [])
+        XCTAssertFalse(responder.requests(instanceId: "laptop").contains("POST /chats"))
+    }
+
+    @MainActor
+    func testWithTheFlagOffSuspendingStillDropsAnIntent() {
+        let intents = AidenForegroundIntentRouter(queuesActions: false)
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false)
+        intents.handleSuspend()
+
+        XCTAssertEqual(intents.actions, [])
+    }
+
+    @MainActor
+    func testRoutesSurviveDiscardingActions() {
+        for queuesActions in [true, false] {
+            let intents = AidenForegroundIntentRouter(queuesActions: queuesActions)
+            let route = AidenAppRoute.machine(instanceId: "laptop")
+            intents.submit(route: route)
+            intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false)
+
+            intents.handleSuspend()
+            intents.discardActions()
+
+            XCTAssertEqual(intents.actions, [])
+            XCTAssertEqual(intents.routes.map(\.route), [route])
+        }
+    }
+
+    @MainActor
+    func testAChatInAFreshHiddenWorkspaceRefreshesItsMachineThenOpens() async throws {
+        for machine in ["studio", "laptop"] {
+            let responder = AidenDemoResponder()
+            let coordinator = try await connectedDemoMachines(responder)
+            let connection = try XCTUnwrap(coordinator.hosts.connection(for: machine))
+            replyToNewChats(responder, on: [machine], workspaceId: "workspace_fresh")
+            responder.reply(instanceId: machine, path: "/workspaces", status: 200, json: hiddenWorkspaces(["default", "workspace_fresh"]))
+            let intents = AidenForegroundIntentRouter(queuesActions: true)
+
+            intents.submit(instanceID: machine, workspaceID: "default", startsVoice: false)
+            await intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+
+            XCTAssertTrue(connection.workspaces.contains { $0.id == "workspace_fresh" }, machine)
+            XCTAssertEqual(
+                intents.routes.map(\.route),
+                [.chat(AidenHostObjectID(instanceId: machine, deviceId: connection.installation.deviceId, objectId: "chat_new_\(machine)"))]
+            )
+            XCTAssertNil(coordinator.presentedError, machine)
+            XCTAssertEqual(coordinator.activeInstanceId, "studio", "The selection moved")
+        }
+    }
+
+    @MainActor
+    func testAChatStillUnlistedAfterTheRefreshSaysSoAndOpensNothing() async throws {
+        for machine in ["studio", "laptop"] {
+            for readFails in [false, true] {
+                let responder = AidenDemoResponder()
+                let coordinator = try await connectedDemoMachines(responder)
+                replyToNewChats(responder, on: [machine], workspaceId: "workspace_fresh")
+                if readFails {
+                    responder.fail(instanceId: machine, path: "/workspaces", code: .timedOut)
+                }
+                let reads = responder.requests(instanceId: machine).filter { $0 == "GET /workspaces" }.count
+                let intents = AidenForegroundIntentRouter(queuesActions: true)
+
+                intents.submit(instanceID: machine, workspaceID: "default", startsVoice: false)
+                await intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+
+                XCTAssertEqual(responder.requests(instanceId: machine).filter { $0 == "GET /workspaces" }.count, reads + 1)
+                XCTAssertEqual(intents.routes, [])
+                XCTAssertEqual(coordinator.presentedError, AidenNoWorkspace.startedButUnlistedMessage)
+            }
+        }
+    }
+
+    @MainActor
+    func testAMachineRevokedDuringTheWorkspaceRefreshDropsQuietly() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"], workspaceId: "workspace_fresh")
+        responder.reply(
+            instanceId: "laptop",
+            path: "/workspaces",
+            status: 401,
+            json: Data(#"{"error":{"code":"credential_revoked","message":"Revoked.","requestId":"r","retryable":false}}"#.utf8)
+        )
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+
+        intents.submit(instanceID: "laptop", workspaceID: "default", startsVoice: false)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+
+        XCTAssertEqual(intents.routes, [])
+        XCTAssertNil(coordinator.presentedError)
+    }
+
+    @MainActor
+    func testAnIntentForAMachineNoLongerPairedOrRevokedDropsQuietly() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop", "mini"])
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        await coordinator.removeInstallation("laptop")
+        coordinator.hosts.connection(for: "mini")?.markRevoked()
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false)
+        intents.submit(instanceID: "mini", workspaceID: "workspace_notes", startsVoice: true)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+
+        XCTAssertEqual(intents.actions, [])
+        XCTAssertEqual(intents.routes, [])
+        XCTAssertNil(coordinator.presentedError)
+        XCTAssertFalse(responder.requests(instanceId: "laptop").contains("POST /chats"))
+        XCTAssertFalse(responder.requests(instanceId: "mini").contains("POST /chats"))
+    }
+
+    @MainActor
+    func testAnIntentWhoseMachineFindsItRevokedDropsQuietly() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        responder.reply(
+            instanceId: "laptop",
+            method: "POST",
+            path: "/chats",
+            status: 401,
+            json: try JSONSerialization.data(withJSONObject: ["error": [
+                "code": "credential_revoked",
+                "message": "This device was removed.",
+                "requestId": "request_demo_revoked",
+                "retryable": false,
+            ]])
+        )
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+
+        XCTAssertEqual(intents.actions, [])
+        XCTAssertEqual(intents.routes, [])
+        XCTAssertNil(coordinator.presentedError)
+    }
+
+    @MainActor
+    func testAVoiceIntentOpensItsChatListeningOnce() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"])
+        let installation = try XCTUnwrap(coordinator.hosts.connection(for: "laptop")).installation
+        let chat = AidenHostObjectID(instanceId: "laptop", deviceId: installation.deviceId, objectId: "chat_new_laptop")
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: true)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+        let navigation = AidenAppNavigation()
+        for queued in intents.takeRoutes(openableOn: coordinator, isForeground: { true }) {
+            navigation.open(queued.route, startsVoice: queued.startsVoice)
+        }
+
+        XCTAssertEqual(navigation.inboxPath, [.chat(chat)])
+        XCTAssertEqual(navigation.chatStartingVoice, chat)
+
+        // Saved navigation never carries it: a relaunch must not open the microphone.
+        let saved = try JSONDecoder().decode(
+            AidenAppNavigationSnapshot.self,
+            from: JSONEncoder().encode(navigation.snapshot)
+        )
+        XCTAssertNil(AidenAppNavigation(restoring: saved, installations: [installation]).chatStartingVoice)
+
+        navigation.finishStartingVoice(AidenHostObjectID(instanceId: "laptop", deviceId: installation.deviceId, objectId: "other"))
+        XCTAssertEqual(navigation.chatStartingVoice, chat, "Another chat closing ended the voice start")
+        navigation.finishStartingVoice(chat)
+        XCTAssertNil(navigation.chatStartingVoice)
+
+        navigation.open(.chat(chat), startsVoice: true)
+        navigation.open(.settings)
+        XCTAssertNil(navigation.chatStartingVoice, "A voice start outlived the intent that asked for it")
+    }
+
+    @MainActor
+    func testAVoiceIntentThatLosesTheForegroundStillOpensItsChatSilently() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"])
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: true)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true })
+        let taken = intents.takeRoutes(openableOn: coordinator, isForeground: { false })
+
+        XCTAssertEqual(taken.count, 1)
+        XCTAssertEqual(taken.map(\.startsVoice), [false])
+        XCTAssertEqual(intents.routes, [])
+    }
+
+    @MainActor
+    func testAVoiceRouteIsJudgedWhenTakenNotWhenQueued() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"])
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        var foregroundChecks = 0
+
+        // Away while the chat was created, back in front of the person by the take.
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: true)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: {
+            foregroundChecks += 1
+            return foregroundChecks == 1
+        })
+
+        XCTAssertEqual(intents.takeRoutes(openableOn: coordinator, isForeground: { true }).map(\.startsVoice), [true])
+    }
+
+    @MainActor
+    func testAVoiceRouteThatWaitedPastItsMinuteOpensSilently() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await connectedDemoMachines(responder)
+        replyToNewChats(responder, on: ["laptop"])
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let start = Date()
+
+        intents.submit(instanceID: "laptop", workspaceID: nil, startsVoice: true, now: start)
+        await intents.openWaitingChats(coordinator: coordinator, isForeground: { true }, now: { start })
+        let taken = intents.takeRoutes(
+            openableOn: coordinator,
+            isForeground: { true },
+            now: start.addingTimeInterval(60)
+        )
+
+        XCTAssertEqual(taken.count, 1)
+        XCTAssertEqual(taken.map(\.startsVoice), [false])
+    }
+
+    @MainActor
+    func testARouteQueuedBeforeTheShellMountsOpensExactlyOnce() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: AidenDemoResponder())
+        await coordinator.start()
+        let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
+        let intents = AidenForegroundIntentRouter(queuesActions: true)
+        let early = AidenAppRoute.machine(instanceId: "laptop")
+        let late = AidenAppRoute.machine(instanceId: "mini")
+
+        intents.submit(route: early)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(intents.routes.map(\.route), [early], "Nothing is mounted to take it yet")
+
+        let first = try showShell(coordinator, store: store, intents: intents)
+        await waitUntil { store.load().inboxPath == [early] }
+        XCTAssertEqual(store.load().inboxPath, [early])
+        XCTAssertEqual(intents.routes, [])
+
+        intents.submit(route: late)
+        await waitUntil { store.load().inboxPath == [early, late] }
+        XCTAssertEqual(store.load().inboxPath, [early, late])
+        first.isHidden = true
+        first.rootViewController = nil
+
+        // A shell mounting again starts from what was saved and opens nothing twice.
+        let second = try showShell(coordinator, store: store, intents: intents)
+        defer {
+            second.isHidden = true
+            second.rootViewController = nil
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(store.load().inboxPath, [early, late])
+    }
+
+    @MainActor
+    private func connectedDemoMachines(_ responder: AidenDemoResponder) async throws -> AidenRemoteCoordinator {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        await AidenHostConnectScheduler(registry: coordinator.hosts, pathChanges: AsyncStream { _ in }).foregrounded()
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.hosts.connection(for: "laptop")?.connectionState, .connected)
+        return coordinator
+    }
+
+    private func replyToNewChats(
+        _ responder: AidenDemoResponder,
+        on machines: [String],
+        workspaceId: String = "workspace_app"
+    ) {
+        for instanceId in machines {
+            responder.reply(
+                instanceId: instanceId,
+                method: "POST",
+                path: "/chats",
+                status: 201,
+                json: Data("""
+                {"id":"chat_new_\(instanceId)","workspaceId":"\(workspaceId)","title":"New chat","messages":[],
+                "createdAt":"2026-08-19T19:00:00.000Z","updatedAt":"2026-08-19T19:00:00.000Z","revision":"chat_revision_1"}
+                """.utf8)
+            )
+        }
+    }
+
+    /// Hidden No workspace records, as `GET /workspaces` lists them.
+    private func hiddenWorkspaces(_ ids: [String]) -> Data {
+        let records = ids.map { id in
+            """
+            {"id":"\(id)","name":"No workspace","permission":"ask","memoryEnabled":true,"hasFolder":true,
+            "isManagedWorktree":false,"noWorkspace":true,"createdAt":"2026-08-19T19:00:00.000Z",
+            "updatedAt":"2026-08-19T19:00:00.000Z","revision":"workspace_revision_1"}
+            """
+        }
+        return Data(#"{"workspaces":[\#(records.joined(separator: ","))]}"#.utf8)
+    }
+
+    /// Reads `<prefix><instance>.<run>` back: the first dot ends the instance.
+    private func machineAndRun(in identifier: String, after prefix: String) throws -> [String] {
+        let rest = identifier.dropFirst(prefix.count)
+        let dot = try XCTUnwrap(rest.firstIndex(of: "."), identifier)
+        let instance = try XCTUnwrap(String(rest[..<dot]).removingPercentEncoding, identifier)
+        return [instance, String(rest[rest.index(after: dot)...])]
+    }
+
+    private func scheduledRun(id: String) -> AidenScheduledRunNotification {
+        AidenScheduledRunNotification(
+            id: id,
+            taskId: "task-1",
+            taskName: "Nightly report",
+            status: "succeeded",
+            startedAt: Date(timeIntervalSince1970: 100),
+            finishedAt: Date(timeIntervalSince1970: 101),
+            summary: "Done",
+            errorCode: nil,
+            notify: true
+        )
+    }
+
+    private func botRoutineNotification(id: String) throws -> AidenBotRoutineNotification {
+        let feed = try AidenRemoteJSONDecoder.decode(
+            AidenBotRoutineNotificationFeed.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "notifications": [[
+                    "id": id, "botId": "bot_fixture_01", "botName": "Scout",
+                    "routineId": "task_fixture_routine_01", "routineName": "Morning brief",
+                    "status": "succeeded", "finishedAt": "2026-08-19T15:30:00.000Z", "preview": "Ready.",
+                ]],
+                "now": "2026-08-19T16:00:00.000Z",
+            ])
+        )
+        return try XCTUnwrap(feed.notifications.first)
+    }
+
+    /// What tapping each kind of notification from `instanceId` hands the app:
+    /// a run alert, a Bot routine, and a scheduled run, as the notifiers post them.
+    @MainActor
+    private func taps(from instanceId: String) async throws -> [AidenNotificationTap] {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let center = AidenNotificationCenterFake()
+        await AidenRunAlertNotifier(defaults: defaults, center: center, appState: { .background }).notify(
+            .completed,
+            id: "stream-1",
+            instanceID: instanceId,
+            chatID: "chat_\(instanceId)_1",
+            chatTitle: "Chat",
+            isChatOnScreen: false
+        )
+        center.posted.append(AidenBotRoutineNotifier.request(for: try botRoutineNotification(id: "run-1"), instanceId: instanceId))
+        let notifier = AidenScheduledRunNotifier(defaults: defaults, center: center)
+        await notifier.deliver(instanceId: instanceId, client: AidenScheduledFeedFake(notifications: []))
+        await notifier.deliver(instanceId: instanceId, client: AidenScheduledFeedFake(notifications: [scheduledRun(id: "run-2")]))
+        XCTAssertEqual(center.posted.count, 3)
+        return center.posted.map { AidenNotificationTap(userInfo: $0.content.userInfo) }
+    }
+
+    @MainActor
+    private func showShell(
+        _ coordinator: AidenRemoteCoordinator,
+        store: AidenAppNavigationStore,
+        intents: AidenForegroundIntentRouter
+    ) throws -> UIWindow {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
+        window.rootViewController = UIHostingController(rootView:
+            AidenAppShellView(
+                coordinator: coordinator,
+                inboxStore: AidenUnifiedInboxStore(coordinator: coordinator),
+                navigationStore: store,
+                intents: intents
+            )
+                .environment(AidenHapticCenter())
+        )
+        window.makeKeyAndVisible()
+        return window
+    }
+
+    @MainActor
+    private func waitUntil(_ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(10)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+#endif
 }
+
+#if DEBUG
+/// Posts as the system does: a second request with one identifier replaces the first.
+private final class AidenNotificationCenterFake: AidenRunAlertCenter, AidenNotificationInventory {
+    var posted: [UNNotificationRequest] = []
+    private(set) var removalPasses = 0
+    /// The system's removal calls report nothing back, so one can quietly fail.
+    var ignoresRemovals = false
+
+    func currentAuthorizationStatus() async -> UNAuthorizationStatus { .authorized }
+    func requestAlertAuthorization() async -> Bool { true }
+
+    func add(_ request: UNNotificationRequest) async throws {
+        posted.removeAll { $0.identifier == request.identifier }
+        posted.append(request)
+    }
+
+    func postedRequests() async -> [UNNotificationRequest] { posted }
+
+    func removeNotifications(withIdentifiers identifiers: [String]) {
+        removalPasses += 1
+        guard !ignoresRemovals else { return }
+        posted.removeAll { identifiers.contains($0.identifier) }
+    }
+}
+
+private struct AidenScheduledFeedFake: AidenScheduledRunNotificationTransport {
+    let notifications: [AidenScheduledRunNotification]
+
+    func scheduledRunNotifications(since: Date?) async throws -> AidenScheduledRunNotificationFeed {
+        AidenScheduledRunNotificationFeed(notifications: notifications, serverNow: Date(timeIntervalSince1970: 50))
+    }
+}
+#endif
 
 private final class AidenRecoveryMemoryKeychain: KeychainStoring {
     func save(_ value: String, forKey key: KeychainStore.Key) throws {}

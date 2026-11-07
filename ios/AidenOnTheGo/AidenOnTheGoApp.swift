@@ -107,6 +107,12 @@ struct AidenOnTheGoApp: App {
 #endif
         _remoteCoordinator = State(initialValue: coordinator)
         _inboxStore = State(initialValue: AppConfig.tabShellEnabled ? AidenUnifiedInboxStore(coordinator: coordinator) : nil)
+        // A tap can launch the app, so this can't wait for `ContentView`.
+        AidenNotificationPresentationDelegate.openTap = { $0.open(coordinator: coordinator) }
+        // The unit-test host never touches the device's notifications.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            Task { await AidenNotificationIdentifierMigration.runOnce() }
+        }
     }
 
     var body: some Scene {
