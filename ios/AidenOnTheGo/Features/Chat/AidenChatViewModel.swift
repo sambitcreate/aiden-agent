@@ -443,13 +443,15 @@ final class AidenChatViewModel {
         return owner
     }
 
-    /// The shell on screen is showing this chat's machine. `onChatUpdated` and
-    /// `onChatActivityChanged` land in the shell's selected-machine state, so a
-    /// chat still running after the selection moved stays quiet until it's back.
+    /// The selection is on this chat's machine.
     private var ownerIsSelected: Bool {
         !isReadOnlyFixture && coordinator.activeInstanceId == owner.instanceId
     }
 
+    /// `onChatUpdated` and `onChatActivityChanged` have someone to tell. In the
+    /// old shell they land in the selected machine's state, so a chat still running
+    /// after the selection moved stays quiet until it's back. In the tab shell they
+    /// land on the chat's own machine, selected or not.
     private var reportsChanges: Bool { reportsEveryMachine || ownerIsSelected }
 
     /// Nobody is looking at this chat and its machine isn't selected, so
