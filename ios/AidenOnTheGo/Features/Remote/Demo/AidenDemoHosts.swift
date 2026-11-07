@@ -319,6 +319,9 @@ enum AidenDemoHosts {
         /// Where in the row-state pattern this machine starts. The first machine
         /// opens on the busiest rows, the others on quieter ones.
         var patternStart = 0
+        /// Where in the title list this machine starts, so two machines on the
+        /// same rows don't read as one chat listed twice.
+        var titleStart = 0
         /// Whether the machine has one Bot. The empty scenario has none, so the
         /// Bots empty state stays reachable.
         var hasBot = true
@@ -360,6 +363,7 @@ enum AidenDemoHosts {
             rows: Int,
             online: Bool = true,
             start: Int = 0,
+            titleStart: Int = 0,
             hasBot: Bool = true
         ) -> Machine {
             Machine(
@@ -367,6 +371,7 @@ enum AidenDemoHosts {
                 rowCount: rows,
                 isOnline: online,
                 patternStart: start,
+                titleStart: titleStart,
                 hasBot: hasBot
             )
         }
@@ -379,7 +384,14 @@ enum AidenDemoHosts {
         case .one:
             machines = [machine("studio", "Studio Mac", rows: 4)]
         case .four:
-            machines = [studio, laptop, mini, machine("build", "Build Box", rows: 0, online: false)]
+            // The mini waits on the person and runs a chat too, so Catch Up and the
+            // accessory each have more than one machine to cross.
+            machines = [
+                studio,
+                laptop,
+                machine("mini", "Home Mini", rows: 2, titleStart: 7),
+                machine("build", "Build Box", rows: 0, online: false),
+            ]
         case .empty:
             machines = [machine("studio", "Studio Mac", rows: 0, hasBot: false)]
         case .busy:
@@ -515,7 +527,8 @@ enum AidenDemoHosts {
         let rows = AidenDemoContent.rows(
             instanceId: id,
             count: machine.rowCount,
-            patternStart: machine.patternStart
+            patternStart: machine.patternStart,
+            titleStart: machine.titleStart
         )
         responder.reply(instanceId: id, path: "/server", status: 200, json: AidenDemoContent.serverJSON(for: installation))
         responder.reply(instanceId: id, path: "/workspaces", status: 200, json: AidenDemoContent.workspacesJSON())
@@ -745,7 +758,7 @@ private enum AidenDemoContent {
 
     /// Chat summaries, newest first. Row `n` takes pattern slot `patternStart + n`:
     /// needs approval, working, needs input, failed, unread, pinned, then read.
-    static func rows(instanceId: String, count: Int, patternStart: Int) -> [[String: Any]] {
+    static func rows(instanceId: String, count: Int, patternStart: Int, titleStart: Int = 0) -> [[String: Any]] {
         let now = Date()
         return (0..<count).map { index in
             let updatedAt = now.addingTimeInterval(-Double(5 + index * 37) * 60)
@@ -753,7 +766,7 @@ private enum AidenDemoContent {
             var row: [String: Any] = [
                 "id": "chat_\(instanceId)_\(index + 1)",
                 "workspaceId": index % 3 == 2 ? "workspace_notes" : "workspace_app",
-                "title": titles[index % titles.count],
+                "title": titles[(titleStart + index) % titles.count],
                 "titlePending": false,
                 "createdAt": timestamp(createdAt),
                 "updatedAt": timestamp(updatedAt),

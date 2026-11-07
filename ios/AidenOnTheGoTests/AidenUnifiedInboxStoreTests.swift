@@ -196,6 +196,16 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         return row
     }
 
+    private func running(_ id: String, age: Int) -> [String: Any] {
+        var running = row(id, age: age)
+        let started = timestamp(now.addingTimeInterval(-Double(age) * 60))
+        running.merge([
+            "activity": "active", "rowState": "working", "runStartedAt": started,
+            "inboxBucket": "working", "inboxSortAt": started,
+        ]) { $1 }
+        return running
+    }
+
     private func page(_ rows: [[String: Any]], next: String? = nil) -> Data {
         var object: [String: Any] = ["summaries": rows]
         if let next { object["nextCursor"] = next }
@@ -1252,6 +1262,56 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
     }
 
     // MARK: Revocation and late answers
+
+    /// A running chat is what the Inbox has to say, so it isn't caught up.
+    func testAnInboxWithOnlyRunningChatsIsNotCaughtUp() async throws {
+        let coordinator = coordinator("studio")
+        serve([running("run", age: 3)], on: "studio")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertEqual(store.inbox.running.map(\.id.objectId), ["run"])
+        XCTAssertTrue(store.hasRunningChats)
+        XCTAssertEqual(store.listState, .rows)
+        store.stop()
+    }
+
+    func testARunThatEndsTakesTheAccessoryWithIt() async throws {
+        let coordinator = coordinator("studio")
+        serve([running("run", age: 3)], on: "studio")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        XCTAssertTrue(store.hasRunningChats)
+
+        // Past the recent window, so the finished chat isn't listed in Earlier.
+        serve([row("run", age: 100_000)], on: "studio")
+        await store.refreshAll()
+
+        XCTAssertFalse(store.hasRunningChats)
+        XCTAssertEqual(store.listState, .caughtUp)
+        store.stop()
+    }
+
+    /// Nothing shows an offline machine's running chat, so it can't stand in for
+    /// the rows of a list that has none.
+    func testAnOfflineRunningChatLeavesTheListToSayWhy() async throws {
+        let coordinator = coordinator("studio")
+        try await saveWorkspace(on: "studio")
+        try await save([running("run", age: 3)], on: "studio")
+        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        store.start()
+        await waitUntil("the saved row") { store.inbox.running.count == 1 }
+        await waitUntil("the machine to be offline") { store.snapshots["studio"]?.isOnline == false }
+
+        XCTAssertFalse(store.hasRunningChats)
+        XCTAssertNotEqual(store.listState, .rows)
+        store.stop()
+    }
 
     func testARevokedMachinesRowsDropAtOnce() async throws {
         let coordinator = coordinator("studio", "laptop")

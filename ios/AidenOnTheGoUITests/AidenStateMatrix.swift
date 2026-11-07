@@ -104,6 +104,15 @@ enum AidenStateMatrix {
         return inBar.exists ? inBar : app.buttons[title].firstMatch
     }
 
+    /// The running chats, above the tab bar or as the Inbox's first row.
+    static func runningAccessory(in app: XCUIApplication) -> XCUIElement {
+        app.buttons["aiden.running-accessory"].firstMatch
+    }
+
+    static func catchUpRow(in app: XCUIApplication) -> XCUIElement {
+        app.buttons["aiden.catch-up"].firstMatch
+    }
+
     /// The Search tab folds the tab bar away while its field is up, and Close
     /// brings it back.
     static func leaveSearch(in app: XCUIApplication) {

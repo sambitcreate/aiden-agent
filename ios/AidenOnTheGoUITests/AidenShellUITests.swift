@@ -111,6 +111,106 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Running chats live above the tab bar, and only while there are any.
+    func testAccessoryAppearsOnlyWhileRunning() {
+        let busy = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(openInbox(in: busy).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        let accessory = AidenStateMatrix.runningAccessory(in: busy)
+        XCTAssertTrue(accessory.waitForExistence(timeout: 10), "No accessory while a chat runs")
+        XCTAssertTrue(accessory.label.contains("Plan the Q3 roadmap"), "The accessory said \(accessory.label)")
+        XCTAssertFalse(accessory.label.contains("more"), "One running chat was counted as several")
+
+        accessory.tap()
+        XCTAssertTrue(busy.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "One running chat did not open")
+        XCTAssertTrue(accessory.waitForNonExistence(timeout: 5), "The accessory stayed under the composer")
+
+        goBack(in: busy)
+        XCTAssertTrue(accessory.waitForExistence(timeout: 10), "The accessory did not come back with the Inbox")
+        busy.terminate()
+
+        let empty = AidenStateMatrix.launch(scenario: .empty, shell: .tabs)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: empty).waitForExistence(timeout: 10))
+        XCTAssertTrue(empty.staticTexts["No chats yet"].waitForExistence(timeout: 10))
+        XCTAssertFalse(AidenStateMatrix.runningAccessory(in: empty).exists, "An accessory with nothing running")
+        empty.terminate()
+    }
+
+    /// More than one running chat is a list to choose from.
+    func testAccessoryWithSeveralRunningChatsOpensASheet() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let accessory = AidenStateMatrix.runningAccessory(in: app)
+        XCTAssertTrue(accessory.waitForExistence(timeout: 15), "No accessory while chats run")
+        XCTAssertTrue(accessory.label.contains("1 more"), "The accessory said \(accessory.label)")
+
+        accessory.tap()
+
+        let sheet = app.navigationBars["Running chats"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "No sheet of running chats")
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Plan the Q3 roadmap")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "The sheet did not list the chat")
+        row.tap()
+
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertFalse(sheet.exists, "The sheet stayed up over the chat")
+        app.terminate()
+    }
+
+    /// Four chats need the person across two machines. Next walks them all, then
+    /// says it's finished, and the Inbox is one Back away the whole time.
+    func testCatchUpWalksEveryMachineThenFinishes() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let catchUp = AidenStateMatrix.catchUpRow(in: app)
+        XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
+        XCTAssertTrue(catchUp.label.contains("4 chats"), "The row said \(catchUp.label)")
+
+        catchUp.tap()
+
+        // The two approvals tie, so their order isn't fixed. The mini's is the other
+        // machine's chat, and a walk that stayed on one chat would never reach it.
+        var left: Set = [
+            "Fix the flaky upload test", "Rename the onboarding assets",
+            "Summarise the design review", "Refactor the settings screen",
+        ]
+        let next = app.navigationBars.buttons["Next"]
+        for step in 1...4 {
+            XCTAssertTrue(next.waitForExistence(timeout: 10), "No Next on chat \(step)")
+            let chatOnScreen = NSPredicate { _, _ in left.contains { app.navigationBars[$0].exists } }
+            wait(for: [XCTNSPredicateExpectation(predicate: chatOnScreen, object: nil)], timeout: 10)
+            left = left.filter { !app.navigationBars[$0].exists }
+            XCTAssertEqual(left.count, 4 - step, "Chat \(step) wasn't a new one")
+            next.tap()
+        }
+        XCTAssertTrue(app.staticTexts["Catch Up finished"].waitForExistence(timeout: 10), "No finished state")
+        XCTAssertFalse(next.exists, "Next outlived the run")
+
+        app.buttons["Back to Inbox"].firstMatch.tap()
+        XCTAssertTrue(AidenStateMatrix.tab("Inbox", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(catchUp.waitForExistence(timeout: 10), "The chats still need the person")
+        app.terminate()
+    }
+
+    func testNextShowsOnlyDuringCatchUp() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertFalse(app.navigationBars.buttons["Next"].exists, "Next showed outside a run")
+        goBack(in: app)
+
+        let catchUp = AidenStateMatrix.catchUpRow(in: app)
+        XCTAssertTrue(catchUp.waitForExistence(timeout: 10), "No Catch Up row")
+        catchUp.tap()
+        XCTAssertTrue(app.navigationBars.buttons["Next"].waitForExistence(timeout: 10), "No Next during the run")
+        goBack(in: app)
+
+        XCTAssertTrue(chat.waitForExistence(timeout: 10))
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertFalse(app.navigationBars.buttons["Next"].exists, "Next outlived the run")
+        app.terminate()
+    }
+
     /// The composer owns the bottom edge of a pushed chat.
     func testAPushedChatHidesTheTabBarUntilItIsLeft() {
         let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
@@ -257,6 +357,49 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(oldHost.staticTexts["Bots unavailable"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-bots-unavailable", in: self)
         oldHost.terminate()
+    }
+
+    /// The accessory in both forms and a whole Catch Up, for a person to look at.
+    /// A screen that cannot be reached fails the test.
+    func testCaptureRunningAccessoryAndCatchUp() {
+        for appearance in AidenStateMatrix.Appearance.allCases {
+            let tag = appearance.rawValue
+            let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance)
+            let accessory = AidenStateMatrix.runningAccessory(in: app)
+            XCTAssertTrue(accessory.waitForExistence(timeout: 15), "No accessory (\(tag))")
+            AidenStateMatrix.capture("accessory-expanded-\(tag)", in: self)
+
+            app.swipeUp(velocity: .slow)
+            Thread.sleep(forTimeInterval: 1)
+            AidenStateMatrix.capture("accessory-compact-\(tag)", in: self)
+            app.swipeDown(velocity: .slow)
+            Thread.sleep(forTimeInterval: 1)
+
+            accessory.tap()
+            XCTAssertTrue(app.navigationBars["Running chats"].waitForExistence(timeout: 10), "No sheet (\(tag))")
+            AidenStateMatrix.capture("running-sheet-\(tag)", in: self)
+            app.buttons["Done"].firstMatch.tap()
+
+            let catchUp = AidenStateMatrix.catchUpRow(in: app)
+            XCTAssertTrue(catchUp.waitForExistence(timeout: 10), "No Catch Up row (\(tag))")
+            catchUp.tap()
+            let next = app.navigationBars.buttons["Next"]
+            XCTAssertTrue(next.waitForExistence(timeout: 10), "No Next (\(tag))")
+            Thread.sleep(forTimeInterval: 1)
+            AidenStateMatrix.capture("catch-up-first-\(tag)", in: self)
+            next.tap()
+            XCTAssertTrue(next.waitForExistence(timeout: 10), "No Next on the second chat (\(tag))")
+            Thread.sleep(forTimeInterval: 1)
+            AidenStateMatrix.capture("catch-up-second-\(tag)", in: self)
+            for _ in 1...3 {
+                XCTAssertTrue(next.waitForExistence(timeout: 10), "No Next (\(tag))")
+                next.tap()
+            }
+            XCTAssertTrue(app.staticTexts["Catch Up finished"].waitForExistence(timeout: 10), "No finished state (\(tag))")
+            Thread.sleep(forTimeInterval: 1)
+            AidenStateMatrix.capture("catch-up-finished-\(tag)", in: self)
+            app.terminate()
+        }
     }
 
     /// Light, dark and the largest accessibility text, so later work has a

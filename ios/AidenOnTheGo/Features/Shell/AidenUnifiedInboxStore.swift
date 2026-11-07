@@ -23,6 +23,9 @@ final class AidenUnifiedInboxStore {
     /// The tab's badge. Kept apart from `inbox`, so whoever shows it redraws
     /// when the count changes and not with every row.
     private(set) var needsYouCount = 0
+    /// Whether the accessory has anything to show. Kept apart from `inbox` for the
+    /// same reason as the badge: the shell reads it.
+    private(set) var hasRunningChats = false
     private(set) var listState = AidenInboxListState.loading
     /// A listed machine answered with a failure, and saved rows are standing in.
     private(set) var refreshFailed = false
@@ -327,6 +330,8 @@ final class AidenUnifiedInboxStore {
             )
             if rebuilt != inbox { inbox = rebuilt }
             if rebuilt.needsYouCount != needsYouCount { needsYouCount = rebuilt.needsYouCount }
+            let hasRunning = !AidenRunningSummary(rows: rebuilt.running).isEmpty
+            if hasRunning != hasRunningChats { hasRunningChats = hasRunning }
         }
         describeTheList(shown: shown, hasHiddenMachines: !hidden.isEmpty)
     }
@@ -337,7 +342,7 @@ final class AidenUnifiedInboxStore {
         listedMachines = listed.map(\.connection.instanceId)
 
         let state = AidenInboxListState.make(
-            hasRows: !(inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty),
+            hasRows: hasRunningChats || !(inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty),
             machines: listed.map(\.read),
             hasHiddenMachines: hasHiddenMachines
         )
