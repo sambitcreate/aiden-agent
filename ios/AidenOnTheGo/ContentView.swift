@@ -176,6 +176,8 @@ struct ContentView: View {
     }
 
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// Nil with the tab shell off: the menu shell reads one machine, and nothing polls.
+    var inboxStore: AidenUnifiedInboxStore?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
     @State private var newChatConsent = AidenNewChatLinkConsent()
@@ -207,8 +209,8 @@ struct ContentView: View {
                         hasCompletedMobileOnboarding = true
                     }
                 )
-            } else if AppConfig.tabShellEnabled {
-                AidenAppShellView(coordinator: coordinator, navigationRequest: $navigationRequest)
+            } else if let inboxStore {
+                AidenAppShellView(coordinator: coordinator, inboxStore: inboxStore, navigationRequest: $navigationRequest)
             } else {
                 AidenProductShellView(
                     coordinator: coordinator,
@@ -243,6 +245,8 @@ struct ContentView: View {
                 pathChanges: AidenNetworkPathMonitor.shared.pathChanges()
             )
             connectScheduler = scheduler
+            inboxStore?.connectScheduler = scheduler
+            if scenePhase == .active { inboxStore?.start() }
             await scheduler.foregrounded()
         }
         .onOpenURL { url in
@@ -328,6 +332,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             switch sceneRefreshGate.transition(to: phase) {
             case .refresh:
+                inboxStore?.start()
                 // A selected machine that needs pairing still releases the
                 // scheduler from its background state.
                 guard coordinator.connectionState != .needsPairing else {
@@ -362,6 +367,7 @@ struct ContentView: View {
                 }
                 Task { await connectScheduler?.foregrounded() }
             case .suspend:
+                inboxStore?.stop()
                 connectScheduler?.backgrounded()
                 externalNewChats.invalidate()
                 newChatConsent.invalidate()

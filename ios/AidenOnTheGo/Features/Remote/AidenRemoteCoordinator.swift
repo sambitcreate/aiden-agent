@@ -210,7 +210,7 @@ final class AidenRemoteCoordinator {
     private(set) var isMutating = false
     var presentedError: String?
     let workspaceArchiveStore: AidenWorkspaceArchiveStore
-    private let chatCache: AidenChatCache
+    let chatCache: AidenChatCache
     private let chatDraftStore: AidenChatDraftStore
     private let scheduledTaskCache: AidenScheduledTaskCache
     private let workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache

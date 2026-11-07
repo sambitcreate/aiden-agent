@@ -251,7 +251,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let store = try await inboxStore()
         responder.reply(instanceId: "laptop", method: "POST", path: "/chats/c1/triage", status: 200, json: Self.triageJSON)
 
-        await store.setTriage(.done(true), on: id())
+        await store.perform(.done, on: id())
 
         XCTAssertEqual(requests("laptop").filter { $0 == "POST /chats/c1/triage" }.count, 1)
         XCTAssertFalse(requests("studio").contains("POST /chats/c1/triage"))
@@ -265,12 +265,25 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let store = try await inboxStore(unread: true)
         responder.reply(instanceId: "laptop", method: "POST", path: "/chats/c1/read", status: 204, json: Data())
 
-        await store.markRead(id())
+        await store.perform(.markRead, on: id())
 
         XCTAssertEqual(requests("laptop").filter { $0 == "POST /chats/c1/read" }.count, 1)
         XCTAssertFalse(requests("studio").contains("POST /chats/c1/read"))
         XCTAssertEqual(store.homeModel(for: "laptop")?.chats.first?.unread, false)
         XCTAssertEqual(store.homeModel(for: "studio")?.chats.first?.unread, true)
+        store.stop()
+    }
+
+    func testARowsDeleteGoesThroughTheRowActions() async throws {
+        let store = try await inboxStore()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/chats/c1", status: 204, json: Data())
+        store.homeModel(for: "studio")?.inboxNotice = AidenInboxNotice(message: "From the last action")
+
+        await store.perform(.delete, on: id())
+
+        XCTAssertEqual(requests("laptop").filter { $0 == "DELETE /chats/c1" }.count, 1)
+        XCTAssertEqual(store.homeModel(for: "laptop")?.chats.isEmpty, true)
+        XCTAssertNil(store.notice, "A new action leaves the last one's banner up")
         store.stop()
     }
 
@@ -368,8 +381,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let older = AidenHostObjectID(instanceId: "laptop", deviceId: "older-device", objectId: "c1")
         let before = requests("laptop").count
 
-        await store.setTriage(.done(true), on: older)
-        await store.delete(older)
+        await store.perform(.done, on: older)
+        await store.perform(.delete, on: older)
 
         XCTAssertEqual(requests("laptop").count, before)
         XCTAssertEqual(store.homeModel(for: "laptop")?.chats.map(\.id), ["c1"])

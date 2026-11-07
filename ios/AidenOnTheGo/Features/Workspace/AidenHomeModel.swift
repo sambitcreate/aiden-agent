@@ -42,6 +42,9 @@ final class AidenHomeModel {
     /// Mark read: the newest reply it covers. A page row with a newer reply
     /// is not covered by it, so that page row is shown instead.
     private var localSummaryEdits: [String: (generation: UInt64, token: UInt64, summary: AidenChatSummary?, activityOnly: Bool, readThrough: AidenChatInboxSignals?, triageOnly: Bool, wholeGeneration: UInt64)] = [:]
+    /// Chats with a swipe's write still out. No page knows of that write yet,
+    /// however late the page was asked for, so each one goes under these edits.
+    private var writesOut: [String: Int] = [:]
     private var prefetchTask: Task<Void, Never>?
     /// Changes each time a chat is viewed: a chat viewed while a swipe's
     /// write was out has been read, so a refusal never brings its dot back.
@@ -117,6 +120,8 @@ final class AidenHomeModel {
         let before = chats[index]
         let supportsMessagesWindow = host.server?.features.contains(AidenServer.chatMessagesWindowFeature) == true
         let viewed = viewStamp(chatID)
+        beginWrite(chatID)
+        defer { endWrite(chatID) }
         chats[index].unread = false
         chats[index].inbox.invalidateHostPlacement()
         let optimistic = chats[index]
@@ -205,6 +210,7 @@ final class AidenHomeModel {
         let alsoMarkRead = change.hidesRow && AidenInbox.alsoMarksRead(before, isOpen: isOpen)
         if alsoMarkRead, host.server?.supportsChatReadState != true { return false }
         let optimistic = AidenInbox.applyingOptimisticTriage(change, to: before, now: now, alsoMarkRead: alsoMarkRead)
+        beginWrite(chatID)
         chats[index] = optimistic
         persistCurrentSummaries(changedID: chatID, triageOnly: true, readThrough: alsoMarkRead ? before.inbox : nil)
         inboxNotice = nil
@@ -223,6 +229,7 @@ final class AidenHomeModel {
                 host: host
             )
         } catch {
+            endWrite(chatID)
             await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, triageOnly: true, context: context, host: host)
             guard host.holdsHomeContext(context) else { return false }
             let conflict = (error as? AidenRemoteClientError)?.isRevisionConflict == true
@@ -234,6 +241,7 @@ final class AidenHomeModel {
             if conflict { await load(host: host) }
             return false
         }
+        defer { endWrite(chatID) }
         func isShown() -> Bool { host.holdsHomeContext(context) && contentContext == context }
         let settled: @Sendable (AidenChatSummary) -> AidenChatSummary = { row in
             var row = row
@@ -282,6 +290,15 @@ final class AidenHomeModel {
             }
         }
         return true
+    }
+
+    private func beginWrite(_ chatID: String) {
+        writesOut[chatID, default: 0] += 1
+    }
+
+    private func endWrite(_ chatID: String) {
+        let left = (writesOut[chatID] ?? 0) - 1
+        writesOut[chatID] = left > 0 ? left : nil
     }
 
     /// One triage write, sent once more from the host's revision when another
@@ -431,7 +448,7 @@ final class AidenHomeModel {
         // Publish the actual admitted page, including partial-deletion filtering
         // and any newer cross-owner detail updates that followed admission.
         chats = state.snapshot?.summaries ?? []
-        for (id, edit) in localSummaryEdits where edit.token > max(state.fullToken, state.rowTokens[id] ?? 0) {
+        for (id, edit) in localSummaryEdits where edit.token > max(state.fullToken, state.rowTokens[id] ?? 0) || writesOut[id] != nil {
             if edit.triageOnly, let index = chats.firstIndex(where: { $0.id == id }), let row = edit.summary {
                 if (row.inbox.triageRevision ?? 0) >= (chats[index].inbox.triageRevision ?? 0) {
                     chats[index].inbox.pinnedAt = row.inbox.pinnedAt
@@ -742,13 +759,14 @@ final class AidenHomeModel {
         guard isWanted() else { return .stale }
         chats = admitted?.summaries ?? []
         nextChatCursor = admitted?.nextCursor
-        paginationState = .idle
+        // Load more is still out, and ends this itself.
+        if paginationState != .loading { paginationState = .idle }
         // A Mark read made since this page was asked for clears the
         // page row's dot only for the reply it read through: a
         // newer reply on the page keeps its dot and the rest of
         // the page row.
         var readOverPage: [String] = []
-        for (id, edit) in localSummaryEdits where edit.generation > requestEditGeneration {
+        for (id, edit) in localSummaryEdits where edit.generation > requestEditGeneration || writesOut[id] != nil {
             let editIsNewer = edit.token > max(state.fullToken, state.rowTokens[id] ?? 0)
             if edit.triageOnly || edit.readThrough != nil {
                 guard var pageRow = loadedPage.summaries.first(where: { $0.id == id }),
@@ -808,6 +826,8 @@ final class AidenHomeModel {
     }
 
     static let recentTranscriptPrefetchLimit = 5
+    /// Reads of one Load more, for a list that keeps moving under them.
+    static let loadMoreAttempts = 3
 
     /// A saved transcript for a Recents row, so opening it is immediate.
     func cachedWorkspaceChat(id: String, workspaceId: String, instanceId: String) async -> AidenChat? {
@@ -815,6 +835,17 @@ final class AidenHomeModel {
               !cached.isBotChat,
               cached.workspaceId == workspaceId else { return nil }
         return await chatCache.presenting(cached, instanceId: instanceId)
+    }
+
+    /// For the Inbox, whose reads are polls: `load` does this for the old shell.
+    func prefetchRecentTranscripts(host: any AidenHomeHost) {
+        guard let context = contentContext, host.holdsHomeContext(context),
+              let client = try? host.homeClient(for: context) else { return }
+        prefetchRecentTranscripts(client: client, context: context, host: host)
+    }
+
+    func cancelTranscriptPrefetch() {
+        prefetchTask?.cancel()
     }
 
     /// Saves the newest few transcripts after Recents refresh, one at a time,
@@ -852,31 +883,45 @@ final class AidenHomeModel {
     func loadMoreChats(host: any AidenHomeHost) async {
         guard case .loaded = chatListLoadState,
               paginationState != .loading,
-              let cursor = nextChatCursor,
+              nextChatCursor != nil,
               let context = contentContext,
               host.holdsHomeContext(context) else { return }
-        let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
-        latestSummaryRequestToken = writeToken
+        func isCurrent() -> Bool { host.holdsHomeContext(context) && contentContext == context }
         paginationState = .loading
-        do {
-            let page = try await host.homeClient(for: context).chatSummaries(cursor: cursor)
-            guard host.holdsHomeContext(context), contentContext == context else { return }
-            try await acceptChatSummaryContinuation(
-                page,
-                requestedCursor: cursor,
-                instanceId: context.instanceId,
-                writeToken: writeToken,
-                isCurrent: {
-                    host.holdsHomeContext(context) && self.contentContext == context && self.latestSummaryRequestToken == writeToken
+        // A page read from under the list can't be saved over it. A poll landing
+        // meanwhile leaves that, or moves the cursor, so the read starts again
+        // from where the list is now and the page isn't lost.
+        for _ in 0..<Self.loadMoreAttempts {
+            guard let cursor = nextChatCursor else {
+                paginationState = .idle
+                return
+            }
+            let writeToken = chatCache.reserveSummaryWrite(instanceId: context.instanceId)
+            latestSummaryRequestToken = writeToken
+            do {
+                let page = try await host.homeClient(for: context).chatSummaries(cursor: cursor)
+                guard isCurrent() else { return }
+                try await acceptChatSummaryContinuation(
+                    page,
+                    requestedCursor: cursor,
+                    instanceId: context.instanceId,
+                    writeToken: writeToken,
+                    isCurrent: isCurrent
+                )
+                return
+            } catch let error where aidenIsCancellation(error) {
+                guard isCurrent() else { return }
+                if Task.isCancelled {
+                    paginationState = .idle
+                    return
                 }
-            )
-        } catch let error where aidenIsCancellation(error) {
-            guard host.holdsHomeContext(context), contentContext == context else { return }
-            paginationState = .idle
-        } catch {
-            guard host.holdsHomeContext(context), contentContext == context else { return }
-            paginationState = .failed(error.localizedDescription)
+            } catch {
+                guard isCurrent() else { return }
+                paginationState = .failed(error.localizedDescription)
+                return
+            }
         }
+        paginationState = .failed(String(localized: "Couldn’t load more chats. Try again."))
     }
 }
 

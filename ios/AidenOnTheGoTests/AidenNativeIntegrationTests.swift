@@ -1942,7 +1942,12 @@ final class AidenNativeIntegrationTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
         window.rootViewController = UIHostingController(rootView:
-            AidenAppShellView(coordinator: coordinator, navigationStore: store, intents: intents)
+            AidenAppShellView(
+                coordinator: coordinator,
+                inboxStore: AidenUnifiedInboxStore(coordinator: coordinator),
+                navigationStore: store,
+                intents: intents
+            )
                 .environment(AidenHapticCenter())
         )
         window.makeKeyAndVisible()

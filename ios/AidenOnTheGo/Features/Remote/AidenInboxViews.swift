@@ -96,6 +96,7 @@ struct AidenInboxRowView: View {
     let section: AidenInboxSection
     let workspaceName: String?
     let palette: AidenPalette
+    var isPinned = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -126,6 +127,11 @@ struct AidenInboxRowView: View {
 
             Spacer(minLength: 8)
 
+            if isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.caption2)
+                    .foregroundStyle(palette.secondary)
+            }
             if status.tone == .working {
                 AidenWorkingIndicator(size: 12)
             }
@@ -170,7 +176,10 @@ struct AidenInboxRowView: View {
 
     /// "Title, workspace, status, wait, Unread", as the desktop names it.
     func accessibilityName(_ status: AidenInboxRowStatus) -> String {
-        [row.summary.title, workspaceName, status.spokenLabel ?? status.label, status.wait, unread ? "Unread" : nil]
+        [
+            row.summary.title, workspaceName, isPinned ? String(localized: "Pinned") : nil,
+            status.spokenLabel ?? status.label, status.wait, unread ? "Unread" : nil,
+        ]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: ", ")
@@ -277,11 +286,12 @@ struct AidenInboxListRow: View {
     let workspaceName: String?
     let palette: AidenPalette
     let actions: AidenInboxRowActions
+    var isPinned = false
     let open: () -> Void
 
     var body: some View {
         Button(action: open) {
-            AidenInboxRowView(row: row, section: section, workspaceName: workspaceName, palette: palette)
+            AidenInboxRowView(row: row, section: section, workspaceName: workspaceName, palette: palette, isPinned: isPinned)
         }
         .buttonStyle(.plain)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {

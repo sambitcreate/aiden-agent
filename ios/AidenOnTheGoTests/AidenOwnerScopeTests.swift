@@ -83,6 +83,7 @@ final class AidenOwnerScopeTests: XCTestCase {
         owner instanceId: String,
         chat chatId: String = "c1",
         networkPath: AidenNetworkAvailability? = nil,
+        reportsEveryMachine: Bool = false,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) throws -> AidenChatViewModel {
@@ -95,6 +96,7 @@ final class AidenOwnerScopeTests: XCTestCase {
             modelPreferenceStore: preferences,
             visualDocumentCache: AidenVisualDocumentCache(root: root.appending(path: "visuals", directoryHint: .isDirectory)),
             networkPath: networkPath ?? AidenNetworkAvailability(),
+            reportsEveryMachine: reportsEveryMachine,
             onChatUpdated: onChatUpdated,
             onChatActivityChanged: onChatActivityChanged
         )
@@ -429,6 +431,32 @@ final class AidenOwnerScopeTests: XCTestCase {
         let release = try await sendHeldTurn(on: a)
         await coordinator.switchInstallation(to: "laptop")
         await coordinator.switchInstallation(to: "studio")
+        updates = []
+        activity = []
+
+        transcript("from studio", "streamed on studio", on: "studio", revision: "r2")
+        release()
+        try await waitUntil("the reply to settle") {
+            a.activeStreamID == nil && a.chat.messages.last?.text == "streamed on studio"
+        }
+
+        XCTAssertEqual(updates.last?.messages.last?.text, "streamed on studio")
+        XCTAssertEqual(activity, [.idle])
+    }
+
+    /// The tab shell's rows come from every machine, so its chats report to
+    /// their own machine's rows whichever machine is selected.
+    func testATabShellChatPublishesWhileAnotherMachineIsSelected() async throws {
+        var updates: [AidenChat] = []
+        var activity: [AidenChatSummaryActivity] = []
+        let a = try model(
+            owner: "studio",
+            reportsEveryMachine: true,
+            onChatUpdated: { updates.append($0) },
+            onChatActivityChanged: { activity.append($1) }
+        )
+        let release = try await sendHeldTurn(on: a)
+        await coordinator.switchInstallation(to: "laptop")
         updates = []
         activity = []
 
