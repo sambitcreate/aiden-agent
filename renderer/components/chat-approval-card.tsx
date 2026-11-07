@@ -56,6 +56,7 @@ const TOOL_LABELS: Record<string, string> = {
   agent_tool: "Agent tool",
   computer_use: "Computer Use",
   form_fill: "Form fill",
+  workspace_artifact: "Artifact",
 };
 
 /** A tool's name as an approval heading: known labels, otherwise sentence case. */

@@ -56,6 +56,13 @@ function keysAreWireSafe(value: unknown, depth = 0): boolean {
   return true;
 }
 
+/** A visual's local state: an object of wire-safe keys within the state size cap, or undefined. */
+export function parseAidenUiState(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !keysAreWireSafe(value)) return undefined;
+  if (byteLength(JSON.stringify(value)) > AIDEN_UI_LIMITS.stateBytes) return undefined;
+  return value;
+}
+
 function isPropValue(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return typeof value.op === "string" || typeof value.act === "string";

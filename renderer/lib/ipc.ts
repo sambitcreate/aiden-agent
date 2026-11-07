@@ -314,7 +314,9 @@ import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../share
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import type {
   WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactImportPreview,
   WorkspaceArtifactV1,
+  WorkspaceArtifactRevisionSummary,
   WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
@@ -1474,8 +1476,9 @@ export const workspaceArtifactsApi = {
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
   delete: (workspaceId: string, artifactId: string) =>
     invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
-  saveState: (workspaceId: string, artifactId: string, state: Record<string, unknown>) =>
-    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
+  /** `revision` is the one the person was looking at; state from a page since replaced is dropped. */
+  saveState: (workspaceId: string, artifactId: string, revision: number, state: Record<string, unknown>) =>
+    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, revision, state),
   approve: (workspaceId: string, artifactId: string, digest: string) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
   /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
@@ -1484,6 +1487,23 @@ export const workspaceArtifactsApi = {
   /** Runs one of the page's buttons; main fills in the saved command. */
   run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
     invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
+  /** The page's kept earlier versions, newest first. */
+  history: (workspaceId: string, artifactId: string) =>
+    invoke<WorkspaceArtifactRevisionSummary[]>("workspaces:artifacts:history", workspaceId, artifactId),
+  /** Brings back an earlier version; commands that differ from the approved ones need allowing again. */
+  restore: (workspaceId: string, artifactId: string, revision: number) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:restore", workspaceId, artifactId, revision),
+  /** Saves the page as a file the person picks; main reads the page and leaves out approval, ids and data. */
+  exportPage: (workspaceId: string, artifactId: string) =>
+    invoke<{ status: "saved" | "cancelled" }>("workspaces:artifacts:export", workspaceId, artifactId),
+  /** Reads a page file the person picks and holds it in main until confirmed or discarded. */
+  importPreview: (workspaceId: string) =>
+    invoke<WorkspaceArtifactImportPreview>("workspaces:artifacts:importPreview", workspaceId),
+  /** Adds the previewed page, never approved, under a free name. */
+  importConfirm: (workspaceId: string, token: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:importConfirm", workspaceId, token),
+  importDiscard: (workspaceId: string, token: string) =>
+    invoke<{ discarded: boolean }>("workspaces:artifacts:importDiscard", workspaceId, token),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };

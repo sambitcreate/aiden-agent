@@ -188,14 +188,40 @@ export async function writeAidenChatExportForRenderer(
   }
 }
 
-export function safeExportFileName(title: string): string {
+/**
+ * Most file systems cap a name at 255 bytes. The base name stays well under
+ * that, so the extension and a save dialog's " 2" still fit.
+ */
+const EXPORT_BASE_NAME_MAX_BYTES = 150;
+
+export interface SafeExportFileNameOptions {
+  /** The name used when the title leaves nothing visible. */
+  fallback?: string;
+  /** Appended to the base name, with its leading dot. */
+  extension?: string;
+}
+
+/** The longest prefix of whole code points that fits in `maxBytes` of UTF-8. */
+function utf8Prefix(text: string, maxBytes: number): string {
+  let bytes = 0;
+  let end = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    end += char.length;
+  }
+  return text.slice(0, end);
+}
+
+export function safeExportFileName(title: string, options: SafeExportFileNameOptions = {}): string {
   const normalized = boundedUnicodePrefix(title, 640)
     .normalize("NFKC")
     .replace(/[\\/:*?"<>|\p{Cc}\p{Cf}]+/gu, " ")
     .replace(/\s+/gu, " ")
     .trim()
-    // Dotfile-oriented chat titles must not produce hidden export files.
+    // Dotfile-oriented titles must not produce hidden export files.
     .replace(/^[.\s]+/u, "");
-  const base = Array.from(normalized).slice(0, 80).join("");
-  return `${base || "Aiden chat"}.aiden-chat.json`;
+  const base = utf8Prefix(normalized, EXPORT_BASE_NAME_MAX_BYTES).trim();
+  return `${base || (options.fallback ?? "Aiden chat")}${options.extension ?? ".aiden-chat.json"}`;
 }

@@ -1648,6 +1648,8 @@ type DialogProps = React.PropsWithChildren<{
   description?: React.ReactNode;
   confirmLabel?: string;
   confirmDisabled?: boolean;
+  /** Id of the text that says why confirm is off, read with the button. */
+  confirmDescribedBy?: string;
   confirmHidden?: boolean;
   cancelRef?: React.RefObject<HTMLButtonElement | null>;
   dismissDisabled?: boolean;
@@ -1683,6 +1685,7 @@ export function Dialog({
   description,
   confirmLabel = "Done",
   confirmDisabled,
+  confirmDescribedBy,
   confirmHidden,
   cancelRef,
   dismissDisabled,
@@ -1800,6 +1803,7 @@ export function Dialog({
                 variant="accent"
                 className={actionClassName}
                 disabled={confirmDisabled || busy}
+                aria-describedby={confirmDescribedBy}
                 onClick={() => void onConfirm?.()}
               >
                 {confirmLabel}

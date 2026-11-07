@@ -4,12 +4,23 @@
 import {
   isWorkspaceArtifactId,
   isWorkspaceArtifactName,
+  isWorkspaceArtifactRevision,
   isWorkspaceArtifactWorkspaceId,
   WORKSPACE_ARTIFACT_LIMITS,
+  workspaceArtifactCommandList,
+  type WorkspaceArtifactImportPreview,
   type WorkspaceArtifactsChangedEvent,
 } from "../../renderer/shared/workspace-artifacts.js";
 import type { WorkspaceArtifactRunContext, WorkspaceArtifactRunner } from "../services/workspace-artifacts/runner.js";
 import type { WorkspaceArtifactStore } from "../services/workspace-artifacts/store.js";
+import {
+  parseWorkspaceArtifactPageFileText,
+  WORKSPACE_ARTIFACT_FILE_MAX_BYTES,
+  WorkspaceArtifactImports,
+  workspaceArtifactPageFile,
+  workspaceArtifactPageFileName,
+  type WorkspaceArtifactFiles,
+} from "../services/workspace-artifacts/transfer.js";
 import { parseUiVisualState } from "./chat-ui-visual-state.js";
 
 export const WORKSPACE_ARTIFACT_CHANNELS = {
@@ -20,11 +31,28 @@ export const WORKSPACE_ARTIFACT_CHANNELS = {
   approve: "workspaces:artifacts:approve",
   refresh: "workspaces:artifacts:refresh",
   run: "workspaces:artifacts:run",
+  history: "workspaces:artifacts:history",
+  restore: "workspaces:artifacts:restore",
+  exportPage: "workspaces:artifacts:export",
+  importPreview: "workspaces:artifacts:importPreview",
+  importConfirm: "workspaces:artifacts:importConfirm",
+  importDiscard: "workspaces:artifacts:importDiscard",
 } as const;
 
 export interface WorkspaceArtifactHandlerDependencies {
   handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => void;
-  store: Pick<WorkspaceArtifactStore, "list" | "rename" | "delete" | "saveState" | "approve">;
+  store: Pick<
+    WorkspaceArtifactStore,
+    "list" | "get" | "create" | "rename" | "delete" | "saveState" | "approve" | "history" | "restore"
+  >;
+  files: WorkspaceArtifactFiles;
+  /**
+   * Names the window document that called, so a previewed import can be
+   * confirmed only from there.
+   */
+  owner: (event: unknown) => string;
+  /** Clock for import expiry; tests move it. */
+  now?: () => number;
   workspaceExists: (workspaceId: string) => Promise<boolean>;
   notify: (event: WorkspaceArtifactsChangedEvent) => void;
   runner: Pick<WorkspaceArtifactRunner, "refresh" | "runAction">;
@@ -49,6 +77,11 @@ function asArtifactId(value: unknown): string {
   return value;
 }
 
+function asImportToken(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,64}$/u.test(value)) throw new Error("Invalid import.");
+  return value;
+}
+
 function asText(value: unknown, name: string, max: number): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(`Invalid ${name}.`);
   return value;
@@ -56,6 +89,7 @@ function asText(value: unknown, name: string, max: number): string {
 
 export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifactHandlerDependencies): void {
   const { handle, store, notify } = dependencies;
+  const imports = new WorkspaceArtifactImports({ ...(dependencies.now ? { now: dependencies.now } : {}) });
 
   async function existingWorkspace(value: unknown): Promise<string> {
     const id = asWorkspaceId(value);
@@ -80,10 +114,11 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     return { removed };
   });
 
-  handle(WORKSPACE_ARTIFACT_CHANNELS.saveState, async (_event, workspaceId, artifactId, state) => {
+  handle(WORKSPACE_ARTIFACT_CHANNELS.saveState, async (_event, workspaceId, artifactId, revision, state) => {
     const workspace = await existingWorkspace(workspaceId);
+    if (!isWorkspaceArtifactRevision(revision)) throw new Error("Invalid revision.");
     // State saves are frequent and local to the page, so they notify nobody.
-    await store.saveState(workspace, asArtifactId(artifactId), parseUiVisualState(state));
+    await store.saveState(workspace, asArtifactId(artifactId), revision, parseUiVisualState(state));
   });
 
   handle(WORKSPACE_ARTIFACT_CHANNELS.approve, async (_event, workspaceId, artifactId, digest) => {
@@ -93,6 +128,89 @@ export function registerWorkspaceArtifactHandlers(dependencies: WorkspaceArtifac
     notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
     return artifact;
   });
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.history, async (_event, workspaceId, artifactId) =>
+    store.history(await existingWorkspace(workspaceId), asArtifactId(artifactId)),
+  );
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.restore, async (_event, workspaceId, artifactId, revision) => {
+    const workspace = await existingWorkspace(workspaceId);
+    const id = asArtifactId(artifactId);
+    if (!isWorkspaceArtifactRevision(revision)) throw new Error("Invalid revision.");
+    // A restore from the page menu never approves anything: commands that
+    // differ from the approved ones wait for the person to allow them.
+    const artifact = await store.restore(workspace, id, revision);
+    notify({ workspaceId: workspace, artifactId: artifact.id, reason: "updated" });
+    return artifact;
+  });
+
+  // Export and import are the person's own actions from the Artifacts tab;
+  // the workspace_artifact tool has no operation for either.
+  handle(WORKSPACE_ARTIFACT_CHANNELS.exportPage, async (event, workspaceId, artifactId) => {
+    const workspace = await existingWorkspace(workspaceId);
+    const id = asArtifactId(artifactId);
+    const view = await store.get(workspace, id);
+    if (!view) throw new Error("That artifact no longer exists in this workspace.");
+    const target = await dependencies.files.chooseExportPath(event, workspaceArtifactPageFileName(view.artifact.visual.title));
+    if (!target) return { status: "cancelled" as const };
+    // Written as the page is once the person chose where, not as it was before.
+    const latest = await store.get(workspace, id);
+    if (!latest) throw new Error("That artifact no longer exists in this workspace.");
+    try {
+      await dependencies.files.writeFile(target, `${JSON.stringify(workspaceArtifactPageFile(latest.artifact), null, 2)}\n`);
+    } catch {
+      throw new Error("Aiden could not write the page file.");
+    }
+    return { status: "saved" as const };
+  });
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.importPreview, async (event, workspaceId): Promise<WorkspaceArtifactImportPreview> => {
+    const workspace = await existingWorkspace(workspaceId);
+    const owner = dependencies.owner(event);
+    if ((await store.list(workspace)).length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
+      throw new Error(`This workspace already has ${WORKSPACE_ARTIFACT_LIMITS.perWorkspace} artifacts. Delete one before importing.`);
+    }
+    const file = await dependencies.files.chooseImportFile(event);
+    if (!file) return { status: "cancelled" };
+    const tooLarge = () =>
+      new Error(`This file is larger than ${WORKSPACE_ARTIFACT_FILE_MAX_BYTES / (1024 * 1024)} MiB, so it isn’t an Aiden page.`);
+    let bytes: Uint8Array;
+    try {
+      bytes = await dependencies.files.readFile(file, WORKSPACE_ARTIFACT_FILE_MAX_BYTES);
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === "EFBIG") throw tooLarge();
+      throw new Error("Aiden could not read that file.");
+    }
+    if (bytes.byteLength > WORKSPACE_ARTIFACT_FILE_MAX_BYTES) throw tooLarge();
+    const content = parseWorkspaceArtifactPageFileText(new TextDecoder().decode(bytes));
+    // Nothing is saved yet: the page waits here until the person confirms.
+    const token = imports.hold(workspace, owner, content);
+    const { onOpen, intervalSeconds } = content.refresh;
+    return {
+      status: "ready",
+      token,
+      title: content.title,
+      ...(content.description ? { description: content.description } : {}),
+      commands: workspaceArtifactCommandList(content.sources, content.actions),
+      files: content.sources.flatMap((source) => (source.kind === "file" ? [source.file] : [])),
+      ...(content.sources.length > 0 ? { refresh: { onOpen, ...(intervalSeconds ? { intervalSeconds } : {}) } } : {}),
+      shellSources: content.sources.some((source) => source.kind === "shell"),
+    };
+  });
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.importConfirm, async (event, workspaceId, token) => {
+    const workspace = await existingWorkspace(workspaceId);
+    const content = imports.take(workspace, dependencies.owner(event), asImportToken(token));
+    // Never approved: neither the file nor the renderer can vouch for its
+    // commands, so under Ask they wait for the person to allow them.
+    const artifact = await store.create(workspace, content, { uniqueTitle: true });
+    notify({ workspaceId: workspace, artifactId: artifact.id, reason: "created" });
+    return artifact;
+  });
+
+  handle(WORKSPACE_ARTIFACT_CHANNELS.importDiscard, (event, workspaceId, token) => ({
+    discarded: imports.discard(asWorkspaceId(workspaceId), dependencies.owner(event), asImportToken(token)),
+  }));
 
   handle(WORKSPACE_ARTIFACT_CHANNELS.refresh, async (event, workspaceId, artifactId) => {
     const workspace = await existingWorkspace(workspaceId);
