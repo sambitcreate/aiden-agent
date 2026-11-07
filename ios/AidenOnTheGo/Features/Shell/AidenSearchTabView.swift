@@ -75,6 +75,7 @@ struct AidenSearchTabView: View {
 
     private func results(chats: [AidenUnifiedInboxRow], bots: [AidenSearchBotHit], note: String?) -> some View {
         let details = model.chatDetails()
+        let roster = inboxStore.roster
         return List {
             if !chats.isEmpty {
                 Section("Chats") {
@@ -82,8 +83,9 @@ struct AidenSearchTabView: View {
                         Button { open(row.route) } label: {
                             AidenSearchChatRowView(
                                 row: row,
-                                machineName: details.machineName(for: row),
-                                workspaceName: details.workspaceName(for: row)
+                                machineName: roster.labels[row.id.instanceId]?.name ?? details.machineName(for: row),
+                                workspaceName: details.workspaceName(for: row),
+                                chip: roster.searchChip(for: row.id.instanceId)
                             )
                         }
                         .listRowBackground(palette.canvas)
@@ -93,7 +95,13 @@ struct AidenSearchTabView: View {
             if !bots.isEmpty {
                 Section("Bots") {
                     ForEach(bots) { hit in
-                        Button { open(hit.route) } label: { AidenSearchBotRowView(hit: hit) }
+                        Button { open(hit.route) } label: {
+                            AidenSearchBotRowView(
+                                hit: hit,
+                                machineName: roster.labels[hit.id.instanceId]?.name ?? hit.machineName,
+                                chip: roster.searchChip(for: hit.id.instanceId)
+                            )
+                        }
                             .listRowBackground(palette.canvas)
                     }
                 }
@@ -168,6 +176,7 @@ private struct AidenSearchChatRowView: View {
     let row: AidenUnifiedInboxRow
     let machineName: String?
     let workspaceName: String?
+    let chip: AidenMachineLabel?
 
     @Environment(\.aidenPalette) private var palette
 
@@ -194,10 +203,13 @@ private struct AidenSearchChatRowView: View {
                     .font(.body)
                     .foregroundStyle(palette.foreground)
                     .multilineTextAlignment(.leading)
-                Text(subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(palette.secondary)
-                    .multilineTextAlignment(.leading)
+                HStack(spacing: AidenSpacing.xs) {
+                    if let chip { AidenMachineChip(label: chip) }
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .multilineTextAlignment(.leading)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -217,6 +229,8 @@ private struct AidenSearchChatRowView: View {
 /// A Bot conversation found on some machine.
 private struct AidenSearchBotRowView: View {
     let hit: AidenSearchBotHit
+    let machineName: String
+    let chip: AidenMachineLabel?
 
     @Environment(\.aidenPalette) private var palette
 
@@ -237,10 +251,13 @@ private struct AidenSearchBotRowView: View {
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
                 }
-                Text("Bot conversation · \(hit.machineName)")
-                    .font(.footnote)
-                    .foregroundStyle(palette.secondary)
-                    .multilineTextAlignment(.leading)
+                HStack(spacing: AidenSpacing.xs) {
+                    if let chip { AidenMachineChip(label: chip) }
+                    Text("Bot conversation · \(machineName)")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .multilineTextAlignment(.leading)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -249,7 +266,7 @@ private struct AidenSearchBotRowView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(String(localized: "\(hit.title), Bot conversation on \(hit.machineName)"))
+        .accessibilityLabel(String(localized: "\(hit.title), Bot conversation on \(machineName)"))
         .accessibilityValue(hit.preview ?? "")
     }
 }

@@ -26,18 +26,22 @@ struct AidenInboxTabView: View {
     var state = AidenInboxListState.rows
     var refreshFailed = false
     var moreChats = AidenInboxMoreChats.none
+    var roster = AidenMachineRoster()
+    var filter = Binding.constant(AidenMachineFilter.all)
     let onOpen: (AidenHostObjectID) -> Void
     let onAction: (AidenInboxRowAction, AidenHostObjectID) -> Void
     var onRefresh: () async -> Void = {}
     var onRetry: () -> Void = {}
     var onShowAllEarlier: () -> Void = {}
     var onLoadMore: () -> Void = {}
+    var onReconnect: (String) -> Void = { _ in }
 
     @Environment(\.aidenPalette) private var palette
     @State private var snoozeCandidate: AidenHostObjectID?
 
     var body: some View {
         List {
+            machineRows
             if refreshFailed { refreshErrorRow }
             if state == .loading {
                 AidenChatListSkeleton(rowCount: 6, accessibilityText: "Loading Inbox")
@@ -109,6 +113,8 @@ struct AidenInboxTabView: View {
                 palette: palette,
                 actions: actions,
                 isPinned: row.isPinned,
+                machine: roster.rowChip(for: row.id.instanceId, filter: filter.wrappedValue),
+                isDimmed: roster.isOffline(row.id.instanceId),
                 open: { onOpen(row.id) }
             )
             .contextMenu { contextMenu(for: row, actions: actions) }
@@ -132,6 +138,28 @@ struct AidenInboxTabView: View {
             }
         } else if let wake = actions.snooze {
             Button(actions.snoozeLabel, systemImage: "clock", action: wake)
+        }
+    }
+
+    /// The filter strip, then a row for each offline machine the filter shows.
+    @ViewBuilder
+    private var machineRows: some View {
+        if roster.showsStrip {
+            AidenMachineStrip(labels: roster.visible, filter: filter)
+                .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: 0, bottom: AidenSpacing.xs, trailing: 0))
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+        }
+        ForEach(roster.offlineRows(under: filter.wrappedValue)) { machine in
+            AidenMachineOfflineRow(
+                label: machine.label,
+                lastSeen: machine.lastSeen,
+                isReconnecting: machine.isReconnecting,
+                onReconnect: { onReconnect(machine.id) }
+            )
+            .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: AidenSpacing.l, bottom: AidenSpacing.xs, trailing: AidenSpacing.l))
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
         }
     }
 
@@ -258,6 +286,7 @@ struct AidenInboxTabRootView: View {
 
     let store: AidenUnifiedInboxStore
     let onOpen: (AidenHostObjectID) -> Void
+    var onOpenMachines: () -> Void = {}
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -271,6 +300,8 @@ struct AidenInboxTabRootView: View {
             state: store.listState,
             refreshFailed: store.refreshFailed,
             moreChats: store.moreChats,
+            roster: store.roster,
+            filter: Binding(get: { store.filter }, set: { store.filter = $0 }),
             onOpen: onOpen,
             onAction: { action, id in
                 Task { await store.perform(action, on: id) }
@@ -278,9 +309,15 @@ struct AidenInboxTabRootView: View {
             onRefresh: { await store.refreshAll() },
             onRetry: { Task { await store.retry() } },
             onShowAllEarlier: { store.showsAllEarlier = true },
-            onLoadMore: { Task { await store.loadMoreChats() } }
+            onLoadMore: { Task { await store.loadMoreChats() } },
+            onReconnect: { store.reconnect($0) }
         )
         .navigationTitle("Inbox")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                AidenHostStatusItem(online: store.roster.online, total: store.roster.total, onOpen: onOpenMachines)
+            }
+        }
         .overlay(alignment: .top) { noticeBanner }
         .animation(reduceMotion ? nil : .smooth(duration: 0.24, extraBounce: 0), value: store.notice)
         .task {

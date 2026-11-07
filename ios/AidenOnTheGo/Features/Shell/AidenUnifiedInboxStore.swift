@@ -22,6 +22,8 @@ final class AidenUnifiedInboxStore {
     private(set) var hiddenMachines: Set<String> = []
     /// Built when its inputs change, so a view can read it freely.
     private(set) var inbox = AidenUnifiedInbox()
+    /// What's drawn around the rows to say which machine is which.
+    private(set) var roster = AidenMachineRoster()
     /// The tab's badge. Kept apart from `inbox`, so whoever shows it redraws
     /// when the count changes and not with every row.
     private(set) var needsYouCount = 0
@@ -132,6 +134,12 @@ final class AidenUnifiedInboxStore {
         wakeEveryPoller()
     }
 
+    /// Chats that aren't done on a machine. Nil for one the Inbox can't read.
+    func openChatCount(on instanceId: String) -> Int? {
+        guard let snapshot = snapshots[instanceId], !snapshot.isBlocked else { return nil }
+        return AidenMachineRoster.openChatCount(in: snapshot.chats)
+    }
+
     /// The model that reads `instanceId`, for acting on its rows.
     func homeModel(for instanceId: String) -> AidenHomeModel? {
         machines[instanceId]?.model
@@ -199,6 +207,11 @@ final class AidenUnifiedInboxStore {
         await refreshAll()
     }
 
+    /// An offline row's Reconnect: this machine only, through the same queue.
+    func reconnect(_ instanceId: String) {
+        connectScheduler?.connect(instanceId: instanceId)
+    }
+
     /// Snoozes end and Earlier ages out on this phone's clock, with no change on
     /// any machine to say so.
     func refreshClock() {
@@ -233,12 +246,14 @@ final class AidenUnifiedInboxStore {
             let workspaces = connection.workspaces
             return MachineReading(
                 connection: connection,
+                installation: connection.installation,
                 machine: machine,
                 chats: machine?.model.chats ?? [],
                 workspaceNames: isBlocked ? [:] : workspaces.isEmpty ? machine?.savedWorkspaceNames ?? [:] : Self.names(of: workspaces),
                 isConnected: connection.connectionState == .connected,
                 isOnline: connection.isKnownOnline,
                 isOffline: connection.isKnownOffline,
+                isReconnecting: connection.isConnectInFlight,
                 isBlocked: isBlocked,
                 isHidden: isHidden,
                 supportsReadState: connection.server?.supportsChatReadState == true,
@@ -332,6 +347,29 @@ final class AidenUnifiedInboxStore {
             if rebuilt.needsYouCount != needsYouCount { needsYouCount = rebuilt.needsYouCount }
         }
         describeTheList(shown: shown, hasHiddenMachines: !hidden.isEmpty)
+        let described = describeTheMachines(readings, shown: shown)
+        if described != roster { roster = described }
+    }
+
+    private func describeTheMachines(_ readings: [MachineReading], shown: [MachineReading]) -> AidenMachineRoster {
+        let labels = AidenMachineLabel.labels(connections: readings.map(\.connection), preferences: preferences)
+        func label(_ reading: MachineReading) -> AidenMachineLabel? { labels[reading.connection.instanceId] }
+        return AidenMachineRoster(
+            labels: labels,
+            visible: shown.compactMap(label),
+            offline: shown.filter(\.isOffline).compactMap { reading in
+                label(reading).map {
+                    AidenMachineRoster.OfflineMachine(
+                        label: $0,
+                        lastSeen: reading.installation.lastConnectedAt,
+                        isReconnecting: reading.isReconnecting
+                    )
+                }
+            },
+            online: readings.filter(\.isOnline).count,
+            total: readings.count,
+            usable: readings.filter { !$0.isBlocked }.count
+        )
     }
 
     /// Everything the list says besides its rows.
@@ -631,12 +669,15 @@ private final class Poller {
 
 private struct MachineReading {
     let connection: AidenHostConnection
+    /// Read here so a rename or a new last-connected time wakes the store.
+    let installation: AidenInstallation
     let machine: Machine?
     let chats: [AidenChatSummary]
     let workspaceNames: [String: String]
     let isConnected: Bool
     let isOnline: Bool
     let isOffline: Bool
+    let isReconnecting: Bool
     let isBlocked: Bool
     let isHidden: Bool
     let supportsReadState: Bool

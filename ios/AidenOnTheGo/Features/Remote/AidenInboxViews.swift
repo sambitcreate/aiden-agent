@@ -97,6 +97,18 @@ struct AidenInboxRowView: View {
     let workspaceName: String?
     let palette: AidenPalette
     var isPinned = false
+    /// Says which machine the row is on. Nil when only one is listed.
+    var machine: AidenMachineLabel?
+    /// The row's machine is offline. The words drop to the palette's secondary
+    /// colour rather than fading, so they stay readable, and the chip stays as it
+    /// is, because fading it would cost its contrast.
+    var isDimmed = false
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// At the largest text sizes the status goes under the words, so it never
+    /// squeezes the title.
+    private var isStacked: Bool { dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -105,45 +117,31 @@ struct AidenInboxRowView: View {
     }
 
     private var unread: Bool { row.summary.unread }
+    private var offlineText: String? { isDimmed ? String(localized: "Offline") : nil }
+
+    /// The line under the title. The chip lives here so it can never take width
+    /// from the title.
+    private var detail: String? {
+        let parts = [workspaceName, offlineText].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     private func content(status: AidenInboxRowStatus) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Circle()
-                .fill(unread ? palette.accent : Color.clear)
+                .fill(unread ? (isDimmed ? palette.secondary : palette.accent) : Color.clear)
                 .frame(width: 7, height: 7)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.summary.title)
-                    .font(.subheadline.weight(unread ? .semibold : .medium))
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(1)
-                if let workspaceName {
-                    Text(workspaceName)
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
-                        .lineLimit(1)
+            if isStacked {
+                VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+                    words
+                    HStack(spacing: 10) { statusLine(status) }
                 }
-            }
-
-            Spacer(minLength: 8)
-
-            if isPinned {
-                Image(systemName: "pin.fill")
-                    .font(.caption2)
-                    .foregroundStyle(palette.secondary)
-            }
-            if status.tone == .working {
-                AidenWorkingIndicator(size: 12)
-            }
-            if let label = status.label {
-                statusLabel(label, tone: status.tone)
-            }
-            if let wait = status.wait {
-                Text(wait)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(palette.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
+                Spacer(minLength: 0)
+            } else {
+                words
+                Spacer(minLength: 8)
+                statusLine(status)
             }
         }
         .padding(.horizontal, 12)
@@ -154,14 +152,57 @@ struct AidenInboxRowView: View {
         .accessibilityLabel(accessibilityName(status))
     }
 
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(row.summary.title)
+                .font(.subheadline.weight(unread ? .semibold : .medium))
+                .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
+                .lineLimit(isStacked ? 3 : 1)
+            if machine != nil || detail != nil {
+                HStack(spacing: AidenSpacing.xs) {
+                    if let machine { AidenMachineChip(label: machine) }
+                    if let detail {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(isStacked ? 2 : 1)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusLine(_ status: AidenInboxRowStatus) -> some View {
+        if isPinned {
+            Image(systemName: "pin.fill")
+                .font(.caption2)
+                .foregroundStyle(palette.secondary)
+        }
+        if status.tone == .working {
+            AidenWorkingIndicator(size: 12)
+        }
+        if let label = status.label {
+            statusLabel(label, tone: status.tone)
+        }
+        if let wait = status.wait {
+            Text(wait)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(palette.secondary)
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+
     @ViewBuilder
     private func statusLabel(_ label: String, tone: AidenInboxRowStatus.Tone) -> some View {
         switch tone {
         case .warning, .danger:
-            let tint = tone == .danger ? palette.danger : palette.warning
+            let tint = isDimmed ? palette.secondary : tone == .danger ? palette.danger : palette.warning
             Text(label)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(tint)
+                .lineLimit(1)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
                 .background(tint.opacity(0.12), in: Capsule())
@@ -170,14 +211,16 @@ struct AidenInboxRowView: View {
                 .font(.caption)
                 .foregroundStyle(palette.secondary)
                 .lineLimit(1)
-                .fixedSize()
+                .fixedSize(horizontal: !isStacked, vertical: false)
         }
     }
 
-    /// "Title, workspace, status, wait, Unread", as the desktop names it.
+    /// "Title, workspace, status, wait, Unread", as the desktop names it, with the
+    /// machine after the workspace when more than one is listed.
     func accessibilityName(_ status: AidenInboxRowStatus) -> String {
         [
-            row.summary.title, workspaceName, isPinned ? String(localized: "Pinned") : nil,
+            row.summary.title, workspaceName, machine?.accessibilityLabel, offlineText,
+            isPinned ? String(localized: "Pinned") : nil,
             status.spokenLabel ?? status.label, status.wait, unread ? "Unread" : nil,
         ]
             .compactMap { $0 }
@@ -287,11 +330,21 @@ struct AidenInboxListRow: View {
     let palette: AidenPalette
     let actions: AidenInboxRowActions
     var isPinned = false
+    var machine: AidenMachineLabel?
+    var isDimmed = false
     let open: () -> Void
 
     var body: some View {
         Button(action: open) {
-            AidenInboxRowView(row: row, section: section, workspaceName: workspaceName, palette: palette, isPinned: isPinned)
+            AidenInboxRowView(
+                row: row,
+                section: section,
+                workspaceName: workspaceName,
+                palette: palette,
+                isPinned: isPinned,
+                machine: machine,
+                isDimmed: isDimmed
+            )
         }
         .buttonStyle(.plain)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {

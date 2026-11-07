@@ -8,6 +8,8 @@ struct AidenTranscriptScaffold<Transcript: View>: View {
     private let dock: AidenChatDock
     private let transcript: Transcript
 
+    @Environment(\.aidenConversationMachine) private var machine
+
     init(dock: AidenChatDock, @ViewBuilder transcript: () -> Transcript) {
         self.dock = dock
         self.transcript = transcript()
@@ -17,6 +19,9 @@ struct AidenTranscriptScaffold<Transcript: View>: View {
         transcript
             .aidenComposerSoftScrollEdge()
             .safeAreaBar(edge: .bottom, spacing: 0) { dock }
+            // Always applied: wrapping it in an `if` would rebuild the transcript
+            // when a second machine is paired. An empty subtitle draws nothing.
+            .navigationSubtitle(machine ?? "")
     }
 }
 

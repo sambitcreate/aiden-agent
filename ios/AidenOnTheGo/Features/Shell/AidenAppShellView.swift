@@ -54,9 +54,10 @@ struct AidenAppShellView: View {
         TabView(selection: $navigation.tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 NavigationStack(path: $navigation.inboxPath) {
-                    AidenInboxTabRootView(store: inboxStore, onOpen: openChat)
+                    AidenInboxTabRootView(store: inboxStore, onOpen: openChat, onOpenMachines: { navigation.open(.machines) })
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
+                .environment(inboxStore)
             }
             .badge(inboxStore.needsYouCount)
 
@@ -141,6 +142,7 @@ struct AidenAppShellView: View {
                     inboxStore.homeModel(for: id.instanceId)?.setActivity(activity, forChatID: chatID)
                 }
             )
+            .environment(\.aidenConversationMachine, inboxStore.roster.chatSubtitle(for: id.instanceId))
             .onDisappear { navigation.finishStartingVoice(id) }
         case .bot(let id):
             let installation = coordinator.installationStore.installations.first { $0.id == id.instanceId }
