@@ -912,6 +912,16 @@ final class AidenOwnerRoutingTests: XCTestCase {
         return model
     }
 
+    /// The saved machine goes first. The purge has work left after that, and the
+    /// state and the error come at the end of it.
+    private func waitForPairing() async throws {
+        try await waitUntil("the pairing screen") {
+            self.coordinator.installationStore.installations.isEmpty
+                && self.coordinator.connectionState == .needsPairing
+                && self.coordinator.presentedError != nil
+        }
+    }
+
     func testARevokedSelectedMachinesChatStaysUntilLeaving() async throws {
         try await connect([studio, laptop], tabShell: true)
         let model = try await sendRefusedByStudio()
@@ -971,10 +981,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         model.setViewPresent(false)
 
-        try await waitUntil("the purge") { self.coordinator.installationStore.installations.isEmpty }
+        try await waitForPairing()
         XCTAssertFalse(coordinator.isHoldingRevokedChat)
-        XCTAssertEqual(coordinator.connectionState, .needsPairing)
-        XCTAssertNotNil(coordinator.presentedError)
     }
 
     func testConnectingLeavesAHeldOnlyMachineAlone() async throws {
@@ -992,8 +1000,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         model.setViewPresent(false)
 
-        try await waitUntil("the purge") { self.coordinator.installationStore.installations.isEmpty }
-        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        try await waitForPairing()
     }
 
     func testSelectingAHeldMachineWaitsForItsChatToLeave() async throws {
@@ -1136,8 +1143,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         relaunchRefusedByStudio([studio])
         await launch()
 
-        try await waitUntil("the purge") { self.coordinator.installationStore.installations.isEmpty }
-        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        try await waitForPairing()
     }
 
     func testAnOnlyMachinesRestoredChatStaysThenGoesToPairing() async throws {
@@ -1154,8 +1160,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         model.setViewPresent(false)
 
-        try await waitUntil("the purge") { self.coordinator.installationStore.installations.isEmpty }
-        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        try await waitForPairing()
     }
 
     // MARK: Words on a machine that revoked this phone
