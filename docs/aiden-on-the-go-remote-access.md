@@ -98,7 +98,7 @@ outside a Git repository.
 Environment files may contain secrets. All choices start unchecked. Select only
 files you want on that computer. Aiden offers ignored root-level `.env*` and
 `.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
-the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+the transfer at 16 files and 512 KiB. Each selected file must also be ignored by the cloned repository with both case-sensitive and case-insensitive Git matching or the clone is discarded. User-level Git excludes do not satisfy this check. Nothing existing is overwritten. The cloned
 project becomes available after the selected files arrive. The new chat opens on
 the destination; a typed prompt and attachments carry over when that computer has
 no saved draft. An existing remote draft is retained, with the local prompt still
@@ -136,7 +136,7 @@ When the agent records a browser tab, the paired Mac (contract revision 46) lets
 
 ## Values read from a web page
 
-When the agent reads a page in extract mode, the Mac (contract revision 38) sends the values it read with the chat's activity. Aiden On The Go for iPhone and Android shows them as a card under the "Fetched web page" line: each value with the line of the page it came from, a **Guess** label on values the agent isn't sure of, and "Not on the page" for values the page doesn't have. Only the field names, a short form of each value and its page line reach the phone, never the page. Older phones and Macs show the activity line without the card. See [web-fetch-extract.md](web-fetch-extract.md).
+When the agent reads a page in extract mode, the Mac (contract revision 38) sends the values it read with the chat's activity. Aiden On The Go for iPhone and Android shows them as a card under the "Fetched web page" line: each value with supporting page text, a **Guess** label on values the agent isn't sure of, and "Not on the page" for values the page doesn't have. Only the field names, a short form of each value and its page line reach the phone, never the page. Older phones and Macs show the activity line without the card. See [web-fetch-extract.md](web-fetch-extract.md).
 
 When the paired Mac has spending limits on (contract revision 47), Aiden On The Go for iPhone and Android shows a quiet line in a workspace chat or Bot chat once it has used 80% of its limit, and a card with **Allow $X more** once it reaches it. Allowing more from the phone and the Mac at the same moment adds the amount once. The limits themselves are set on the Mac in Settings → Context & Limits; see [usage limits and spending limits](usage-limits-and-spending.md). With an older phone, or from another paired Mac, a send over the limit is refused with the Mac's message, and you allow more on the Mac.
 

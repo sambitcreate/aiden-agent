@@ -3,7 +3,9 @@
 // ⌘/ list and Settings → Keyboard shortcuts both show them from here; keep
 // docs/keyboard.md in step.
 
-export type BuiltInKeySection = "Moving around" | "In a chat";
+import type { CommandCapability } from "./keybindings";
+
+export type BuiltInKeySection = "Moving around" | "In a chat" | "Design canvas";
 
 export interface BuiltInKey {
   id: string;
@@ -14,6 +16,8 @@ export interface BuiltInKey {
   /** Another way to do the same, shown after "or". */
   alsoKeys?: readonly string[];
   section: BuiltInKeySection;
+  /** Listed only while this capability is on (design mode is experimental). */
+  requiresCapability?: CommandCapability;
 }
 
 export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
@@ -101,5 +105,109 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     description: "Turn down the waiting approval, under the same conditions as Allow once.",
     keys: ["Command+Backspace"],
     section: "In a chat",
+  },
+  {
+    id: "canvas-tools",
+    title: "Select / Hand tool",
+    description: "On the design canvas, with the canvas focused.",
+    keys: ["V", "H"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-note",
+    title: "Add a note",
+    description: "In the middle of the view, ready to type.",
+    keys: ["N"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-draw",
+    title: "Text / Frame tool",
+    description: "Click to place, or drag to size. Each drawing tool goes back to Select once it has made something.",
+    keys: ["T", "F"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-shapes",
+    title: "Rectangle / Oval tool",
+    description: "Drag to draw; Shift keeps it square or round.",
+    keys: ["R", "O"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-lines",
+    title: "Line / Arrow tool",
+    description: "Drag between two points; an end dropped on a frame stays joined to it. Shift keeps 45° steps.",
+    keys: ["L", "Shift+L"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-pencil",
+    title: "Pencil / Pen tool",
+    description: "The pen clicks corners and drags curves; Return, Esc or a double-click finishes.",
+    keys: ["P", "Shift+P"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-format",
+    title: "Bold / Italic / Underline",
+    description: "Formats the selected words in a note or text item; links, lists, size and colours are on its formatting bar.",
+    keys: ["Command+B", "Command+I", "Command+U"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-comment",
+    title: "Comment tool",
+    description: "Click an element of a page, a frame or the canvas to comment. Alt picks the element's parent; Esc leaves.",
+    keys: ["C"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-rename",
+    title: "Rename the selected frame",
+    description: "Or double-click its title. Return keeps the name, Esc cancels.",
+    keys: ["F2"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-undo",
+    title: "Undo / redo on the canvas",
+    description: "Moves, edits, pages and renames.",
+    keys: ["Command+Z", "Command+Shift+Z"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-duplicate",
+    title: "Duplicate / remove the selection",
+    description: "Delete works as well as Backspace.",
+    keys: ["Command+D", "Backspace"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-fit",
+    title: "Fit everything / the selection",
+    description: "⇧0 resets the zoom; + and - zoom in and out; M shows the minimap.",
+    keys: ["Shift+1", "Shift+2"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
+  },
+  {
+    id: "canvas-enter",
+    title: "Enter / leave a page frame",
+    description: "Keys typed inside an entered page stay with that page. Return on text or a shape edits its words.",
+    keys: ["Return", "Escape"],
+    section: "Design canvas",
+    requiresCapability: "designMode",
   },
 ];

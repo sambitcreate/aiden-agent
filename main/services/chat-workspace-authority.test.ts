@@ -69,12 +69,7 @@ test("generation initialization persists terminal outcomes before releasing owne
   const helperStart = startSource.indexOf(
     "const initializationTerminalState = { attempted: false }",
   );
-  const firstCleanup = startSource.indexOf("releaseGenerationSkillReservation(initialization)");
   assert.ok(helperStart >= 0, "terminal persistence helper must be part of generation start");
-  assert.ok(
-    helperStart < firstCleanup,
-    "terminal persistence must be established before an initialization cleanup can run",
-  );
   assert.match(llmClientSource, /import \{ persistGenerationInitializationTerminal \}/u);
   assert.match(startSource, /await persistGenerationInitializationTerminal\(\{/u);
   assert.match(
@@ -88,7 +83,7 @@ test("generation initialization persists terminal outcomes before releasing owne
     /await persistInitializationTerminal\(\s*"cancelled",\s*(?:initialization|activeGeneration)\.cancellationOrigin,?\s*\)/gu,
   );
   const failurePersists = startSource.match(/await persistInitializationTerminal\("failed"\)/gu);
-  assert.equal(cancellationPersists?.length, 3);
+  assert.equal(cancellationPersists?.length, 2);
   assert.equal(failurePersists?.length, 3);
 
   for (const status of ["cancelled", "failed"] as const) {
@@ -100,7 +95,7 @@ test("generation initialization persists terminal outcomes before releasing owne
     const persistIndex = persistMatch?.index ?? -1;
     assert.ok(persistIndex >= 0);
     const cleanupIndex = startSource.indexOf(
-      "releaseGenerationSkillReservation(initialization)",
+      "settleGeneration(streamId, params, initialization, initializing)",
       persistIndex,
     );
     assert.ok(

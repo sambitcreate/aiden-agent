@@ -420,3 +420,38 @@ test("/until and /follow need a chat with folder access, and /until can be set w
   assert.deepEqual(asked, [["until", "npm test -- --run"], ["follow", ""]]);
   assert.equal(executeSlashCommandAction(until, "npm test", { ...handlers, followThrough: undefined }), false);
 });
+
+test("/design turns design mode on, /design off turns it off, and needs a chat that can use it", () => {
+  const design = command("design");
+  assert.deepEqual(slashCommandAvailability(design, { ...context, designModeAvailable: true }), { available: true });
+  // A No workspace chat can use design mode, and it can change while an answer runs.
+  assert.deepEqual(
+    slashCommandAvailability(design, { ...context, designModeAvailable: true, hasWorkspace: false, idle: false }),
+    { available: true },
+  );
+  assert.equal(slashCommandAvailability(design, context).available, false, "not offered unless the chat can use it");
+
+  assert.deepEqual(validateSlashCommandArgument(design, ""), { valid: true });
+  assert.deepEqual(validateSlashCommandArgument(design, " OFF "), { valid: true, value: "off" });
+  const other = validateSlashCommandArgument(design, "please");
+  assert.equal(other.valid, false);
+  assert.match(other.reason ?? "", /\/design off/u);
+
+  const changes: boolean[] = [];
+  const handlers: SlashCommandActionHandlers = {
+    executeCommand: () => true,
+    openSettings: () => undefined,
+    requestRename: () => undefined,
+    copyLatestResponse: () => undefined,
+    openReview: () => undefined,
+    openAccess: () => undefined,
+    setDesignMode: (on) => {
+      changes.push(on);
+      return true;
+    },
+  };
+  assert.equal(executeSlashCommandAction(design, "", handlers), true);
+  assert.equal(executeSlashCommandAction(design, "off", handlers), true);
+  assert.deepEqual(changes, [true, false]);
+  assert.equal(executeSlashCommandAction(design, "", { ...handlers, setDesignMode: undefined }), false);
+});

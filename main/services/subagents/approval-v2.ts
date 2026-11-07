@@ -4,10 +4,40 @@ import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs
 import { subagentAuthorityDigestV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import type { WorkspacePermission } from "../types.js";
 
+export type SubagentRunGrantPhaseV2 =
+  | "unrequested"
+  | "requesting"
+  | "granted"
+  | "denied"
+  | "revoked";
+
+export type SubagentRunGrantEventV2 = "request" | "allow" | "deny" | "revoke";
+
+/**
+ * The whole lifecycle of a run grant. Only `requesting` can reach `granted`, so
+ * a grant is never issued unasked, and `denied` and `revoked` are terminal, so
+ * an answer that lands after revocation cannot revive it. An event with no
+ * transition from the current phase leaves the phase unchanged.
+ */
+export function nextSubagentRunGrantPhaseV2(
+  phase: SubagentRunGrantPhaseV2,
+  event: SubagentRunGrantEventV2,
+): SubagentRunGrantPhaseV2 {
+  if (phase === "denied" || phase === "revoked") return phase;
+  if (event === "revoke") return "revoked";
+  if (phase === "unrequested") return event === "request" ? "requesting" : phase;
+  if (phase === "requesting") {
+    if (event === "allow") return "granted";
+    if (event === "deny") return "denied";
+  }
+  return phase;
+}
+
 /** One in-memory decision for one child run and one privileged lane. */
 export class SubagentRunGrantV2 {
-  private state: "pending" | "granted" | "denied";
-  private pending?: Promise<boolean>;
+  private phase: SubagentRunGrantPhaseV2;
+  /** Settles once the single request for this grant has been answered. */
+  private decision?: Promise<void>;
   private readonly authorityDigest: string;
 
   constructor(
@@ -17,15 +47,23 @@ export class SubagentRunGrantV2 {
     private readonly now: () => number = Date.now,
   ) {
     this.authorityDigest = subagentAuthorityDigestV2(authority);
-    this.state = permission === "full" ? "granted" : "pending";
+    this.phase = permission === "full" ? "granted" : "unrequested";
   }
 
-  valid(authority: SubagentAuthorityV2, permission: WorkspacePermission): boolean {
-    return this.state === "granted" &&
-      !this.signal?.aborted &&
+  /** The caller's live authority still names what this grant was minted for. */
+  private bound(authority: SubagentAuthorityV2, permission: WorkspacePermission): boolean {
+    return !this.signal?.aborted &&
       permission === this.permission &&
       authority.expiresAt > this.now() &&
       subagentAuthorityDigestV2(authority) === this.authorityDigest;
+  }
+
+  private apply(event: SubagentRunGrantEventV2): void {
+    this.phase = nextSubagentRunGrantPhaseV2(this.phase, event);
+  }
+
+  valid(authority: SubagentAuthorityV2, permission: WorkspacePermission): boolean {
+    return this.phase === "granted" && this.bound(authority, permission);
   }
 
   async ensure(
@@ -34,28 +72,21 @@ export class SubagentRunGrantV2 {
     request: () => Promise<boolean>,
   ): Promise<boolean> {
     if (this.valid(authority, permission)) return true;
-    if (this.state !== "pending" && !this.pending) return false;
-    if (this.state === "denied" || this.signal?.aborted ||
-      authority.expiresAt <= this.now() ||
-      permission !== this.permission ||
-      subagentAuthorityDigestV2(authority) !== this.authorityDigest) return false;
-    if (this.permission !== "ask") return false;
-    this.pending ??= Promise.resolve().then(request).then(
-      (allowed) => {
-        this.state = this.state !== "denied" && allowed && !this.signal?.aborted
-          ? "granted" : "denied";
-        return this.valid(authority, permission);
-      },
-      () => {
-        this.state = "denied";
-        return false;
-      },
-    );
-    return this.pending;
+    if (this.permission !== "ask" || !this.bound(authority, permission)) return false;
+    if (this.phase === "unrequested") {
+      this.apply("request");
+      this.decision = Promise.resolve().then(request).then(
+        (allowed) => this.apply(allowed && !this.signal?.aborted ? "allow" : "deny"),
+        () => this.apply("deny"),
+      );
+    }
+    if (this.phase !== "requesting") return false;
+    await this.decision;
+    return this.valid(authority, permission);
   }
 
   revoke(): void {
-    this.state = "denied";
+    this.apply("revoke");
   }
 }
 

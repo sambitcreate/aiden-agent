@@ -148,6 +148,21 @@ export class ChatCreateReconciliationRequiredError extends Error {
   }
 }
 
+export type ChatStoreErrorCode = "design-mode-unavailable";
+
+/** A store refusal whose message is safe to show the person. */
+export class ChatStoreError extends Error {
+  readonly code: ChatStoreErrorCode;
+
+  constructor(code: ChatStoreErrorCode, message: string) {
+    super(message);
+    this.name = "ChatStoreError";
+    this.code = code;
+  }
+}
+
+export const DESIGN_MODE_UNAVAILABLE_MESSAGE = "Design mode is available in project chats only.";
+
 export function isChatCreateReconciliationRequiredError(
   error: unknown,
 ): error is ChatCreateReconciliationRequiredError {
@@ -446,7 +461,8 @@ export function createChatStore(
           Number.isSafeInteger(meta.lastAssistantAt) &&
           meta.lastAssistantAt >= 0)) &&
       (meta.lastAssistantFailed === undefined || meta.lastAssistantFailed === true) &&
-      (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined)
+      (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined) &&
+      (meta.designMode === undefined || meta.designMode === true)
     );
   }
 
@@ -842,6 +858,16 @@ export function createChatStore(
       if (lineage) record.forkedFrom = lineage;
       else delete record.forkedFrom;
     }
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "designMode") &&
+      (parsed as Record<string, unknown>).designMode !== true
+    ) {
+      // A layout preference only: anything but a literal true reads as off.
+      delete (parsed as Record<string, unknown>).designMode;
+    }
     const messages = (parsed as { messages?: unknown } | null)?.messages;
     if (
       policy !== "pure" &&
@@ -1236,6 +1262,7 @@ export function createChatStore(
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id } : {}),
       ...(lastAssistant && isFailedAssistantTurn(lastAssistant) ? { lastAssistantFailed: true } : {}),
       ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
+      ...(chat.designMode === true ? { designMode: true as const } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     };
@@ -1414,6 +1441,14 @@ export function createChatStore(
      */
     async getWithImageReferences(id: string): Promise<Chat | null> {
       return shared([id], false, () => readChat(id, "owner"));
+    },
+
+    /** One chat's index metadata, without reading its transcript. Null when unknown. */
+    async getMeta(id: string): Promise<ChatMeta | null> {
+      return shared([id], true, () => withIndexLock(async () => {
+        const meta = (await loadIndex()).find((entry) => entry.id === id);
+        return meta ? { ...meta, workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID } : null;
+      }));
     },
 
     /** One stored image's bytes, or undefined when its file is missing or damaged. */
@@ -1974,6 +2009,31 @@ export function createChatStore(
         await writeChatAndMeta(chat);
         return chat;
       }));
+    },
+
+    /**
+     * Turn design mode on or off for one chat. It is a layout preference: the
+     * history, the title and the sidebar order stay as they are. Bot, Assistant
+     * and feature-owned chats never take it.
+     */
+    async setDesignMode(
+      id: string,
+      enabled: boolean,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (enabled && chatSurface(chat) !== "regular") {
+          throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
+        }
+        if ((chat.designMode === true) === enabled) return chat;
+        if (enabled) chat.designMode = true;
+        else delete chat.designMode;
+        await writeChatAndMeta(chat);
+        return chat;
+      });
     },
 
     /** Persist the user's per-chat Computer Use grant without reordering history. */

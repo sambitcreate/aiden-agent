@@ -48,6 +48,8 @@ export interface WorkspaceApplicationDependencies {
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void> };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
+  /** Ends aiden-design grants that serve the removed workspace's folder. */
+  designGrants?: { revokeRoot(workspaceRoot: string): void };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
   workspaceOperationRegistry: Pick<typeof workspaceOperationRegistry, "cancelAndSettle">;
   createScratchWorkspaceDirectory: typeof createScratchWorkspaceDirectory;
@@ -74,6 +76,12 @@ export interface WorkspaceApplicationDependencies {
   logError(area: string, message: string, error: unknown): void;
 }
 
+/** A private folder cannot be assigned to another chat until this operation settles. */
+export interface WorkspaceChatAssignment {
+  workspaceId: string;
+  release(): void;
+}
+
 export interface WorkspaceApplicationMutationOptions {
   assertCurrent?: (workspace: Workspace) => void;
   beforeSave?: (workspace: Workspace | undefined) => void | Promise<void>;
@@ -91,6 +99,8 @@ export interface WorkspaceFolderCreationOptions {
 
 export function createWorkspaceApplicationService(deps: WorkspaceApplicationDependencies) {
   let folderCreationTail: Promise<void> = Promise.resolve();
+  let assignmentTail: Promise<unknown> = Promise.resolve();
+  const assignedPrivateWorkspaces = new Set<string>();
 
   const serializeFolderCreation = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = folderCreationTail.then(operation, operation);
@@ -305,15 +315,34 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
      * A hidden record that is gone (its last chat was deleted, so it was
      * released) also gets a fresh one: the device asked for No workspace and
      * still lists the old record as the group's home. Returns the workspace
-     * to use; any other workspace is unchanged.
+     * to use; any other workspace is unchanged. Hold the reservation through
+     * commit and failure cleanup, then release it. Unknown outcomes stay held
+     * until restart reconciles the chat store.
      */
-    async workspaceForNoWorkspaceChat(workspaceId: string) {
-      if (!deps.noWorkspace) return workspaceId;
-      const workspace = await deps.configStore.getWorkspace(workspaceId);
-      if (!workspace) return (await service.createNoWorkspace()).id;
-      if (!workspace.noWorkspace) return workspaceId;
-      if ((await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0) return workspaceId;
-      return (await service.createNoWorkspace()).id;
+    reserveNoWorkspaceChat(workspaceId: string): Promise<WorkspaceChatAssignment> {
+      const reserve = async (): Promise<WorkspaceChatAssignment> => {
+        const workspace = await deps.configStore.getWorkspace(workspaceId);
+        if (!deps.noWorkspace || (workspace && !workspace.noWorkspace)) {
+          return { workspaceId, release: () => undefined };
+        }
+        const available = workspace && !assignedPrivateWorkspaces.has(workspaceId) &&
+          (await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0;
+        const target = available ? workspaceId : (await service.createNoWorkspace()).id;
+        assignedPrivateWorkspaces.add(target);
+        let released = false;
+        return {
+          workspaceId: target,
+          release: () => {
+            if (released) return;
+            released = true;
+            assignedPrivateWorkspaces.delete(target);
+          },
+        };
+      };
+      // Separate from folder creation: reservation may need to create a folder.
+      const result = assignmentTail.then(reserve, reserve);
+      assignmentTail = result.catch(() => undefined);
+      return result;
     },
 
     /** After a chat is deleted: its hidden No workspace folder goes too once no chat uses it. */
@@ -448,6 +477,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             await deps.scheduleService.cancelWorkspace(id);
             await deps.configStore.removeWorkspace(id);
             followThroughChange.committed = true;
+            if (existing?.folderPath) deps.designGrants?.revokeRoot(existing.folderPath);
             await deps.workspaceArtifacts?.removeWorkspace(id).catch((error: unknown) => {
               deps.logError("workspace", "Could not remove the workspace's artifacts.", error);
             });

@@ -38,7 +38,9 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
       since: number | undefined,
       options: { issues?: boolean; peers?: boolean; messaging?: boolean; accessRequests?: boolean } = {},
     ): Promise<AidenRemoteBotRoutineNotificationList> {
-      const at = now();
+      // A release can commit just after this poll reads a Bot's log. Keep the
+      // current millisecond open so the next exclusive cursor includes it.
+      const through = now() - 1;
       const names = new Map<string, Promise<string | undefined>>();
       const nameOf = (botId: string) => {
         let name = names.get(botId);
@@ -49,7 +51,7 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
         return name;
       };
       const notifications: AidenRemoteBotRoutineNotification[] = [];
-      for (const row of await dependencies.log.due(since, at)) {
+      for (const row of await dependencies.log.due(since, through)) {
         // Routine results are the revision-27 feed. Issue cards join it only
         // for a device that negotiated `bot:issues` (revision 42), whose
         // decoder accepts `kind: "issue"`; every other device still gets
@@ -101,7 +103,7 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
       }
       return parseAidenRemoteBotRoutineNotificationList({
         notifications: notifications.slice(0, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATIONS_MAX),
-        now: new Date(at).toISOString(),
+        now: new Date(through).toISOString(),
       });
     },
   };

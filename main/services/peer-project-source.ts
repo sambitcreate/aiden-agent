@@ -14,7 +14,7 @@ import {
 import type { Workspace } from "./types.js";
 
 const run = promisify(execFile);
-async function git(cwd: string, args: string[]): Promise<string> {
+export async function peerProjectGit(cwd: string, args: string[]): Promise<string> {
   const env: NodeJS.ProcessEnv = { ...agentCommandEnvironment(), GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG", "GIT_CONFIG_COUNT"]) delete env[key];
   const binary = await resolveGitExecutableMemoized("git", cwd, env);
@@ -22,8 +22,8 @@ async function git(cwd: string, args: string[]): Promise<string> {
 }
 
 /** Only metadata enters the renderer; selected file contents go straight to the peer transport. */
-export function createPeerProjectSource(options: { getWorkspace(id: string): Promise<Workspace | null | undefined>; git?: typeof git }) {
-  const command = options.git ?? git;
+export function createPeerProjectSource(options: { getWorkspace(id: string): Promise<Workspace | null | undefined>; git?: typeof peerProjectGit }) {
+  const command = options.git ?? peerProjectGit;
   const inspect = async (id: string) => {
     const workspace = await options.getWorkspace(id);
     if (!workspace?.folderPath) throw new Error("Choose a project with a repository folder.");

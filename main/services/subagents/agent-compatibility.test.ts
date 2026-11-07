@@ -842,6 +842,72 @@ test("child completion fails closed on a Pi journal append failure", async () =>
   assert.equal(registry.activeCount, 0);
 });
 
+function longForkHistory() {
+  return Array.from({ length: 10 }, (_, index) => [
+    {
+      role: "user" as const,
+      content: `FORK-START-${index}-${"x".repeat(5_500)}-FORK-END`,
+      timestamp: index * 2 + 1,
+    },
+    {
+      ...fauxAssistantMessage(`FORK-ANSWER-${index}-${"y".repeat(5_500)}`),
+      timestamp: index * 2 + 2,
+    },
+  ]).flat();
+}
+
+for (const initialSpend of [0.8, 0.1]) {
+  test(`paid helper summaries respect the parent chat cap starting at $${initialSpend}`, async () => {
+    const owner = { kind: "chat", id: "parent" } as const;
+    const spending = new SpendingService({
+      persistence: { load: async () => undefined, save: async () => {} },
+      settings: async () => ({ chatUsd: 1 }),
+      broadcast() {},
+    });
+    await spending.record(owner, initialSpend);
+    const model = createFauxCore({ provider: "priced-fork", models: [{ id: "small", contextWindow: 32_768 }] }).getModel();
+    const calls: string[] = [];
+    const runtime = runtimeFrom(model as Model<Api>, (requested, context) => {
+      const prompt = JSON.stringify(context);
+      const summary = prompt.includes("context summarization assistant");
+      calls.push(summary ? "summary" : "reply");
+      const content = prompt.includes("PREFIX of a turn")
+        ? "## Original Request\nConclude.\n\n## Early Progress\n- Reviewed history.\n\n## Context for Suffix\n- Continue."
+        : summary ? semanticCheckpointSummary("Fork history") : "Done.";
+      const message = providerMessage(requested, "stop", content);
+      const usd = summary ? 0.30 : 0.01;
+      message.usage = { ...message.usage, cost: { ...message.usage.cost, input: usd, total: usd } };
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end(message);
+      return stream;
+    });
+    const usage: number[] = [];
+    const registry = new SubagentRuntimeRegistry(undefined, undefined, {
+      spending,
+      recordCompactionUsage: (message) => { usage.push(message.usage.cost.total); },
+    });
+    const running = registry.create({
+      authority: { generationId: "g", chatId: owner.id, workspaceId: "workspace" },
+      groupId: "group", runtime, thinkingLevel: "high", systemPrompt: "Finish the task.",
+      tools: [], initialMessages: longForkHistory(),
+    });
+    const outcome = await running.prompt("Conclude from the forked conversation.");
+    const spent = (await spending.status("chat", owner.id))!.spentUsd;
+    if (initialSpend === 0.8) {
+      assert.deepEqual(calls, ["summary"]);
+      assert.deepEqual(usage, [0.30]);
+      assert.equal(spent, 1.10);
+      assert.notEqual(outcome.kind, "completed");
+    } else {
+      assert.deepEqual(calls, ["summary", "summary", "reply"]);
+      assert.deepEqual(usage, [0.30, 0.30]);
+      assert.ok(Math.abs(spent - 0.71) < 1e-8);
+      assert.equal(outcome.kind, "completed");
+    }
+  });
+}
+
 for (const recentBudget of [undefined, 0]) {
 test(`forked initial context respects ${recentBudget === undefined ? "default" : "zero recent"} model budget before the first provider request`, async () => {
   const core = createFauxCore({
@@ -881,17 +947,7 @@ test(`forked initial context respects ${recentBudget === undefined ? "default" :
     thinkingLevel: "high",
     systemPrompt: "Complete one bounded child task.",
     tools: [],
-    initialMessages: Array.from({ length: 10 }, (_, index) => [
-      {
-        role: "user" as const,
-        content: `FORK-START-${index}-${"x".repeat(5_500)}-FORK-END`,
-        timestamp: index * 2 + 1,
-      },
-      {
-        ...fauxAssistantMessage(`FORK-ANSWER-${index}-${"y".repeat(5_500)}`),
-        timestamp: index * 2 + 2,
-      },
-    ]).flat(),
+    initialMessages: longForkHistory(),
   });
 
   // Already admitted children retain their captured budget even if settings change.

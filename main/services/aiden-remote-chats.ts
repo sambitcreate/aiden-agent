@@ -1,3 +1,4 @@
+import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { reportChatMessageSent } from "./analytics/analytics-feature-reports.js";
 import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
@@ -63,6 +64,7 @@ import {
 } from "./chat-append-commit.js";
 import type { createChatApplicationService } from "./chat-application-service.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
+import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -1464,7 +1466,7 @@ export class AidenRemoteChatService {
        * workspaces are used as requested.
        */
       noWorkspace?: {
-        target(workspaceId: string): Promise<string>;
+        target(workspaceId: string): Promise<string | WorkspaceChatAssignment>;
         release(workspaceId: string): Promise<void>;
       };
       /** For usage data: a real workspace record, not a hidden folder or a default. */
@@ -1760,43 +1762,17 @@ export class AidenRemoteChatService {
     if (!IDEMPOTENCY_KEY.test(scope.key)) {
       throw new AidenRemoteServiceError("invalid_request", "Idempotency-Key is invalid.", 400);
     }
-    if (!this.options.persistIdempotency) return this.idempotency.execute(scope, input, action);
-    let admit!: () => void;
-    let reject!: (error: unknown) => void;
-    const durable = new Promise<void>((resolve, rejectPromise) => {
-      admit = resolve;
-      reject = rejectPromise;
-    });
-    const pending = this.idempotency.execute(scope, input, async () => {
-      await durable;
-      return action();
-    });
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-      admit();
-    } catch (error) {
-      reject(error);
-      await pending.catch(() => undefined);
-      throw new AidenRemoteServiceError("internal_error", "Aiden could not prepare this chat request.", 500);
-    }
-    let result: T | undefined;
-    let failure: unknown;
-    try {
-      result = await pending;
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await this.options.persistIdempotency(this.idempotency.snapshot());
-    } catch {
-      throw new AidenRemoteServiceError(
-        "idempotency_in_flight",
-        "The chat request may have completed, but its outcome could not be recorded.",
-        409,
-      );
-    }
-    if (failure) throw failure;
-    return result!;
+    return executeAidenDurableOperation(
+      {
+        ledger: this.idempotency,
+        persist: this.options.persistIdempotency,
+        notPreparedMessage: "Aiden could not prepare this chat request.",
+        outcomeUnrecordedMessage: "The chat request may have completed, but its outcome could not be recorded.",
+      },
+      scope,
+      input,
+      action,
+    );
   }
 
   private async chat(chatId: string): Promise<Chat> {
@@ -2165,18 +2141,29 @@ export class AidenRemoteChatService {
           const created = await this.assigningNoWorkspace(async () => {
             // Only a phone that knows the Chats group (revision 51) asks for a folder of its own;
             // an older phone keeps the workspace it named, as it always has.
-            const workspaceId = parsed.noWorkspace
-              ? ((await this.options.noWorkspace?.target(parsed.workspaceId)) ?? parsed.workspaceId)
-              : parsed.workspaceId;
-            return this.options.application.create(
-              {
-                workspaceId,
-                ...(selection
-                  ? { providerId: selection.providerId, model: selection.modelId }
-                  : {}),
-              },
-              owner,
-            );
+            const target = parsed.noWorkspace ? await this.options.noWorkspace?.target(parsed.workspaceId) : undefined;
+            const assignment = typeof target === "object" ? target : undefined;
+            const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
+            let uncertain = false;
+            try {
+              return await this.options.application.create(
+                {
+                  workspaceId,
+                  ...(selection
+                    ? { providerId: selection.providerId, model: selection.modelId }
+                    : {}),
+                },
+                owner,
+              );
+            } catch (error) {
+              uncertain = isChatCreateReconciliationRequiredError(error);
+              if (!uncertain && workspaceId !== parsed.workspaceId) {
+                await this.options.noWorkspace?.release(workspaceId).catch(() => undefined);
+              }
+              throw error;
+            } finally {
+              if (!uncertain) assignment?.release();
+            }
           });
           if (!created) throw new AidenRemoteServiceError("internal_error", "Aiden could not create the chat.", 500);
           this.options.notifyChanged?.(created.id);

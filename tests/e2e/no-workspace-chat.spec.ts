@@ -47,6 +47,29 @@ async function sendAndWaitForReply(page: Page, text: string, userDataDir: string
   await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
 }
 
+test("chat history IPC creates and reloads an ordinary chat after startup", async ({ aiden }) => {
+  const { page, userDataDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  const workspaceId = (await workspaces(page))[0].id;
+  const created = await page.evaluate(async (workspaceId) => {
+    const ipc = (window as unknown as {
+      aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+    }).aidenAPI.ipc;
+    return ipc.invoke<{ id: string; title: string; workspaceId: string }>("chats:create", {
+      workspaceId,
+      title: "History startup check",
+    });
+  }, workspaceId);
+  expect(created).toMatchObject({ title: "History startup check", workspaceId });
+  expect((await regularChats(userDataDir)).map((chat) => chat.id)).toContain(created.id);
+  const loaded = await page.evaluate((chatId) => (
+    window as unknown as {
+      aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+    }
+  ).aidenAPI.ipc.invoke<{ chat: { id: string; messages: unknown[] } }>("chats:get", chatId), created.id);
+  expect(loaded.chat).toMatchObject({ id: created.id, messages: [] });
+});
+
 test("No workspace chats each run in their own hidden folder and share one Chats group", async ({ aiden }) => {
   const { page, userDataDir } = aiden;
   await finishLmStudioOnboarding(page);
@@ -119,6 +142,40 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   const thirdHome = (await workspaces(page)).find((workspace) => workspace.id === third.workspaceId);
   expect(thirdHome?.noWorkspace).toBe(true);
   expect(await isDirectory(thirdHome!.folderPath!)).toBe(true);
+});
+
+test("a selected skill reaches the first turn after allocating a fresh private folder", async ({ aiden }) => {
+  const { page, userDataDir, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.evaluate(() => (window as unknown as {
+    aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+  }).aidenAPI.ipc.invoke("skills:save", {
+    id: "private-handoff-fixture",
+    name: "Private handoff fixture",
+    description: "A skill selected before its private folder exists.",
+    instructions: "PRIVATE_HANDOFF_INSTRUCTION: Apply the chosen review checklist.",
+    enabled: true,
+  }));
+  await page.reload();
+  await sendAndWaitForReply(page, "Populate the original private home", userDataDir, 1);
+  const [source] = await regularChats(userDataDir);
+  await expect.poll(() => savedReplies(userDataDir, source.id)).toBe(1);
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  const composer = page.locator("textarea");
+  await composer.fill("$");
+  await page.getByRole("listbox", { name: "Skills" })
+    .getByRole("option", { name: /Private handoff fixture/u }).click();
+  const prompt = "Apply my selected checklist in the new private chat";
+  await composer.fill(prompt);
+  await composer.press("Enter");
+  await expect.poll(async () => (await regularChats(userDataDir)).length).toBe(2);
+  const target = (await regularChats(userDataDir)).find((chat) => chat.id !== source.id)!;
+  expect(target.workspaceId).not.toBe(source.workspaceId);
+  await expect.poll(() => savedReplies(userDataDir, target.id)).toBe(1);
+  expect(lmStudio.requests.some((request) => {
+    const body = JSON.stringify(request.body);
+    return body.includes(prompt) && body.includes("PRIVATE_HANDOFF_INSTRUCTION");
+  })).toBe(true);
 });
 
 test("an older install's folderless default workspace becomes the home of its chats on the next start", async ({ aiden }) => {

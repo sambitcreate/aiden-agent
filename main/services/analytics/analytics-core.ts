@@ -222,7 +222,7 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 
 // Rebuilds a `$exception_list` from scratch, admitting only what
 // exceptionList could have produced from a sanitized exception.
-function validExceptionList(value: unknown, fallbackPlatform: string): Record<string, unknown>[] | undefined {
+function validExceptionList(value: unknown, source: unknown): Record<string, unknown>[] | undefined {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CAUSE_DEPTH + 1) return undefined;
   let platform: string | undefined;
   let handled = true;
@@ -244,11 +244,11 @@ function validExceptionList(value: unknown, fallbackPlatform: string): Record<st
       platform = frame.platform;
       v8Frames.push({ filename: frame.filename, function: frame.function, lineno: frame.lineno, colno: frame.colno, inApp: frame.in_app });
     }
-    const error = parseSanitizedError({ type: entry.type, value: entry.value, frames: v8Frames });
+    const error = parseSanitizedError({ type: entry.type, value: entry.value, frames: v8Frames }, { allowSystemErrorCode: source === "server" });
     if (!error) return undefined;
     errors.push(error);
   }
-  return buildExceptionList(errors, platform ?? fallbackPlatform, handled);
+  return buildExceptionList(errors, platform ?? (source === "renderer" ? "web:javascript" : "node:javascript"), handled);
 }
 
 // The last line of defence, run by the SDK on every outgoing message: only
@@ -267,7 +267,7 @@ export function validateOutgoingEvent<M extends { event: string; properties?: Re
   const properties: Record<string, unknown> = {};
   const source = message.properties ?? {};
   if (message.event === EXCEPTION_EVENT) {
-    const list = validExceptionList(source.$exception_list, source.source === "renderer" ? "web:javascript" : "node:javascript");
+    const list = validExceptionList(source.$exception_list, source.source);
     if (!list) return null;
     if (typeof source.$exception_level !== "string" || !EXCEPTION_LEVELS.has(source.$exception_level)) return null;
     if (typeof source.$exception_fingerprint !== "string" || !FINGERPRINT.test(source.$exception_fingerprint)) return null;

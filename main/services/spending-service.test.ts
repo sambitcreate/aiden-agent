@@ -133,3 +133,15 @@ test("a meter whose response charge could not be saved refuses the next provider
   await assert.rejects(async () => { await stream(model, context, {}); }, /charge publication failed/u);
   assert.equal(asked, 1);
 });
+
+test("a restart immediately after recording restores the routine and monthly balances", async () => {
+  const saved: SpendingDocument[] = [];
+  const settings = { routineRunUsd: 1, botMonthUsd: 3 };
+  const first = service(settings, saved);
+  const owner = { kind: "bot", id: "ada", run: "morning" } as const;
+  await Promise.all([first.record(owner, 0.25), first.record(owner, 0.75)]);
+  const reopened = service(settings, [], [], saved[saved.length - 1]);
+  assert.deepEqual(await reopened.block(owner), { kind: "run", allowedUsd: 1, spentUsd: 1 });
+  assert.equal((await reopened.status("bot", owner.id))?.spentUsd, 1);
+  assert.equal(await reopened.block({ ...owner, run: "evening" }), undefined);
+});

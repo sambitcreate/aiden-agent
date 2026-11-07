@@ -309,6 +309,14 @@ export function slashCommandTakesArgument(command: SlashCommandDefinition): bool
   return command.argument !== "none";
 }
 
+/**
+ * Whether picking the command fills in "/name " and waits for text. A command
+ * whose argument is only an optional "off", such as /design, runs at once.
+ */
+export function slashCommandWaitsForArgument(command: SlashCommandDefinition): boolean {
+  return slashCommandTakesArgument(command) && command.argument !== "optional-off";
+}
+
 /** Replace the typed token with the command's full name and a space, ready for its argument. */
 export function completeSlashCommandToken(
   draft: string,

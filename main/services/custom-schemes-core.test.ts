@@ -35,3 +35,18 @@ test("no custom scheme can bypass CSP, run service workers, or be fetched cross-
     assert.equal(privileges.secure, true, scheme);
   }
 });
+
+test("aiden-design is privileged only with design mode on, and like the others cannot bypass CSP or be fetched", () => {
+  assert.equal(
+    customSchemePrivileges({ studioAssets: false, designMode: false }).some(({ scheme }) => scheme === "aiden-design"),
+    false,
+  );
+  const schemes = customSchemePrivileges({ studioAssets: false, designMode: true });
+  assert.equal(schemes.filter(({ scheme }) => scheme === "aiden-design").length, 1);
+  const design = schemes.find(({ scheme }) => scheme === "aiden-design");
+  assert.equal(design?.privileges.bypassCSP, false);
+  assert.equal(design?.privileges.supportFetchAPI, false);
+  assert.equal(design?.privileges.allowServiceWorkers, false);
+  assert.equal(design?.privileges.corsEnabled, false);
+  assert.equal(design?.privileges.standard, true);
+});

@@ -173,6 +173,7 @@ import {
 import { skillRegistry } from "./skill-registry-main.js";
 import { withoutSkills } from "./skill-registry.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
+import { DESIGN_CANVAS_SKILLS } from "./design-canvas/skill.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { simulatorShareRelay } from "./devices/device-share.js";
 import {
@@ -668,8 +669,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.
               target: async (workspaceId) => {
-                const target = await workspaceApplicationService.workspaceForNoWorkspaceChat(workspaceId);
-                if (target !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
+                const target = await workspaceApplicationService.reserveNoWorkspaceChat(workspaceId);
+                if (target.workspaceId !== workspaceId) ipcMain.broadcast("workspaces:changed", {});
                 return target;
               },
               release: async (workspaceId) => {
@@ -692,9 +693,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.capabilities.includes("skills:invoke")
               );
             },
-            // Phones never get workspace_artifact, so they do not list its skill either.
+            // Phones never get workspace_artifact or the design canvas, so they do not list those skills either.
             skillCatalog: async (workspaceId) =>
-              withoutSkills(await skillRegistry.snapshot(workspaceId), DESKTOP_ARTIFACT_SKILLS).catalog,
+              withoutSkills(await skillRegistry.snapshot(workspaceId), new Set([...DESKTOP_ARTIFACT_SKILLS, ...DESIGN_CANVAS_SKILLS])).catalog,
             botSkillCatalog: async (deviceId, botId, chatId, workspaceId) => {
               // The same Full/Custom narrowing the generation path enforces:
               // admit fresh, revalidate, then filter the workspace snapshot

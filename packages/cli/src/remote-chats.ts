@@ -22,13 +22,8 @@ import { liveRunAttention } from "../../../main/services/chat-pending-attention.
 export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<typeof createDaemonChats>, workspace: ReturnType<typeof createCliWorkspaceApplication>, state: AidenRemoteStateRegistry,
   idempotency: AidenIdempotencyLedger, persistIdempotency: (value: AidenIdempotencySnapshot) => Promise<void>, bots: Awaited<ReturnType<typeof createCliBots>>) {
   const deleting = new JsonStore<string[]>(join(agentDir, "daemon-chat-deletions.json"), []);
-  // A journal deletion is a durable roll-forward checkpoint, including after a crash.
-  for (const id of await deleting.load()) {
-    await deleteCliBotSubagentHistory(agentDir, id);
-    await rm(daemon.sessionPath(id), { force: true });
-    if (await daemon.chatStore.get(id)) await daemon.chatStore.remove(id);
-    await deleting.update((values) => { values.splice(values.indexOf(id), 1); });
-  }
+  // Remote must not serve a chat whose deletion could not finish.
+  await daemon.recoverChatDeletions();
   const privateHistory = {
     async deleteChat(id: string) { await deleting.update((values) => { if (!values.includes(id)) values.push(id); }); await deleteCliBotSubagentHistory(agentDir, id); },
     async completeChatDeletion(id: string) { await deleting.update((values) => { const index = values.indexOf(id); if (index >= 0) values.splice(index, 1); }); },

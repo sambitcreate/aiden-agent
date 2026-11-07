@@ -25,6 +25,7 @@ import {
   Settings,
   TerminalSquare,
   Wrench,
+  PencilRuler,
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { cn } from "../lib/ui-utils";
@@ -48,6 +49,7 @@ const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }
   check: ListChecks,
   copy: Clipboard,
   clone: CopyPlus,
+  design: PencilRuler,
   editor: Code2,
   environment: FolderCog,
   export: Download,
