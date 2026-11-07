@@ -393,6 +393,19 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.capture("search-failing-machines", in: self)
         mixed.terminate()
 
+        let largest = AidenStateMatrix.launch(
+            scenario: .offlineMix,
+            shell: .tabs,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: largest).waitForExistence(timeout: 10))
+        search("zzzz", in: largest)
+        XCTAssertTrue(largest.staticTexts["No results"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("search-no-results-failing-machines-accessibilityExtraExtraExtraLarge", in: self)
+        for _ in 0..<4 { dragResults(in: largest, from: 0.4, to: 0.05) }
+        AidenStateMatrix.capture("search-no-results-failing-machines-accessibilityExtraExtraExtraLarge-scrolled", in: self)
+        largest.terminate()
+
         let noBots = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
         XCTAssertTrue(openInbox(in: noBots).waitForExistence(timeout: 10))
         search("zzzz", in: noBots)
