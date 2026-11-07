@@ -18,6 +18,8 @@ import Observation
 @Observable
 final class AidenUnifiedInboxStore {
     private(set) var snapshots: [String: AidenHostInboxSnapshot] = [:]
+    /// Machines the person hid from the Inbox. Search reads them with `snapshots`.
+    private(set) var hiddenMachines: Set<String> = []
     /// Built when its inputs change, so a view can read it freely.
     private(set) var inbox = AidenUnifiedInbox()
     /// A machine that stops being shown puts this back to `.all`.
@@ -203,6 +205,7 @@ final class AidenUnifiedInboxStore {
             filter = .all
         }
         let hidden = Set(readings.filter(\.isHidden).map(\.connection.instanceId))
+        if hidden != hiddenMachines { hiddenMachines = hidden }
         let inputs = InboxInputs(snapshots: snapshots, filter: filter, hiddenMachines: hidden)
         guard inputs != builtFrom else { return }
         builtFrom = inputs

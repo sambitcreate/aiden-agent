@@ -8,6 +8,10 @@ struct AidenSearchTabView: View {
     let onOpen: (AidenAppRoute) -> Void
 
     @State private var model: AidenSearchModel
+    @FocusState private var searchIsFocused: Bool
+    /// What the last row needs below it so the search field, which grows with the
+    /// text size, never sits on it.
+    @ScaledMetric(relativeTo: .body) private var fieldClearance: CGFloat = 72
     @Environment(\.aidenPalette) private var palette
 
     init(
@@ -28,42 +32,62 @@ struct AidenSearchTabView: View {
         content
             .background(palette.canvas.ignoresSafeArea())
             .navigationTitle("Search")
-            // The query is the field's text; each change searches again.
+            // Each change of the trimmed query searches again.
             .searchable(text: $model.query, prompt: "Chats and Bots")
-            .task(id: model.query) { await model.run() }
+            .searchFocused($searchIsFocused)
+            // The Search key puts the keyboard away and keeps the query.
+            .onSubmit(of: .search) { searchIsFocused = false }
+            .task(id: model.trimmedQuery) { await model.run() }
     }
 
     @ViewBuilder
     private var content: some View {
         if !model.hasQuery {
-            ContentUnavailableView(
-                "Search",
-                systemImage: "magnifyingglass",
-                description: Text("Find a chat, or a Bot conversation on any of your machines.")
-            )
+            scrolling {
+                ContentUnavailableView(
+                    "Search",
+                    systemImage: "magnifyingglass",
+                    description: Text("Find a chat, or a Bot conversation on any of your machines.")
+                )
+            }
         } else {
             let chats = model.chats
             let bots = model.bots
+            let unsearched = unsearchedNote(model.unsearchedMachines)
             if chats.isEmpty && bots.isEmpty {
-                emptyResults
+                emptyResults(note: unsearched)
             } else {
-                results(chats: chats, bots: bots)
+                results(chats: chats, bots: bots, note: unsearched)
             }
         }
     }
 
+    /// A state with no list scrolls like one, so all of it can be read at the
+    /// largest text, and it leaves the keyboard the same way.
+    private func scrolling<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView {
+            content()
+                .frame(maxWidth: .infinity)
+                .padding(.top, AidenSpacing.xxxl)
+        }
+        .contentMargins(.bottom, fieldClearance, for: .scrollContent)
+        .scrollBounceBehavior(.basedOnSize)
+        .putsKeyboardAwayOnDrag(searchIsFocused: $searchIsFocused)
+    }
+
     // MARK: Results
 
-    private func results(chats: [AidenUnifiedInboxRow], bots: [AidenSearchBotHit]) -> some View {
-        List {
+    private func results(chats: [AidenUnifiedInboxRow], bots: [AidenSearchBotHit], note: String?) -> some View {
+        let details = model.chatDetails()
+        return List {
             if !chats.isEmpty {
                 Section("Chats") {
                     ForEach(chats) { row in
                         Button { open(row.route) } label: {
                             AidenSearchChatRowView(
                                 row: row,
-                                machineName: model.machineName(for: row.id.instanceId),
-                                workspaceName: model.workspaceName(for: row)
+                                machineName: details.machineName(for: row),
+                                workspaceName: details.workspaceName(for: row)
                             )
                         }
                         .listRowBackground(palette.canvas)
@@ -78,7 +102,7 @@ struct AidenSearchTabView: View {
                     }
                 }
             }
-            if model.isSearchingBots || !model.unsearchedMachines.isEmpty {
+            if model.isSearchingBots || note != nil {
                 Section {
                     if model.isSearchingBots {
                         HStack(spacing: AidenSpacing.m) {
@@ -88,7 +112,7 @@ struct AidenSearchTabView: View {
                         }
                         .accessibilityElement(children: .combine)
                     }
-                    if let note = unsearchedNote {
+                    if let note {
                         Text(note)
                             .font(.footnote)
                             .foregroundStyle(palette.secondary)
@@ -98,37 +122,38 @@ struct AidenSearchTabView: View {
             }
         }
         .listStyle(.plain)
+        .contentMargins(.bottom, fieldClearance, for: .scrollContent)
         .scrollContentBackground(.hidden)
-        // Reading the results puts the keyboard away.
-        .scrollDismissesKeyboard(.immediately)
+        .putsKeyboardAwayOnDrag(searchIsFocused: $searchIsFocused)
         .foregroundStyle(palette.foreground)
     }
 
-    private var emptyResults: some View {
-        VStack(spacing: AidenSpacing.l) {
-            if model.isSearchingBots {
-                ProgressView("Searching Bots")
-                    .padding(AidenSpacing.xxl)
-            } else {
-                ContentUnavailableView(
-                    "No results",
-                    systemImage: "magnifyingglass",
-                    description: Text("Search covers the chats Aiden has loaded and Bot conversations on connected machines. A chat that hasn’t loaded yet won’t appear here.")
-                )
-            }
-            if let note = unsearchedNote {
-                Text(note)
-                    .font(.footnote)
-                    .foregroundStyle(palette.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, AidenSpacing.xxl)
+    private func emptyResults(note: String?) -> some View {
+        scrolling {
+            VStack(spacing: AidenSpacing.l) {
+                if model.isSearchingBots {
+                    ProgressView("Searching Bots")
+                        .padding(AidenSpacing.xxl)
+                } else {
+                    ContentUnavailableView(
+                        "No results",
+                        systemImage: "magnifyingglass",
+                        description: Text("Search covers the chats Aiden has loaded and Bot conversations on connected machines. A chat that hasn’t loaded yet won’t appear here.")
+                    )
+                }
+                if let note {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, AidenSpacing.xxl)
+                }
             }
         }
     }
 
     /// Says which machines' Bots weren't searched, so a missing result isn't read as "none".
-    private var unsearchedNote: String? {
-        let names = model.unsearchedMachines
+    private func unsearchedNote(_ names: [String]) -> String? {
         guard !names.isEmpty else { return nil }
         let list = names.formatted(.list(type: .and))
         return String(localized: "Couldn’t search Bot conversations on \(list).")
@@ -230,5 +255,16 @@ private struct AidenSearchBotRowView: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(String(localized: "\(hit.title), Bot conversation on \(hit.machineName)"))
         .accessibilityValue(hit.preview ?? "")
+    }
+}
+
+private extension View {
+    /// Dragging the results lets go of the search field's focus, which puts the
+    /// keyboard away and keeps the query. `scrollDismissesKeyboard` doesn't reach
+    /// the field of a search tab, so the field's own focus is let go.
+    func putsKeyboardAwayOnDrag(searchIsFocused: FocusState<Bool>.Binding) -> some View {
+        onScrollPhaseChange { _, phase in
+            if phase == .interacting { searchIsFocused.wrappedValue = false }
+        }
     }
 }

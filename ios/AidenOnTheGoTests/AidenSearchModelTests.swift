@@ -76,8 +76,20 @@ final class AidenSearchModelTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_787_100_000)
     private let clock = AidenManualClock()
     private let desk = AidenBotDesk()
+    private let onScreenView = NSObject()
     private var machineList: [AidenSearchMachine] = []
     private var snapshots: [AidenHostInboxSnapshot] = []
+    private var preferences = AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
+
+    /// The real machine source and a model over it.
+    private func realModel(_ coordinator: AidenRemoteCoordinator) -> AidenSearchModel {
+        let preferences = preferences
+        return AidenSearchModel(
+            chatInput: { AidenSearchChatInput(snapshots: []) },
+            machines: { AidenSearchMachine.machines(in: coordinator, preferences: preferences) },
+            clock: clock
+        )
+    }
 
     // MARK: Fixtures
 
@@ -101,12 +113,13 @@ final class AidenSearchModelTests: XCTestCase {
         _ id: String,
         _ name: String,
         canReadBots: Bool = true,
-        isConnected: Bool = true
+        isConnected: Bool = true,
+        isRevoked: Bool = false
     ) -> AidenSearchMachine {
         let desk = desk
         return AidenSearchMachine(
             instanceId: id, deviceId: "phone", name: name,
-            canReadBots: canReadBots, isConnected: isConnected,
+            canReadBots: canReadBots, isConnected: isConnected, isRevoked: isRevoked,
             searchBots: { query in try await desk.search(machine: id, query: query) }
         )
     }
@@ -151,6 +164,15 @@ final class AidenSearchModelTests: XCTestCase {
         let task = Task { await model.run() }
         await settle("debounce sleep") { clock.sleeperCount == count }
         return task
+    }
+
+    /// A background revocation of a machine that isn't selected. A view is showing
+    /// its data, so the connection stays in the registry, revoked, as the app holds it.
+    private func revoke(_ instanceId: String, in coordinator: AidenRemoteCoordinator) async {
+        coordinator.setOnScreen(true, view: onScreenView, instanceId: instanceId)
+        if let connection = coordinator.hosts.connection(for: instanceId) {
+            await coordinator.hostConnectionWasRevokedInBackground(connection)
+        }
     }
 
     private func pastDebounce() {
@@ -427,6 +449,7 @@ final class AidenSearchModelTests: XCTestCase {
         capable: Set<String> = ["studio", "laptop", "mini"],
         offline: Set<String> = []
     ) async throws -> (AidenRemoteCoordinator, AidenDemoResponder) {
+        preferences = AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
         let responder = AidenDemoResponder()
         let installations = ["studio", "laptop", "mini"].map { id -> AidenInstallation in
             var installation = AidenDemoHosts.installation(instanceId: id, name: id.capitalized)
@@ -453,7 +476,7 @@ final class AidenSearchModelTests: XCTestCase {
     func testTheRealSourceReadsEachMachinesOwnCapabilityAndConnection() async throws {
         let (coordinator, _) = try await demoMachines(capable: ["studio", "mini"], offline: ["mini"])
 
-        let machines = AidenSearchMachine.machines(in: coordinator)
+        let machines = AidenSearchMachine.machines(in: coordinator, preferences: preferences)
 
         XCTAssertEqual(machines.map(\.instanceId), ["studio", "laptop", "mini"])
         XCTAssertEqual(machines.map(\.name), ["Studio", "Laptop", "Mini"])
@@ -464,13 +487,8 @@ final class AidenSearchModelTests: XCTestCase {
 
     func testSearchingRealMachinesAsksOnlyConnectedCapableOnesAndLeavesTheSelectionAlone() async throws {
         let (coordinator, responder) = try await demoMachines(capable: ["studio", "mini"], offline: ["mini"])
-        let before = (responder.requests(instanceId: "studio").count, responder.requests(instanceId: "laptop").count,
-                      responder.requests(instanceId: "mini").count)
-        let model = AidenSearchModel(
-            chatInput: { AidenSearchChatInput(snapshots: []) },
-            machines: { AidenSearchMachine.machines(in: coordinator) },
-            clock: clock
-        )
+        let before = (laptop: responder.requests(instanceId: "laptop").count, mini: responder.requests(instanceId: "mini").count)
+        let model = realModel(coordinator)
 
         // A slash and a space must travel as a query, never as part of the path.
         model.query = "a/b ../c"
@@ -484,22 +502,17 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(asked("studio"), ["GET /bot-conversations"])
         XCTAssertEqual(asked("laptop"), [], "A machine without Bot access was asked")
         XCTAssertEqual(asked("mini"), [], "A machine that isn't connected was asked")
-        XCTAssertEqual(responder.requests(instanceId: "laptop").count, before.1, "Searching reached a machine it had no reason to")
-        XCTAssertEqual(responder.requests(instanceId: "mini").count, before.2, "Searching retried a machine that isn't connected")
+        XCTAssertEqual(responder.requests(instanceId: "laptop").count, before.laptop, "Searching reached a machine it had no reason to")
+        XCTAssertEqual(responder.requests(instanceId: "mini").count, before.mini, "Searching retried a machine that isn't connected")
         XCTAssertEqual(model.bots.map(\.title), ["Scout on studio"])
         XCTAssertEqual(model.unsearchedMachines, ["Mini"])
         XCTAssertEqual(coordinator.activeInstanceId, "studio")
-        XCTAssertGreaterThanOrEqual(responder.requests(instanceId: "studio").count, before.0)
     }
 
     func testARealMachineThatErrorsIsNamedAndTheRestStay() async throws {
         let (coordinator, responder) = try await demoMachines()
         responder.reply(instanceId: "laptop", path: "/bot-conversations", status: 500, json: Data("{}".utf8))
-        let model = AidenSearchModel(
-            chatInput: { AidenSearchChatInput(snapshots: []) },
-            machines: { AidenSearchMachine.machines(in: coordinator) },
-            clock: clock
-        )
+        let model = realModel(coordinator)
 
         model.query = "scout"
         let run = await startRun(model)
@@ -510,6 +523,207 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(model.unsearchedMachines, ["Laptop"])
         XCTAssertNil(coordinator.presentedError)
         XCTAssertEqual(coordinator.connectionState, .connected)
+    }
+
+    // MARK: Hidden and revoked machines
+
+    func testHitsFromAMachineThatLeavesTheListAreDropped() async {
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop")]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        desk.reply("laptop", "scout", [conversation("chat_2", title: "Scout notes", minutesAgo: 20)])
+        let model = makeModel()
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest", "Scout notes"])
+
+        // Hidden or forgotten: the machine is no longer one the person searches.
+        machineList = [machine("studio", "Studio Mac")]
+
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+    }
+
+    func testHitsFromAMachineRevokedAfterTheyLandedAreDropped() async {
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop")]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        desk.reply("laptop", "scout", [conversation("chat_2", title: "Scout notes", minutesAgo: 20)])
+        let model = makeModel()
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop", isConnected: false, isRevoked: true)]
+
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+        XCTAssertTrue(model.unsearchedMachines.isEmpty, "A revoked machine was named")
+    }
+
+    func testARevokedMachineIsNotNamedAsOneThatCouldNotBeSearched() async {
+        machineList = [
+            machine("studio", "Studio Mac"),
+            machine("laptop", "Laptop", isConnected: false, isRevoked: true),
+            machine("build", "Build Box", isConnected: false),
+        ]
+        let model = makeModel()
+
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+
+        XCTAssertEqual(model.unsearchedMachines, ["Build Box"])
+        XCTAssertEqual(desk.asks, ["studio: scout"])
+    }
+
+    func testTheQueryIsTrimmedForTheTaskThatRunsIt() {
+        let model = makeModel()
+        model.query = "  scout \n"
+        XCTAssertEqual(model.trimmedQuery, "scout")
+    }
+
+    func testChatDetailsAreReadOnceForEveryRow() {
+        snapshots = [
+            snapshot("studio", [chat("c1", "Upload test")]),
+            snapshot("laptop", [chat("c1", "Upload again")], online: false),
+        ]
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop")]
+        let model = makeModel()
+        model.query = "upload"
+
+        let details = model.chatDetails()
+
+        XCTAssertEqual(model.chats.map { details.machineName(for: $0) }, ["Laptop", "Studio Mac"])
+        XCTAssertEqual(model.chats.map { details.workspaceName(for: $0) }, ["Project", "Project"])
+    }
+
+    func testTheRealSourceLeavesOutAHiddenMachine() async throws {
+        let (coordinator, responder) = try await demoMachines(offline: ["mini"])
+        preferences.update("laptop") { $0.isHidden = true }
+        preferences.update("mini") { $0.isHidden = true }
+        let model = realModel(coordinator)
+
+        XCTAssertEqual(AidenSearchMachine.machines(in: coordinator, preferences: preferences).map(\.instanceId), ["studio"])
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+
+        XCTAssertEqual(model.bots.map(\.title), ["Scout on studio"])
+        XCTAssertTrue(model.unsearchedMachines.isEmpty, "A hidden machine was named")
+        XCTAssertEqual(responder.requests(instanceId: "laptop").filter { $0.contains("bot-conversations") }, [])
+    }
+
+    func testARealMachineHiddenAfterItsHitsLandedLosesThem() async throws {
+        let (coordinator, _) = try await demoMachines()
+        let model = realModel(coordinator)
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+        XCTAssertEqual(Set(model.bots.map(\.title)), ["Scout on studio", "Scout on laptop", "Scout on mini"])
+
+        preferences.update("laptop") { $0.isHidden = true }
+
+        XCTAssertEqual(Set(model.bots.map(\.title)), ["Scout on studio", "Scout on mini"])
+    }
+
+    func testARealMachineRevokedAfterItsHitsLandedLosesThem() async throws {
+        let (coordinator, _) = try await demoMachines()
+        let model = realModel(coordinator)
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+        XCTAssertEqual(model.bots.count, 3)
+
+        await revoke("laptop", in: coordinator)
+
+        XCTAssertEqual(Set(model.bots.map(\.title)), ["Scout on studio", "Scout on mini"])
+        XCTAssertFalse(model.unsearchedMachines.contains("Laptop"))
+    }
+
+    func testARealMachineRevokedWhileItsRequestIsOutIsDropped() async throws {
+        let (coordinator, responder) = try await demoMachines()
+        let release = responder.hold(instanceId: "laptop", path: "/bot-conversations")
+        let model = realModel(coordinator)
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await settle("laptop asked") {
+            responder.requests(instanceId: "laptop").contains("GET /bot-conversations")
+        }
+
+        await revoke("laptop", in: coordinator)
+        release()
+        await run.value
+
+        XCTAssertEqual(Set(model.bots.map(\.title)), ["Scout on studio", "Scout on mini"])
+        XCTAssertFalse(model.unsearchedMachines.contains("Laptop"), "A revoked machine was named")
+        XCTAssertFalse(model.isSearchingBots)
+    }
+
+    func testABotSearchAsksForUpToFiftyConversations() async throws {
+        let (coordinator, responder) = try await demoMachines()
+        let seen = AidenQueryItemsBox()
+        responder.reply(instanceId: "studio", path: "/bot-conversations", status: 200) { url in
+            seen.record(url)
+            return Data(#"{"conversations":[]}"#.utf8)
+        }
+        let model = realModel(coordinator)
+
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+
+        XCTAssertEqual(seen.value("limit"), "50")
+        XCTAssertEqual(seen.value("query"), "scout")
+    }
+
+    // MARK: From the Inbox store
+
+    func testTheChatInputIsBuiltFromTheInboxStoreAndKeepsItsHiddenMachines() async throws {
+        let (coordinator, _) = try await demoMachines()
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AidenSearchModelTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        for id in ["studio", "laptop"] {
+            let decoded = try AidenRemoteJSONDecoder.decode(AidenChatSummaryPage.self, from: Data(
+                #"{"summaries":[{"id":"c_\#(id)","workspaceId":"workspace_app","title":"Upload test on \#(id)","titlePending":false,"createdAt":"2026-11-05T09:00:00.000Z","updatedAt":"2026-11-05T09:00:00.000Z","revision":"rev_\#(String(format: "%043d", 1))","activity":"idle","rowState":"idle","unread":false,"inboxBucket":"earlier","inboxSortAt":"2026-11-05T09:00:00.000Z"}]}"#.utf8
+            ))
+            _ = try await cache.saveChatSummaries(
+                AidenChatCache.SummarySnapshot(summaries: decoded.summaries, nextCursor: nil),
+                instanceId: id,
+                writeToken: cache.reserveSummaryWrite(instanceId: id)
+            )
+            _ = await cache.saveWorkspaces(
+                [try AidenRemoteJSONDecoder.decode(AidenWorkspace.self, from: Data(
+                    #"{"id":"workspace_app","name":"Saved name","permission":"ask","memoryEnabled":true,"hasFolder":true,"isManagedWorktree":false,"createdAt":"2026-11-05T09:00:00.000Z","updatedAt":"2026-11-05T09:00:00.000Z","revision":"workspace_revision_7"}"#.utf8
+                ))],
+                instanceId: id,
+                writeToken: cache.reserveChatWrite()
+            )
+        }
+        let store = AidenUnifiedInboxStore(hosts: coordinator.hosts, preferences: preferences, cache: cache, clock: clock)
+        await settle("saved chats reach the store") {
+            store.snapshots["studio"]?.chats.isEmpty == false && store.snapshots["laptop"]?.chats.isEmpty == false
+        }
+        let model = AidenSearchModel(
+            chatInput: { AidenSearchChatInput(store: store) },
+            machines: { AidenSearchMachine.machines(in: coordinator, preferences: self.preferences) },
+            clock: clock
+        )
+        model.query = "upload"
+        XCTAssertEqual(Set(model.chats.map(\.id.instanceId)), ["studio", "laptop"])
+
+        preferences.update("laptop") { $0.isHidden = true }
+        await settle("the store sees the hidden machine") { store.hiddenMachines == ["laptop"] }
+
+        XCTAssertEqual(AidenSearchChatInput(store: store).hiddenMachines, ["laptop"])
+        XCTAssertEqual(model.chats.map(\.id.instanceId), ["studio"])
     }
 
     // MARK: The shell's stand-in
@@ -534,6 +748,25 @@ private extension ISO8601DateFormatter {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
+}
+
+/// The query items of the last request a reply closure saw.
+private final class AidenQueryItemsBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String: String] = [:]
+
+    func record(_ url: URL) {
+        let found = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        lock.lock()
+        items = Dictionary(found.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+        lock.unlock()
+    }
+
+    func value(_ name: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return items[name]
+    }
 }
 
 /// Stands in for the machines' Bot search: records who was asked, and answers,

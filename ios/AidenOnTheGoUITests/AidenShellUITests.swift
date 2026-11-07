@@ -209,12 +209,14 @@ final class AidenShellUITests: XCTestCase {
 
     /// Types into the Search tab's field. The demo machines answer from a
     /// responder in the app, so this reaches no real machine.
-    private func search(_ text: String, in app: XCUIApplication) {
+    private func search(_ text: String, in app: XCUIApplication, submit: Bool = true) {
         AidenStateMatrix.openArea("Search", in: app)
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10), "Search has no field")
         field.tap()
         field.typeText(text)
+        // The Search key puts the keyboard away and keeps the query, so the results are in view.
+        if submit { field.typeText("\n") }
     }
 
     private func searchRow(_ prefix: String, in app: XCUIApplication) -> XCUIElement {
@@ -253,6 +255,82 @@ final class AidenShellUITests: XCTestCase {
             "The empty state did not say what search covers"
         )
         app.terminate()
+    }
+
+    /// A drag that XCUITest's `swipeUp()` doesn't make: slow, from one spot to another.
+    /// A flick from `swipeUp()` left the list where it was, which is why an earlier
+    /// attempt saw no scroll and no change of keyboard.
+    private func dragResults(in app: XCUIApplication, from: Double = 0.45, to: Double = 0.1) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+    }
+
+    /// The largest text makes the list taller than the space above the keyboard.
+    func testDraggingTheResultsPutsTheKeyboardAwayAndKeepsTheQuery() {
+        let app = AidenStateMatrix.launch(
+            scenario: .four,
+            shell: .tabs,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        search("flaky", in: app, submit: false)
+        XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard was not up to begin with")
+
+        dragResults(in: app)
+
+        let gone = NSPredicate(format: "exists == false")
+        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)], timeout: 5)
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "flaky", "The query went with the keyboard")
+        app.terminate()
+    }
+
+    func testTheSearchKeyPutsTheKeyboardAwayAndKeepsTheQuery() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        search("flaky", in: app, submit: false)
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard was not up to begin with")
+
+        app.searchFields.firstMatch.typeText("\n")
+
+        let gone = NSPredicate(format: "exists == false")
+        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)], timeout: 5)
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "flaky")
+        XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).exists, "The results went with the keyboard")
+        app.terminate()
+    }
+
+    /// Without a list the empty states still scroll, so none of their words or
+    /// the note about unsearched machines can sit behind the field.
+    func testTheEmptyStatesScrollClearOfTheField() {
+        for size in [AidenStateMatrix.ContentSize.large, .accessibilityExtraExtraExtraLarge] {
+            let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, contentSize: size)
+            XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "\(size)")
+            search("zzzz", in: app, submit: false)
+            let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search")).firstMatch
+            XCTAssertTrue(note.waitForExistence(timeout: 10), "No note (\(size))")
+
+            for _ in 0..<4 { dragResults(in: app, from: 0.4, to: 0.05) }
+            let field = app.searchFields.firstMatch
+            XCTAssertLessThanOrEqual(note.frame.maxY, field.frame.minY, "The note sits behind the field (\(size))")
+            app.terminate()
+        }
+
+        let prompt = AidenStateMatrix.launch(
+            scenario: .one,
+            shell: .tabs,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: prompt).waitForExistence(timeout: 10))
+        AidenStateMatrix.openArea("Search", in: prompt)
+        let description = prompt.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "any of your machines")
+        ).firstMatch
+        XCTAssertTrue(description.waitForExistence(timeout: 10), "No prompt")
+        for _ in 0..<4 { dragResults(in: prompt, from: 0.4, to: 0.05) }
+        XCTAssertLessThanOrEqual(description.frame.maxY, prompt.searchFields.firstMatch.frame.minY, "The prompt is cut off by the field")
+        prompt.terminate()
     }
 
     /// Home Mini errors, and Laptop and Build Box are offline. Studio's results stay.

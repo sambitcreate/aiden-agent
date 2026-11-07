@@ -37,9 +37,12 @@ struct AidenSearchMachine {
     let canReadBots: Bool
     /// Connected now. A machine that isn't is skipped, not connected for the search.
     let isConnected: Bool
+    /// Its credential was revoked. Its Bots are neither searched nor shown, and
+    /// it isn't named as one that couldn't be searched.
+    var isRevoked = false
     let searchBots: @MainActor @Sendable (_ query: String) async throws -> [AidenBotConversationItem]
 
-    var canBeAsked: Bool { canReadBots && isConnected }
+    var canBeAsked: Bool { canReadBots && isConnected && !isRevoked }
 }
 
 @MainActor @Observable
@@ -50,11 +53,11 @@ final class AidenSearchModel {
     static let maxBotQueryScalars = 200
 
     var query = ""
-    private(set) var bots: [AidenSearchBotHit] = []
-    /// Machines that have Bots but couldn't be searched: not connected, or
-    /// they didn't answer. In the order the machines are listed.
-    private(set) var unsearchedMachines: [String] = []
     private(set) var isSearchingBots = false
+    private var isSearching = false
+    private var skippedMachines: Set<String> = []
+    private var failedMachines: Set<String> = []
+    private var hitsByMachine: [String: [AidenSearchBotHit]] = [:]
 
     @ObservationIgnored private let chatInput: @MainActor () -> AidenSearchChatInput
     @ObservationIgnored private let machines: @MainActor () -> [AidenSearchMachine]
@@ -63,8 +66,6 @@ final class AidenSearchModel {
     /// Each `run()` takes a number. Only the newest one may change what's shown.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var inFlight: Task<Void, Never>?
-    @ObservationIgnored private var hitsByMachine: [String: [AidenSearchBotHit]] = [:]
-    @ObservationIgnored private var failedMachines: Set<String> = []
 
     init(
         chatInput: @escaping @MainActor () -> AidenSearchChatInput,
@@ -78,8 +79,38 @@ final class AidenSearchModel {
         self.clock = clock
     }
 
-    private var trimmedQuery: String {
+    /// What is searched for. The view runs a search for each change of it.
+    var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Bot conversations found so far, newest first. Read against the machines
+    /// as they are now, so a machine that was revoked, hidden or forgotten after
+    /// its hits landed has none left, without waiting for another keystroke.
+    var bots: [AidenSearchBotHit] {
+        guard isSearching else { return [] }
+        let current = machines()
+        let shown = Set(current.filter { !$0.isRevoked }.map { Self.key($0.instanceId, $0.deviceId) })
+        return Self.merged(
+            hitsByMachine.filter { entry in
+                entry.value.first.map { shown.contains(Self.key($0.id.instanceId, $0.id.deviceId)) } ?? false
+            },
+            order: current
+        )
+    }
+
+    /// Machines that have Bots but couldn't be searched: not connected, or
+    /// they didn't answer. In the order the machines are listed. A machine that
+    /// is revoked, hidden or gone isn't one the person is waiting on.
+    var unsearchedMachines: [String] {
+        guard isSearching else { return [] }
+        return machines()
+            .filter { $0.canReadBots && !$0.isRevoked && (skippedMachines.contains($0.instanceId) || failedMachines.contains($0.instanceId)) }
+            .map(\.name)
+    }
+
+    private static func key(_ instanceId: String, _ deviceId: String) -> String {
+        "\(instanceId)\u{0}\(deviceId)"
     }
 
     /// False for an empty or blank query, which shows nothing and asks nothing.
@@ -109,11 +140,13 @@ final class AidenSearchModel {
         machines().first { $0.instanceId == instanceId }?.name
     }
 
-    func workspaceName(for row: AidenUnifiedInboxRow) -> String? {
-        guard case .chat(let summary, _) = row.content else { return nil }
-        return chatInput().snapshots.first {
-            $0.instanceId == row.id.instanceId && $0.deviceId == row.id.deviceId
-        }?.workspaceNames[summary.workspaceId]
+    /// What a chat row says about where it lives. Built once for a render, not
+    /// once per row.
+    func chatDetails() -> AidenSearchChatDetails {
+        AidenSearchChatDetails(
+            machineNames: Dictionary(machines().map { ($0.instanceId, $0.name) }, uniquingKeysWith: { first, _ in first }),
+            snapshots: chatInput().snapshots
+        )
     }
 
     /// Searches for the current query. Chats don't need it. This asks each
@@ -129,13 +162,14 @@ final class AidenSearchModel {
         let all = machines()
         hitsByMachine = [:]
         failedMachines = []
-        bots = []
+        skippedMachines = []
         guard !text.isEmpty else {
-            unsearchedMachines = []
+            isSearching = false
             isSearchingBots = false
             return
         }
-        unsearchedMachines = Self.unsearched(in: all, failed: [])
+        isSearching = true
+        skippedMachines = Self.skipped(in: all)
         isSearchingBots = all.contains(where: \.canBeAsked)
         guard isSearchingBots else { return }
 
@@ -158,7 +192,7 @@ final class AidenSearchModel {
         guard mine == generation else { return }
         // The machines may have changed while the person typed.
         let all = machines()
-        unsearchedMachines = Self.unsearched(in: all, failed: [])
+        skippedMachines = Self.skipped(in: all)
         let askable = all.filter(\.canBeAsked)
         guard !askable.isEmpty else {
             isSearchingBots = false
@@ -183,12 +217,10 @@ final class AidenSearchModel {
                 switch outcome.result {
                 case .success(let items):
                     hitsByMachine[outcome.machine.instanceId] = Self.hits(from: items, on: outcome.machine)
-                    bots = Self.merged(hitsByMachine, order: all)
                 case .failure(let error):
                     // Stopping a search isn't a machine failing.
                     guard !aidenIsCancellation(error) else { continue }
                     failedMachines.insert(outcome.machine.instanceId)
-                    unsearchedMachines = Self.unsearched(in: all, failed: failedMachines)
                 }
             }
         }
@@ -196,10 +228,9 @@ final class AidenSearchModel {
         isSearchingBots = false
     }
 
-    private static func unsearched(in machines: [AidenSearchMachine], failed: Set<String>) -> [String] {
-        machines
-            .filter { $0.canReadBots && (!$0.isConnected || failed.contains($0.instanceId)) }
-            .map(\.name)
+    /// Machines with Bots that weren't connected when the search began.
+    private static func skipped(in machines: [AidenSearchMachine]) -> Set<String> {
+        Set(machines.filter { $0.canReadBots && !$0.isConnected }.map(\.instanceId))
     }
 
     private static func hits(from items: [AidenBotConversationItem], on machine: AidenSearchMachine) -> [AidenSearchBotHit] {
@@ -235,9 +266,15 @@ final class AidenSearchModel {
 extension AidenSearchMachine {
     /// Every paired machine, each judged on its own connection. Asking starts
     /// no connection and leaves the selection where it was.
+    ///
+    /// A machine the person hid from the Inbox isn't listed: it isn't asked, its
+    /// hits aren't shown, and it isn't named.
     @MainActor
-    static func machines(in coordinator: AidenRemoteCoordinator) -> [AidenSearchMachine] {
-        coordinator.hosts.ordered.map { connection in
+    static func machines(
+        in coordinator: AidenRemoteCoordinator,
+        preferences: AidenMachinePreferencesStore = .shared
+    ) -> [AidenSearchMachine] {
+        coordinator.hosts.ordered.filter { !preferences.isHidden($0.instanceId) }.map { connection in
             let instanceId = connection.instanceId
             let deviceId = connection.installation.deviceId
             return AidenSearchMachine(
@@ -246,6 +283,7 @@ extension AidenSearchMachine {
                 name: connection.installation.name,
                 canReadBots: connection.installation.isBotsEligible,
                 isConnected: !connection.isRevoked && connection.connectionState == .connected,
+                isRevoked: connection.isRevoked,
                 searchBots: { [weak coordinator] query in
                     guard let coordinator else { throw CancellationError() }
                     let context = try coordinator.ownerContext(for: instanceId)
@@ -253,7 +291,7 @@ extension AidenSearchMachine {
                     do {
                         let client = try coordinator.remoteClient(for: context)
                         // The text goes as a query item, never in the path.
-                        let page = try await client.botConversations(query: AidenBotConversationQuery(query: query))
+                        let page = try await client.botConversations(query: AidenBotConversationQuery(query: query, limit: AidenBotWire.maxConversationPage))
                         guard coordinator.isLive(context) else { throw AidenRemoteClientError.installationChanged }
                         return page.conversations
                     } catch {
@@ -287,5 +325,31 @@ extension AidenSearchChatInput {
             isBlocked: connection.isRevoked,
             fetchedAt: nil
         )])
+    }
+}
+
+/// Where each chat row lives: its machine's name and its workspace's name.
+struct AidenSearchChatDetails {
+    let machineNames: [String: String]
+    let snapshots: [AidenHostInboxSnapshot]
+
+    func machineName(for row: AidenUnifiedInboxRow) -> String? {
+        machineNames[row.id.instanceId]
+    }
+
+    func workspaceName(for row: AidenUnifiedInboxRow) -> String? {
+        guard case .chat(let summary, _) = row.content else { return nil }
+        return snapshots.first {
+            $0.instanceId == row.id.instanceId && $0.deviceId == row.id.deviceId
+        }?.workspaceNames[summary.workspaceId]
+    }
+}
+
+extension AidenSearchChatInput {
+    /// Every machine's loaded chats, as the Inbox holds them, with the machines
+    /// the person hid. Read inside a view body, it follows the store.
+    @MainActor
+    init(store: AidenUnifiedInboxStore) {
+        self.init(snapshots: Array(store.snapshots.values), hiddenMachines: store.hiddenMachines)
     }
 }
