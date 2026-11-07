@@ -71,6 +71,8 @@ struct ContentView: View {
     }
 
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// Nil with the tab shell off: the menu shell reads one machine, and nothing polls.
+    var inboxStore: AidenUnifiedInboxStore?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
     @State private var newChatConsent = AidenNewChatLinkConsent()
@@ -84,6 +86,12 @@ struct ContentView: View {
     @State private var connectionRecoveryDestination: ConnectionRecoveryDestination?
     @State private var connectScheduler: AidenHostConnectScheduler?
 
+    /// Empty with the flag off, where only the selected machine counts.
+    private var connectedMachines: [String] {
+        guard AppConfig.tabShellEnabled else { return [] }
+        return coordinator.hosts.ordered.filter { $0.connectionState == .connected }.map(\.instanceId)
+    }
+
     var body: some View {
         Group {
             switch coordinator.connectionState {
@@ -96,8 +104,8 @@ struct ContentView: View {
                     }
                 )
             case .connecting, .connected, .offline:
-                if AppConfig.tabShellEnabled {
-                    AidenAppShellView(coordinator: coordinator, navigationRequest: $navigationRequest)
+                if let inboxStore {
+                    AidenAppShellView(coordinator: coordinator, inboxStore: inboxStore, navigationRequest: $navigationRequest)
                 } else {
                     AidenProductShellView(
                         coordinator: coordinator,
@@ -133,10 +141,12 @@ struct ContentView: View {
                 pathChanges: AidenNetworkPathMonitor.shared.pathChanges()
             )
             connectScheduler = scheduler
+            inboxStore?.connectScheduler = scheduler
+            if scenePhase == .active { inboxStore?.start() }
             await scheduler.foregrounded()
         }
         .onOpenURL { url in
-            _ = foregroundIntents.take()
+            foregroundIntents.discardActions()
             guard let request = AidenDeepLink.request(from: url) else {
                 coordinator.presentedError = String(localized: "That Aiden link is invalid or no longer supported.")
                 return
@@ -163,7 +173,7 @@ struct ContentView: View {
         } message: { target in
             Text("Create a chat in \(target.workspaceName) on \(target.installationName)? Use the microphone button when you are ready to dictate.")
         }
-        .task(id: foregroundIntents.pending?.id) {
+        .task(id: foregroundIntents.actions.map(\.id)) {
             // A newer native intent supersedes a link still waiting for readiness.
             if foregroundIntents.pending != nil {
                 externalNewChats.invalidate()
@@ -175,7 +185,17 @@ struct ContentView: View {
         .onDisappear {
             externalNewChats.invalidate()
             newChatConsent.invalidate()
-            _ = foregroundIntents.take()
+            foregroundIntents.discardActions()
+        }
+        .onChange(of: connectedMachines) { previous, connected in
+            // A machine connecting late still owes its intents and activities,
+            // which the foreground pass found it too early for.
+            Task { await consumeForegroundIntentIfReady() }
+            let arrived = Set(connected).subtracting(previous)
+            Task { await AidenRemoteLiveActivityManager.shared.reconcileConnectedMachines(of: coordinator, only: arrived) }
+        }
+        .onChange(of: coordinator.installationStore.installations) {
+            if AppConfig.tabShellEnabled { foregroundIntents.dropUnopenable(on: coordinator) }
         }
         .onChange(of: coordinator.connectionState) { _, state in
             if state == .needsPairing {
@@ -204,6 +224,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             switch sceneRefreshGate.transition(to: phase) {
             case .refresh:
+                inboxStore?.start()
                 // A selected machine that needs pairing still releases the
                 // scheduler from its background state.
                 guard coordinator.connectionState != .needsPairing else {
@@ -225,8 +246,10 @@ struct ContentView: View {
                     // Bot routine results land as local notifications when
                     // the app comes to the foreground (there is no push).
                     Task { await AidenBotRoutineNotifier.shared.deliverIfSupported(coordinator: coordinator) }
-                    if let context = try? coordinator.requestContext(),
-                       let client = try? coordinator.remoteClient(for: context) {
+                    if AppConfig.tabShellEnabled {
+                        await AidenRemoteLiveActivityManager.shared.reconcileConnectedMachines(of: coordinator)
+                    } else if let context = try? coordinator.requestContext(),
+                              let client = try? coordinator.remoteClient(for: context) {
                         await AidenRemoteLiveActivityManager.shared.reconcile(
                             instanceID: context.instanceId,
                             client: client,
@@ -236,11 +259,12 @@ struct ContentView: View {
                 }
                 Task { await connectScheduler?.foregrounded() }
             case .suspend:
+                inboxStore?.stop()
                 connectScheduler?.backgrounded()
                 externalNewChats.invalidate()
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
-                _ = foregroundIntents.take()
+                foregroundIntents.handleSuspend()
                 Task { await AidenRemoteLiveActivityManager.shared.markAllStale() }
             case .resume, .none:
                 if phase == .active {
@@ -287,7 +311,16 @@ struct ContentView: View {
 
     @MainActor
     private func consumeForegroundIntentIfReady() async {
-        guard scenePhase == .active, !sceneConnectionRefreshInProgress, coordinator.connectionState == .connected,
+        guard scenePhase == .active else { return }
+        if AppConfig.tabShellEnabled {
+            // Each intent waits on its own machine, so the selected machine's
+            // reconnect holds up nobody else.
+            // Its own task: taking an action restarts the `.task(id:)` this may be
+            // running in, and a chat being created must not be cancelled with it.
+            Task { await foregroundIntents.openWaitingChats(coordinator: coordinator) }
+            return
+        }
+        guard !sceneConnectionRefreshInProgress, coordinator.connectionState == .connected,
               let action = foregroundIntents.take() else { return }
         prepareNewChat(AidenNavigationRequest(destination: .newChat, instanceId: action.instanceID,
             workspaceId: action.workspaceID, startsVoice: false), startsVoice: action.startsVoice, requiresConfirmation: false)

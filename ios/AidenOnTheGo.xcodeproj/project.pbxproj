@@ -110,6 +110,7 @@
 		A0E100000000000000000022 /* AidenUnifiedInboxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000032 /* AidenUnifiedInboxTests.swift */; };
 		A0E100000000000000000044 /* AidenInboxPollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000054 /* AidenInboxPollPolicy.swift */; };
 		A0E100000000000000000045 /* AidenUnifiedInboxStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000055 /* AidenUnifiedInboxStore.swift */; };
+		A2E0000000000000000000A3 /* AidenInboxTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0000000000000000000B3 /* AidenInboxTabView.swift */; };
 		A0E100000000000000000046 /* AidenUnifiedInboxStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000056 /* AidenUnifiedInboxStoreTests.swift */; };
 		A0E100000000000000000041 /* AidenMachinesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000051 /* AidenMachinesView.swift */; };
 		A0E100000000000000000042 /* AidenMachineDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000052 /* AidenMachineDetailView.swift */; };
@@ -365,6 +366,7 @@
 		A0E100000000000000000032 /* AidenUnifiedInboxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenUnifiedInboxTests.swift; sourceTree = "<group>"; };
 		A0E100000000000000000054 /* AidenInboxPollPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenInboxPollPolicy.swift; sourceTree = "<group>"; };
 		A0E100000000000000000055 /* AidenUnifiedInboxStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenUnifiedInboxStore.swift; sourceTree = "<group>"; };
+		A2E0000000000000000000B3 /* AidenInboxTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenInboxTabView.swift; sourceTree = "<group>"; };
 		A0E100000000000000000056 /* AidenUnifiedInboxStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenUnifiedInboxStoreTests.swift; sourceTree = "<group>"; };
 		A0E100000000000000000051 /* AidenMachinesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachinesView.swift; sourceTree = "<group>"; };
 		A0E100000000000000000052 /* AidenMachineDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachineDetailView.swift; sourceTree = "<group>"; };
@@ -770,6 +772,7 @@
 				A2E000000000000000000012 /* AidenAppShellView.swift */,
 				A4B240000000000000000012 /* AidenSearchTabView.swift */,
 				A0E100000000000000000055 /* AidenUnifiedInboxStore.swift */,
+				A2E0000000000000000000B3 /* AidenInboxTabView.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -1262,6 +1265,7 @@
 				A4B240000000000000000001 /* AidenSearchModel.swift in Sources */,
 				A0E100000000000000000044 /* AidenInboxPollPolicy.swift in Sources */,
 				A0E100000000000000000045 /* AidenUnifiedInboxStore.swift in Sources */,
+				A2E0000000000000000000A3 /* AidenInboxTabView.swift in Sources */,
 				A0E200000000000000000007 /* AidenHostConnectScheduler.swift in Sources */,
 				A2E000000000000000000001 /* AidenAppNavigation.swift in Sources */,
 				A2E000000000000000000002 /* AidenAppShellView.swift in Sources */,

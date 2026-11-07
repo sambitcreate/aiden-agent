@@ -165,6 +165,60 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Needs you above Updates above Earlier, whichever machine a row came from.
+    func testInboxShowsNeedsYouUpdatesEarlierInOrder() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        func heading(_ title: String) -> XCUIElement {
+            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        }
+        let needsYou = heading("Needs you")
+        let updates = heading("Updates")
+        let earlier = heading("Earlier")
+        for section in [needsYou, updates, earlier] {
+            XCTAssertTrue(section.waitForExistence(timeout: 10), "\(section) is missing")
+        }
+
+        XCTAssertLessThan(needsYou.frame.minY, updates.frame.minY)
+        XCTAssertLessThan(updates.frame.minY, earlier.frame.minY)
+
+        // Two prompts and a failed run wait on the person. The running chat doesn't.
+        let badge = AidenStateMatrix.tab("Inbox", in: app).value as? String
+        XCTAssertTrue(badge?.contains("3") == true, "The Inbox badge said \(badge ?? "nothing")")
+        AidenStateMatrix.capture("tabs-inbox-sections", in: self)
+        app.terminate()
+    }
+
+    /// A row's menu opens with what its swipes offer, and a row waiting on a
+    /// decision offers neither Done nor Snooze either way.
+    func testRowMenusMatchTheirSwipes() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let prompt = openInbox(in: app)
+        XCTAssertTrue(prompt.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        let idle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Compare two caching strategies")).firstMatch
+        XCTAssertTrue(idle.waitForExistence(timeout: 10), "No Earlier row")
+
+        idle.swipeLeft()
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "The swipe offered no Done")
+        XCTAssertTrue(app.buttons["Snooze"].exists, "The swipe offered no Snooze")
+        AidenStateMatrix.capture("tabs-inbox-swipe", in: self)
+        idle.swipeRight()
+        XCTAssertTrue(app.buttons["Done"].waitForNonExistence(timeout: 5))
+
+        idle.press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "The menu offered no Done")
+        XCTAssertTrue(app.buttons["Snooze"].exists, "The menu offered no Snooze")
+        AidenStateMatrix.capture("tabs-inbox-menu", in: self)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
+        XCTAssertTrue(app.buttons["Done"].waitForNonExistence(timeout: 5))
+
+        prompt.swipeLeft()
+        XCTAssertFalse(app.buttons["Done"].waitForExistence(timeout: 2), "A prompt row offered Done")
+        XCTAssertFalse(app.buttons["Snooze"].exists, "A prompt row offered Snooze")
+        app.terminate()
+    }
+
     /// Every tab and a pushed chat, for a person to look at. A screen that cannot
     /// be reached fails the test.
     func testCaptureTabShellScreens() {

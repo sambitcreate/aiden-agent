@@ -22,9 +22,29 @@ final class AidenUnifiedInboxStore {
     private(set) var hiddenMachines: Set<String> = []
     /// Built when its inputs change, so a view can read it freely.
     private(set) var inbox = AidenUnifiedInbox()
+    /// The tab's badge. Kept apart from `inbox`, so whoever shows it redraws
+    /// when the count changes and not with every row.
+    private(set) var needsYouCount = 0
+    private(set) var listState = AidenInboxListState.loading
+    /// A listed machine answered with a failure, and saved rows are standing in.
+    private(set) var refreshFailed = false
+    private(set) var moreChats = AidenInboxMoreChats.none
+    /// The newest banner. `perform` clears the others, so there's only ever one.
+    private(set) var notice: AidenInboxMachineNotice?
     /// A machine that stops being shown puts this back to `.all`.
     var filter: AidenMachineFilter = .all {
         didSet { if filter != oldValue { settle() } }
+    }
+    /// The chat on screen, which is never news.
+    var openChat: AidenHostObjectID? {
+        didSet { if openChat != oldValue { settle() } }
+    }
+    var searchText = "" {
+        didSet { if searchText != oldValue { settle() } }
+    }
+    /// Show N more: Earlier past its cap.
+    var showsAllEarlier = false {
+        didSet { if showsAllEarlier != oldValue { settle() } }
     }
     /// Set by whoever owns the scheduler. Without it an unreachable machine
     /// stays that way until something else connects it.
@@ -46,6 +66,9 @@ final class AidenUnifiedInboxStore {
     @ObservationIgnored private var isInboxVisible = false
     @ObservationIgnored private var focusedMachine: String?
     @ObservationIgnored private var builtFrom: InboxInputs?
+    @ObservationIgnored private var clockReadings = 0
+    /// Shown and inside the filter.
+    @ObservationIgnored private var listedMachines: [String] = []
 
     init(
         hosts: AidenHostRegistry,
@@ -114,6 +137,75 @@ final class AidenUnifiedInboxStore {
         machines[instanceId]?.model
     }
 
+    // MARK: Acting on rows
+
+    /// One swipe, on the model the row is drawn from, so its optimistic edit is
+    /// the one on screen. A row is acted on over its own machine, selected or not.
+    func perform(_ action: AidenInboxRowAction, on id: AidenHostObjectID) async {
+        guard let (model, connection) = owner(of: id) else { return }
+        machines.values.forEach { $0.model.inboxNotice = nil }
+        func triage(_ change: AidenChatTriageChange) async {
+            await model.setTriage(change, chatID: id.objectId, host: connection, isOpen: id == openChat, now: now())
+        }
+        switch action {
+        case .markRead: await model.markRead(chatID: id.objectId, host: connection)
+        case .done: await triage(.done(true))
+        case .undone: await triage(.done(false))
+        case .snooze(let option): await triage(.snooze(until: option.until))
+        case .wake: await triage(.wake)
+        }
+    }
+
+    /// Undo is sent against the swipe's own revision, so a notice without one
+    /// offers none rather than writing unconditionally.
+    func undo(_ notice: AidenInboxMachineNotice) async {
+        guard let model = homeModel(for: notice.instanceId),
+              let connection = hosts.connection(for: notice.instanceId),
+              let undo = notice.notice.undo, let chatID = notice.notice.chatID,
+              let revision = notice.notice.revision else { return }
+        model.inboxNotice = nil
+        await model.setTriage(undo, chatID: chatID, host: connection, now: now(), undoRevision: revision)
+    }
+
+    func dismissNotice() {
+        guard let notice else { return }
+        homeModel(for: notice.instanceId)?.inboxNotice = nil
+    }
+
+    private func owner(of id: AidenHostObjectID) -> (AidenHomeModel, AidenHostConnection)? {
+        guard let model = homeModel(for: id.instanceId),
+              let connection = hosts.connection(for: id.instanceId),
+              connection.installation.deviceId == id.deviceId else { return nil }
+        return (model, connection)
+    }
+
+    // MARK: Reading on demand
+
+    /// Older chats, from every listed machine that has them, each at its own pace.
+    func loadMoreChats() async {
+        let reads = listedMachines.compactMap { instanceId -> Task<Void, Never>? in
+            guard let model = homeModel(for: instanceId), model.nextChatCursor != nil,
+                  let connection = hosts.connection(for: instanceId) else { return nil }
+            return Task { await model.loadMoreChats(host: connection) }
+        }
+        for read in reads { await read.value }
+    }
+
+    /// Try Again: reads the machines that are connected, and queues the rest.
+    func retry() async {
+        for instanceId in listedMachines where hosts.connection(for: instanceId)?.connectionState != .connected {
+            connectScheduler?.connect(instanceId: instanceId)
+        }
+        await refreshAll()
+    }
+
+    /// Snoozes end and Earlier ages out on this phone's clock, with no change on
+    /// any machine to say so.
+    func refreshClock() {
+        clockReadings += 1
+        settle()
+    }
+
     // MARK: Following the machines
 
     /// Re-reads every machine each time anything read here changes, so a
@@ -135,7 +227,7 @@ final class AidenUnifiedInboxStore {
     /// has one by the time a view asks.
     private func readMachines() -> [MachineReading] {
         hosts.ordered.map { connection in
-            let isBlocked = connection.isRevoked || connection.isPurgePending || connection.connectionState == .needsPairing
+            let isBlocked = connection.isBlockedFromInbox
             let isHidden = preferences.preferences(for: connection.instanceId).isHidden
             let machine = isBlocked ? nil : machine(for: connection)
             let workspaces = connection.workspaces
@@ -146,8 +238,16 @@ final class AidenUnifiedInboxStore {
                 workspaceNames: isBlocked ? [:] : workspaces.isEmpty ? machine?.savedWorkspaceNames ?? [:] : Self.names(of: workspaces),
                 isConnected: connection.connectionState == .connected,
                 isOnline: connection.isKnownOnline,
+                isOffline: connection.isKnownOffline,
                 isBlocked: isBlocked,
-                isHidden: isHidden
+                isHidden: isHidden,
+                supportsReadState: connection.server?.supportsChatReadState == true,
+                supportsTriage: connection.server?.supportsChatTriage == true
+                    && connection.installation.hasNegotiatedAccess(to: .chatWrite),
+                loadState: machine?.model.chatListLoadState ?? .unresolved,
+                pagination: machine?.model.paginationState ?? .idle,
+                hasMoreChats: machine?.model.nextChatCursor != nil,
+                notice: machine?.model.inboxNotice
             )
         }
     }
@@ -194,7 +294,9 @@ final class AidenUnifiedInboxStore {
                 workspaceNames: reading.workspaceNames,
                 isOnline: reading.isOnline,
                 isBlocked: reading.isBlocked,
-                fetchedAt: reading.machine?.fetchedAt
+                fetchedAt: reading.machine?.fetchedAt,
+                supportsReadState: reading.supportsReadState,
+                supportsTriage: reading.supportsTriage
             )
         }
         if latest != snapshots { snapshots = latest }
@@ -206,17 +308,58 @@ final class AidenUnifiedInboxStore {
         }
         let hidden = Set(readings.filter(\.isHidden).map(\.connection.instanceId))
         if hidden != hiddenMachines { hiddenMachines = hidden }
-        let inputs = InboxInputs(snapshots: snapshots, filter: filter, hiddenMachines: hidden)
-        guard inputs != builtFrom else { return }
-        builtFrom = inputs
-        let rebuilt = AidenUnifiedInbox.make(
-            snapshots: Array(snapshots.values),
+        let inputs = InboxInputs(
+            snapshots: snapshots,
             filter: filter,
             hiddenMachines: hidden,
-            openChat: nil,
-            now: now()
+            openChat: openChat,
+            searchText: searchText,
+            showsAllEarlier: showsAllEarlier,
+            clockReadings: clockReadings
         )
-        if rebuilt != inbox { inbox = rebuilt }
+        if inputs != builtFrom {
+            builtFrom = inputs
+            let rebuilt = AidenUnifiedInbox.make(
+                snapshots: Array(snapshots.values),
+                filter: filter,
+                hiddenMachines: hidden,
+                openChat: openChat,
+                now: now(),
+                searchText: searchText,
+                showAllEarlier: showsAllEarlier
+            )
+            if rebuilt != inbox { inbox = rebuilt }
+            if rebuilt.needsYouCount != needsYouCount { needsYouCount = rebuilt.needsYouCount }
+        }
+        describeTheList(shown: shown, hasHiddenMachines: !hidden.isEmpty)
+    }
+
+    /// Everything the list says besides its rows.
+    private func describeTheList(shown: [MachineReading], hasHiddenMachines: Bool) {
+        let listed = shown.filter { filter == .all || filter == .machine($0.connection.instanceId) }
+        listedMachines = listed.map(\.connection.instanceId)
+
+        let state = AidenInboxListState.make(
+            hasRows: !(inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty),
+            machines: listed.map(\.read),
+            hasHiddenMachines: hasHiddenMachines
+        )
+        if state != listState { listState = state }
+
+        // A list with nothing else to show says this itself.
+        var failed = listed.contains { $0.read.failure != nil }
+        if case .failed = state { failed = false }
+        if failed != refreshFailed { refreshFailed = failed }
+
+        let more = AidenInboxMoreChats.make(listed)
+        if more != moreChats { moreChats = more }
+
+        let newest = shown
+            .compactMap { reading in
+                reading.notice.map { AidenInboxMachineNotice(instanceId: reading.connection.instanceId, notice: $0) }
+            }
+            .max { $0.notice.postedAt < $1.notice.postedAt }
+        if newest != notice { notice = newest }
     }
 
     // MARK: Polling
@@ -250,6 +393,7 @@ final class AidenUnifiedInboxStore {
     private func endPolling(_ instanceId: String) {
         loops.removeValue(forKey: instanceId)?.cancel()
         fetches.removeValue(forKey: instanceId)?.cancel()
+        machines[instanceId]?.model.cancelTranscriptPrefetch()
         pollers[instanceId] = nil
     }
 
@@ -389,7 +533,11 @@ final class AidenUnifiedInboxStore {
         switch result {
         case .loaded:
             poller.failures = 0
-            if walkingPages { poller.hasWalked = true }
+            if walkingPages {
+                poller.hasWalked = true
+                // Saved so a first open works once the machine has gone.
+                if pollers[instanceId] === poller { machine.model.prefetchRecentTranscripts(host: connection) }
+            }
             machine.fetchedAt = now()
             settle()
         case .abandoned:
@@ -397,6 +545,24 @@ final class AidenUnifiedInboxStore {
         case .failed(let error):
             if await connection.handlePollError(error, sinceConnect: connectBefore) { poller.failures += 1 }
         }
+    }
+}
+
+/// An Inbox banner, and the machine whose model holds it.
+struct AidenInboxMachineNotice: Equatable {
+    let instanceId: String
+    let notice: AidenInboxNotice
+}
+
+extension AidenUnifiedInboxStore {
+    /// The app's store, on the coordinator's machines and saved chats.
+    convenience init(coordinator: AidenRemoteCoordinator) {
+        self.init(
+            hosts: coordinator.hosts,
+            preferences: .shared,
+            cache: coordinator.chatCache,
+            clock: ContinuousClock()
+        )
     }
 }
 
@@ -470,12 +636,58 @@ private struct MachineReading {
     let workspaceNames: [String: String]
     let isConnected: Bool
     let isOnline: Bool
+    let isOffline: Bool
     let isBlocked: Bool
     let isHidden: Bool
+    let supportsReadState: Bool
+    let supportsTriage: Bool
+    let loadState: AidenHomeModel.ChatListLoadState
+    let pagination: AidenHomeModel.PaginationState
+    let hasMoreChats: Bool
+    let notice: AidenInboxNotice?
+
+    /// A failure from a machine that's gone says nothing `isOffline` doesn't.
+    var read: AidenInboxMachineRead {
+        var failure: String?
+        if case .failed(let message) = loadState, !isOffline { failure = message }
+        return AidenInboxMachineRead(
+            presentation: .of(
+                hasContent: !chats.isEmpty,
+                hasSettled: loadState == .loaded,
+                failed: isOffline || failure != nil
+            ),
+            failure: failure
+        )
+    }
+}
+
+private extension AidenInboxMoreChats {
+    /// A machine that isn't connected can't be read, so it has no page to offer.
+    static func make(_ machines: [MachineReading]) -> Self {
+        let reachable = machines.filter(\.isConnected)
+        if reachable.contains(where: { $0.pagination == .loading }) { return .loading }
+        for machine in reachable {
+            if case .failed(let message) = machine.pagination { return .failed(message) }
+        }
+        return reachable.contains { $0.hasMoreChats && $0.loadState == .loaded } ? .available : .none
+    }
 }
 
 private struct InboxInputs: Equatable {
     let snapshots: [String: AidenHostInboxSnapshot]
     let filter: AidenMachineFilter
     let hiddenMachines: Set<String>
+    let openChat: AidenHostObjectID?
+    let searchText: String
+    let showsAllEarlier: Bool
+    let clockReadings: Int
+}
+
+extension AidenHostConnection {
+    /// A machine the Inbox shows nothing of: revoked, waiting to be purged, or
+    /// needing to be paired again (a missing credential ends there too). Search
+    /// reads the same, so what leaves the Inbox leaves Search.
+    var isBlockedFromInbox: Bool {
+        isRevoked || isPurgePending || connectionState == .needsPairing
+    }
 }

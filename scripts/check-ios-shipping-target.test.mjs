@@ -129,6 +129,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenProvidersView.swift",
   "AidenOnTheGo/Features/Shell/AidenUnifiedInboxStore.swift",
+  "AidenOnTheGo/Features/Shell/AidenInboxTabView.swift",
   "AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift",
   "AidenOnTheGo/Features/Remote/AidenSceneRefreshGate.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift",
