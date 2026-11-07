@@ -19,9 +19,8 @@ extension AidenUnifiedInboxRow {
     var route: AidenAppRoute { .chat(id) }
 }
 
-/// What chat search reads: the same input the Inbox merges. The Inbox store
-/// supplies it. Until that store is wired, the shell supplies the selected
-/// machine alone (`selectedMachine(of:chats:)`).
+/// What chat search reads: the same input the Inbox merges, from the Inbox store
+/// (`init(store:)`).
 struct AidenSearchChatInput {
     var snapshots: [AidenHostInboxSnapshot]
     var hiddenMachines: Set<String> = []
@@ -37,12 +36,13 @@ struct AidenSearchMachine {
     let canReadBots: Bool
     /// Connected now. A machine that isn't is skipped, not connected for the search.
     let isConnected: Bool
-    /// Its credential was revoked. Its Bots are neither searched nor shown, and
-    /// it isn't named as one that couldn't be searched.
-    var isRevoked = false
+    /// The Inbox treats it as gone: revoked, waiting to be purged, or needing to
+    /// be paired again. Its Bots are neither searched nor shown, and it isn't
+    /// named as one that couldn't be searched.
+    var isBlocked = false
     let searchBots: @MainActor @Sendable (_ query: String) async throws -> [AidenBotConversationItem]
 
-    var canBeAsked: Bool { canReadBots && isConnected && !isRevoked }
+    var canBeAsked: Bool { canReadBots && isConnected && !isBlocked }
 }
 
 @MainActor @Observable
@@ -90,7 +90,7 @@ final class AidenSearchModel {
     var bots: [AidenSearchBotHit] {
         guard isSearching else { return [] }
         let current = machines()
-        let shown = Set(current.filter { !$0.isRevoked }.map { Self.key($0.instanceId, $0.deviceId) })
+        let shown = Set(current.filter { !$0.isBlocked }.map { Self.key($0.instanceId, $0.deviceId) })
         return Self.merged(
             hitsByMachine.filter { entry in
                 entry.value.first.map { shown.contains(Self.key($0.id.instanceId, $0.id.deviceId)) } ?? false
@@ -105,7 +105,7 @@ final class AidenSearchModel {
     var unsearchedMachines: [String] {
         guard isSearching else { return [] }
         return machines()
-            .filter { $0.canReadBots && !$0.isRevoked && (skippedMachines.contains($0.instanceId) || failedMachines.contains($0.instanceId)) }
+            .filter { $0.canReadBots && !$0.isBlocked && (skippedMachines.contains($0.instanceId) || failedMachines.contains($0.instanceId)) }
             .map(\.name)
     }
 
@@ -134,10 +134,6 @@ final class AidenSearchModel {
         )
         // Running chats are in no list of the Inbox, but a search must find them.
         return inbox.needsYou + inbox.running + inbox.updates + inbox.earlier
-    }
-
-    func machineName(for instanceId: String) -> String? {
-        machines().first { $0.instanceId == instanceId }?.name
     }
 
     /// What a chat row says about where it lives. Built once for a render, not
@@ -282,8 +278,8 @@ extension AidenSearchMachine {
                 deviceId: deviceId,
                 name: connection.installation.name,
                 canReadBots: connection.installation.isBotsEligible,
-                isConnected: !connection.isRevoked && connection.connectionState == .connected,
-                isRevoked: connection.isRevoked,
+                isConnected: !connection.isBlockedFromInbox && connection.connectionState == .connected,
+                isBlocked: connection.isBlockedFromInbox,
                 searchBots: { [weak coordinator] query in
                     guard let coordinator else { throw CancellationError() }
                     let context = try coordinator.ownerContext(for: instanceId)
@@ -301,30 +297,6 @@ extension AidenSearchMachine {
                 }
             )
         }
-    }
-}
-
-extension AidenSearchChatInput {
-    /// The selected machine's loaded chats alone, until the Inbox store gives
-    /// every machine's.
-    @MainActor
-    static func selectedMachine(of coordinator: AidenRemoteCoordinator, chats: [AidenChatSummary]) -> Self {
-        guard let instanceId = coordinator.activeInstanceId,
-              let connection = coordinator.hosts.connection(for: instanceId) else {
-            return Self(snapshots: [])
-        }
-        return Self(snapshots: [AidenHostInboxSnapshot(
-            instanceId: instanceId,
-            deviceId: connection.installation.deviceId,
-            chats: chats,
-            workspaceNames: Dictionary(
-                connection.workspaces.map { ($0.id, $0.name) },
-                uniquingKeysWith: { first, _ in first }
-            ),
-            isOnline: connection.connectionState == .connected,
-            isBlocked: connection.isRevoked,
-            fetchedAt: nil
-        )])
     }
 }
 

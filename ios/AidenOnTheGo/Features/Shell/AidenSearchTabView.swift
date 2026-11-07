@@ -3,8 +3,7 @@ import SwiftUI
 /// The Search tab: loaded chats, matched on the phone, and Bot conversations,
 /// which each connected machine matches itself. Rows are plain list rows.
 struct AidenSearchTabView: View {
-    let coordinator: AidenRemoteCoordinator
-    let homeModel: AidenHomeModel
+    let inboxStore: AidenUnifiedInboxStore
     let onOpen: (AidenAppRoute) -> Void
 
     @State private var model: AidenSearchModel
@@ -16,14 +15,13 @@ struct AidenSearchTabView: View {
 
     init(
         coordinator: AidenRemoteCoordinator,
-        homeModel: AidenHomeModel,
+        inboxStore: AidenUnifiedInboxStore,
         onOpen: @escaping (AidenAppRoute) -> Void
     ) {
-        self.coordinator = coordinator
-        self.homeModel = homeModel
+        self.inboxStore = inboxStore
         self.onOpen = onOpen
         _model = State(initialValue: AidenSearchModel(
-            chatInput: { AidenSearchChatInput.selectedMachine(of: coordinator, chats: homeModel.chats) },
+            chatInput: { AidenSearchChatInput(store: inboxStore) },
             machines: { AidenSearchMachine.machines(in: coordinator) }
         ))
     }
@@ -35,8 +33,6 @@ struct AidenSearchTabView: View {
             // Each change of the trimmed query searches again.
             .searchable(text: $model.query, prompt: "Chats and Bots")
             .searchFocused($searchIsFocused)
-            // The Search key puts the keyboard away and keeps the query.
-            .onSubmit(of: .search) { searchIsFocused = false }
             .task(id: model.trimmedQuery) { await model.run() }
     }
 
@@ -160,8 +156,8 @@ struct AidenSearchTabView: View {
     }
 
     private func open(_ route: AidenAppRoute) {
-        if case .chat(let id) = route, id.instanceId == coordinator.activeInstanceId {
-            homeModel.markViewed(chatID: id.objectId)
+        if case .chat(let id) = route {
+            inboxStore.homeModel(for: id.instanceId)?.markViewed(chatID: id.objectId)
         }
         onOpen(route)
     }

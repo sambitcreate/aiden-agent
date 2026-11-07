@@ -296,6 +296,20 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Chats come from the Inbox store, so a machine that isn't selected has its
+    /// chats searched too, and says which machine.
+    func testSearchFindsChatsOnAMachineThatIsNotSelected() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("e", in: app)
+
+        let other = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", ", chat on Laptop")).firstMatch
+        XCTAssertTrue(other.waitForExistence(timeout: 20), "No chat from Laptop, which isn't selected")
+        XCTAssertTrue(searchRow("Fix the flaky upload test, chat on Studio Mac", in: app).exists || app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", ", chat on Studio Mac")).firstMatch.exists)
+        app.terminate()
+    }
+
     func testSearchSaysItCoversLoadedChatsWhenNothingMatches() {
         let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
@@ -424,9 +438,14 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10), tag)
             AidenStateMatrix.capture("search-prompt-\(tag)", in: self)
             search("flaky", in: app)
-            XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result (\(tag))")
-            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).exists, "No chat result (\(tag))")
+            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No chat result (\(tag))")
             AidenStateMatrix.capture("search-results-\(tag)", in: self)
+            if size == .accessibilityExtraExtraExtraLarge {
+                // Every machine's chats come first, so the Bots are further down.
+                for _ in 0..<6 where !searchRow("Scout", in: app).exists { dragResults(in: app, from: 0.6, to: 0.1) }
+                AidenStateMatrix.capture("search-results-\(tag)-scrolled", in: self)
+            }
+            XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result (\(tag))")
             app.terminate()
         }
 

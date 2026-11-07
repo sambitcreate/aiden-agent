@@ -114,12 +114,12 @@ final class AidenSearchModelTests: XCTestCase {
         _ name: String,
         canReadBots: Bool = true,
         isConnected: Bool = true,
-        isRevoked: Bool = false
+        isBlocked: Bool = false
     ) -> AidenSearchMachine {
         let desk = desk
         return AidenSearchMachine(
             instanceId: id, deviceId: "phone", name: name,
-            canReadBots: canReadBots, isConnected: isConnected, isRevoked: isRevoked,
+            canReadBots: canReadBots, isConnected: isConnected, isBlocked: isBlocked,
             searchBots: { query in try await desk.search(machine: id, query: query) }
         )
     }
@@ -434,14 +434,6 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(navigation.botsPath, [.bot(laptop("bot_scout"))])
     }
 
-    func testAMachineIsNamedByItsInstance() {
-        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop")]
-        let model = makeModel()
-
-        XCTAssertEqual(model.machineName(for: "laptop"), "Laptop")
-        XCTAssertNil(model.machineName(for: "gone"))
-    }
-
     // MARK: Real machines
 
     /// Real clients over the demo machines, so each request is one the contract has.
@@ -554,7 +546,7 @@ final class AidenSearchModelTests: XCTestCase {
         pastDebounce()
         await run.value
 
-        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop", isConnected: false, isRevoked: true)]
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop", isConnected: false, isBlocked: true)]
 
         XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
         XCTAssertTrue(model.unsearchedMachines.isEmpty, "A revoked machine was named")
@@ -563,7 +555,7 @@ final class AidenSearchModelTests: XCTestCase {
     func testARevokedMachineIsNotNamedAsOneThatCouldNotBeSearched() async {
         machineList = [
             machine("studio", "Studio Mac"),
-            machine("laptop", "Laptop", isConnected: false, isRevoked: true),
+            machine("laptop", "Laptop", isConnected: false, isBlocked: true),
             machine("build", "Build Box", isConnected: false),
         ]
         let model = makeModel()
@@ -682,6 +674,25 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(seen.value("query"), "scout")
     }
 
+    func testASelectedMachineThatNeedsPairingLosesItsHitsAndIsNotNamed() async throws {
+        let (coordinator, _) = try await demoMachines()
+        let model = realModel(coordinator)
+        model.query = "scout"
+        let run = await startRun(model)
+        pastDebounce()
+        await run.value
+        XCTAssertEqual(Set(model.bots.map(\.title)), ["Scout on studio", "Scout on laptop", "Scout on mini"])
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+
+        // A selected machine with no credential to use ends here, without being revoked.
+        let studio = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        studio.adopt(connectionState: .needsPairing)
+
+        XCTAssertFalse(studio.isRevoked)
+        XCTAssertFalse(model.bots.contains { $0.id.instanceId == "studio" })
+        XCTAssertFalse(model.unsearchedMachines.contains("Studio"))
+    }
+
     // MARK: From the Inbox store
 
     func testTheChatInputIsBuiltFromTheInboxStoreAndKeepsItsHiddenMachines() async throws {
@@ -724,21 +735,6 @@ final class AidenSearchModelTests: XCTestCase {
 
         XCTAssertEqual(AidenSearchChatInput(store: store).hiddenMachines, ["laptop"])
         XCTAssertEqual(model.chats.map(\.id.instanceId), ["studio"])
-    }
-
-    // MARK: The shell's stand-in
-
-    func testTheShellsChatInputIsTheSelectedMachineAlone() async throws {
-        let (coordinator, _) = try await demoMachines()
-        let summaries = [chat("c1", "Upload test")]
-
-        let input = AidenSearchChatInput.selectedMachine(of: coordinator, chats: summaries)
-
-        XCTAssertEqual(input.snapshots.map(\.instanceId), ["studio"])
-        XCTAssertEqual(input.snapshots.first?.deviceId, "demo-device")
-        XCTAssertEqual(input.snapshots.first?.chats, summaries)
-        XCTAssertEqual(input.snapshots.first?.isOnline, true)
-        XCTAssertFalse(input.snapshots.first?.workspaceNames.isEmpty ?? true)
     }
 }
 
