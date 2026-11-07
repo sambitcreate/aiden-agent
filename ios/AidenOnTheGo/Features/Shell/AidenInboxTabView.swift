@@ -43,15 +43,11 @@ struct AidenInboxTabView: View {
     @State private var deleteCandidate: AidenHostObjectID?
 
     private var catchUpCount: Int { AidenCatchUpQueue(rows: inbox.needsYou).count }
-    private var hasRunningChats: Bool { !AidenRunningSummary(rows: inbox.running).isEmpty }
-    private var isRunningOnly: Bool {
-        hasRunningChats && inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty
-    }
 
     var body: some View {
         List {
             if refreshFailed { refreshErrorRow }
-            if runningHome == .inboxRow, hasRunningChats { runningRow }
+            if runningHome == .inboxRow, !inbox.running.isEmpty { runningRow }
             if catchUpCount > 0 { catchUpRow }
             if state == .loading {
                 AidenChatListSkeleton(rowCount: 6, accessibilityText: "Loading Inbox")
@@ -278,7 +274,7 @@ struct AidenInboxTabView: View {
     @ViewBuilder
     private var emptyState: some View {
         switch state {
-        case .rows where isRunningOnly && runningHome == .accessory:
+        case .rows where runningHome.leavesListEmpty(inbox):
             ContentUnavailableView(
                 "Nothing needs you yet",
                 systemImage: "tray",
@@ -411,15 +407,16 @@ struct AidenInboxTabRootView: View {
 /// Where a Catch Up run ends, so the last Next lands on an answer and not on a
 /// chat or an empty screen.
 struct AidenCatchUpFinishedView: View {
+    let ending: AidenCatchUpEnding
     let onDone: () -> Void
 
     @Environment(\.aidenPalette) private var palette
 
     var body: some View {
         ContentUnavailableView {
-            Label("Catch Up finished", systemImage: "checkmark.circle")
+            Label(ending.title, systemImage: ending.walked ? "checkmark.circle" : "tray")
         } description: {
-            Text("You’ve been through every chat that needed you.")
+            Text(ending.message)
         } actions: {
             Button("Back to Inbox", action: onDone)
                 .buttonStyle(.borderedProminent)

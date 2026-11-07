@@ -333,8 +333,8 @@ enum AidenDemoHosts {
         let installation: AidenInstallation
         var rowCount: Int
         var isOnline = true
-        /// Where in the row-state pattern this machine starts. The first machine
-        /// opens on the busiest rows, the others on quieter ones.
+        /// Where in the row-state pattern this machine starts. Zero opens on the
+        /// busiest rows, and a higher start on quieter ones.
         var patternStart = 0
         /// Where in the title list this machine starts, so two machines on the
         /// same rows don't read as one chat listed twice.
@@ -896,6 +896,23 @@ private enum AidenDemoContent {
         // Every value here is built above from literals, so serialization cannot fail.
         try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
+}
+
+/// A photo already in the composer of every chat, for screens and UI tests that
+/// need one without the photo picker. Only with `-AidenDemoStagedAttachment YES`.
+enum AidenDemoStagedAttachment {
+    static var isRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoStagedAttachment")
+    }
+
+    static let reference = AidenAttachmentReference(
+        id: "att_" + String(repeating: "a", count: 43),
+        name: "Screenshot.png",
+        mimeType: "image/png",
+        kind: .image,
+        size: 1_024,
+        expiresAt: .distantFuture
+    )
 }
 
 /// A long chat on the studio machine, served a window at a time, for screens

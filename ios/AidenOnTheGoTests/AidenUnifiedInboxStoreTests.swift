@@ -1295,9 +1295,9 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         store.stop()
     }
 
-    /// Nothing shows an offline machine's running chat, so it can't stand in for
-    /// the rows of a list that has none.
-    func testAnOfflineRunningChatLeavesTheListToSayWhy() async throws {
+    /// It can't be confirmed running, so it's a row in Updates, and the Inbox can't
+    /// say "All caught up" over it.
+    func testAnOfflineRunningChatIsARowAndNeverCaughtUp() async throws {
         let coordinator = coordinator("studio")
         try await saveWorkspace(on: "studio")
         try await save([running("run", age: 3)], on: "studio")
@@ -1305,11 +1305,14 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await connectAll(coordinator)
         let store = makeStore(coordinator)
         store.start()
-        await waitUntil("the saved row") { store.inbox.running.count == 1 }
         await waitUntil("the machine to be offline") { store.snapshots["studio"]?.isOnline == false }
+        await waitUntil("the saved row") { !store.inbox.updates.isEmpty || !store.inbox.running.isEmpty }
 
+        XCTAssertEqual(store.inbox.updates.map(\.id.objectId), ["run"])
+        XCTAssertEqual(store.inbox.running, [])
         XCTAssertFalse(store.hasRunningChats)
-        XCTAssertNotEqual(store.listState, .rows)
+        XCTAssertEqual(store.inbox.needsYouCount, 0)
+        XCTAssertEqual(store.listState, .rows)
         store.stop()
     }
 

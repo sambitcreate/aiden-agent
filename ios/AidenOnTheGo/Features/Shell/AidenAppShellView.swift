@@ -195,8 +195,8 @@ struct AidenAppShellView: View {
             AidenTabPlaceholderView(title: "Scheduled tasks", systemImage: "calendar")
         case .usage:
             AidenTabPlaceholderView(title: "Usage", systemImage: "chart.bar")
-        case .catchUpFinished:
-            AidenCatchUpFinishedView { navigation.inboxPath = [] }
+        case .catchUpFinished(let ending):
+            AidenCatchUpFinishedView(ending: ending) { navigation.inboxPath = [] }
         }
     }
 
@@ -360,6 +360,8 @@ private struct AidenChatRouteView: View {
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     @State private var model: AidenChatRouteModel
+    @State private var holdsAttachments = false
+    @State private var isConfirmingNext = false
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -413,10 +415,25 @@ private struct AidenChatRouteView: View {
         .toolbar {
             if let onNext {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Next", action: onNext)
-                        .accessibilityHint("Opens the next chat that needs you")
+                    Button("Next") {
+                        if holdsAttachments { isConfirmingNext = true } else { onNext() }
+                    }
+                    .accessibilityHint("Opens the next chat that needs you")
+                    .confirmationDialog(
+                        "Discard attachments?",
+                        isPresented: $isConfirmingNext,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Discard attachments", role: .destructive, action: onNext)
+                        Button("Stay", role: .cancel) {}
+                    } message: {
+                        Text("They aren’t kept when you move to the next chat. Your message text is saved.")
+                    }
                 }
             }
+        }
+        .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
+            holdsAttachments = holds
         }
         .task(id: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState) {
             await model.load(coordinator: coordinator)

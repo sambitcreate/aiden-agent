@@ -8,9 +8,12 @@ import Foundation
 /// simply not here.
 struct AidenCatchUpQueue: Equatable {
     private let ids: [AidenHostObjectID]
+    /// Rows that need the person and can't be opened yet.
+    private let offline: Set<AidenHostObjectID>
 
     init(rows: [AidenUnifiedInboxRow]) {
         ids = rows.filter(\.isOnline).map(\.id)
+        offline = Set(rows.filter { !$0.isOnline }.map(\.id))
     }
 
     var first: AidenHostObjectID? { ids.first }
@@ -22,6 +25,37 @@ struct AidenCatchUpQueue: Equatable {
         guard let index = ids.firstIndex(of: id) else { return ids.first }
         let next = ids.index(after: index)
         return ids.indices.contains(next) ? ids[next] : nil
+    }
+
+    /// How a run that showed `shown` ends. A chat shown before its machine dropped
+    /// has been seen, so it isn't left over.
+    func ending(after shown: Set<AidenHostObjectID> = []) -> AidenCatchUpEnding {
+        AidenCatchUpEnding(walked: !shown.isEmpty, unreached: offline.subtracting(shown).count)
+    }
+}
+
+/// What the last screen of a Catch Up can truthfully say. The queue leaves out
+/// offline machines, so its end isn't the end of what needs the person.
+struct AidenCatchUpEnding: Hashable, Codable {
+    /// False when there was nothing to show from the start.
+    let walked: Bool
+    /// Chats that need the person on offline machines, which this run didn't show.
+    let unreached: Int
+
+    var title: String {
+        if walked { return String(localized: "Catch Up finished") }
+        return unreached == 0 ? String(localized: "Nothing to catch up on") : String(localized: "Nothing to catch up on yet")
+    }
+
+    var message: String {
+        switch (walked, unreached) {
+        case (true, 0): String(localized: "You’ve been through every chat in Catch Up.")
+        case (true, 1): String(localized: "You’ve been through every chat you can reach. 1 more is on an offline machine.")
+        case (true, _): String(localized: "You’ve been through every chat you can reach. \(unreached) more are on offline machines.")
+        case (false, 0): String(localized: "There’s nothing in Catch Up right now.")
+        case (false, 1): String(localized: "1 chat needs you on an offline machine.")
+        case (false, _): String(localized: "\(unreached) chats need you on offline machines.")
+        }
     }
 }
 
@@ -48,5 +82,9 @@ struct AidenCatchUpRun: Equatable {
         current = candidate
         shown.insert(candidate)
         return candidate
+    }
+
+    func ending(in queue: AidenCatchUpQueue) -> AidenCatchUpEnding {
+        queue.ending(after: shown)
     }
 }

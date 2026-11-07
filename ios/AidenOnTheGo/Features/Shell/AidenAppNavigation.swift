@@ -9,7 +9,7 @@ enum AidenAppRoute: Hashable, Codable {
     case chat(AidenHostObjectID), bot(AidenHostObjectID), workspace(AidenHostObjectID)
     case machines, machine(instanceId: String), settings, scheduled, usage
     /// Where a Catch Up run ends. It means nothing after a relaunch, so it's never saved.
-    case catchUpFinished
+    case catchUpFinished(AidenCatchUpEnding)
 
     /// The tab whose stack holds this route.
     var tab: AidenAppTab {
@@ -66,7 +66,7 @@ enum AidenAppRoute: Hashable, Codable {
         switch self {
         case .chat(let id), .bot(let id), .workspace(let id): id.instanceId == instanceId
         case .machine(let id): id == instanceId
-        case .machines, .settings, .scheduled, .usage: false
+        case .machines, .settings, .scheduled, .usage, .catchUpFinished: false
         }
     }
 }
@@ -274,7 +274,7 @@ final class AidenAppNavigation {
     var snapshot: AidenAppNavigationSnapshot {
         AidenAppNavigationSnapshot(
             tab: tab,
-            inboxPath: inboxPath.filter { $0 != .catchUpFinished },
+            inboxPath: inboxPath.filter { if case .catchUpFinished = $0 { false } else { true } },
             botsPath: botsPath,
             workspacesPath: workspacesPath,
             savedPaths: savedPaths
@@ -315,7 +315,7 @@ final class AidenAppNavigation {
     @discardableResult
     func startCatchUp(in queue: AidenCatchUpQueue) -> AidenHostObjectID? {
         guard let first = queue.first else {
-            open(.catchUpFinished)
+            open(.catchUpFinished(queue.ending()))
             return nil
         }
         catchUp = AidenCatchUpRun(startingAt: first)
@@ -334,7 +334,7 @@ final class AidenAppNavigation {
         catchUp = nil
         inboxPath.removeLast()
         guard let next else {
-            open(.catchUpFinished)
+            open(.catchUpFinished(run.ending(in: queue)))
             return nil
         }
         open(.chat(next))

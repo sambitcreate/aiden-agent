@@ -211,6 +211,78 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Only the words are saved with a chat, so Next says so before it loses a photo.
+    func testNextAsksBeforeLeavingAttachmentsBehind() {
+        let app = AidenStateMatrix.launch(
+            scenario: .four,
+            shell: .tabs,
+            extraArguments: ["-AidenDemoStagedAttachment", "YES"]
+        )
+        let catchUp = AidenStateMatrix.catchUpRow(in: app)
+        XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
+        catchUp.tap()
+        let next = app.navigationBars.buttons["Next"]
+        XCTAssertTrue(next.waitForExistence(timeout: 10), "No Next")
+        Thread.sleep(forTimeInterval: 1)
+        let firstChat = app.navigationBars.firstMatch.identifier
+
+        next.tap()
+
+        let discard = app.buttons["Discard attachments"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 5), "Next left without asking")
+        AidenStateMatrix.capture("catch-up-discard-attachments", in: self)
+        XCTAssertEqual(app.navigationBars.firstMatch.identifier, firstChat, "Next moved on before the answer")
+
+        discard.tap()
+
+        let moved = NSPredicate { _, _ in app.navigationBars.firstMatch.identifier != firstChat }
+        wait(for: [XCTNSPredicateExpectation(predicate: moved, object: nil)], timeout: 10)
+        app.terminate()
+    }
+
+    /// The words typed last are the ones a timed save would miss.
+    func testDraftTextSurvivesNext() {
+        let draft = "Keep these words"
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let catchUp = AidenStateMatrix.catchUpRow(in: app)
+        XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
+        catchUp.tap()
+
+        // A chat asking something shows a card where the composer goes.
+        let next = app.navigationBars.buttons["Next"]
+        let composer = app.descendants(matching: .any).matching(NSPredicate(
+            format: "elementType == %d OR elementType == %d",
+            XCUIElement.ElementType.textField.rawValue,
+            XCUIElement.ElementType.textView.rawValue
+        )).firstMatch
+        for _ in 1...4 {
+            XCTAssertTrue(next.waitForExistence(timeout: 10), "The run ended with no composer")
+            if composer.waitForExistence(timeout: 3) { break }
+            next.tap()
+        }
+        XCTAssertTrue(composer.exists, "No chat in the run has a composer")
+        let title = app.navigationBars.firstMatch.identifier
+        composer.tap()
+        composer.typeText(draft)
+
+        next.tap()
+        let moved = NSPredicate { _, _ in app.navigationBars.firstMatch.identifier != title }
+        wait(for: [XCTNSPredicateExpectation(predicate: moved, object: nil)], timeout: 10)
+        goBack(in: app)
+
+        let chat = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "\(title) isn't in the Inbox")
+        chat.tap()
+        let kept = NSPredicate(format: "value CONTAINS %@", draft)
+        wait(for: [XCTNSPredicateExpectation(predicate: kept, object: composer)], timeout: 10)
+
+        // The demo chats are shared with the other tests.
+        composer.tap()
+        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: draft.count))
+        Thread.sleep(forTimeInterval: 1)
+        app.terminate()
+    }
+
     /// The composer owns the bottom edge of a pushed chat.
     func testAPushedChatHidesTheTabBarUntilItIsLeft() {
         let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)

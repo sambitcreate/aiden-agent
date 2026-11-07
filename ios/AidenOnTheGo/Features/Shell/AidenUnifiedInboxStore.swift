@@ -339,7 +339,7 @@ final class AidenUnifiedInboxStore {
             )
             if rebuilt != inbox { inbox = rebuilt }
             if rebuilt.needsYouCount != needsYouCount { needsYouCount = rebuilt.needsYouCount }
-            let hasRunning = !AidenRunningSummary(rows: rebuilt.running).isEmpty
+            let hasRunning = !rebuilt.running.isEmpty
             if hasRunning != hasRunningChats { hasRunningChats = hasRunning }
         }
         describeTheList(shown: shown, hasHiddenMachines: !hidden.isEmpty)

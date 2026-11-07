@@ -12,10 +12,16 @@ enum AidenRunningHome: Equatable {
     static var accessoryCanTurnOff: Bool {
         if #available(iOS 26.1, *) { true } else { false }
     }
+
+    /// True when running chats are all the Inbox has and they sit above the tab
+    /// bar, so the list is empty without being caught up.
+    func leavesListEmpty(_ inbox: AidenUnifiedInbox) -> Bool {
+        self == .accessory && !inbox.running.isEmpty
+            && inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty
+    }
 }
 
-/// What the running chats add up to. An offline machine's chat may have stopped
-/// long ago, so only rows on machines that are online count.
+/// What the running chats add up to.
 struct AidenRunningSummary: Equatable {
     enum Tap: Equatable {
         case open(AidenHostObjectID)
@@ -24,12 +30,6 @@ struct AidenRunningSummary: Equatable {
 
     /// Oldest run first.
     let rows: [AidenUnifiedInboxRow]
-
-    init(rows: [AidenUnifiedInboxRow]) {
-        self.rows = rows.filter(\.isOnline)
-    }
-
-    var isEmpty: Bool { rows.isEmpty }
 
     var title: String? {
         switch rows.first?.content {
@@ -132,7 +132,7 @@ struct AidenRunningChatsSheet: View {
     @Environment(\.aidenPalette) private var palette
 
     private var rows: [AidenUnifiedInboxRow] {
-        AidenRunningSummary(rows: store.inbox.running).rows
+        store.inbox.running
     }
 
     var body: some View {
