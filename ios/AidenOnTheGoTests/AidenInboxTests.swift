@@ -541,12 +541,17 @@ private final class AidenInboxTabFixture {
     private let root: URL
     private var scheduler: AidenHostConnectScheduler?
 
-    init(machines ids: [String]) {
+    /// A `readOnly` machine's pairing wasn't granted chat writes.
+    init(machines ids: [String], readOnly: Set<String> = []) {
         root = FileManager.default.temporaryDirectory
             .appending(path: "AidenInboxTabFixture-\(UUID().uuidString)", directoryHint: .isDirectory)
         cache = AidenChatCache(root: root)
         coordinator = AidenDemoHosts.coordinator(
-            installations: ids.map { AidenDemoHosts.installation(instanceId: $0, name: $0) },
+            installations: ids.map { id in
+                var installation = AidenDemoHosts.installation(instanceId: id, name: id)
+                if readOnly.contains(id) { installation.deviceCapabilities.removeAll { $0 == .chatWrite } }
+                return installation
+            },
             responder: responder
         )
     }
@@ -606,6 +611,16 @@ private final class AidenInboxTabFixture {
         return row
     }
 
+    /// An unseen failed run: it needs the person, and Done on it also reads it.
+    func failedRow(_ id: String, age: Int) -> [String: Any] {
+        let row = row(id, age: age, unread: true)
+        return row.merging([
+            "lastRunFailed": true,
+            "lastAssistantAt": row["updatedAt"]!,
+            "lastAssistantMessageId": "msg_1",
+        ]) { $1 }
+    }
+
     func serve(_ rows: [[String: Any]], next: String? = nil, on instanceId: String) {
         responder.reply(instanceId: instanceId, path: "/chat-summaries", status: 200, json: page(rows, next: next))
     }
@@ -621,6 +636,21 @@ private final class AidenInboxTabFixture {
         responder.reply(instanceId: instanceId, method: "POST", path: "/chats/\(chatID)/triage", status: 200, json: Data("""
         {"chatId":"\(chatID)","revision":\(revision),"updatedAt":"\(Self.doneAt)","pinnedAt":null,"doneAt":\(done),"snoozedUntil":null}
         """.utf8))
+    }
+
+    func serveRead(of chatID: String, on instanceId: String) {
+        responder.reply(instanceId: instanceId, method: "POST", path: "/chats/\(chatID)/read", status: 204, json: Data())
+    }
+
+    func serveTranscript(of row: [String: Any], on instanceId: String) {
+        let chat = row.filter { ["id", "workspaceId", "title", "createdAt", "updatedAt", "revision"].contains($0.key) }
+            .merging(["messages": [["id": "m1", "role": "assistant", "text": "Saved", "createdAt": row["updatedAt"]!]]]) { $1 }
+        responder.reply(
+            instanceId: instanceId,
+            path: "/chats/\(row["id"]!)",
+            status: 200,
+            json: try! JSONSerialization.data(withJSONObject: chat, options: [.sortedKeys])
+        )
     }
 
     func requests(_ request: String, on instanceId: String) -> Int {
@@ -835,11 +865,11 @@ extension AidenInboxTests {
 
         await fixture.waitUntil("every machine's rows") { store.inbox.listedIDs.count == 4 }
 
-        XCTAssertEqual(store.inbox.needsYouCount, 2)
-        XCTAssertEqual(store.inbox.needsYouCount, store.inbox.needsYou.count)
+        XCTAssertEqual(store.needsYouCount, 2)
+        XCTAssertEqual(store.needsYouCount, store.inbox.needsYou.count)
 
         store.filter = .machine("mini")
-        XCTAssertEqual(store.inbox.needsYouCount, 2, "The filter narrowed the badge")
+        XCTAssertEqual(store.needsYouCount, 2, "The filter narrowed the badge")
     }
 
     /// Plan, Task 21: the count is "online, not hidden, ignores filter", and the
@@ -857,17 +887,17 @@ extension AidenInboxTests {
         store.start()
         defer { store.stop() }
         await fixture.waitUntil("the rows") { store.inbox.listedIDs.count == 3 }
-        XCTAssertEqual(store.inbox.needsYouCount, 2)
+        XCTAssertEqual(store.needsYouCount, 2)
 
         fixture.preferences.update("laptop") { $0.isHidden = true }
 
         await fixture.waitUntil("the hidden rows to go") { store.inbox.listedIDs == ["mine"] }
-        XCTAssertEqual(store.inbox.needsYouCount, 1)
+        XCTAssertEqual(store.needsYouCount, 1)
 
         fixture.preferences.update("laptop") { $0.isHidden = false }
 
         await fixture.waitUntil("the rows to come back") { store.inbox.listedIDs.count == 3 }
-        XCTAssertEqual(store.inbox.needsYouCount, 2)
+        XCTAssertEqual(store.needsYouCount, 2)
     }
 
     @MainActor
@@ -1022,7 +1052,7 @@ extension AidenInboxTests {
         store.searchText = "needle"
 
         XCTAssertEqual(store.inbox.listedIDs, ["needle"])
-        XCTAssertEqual(store.inbox.needsYouCount, 1)
+        XCTAssertEqual(store.needsYouCount, 1)
     }
 
     @MainActor
@@ -1111,6 +1141,289 @@ extension AidenInboxTests {
         navigation.inboxPath = [.chat(id)]
         navigation.tab = .bots
         XCTAssertNil(navigation.openChat, "A chat on a tab nobody is looking at")
+    }
+
+    // MARK: Polls landing under a write
+
+    /// A poll asked for after the swipe can still read the machine before the
+    /// write lands, so its page says the row was never moved.
+    @MainActor
+    func testAPollLandingDuringASwipeLeavesTheRowMoved() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([fixture.failedRow("failed", age: 90), fixture.row("quiet", age: 120)], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the failed row") { store.inbox.needsYou.map(\.id.objectId) == ["failed"] }
+        XCTAssertEqual(store.needsYouCount, 1)
+        fixture.serveTriage(of: "failed", on: "studio", revision: 1, doneAt: AidenInboxTabFixture.doneAt)
+        fixture.serveRead(of: "failed", on: "studio")
+        let release = fixture.responder.hold(instanceId: "studio", path: "/chats/failed/triage")
+        let swipe = Task { await store.perform(.done, on: try! fixture.id("failed", on: "studio")) }
+        await fixture.waitUntil("the write to go out") {
+            fixture.requests("POST /chats/failed/triage", on: "studio") == 1
+        }
+
+        await store.refreshAll()
+
+        XCTAssertFalse(store.inbox.listedIDs.contains("failed"), "The poll brought the row back")
+        XCTAssertEqual(store.needsYouCount, 0, "The poll put the badge back up")
+        release()
+        await swipe.value
+        await fixture.waitUntil("the notice") { store.notice != nil }
+        XCTAssertFalse(store.inbox.listedIDs.contains("failed"))
+    }
+
+    @MainActor
+    func testAPollLandingDuringMarkReadKeepsTheDotOff() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([fixture.failedRow("failed", age: 90)], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the failed row") { store.needsYouCount == 1 }
+        fixture.serveRead(of: "failed", on: "studio")
+        let release = fixture.responder.hold(instanceId: "studio", path: "/chats/failed/read")
+        let swipe = Task { await store.perform(.markRead, on: try! fixture.id("failed", on: "studio")) }
+        await fixture.waitUntil("the write to go out") {
+            fixture.requests("POST /chats/failed/read", on: "studio") == 1
+        }
+
+        await store.refreshAll()
+
+        XCTAssertEqual(store.homeModel(for: "studio")?.chats.first?.unread, false, "The poll brought the dot back")
+        XCTAssertEqual(store.needsYouCount, 0)
+        release()
+        await swipe.value
+    }
+
+    /// The write is what decides. A refusal still brings the row back.
+    @MainActor
+    func testARefusalAfterAPollLandedPutsTheRowBack() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("row", age: 90)], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the row") { store.inbox.listedIDs.contains("row") }
+        fixture.responder.reply(instanceId: "studio", method: "POST", path: "/chats/row/triage", status: 500, json: Data("{}".utf8))
+        let release = fixture.responder.hold(instanceId: "studio", path: "/chats/row/triage")
+        let swipe = Task { await store.perform(.done, on: try! fixture.id("row", on: "studio")) }
+        await fixture.waitUntil("the write to go out") { fixture.requests("POST /chats/row/triage", on: "studio") == 1 }
+        await store.refreshAll()
+        XCTAssertFalse(store.inbox.listedIDs.contains("row"))
+
+        release()
+        await swipe.value
+
+        await fixture.waitUntil("the row to come back") { store.inbox.listedIDs.contains("row") }
+        await fixture.waitUntil("the notice") { store.notice != nil }
+    }
+
+    // MARK: Polls landing under Load more
+
+    /// Load more, parked at the machine, while a poll comes and goes.
+    @MainActor
+    private func loadMoreUnderAPoll(_ fixture: AidenInboxTabFixture, store: AidenUnifiedInboxStore, cursor: String, poll: () -> Void) async {
+        let query = "limit=100&cursor=\(cursor)"
+        let release = fixture.responder.hold(instanceId: "studio", path: "/chat-summaries", query: query)
+        let sent = fixture.requests("GET /chat-summaries", on: "studio")
+        let more = Task { await store.loadMoreChats() }
+        await fixture.waitUntil("Load more to go out") { fixture.requests("GET /chat-summaries", on: "studio") == sent + 1 }
+        poll()
+        await store.refreshAll()
+        XCTAssertEqual(store.moreChats, .loading, "A poll ended Load more's spinner")
+        release()
+        await more.value
+    }
+
+    @MainActor
+    func testAPollDuringLoadMoreKeepsThePage() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        let cursor = "cur_next.\(String(repeating: "a", count: 43))"
+        fixture.serve([fixture.row("first", age: 1)], next: cursor, on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("a page left") { store.moreChats == .available }
+        fixture.responder.reply(
+            instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(cursor)",
+            status: 200, json: fixture.page([fixture.row("second", age: 5)])
+        )
+
+        await loadMoreUnderAPoll(fixture, store: store, cursor: cursor) {}
+
+        await fixture.waitUntil("the next page") { store.inbox.listedIDs.contains("second") }
+        await fixture.waitUntil("nothing left") { store.moreChats == .none }
+    }
+
+    /// A new reply moves the first page's end, so the old cursor no longer
+    /// follows on from the list, and the page is read again from the new one.
+    @MainActor
+    func testAPollThatMovesTheCursorDuringLoadMoreReadsOnFromTheNewOne() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        let cursor = "cur_next.\(String(repeating: "a", count: 43))"
+        let moved = "cur_next.\(String(repeating: "b", count: 43))"
+        fixture.serve([fixture.row("first", age: 1)], next: cursor, on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("a page left") { store.moreChats == .available }
+        fixture.responder.reply(
+            instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(moved)",
+            status: 200, json: fixture.page([fixture.row("second", age: 5)])
+        )
+
+        await loadMoreUnderAPoll(fixture, store: store, cursor: cursor) {
+            fixture.serve([fixture.row("new", age: 0), fixture.row("first", age: 1)], next: moved, on: "studio")
+        }
+
+        await fixture.waitUntil("the next page") { store.inbox.listedIDs.contains("second") }
+        await fixture.waitUntil("nothing left") { store.moreChats == .none }
+    }
+
+    /// However busy the machine, Load more ends in rows or in words.
+    @MainActor
+    func testLoadMoreThatKeepsBeingOvertakenSaysSo() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        func cursor(_ index: Int) -> String { "cur_next.\(String(repeating: "\(index)", count: 43))" }
+        fixture.serve([fixture.row("first", age: 1)], next: cursor(1), on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("a page left") { store.moreChats == .available }
+        let releases = (1...3).map { fixture.responder.hold(instanceId: "studio", path: "/chat-summaries", query: "limit=100&cursor=\(cursor($0))") }
+
+        let sent = fixture.requests("GET /chat-summaries", on: "studio")
+
+        let more = Task { await store.loadMoreChats() }
+        for index in 1...3 {
+            // Each round is one read of the page and one poll.
+            await fixture.waitUntil("page \(index) to go out") {
+                fixture.requests("GET /chat-summaries", on: "studio") == sent + 2 * index - 1
+            }
+            fixture.serve([fixture.row("first", age: 1)], next: cursor(index + 1), on: "studio")
+            await store.refreshAll()
+            releases[index - 1]()
+        }
+        await more.value
+
+        await fixture.waitUntil("the failure") {
+            if case .failed = store.moreChats { return true }
+            return false
+        }
+    }
+
+    // MARK: The chat write gate
+
+    /// Done and Snooze need the pairing's write grant as well as the feature.
+    @MainActor
+    func testAMachineWithoutChatWriteOffersNoTriage() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio", "laptop"], readOnly: ["laptop"])
+        await fixture.connectAll()
+        fixture.serve([fixture.row("writable", age: 90)], on: "studio")
+        fixture.serve([fixture.row("readable", age: 91)], on: "laptop")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the rows") { store.inbox.listedIDs.count == 2 }
+
+        let rows = store.inbox.needsYou + store.inbox.updates + store.inbox.earlier
+        let offers = Dictionary(uniqueKeysWithValues: rows.map { ($0.id.instanceId, $0.offer) })
+        XCTAssertEqual(offers["studio"]?.done, true)
+        XCTAssertEqual(offers["studio"]?.snooze, true)
+        XCTAssertEqual(offers["laptop"]?.done, false, "A pairing that can't write was offered Done")
+        XCTAssertEqual(offers["laptop"]?.snooze, false, "A pairing that can't write was offered Snooze")
+    }
+
+    // MARK: Saved transcripts
+
+    /// The Inbox never calls `load`, so a cold start's poll is what saves the
+    /// newest transcripts, and a first open works with the machine gone.
+    @MainActor
+    func testAColdStartSavesTheNewestTranscriptsForAFirstOpenOffline() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        let limit = AidenHomeModel.recentTranscriptPrefetchLimit
+        let rows = (1...(limit + 2)).map { fixture.row("chat\($0)", age: $0) }
+        rows.forEach { fixture.serveTranscript(of: $0, on: "studio") }
+        fixture.serve(rows, on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+
+        await fixture.waitUntil("the reads") { fixture.requests("GET /chats/chat\(limit)", on: "studio") == 1 }
+        for _ in 0..<500 {
+            if await fixture.cache.loadChat(instanceId: "studio", chatId: "chat\(limit)") != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(fixture.requests("GET /chats/chat\(limit + 1)", on: "studio"), 0, "Read past the limit")
+
+        // Only a cold start reads ahead, however much a later poll says changed.
+        var changed = rows[0]
+        changed["revision"] = "rev_" + String(repeating: "9", count: 43)
+        fixture.serve([changed] + rows.dropFirst(), on: "studio")
+        await store.refreshAll()
+        XCTAssertEqual(fixture.requests("GET /chats/chat1", on: "studio"), 1, "A later poll read ahead")
+
+        fixture.responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        let route = AidenChatRouteModel(id: try fixture.id("chat1", on: "studio"), cache: fixture.cache)
+        await route.load(coordinator: fixture.coordinator)
+        guard case .ready = route.state else { return XCTFail("A first open offline got \(route.state)") }
+    }
+
+    @MainActor
+    func testGoingToTheBackgroundEndsTheReadAhead() async throws {
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        let rows = (1...3).map { fixture.row("chat\($0)", age: $0) }
+        rows.forEach { fixture.serveTranscript(of: $0, on: "studio") }
+        fixture.serve(rows, on: "studio")
+        let release = fixture.responder.hold(instanceId: "studio", path: "/chats/chat1")
+        let store = fixture.makeStore()
+        store.start()
+        await fixture.waitUntil("the first read") { fixture.requests("GET /chats/chat1", on: "studio") == 1 }
+
+        store.stop()
+        release()
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(fixture.requests("GET /chats/chat2", on: "studio"), 0, "It read on in the background")
+    }
+
+    // MARK: The badge
+
+    /// The shell's body reads this, so a row changing mustn't redraw the tabs
+    /// and any chat pushed on them.
+    @MainActor
+    func testOnlyACountChangeReachesTheBadge() async throws {
+        final class Heard: @unchecked Sendable { var changed = false }
+        let fixture = AidenInboxTabFixture(machines: ["studio"])
+        await fixture.connectAll()
+        let approval = fixture.row("approval", age: 1, state: "needs_approval")
+        fixture.serve([approval], on: "studio")
+        let store = fixture.makeStore()
+        store.start()
+        defer { store.stop() }
+        await fixture.waitUntil("the row") { store.needsYouCount == 1 }
+        let heard = Heard()
+        withObservationTracking { _ = store.needsYouCount } onChange: { heard.changed = true }
+
+        fixture.serve([approval, fixture.row("quiet", age: 2)], on: "studio")
+        await store.refreshAll()
+        await fixture.waitUntil("the new row") { store.inbox.listedIDs.contains("quiet") }
+        XCTAssertFalse(heard.changed, "A row that isn't counted redrew the badge")
+
+        fixture.serve([approval, fixture.row("question", age: 3, state: "needs_input")], on: "studio")
+        await store.refreshAll()
+        await fixture.waitUntil("the count") { store.needsYouCount == 2 }
+        XCTAssertTrue(heard.changed)
     }
 }
 #endif

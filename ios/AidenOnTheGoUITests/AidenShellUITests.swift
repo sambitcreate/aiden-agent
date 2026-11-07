@@ -165,7 +165,7 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
-    /// Needs You above Updates above Earlier, whichever machine a row came from.
+    /// Needs you above Updates above Earlier, whichever machine a row came from.
     func testInboxShowsNeedsYouUpdatesEarlierInOrder() {
         let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
@@ -173,7 +173,7 @@ final class AidenShellUITests: XCTestCase {
         func heading(_ title: String) -> XCUIElement {
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
         }
-        let needsYou = heading("Needs You")
+        let needsYou = heading("Needs you")
         let updates = heading("Updates")
         let earlier = heading("Earlier")
         for section in [needsYou, updates, earlier] {

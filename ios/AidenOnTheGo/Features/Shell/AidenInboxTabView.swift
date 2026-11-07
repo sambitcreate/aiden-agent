@@ -19,7 +19,7 @@ extension AidenInboxRowActions {
     }
 }
 
-/// Every machine's chats in one list: Needs You, Updates, Earlier. Running chats
+/// Every machine's chats in one list: Needs you, Updates, Earlier. Running chats
 /// aren't listed here, because the accessory owns them.
 struct AidenInboxTabView: View {
     let inbox: AidenUnifiedInbox
@@ -45,9 +45,9 @@ struct AidenInboxTabView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(palette.canvas)
             }
-            section(.needsYou, title: String(localized: "Needs You"), rows: inbox.needsYou)
-            section(.updates, title: String(localized: "Updates"), rows: inbox.updates)
-            section(.earlier, title: String(localized: "Earlier"), rows: inbox.earlier) {
+            section(.needsYou, rows: inbox.needsYou)
+            section(.updates, rows: inbox.updates)
+            section(.earlier, rows: inbox.earlier) {
                 if inbox.earlierOverflow > 0 { showMoreRow }
             }
             if moreChats != .none { moreChatsRow }
@@ -76,7 +76,6 @@ struct AidenInboxTabView: View {
     @ViewBuilder
     private func section(
         _ section: AidenInboxSection,
-        title: String,
         rows: [AidenUnifiedInboxRow],
         @ViewBuilder footer: () -> some View = { EmptyView() }
     ) -> some View {
@@ -87,7 +86,7 @@ struct AidenInboxTabView: View {
                 }
                 footer()
             } header: {
-                AidenInboxSectionHeader(section: section, count: rows.count, palette: palette, title: title)
+                AidenInboxSectionHeader(section: section, count: rows.count, palette: palette)
                     .textCase(nil)
             }
             .listSectionSeparator(.hidden)
@@ -142,10 +141,10 @@ struct AidenInboxTabView: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(palette.secondary)
                 .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                .padding(.leading, 29)
+                .padding(.leading, AidenSpacing.xxl)
         }
         .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+        .listRowInsets(EdgeInsets(top: 0, leading: AidenSpacing.l, bottom: 0, trailing: AidenSpacing.m))
         .listRowSeparator(.hidden)
         .listRowBackground(palette.canvas)
     }

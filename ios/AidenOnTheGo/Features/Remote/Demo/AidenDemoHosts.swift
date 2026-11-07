@@ -73,6 +73,7 @@ final class AidenDemoResponder: @unchecked Sendable {
     private struct HoldKey: Hashable {
         let instanceId: String
         let path: String
+        var query: String?
     }
 
     private final class Hold {
@@ -123,11 +124,12 @@ final class AidenDemoResponder: @unchecked Sendable {
     }
 
     /// Parks requests to `path` until the returned closure is called. Requests
-    /// that arrive after the release are answered at once.
-    func hold(instanceId: String, path: String) -> @Sendable () -> Void {
+    /// that arrive after the release are answered at once. `query` parks only
+    /// one exact query string, such as one page of a list.
+    func hold(instanceId: String, path: String, query: String? = nil) -> @Sendable () -> Void {
         let hold = Hold()
         lock.lock()
-        holds[HoldKey(instanceId: instanceId, path: path)] = hold
+        holds[HoldKey(instanceId: instanceId, path: path, query: query)] = hold
         lock.unlock()
         return { [weak self] in
             guard let self else { return }
@@ -162,7 +164,8 @@ final class AidenDemoResponder: @unchecked Sendable {
 
         lock.lock()
         log[instanceId, default: []].append("\(method) \(path)")
-        if let hold = holds[HoldKey(instanceId: instanceId, path: path)], !hold.isReleased {
+        let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
+        if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)], !hold.isReleased {
             hold.waiting.append { [self] in
                 deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
             }

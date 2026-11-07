@@ -230,16 +230,13 @@ struct AidenInboxSectionHeader: View {
     let section: AidenInboxSection
     let count: Int
     let palette: AidenPalette
-    var title: String?
-
-    private var heading: String { title ?? section.title }
 
     var body: some View {
         HStack(spacing: 6) {
             if section == .working {
                 AidenWorkingIndicator(size: 10)
             }
-            Text(heading)
+            Text(section.title)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(palette.secondary)
             Text("\(count)")
@@ -251,7 +248,7 @@ struct AidenInboxSectionHeader: View {
         .padding(.bottom, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(heading), \(count)")
+        .accessibilityLabel("\(section.title), \(count)")
         .accessibilityAddTraits(.isHeader)
         .listRowInsets(EdgeInsets())
         .listRowSeparator(.hidden)

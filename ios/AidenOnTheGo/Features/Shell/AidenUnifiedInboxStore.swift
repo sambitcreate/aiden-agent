@@ -20,6 +20,9 @@ final class AidenUnifiedInboxStore {
     private(set) var snapshots: [String: AidenHostInboxSnapshot] = [:]
     /// Built when its inputs change, so a view can read it freely.
     private(set) var inbox = AidenUnifiedInbox()
+    /// The tab's badge. Kept apart from `inbox`, so whoever shows it redraws
+    /// when the count changes and not with every row.
+    private(set) var needsYouCount = 0
     private(set) var listState = AidenInboxListState.loading
     /// A listed machine answered with a failure, and saved rows are standing in.
     private(set) var refreshFailed = false
@@ -323,6 +326,7 @@ final class AidenUnifiedInboxStore {
                 showAllEarlier: showsAllEarlier
             )
             if rebuilt != inbox { inbox = rebuilt }
+            if rebuilt.needsYouCount != needsYouCount { needsYouCount = rebuilt.needsYouCount }
         }
         describeTheList(shown: shown, hasHiddenMachines: !hidden.isEmpty)
     }
@@ -386,6 +390,7 @@ final class AidenUnifiedInboxStore {
     private func endPolling(_ instanceId: String) {
         loops.removeValue(forKey: instanceId)?.cancel()
         fetches.removeValue(forKey: instanceId)?.cancel()
+        machines[instanceId]?.model.cancelTranscriptPrefetch()
         pollers[instanceId] = nil
     }
 
@@ -525,7 +530,11 @@ final class AidenUnifiedInboxStore {
         switch result {
         case .loaded:
             poller.failures = 0
-            if walkingPages { poller.hasWalked = true }
+            if walkingPages {
+                poller.hasWalked = true
+                // Saved so a first open works once the machine has gone.
+                if pollers[instanceId] === poller { machine.model.prefetchRecentTranscripts(host: connection) }
+            }
             machine.fetchedAt = now()
             settle()
         case .abandoned:

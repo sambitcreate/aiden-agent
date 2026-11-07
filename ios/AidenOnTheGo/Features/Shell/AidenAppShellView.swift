@@ -56,7 +56,7 @@ struct AidenAppShellView: View {
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
-            .badge(inboxStore.inbox.needsYouCount)
+            .badge(inboxStore.needsYouCount)
 
             Tab("Bots", systemImage: AidenProductArea.bots.symbol, value: AidenAppTab.bots) {
                 NavigationStack(path: $navigation.botsPath) {
