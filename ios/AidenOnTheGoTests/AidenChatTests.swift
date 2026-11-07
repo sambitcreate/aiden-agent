@@ -3395,13 +3395,16 @@ final class AidenChatTests: XCTestCase {
         let delays = AidenProbeDelayRecorder()
         model.foreignRunProbeSleep = { delay in
             delays.record(delay)
-            try await Task.sleep(for: .milliseconds(10))
+            // The third check stays asleep, so no request is on its way when the
+            // chat stops. One already sent can't be called back.
+            try await Task.sleep(for: delay == .seconds(20) ? .seconds(60) : .milliseconds(10))
         }
         XCTAssertFalse(model.canReadAgentRoster)
 
         await model.load(observeProgress: true)
         // The load's attach plus two probes find nothing, backing off.
-        try await waitForCondition("idle probes") { fixture.currentRunRequests >= 3 }
+        try await waitForCondition("idle probes") { delays.values.contains(.seconds(20)) }
+        XCTAssertEqual(fixture.currentRunRequests, 3)
         model.stopProgressObservation()
         XCTAssertFalse(model.isProbingForForeignRuns, "Leaving the foreground stops the probe.")
         let requestsWhenSuspended = fixture.currentRunRequests
@@ -3420,6 +3423,37 @@ final class AidenChatTests: XCTestCase {
         try await waitForCondition("live foreign output") { model.liveText == "Hello from the Mac" }
         XCTAssertEqual(delays.values.first, .seconds(5))
         model.stopProgressObservation()
+        XCTAssertTrue(model.isObservingForeignRun, "A run the probe found isn't the probe's to end")
+    }
+
+    @MainActor
+    func testLeavingTheForegroundEndsTheProbesOwnLookup() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let fixture = AidenAnnouncedRunFixture(scenario: .live, rosterReadable: false)
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { request in
+                let response = fixture.response(request)
+                // The load's lookup finds nothing. The probe's can't get through,
+                // so it stays open, trying again.
+                guard request.url!.path.hasSuffix("/runs/current/events"), fixture.currentRunRequests > 1 else {
+                    return response
+                }
+                return (503, "application/json", Data(
+                    #"{"error":{"code":"internal_error","message":"Try again.","requestId":"r","retryable":true}}"#.utf8
+                ))
+            },
+            extraCapabilities: [.runsObserve, .runsControl]
+        )
+        model.foreignRunProbeSleep = { _ in try await Task.sleep(for: .milliseconds(10)) }
+
+        await model.load(observeProgress: true)
+        try await waitForCondition("the probe's lookup") { fixture.currentRunRequests >= 2 }
+        XCTAssertTrue(model.isLookingForForeignRun)
+
+        model.stopProgressObservation()
+
+        XCTAssertFalse(model.isLookingForForeignRun, "The probe stopped and left its lookup running")
     }
 
     @MainActor

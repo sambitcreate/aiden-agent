@@ -219,6 +219,9 @@ final class AidenRemoteCoordinator {
     /// The views showing each machine's data. A revoked machine keeps its data
     /// until its entry here empties.
     @ObservationIgnored private var onScreenViews: [String: Set<ObjectIdentifier>] = [:]
+    /// The tab shell holds a revoked selected machine for its chat on screen, as
+    /// it does any other machine. The old shell ends it at once.
+    private let holdsRevokedChats: Bool
     private var connectionGeneration: Int {
         selectedConnection?.connectionGeneration ?? 0
     }
@@ -234,6 +237,7 @@ final class AidenRemoteCoordinator {
     init(haptics: (any AidenHapticEmitting)? = nil) {
         let installationStore = AidenInstallationStore()
         self.installationStore = installationStore
+        holdsRevokedChats = AppConfig.tabShellEnabled
         machinePreferences = .shared
         self.haptics = haptics ?? AidenHapticCenter()
         workspaceArchiveStore = AidenWorkspaceArchiveStore()
@@ -265,9 +269,11 @@ final class AidenRemoteCoordinator {
         haptics: (any AidenHapticEmitting)? = nil,
         machinePreferences: AidenMachinePreferencesStore = .shared,
         clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) },
-        probeClientFactory: ClientFactory? = nil
+        probeClientFactory: ClientFactory? = nil,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) {
         self.installationStore = installationStore
+        holdsRevokedChats = tabShell
         self.machinePreferences = machinePreferences
         self.haptics = haptics ?? AidenHapticCenter()
         self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
@@ -441,8 +447,10 @@ final class AidenRemoteCoordinator {
             return
         }
         // Selecting a machine revoked in the background: its credential is dead,
-        // so it takes the selected machine's path rather than a connect.
+        // so it takes the selected machine's path rather than a connect. One
+        // held for its chat goes when that chat does, and not before.
         if connection.isPurgePending {
+            guard !isHeldForItsChat(connection) else { return }
             await revokeSelectedConnectionAndConnectNext(connection)
             return
         }
@@ -912,6 +920,16 @@ final class AidenRemoteCoordinator {
         return true
     }
 
+    /// True while the selected machine has revoked this phone and stays only for
+    /// its chat on screen. The pairing screen waits, or it would take the chat away.
+    var isHoldingRevokedChat: Bool {
+        selectedConnection.map(isHeldForItsChat) == true
+    }
+
+    private func isHeldForItsChat(_ connection: AidenHostConnection) -> Bool {
+        holdsRevokedChats && connection.isPurgePending && onScreenViews[connection.instanceId] != nil
+    }
+
     /// Records that `view` is or isn't showing `instanceId`'s data. The last
     /// view leaving a revoked machine ends its wait for the purge.
     func setOnScreen(_ onScreen: Bool, view: AnyObject, instanceId: String) {
@@ -1101,6 +1119,7 @@ final class AidenRemoteCoordinator {
     ) async {
         workspaceArchiveStore.purge(instanceID: installationId)
         AidenProductNavigationStore.shared.purge(instanceID: installationId)
+        AidenAppNavigationStore().purge(instanceID: installationId)
         AidenChatForkPrefillHandoff.purge(instanceId: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
@@ -1249,6 +1268,14 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         _ connection: AidenHostConnection,
         over route: AidenHostConnection.ConnectRoute
     ) async {
+        // The selected machine is only the default for new work, so a chat of
+        // its on screen gets what any machine's does. The selection moves on,
+        // if there's anywhere to go, and the purge waits for that chat to leave.
+        if holdsRevokedChats, onScreenViews[connection.instanceId] != nil {
+            connection.markRevokedWithPurgePending()
+            hostConnectionNeedsPairing(connection)
+            return
+        }
         guard route == .probe else {
             await revokeSelectedConnectionAndConnectNext(connection)
             return

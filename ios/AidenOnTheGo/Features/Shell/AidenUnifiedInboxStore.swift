@@ -18,6 +18,8 @@ import Observation
 @Observable
 final class AidenUnifiedInboxStore {
     private(set) var snapshots: [String: AidenHostInboxSnapshot] = [:]
+    /// Machines the person hid from the Inbox. Search reads them with `snapshots`.
+    private(set) var hiddenMachines: Set<String> = []
     /// Built when its inputs change, so a view can read it freely.
     private(set) var inbox = AidenUnifiedInbox()
     /// The tab's badge. Kept apart from `inbox`, so whoever shows it redraws
@@ -54,6 +56,7 @@ final class AidenUnifiedInboxStore {
     @ObservationIgnored private let hosts: AidenHostRegistry
     @ObservationIgnored private let preferences: AidenMachinePreferencesStore
     @ObservationIgnored private let cache: AidenChatCache
+    @ObservationIgnored private let drafts: AidenChatDraftStore
     @ObservationIgnored private let timing: Timing
     @ObservationIgnored private let drawJitter: @MainActor () -> Double
     @ObservationIgnored private let now: @MainActor () -> Date
@@ -76,12 +79,14 @@ final class AidenUnifiedInboxStore {
         preferences: AidenMachinePreferencesStore,
         cache: AidenChatCache,
         clock: any Clock<Duration>,
+        drafts: AidenChatDraftStore = .shared,
         jitter: @escaping @MainActor () -> Double = { .random(in: AidenInboxPollPolicy.jitterRange) },
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.hosts = hosts
         self.preferences = preferences
         self.cache = cache
+        self.drafts = drafts
         timing = Timing(clock)
         drawJitter = jitter
         self.now = now
@@ -154,6 +159,7 @@ final class AidenUnifiedInboxStore {
         case .undone: await triage(.done(false))
         case .snooze(let option): await triage(.snooze(until: option.until))
         case .wake: await triage(.wake)
+        case .delete: await delete(id)
         }
     }
 
@@ -173,11 +179,13 @@ final class AidenUnifiedInboxStore {
         homeModel(for: notice.instanceId)?.inboxNotice = nil
     }
 
+    /// A row from an older pairing of a machine goes nowhere: `id` was issued to
+    /// a device that machine no longer knows, or the store no longer reads.
     private func owner(of id: AidenHostObjectID) -> (AidenHomeModel, AidenHostConnection)? {
-        guard let model = homeModel(for: id.instanceId),
+        guard let machine = machines[id.instanceId], machine.lease.deviceId == id.deviceId,
               let connection = hosts.connection(for: id.instanceId),
               connection.installation.deviceId == id.deviceId else { return nil }
-        return (model, connection)
+        return (machine.model, connection)
     }
 
     // MARK: Reading on demand
@@ -228,7 +236,7 @@ final class AidenUnifiedInboxStore {
     /// has one by the time a view asks.
     private func readMachines() -> [MachineReading] {
         hosts.ordered.map { connection in
-            let isBlocked = connection.isRevoked || connection.isPurgePending || connection.connectionState == .needsPairing
+            let isBlocked = connection.isBlockedFromInbox
             let isHidden = preferences.preferences(for: connection.instanceId).isHidden
             let machine = isBlocked ? nil : machine(for: connection)
             let workspaces = connection.workspaces
@@ -308,6 +316,7 @@ final class AidenUnifiedInboxStore {
             filter = .all
         }
         let hidden = Set(readings.filter(\.isHidden).map(\.connection.instanceId))
+        if hidden != hiddenMachines { hiddenMachines = hidden }
         let inputs = InboxInputs(
             snapshots: snapshots,
             filter: filter,
@@ -566,6 +575,38 @@ extension AidenUnifiedInboxStore {
             clock: ContinuousClock()
         )
     }
+
+    /// The row goes at once. If the machine doesn't take the delete it comes back.
+    func delete(_ id: AidenHostObjectID) async {
+        guard let (model, connection) = owner(of: id), let context = try? connection.homeContext(),
+              let index = model.chats.firstIndex(where: { $0.id == id.objectId }) else { return }
+        let row = model.chats[index]
+        model.removeChat(id: id.objectId)
+        do {
+            let client = try connection.homeClient(for: context)
+            // The machine wants the chat's current revision, and a row can be behind.
+            let current = try await client.chat(id: id.objectId)
+            guard connection.holdsHomeContext(context) else { return }
+            try await client.removeChat(id: id.objectId, revision: current.revision)
+            guard connection.holdsHomeContext(context) else { return }
+            await cache.removeChat(instanceId: id.instanceId, chatId: id.objectId)
+            await drafts.remove(instanceId: id.instanceId, chatId: id.objectId)
+            // The machine lets the chat's hidden folder go with it.
+            try? await connection.refreshWorkspacesForPoll()
+        } catch {
+            guard connection.holdsHomeContext(context) else { return }
+            if (error as? AidenRemoteClientError)?.isCredentialRevoked == true {
+                // Its rows go with it, so there's nothing to bring back.
+                _ = await connection.handlePollError(error, sinceConnect: connection.connectionGeneration)
+                return
+            }
+            model.restoreChat(row, at: index)
+            guard !aidenIsCancellation(error) else { return }
+            model.inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t delete that chat. It’s back where it was."))
+            // The answer may be what was lost, with the chat gone after all.
+            _ = await model.pollChats(host: connection, walkingPages: false, now: now())
+        }
+    }
 }
 
 /// `any Clock<Duration>` can sleep, but can't compare two of its own instants, so
@@ -683,4 +724,13 @@ private struct InboxInputs: Equatable {
     let searchText: String
     let showsAllEarlier: Bool
     let clockReadings: Int
+}
+
+extension AidenHostConnection {
+    /// A machine the Inbox shows nothing of: revoked, waiting to be purged, or
+    /// needing to be paired again (a missing credential ends there too). Search
+    /// reads the same, so what leaves the Inbox leaves Search.
+    var isBlockedFromInbox: Bool {
+        isRevoked || isPurgePending || connectionState == .needsPairing
+    }
 }

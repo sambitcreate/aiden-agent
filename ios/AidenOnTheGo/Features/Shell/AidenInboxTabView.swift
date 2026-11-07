@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// What a row can be asked to do. Mirrors `AidenInboxRowOffer`.
+/// What a row can be asked to do. Mirrors `AidenInboxRowOffer`, plus Delete,
+/// which every row offers.
 enum AidenInboxRowAction: Equatable {
-    case markRead, done, snooze(AidenSnoozeOption), wake, undone
+    case markRead, done, snooze(AidenSnoozeOption), wake, undone, delete
 }
 
 extension AidenInboxRowActions {
@@ -39,6 +40,7 @@ struct AidenInboxTabView: View {
 
     @Environment(\.aidenPalette) private var palette
     @State private var snoozeCandidate: AidenHostObjectID?
+    @State private var deleteCandidate: AidenHostObjectID?
 
     private var catchUpCount: Int { AidenCatchUpQueue(rows: inbox.needsYou).count }
     private var hasRunningChats: Bool { !AidenRunningSummary(rows: inbox.running).isEmpty }
@@ -82,6 +84,20 @@ struct AidenInboxTabView: View {
                 Button(option.label) { onAction(.snooze(option), id) }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Delete this chat?",
+            isPresented: Binding(
+                get: { deleteCandidate != nil },
+                set: { if !$0 { deleteCandidate = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: deleteCandidate
+        ) { id in
+            Button("Delete chat", role: .destructive) { onAction(.delete, id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This permanently removes the chat from its machine.")
         }
     }
 
@@ -145,6 +161,7 @@ struct AidenInboxTabView: View {
         } else if let wake = actions.snooze {
             Button(actions.snoozeLabel, systemImage: "clock", action: wake)
         }
+        Button("Delete", systemImage: "trash", role: .destructive) { deleteCandidate = row.id }
     }
 
     private var runningRow: some View {

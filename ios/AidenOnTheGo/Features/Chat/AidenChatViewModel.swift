@@ -106,6 +106,7 @@ final class AidenChatViewModel {
     @ObservationIgnored var foreignRun: AidenForeignRunProjection?
     @ObservationIgnored var foreignRunIsLive = false
     @ObservationIgnored var foreignRunTask: Task<Void, Never>?
+    @ObservationIgnored var foreignRunLookupIsProbes = false
     @ObservationIgnored var foreignRunSettleTask: Task<Void, Never>?
     @ObservationIgnored var foreignRunGeneration: UInt64 = 0
     /// Bounded transcript recovery after a foreign run ended but its re-read failed.
@@ -459,7 +460,7 @@ final class AidenChatViewModel {
     private var isLeftBehind: Bool { isViewGone && !ownerIsSelected }
 
     private var ownerConnection: AidenHostConnection? {
-        coordinator.hosts.connection(for: owner.instanceId)
+        isReadOnlyFixture ? nil : coordinator.hosts.connection(for: owner.instanceId)
     }
 
     /// The owner's `/server` answer. Nil until that machine has connected,
@@ -1822,6 +1823,20 @@ final class AidenChatViewModel {
             )
             streamState = nil
         }
+        /// A revoked machine's chat stays on screen until the person leaves it,
+        /// and however this send ended, nothing can retry it, so its words come
+        /// back. False when the chat is gone or the machine hasn't revoked this
+        /// phone. `told` is this send's own 401, which may be the first word of it.
+        func returnToRevokedChat(told: Bool = false) async -> Bool {
+            guard !isRemoved, coordinator.isRetained(context), told || isOwnerRevoked else { return false }
+            restoreFailedSend()
+            if let session = draftSession { await draftStore.settlePendingSend(key: attempt.key, session: session) }
+            pendingSend = nil
+            isPendingSendRefusedBecauseBusy = false
+            presentedError = AidenDockCopy.machineRevoked
+            coordinator.haptics.play(.error, scope: hapticScope)
+            return true
+        }
         do {
             if makesWorktree {
                 // Revision 53: the Mac makes the worktree and moves this empty
@@ -1852,7 +1867,10 @@ final class AidenChatViewModel {
                     if AidenNewWorktreeRetry.spendsKey(error) { worktreeAttempt = nil }
                     throw error
                 }
-                guard !isRemoved, coordinator.isLive(context) else { return }
+                guard !isRemoved, coordinator.isLive(context) else {
+                    _ = await returnToRevokedChat()
+                    return
+                }
                 chat.workspaceId = moved.chat.workspaceId
                 chat.revision = moved.chat.revision
                 startsInNewWorktree = false
@@ -1872,7 +1890,10 @@ final class AidenChatViewModel {
                 draftSession = session
             }
             try await draftStore.savePendingSend(attempt, session: session)
-            guard !isRemoved, coordinator.isLive(context) else { return }
+            guard !isRemoved, coordinator.isLive(context) else {
+                _ = await returnToRevokedChat()
+                return
+            }
             pendingSend = attempt
             isPendingSendRefusedBecauseBusy = false
             guard attempt.canRetry(), coordinator.isLive(context) else { throw AidenRemoteClientError.invalidResponse }
@@ -1986,23 +2007,18 @@ final class AidenChatViewModel {
             coordinator.haptics.play(.actionStarted, scope: hapticScope, dedupeKey: "turn-start:\(response.streamId)")
             startStreaming(stream, context: context, feedbackPolicy: .localTurn)
         } catch let error where aidenIsCancellation(error) {
-            guard !isRemoved, coordinator.isLive(context) else { return }
-            restoreFailedSend()
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) {
-                // The selected machine leaves with its chats. Another machine's
-                // record stays while this chat is on screen, so the person gets
-                // their words back. Nothing can retry over a revoked pairing.
-                guard !isRemoved, coordinator.isRetained(context) else { return }
-                restoreFailedSend()
-                if let session = draftSession { await draftStore.settlePendingSend(key: attempt.key, session: session) }
-                pendingSend = nil
-                isPendingSendRefusedBecauseBusy = false
-                presentedError = AidenDockCopy.machineRevoked
-                coordinator.haptics.play(.error, scope: hapticScope)
+            guard !isRemoved, coordinator.isLive(context) else {
+                _ = await returnToRevokedChat()
                 return
             }
-            guard !isRemoved, coordinator.isLive(context) else { return }
+            restoreFailedSend()
+        } catch {
+            // The selected machine leaves with its chats. Another machine's
+            // record stays while this chat is on screen. The revocation may be
+            // this answer's, or another request's that got there first.
+            let told = await coordinator.handleCredentialRevocation(error, context: context)
+            if await returnToRevokedChat(told: told) { return }
+            guard !told, !isRemoved, coordinator.isLive(context) else { return }
             restoreFailedSend()
             if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
                let session = draftSession,
@@ -2559,10 +2575,10 @@ final class AidenChatViewModel {
                 coordinator.haptics.play(.error, scope: hapticScope)
             }
         } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) {
-                // As in `send`: another machine's record stays while this chat is
-                // on screen, so the words come back. Nothing can retry them.
-                guard !isRemoved, coordinator.isRetained(context) else { return }
+            // As in `send`: another machine's record stays while this chat is on
+            // screen, so the words come back. Nothing can retry them.
+            let told = await coordinator.handleCredentialRevocation(error, context: context)
+            if !isRemoved, coordinator.isRetained(context), told || isOwnerRevoked {
                 if retry {
                     // A retry's words are in the pending send alone, so they
                     // reach the saved draft before that send is settled.
@@ -2579,7 +2595,7 @@ final class AidenChatViewModel {
                 coordinator.haptics.play(.error, scope: hapticScope)
                 return
             }
-            guard coordinator.isLive(context) else { return }
+            guard !told, coordinator.isLive(context) else { return }
             restoreDraft()
             presentedError = String(localized: "The run input was not confirmed. Your draft is back — check the chat before trying again.")
             coordinator.haptics.play(.error, scope: hapticScope)

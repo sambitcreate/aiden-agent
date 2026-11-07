@@ -64,7 +64,7 @@ enum AidenStateMatrix {
             // app stores its navigation as Data, so a string here reads as "nothing
             // saved" and the stored value from an earlier launch is ignored.
             "-aiden.product-navigation.v1", "reset",
-            "-aiden.app-navigation.v1", "reset",
+            "-aiden.product-navigation.v2", "reset",
             // Keep the simulator in the same language as the strings the tests look for.
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",

@@ -402,6 +402,234 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
+    // MARK: Search
+
+    /// Types into the Search tab's field. The demo machines answer from a
+    /// responder in the app, so this reaches no real machine.
+    private func search(_ text: String, in app: XCUIApplication, submit: Bool = true) {
+        AidenStateMatrix.openArea("Search", in: app)
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "Search has no field")
+        field.tap()
+        field.typeText(text)
+        // The Search key puts the keyboard away and keeps the query, so the results are in view.
+        if submit { field.typeText("\n") }
+    }
+
+    private func searchRow(_ prefix: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
+    }
+
+    func testSearchFindsAChatAndABotConversationAndOpensTheChat() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("flaky", in: app)
+
+        let chat = searchRow("Fix the flaky upload test, chat on Studio Mac", in: app)
+        let bot = searchRow("Scout, Bot conversation on Studio Mac", in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat result")
+        XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot result")
+        // One element each, naming what it is and which machine has it.
+        XCTAssertEqual(bot.value as? String, "Flagged the flaky upload test again this week")
+
+        chat.tap()
+
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        app.terminate()
+    }
+
+    /// Chats come from the Inbox store, so a machine that isn't selected has its
+    /// chats searched too, and says which machine.
+    func testSearchFindsChatsOnAMachineThatIsNotSelected() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("e", in: app)
+
+        let other = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", ", chat on Laptop")).firstMatch
+        XCTAssertTrue(other.waitForExistence(timeout: 20), "No chat from Laptop, which isn't selected")
+        XCTAssertTrue(searchRow("Fix the flaky upload test, chat on Studio Mac", in: app).exists || app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", ", chat on Studio Mac")).firstMatch.exists)
+        app.terminate()
+    }
+
+    func testSearchSaysItCoversLoadedChatsWhenNothingMatches() {
+        let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("zzzz", in: app)
+
+        XCTAssertTrue(app.staticTexts["No results"].waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "chats Aiden has loaded"))
+                .firstMatch.exists,
+            "The empty state did not say what search covers"
+        )
+        app.terminate()
+    }
+
+    /// A drag that XCUITest's `swipeUp()` doesn't make: slow, from one spot to another.
+    /// A flick from `swipeUp()` left the list where it was, which is why an earlier
+    /// attempt saw no scroll and no change of keyboard.
+    private func dragResults(in app: XCUIApplication, from: Double = 0.45, to: Double = 0.1) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+    }
+
+    /// The largest text makes the list taller than the space above the keyboard.
+    func testDraggingTheResultsPutsTheKeyboardAwayAndKeepsTheQuery() {
+        let app = AidenStateMatrix.launch(
+            scenario: .four,
+            shell: .tabs,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        search("flaky", in: app, submit: false)
+        XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard was not up to begin with")
+
+        dragResults(in: app)
+
+        let gone = NSPredicate(format: "exists == false")
+        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)], timeout: 5)
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "flaky", "The query went with the keyboard")
+        app.terminate()
+    }
+
+    func testTheSearchKeyPutsTheKeyboardAwayAndKeepsTheQuery() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        search("flaky", in: app, submit: false)
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard was not up to begin with")
+
+        app.searchFields.firstMatch.typeText("\n")
+
+        let gone = NSPredicate(format: "exists == false")
+        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)], timeout: 5)
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "flaky")
+        XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).exists, "The results went with the keyboard")
+        app.terminate()
+    }
+
+    /// Without a list the empty states still scroll, so none of their words or
+    /// the note about unsearched machines can sit behind the field.
+    func testTheEmptyStatesScrollClearOfTheField() {
+        for size in [AidenStateMatrix.ContentSize.large, .accessibilityExtraExtraExtraLarge] {
+            let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, contentSize: size)
+            XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "\(size)")
+            search("zzzz", in: app, submit: false)
+            let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search")).firstMatch
+            XCTAssertTrue(note.waitForExistence(timeout: 10), "No note (\(size))")
+
+            for _ in 0..<4 { dragResults(in: app, from: 0.4, to: 0.05) }
+            let field = app.searchFields.firstMatch
+            XCTAssertLessThanOrEqual(note.frame.maxY, field.frame.minY, "The note sits behind the field (\(size))")
+            app.terminate()
+        }
+
+        let prompt = AidenStateMatrix.launch(
+            scenario: .one,
+            shell: .tabs,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: prompt).waitForExistence(timeout: 10))
+        AidenStateMatrix.openArea("Search", in: prompt)
+        let description = prompt.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "any of your machines")
+        ).firstMatch
+        XCTAssertTrue(description.waitForExistence(timeout: 10), "No prompt")
+        for _ in 0..<4 { dragResults(in: prompt, from: 0.4, to: 0.05) }
+        XCTAssertLessThanOrEqual(description.frame.maxY, prompt.searchFields.firstMatch.frame.minY, "The prompt is cut off by the field")
+        prompt.terminate()
+    }
+
+    /// Home Mini errors, and Laptop and Build Box are offline. Studio's results stay.
+    func testSearchNamesTheMachinesItCouldNotSearch() {
+        let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+
+        search("flaky", in: app)
+
+        XCTAssertTrue(searchRow("Scout, Bot conversation on Studio Mac", in: app).waitForExistence(timeout: 10))
+        let note = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search Bot conversations on")
+        ).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10), "No note about the machines that weren't searched")
+        for name in ["Laptop", "Home Mini", "Build Box"] {
+            XCTAssertTrue(note.label.contains(name), "\(name) is missing from: \(note.label)")
+        }
+        XCTAssertFalse(note.label.contains("Studio Mac"))
+        XCTAssertFalse(app.alerts.firstMatch.exists, "A failing machine raised an app-wide alert")
+        app.terminate()
+    }
+
+    /// Search with results in light, dark and the largest text, with no
+    /// results, and with machines that couldn't be searched. A screen that
+    /// cannot be reached fails the test.
+    func testCaptureSearchScreens() {
+        let variants: [(AidenStateMatrix.Appearance, AidenStateMatrix.ContentSize)] = [
+            (.light, .large),
+            (.dark, .large),
+            (.light, .accessibilityExtraExtraExtraLarge),
+        ]
+        for (appearance, size) in variants {
+            let tag = "\(appearance.rawValue)-\(size.label)"
+            let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance, contentSize: size)
+            XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox (\(tag))")
+            AidenStateMatrix.openArea("Search", in: app)
+            XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10), tag)
+            AidenStateMatrix.capture("search-prompt-\(tag)", in: self)
+            search("flaky", in: app)
+            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No chat result (\(tag))")
+            AidenStateMatrix.capture("search-results-\(tag)", in: self)
+            if size == .accessibilityExtraExtraExtraLarge {
+                // Every machine's chats come first, so the Bots are further down.
+                for _ in 0..<6 where !searchRow("Scout", in: app).exists { dragResults(in: app, from: 0.6, to: 0.1) }
+                AidenStateMatrix.capture("search-results-\(tag)-scrolled", in: self)
+            }
+            XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result (\(tag))")
+            app.terminate()
+        }
+
+        let empty = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        XCTAssertTrue(openInbox(in: empty).waitForExistence(timeout: 10))
+        search("zzzz", in: empty)
+        XCTAssertTrue(empty.staticTexts["No results"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("search-no-results", in: self)
+        empty.terminate()
+
+        let mixed = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        XCTAssertTrue(openInbox(in: mixed).waitForExistence(timeout: 10))
+        search("flaky", in: mixed)
+        XCTAssertTrue(
+            mixed.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search"))
+                .firstMatch.waitForExistence(timeout: 10)
+        )
+        AidenStateMatrix.capture("search-failing-machines", in: self)
+        mixed.terminate()
+
+        let largest = AidenStateMatrix.launch(
+            scenario: .offlineMix,
+            shell: .tabs,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: largest).waitForExistence(timeout: 10))
+        search("zzzz", in: largest)
+        XCTAssertTrue(largest.staticTexts["No results"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("search-no-results-failing-machines-accessibilityExtraExtraExtraLarge", in: self)
+        for _ in 0..<4 { dragResults(in: largest, from: 0.4, to: 0.05) }
+        AidenStateMatrix.capture("search-no-results-failing-machines-accessibilityExtraExtraExtraLarge-scrolled", in: self)
+        largest.terminate()
+
+        let noBots = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        XCTAssertTrue(openInbox(in: noBots).waitForExistence(timeout: 10))
+        search("zzzz", in: noBots)
+        XCTAssertTrue(noBots.staticTexts["No results"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("search-no-results-failing-machines", in: self)
+        noBots.terminate()
+    }
+
     /// Light, dark and the largest accessibility text, so later work has a
     /// "before" to compare with. A screen that cannot be reached fails the test
     /// instead of being skipped.
