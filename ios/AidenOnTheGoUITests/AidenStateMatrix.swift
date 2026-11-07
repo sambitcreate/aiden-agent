@@ -108,7 +108,8 @@ enum AidenStateMatrix {
 
     /// A tab's row in the list a regular-width window shows the tabs in.
     static func sidebarRow(_ title: String, in app: XCUIApplication) -> XCUIElement {
-        app.cells.matching(NSPredicate(format: "label == %@", title)).firstMatch
+        // A row with a badge reads "Inbox, 3".
+        app.cells.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", title, "\(title), ")).firstMatch
     }
 
     /// The window the app draws in. An iPad's first window can keep the size the

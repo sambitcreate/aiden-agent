@@ -1949,6 +1949,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
                 intents: intents
             )
                 .environment(AidenHapticCenter())
+                .environment(AidenAppearanceStore())
         )
         window.makeKeyAndVisible()
         return window

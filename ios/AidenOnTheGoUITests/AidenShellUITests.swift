@@ -86,12 +86,13 @@ final class AidenShellUITests: XCTestCase {
         }
 
         AidenStateMatrix.openArea("Search", in: app)
-        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10), "Search has no field")
+        XCTAssertTrue(searchField(in: app).exists, "Search has no field")
         app.terminate()
     }
 
     /// The largest text makes the list taller than the screen, so it can scroll.
-    func testTheTabBarMinimizesOnScrollDownAndComesBack() {
+    func testTheTabBarMinimizesOnScrollDownAndComesBack() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .pad, "A tab bar minimizes on iPhone")
         let app = AidenStateMatrix.launch(
             scenario: .busy,
             shell: .tabs,
@@ -184,8 +185,10 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertLessThan(updates.frame.minY, earlier.frame.minY)
 
         // Two prompts and a failed run wait on the person. The running chat doesn't.
-        let badge = AidenStateMatrix.tab("Inbox", in: app).value as? String
-        XCTAssertTrue(badge?.contains("3") == true, "The Inbox badge said \(badge ?? "nothing")")
+        // A tab bar gives the count as a value, and a sidebar row in its label.
+        let inbox = AidenStateMatrix.tab("Inbox", in: app)
+        let badge = "\(inbox.label) \(inbox.value as? String ?? "")"
+        XCTAssertTrue(badge.contains("3"), "The Inbox badge said \(badge)")
         AidenStateMatrix.capture("tabs-inbox-sections", in: self)
         app.terminate()
     }
@@ -236,7 +239,7 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.capture("tabs-workspaces", in: self)
 
         AidenStateMatrix.openArea("Search", in: app)
-        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(searchField(in: app).exists)
         AidenStateMatrix.capture("tabs-search", in: self)
 
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10))
@@ -616,6 +619,7 @@ final class AidenShellUITests: XCTestCase {
             AidenStateMatrix.capture("inbox-\(tag)", in: self)
 
             // A chat.
+            hideOverlaySidebar(in: app)
             firstChat.tap()
             XCTAssertTrue(
                 app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Where do we stand?")).firstMatch
@@ -720,6 +724,7 @@ final class AidenShellUITests: XCTestCase {
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rename the onboarding assets")).firstMatch
         for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No long chat in the inbox")
+        hideOverlaySidebar(in: app)
         row.tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
     }
@@ -777,6 +782,16 @@ final class AidenShellUITests: XCTestCase {
             toggle.tap()
             Thread.sleep(forTimeInterval: 0.5)
         }
+    }
+
+    /// An iPad keeps the field behind a toolbar button until it's asked for.
+    private func searchField(in app: XCUIApplication) -> XCUIElement {
+        let field = app.searchFields.firstMatch
+        if !field.waitForExistence(timeout: 5) {
+            app.navigationBars["Search"].buttons["Search"].firstMatch.tap()
+            _ = field.waitForExistence(timeout: 5)
+        }
+        return field
     }
 
     private func machinesRow(in app: XCUIApplication) -> XCUIElement {
