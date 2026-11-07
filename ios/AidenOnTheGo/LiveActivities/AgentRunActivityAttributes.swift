@@ -69,15 +69,20 @@ struct AgentRunActivityAttributes: ActivityAttributes {
     var sessionTitle: String
     var streamID: String?
     var startedAt: Date
+    /// The pairing the run started under. Optional, and nil on an activity from
+    /// an older build, so an activity already running keeps decoding.
+    var deviceID: String?
 
     init(
         instanceID: String,
+        deviceID: String? = nil,
         sessionID: String,
         sessionTitle: String,
         streamID: String? = nil,
         startedAt: Date
     ) {
         self.instanceID = instanceID
+        self.deviceID = deviceID
         self.sessionID = sessionID
         self.sessionTitle = AgentRunActivitySanitizer.sessionTitle(sessionTitle)
         self.streamID = AgentLiveActivityReusePolicy.normalizedStreamID(streamID)

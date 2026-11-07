@@ -38,8 +38,17 @@ enum AidenAppRoute: Hashable, Codable {
         }
     }
 
+    /// The machine the route belongs to. Nil for a place that has none.
+    var instanceId: String? {
+        switch self {
+        case .chat(let id), .bot(let id), .workspace(let id): id.instanceId
+        case .machine(let instanceId): instanceId
+        case .machines, .settings, .scheduled, .usage: nil
+        }
+    }
+
     /// False for a route to a machine that's gone, or to an older pairing of it.
-    fileprivate func isReachable(on installations: [AidenInstallation]) -> Bool {
+    func isReachable(on installations: [AidenInstallation]) -> Bool {
         switch self {
         case .chat(let id), .bot(let id), .workspace(let id):
             installations.contains { $0.id == id.instanceId && $0.deviceId == id.deviceId }
@@ -48,6 +57,14 @@ enum AidenAppRoute: Hashable, Codable {
         case .machines, .settings, .scheduled, .usage:
             true
         }
+    }
+}
+
+extension AidenRemoteCoordinator {
+    /// False once the route's machine has left, been paired again, or been revoked.
+    func canOpen(_ route: AidenAppRoute) -> Bool {
+        route.isReachable(on: installationStore.installations)
+            && route.instanceId.flatMap { hosts.connection(for: $0)?.isRevoked } != true
     }
 }
 
@@ -139,6 +156,18 @@ final class AidenAppNavigation {
             botsPath: botsPath,
             workspacesPath: workspacesPath
         )
+    }
+
+    /// The chat on screen: the top of the tab that's showing.
+    var openChat: AidenHostObjectID? {
+        let path = switch tab {
+        case .inbox: inboxPath
+        case .bots: botsPath
+        case .workspaces: workspacesPath
+        case .search: [AidenAppRoute]()
+        }
+        guard case .chat(let id)? = path.last else { return nil }
+        return id
     }
 
     /// Selects the route's tab and shows the route there. A route already on

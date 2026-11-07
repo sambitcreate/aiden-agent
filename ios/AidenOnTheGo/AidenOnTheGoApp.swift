@@ -79,6 +79,8 @@ final class AidenMetricDiagnosticSubscriber: NSObject, MXMetricManagerSubscriber
 struct AidenOnTheGoApp: App {
     @State private var haptics: AidenHapticCenter
     @State private var remoteCoordinator: AidenRemoteCoordinator
+    /// Built here because an app's `init` runs once. Nil with the tab shell off.
+    @State private var inboxStore: AidenUnifiedInboxStore?
     @State private var appearance = AidenAppearanceStore()
 
     init() {
@@ -88,20 +90,29 @@ struct AidenOnTheGoApp: App {
         AidenDiagnostics.record(.app, event: .launch, outcome: .started)
         let haptics = AidenHapticCenter()
         _haptics = State(initialValue: haptics)
+        let coordinator: AidenRemoteCoordinator
 #if DEBUG
         // `-AidenDemoScenario <name>` runs the real shell against fake machines.
         if let scenario = AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) {
-            _remoteCoordinator = State(initialValue: AidenDemoHosts.coordinator(
+            coordinator = AidenDemoHosts.coordinator(
                 scenario,
                 responder: AidenDemoResponder(),
                 haptics: haptics
-            ))
+            )
         } else {
-            _remoteCoordinator = State(initialValue: AidenRemoteCoordinator(haptics: haptics))
+            coordinator = AidenRemoteCoordinator(haptics: haptics)
         }
 #else
-        _remoteCoordinator = State(initialValue: AidenRemoteCoordinator(haptics: haptics))
+        coordinator = AidenRemoteCoordinator(haptics: haptics)
 #endif
+        _remoteCoordinator = State(initialValue: coordinator)
+        _inboxStore = State(initialValue: AppConfig.tabShellEnabled ? AidenUnifiedInboxStore(coordinator: coordinator) : nil)
+        // A tap can launch the app, so this can't wait for `ContentView`.
+        AidenNotificationPresentationDelegate.openTap = { $0.open(coordinator: coordinator) }
+        // The unit-test host never touches the device's notifications.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            Task { await AidenNotificationIdentifierMigration.runOnce() }
+        }
     }
 
     var body: some Scene {
@@ -112,10 +123,10 @@ struct AidenOnTheGoApp: App {
                     if AidenInboxFixtureView.isRequested {
                         AidenInboxFixtureView()
                     } else {
-                        ContentView(coordinator: remoteCoordinator)
+                        ContentView(coordinator: remoteCoordinator, inboxStore: inboxStore)
                     }
 #else
-                    ContentView(coordinator: remoteCoordinator)
+                    ContentView(coordinator: remoteCoordinator, inboxStore: inboxStore)
 #endif
                 }
                 .environment(appearance)

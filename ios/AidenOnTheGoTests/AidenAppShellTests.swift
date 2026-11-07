@@ -624,7 +624,13 @@ final class AidenAppShellTests: XCTestCase {
         wait: Duration = .seconds(30),
         opened: @escaping @MainActor (AidenHostObjectID) -> Void = { _ in }
     ) -> AidenNewChatFlow {
-        AidenNewChatFlow(coordinator: coordinator, home: home, readinessWait: wait, onOpen: opened)
+        AidenNewChatFlow(
+            coordinator: coordinator,
+            home: { home },
+            reload: { await home.load(coordinator: coordinator) },
+            readinessWait: wait,
+            onOpen: opened
+        )
     }
 
     private func workspace(_ id: String, in coordinator: AidenRemoteCoordinator) throws -> AidenWorkspace {

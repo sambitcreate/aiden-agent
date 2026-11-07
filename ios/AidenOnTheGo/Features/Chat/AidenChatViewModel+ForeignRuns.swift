@@ -335,6 +335,7 @@ extension AidenChatViewModel {
         publishForeignRun(context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
+            deviceID: context.deviceId,
             chatID: chat.id,
             title: chat.displayTitle,
             streamID: projection.runId

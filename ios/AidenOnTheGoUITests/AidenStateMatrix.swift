@@ -50,7 +50,8 @@ enum AidenStateMatrix {
         shell: Shell = .menu,
         appearance: Appearance = .light,
         contentSize: ContentSize = .large,
-        theme: String? = nil
+        theme: String? = nil,
+        extraArguments: [String] = []
     ) -> XCUIApplication {
         let app = XCUIApplication()
         var arguments = [
@@ -74,7 +75,7 @@ enum AidenStateMatrix {
         if let theme {
             arguments += ["-aiden.appearance.lightPreset", theme, "-aiden.appearance.darkPreset", theme]
         }
-        app.launchArguments = arguments
+        app.launchArguments = arguments + extraArguments
         app.launch()
         return app
     }

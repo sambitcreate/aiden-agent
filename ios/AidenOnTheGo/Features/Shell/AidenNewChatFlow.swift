@@ -14,25 +14,30 @@ final class AidenNewChatFlow {
     let hapticScope = UUID()
 
     @ObservationIgnored private let coordinator: AidenRemoteCoordinator
-    @ObservationIgnored private let home: AidenHomeModel
+    /// The selected machine's model. It's the store's, so it can change or be
+    /// missing between taps.
+    @ObservationIgnored private let home: @MainActor () -> AidenHomeModel?
+    @ObservationIgnored private let reload: @MainActor () async -> Void
     @ObservationIgnored private let readinessWait: Duration
     @ObservationIgnored private let onOpen: @MainActor (AidenHostObjectID) -> Void
     @ObservationIgnored private var latestReceipt: (id: AidenHostObjectID, chat: AidenChat)?
 
     init(
         coordinator: AidenRemoteCoordinator,
-        home: AidenHomeModel,
+        home: @escaping @MainActor () -> AidenHomeModel?,
+        reload: @escaping @MainActor () async -> Void,
         readinessWait: Duration = .seconds(30),
         onOpen: @escaping @MainActor (AidenHostObjectID) -> Void
     ) {
         self.coordinator = coordinator
         self.home = home
+        self.reload = reload
         self.readinessWait = readinessWait
         self.onOpen = onOpen
     }
 
     private var chatListUnavailable: Bool {
-        if case .failed = home.chatListLoadState { return true }
+        if case .failed = home()?.chatListLoadState { return true }
         return false
     }
 
@@ -127,7 +132,7 @@ final class AidenNewChatFlow {
     /// Holds a compose tapped before the machine is ready, then lets it continue.
     /// False when the connection or the chat list fails, or the wait runs out.
     func awaitReady() async -> Bool {
-        if coordinator.connectionState == .connected, home.chatListLoadState == .loaded { return true }
+        if coordinator.connectionState == .connected, home()?.chatListLoadState == .loaded { return true }
         let resumedStatus = status
         status = String(localized: "Waiting for your machine…")
         defer { status = resumedStatus }
@@ -135,7 +140,7 @@ final class AidenNewChatFlow {
         while ContinuousClock.now < deadline, !Task.isCancelled {
             switch coordinator.connectionState {
             case .connected:
-                if home.chatListLoadState == .loaded { return true }
+                if home()?.chatListLoadState == .loaded { return true }
                 if chatListUnavailable { return false }
             case .connecting:
                 break
@@ -151,7 +156,7 @@ final class AidenNewChatFlow {
         if case .offline = coordinator.connectionState {
             coordinator.presentedError = String(localized: "Your machine isn’t reachable right now. Try again once it’s connected.")
         } else {
-            coordinator.presentedError = home.chatLoadErrorMessage
+            coordinator.presentedError = home()?.chatLoadErrorMessage
                 ?? String(localized: "Chats are unavailable. Try loading them again first.")
         }
         coordinator.haptics.play(.error, scope: hapticScope)
@@ -182,14 +187,14 @@ final class AidenNewChatFlow {
                 await coordinator.refreshWorkspaces()
                 guard coordinator.isCurrent(context) else { return }
                 guard coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
-                    home.accept(chat)
+                    home()?.accept(chat)
                     coordinator.presentedError = AidenNoWorkspace.startedButUnlistedMessage
                     return
                 }
             }
             // The chat opens from the create receipt; the full reload runs behind it.
-            home.accept(chat)
-            home.markViewed(chatID: chat.id)
+            home()?.accept(chat)
+            home()?.markViewed(chatID: chat.id)
             let id = AidenHostObjectID(instanceId: context.instanceId, deviceId: context.deviceId, objectId: chat.id)
             latestReceipt = (id, chat)
             onOpen(id)
@@ -198,9 +203,9 @@ final class AidenNewChatFlow {
                 scope: hapticScope,
                 dedupeKey: "new-agent:\(workspace.id):\(chat.id):\(chat.revision)"
             )
-            Task { [home, coordinator] in
+            Task { [reload, coordinator] in
                 guard coordinator.isCurrent(context) else { return }
-                await home.load(coordinator: coordinator)
+                await reload()
             }
         } catch let error where aidenIsCancellation(error) {
             return
@@ -210,7 +215,7 @@ final class AidenNewChatFlow {
             coordinator.haptics.play(.error, scope: hapticScope)
             await coordinator.refreshWorkspaces()
             guard coordinator.isCurrent(context) else { return }
-            await home.load(coordinator: coordinator)
+            await reload()
         }
     }
 

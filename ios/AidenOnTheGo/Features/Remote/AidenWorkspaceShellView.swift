@@ -131,7 +131,7 @@ private struct AidenNavigationResolutionID: Equatable {
     let connectionState: AidenRemoteConnectionState
 }
 
-struct AidenHomeLoadID: Equatable {
+private struct AidenHomeLoadID: Equatable {
     let instanceID: String?
     let connectionState: AidenRemoteConnectionState
 }

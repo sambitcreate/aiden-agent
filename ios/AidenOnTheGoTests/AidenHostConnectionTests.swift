@@ -61,6 +61,40 @@ final class AidenHostConnectionTests: XCTestCase {
         XCTAssertNil(connection.server)
     }
 
+    func testAMachineIsKnownOnlineOnlyOnceItHasAnswered() async throws {
+        let responder = AidenDemoResponder()
+        _ = AidenDemoHosts.coordinator(.four, responder: responder)
+        let connection = standalone("laptop", responder: responder)
+        XCTAssertFalse(connection.isKnownOnline)
+
+        await connection.connect()
+
+        XCTAssertTrue(connection.isKnownOnline)
+    }
+
+    func testAReconnectingMachineStaysKnownOnlineUntilTheAttemptFails() async throws {
+        let responder = AidenDemoResponder()
+        _ = AidenDemoHosts.coordinator(.four, responder: responder)
+        let connection = standalone("laptop", responder: responder)
+        await connection.connect()
+        let release = responder.hold(instanceId: "laptop", path: "/server")
+        defer { release() }
+
+        let attempt = Task { await connection.connect() }
+        let deadline = Date().addingTimeInterval(30)
+        while connection.connectionState != .connecting, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(connection.connectionState, .connecting)
+        XCTAssertTrue(connection.isKnownOnline)
+
+        responder.fail(instanceId: "laptop", path: "/server", code: .notConnectedToInternet)
+        release()
+        await attempt.value
+
+        XCTAssertFalse(connection.isKnownOnline)
+    }
+
     func testDisconnectMovesGenerationSoOldContextsGoStale() async throws {
         let responder = AidenDemoResponder()
         _ = AidenDemoHosts.coordinator(.one, responder: responder)

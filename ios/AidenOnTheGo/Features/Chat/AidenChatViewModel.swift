@@ -48,6 +48,9 @@ final class AidenChatViewModel {
     /// reply can't land on another machine's chat with the same ID.
     let owner: AidenRemoteRequestContext
     private var allowsMutations: Bool
+    /// The tab shell's rows come from every machine, so it hears from a chat on
+    /// any of them. The old shell holds only the selected machine's.
+    private let reportsEveryMachine: Bool
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     private let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     let draftStore: AidenChatDraftStore
@@ -294,7 +297,7 @@ final class AidenChatViewModel {
             let isActive = streamState.map { !$0.isTerminal } ?? false
             guard wasActive != isActive else { return }
             if !isActive { runInputMode = .queue }
-            if ownerIsSelected { onChatActivityChanged(chat.id, isActive ? .active : .idle) }
+            if reportsChanges { onChatActivityChanged(chat.id, isActive ? .active : .idle) }
         }
     }
     private var networkWaitStreamID: String?
@@ -440,12 +443,16 @@ final class AidenChatViewModel {
         return owner
     }
 
-    /// The shell on screen is showing this chat's machine. `onChatUpdated` and
-    /// `onChatActivityChanged` land in the shell's selected-machine state, so a
-    /// chat still running after the selection moved stays quiet until it's back.
+    /// The selection is on this chat's machine.
     private var ownerIsSelected: Bool {
         !isReadOnlyFixture && coordinator.activeInstanceId == owner.instanceId
     }
+
+    /// `onChatUpdated` and `onChatActivityChanged` have someone to tell. In the
+    /// old shell they land in the selected machine's state, so a chat still running
+    /// after the selection moved stays quiet until it's back. In the tab shell they
+    /// land on the chat's own machine, selected or not.
+    private var reportsChanges: Bool { reportsEveryMachine || ownerIsSelected }
 
     /// Nobody is looking at this chat and its machine isn't selected, so
     /// nothing will come back for it if its machine stops answering.
@@ -494,12 +501,14 @@ final class AidenChatViewModel {
         liveActivities: AidenRemoteLiveActivityManager? = nil,
         networkPath: AidenNetworkPathSource? = nil,
         allowsMutations: Bool = true,
+        reportsEveryMachine: Bool = AppConfig.tabShellEnabled,
         streamingRevealTick: @escaping @Sendable () async throws -> Void = {
             try await Task.sleep(for: AidenStreamingRevealGate.tick)
         },
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
+        self.reportsEveryMachine = reportsEveryMachine
         self.streamingRevealTick = streamingRevealTick
         self.owner = owner
         runtime = .live(
@@ -545,6 +554,7 @@ final class AidenChatViewModel {
         visualDocumentCache = .shared
         modelPreferenceStore = .shared
         hapticScope = UUID()
+        reportsEveryMachine = false
         onChatUpdated = { _ in }
         onChatActivityChanged = { _, _ in }
         streamingRevealTick = { try await Task.sleep(for: AidenStreamingRevealGate.tick) }
@@ -797,7 +807,7 @@ final class AidenChatViewModel {
             chat.title = updated.title
             chat.revision = updated.revision
             chat.localTitleOverride = admitted.localTitleOverride
-            if ownerIsSelected { onChatUpdated(chat) }
+            if reportsChanges { onChatUpdated(chat) }
             coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
         } catch let error where aidenIsCancellation(error) {
             guard !isRemoved, coordinator.isLive(context) else { return }
@@ -859,29 +869,9 @@ final class AidenChatViewModel {
         guard !isRemoved, !Task.isCancelled else { throw CancellationError() }
         let context = owner
         let client = try coordinator.remoteClient(for: context)
-        let status = try await client.speechStatus()
-        guard !isRemoved, !Task.isCancelled, coordinator.isLive(context) else { throw CancellationError() }
-        guard status.engine.ready else {
-            throw NSError(
-                domain: "AidenVoiceInput",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: status.engine.error ?? String(localized: "The desktop speech engine is unavailable.")]
-            )
+        return try await aidenTranscribeSpeech(pcm16, on: client) {
+            !isRemoved && coordinator.isLive(context)
         }
-        guard let model = status.models.first(where: { $0.id == status.selectedModelId && $0.installed })
-            ?? status.models.first(where: { $0.installed && $0.recommended })
-            ?? status.models.first(where: { $0.installed }) else {
-            throw NSError(
-                domain: "AidenVoiceInput",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a desktop speech model in App Settings before using this option.")]
-            )
-        }
-        if status.selectedModelId != model.id { _ = try await client.selectSpeechModel(model.id) }
-        guard !isRemoved, !Task.isCancelled, coordinator.isLive(context) else { throw CancellationError() }
-        let result = try await client.transcribeSpeech(pcm16: pcm16, modelId: model.id)
-        guard !isRemoved, !Task.isCancelled, coordinator.isLive(context) else { throw CancellationError() }
-        return result.text
     }
 
     private var turnModelSelection: AidenChatModelSelection {
@@ -1957,6 +1947,7 @@ final class AidenChatViewModel {
                 startedActivity = true
                 await liveActivities.start(
                     instanceID: instanceId,
+                    deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
                     streamID: response.streamId
@@ -2902,6 +2893,7 @@ final class AidenChatViewModel {
             if !status.state.isTerminal {
                 await liveActivities.start(
                     instanceID: instanceId,
+                    deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
                     streamID: stream.streamId
@@ -3775,7 +3767,7 @@ final class AidenChatViewModel {
         let presented = beforePublishing(admitted)
         chat = presented
         resolveModelSelection()
-        if ownerIsSelected { onChatUpdated(presented) }
+        if reportsChanges { onChatUpdated(presented) }
         reportChatViewed(presented)
         if scheduleTitleRefresh, presented.isTitlePending {
             schedulePendingTitleRefresh(context: context)

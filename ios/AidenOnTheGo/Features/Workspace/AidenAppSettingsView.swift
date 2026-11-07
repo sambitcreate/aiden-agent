@@ -8,6 +8,7 @@ struct AidenAppSettingsView: View {
     let addInstallation: () -> Void
     /// True when a stack has pushed this page, so Back replaces Done.
     var isPushed = false
+    var tabShellEnabled = AppConfig.tabShellEnabled
 
     @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
@@ -61,6 +62,13 @@ struct AidenAppSettingsView: View {
         }
     }
 
+    /// "3 of 4 online", read from the connections, so it never writes anything.
+    private var machinesSummary: String {
+        let connections = coordinator.hosts.ordered
+        let online = connections.filter { !$0.isRevoked && $0.connectionState == .connected }.count
+        return String(localized: "\(online) of \(connections.count) online")
+    }
+
     var body: some View {
         AidenPresentedStack(isPushed: isPushed) {
             Form {
@@ -69,10 +77,26 @@ struct AidenAppSettingsView: View {
                         "Connected desktop",
                         value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
                     )
-                    Button {
-                        isShowingInstallations = true
-                    } label: {
-                        Label("Paired Installations", systemImage: "desktopcomputer")
+                    if tabShellEnabled {
+                        NavigationLink {
+                            AidenMachinesView(
+                                coordinator: coordinator,
+                                preferences: .shared,
+                                addMachine: addInstallation
+                            )
+                        } label: {
+                            LabeledContent {
+                                Text(machinesSummary)
+                            } label: {
+                                Label("Machines", systemImage: "desktopcomputer")
+                            }
+                        }
+                    } else {
+                        Button {
+                            isShowingInstallations = true
+                        } label: {
+                            Label("Paired Installations", systemImage: "desktopcomputer")
+                        }
                     }
                 }
 

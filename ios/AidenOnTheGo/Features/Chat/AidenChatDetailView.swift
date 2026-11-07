@@ -44,6 +44,8 @@ struct AidenChatDetailView: View {
     @State private var composerSession: AidenComposerSession
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: false)
     @State private var chatLoadEpoch = 0
+    /// The message to scroll back to once a page of earlier messages is laid out.
+    @State private var keptPlaceID: String?
     @State private var botToolsModel: AidenBotChatToolsModel?
     @State private var botSheet: AidenBotChatSheet?
     @State private var isConfirmingBotDelete = false
@@ -411,6 +413,7 @@ struct AidenChatDetailView: View {
             )
             .scrollDismissesKeyboard(.interactively)
             .aidenReportsTranscriptFit(to: follow)
+            .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
             .simultaneousGesture(
                 TapGesture().onEnded { composerIsFocused = false }
@@ -463,7 +466,7 @@ struct AidenChatDetailView: View {
             }
             if model.hasOlderMessages {
                 AidenLoadEarlierMessagesButton(isLoading: model.isLoadingEarlierMessages) {
-                    loadEarlierMessages(proxy)
+                    loadEarlierMessages()
                 }
             }
             // Settled rows live in a child view that tracks only `chat`, so
@@ -949,15 +952,21 @@ struct AidenChatDetailView: View {
     }
 
     /// Prepending would otherwise leave the viewport at the same offset over
-    /// new content; re-anchor on the message that was first so the reader
-    /// stays where they were.
-    private func loadEarlierMessages(_ proxy: ScrollViewProxy) {
+    /// new content. Once the page is in, name the message that was first, and
+    /// the transcript scrolls back to it after the rows above it are laid out
+    /// (`aidenKeepsPlaceOnPrepend`). Scrolling in this same turn does nothing:
+    /// the stack has not laid out the new rows yet, so the old position still
+    /// answers.
+    private func loadEarlierMessages() {
         let anchorID = model.chat.messages.first?.id
+        let ticket = follow.placeTicket()
         Task {
             await model.loadEarlierMessages()
             guard let anchorID, model.chat.messages.first?.id != anchorID,
-                  model.chat.messages.contains(where: { $0.id == anchorID }) else { return }
-            proxy.scrollTo(model.renderID(forMessageID: anchorID), anchor: .top)
+                  model.chat.messages.contains(where: { $0.id == anchorID }),
+                  // The reader may have jumped to latest, sent, or scrolled while the page loaded.
+                  follow.keepsPlace(ticket) else { return }
+            keptPlaceID = model.renderID(forMessageID: anchorID)
         }
     }
 
@@ -1004,13 +1013,15 @@ func aidenChatIsScrolledAwayFromLatest(
 struct AidenChatJumpToLatestButton: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.aidenPalette) private var palette
+    @ScaledMetric(relativeTo: .body) private var arrowSize: CGFloat = 13
 
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: "arrow.down")
-                .font(.system(size: 13, weight: .semibold))
+                // Grows with the text size, but stays inside the 34 pt circle.
+                .font(.system(size: min(arrowSize, 20), weight: .semibold))
                 .foregroundStyle(palette.foreground)
                 .frame(width: 34, height: 34)
                 .contentShape(Circle())
@@ -1040,7 +1051,7 @@ private struct AidenLoadEarlierMessagesButton: View {
                         .controlSize(.mini)
                 } else {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption2.weight(.semibold))
                 }
                 Text(isLoading ? "Loading earlier messages" : "Load earlier messages")
                     .font(.footnote.weight(.medium))
