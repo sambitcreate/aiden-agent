@@ -180,6 +180,8 @@ struct AidenChatForkAttempt: Equatable {
 /// Back pops one fork at a time down to the source.
 struct AidenChatForkTrail: Equatable {
     private(set) var forks: [AidenChat] = []
+    /// The machine the forks are on: the one their source chat is on.
+    private(set) var owner: AidenRemoteRequestContext?
 
     /// The fork shown at `depth`; depth 0 is the root chat, not a fork.
     func fork(atDepth depth: Int) -> AidenChat? {
@@ -200,10 +202,11 @@ struct AidenChatForkTrail: Equatable {
     /// Pushes a fork opened from the chat at `depth`. Anything that was
     /// above that level is replaced, so the new fork sits directly on top of
     /// the chat it came from.
-    mutating func open(_ fork: AidenChat, fromDepth depth: Int) {
+    mutating func open(_ fork: AidenChat, fromDepth depth: Int, owner: AidenRemoteRequestContext? = nil) {
         guard depth >= 0, depth <= forks.count else { return }
         forks.removeSubrange(depth...)
         forks.append(fork)
+        self.owner = owner
     }
 
     /// Back from the fork over `depth`: that fork and every one above it
@@ -311,9 +314,9 @@ private struct AidenChatForkLevel: View {
                 onChatUpdated(updated)
             },
             onChatActivityChanged: onChatActivityChanged,
-            onOpenChat: { fork in
+            onOpenChat: { fork, forkOwner in
                 onForkOpened(fork)
-                trail.open(fork, fromDepth: depth)
+                trail.open(fork, fromDepth: depth, owner: forkOwner)
             }
         )
         .id(chat.id)
@@ -326,7 +329,7 @@ private struct AidenChatForkLevel: View {
                     coordinator: coordinator,
                     depth: depth + 1,
                     chat: fork,
-                    owner: owner,
+                    owner: trail.owner ?? owner,
                     autoStartVoice: false,
                     trail: $trail,
                     onChatUpdated: onChatUpdated,

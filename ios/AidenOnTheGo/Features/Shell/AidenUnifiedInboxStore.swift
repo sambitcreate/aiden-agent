@@ -31,6 +31,7 @@ final class AidenUnifiedInboxStore {
     @ObservationIgnored private let hosts: AidenHostRegistry
     @ObservationIgnored private let preferences: AidenMachinePreferencesStore
     @ObservationIgnored private let cache: AidenChatCache
+    @ObservationIgnored private let drafts: AidenChatDraftStore
     @ObservationIgnored private let timing: Timing
     @ObservationIgnored private let drawJitter: @MainActor () -> Double
     @ObservationIgnored private let now: @MainActor () -> Date
@@ -50,12 +51,14 @@ final class AidenUnifiedInboxStore {
         preferences: AidenMachinePreferencesStore,
         cache: AidenChatCache,
         clock: any Clock<Duration>,
+        drafts: AidenChatDraftStore = .shared,
         jitter: @escaping @MainActor () -> Double = { .random(in: AidenInboxPollPolicy.jitterRange) },
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.hosts = hosts
         self.preferences = preferences
         self.cache = cache
+        self.drafts = drafts
         timing = Timing(clock)
         drawJitter = jitter
         self.now = now
@@ -394,6 +397,57 @@ final class AidenUnifiedInboxStore {
         case .failed(let error):
             if await connection.handlePollError(error, sinceConnect: connectBefore) { poller.failures += 1 }
         }
+    }
+}
+
+/// A row's actions, on the machine that owns the row. Nothing here reads or moves
+/// the selection. A row from an older pairing of a machine goes nowhere: `id` was
+/// issued to a device that machine no longer knows.
+extension AidenUnifiedInboxStore {
+    func setTriage(_ change: AidenChatTriageChange, on id: AidenHostObjectID) async {
+        guard let (model, connection) = rowOwner(id) else { return }
+        await model.setTriage(change, chatID: id.objectId, host: connection, now: now())
+    }
+
+    func markRead(_ id: AidenHostObjectID) async {
+        guard let (model, connection) = rowOwner(id) else { return }
+        await model.markRead(chatID: id.objectId, host: connection)
+    }
+
+    /// The row goes at once. If the machine doesn't take the delete it comes back.
+    func delete(_ id: AidenHostObjectID) async {
+        guard let (model, connection) = rowOwner(id), let context = try? connection.homeContext() else { return }
+        model.removeChat(id: id.objectId)
+        do {
+            let client = try connection.homeClient(for: context)
+            // The machine wants the chat's current revision, and a row can be behind.
+            let current = try await client.chat(id: id.objectId)
+            guard connection.holdsHomeContext(context) else { return }
+            try await client.removeChat(id: id.objectId, revision: current.revision)
+            guard connection.holdsHomeContext(context) else { return }
+            await cache.removeChat(instanceId: id.instanceId, chatId: id.objectId)
+            await drafts.remove(instanceId: id.instanceId, chatId: id.objectId)
+        } catch {
+            guard connection.holdsHomeContext(context) else { return }
+            if (error as? AidenRemoteClientError)?.isCredentialRevoked == true {
+                // Its rows go with it, so there's nothing to bring back.
+                _ = await connection.handlePollError(error, sinceConnect: connection.connectionGeneration)
+                return
+            }
+            if !aidenIsCancellation(error) {
+                model.inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t delete that chat. It’s back where it was."))
+            }
+            _ = await model.pollChats(host: connection, walkingPages: false, now: now())
+        }
+    }
+
+    /// The model and connection a row's action goes through, while `id` is from
+    /// the pairing the store is reading.
+    private func rowOwner(_ id: AidenHostObjectID) -> (AidenHomeModel, AidenHostConnection)? {
+        guard let machine = machines[id.instanceId],
+              machine.lease.deviceId == id.deviceId,
+              let connection = hosts.connection(for: id.instanceId) else { return nil }
+        return (machine.model, connection)
     }
 }
 

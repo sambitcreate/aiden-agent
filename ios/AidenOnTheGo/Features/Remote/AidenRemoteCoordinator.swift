@@ -1101,6 +1101,7 @@ final class AidenRemoteCoordinator {
     ) async {
         workspaceArchiveStore.purge(instanceID: installationId)
         AidenProductNavigationStore.shared.purge(instanceID: installationId)
+        AidenAppNavigationStore().purge(instanceID: installationId)
         AidenChatForkPrefillHandoff.purge(instanceId: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)

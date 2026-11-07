@@ -76,7 +76,7 @@ struct AidenChatDetailView: View {
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
     /// for surfaces that cannot navigate to a new Workspace chat.
-    private let onOpenChat: (@MainActor (AidenChat) -> Void)?
+    private let onOpenChat: (@MainActor (AidenChat, AidenRemoteRequestContext) -> Void)?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -86,7 +86,7 @@ struct AidenChatDetailView: View {
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in },
-        onOpenChat: (@MainActor (AidenChat) -> Void)? = nil,
+        onOpenChat: (@MainActor (AidenChat, AidenRemoteRequestContext) -> Void)? = nil,
         composerSession: AidenComposerSession? = nil
     ) {
         _coordinator = State(initialValue: coordinator)
@@ -132,7 +132,7 @@ struct AidenChatDetailView: View {
 #endif
 
     private var workspace: AidenWorkspace? {
-        coordinator?.workspaces.first { $0.id == model.chat.workspaceId }
+        model.ownerWorkspace
     }
 
     private var botToolsSessionIdentity: AidenBotChatToolsSessionIdentity? {
@@ -215,12 +215,12 @@ struct AidenChatDetailView: View {
             guard scenePhase != .background else { return }
             await model.reload(observeProgress: true)
         }
-        .onChange(of: coordinator?.connectionState) { old, new in
+        .onChange(of: model.ownerConnectionState) { old, new in
             // A chat opened from its saved copy while connecting reloads once
             // the Mac answers, so the transcript and read state reconcile.
             if new == .connected, old != .connected { chatLoadEpoch &+= 1 }
         }
-        .task(id: coordinator?.server?.serverTime) {
+        .task(id: model.ownerServer?.serverTime) {
             guard scenePhase == .active else { return }
             model.startProgressObservation()
         }
@@ -242,7 +242,7 @@ struct AidenChatDetailView: View {
         })
         .sheet(isPresented: $showsWorkspaceFile) {
             if let coordinator, let workspace {
-                NavigationStack { AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace, initialReference: workspaceFileReference) }
+                NavigationStack { AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace, owner: model.owner, initialReference: workspaceFileReference) }
             }
         }
         .sheet(item: $botSheet) { botSheetContent($0) }
@@ -276,7 +276,7 @@ struct AidenChatDetailView: View {
             // Once when the chat opens, again after each return to the
             // foreground (chatLoadEpoch) and when the viewer closes. No polling.
             guard scenePhase != .background else { return }
-            await simulators.refresh(coordinator: coordinator, chatId: model.chat.id)
+            await simulators.refresh(client: model.simulatorsClient, chatId: model.chat.id)
         }
         .fullScreenCover(item: $simulatorViewer, onDismiss: {
             simulatorRefreshEpoch &+= 1
@@ -518,15 +518,14 @@ struct AidenChatDetailView: View {
                 action: action,
                 summaryFocus: focus
             ) else { return }
-            // The fork lives on this chat's machine. Opening it from another
-            // machine's shell would file it under that machine.
-            guard coordinator?.activeInstanceId == model.owner.instanceId else { return }
-            onOpenChat(forked)
+            // The fork lives on this chat's machine, and goes on opening there.
+            guard model.opensForks() else { return }
+            onOpenChat(forked, model.owner)
         }
     }
 
     private var simulatorRefreshKey: String {
-        let available = coordinator.map(AidenChatSimulatorsModel.isAvailable(coordinator:)) ?? false
+        let available = model.simulatorsClient != nil
         return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
     }
 
@@ -562,8 +561,8 @@ struct AidenChatDetailView: View {
         [
             model.chat.id,
             model.chat.workspaceId,
-            coordinator?.activeInstanceId ?? "",
-            String(coordinator?.server?.capabilities.contains(.chatNewWorktree) == true),
+            model.owner.instanceId,
+            String(model.ownerServer?.capabilities.contains(.chatNewWorktree) == true),
         ].joined(separator: "|")
     }
 
@@ -594,6 +593,11 @@ struct AidenChatDetailView: View {
             slots: AidenDockSlots(
                 above: {
                     dockNotices.disabled(model.isReadOnlyPresentation)
+                },
+                footer: {
+                    if AppConfig.tabShellEnabled, let notice = model.revokedMachineNotice {
+                        AidenRevokedMachineNoticeRow(notice: notice) { dismissChat() }
+                    }
                 },
                 question: { _ in
                     if let question = model.pendingQuestion {
@@ -661,7 +665,7 @@ struct AidenChatDetailView: View {
             HStack(spacing: 8) {
                 if simulators.deviceCount > 0 {
                     AidenSimulatorDeviceButton(count: simulators.deviceCount) {
-                        simulatorViewer = simulators.makeViewer(coordinator: coordinator)
+                        simulatorViewer = simulators.makeViewer(client: model.simulatorsClient)
                     }
                 }
                 AidenBackgroundJobsChip(running: backgroundJobs.runningCount) {

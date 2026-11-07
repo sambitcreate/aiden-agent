@@ -40,7 +40,10 @@ struct AidenAppShellView: View {
         self.inboxBadge = inboxBadge
         self.navigationStore = navigationStore
         _navigation = State(initialValue: AidenAppNavigation(
-            restoring: navigationStore.load(),
+            restoring: navigationStore.load(
+                installations: coordinator.installationStore.installations,
+                selected: coordinator.activeInstanceId
+            ),
             installations: coordinator.installationStore.installations
         ))
     }

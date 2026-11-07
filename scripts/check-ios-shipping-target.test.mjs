@@ -254,6 +254,7 @@ const testSources = [
   "AidenUnifiedInboxTests.swift",
   "AidenUnifiedInboxStoreTests.swift",
   "AidenMachineDetailTests.swift",
+  "AidenOwnerRoutingTests.swift",
   "AidenBotContractTests.swift",
   "AidenBotGeneratedAvatarTests.swift",
   "AidenBotHomeProfileTests.swift",

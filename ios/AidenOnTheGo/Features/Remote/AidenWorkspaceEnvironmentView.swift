@@ -151,12 +151,32 @@ final class AidenWorkspaceFilesModel {
     var errorMessage: String?
 
     private let workspace: AidenWorkspace
+    /// The machine whose files these are. Nil follows the selected machine.
+    private let owner: AidenRemoteRequestContext?
     private let cache: AidenWorkspaceEnvironmentCache
     private let hapticScope = UUID()
 
-    init(workspace: AidenWorkspace, cache: AidenWorkspaceEnvironmentCache = .shared) {
+    init(
+        workspace: AidenWorkspace,
+        owner: AidenRemoteRequestContext? = nil,
+        cache: AidenWorkspaceEnvironmentCache = .shared
+    ) {
         self.workspace = workspace
+        self.owner = owner
         self.cache = cache
+    }
+
+    private func context(on coordinator: AidenRemoteCoordinator) -> AidenRemoteRequestContext? {
+        owner ?? (try? coordinator.requestContext())
+    }
+
+    private func stillHolds(_ context: AidenRemoteRequestContext, _ coordinator: AidenRemoteCoordinator) -> Bool {
+        context.scope == .owner ? coordinator.isLive(context) : coordinator.isCurrent(context)
+    }
+
+    func isConnected(_ coordinator: AidenRemoteCoordinator) -> Bool {
+        guard let owner else { return coordinator.connectionState == .connected }
+        return coordinator.hosts.connection(for: owner.instanceId)?.connectionState == .connected
     }
 
     func setHapticsActive(_ active: Bool, coordinator: AidenRemoteCoordinator) {
@@ -168,14 +188,14 @@ final class AidenWorkspaceFilesModel {
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
-        guard !isLoading, let context = try? coordinator.requestContext() else { return }
+        guard !isLoading, let context = context(on: coordinator) else { return }
         let instanceId = context.instanceId
         isLoading = true
         revision = UUID()
         let requestRevision = revision
         errorMessage = nil
         defer { isLoading = false }
-        if coordinator.connectionState == .connected {
+        if isConnected(coordinator) {
             do {
                 let value: AidenWorkspaceFileIndex
                 do {
@@ -183,7 +203,7 @@ final class AidenWorkspaceFilesModel {
                 } catch AidenRemoteClientError.server(let status, _) where status == 400 || status == 404 {
                     value = try await coordinator.remoteClient(for: context).workspaceFiles(workspaceId: workspace.id)
                 }
-                guard coordinator.isCurrent(context) else { return }
+                guard stillHolds(context, coordinator) else { return }
                 guard revision == requestRevision else { return }
                 index = value
                 expanded = []
@@ -194,15 +214,15 @@ final class AidenWorkspaceFilesModel {
                 try? await cache.store(index: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
             } catch {
-                guard coordinator.isCurrent(context) else { return }
+                guard stillHolds(context, coordinator) else { return }
                 errorMessage = error.localizedDescription
             }
         }
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id) {
-            guard coordinator.isCurrent(context) else { return }
+            guard stillHolds(context, coordinator) else { return }
             index = cached.index
             isOfflineIndex = true
-        } else if coordinator.isCurrent(context), errorMessage == nil {
+        } else if stillHolds(context, coordinator), errorMessage == nil {
             errorMessage = "Connect to Aiden Agent to load workspace files."
         }
     }
@@ -219,7 +239,7 @@ final class AidenWorkspaceFilesModel {
     func loadPage(directory: AidenWorkspaceFileEntry?, coordinator: AidenRemoteCoordinator) async {
         let path = directory?.displayPath ?? ""
         guard !isLoading, !loadingFolders.contains(path), canLoadPage,
-              let context = try? coordinator.requestContext(), coordinator.connectionState == .connected else { return }
+              let context = context(on: coordinator), isConnected(coordinator) else { return }
         let requestRevision = revision
         loadingFolders.insert(path)
         defer { if revision == requestRevision { loadingFolders.remove(path) } }
@@ -227,7 +247,7 @@ final class AidenWorkspaceFilesModel {
             let page = try await coordinator.remoteClient(for: context).workspaceFilePage(
                 workspaceId: workspace.id, directoryId: directory?.id, cursor: cursors[path]
             )
-            guard coordinator.isCurrent(context), revision == requestRevision, let previous = index else { return }
+            guard stillHolds(context, coordinator), revision == requestRevision, let previous = index else { return }
             let existingPaths = Set(previous.entries.map(\.displayPath))
             let additions = page.entries.filter { !existingPaths.contains($0.displayPath) }
             guard previous.entries.count + additions.count <= 4_000 else {
@@ -240,28 +260,28 @@ final class AidenWorkspaceFilesModel {
             loadedFolders.insert(path)
             if let index { try? await cache.store(index: index, instanceId: context.instanceId, workspaceId: workspace.id) }
         } catch {
-            guard coordinator.isCurrent(context), revision == requestRevision, !aidenIsCancellation(error) else { return }
+            guard stillHolds(context, coordinator), revision == requestRevision, !aidenIsCancellation(error) else { return }
             expanded.remove(path)
             errorMessage = error.localizedDescription
         }
     }
 
     func openLink(_ reference: String, coordinator: AidenRemoteCoordinator) async -> Bool {
-        guard let context = try? coordinator.requestContext() else { return false }
+        guard let context = context(on: coordinator) else { return false }
         openRevision = UUID()
         let requestRevision = openRevision
         do {
             let value = try await coordinator.remoteClient(for: context).workspaceLinkedFile(workspaceId: workspace.id, reference: reference)
-            guard coordinator.isCurrent(context), openRevision == requestRevision else { return false }
+            guard stillHolds(context, coordinator), openRevision == requestRevision else { return false }
             document = value
             draft = value.content
             isOfflineDocument = false
             try? await cache.store(document: value, instanceId: context.instanceId, workspaceId: workspace.id)
             return true
         } catch {
-            guard coordinator.isCurrent(context), openRevision == requestRevision, !aidenIsCancellation(error) else { return false }
+            guard stillHolds(context, coordinator), openRevision == requestRevision, !aidenIsCancellation(error) else { return false }
             if let value = await cache.document(reference: reference, instanceId: context.instanceId, workspaceId: workspace.id) {
-                guard coordinator.isCurrent(context), openRevision == requestRevision else { return false }
+                guard stillHolds(context, coordinator), openRevision == requestRevision else { return false }
                 document = value
                 draft = value.content
                 isOfflineDocument = true
@@ -273,32 +293,32 @@ final class AidenWorkspaceFilesModel {
     }
 
     func open(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async {
-        guard entry.kind == .file, let context = try? coordinator.requestContext() else { return }
+        guard entry.kind == .file, let context = context(on: coordinator) else { return }
         let instanceId = context.instanceId
         openRevision = UUID()
         let requestRevision = openRevision
         document = nil
         errorMessage = nil
-        if coordinator.connectionState == .connected {
+        if isConnected(coordinator) {
             do {
                 let value = try await coordinator.remoteClient(for: context).workspaceFile(
                     workspaceId: workspace.id,
                     fileId: entry.id
                 )
-                guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
+                guard stillHolds(context, coordinator), openRevision == requestRevision else { return }
                 document = value
                 draft = value.content
                 isOfflineDocument = false
                 try? await cache.store(document: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
             } catch {
-                guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
+                guard stillHolds(context, coordinator), openRevision == requestRevision else { return }
                 errorMessage = error.localizedDescription
             }
         }
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id),
            let value = cached.documents[entry.id] {
-            guard coordinator.isCurrent(context), openRevision == requestRevision else { return }
+            guard stillHolds(context, coordinator), openRevision == requestRevision else { return }
             document = value
             draft = value.content
             isOfflineDocument = true
@@ -306,11 +326,11 @@ final class AidenWorkspaceFilesModel {
     }
 
     func save(coordinator: AidenRemoteCoordinator) async -> Bool {
-        guard coordinator.connectionState == .connected,
+        guard isConnected(coordinator),
               canEditDocument,
               !isSaving,
               let document,
-              let context = try? coordinator.requestContext() else { return false }
+              let context = context(on: coordinator) else { return false }
         let instanceId = context.instanceId
         isSaving = true
         errorMessage = nil
@@ -323,7 +343,7 @@ final class AidenWorkspaceFilesModel {
                 content: draft,
                 expectedVersion: document.version
             )
-            guard coordinator.isCurrent(context) else { return false }
+            guard stillHolds(context, coordinator) else { return false }
             self.document = saved
             draft = saved.content
             // Lazy saves rotate the file handle; keep the tree bound to it.
@@ -344,7 +364,7 @@ final class AidenWorkspaceFilesModel {
         } catch let error where aidenIsCancellation(error) {
             return false
         } catch {
-            guard coordinator.isCurrent(context) else { return false }
+            guard stillHolds(context, coordinator) else { return false }
             if case AidenRemoteClientError.server(_, let body) = error,
                body.code.rawValue == "revision_conflict" {
                 errorMessage = "This file changed on the paired desktop. Reload it before saving again."
@@ -372,11 +392,16 @@ struct AidenWorkspaceFilesView: View {
     @State private var isShowingDocument = false
     let initialReference: String?
 
-    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace, initialReference: String? = nil) {
+    init(
+        coordinator: AidenRemoteCoordinator,
+        workspace: AidenWorkspace,
+        owner: AidenRemoteRequestContext? = nil,
+        initialReference: String? = nil
+    ) {
         self.initialReference = initialReference
         self.coordinator = coordinator
         self.workspace = workspace
-        _model = State(initialValue: AidenWorkspaceFilesModel(workspace: workspace))
+        _model = State(initialValue: AidenWorkspaceFilesModel(workspace: workspace, owner: owner))
     }
 
     private var entries: [AidenWorkspaceFileEntry] {
@@ -477,7 +502,7 @@ private struct AidenWorkspaceFileEditorView: View {
             Group {
                 if isEditing {
                     TextEditor(text: $model.draft)
-                        .disabled(!model.canEditDocument || coordinator.connectionState != .connected)
+                        .disabled(!model.canEditDocument || !model.isConnected(coordinator))
                 } else {
                     ScrollView([.vertical, .horizontal]) {
                         LazyVStack(alignment: .leading, spacing: 4) {
@@ -523,12 +548,12 @@ private struct AidenWorkspaceFileEditorView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         if !isEditing {
                             Button("Edit") { isEditing = true }
-                                .disabled(!model.canEditDocument || coordinator.connectionState != .connected)
+                                .disabled(!model.canEditDocument || !model.isConnected(coordinator))
                         } else {
                         Button("Save") { Task { _ = await model.save(coordinator: coordinator) } }
                             .disabled(
                                 !isDirty || model.isSaving || !model.canEditDocument ||
-                                coordinator.connectionState != .connected || model.document?.truncated == true
+                                !model.isConnected(coordinator) || model.document?.truncated == true
                             )
                         }
                     }

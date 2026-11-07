@@ -64,6 +64,49 @@ final class AidenExternalNewChatQueue {
     }
 }
 
+/// Links in the tab shell. Each one goes to the machine it names and leaves the
+/// selection where it is, so whatever is open on the selected machine stays open.
+extension AidenRemoteCoordinator {
+    /// False, with the reason on screen, for a machine that can't answer a link:
+    /// one that isn't paired, or that has revoked this phone.
+    func acceptLink(_ request: AidenNavigationRequest) -> Bool {
+        let instanceId = request.instanceId ?? activeInstanceId
+        guard installationStore.installations.contains(where: { $0.id == instanceId }),
+              let instanceId,
+              hosts.connection(for: instanceId)?.isRevoked != true else {
+            presentedError = String(localized: "This machine is no longer paired. Pair it again to continue.")
+            return false
+        }
+        return true
+    }
+
+    /// Makes the chat someone agreed to, on the pairing they agreed to, and says
+    /// where it is. Nil when what they agreed to no longer holds.
+    func createChat(agreedTo target: AidenNewChatLinkConsent.Target) async throws -> AidenNavigationRequest? {
+        guard installationStore.installations.contains(where: {
+                  $0.id == target.instanceID && $0.deviceId == target.deviceID && $0.createdAt == target.pairedAt
+              }),
+              let connection = hosts.connection(for: target.instanceID),
+              connection.connectionState == .connected,
+              let workspace = connection.workspaces.first(where: { $0.id == target.workspaceID }),
+              !workspaceArchiveStore.isArchived(workspaceID: target.workspaceID, instanceID: target.instanceID),
+              connection.installation.hasNegotiatedAccess(to: .chatWrite),
+              let owner = try? ownerContext(for: target.instanceID) else { return nil }
+        do {
+            // A chat started under Chats can land in a fresh hidden workspace of its own.
+            let chat = try await remoteClient(for: owner)
+                .createChat(workspaceId: target.workspaceID, noWorkspace: workspace.noWorkspace)
+            guard isLive(owner), !chat.isBotChat,
+                  chat.workspaceId == target.workspaceID || workspace.noWorkspace else { return nil }
+            return AidenNavigationRequest(destination: .chat(chat.id), instanceId: target.instanceID,
+                workspaceId: nil, startsVoice: target.startsVoice)
+        } catch {
+            _ = await handleCredentialRevocation(error, context: owner)
+            throw error
+        }
+    }
+}
+
 struct ContentView: View {
     private enum ConnectionRecoveryDestination: String, Identifiable {
         case installations, pairing
@@ -190,6 +233,10 @@ struct ContentView: View {
                 showsNewChatConsent = false
             }
         }
+        // Only the tab shell waits on a machine other than the selected one.
+        .onChange(of: waitingLinkConnectionState) { _, _ in
+            consumeExternalNewChatIfReady()
+        }
         .onChange(of: coordinator.activeInstanceId) { _, _ in
             consumeExternalNewChatIfReady()
             if newChatConsent.active == nil {
@@ -254,8 +301,28 @@ struct ContentView: View {
         }
     }
 
+    /// Whether a link for this machine can go ahead. The tab shell asks that
+    /// machine. The old shell switches to it first, so it asks the selected one.
+    private func isConnected(forLink instanceID: String?) -> Bool {
+        guard AppConfig.tabShellEnabled, let instanceID else { return coordinator.connectionState == .connected }
+        return coordinator.hosts.connection(for: instanceID)?.connectionState == .connected
+    }
+
+    private var waitingLinkConnectionState: AidenRemoteConnectionState? {
+        guard AppConfig.tabShellEnabled, let instanceID = externalNewChats.waiting?.instanceID else { return nil }
+        return coordinator.hosts.connection(for: instanceID)?.connectionState
+    }
+
+    /// What a new-chat link can pick from when its machine's list is at hand.
+    /// Nil sends it to the saved catalog.
+    private func linkWorkspaces(on instanceID: String) -> [AidenWorkspace]? {
+        if AppConfig.tabShellEnabled { return coordinator.hosts.connection(for: instanceID)?.workspaces }
+        return coordinator.activeInstanceId == instanceID ? coordinator.workspaces : nil
+    }
+
     @MainActor
     private func receiveExternalNewChat(_ request: AidenNavigationRequest) {
+        if AppConfig.tabShellEnabled, !coordinator.acceptLink(request) { return }
         guard coordinator.connectionState != .needsPairing,
               let instanceID = request.instanceId ?? coordinator.activeInstanceId,
               let installation = coordinator.installationStore.installations.first(where: { $0.id == instanceID }),
@@ -266,7 +333,9 @@ struct ContentView: View {
         externalNewChats.receive(.init(request: request, origin: origin, instanceID: instanceID,
             deviceID: installation.deviceId, pairedAt: installation.createdAt))
         consumeExternalNewChatIfReady()
-        if case .offline = coordinator.connectionState {
+        if AppConfig.tabShellEnabled {
+            if externalNewChats.waiting != nil { connectScheduler?.connect(instanceId: instanceID) }
+        } else if case .offline = coordinator.connectionState {
             Task { await coordinator.connectActiveInstallation() }
         }
     }
@@ -275,7 +344,7 @@ struct ContentView: View {
     private func consumeExternalNewChatIfReady() {
         if foregroundIntents.pending != nil { externalNewChats.invalidate(); return }
         if coordinator.connectionState == .needsPairing { externalNewChats.invalidate(); return }
-        let ready = coordinator.connectionState == .connected && scenePhase == .active && !sceneConnectionRefreshInProgress
+        let ready = isConnected(forLink: externalNewChats.waiting?.instanceID) && scenePhase == .active && !sceneConnectionRefreshInProgress
         guard let entry = externalNewChats.takeIfReady(ready, isValid: { entry in
             entry.origin.map(coordinator.isCurrent) == true && coordinator.installationStore.installations.contains {
                 $0.id == entry.instanceID && $0.deviceId == entry.deviceID && $0.createdAt == entry.pairedAt
@@ -295,16 +364,17 @@ struct ContentView: View {
 
     @MainActor
     private func prepareNewChat(_ request: AidenNavigationRequest, startsVoice: Bool, requiresConfirmation: Bool) {
-        guard coordinator.connectionState == .connected,
-              let instanceID = request.instanceId ?? coordinator.activeInstanceId,
+        guard let instanceID = request.instanceId ?? coordinator.activeInstanceId,
+              isConnected(forLink: instanceID),
               let installation = coordinator.installationStore.installations.first(where: { $0.id == instanceID }) else {
             coordinator.presentedError = String(localized: "Connect to Aiden Agent before opening this link.")
             return
         }
         let archived = AidenWorkspaceArchiveStore().archivedWorkspaceIDs(for: instanceID)
         let candidates: [AidenIntentWorkspaceRecord]
-        if coordinator.activeInstanceId == instanceID {
-            candidates = AidenNoWorkspace.grouped(coordinator.workspaces).map {
+        let listed = linkWorkspaces(on: instanceID)
+        if let listed {
+            candidates = AidenNoWorkspace.grouped(listed).map {
                 .init(id: $0.id, instanceId: instanceID, name: $0.name)
             }
         } else {
@@ -312,13 +382,11 @@ struct ContentView: View {
         }
         let available = candidates.filter { !archived.contains($0.id) }
         // A chat's own hidden folder is listed under the Chats home, so match against that: the
-        // active Mac's workspaces say which ids are hidden, the catalog says so for the others.
-        let isActive = coordinator.activeInstanceId == instanceID
+        // machine's workspaces say which ids are hidden, the catalog says so for the others.
         let selected = (request.workspaceId ?? AidenProductNavigationStore.shared.selectedWorkspace(for: instanceID))
             .map { id in
-                isActive
-                    ? AidenNoWorkspace.groupID(for: id, in: coordinator.workspaces)
-                    : AidenIntentWorkspaceRecord.listedID(for: id, in: candidates)
+                listed.map { AidenNoWorkspace.groupID(for: id, in: $0) }
+                    ?? AidenIntentWorkspaceRecord.listedID(for: id, in: candidates)
             }
         guard let workspace = selected.flatMap({ id in available.first { $0.id == id } })
                 ?? (request.workspaceId == nil ? available.first : nil) else {
@@ -340,6 +408,10 @@ struct ContentView: View {
                 scenePhase == .active && target.origin.map(coordinator.isCurrent) == true
                     && retainedNewChatTarget(target)
             }) { target in
+                if AppConfig.tabShellEnabled {
+                    guard newChatConsent.active?.id == target.id, scenePhase == .active else { return nil }
+                    return try await coordinator.createChat(agreedTo: target)
+                }
                 if coordinator.activeInstanceId != target.instanceID {
                     await coordinator.switchInstallation(to: target.instanceID)
                 }
@@ -369,7 +441,7 @@ struct ContentView: View {
             if let request { navigationRequest = request }
         } catch {
             // A mutation is never retried after an uncertain result.
-            if retainedNewChatTarget(target), coordinator.activeInstanceId == target.instanceID {
+            if retainedNewChatTarget(target), AppConfig.tabShellEnabled || coordinator.activeInstanceId == target.instanceID {
                 coordinator.presentedError = error.localizedDescription
             }
         }
@@ -383,6 +455,15 @@ struct ContentView: View {
 
     @MainActor
     private func open(_ request: AidenNavigationRequest) async {
+        if AppConfig.tabShellEnabled {
+            guard coordinator.acceptLink(request) else { return }
+            // The route waits for its machine and loads once it answers.
+            if let instanceId = request.instanceId ?? coordinator.activeInstanceId {
+                connectScheduler?.connect(instanceId: instanceId)
+            }
+            navigationRequest = request
+            return
+        }
         if let requestedInstance = request.instanceId {
             guard coordinator.installationStore.installations.contains(where: { $0.id == requestedInstance }) else {
                 coordinator.presentedError = String(localized: "This Aiden installation is no longer paired. Pair it again to continue.")

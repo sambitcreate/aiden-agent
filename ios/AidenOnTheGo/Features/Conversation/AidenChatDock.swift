@@ -124,6 +124,39 @@ struct AidenDockNotice: Equatable {
     let symbol: String
 }
 
+/// What a chat says while its machine has revoked this phone. The machine's chats
+/// stay until nothing shows them, so leaving is what removes them.
+struct AidenRevokedMachineNotice: Equatable {
+    let machineName: String
+
+    var text: String {
+        String(localized: "Closing this chat removes \(machineName)’s chats from this phone.")
+    }
+}
+
+/// Says what leaving will do, and offers it. The reason the chat can't be
+/// answered is already above, in the dock.
+struct AidenRevokedMachineNoticeRow: View {
+    let notice: AidenRevokedMachineNotice
+    let onClose: () -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(notice.text)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Close chat", action: onClose)
+                .font(.footnote.weight(.semibold))
+                .frame(minHeight: 44)
+        }
+        .padding(.horizontal, 16)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct AidenDockActions {
     var onSend: () -> Void = {}
     /// Non-nil while a run can be stopped.
@@ -285,6 +318,32 @@ extension AidenChatViewModel {
     }
 
     var isOwnerRevoked: Bool { AidenDockInput.isRevoked(ownerHostConnection) }
+
+    /// Nil unless leaving this chat is what's holding up its machine's purge.
+    var revokedMachineNotice: AidenRevokedMachineNotice? {
+        guard let connection = ownerHostConnection, connection.isPurgePending else { return nil }
+        return AidenRevokedMachineNotice(machineName: connection.installation.name)
+    }
+
+    var ownerConnectionState: AidenRemoteConnectionState? { ownerHostConnection?.connectionState }
+
+    var ownerWorkspace: AidenWorkspace? {
+        ownerHostConnection?.workspaces.first { $0.id == chat.workspaceId }
+    }
+
+    /// Nil unless the owner offers simulators to this phone. The owner's, for the
+    /// same reason as `spendingTransport`.
+    var simulatorsClient: AidenRemoteClient? {
+        guard !isReadOnlyFixture, ownerServer?.supportsMobileSimulators == true,
+              ownerInstallation?.hasNegotiatedAccess(to: .simulatorsMobile) == true else { return nil }
+        return try? coordinator.remoteClient(for: owner)
+    }
+
+    /// The old shell files every chat under the selected machine, so it opens
+    /// forks only from there. The tab shell's routes carry their machine.
+    func opensForks(inTabShell: Bool = AppConfig.tabShellEnabled) -> Bool {
+        inTabShell || coordinator.activeInstanceId == owner.instanceId
+    }
 
     /// Revision 49: a Workspace chat's background jobs, once this phone holds
     /// `chat:jobs`. The owner's, for the same reason as `spendingTransport`.
