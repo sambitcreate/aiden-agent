@@ -680,50 +680,70 @@ final class AidenOwnerRoutingTests: XCTestCase {
         return router
     }
 
-    func testAnIntentWaitsForItsOwnMachineAfterTheSelectedOneConnects() throws {
+    /// Lets `instanceId` take a create, then runs the queue in front of the person.
+    private func openWaiting(_ router: AidenForegroundIntentRouter, answering instanceId: String) async {
+        responder.reply(instanceId: instanceId, method: "POST", path: "/chats", status: 201, json: json(chatObject("c_new", text: "New")))
+        await router.openWaitingChats(coordinator: coordinator, isForeground: { true })
+    }
+
+    func testAnIntentWaitsForItsOwnMachineAfterTheSelectedOneConnects() async throws {
         let router = intents(for: "laptop")
         try connection("laptop").adopt(connectionState: .connecting)
 
-        XCTAssertNil(router.takeWhenConnected(on: coordinator))
+        await openWaiting(router, answering: "laptop")
+
+        XCTAssertFalse(requests("laptop").contains("POST /chats"))
         XCTAssertNotNil(router.pending, "An intent that can't run yet was spent")
 
         try connection("laptop").adopt(connectionState: .connected)
-        XCTAssertEqual(router.takeWhenConnected(on: coordinator)?.instanceID, "laptop")
+        await openWaiting(router, answering: "laptop")
+
         XCTAssertNil(router.pending)
+        XCTAssertEqual(router.routes.map(\.route), [.chat(id("c_new"))])
+        XCTAssertFalse(requests("studio").contains("POST /chats"))
     }
 
-    func testAnIntentRunsWhileTheSelectedMachineIsOffline() throws {
+    func testAnIntentRunsWhileTheSelectedMachineIsOffline() async throws {
         let router = intents(for: "laptop")
         try connection("studio").adopt(connectionState: .offline(message: "Away"))
 
-        XCTAssertEqual(router.takeWhenConnected(on: coordinator)?.instanceID, "laptop")
+        await openWaiting(router, answering: "laptop")
+
+        XCTAssertEqual(router.routes.map(\.route), [.chat(id("c_new"))])
     }
 
-    func testAnIntentNamingNoMachineFollowsTheSelectedOne() throws {
+    func testAnIntentNamingNoMachineFollowsTheSelectedOne() async throws {
         let router = intents(for: nil)
         try connection("studio").adopt(connectionState: .connecting)
 
-        XCTAssertNil(router.takeWhenConnected(on: coordinator))
+        await openWaiting(router, answering: "studio")
+
+        XCTAssertNotNil(router.pending)
 
         try connection("studio").adopt(connectionState: .connected)
-        XCTAssertNotNil(router.takeWhenConnected(on: coordinator))
+        await openWaiting(router, answering: "studio")
+
+        XCTAssertEqual(router.routes.map(\.route), [.chat(id("c_new", on: "studio"))])
     }
 
-    func testAnIntentForAMachineThatLeftDoesNotWait() {
+    func testAnIntentForAMachineThatLeftDoesNotWait() async {
         let router = intents(for: "gone")
 
-        XCTAssertNil(router.takeWhenConnected(on: coordinator))
+        await router.openWaitingChats(coordinator: coordinator, isForeground: { true })
 
         XCTAssertNil(router.pending)
+        XCTAssertEqual(router.routes, [])
     }
 
-    func testAnIntentThatWaitedTooLongGivesWayToANewOne() throws {
+    func testAnIntentThatWaitedTooLongGivesWayToANewOne() async throws {
         let router = intents(for: "laptop", at: Date().addingTimeInterval(-61))
         try connection("laptop").adopt(connectionState: .connecting)
 
-        router.submit(instanceID: "studio", workspaceID: nil, startsVoice: false)
+        router.submit(instanceID: "studio", workspaceID: "workspace_app", startsVoice: false)
+        await openWaiting(router, answering: "studio")
 
-        XCTAssertEqual(router.pending?.instanceID, "studio", "A stale intent shut out the new one")
+        XCTAssertNil(router.pending)
+        XCTAssertEqual(router.routes.map(\.route), [.chat(id("c_new", on: "studio"))], "A stale intent shut out the new one")
     }
 
     func testTheMenuShellStillTakesOneIntentAtATime() {

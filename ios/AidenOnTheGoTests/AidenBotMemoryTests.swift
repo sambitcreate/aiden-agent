@@ -461,7 +461,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         await notifier.deliver(instanceId: instance, transport: transport)
 
         XCTAssertEqual(transport.cursors, [nil, "2026-08-19T15:00:00.000Z", "2026-08-19T16:00:00.000Z"])
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.run_new"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).run_new"])
         let content = try XCTUnwrap(center.posted.first?.content)
         XCTAssertEqual(content.title, "Scout")
         XCTAssertEqual(content.body, "Morning brief: Your first meeting is at 9:30 with Priya.")
@@ -487,7 +487,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         await notifier.deliver(instanceId: instance, transport: transport)
 
         XCTAssertEqual(transport.cursors.last, "2026-08-19T15:00:00.000Z", "the cursor did not move past the failed run")
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.run_b"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).run_b"])
     }
 
     func testCursorsAreKeptPerPairedMac() async throws {
@@ -518,7 +518,7 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
         await notifier.deliver(instanceId: instance, transport: transport)
 
         XCTAssertEqual(center.authorizationRequests, 1)
-        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.run_a"])
+        XCTAssertEqual(center.posted.map(\.identifier), ["aiden.bot-routine.\(instance).run_a"])
     }
 
     func testNothingIsFetchedWithoutNotificationPermission() async throws {

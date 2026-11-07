@@ -38,8 +38,17 @@ enum AidenAppRoute: Hashable, Codable {
         }
     }
 
+    /// The machine the route belongs to. Nil for a place that has none.
+    var instanceId: String? {
+        switch self {
+        case .chat(let id), .bot(let id), .workspace(let id): id.instanceId
+        case .machine(let instanceId): instanceId
+        case .machines, .settings, .scheduled, .usage: nil
+        }
+    }
+
     /// False for a route to a machine that's gone, or to an older pairing of it.
-    fileprivate func isReachable(on installations: [AidenInstallation]) -> Bool {
+    func isReachable(on installations: [AidenInstallation]) -> Bool {
         switch self {
         case .chat(let id), .bot(let id), .workspace(let id):
             installations.contains { $0.id == id.instanceId && $0.deviceId == id.deviceId }
@@ -57,6 +66,14 @@ enum AidenAppRoute: Hashable, Codable {
         case .machine(let id): id == instanceId
         case .machines, .settings, .scheduled, .usage: false
         }
+    }
+}
+
+extension AidenRemoteCoordinator {
+    /// False once the route's machine has left, been paired again, or been revoked.
+    func canOpen(_ route: AidenAppRoute) -> Bool {
+        route.isReachable(on: installationStore.installations)
+            && route.instanceId.flatMap { hosts.connection(for: $0)?.isRevoked } != true
     }
 }
 
@@ -227,6 +244,9 @@ final class AidenAppNavigation {
     var workspacesPath: [AidenAppRoute]
     private var savedPaths: [String: [AidenAppRoute]]
 
+    /// Not saved: a relaunch must not open the microphone.
+    private(set) var chatStartingVoice: AidenHostObjectID?
+
     init() {
         tab = .inbox
         inboxPath = []
@@ -256,7 +276,12 @@ final class AidenAppNavigation {
 
     /// Selects the route's tab and shows the route there. A route already on
     /// that path is gone back to, so one chat never has two screens.
-    func open(_ route: AidenAppRoute) {
+    /// `startsVoice` is a voice intent's: the chat starts listening when it opens.
+    func open(_ route: AidenAppRoute, startsVoice: Bool = false) {
+        chatStartingVoice = nil
+        if startsVoice, case .chat(let id) = route {
+            chatStartingVoice = id
+        }
         tab = route.tab
         switch route.tab {
         case .inbox: Self.show(route, on: &inboxPath)
@@ -264,6 +289,10 @@ final class AidenAppNavigation {
         case .workspaces: Self.show(route, on: &workspacesPath)
         case .search: break
         }
+    }
+
+    func finishStartingVoice(_ id: AidenHostObjectID) {
+        if chatStartingVoice == id { chatStartingVoice = nil }
     }
 
     /// A tab holding a route to a machine that's gone returns to its root.

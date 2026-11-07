@@ -246,7 +246,7 @@ struct ContentView: View {
             await scheduler.foregrounded()
         }
         .onOpenURL { url in
-            _ = foregroundIntents.take()
+            foregroundIntents.discardActions()
             guard let request = AidenDeepLink.request(from: url) else {
                 coordinator.presentedError = String(localized: "That Aiden link is invalid or no longer supported.")
                 return
@@ -273,7 +273,7 @@ struct ContentView: View {
         } message: { target in
             Text("Create a chat in \(target.workspaceName) on \(target.installationName)? Use the microphone button when you are ready to dictate.")
         }
-        .task(id: foregroundIntents.pending?.id) {
+        .task(id: foregroundIntents.actions.map(\.id)) {
             // A newer native intent supersedes a link still waiting for readiness.
             if foregroundIntents.pending != nil {
                 externalNewChats.invalidate()
@@ -285,7 +285,17 @@ struct ContentView: View {
         .onDisappear {
             externalNewChats.invalidate()
             newChatConsent.invalidate()
-            _ = foregroundIntents.take()
+            foregroundIntents.discardActions()
+        }
+        .onChange(of: connectedMachines) { previous, connected in
+            // A machine connecting late still owes its intents and activities,
+            // which the foreground pass found it too early for.
+            Task { await consumeForegroundIntentIfReady() }
+            let arrived = Set(connected).subtracting(previous)
+            Task { await AidenRemoteLiveActivityManager.shared.reconcileConnectedMachines(of: coordinator, only: arrived) }
+        }
+        .onChange(of: coordinator.installationStore.installations) {
+            if AppConfig.tabShellEnabled { foregroundIntents.dropUnopenable(on: coordinator) }
         }
         .onChange(of: coordinator.connectionState) { _, state in
             if state == .needsPairing {
@@ -299,11 +309,6 @@ struct ContentView: View {
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
             }
-        }
-        .onChange(of: connectedMachines) {
-            // A machine connecting late still owes its intent, which the
-            // foreground pass found it too early for.
-            Task { await consumeForegroundIntentIfReady() }
         }
         // Only the tab shell waits on a machine other than the selected one.
         .onChange(of: waitingLinkConnectionState) { _, _ in
@@ -344,8 +349,10 @@ struct ContentView: View {
                     // Bot routine results land as local notifications when
                     // the app comes to the foreground (there is no push).
                     Task { await AidenBotRoutineNotifier.shared.deliverIfSupported(coordinator: coordinator) }
-                    if let context = try? coordinator.requestContext(),
-                       let client = try? coordinator.remoteClient(for: context) {
+                    if AppConfig.tabShellEnabled {
+                        await AidenRemoteLiveActivityManager.shared.reconcileConnectedMachines(of: coordinator)
+                    } else if let context = try? coordinator.requestContext(),
+                              let client = try? coordinator.remoteClient(for: context) {
                         await AidenRemoteLiveActivityManager.shared.reconcile(
                             instanceID: context.instanceId,
                             client: client,
@@ -359,7 +366,7 @@ struct ContentView: View {
                 externalNewChats.invalidate()
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
-                _ = foregroundIntents.take()
+                foregroundIntents.handleSuspend()
                 Task { await AidenRemoteLiveActivityManager.shared.markAllStale() }
             case .resume, .none:
                 if phase == .active {
@@ -414,22 +421,17 @@ struct ContentView: View {
 
     @MainActor
     private func consumeForegroundIntentIfReady() async {
-        guard scenePhase == .active, !sceneConnectionRefreshInProgress else { return }
+        guard scenePhase == .active else { return }
         if AppConfig.tabShellEnabled {
-            if let action = foregroundIntents.takeWhenConnected(on: coordinator) {
-                startChat(for: action)
-            } else if let action = foregroundIntents.pending,
-                      let instanceID = action.instanceID ?? coordinator.activeInstanceId {
-                connectScheduler?.connect(instanceId: instanceID)
-            }
+            // Each intent waits on its own machine, so the selected machine's
+            // reconnect holds up nobody else.
+            // Its own task: taking an action restarts the `.task(id:)` this may be
+            // running in, and a chat being created must not be cancelled with it.
+            Task { await foregroundIntents.openWaitingChats(coordinator: coordinator) }
             return
         }
-        guard coordinator.connectionState == .connected, let action = foregroundIntents.take() else { return }
-        startChat(for: action)
-    }
-
-    @MainActor
-    private func startChat(for action: AidenForegroundIntentRouter.Action) {
+        guard !sceneConnectionRefreshInProgress, coordinator.connectionState == .connected,
+              let action = foregroundIntents.take() else { return }
         prepareNewChat(AidenNavigationRequest(destination: .newChat, instanceId: action.instanceID,
             workspaceId: action.workspaceID, startsVoice: false), startsVoice: action.startsVoice, requiresConfirmation: false)
     }
