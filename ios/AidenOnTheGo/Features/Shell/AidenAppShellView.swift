@@ -275,12 +275,12 @@ final class AidenChatRouteModel {
         }
         // Saved transcript first: the chat opens at once and refreshes itself.
         if let saved = await cache.admittedChat(instanceId: id.instanceId, chatId: id.objectId) {
-            present(await cache.presenting(saved, instanceId: id.instanceId), owner: owner, coordinator: coordinator)
+            await present(await cache.presenting(saved, instanceId: id.instanceId), owner: owner, coordinator: coordinator)
             return
         }
         do {
             let chat = try await coordinator.remoteClient(for: owner).chat(id: id.objectId)
-            present(chat, owner: owner, coordinator: coordinator)
+            await present(chat, owner: owner, coordinator: coordinator)
         } catch where aidenIsCancellation(error) {
             return
         } catch {
@@ -294,7 +294,7 @@ final class AidenChatRouteModel {
         }
     }
 
-    private func present(_ chat: AidenChat, owner: AidenRemoteRequestContext, coordinator: AidenRemoteCoordinator) {
+    private func present(_ chat: AidenChat, owner: AidenRemoteRequestContext, coordinator: AidenRemoteCoordinator) async {
         guard coordinator.isLive(owner), chat.id == id.objectId else {
             state = .unavailable(String(localized: "This chat is no longer available."))
             return
@@ -305,8 +305,35 @@ final class AidenChatRouteModel {
                 state = .unavailable(explanation)
                 return
             }
+        } else if let refusal = await workspaceRefusal(of: chat, coordinator: coordinator) {
+            state = .unavailable(refusal)
+            return
         }
-        state = .ready(chat, owner: owner)
+        // Cancelled: the view is loading again, and that load decides.
+        guard !Task.isCancelled else { return }
+        state = coordinator.isLive(owner)
+            ? .ready(chat, owner: owner)
+            : .unavailable(String(localized: "This chat is no longer available."))
+    }
+
+    /// Why this chat's workspace rules it out. Only a machine that's answering
+    /// can say a workspace is gone, so a saved chat stays readable while it's away.
+    private func workspaceRefusal(of chat: AidenChat, coordinator: AidenRemoteCoordinator) async -> String? {
+        if coordinator.workspaceArchiveStore.isArchived(workspaceID: chat.workspaceId, instanceID: id.instanceId) {
+            return String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")
+        }
+        guard let connection = coordinator.hosts.connection(for: id.instanceId),
+              connection.connectionState == .connected else { return nil }
+        func isListed() -> Bool { connection.workspaces.contains { $0.id == chat.workspaceId } }
+        guard !isListed() else { return nil }
+        // A chat started without a workspace can sit in a hidden folder made
+        // after the phone last read the machine's workspaces.
+        do {
+            try await connection.refreshWorkspacesForPoll()
+        } catch {
+            return nil
+        }
+        return isListed() ? nil : String(localized: "The chat's workspace is no longer available.")
     }
 }
 

@@ -186,15 +186,49 @@ final class AidenForegroundIntentRouter {
     static let shared = AidenForegroundIntentRouter()
     private(set) var pending: Action?
 
+    /// False keeps the shipping rule: an intent is taken or lost at the first
+    /// chance. True waits for its machine, so one left waiting can go stale.
+    @ObservationIgnored private let queuesActions: Bool
+
+    init(queuesActions: Bool = AppConfig.tabShellEnabled) {
+        self.queuesActions = queuesActions
+    }
+
     func submit(instanceID: String?, workspaceID: String?, startsVoice: Bool, now: Date = Date()) {
-        guard pending == nil else { return }
+        if let pending, !queuesActions || Self.isFresh(pending, now: now) { return }
         pending = Action(instanceID: instanceID, workspaceID: workspaceID, startsVoice: startsVoice, createdAt: now)
     }
 
     func take(now: Date = Date()) -> Action? {
         defer { pending = nil }
-        guard let pending, (0..<60).contains(now.timeIntervalSince(pending.createdAt)) else { return nil }
+        guard let pending, Self.isFresh(pending, now: now) else { return nil }
         return pending
+    }
+
+    /// The tab shell's way to the waiting intent. It runs on its own machine, so
+    /// that machine's connection is the one it waits for, and until then it
+    /// stays. One that's gone stale, or whose machine left, goes.
+    func takeWhenConnected(on coordinator: AidenRemoteCoordinator, now: Date = Date()) -> Action? {
+        guard let action = pending else { return nil }
+        guard Self.isFresh(action, now: now), let connection = machine(for: action, on: coordinator) else {
+            pending = nil
+            return nil
+        }
+        guard connection.connectionState == .connected else { return nil }
+        pending = nil
+        return action
+    }
+
+    /// Nil once the intent's machine has been forgotten or revoked.
+    private func machine(for action: Action, on coordinator: AidenRemoteCoordinator) -> AidenHostConnection? {
+        guard let instanceID = action.instanceID ?? coordinator.activeInstanceId,
+              let connection = coordinator.hosts.connection(for: instanceID),
+              !connection.isRevoked else { return nil }
+        return connection
+    }
+
+    private static func isFresh(_ action: Action, now: Date) -> Bool {
+        (0..<60).contains(now.timeIntervalSince(action.createdAt))
     }
 }
 

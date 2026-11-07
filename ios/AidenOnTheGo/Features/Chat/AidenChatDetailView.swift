@@ -76,7 +76,7 @@ struct AidenChatDetailView: View {
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
     /// for surfaces that cannot navigate to a new Workspace chat.
-    private let onOpenChat: (@MainActor (AidenChat, AidenRemoteRequestContext) -> Void)?
+    private let onOpenChat: (@MainActor (AidenChat) -> Void)?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -86,7 +86,7 @@ struct AidenChatDetailView: View {
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in },
-        onOpenChat: (@MainActor (AidenChat, AidenRemoteRequestContext) -> Void)? = nil,
+        onOpenChat: (@MainActor (AidenChat) -> Void)? = nil,
         composerSession: AidenComposerSession? = nil
     ) {
         _coordinator = State(initialValue: coordinator)
@@ -520,13 +520,12 @@ struct AidenChatDetailView: View {
             ) else { return }
             // The fork lives on this chat's machine, and goes on opening there.
             guard model.opensForks() else { return }
-            onOpenChat(forked, model.owner)
+            onOpenChat(forked)
         }
     }
 
     private var simulatorRefreshKey: String {
-        let available = model.simulatorsClient != nil
-        return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
+        "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(model.offersSimulators)"
     }
 
     /// Revision 47: a Workspace chat's total, or a Bot chat's month.

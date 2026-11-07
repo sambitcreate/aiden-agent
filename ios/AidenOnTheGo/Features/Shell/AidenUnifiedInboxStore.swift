@@ -416,7 +416,9 @@ extension AidenUnifiedInboxStore {
 
     /// The row goes at once. If the machine doesn't take the delete it comes back.
     func delete(_ id: AidenHostObjectID) async {
-        guard let (model, connection) = rowOwner(id), let context = try? connection.homeContext() else { return }
+        guard let (model, connection) = rowOwner(id), let context = try? connection.homeContext(),
+              let index = model.chats.firstIndex(where: { $0.id == id.objectId }) else { return }
+        let row = model.chats[index]
         model.removeChat(id: id.objectId)
         do {
             let client = try connection.homeClient(for: context)
@@ -427,6 +429,8 @@ extension AidenUnifiedInboxStore {
             guard connection.holdsHomeContext(context) else { return }
             await cache.removeChat(instanceId: id.instanceId, chatId: id.objectId)
             await drafts.remove(instanceId: id.instanceId, chatId: id.objectId)
+            // The machine lets the chat's hidden folder go with it.
+            try? await connection.refreshWorkspacesForPoll()
         } catch {
             guard connection.holdsHomeContext(context) else { return }
             if (error as? AidenRemoteClientError)?.isCredentialRevoked == true {
@@ -434,9 +438,10 @@ extension AidenUnifiedInboxStore {
                 _ = await connection.handlePollError(error, sinceConnect: connection.connectionGeneration)
                 return
             }
-            if !aidenIsCancellation(error) {
-                model.inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t delete that chat. It’s back where it was."))
-            }
+            model.restoreChat(row, at: index)
+            guard !aidenIsCancellation(error) else { return }
+            model.inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t delete that chat. It’s back where it was."))
+            // The answer may be what was lost, with the chat gone after all.
             _ = await model.pollChats(host: connection, walkingPages: false, now: now())
         }
     }

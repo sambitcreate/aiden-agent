@@ -408,7 +408,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)? = nil,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         makeCoordinator(
             installations.map { Machine(installation: $0, rowCount: 4) },
@@ -416,7 +417,8 @@ enum AidenDemoHosts {
             haptics: haptics,
             keychain: keychain,
             workspaceEnvironmentCache: workspaceEnvironmentCache,
-            machinePreferences: machinePreferences
+            machinePreferences: machinePreferences,
+            tabShell: tabShell
         )
     }
 
@@ -429,7 +431,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)?,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         let store = AidenInstallationStore(keychain: keychain ?? AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
@@ -489,7 +492,8 @@ enum AidenDemoHosts {
                     credential: credential,
                     session: responder.session
                 )
-            }
+            },
+            tabShell: tabShell
         )
     }
 

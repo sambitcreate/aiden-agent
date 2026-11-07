@@ -331,12 +331,16 @@ extension AidenChatViewModel {
         ownerHostConnection?.workspaces.first { $0.id == chat.workspaceId }
     }
 
+    /// Safe to read from a view's body, unlike `simulatorsClient`.
+    var offersSimulators: Bool {
+        !isReadOnlyFixture && ownerServer?.supportsMobileSimulators == true
+            && ownerInstallation?.hasNegotiatedAccess(to: .simulatorsMobile) == true
+    }
+
     /// Nil unless the owner offers simulators to this phone. The owner's, for the
     /// same reason as `spendingTransport`.
     var simulatorsClient: AidenRemoteClient? {
-        guard !isReadOnlyFixture, ownerServer?.supportsMobileSimulators == true,
-              ownerInstallation?.hasNegotiatedAccess(to: .simulatorsMobile) == true else { return nil }
-        return try? coordinator.remoteClient(for: owner)
+        offersSimulators ? try? coordinator.remoteClient(for: owner) : nil
     }
 
     /// The old shell files every chat under the selected machine, so it opens
