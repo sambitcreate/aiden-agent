@@ -494,7 +494,7 @@ final class AidenShellUITests: XCTestCase {
     func testTheEmptyStatesScrollClearOfTheField() {
         for size in [AidenStateMatrix.ContentSize.large, .accessibilityExtraExtraExtraLarge] {
             let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, contentSize: size)
-            XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "\(size)")
+            XCTAssertTrue(openOfflineMixInbox(in: app).waitForExistence(timeout: 10), "\(size)")
             search("zzzz", in: app, submit: false)
             let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search")).firstMatch
             XCTAssertTrue(note.waitForExistence(timeout: 10), "No note (\(size))")
@@ -591,7 +591,7 @@ final class AidenShellUITests: XCTestCase {
             shell: .tabs,
             contentSize: .accessibilityExtraExtraExtraLarge
         )
-        XCTAssertTrue(openInbox(in: largest).waitForExistence(timeout: 10))
+        XCTAssertTrue(openOfflineMixInbox(in: largest).waitForExistence(timeout: 10))
         search("zzzz", in: largest)
         XCTAssertTrue(largest.staticTexts["No results"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("search-no-results-failing-machines-accessibilityExtraExtraExtraLarge", in: self)
@@ -771,6 +771,14 @@ final class AidenShellUITests: XCTestCase {
         return app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")
         ).firstMatch
+    }
+
+    /// Offline rows sit above the chats, and at the largest text they fill the first
+    /// screen, so the list hasn't made a chat row yet. The first of them says the
+    /// Inbox has settled at every size.
+    private func openOfflineMixInbox(in app: XCUIApplication) -> XCUIElement {
+        AidenStateMatrix.openArea("Inbox", in: app)
+        return app.buttons["Reconnect"].firstMatch
     }
 
     private func botRow(in app: XCUIApplication) -> XCUIElement {
