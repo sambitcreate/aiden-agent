@@ -940,8 +940,10 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(note.waitForExistence(timeout: 10), "No note (\(size))")
 
             for _ in 0..<4 { dragResults(in: app, from: 0.4, to: 0.05) }
+            // The field is at the bottom of a compact window and under the title of a
+            // regular one. Either way, nothing may sit behind it.
             let field = app.searchFields.firstMatch
-            XCTAssertLessThanOrEqual(note.frame.maxY, field.frame.minY, "The note sits behind the field (\(size))")
+            XCTAssertFalse(note.frame.intersects(field.frame), "The note sits behind the field (\(size))")
             app.terminate()
         }
 
@@ -957,7 +959,7 @@ final class AidenShellUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(description.waitForExistence(timeout: 10), "No prompt")
         for _ in 0..<4 { dragResults(in: prompt, from: 0.4, to: 0.05) }
-        XCTAssertLessThanOrEqual(description.frame.maxY, prompt.searchFields.firstMatch.frame.minY, "The prompt is cut off by the field")
+        XCTAssertFalse(description.frame.intersects(prompt.searchFields.firstMatch.frame), "The prompt is cut off by the field")
         prompt.terminate()
     }
 
