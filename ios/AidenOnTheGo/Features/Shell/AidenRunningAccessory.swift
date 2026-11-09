@@ -25,6 +25,8 @@ enum AidenRunningHome: Equatable {
 struct AidenRunningSummary: Equatable {
     enum Tap: Equatable {
         case open(AidenHostObjectID)
+        /// A running Bot opens as the Bot.
+        case openBot(AidenHostObjectID)
         case showAll
     }
 
@@ -34,6 +36,7 @@ struct AidenRunningSummary: Equatable {
     var title: String? {
         switch rows.first?.content {
         case .chat(let summary, _): summary.title
+        case .bot(let bot): bot.name
         case nil: nil
         }
     }
@@ -42,7 +45,7 @@ struct AidenRunningSummary: Equatable {
 
     /// One chat opens, and more than one is a list to choose from.
     var tap: Tap? {
-        rows.count > 1 ? .showAll : rows.first.map { .open($0.id) }
+        rows.count > 1 ? .showAll : rows.first.map { $0.isBot ? .openBot($0.id) : .open($0.id) }
     }
 }
 
@@ -50,7 +53,7 @@ struct AidenRunningSummary: Equatable {
 /// `tabViewBottomAccessoryPlacement`, and goes compact beside a minimized bar.
 struct AidenRunningAccessory: View {
     private let summary: AidenRunningSummary
-    private let onOpen: (AidenHostObjectID) -> Void
+    private let onOpen: (AidenAppRoute) -> Void
     private let onShowAll: () -> Void
 
     @Environment(\.aidenPalette) private var palette
@@ -58,7 +61,7 @@ struct AidenRunningAccessory: View {
 
     init(
         rows: [AidenUnifiedInboxRow],
-        onOpen: @escaping (AidenHostObjectID) -> Void,
+        onOpen: @escaping (AidenAppRoute) -> Void,
         onShowAll: @escaping () -> Void
     ) {
         summary = AidenRunningSummary(rows: rows)
@@ -103,7 +106,8 @@ struct AidenRunningAccessory: View {
 
     private func tap() {
         switch summary.tap {
-        case .open(let id): onOpen(id)
+        case .open(let id): onOpen(.chat(id))
+        case .openBot(let id): onOpen(.bot(id))
         case .showAll: onShowAll()
         case nil: break
         }
@@ -114,7 +118,7 @@ struct AidenRunningAccessory: View {
 /// redrawing the whole shell.
 struct AidenRunningAccessoryHost: View {
     let store: AidenUnifiedInboxStore
-    let onOpen: (AidenHostObjectID) -> Void
+    let onOpen: (AidenAppRoute) -> Void
     let onShowAll: () -> Void
 
     var body: some View {
@@ -126,7 +130,7 @@ struct AidenRunningAccessoryHost: View {
 /// the store, because a run can end while the sheet is open.
 struct AidenRunningChatsSheet: View {
     let store: AidenUnifiedInboxStore
-    let onOpen: (AidenHostObjectID) -> Void
+    let onOpen: (AidenAppRoute) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -159,25 +163,26 @@ struct AidenRunningChatsSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    @ViewBuilder
     private func listRow(_ row: AidenUnifiedInboxRow) -> some View {
-        switch row.content {
-        case .chat(let summary, let placement):
-            Button {
-                onOpen(row.id)
-            } label: {
+        Button {
+            onOpen(row.route)
+        } label: {
+            switch row.content {
+            case .chat(let summary, let placement):
                 AidenInboxRowView(
                     row: AidenInboxProjection.Row(summary: summary, placement: placement),
                     section: .working,
                     workspaceName: row.workspaceName,
                     palette: palette
                 )
+            case .bot(let bot):
+                AidenInboxBotRowView(bot: bot, palette: palette)
             }
-            .buttonStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 0, leading: AidenSpacing.m, bottom: 0, trailing: AidenSpacing.m))
-            .listRowSeparator(.hidden)
-            .listRowBackground(palette.canvas)
         }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 0, leading: AidenSpacing.m, bottom: 0, trailing: AidenSpacing.m))
+        .listRowSeparator(.hidden)
+        .listRowBackground(palette.canvas)
     }
 }
 

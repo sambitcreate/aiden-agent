@@ -42,12 +42,13 @@ struct AidenBotGeneratedAvatarSessionIdentity: Equatable {
     let connection: String
     let capabilityRevision: String
 
+    /// `machine` is the Bot's own machine; nil follows the selected one.
     @MainActor
-    init(coordinator: AidenRemoteCoordinator) {
-        let installation = coordinator.installationStore.activeInstallation
+    init(coordinator: AidenRemoteCoordinator, machine: String? = nil) {
+        let installation = coordinator.botInstallation(on: machine)
         instanceID = installation?.id
         deviceID = installation?.deviceId
-        switch coordinator.connectionState {
+        switch coordinator.botConnectionState(on: machine) {
         case .needsPairing: connection = "needs-pairing"
         case .connecting: connection = "connecting"
         case .connected: connection = "connected"
@@ -212,6 +213,8 @@ private struct AidenBotGeneratedAvatarLoadAttempt: Equatable {
 @Observable
 final class AidenBotGeneratedAvatarModel {
     let coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    let machine: String?
     let botID: String
     private let cache: AidenBotCache
     private let onChanged: (AidenBotDetail) -> Void
@@ -234,18 +237,20 @@ final class AidenBotGeneratedAvatarModel {
 
     init(
         coordinator: AidenRemoteCoordinator,
+        machine: String? = nil,
         botID: String,
         cache: AidenBotCache = .shared,
         onChanged: @escaping (AidenBotDetail) -> Void = { _ in }
     ) {
         self.coordinator = coordinator
+        self.machine = machine
         self.botID = botID
         self.cache = cache
         self.onChanged = onChanged
     }
 
     var sessionIdentity: AidenBotGeneratedAvatarSessionIdentity {
-        AidenBotGeneratedAvatarSessionIdentity(coordinator: coordinator)
+        AidenBotGeneratedAvatarSessionIdentity(coordinator: coordinator, machine: machine)
     }
 
     var displayedImage: UIImage? { candidateImage ?? currentImage }
@@ -265,9 +270,9 @@ final class AidenBotGeneratedAvatarModel {
     }
 
     private var canMutate: Bool {
-        guard coordinator.connectionState == .connected,
-              coordinator.installationStore.activeInstallation?.canWriteBots == true,
-              let context = capturedContext, coordinator.isCurrent(context),
+        guard coordinator.botConnectionState(on: machine) == .connected,
+              coordinator.botInstallation(on: machine)?.canWriteBots == true,
+              let context = capturedContext, coordinator.holds(context),
               authoritativeBot?.health == .ready else { return false }
         return true
     }
@@ -303,9 +308,9 @@ final class AidenBotGeneratedAvatarModel {
         var requestContext: AidenRemoteRequestContext?
         var loadAttempt: AidenBotGeneratedAvatarLoadAttempt?
         do {
-            let context = try coordinator.requestContext()
+            let context = try coordinator.botContext(on: machine)
             requestContext = context
-            guard operationGeneration == generation, coordinator.isCurrent(context) else { return }
+            guard operationGeneration == generation, coordinator.holds(context) else { return }
             let attempt = AidenBotGeneratedAvatarLoadAttempt(
                 context: context,
                 operationGeneration: generation,
@@ -335,7 +340,7 @@ final class AidenBotGeneratedAvatarModel {
             }
             return
         } catch {
-            if let context = requestContext, coordinator.isCurrent(context),
+            if let context = requestContext, coordinator.holds(context),
                await coordinator.handleCredentialRevocation(error, context: context) {
                 clearAllRasterState()
                 return
@@ -896,7 +901,7 @@ final class AidenBotGeneratedAvatarModel {
         context: AidenRemoteRequestContext,
         loadAttempt: AidenBotGeneratedAvatarLoadAttempt? = nil
     ) async {
-        guard coordinator.isCurrent(context), detail.id == botID,
+        guard coordinator.holds(context), detail.id == botID,
               detail.avatar.asset?.assetRevision == content.assetRevision,
               detail.avatar.asset?.byteSize == content.data.count,
               loadAttempt.map(isCurrent) ?? true,
@@ -928,7 +933,7 @@ final class AidenBotGeneratedAvatarModel {
     private func isCurrent(_ context: AidenRemoteRequestContext, generation: UInt) -> Bool {
         operationGeneration == generation
             && capturedContext == context
-            && coordinator.isCurrent(context)
+            && coordinator.holds(context)
     }
 
     private func isCurrent(_ attempt: AidenBotGeneratedAvatarLoadAttempt) -> Bool {
@@ -961,8 +966,8 @@ private struct AidenBotCanonicalAvatarLoadIdentity: Equatable {
     let connection: String
 
     @MainActor
-    init(coordinator: AidenRemoteCoordinator, botID: String, assetRevision: String?) {
-        let session = AidenBotGeneratedAvatarSessionIdentity(coordinator: coordinator)
+    init(coordinator: AidenRemoteCoordinator, machine: String?, botID: String, assetRevision: String?) {
+        let session = AidenBotGeneratedAvatarSessionIdentity(coordinator: coordinator, machine: machine)
         instanceID = session.instanceID
         deviceID = session.deviceID
         self.botID = botID
@@ -1015,6 +1020,8 @@ private final class AidenBotCanonicalAvatarMemoryCache {
 /// the exact installation, pairing device, Bot, and immutable asset revision.
 struct AidenBotCanonicalAvatarView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    /// The Bot's own machine; nil follows the selected one.
+    var machine: String? = nil
     let botID: String
     let avatar: AidenBotAvatarView
     let name: String
@@ -1041,6 +1048,7 @@ struct AidenBotCanonicalAvatarView: View {
     private var loadIdentity: AidenBotCanonicalAvatarLoadIdentity {
         AidenBotCanonicalAvatarLoadIdentity(
             coordinator: coordinator,
+            machine: machine,
             botID: botID,
             assetRevision: avatar.asset?.assetRevision
         )
@@ -1119,16 +1127,18 @@ struct AidenBotCanonicalAvatarView: View {
         guard expected.connection == "connected" else { return }
         var context: AidenRemoteRequestContext?
         do {
-            let captured = try coordinator.requestContext(for: instanceID)
+            let captured = try machine == nil
+                ? coordinator.requestContext(for: instanceID)
+                : coordinator.ownerContext(for: instanceID)
             context = captured
-            guard captured.deviceId == deviceID, coordinator.isCurrent(captured) else { return }
+            guard captured.deviceId == deviceID, coordinator.holds(captured) else { return }
             let content = try await coordinator.remoteClient(for: captured).botAvatar(
                 botId: botID,
                 assetRevision: asset.assetRevision
             )
             guard content.assetRevision == asset.assetRevision,
                   content.data.count == asset.byteSize,
-                  coordinator.isCurrent(captured), loadIdentity == expected,
+                  coordinator.holds(captured), loadIdentity == expected,
                   !Task.isCancelled, let image = UIImage(data: content.data) else { return }
             AidenBotCanonicalAvatarMemoryCache.shared.insert(image, for: cacheKey)
             canonicalImage = image
@@ -1141,7 +1151,7 @@ struct AidenBotCanonicalAvatarView: View {
                     deviceId: deviceID
                 )
             }
-            guard coordinator.isCurrent(captured), loadIdentity == expected else {
+            guard coordinator.holds(captured), loadIdentity == expected else {
                 canonicalImage = nil
                 loadedCacheKey = nil
                 return
@@ -1149,7 +1159,7 @@ struct AidenBotCanonicalAvatarView: View {
         } catch is CancellationError {
             return
         } catch {
-            if let context, coordinator.isCurrent(context) {
+            if let context, coordinator.holds(context) {
                 _ = await coordinator.handleCredentialRevocation(error, context: context)
             }
             guard loadIdentity == expected else { return }

@@ -119,3 +119,48 @@ extension AidenBotCreateFlow.Failure {
         return "\(name): \(message)"
     }
 }
+
+/// The machine a Bot page reads and writes. A page opened on a Bot names the
+/// Bot's machine, so it keeps talking to it whatever the default does. Nil is the
+/// selected machine, which the old shell's pages follow.
+extension AidenRemoteCoordinator {
+    /// An owner context for a named machine, so the page outlives a move of the
+    /// default. A named machine that left throws rather than fall back.
+    func botContext(on instanceId: String?) throws -> AidenRemoteRequestContext {
+        guard let instanceId else { return try requestContext() }
+        return try ownerContext(for: instanceId)
+    }
+
+    func botInstallation(on instanceId: String?) -> AidenInstallation? {
+        guard let instanceId else { return installationStore.activeInstallation }
+        return hosts.connection(for: instanceId)?.installation
+    }
+
+    func botServer(on instanceId: String?) -> AidenServer? {
+        guard let instanceId else { return server }
+        return hosts.connection(for: instanceId)?.server
+    }
+
+    /// A machine that isn't paired reads as one that needs pairing.
+    func botConnectionState(on instanceId: String?) -> AidenRemoteConnectionState {
+        guard let instanceId else { return connectionState }
+        return hosts.connection(for: instanceId)?.connectionState ?? .needsPairing
+    }
+
+    /// The live `/server` features, or the pairing's saved ones while connecting.
+    func botFeatures(on instanceId: String?) -> [String]? {
+        guard let instanceId else { return knownServerFeatures }
+        return knownServerFeatures(of: instanceId)
+    }
+
+    /// The machine a context is for: an owner context's own, else the selection.
+    static func botMachine(of context: AidenRemoteRequestContext) -> String? {
+        context.scope == .owner ? context.instanceId : nil
+    }
+
+    /// Holds until the page's machine is connected (`aidenBotWaitForConnection`).
+    func waitForBotConnection(on instanceId: String?, hold: Duration) async -> Bool {
+        guard let instanceId else { return await aidenBotWaitForConnection(self, hold: hold) }
+        return await aidenBotWaitForConnection(self, on: instanceId, hold: hold)
+    }
+}

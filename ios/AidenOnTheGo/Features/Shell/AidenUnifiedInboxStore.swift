@@ -253,6 +253,7 @@ final class AidenUnifiedInboxStore {
                 supportsReadState: connection.server?.supportsChatReadState == true,
                 supportsTriage: connection.server?.supportsChatTriage == true
                     && connection.installation.hasNegotiatedAccess(to: .chatWrite),
+                bots: Self.readsBots(connection) ? machine?.bots ?? [] : [],
                 loadState: machine?.model.chatListLoadState ?? .unresolved,
                 pagination: machine?.model.paginationState ?? .idle,
                 hasMoreChats: machine?.model.nextChatCursor != nil,
@@ -305,7 +306,8 @@ final class AidenUnifiedInboxStore {
                 isBlocked: reading.isBlocked,
                 fetchedAt: reading.machine?.fetchedAt,
                 supportsReadState: reading.supportsReadState,
-                supportsTriage: reading.supportsTriage
+                supportsTriage: reading.supportsTriage,
+                bots: reading.bots
             )
         }
         if latest != snapshots { snapshots = latest }
@@ -484,6 +486,7 @@ final class AidenUnifiedInboxStore {
             await machine.savedRows?.value
             var result = await machine.model.pollChats(host: connection, walkingPages: walkingPages, now: startedAt)
             if case .loaded = result, let self { result = await self.learnWorkspaces(of: machine, over: connection) }
+            if case .loaded = result, let self { result = await self.learnBots(of: machine, over: connection) }
             await self?.finish(
                 result,
                 walkingPages: walkingPages,
@@ -529,6 +532,33 @@ final class AidenUnifiedInboxStore {
         }
         machine.workspacesAskedAbout.formUnion(unknown)
         return .loaded
+    }
+
+    /// A machine's Bots, read with its chats. A machine that hasn't granted this
+    /// phone `bot:read` is never asked. A read that doesn't land keeps the Bots
+    /// last seen, as a failed poll keeps its rows, unless the machine said this
+    /// pairing is over.
+    private func learnBots(of machine: Machine, over connection: AidenHostConnection) async -> AidenHomePollResult {
+        guard Self.readsBots(connection) else {
+            machine.bots = []
+            return .loaded
+        }
+        do {
+            let list = try await connection.client().bots()
+            guard machines[connection.instanceId] === machine else { return .abandoned }
+            machine.bots = list.bots
+        } catch let error where aidenIsCancellation(error) {
+            return .abandoned
+        } catch let error as AidenRemoteClientError where error.isCredentialRevoked {
+            return .failed(error)
+        } catch {
+            // The chats are read, so this poll did its job.
+        }
+        return .loaded
+    }
+
+    private static func readsBots(_ connection: AidenHostConnection) -> Bool {
+        connection.installation.hasNegotiatedAccess(to: .botRead)
     }
 
     private func finish(
@@ -641,6 +671,8 @@ private final class Machine {
     var savedRows: Task<Void, Never>?
     var workspacesAskedAbout: Set<String> = []
     var workspaceReadsFailed: [String: Int] = [:]
+    /// Read with each poll; the poll's `settle()` brings them to the Inbox.
+    var bots: [AidenBotSummary] = []
 
     init(lease: Lease, model: AidenHomeModel) {
         self.lease = lease
@@ -684,6 +716,7 @@ private struct MachineReading {
     let isHidden: Bool
     let supportsReadState: Bool
     let supportsTriage: Bool
+    let bots: [AidenBotSummary]
     let loadState: AidenHomeModel.ChatListLoadState
     let pagination: AidenHomeModel.PaginationState
     let hasMoreChats: Bool

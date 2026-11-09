@@ -29,7 +29,8 @@ struct AidenInboxTabView: View {
     var runningHome = AidenRunningHome.accessory
     var refreshFailed = false
     var moreChats = AidenInboxMoreChats.none
-    let onOpen: (AidenHostObjectID) -> Void
+    /// A chat row opens its chat, a Bot row its Bot.
+    let onOpen: (AidenAppRoute) -> Void
     let onAction: (AidenInboxRowAction, AidenHostObjectID) -> Void
     var onRefresh: () async -> Void = {}
     var onRetry: () -> Void = {}
@@ -133,9 +134,18 @@ struct AidenInboxTabView: View {
                 palette: palette,
                 actions: actions,
                 isPinned: row.isPinned,
-                open: { onOpen(row.id) }
+                open: { onOpen(row.route) }
             )
             .contextMenu { contextMenu(for: row, actions: actions) }
+        case .bot(let bot):
+            // No Bot triage exists, so a Bot row has no swipes and no menu.
+            Button { onOpen(row.route) } label: {
+                AidenInboxBotRowView(bot: bot, palette: palette)
+            }
+            .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
         }
     }
 
@@ -331,7 +341,7 @@ struct AidenInboxTabRootView: View {
 
     let store: AidenUnifiedInboxStore
     var runningHome = AidenRunningHome.accessory
-    let onOpen: (AidenHostObjectID) -> Void
+    let onOpen: (AidenAppRoute) -> Void
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
 
@@ -423,5 +433,59 @@ struct AidenCatchUpFinishedView: View {
         }
         .background(palette.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// A Bot that needs the person, or is running: its name and why. Tapping opens
+/// the Bot, the one thing a Bot row offers.
+struct AidenInboxBotRowView: View {
+    let bot: AidenBotSummary
+    let palette: AidenPalette
+
+    var body: some View {
+        let reason = AidenBotAttention.reason(bot)
+        HStack(alignment: .center, spacing: 10) {
+            AidenBotAvatarSymbol(name: bot.name, palette: palette)
+            Text(bot.name)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(palette.foreground)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if AidenBotAttention.isRunning(bot), !AidenBotAttention.needsYou(bot) {
+                AidenWorkingIndicator(size: 12)
+            }
+            if let reason {
+                Text(reason)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AidenBotAttention.needsYou(bot) ? palette.warning : palette.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background((AidenBotAttention.needsYou(bot) ? palette.warning : palette.secondary).opacity(0.12), in: Capsule())
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([String(localized: "Bot \(bot.name)"), reason].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint("Opens the Bot")
+    }
+}
+
+/// The Bot's initial on a tinted circle, so a Bot row reads as a Bot beside chats.
+private struct AidenBotAvatarSymbol: View {
+    let name: String
+    let palette: AidenPalette
+
+    var body: some View {
+        Text(name.prefix(1).uppercased())
+            .font(.caption.weight(.bold))
+            .foregroundStyle(palette.accent)
+            .frame(width: 24, height: 24)
+            .background(palette.accent.opacity(0.14), in: Circle())
+            .accessibilityHidden(true)
     }
 }

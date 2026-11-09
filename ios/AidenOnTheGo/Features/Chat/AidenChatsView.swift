@@ -4,6 +4,8 @@ struct AidenWorkspaceChatsView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.aidenPalette) private var palette
     let workspace: AidenWorkspace
+    /// The workspace's machine, whose chats these are. Nil is the selected machine.
+    let owner: AidenRemoteRequestContext?
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
@@ -16,17 +18,20 @@ struct AidenWorkspaceChatsView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
+        owner: AidenRemoteRequestContext? = nil,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
     ) {
         self.coordinator = coordinator
         self.workspace = workspace
+        self.owner = owner
         self.onChatUpdated = onChatUpdated
         self.onChatRemoved = onChatRemoved
         self.onChatActivityChanged = onChatActivityChanged
         _model = State(initialValue: AidenWorkspaceChatsModel(
             coordinator: coordinator,
+            owner: owner,
             workspaceId: workspace.id,
             onChatUpdated: onChatUpdated,
             onChatRemoved: onChatRemoved
@@ -59,6 +64,7 @@ struct AidenWorkspaceChatsView: View {
                             AidenForkableChatDetailView(
                                 coordinator: coordinator,
                                 chat: chat,
+                                owner: owner,
                                 onChatUpdated: {
                                     model.accept($0)
                                     onChatUpdated($0)
@@ -95,7 +101,8 @@ struct AidenWorkspaceChatsView: View {
         .background(palette.canvas)
         .overlay { if model.isLoading && model.chats.isEmpty { ProgressView() } }
         .refreshable { await model.load() }
-        .task(id: coordinator.activeInstanceId) { await model.load() }
+        // An owned workspace's chats don't follow the selection.
+        .task(id: owner == nil ? coordinator.activeInstanceId : owner?.instanceId) { await model.load() }
         .navigationDestination(isPresented: Binding(
             get: { createdChat != nil },
             set: { if !$0 { createdChat = nil } }
@@ -104,6 +111,7 @@ struct AidenWorkspaceChatsView: View {
                 AidenForkableChatDetailView(
                     coordinator: coordinator,
                     chat: createdChat,
+                    owner: owner,
                     onChatUpdated: {
                         model.accept($0)
                         onChatUpdated($0)

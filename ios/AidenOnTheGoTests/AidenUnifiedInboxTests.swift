@@ -413,4 +413,163 @@ final class AidenUnifiedInboxTests: XCTestCase {
     func testNoSnapshotsIsAnEmptyInbox() {
         XCTAssertEqual(make([]), AidenUnifiedInbox())
     }
+
+    // MARK: Bots
+
+    private func bot(
+        _ id: String,
+        name: String? = nil,
+        state: String? = "idle",
+        issues: Int? = nil,
+        minutesAgo: Double = 5
+    ) -> AidenBotSummary {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var object: [String: Any] = [
+            "id": id,
+            "name": name ?? id,
+            "purpose": "",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
+            "health": "ready",
+            "createdAt": formatter.string(from: ago(minutesAgo + 60)),
+            "updatedAt": formatter.string(from: ago(minutesAgo)),
+            "revision": "bot_revision_\(id)",
+        ]
+        if let state { object["sessionState"] = state }
+        if state == "paused" { object["paused"] = true }
+        if let issues { object["issueCount"] = issues }
+        let data = try! JSONSerialization.data(withJSONObject: object)
+        return try! AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: data)
+    }
+
+    private func snapshot(_ instanceId: String, bots: [AidenBotSummary], online: Bool = true) -> AidenHostInboxSnapshot {
+        var snapshot = snapshot(instanceId, [], online: online)
+        snapshot.bots = bots
+        return snapshot
+    }
+
+    func testABotWithIssuesNeedsYou() {
+        let cards = bot("bot_cards", issues: 2, minutesAgo: 30)
+        let stopped = bot("bot_stopped", state: "interrupted", minutesAgo: 20)
+        let noModel = bot("bot_model", state: "needs_model", minutesAgo: 10)
+        XCTAssertTrue([cards, stopped, noModel].allSatisfy(AidenBotAttention.needsYou))
+        let inbox = make([
+            snapshot("mac-a", bots: [noModel, cards]),
+            snapshot("mac-b", bots: [stopped]),
+            snapshot("mac-c", [approval("chat", waitingMinutes: 25)]),
+        ])
+        // Same section rules as a chat: an approval's tier first, then Bots by
+        // `updatedAt`, oldest first, across machines.
+        XCTAssertEqual(labels(inbox.needsYou), ["mac-c:chat", "mac-a:bot_cards", "mac-b:bot_stopped", "mac-a:bot_model"])
+        XCTAssertEqual(inbox.needsYouCount, 4)
+        XCTAssertEqual(inbox.needsYou.filter(\.isBot).map(\.route), [
+            .bot(hostID("mac-a", "bot_cards")), .bot(hostID("mac-b", "bot_stopped")), .bot(hostID("mac-a", "bot_model")),
+        ])
+        guard case .bot(let summary) = inbox.needsYou[1].content else { return XCTFail("expected a Bot row") }
+        XCTAssertEqual(summary.issueCount, 2)
+        // Offline, it stays in sight but isn't counted.
+        let offline = make([snapshot("mac-a", bots: [cards], online: false)])
+        XCTAssertEqual(labels(offline.needsYou), ["mac-a:bot_cards"])
+        XCTAssertEqual(offline.needsYou.map(\.isOnline), [false])
+        XCTAssertEqual(offline.needsYouCount, 0)
+    }
+
+    func testAnIdleOrPausedBotStaysOutOfInbox() {
+        let quiet = [
+            bot("bot_idle"),
+            bot("bot_paused", state: "paused"),
+            bot("bot_unavailable", state: "unavailable"),
+            bot("bot_old_mac", state: nil),
+        ]
+        XCTAssertFalse(quiet.contains(where: AidenBotAttention.needsYou))
+        XCTAssertFalse(quiet.contains(where: AidenBotAttention.isRunning))
+        let inbox = make([snapshot("mac-a", bots: quiet)])
+        XCTAssertEqual(inbox, AidenUnifiedInbox())
+    }
+
+    func testARunningBotShowsInTheAccessory() {
+        let scout = bot("bot_scout", name: "Scout", state: "running", minutesAgo: 9)
+        let inbox = make([
+            snapshot("mac-a", bots: [scout]),
+            snapshot("mac-off", bots: [bot("bot_gone", state: "running")], online: false),
+        ])
+        XCTAssertTrue(AidenBotAttention.isRunning(scout))
+        XCTAssertEqual(labels(inbox.running), ["mac-a:bot_scout"])
+        XCTAssertTrue(inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty)
+        let summary = AidenRunningSummary(rows: inbox.running)
+        XCTAssertEqual(summary.title, "Scout")
+        XCTAssertEqual(summary.tap, .openBot(hostID("mac-a", "bot_scout")))
+        // With a chat running too, the oldest run leads.
+        let both = make([snapshot("mac-a", [running("chat", startedMinutesAgo: 4)]), snapshot("mac-b", bots: [scout])])
+        XCTAssertEqual(labels(both.running), ["mac-b:bot_scout", "mac-a:chat"])
+        XCTAssertEqual(AidenRunningSummary(rows: both.running).tap, .showAll)
+    }
+
+    func testBotRowsHaveNoTriageActions() {
+        var machine = snapshot("mac-a", bots: [bot("bot_cards", issues: 1)])
+        machine.supportsReadState = true
+        machine.supportsTriage = true
+        guard let row = make([machine]).needsYou.first else { return XCTFail("expected a Bot row") }
+        XCTAssertTrue(row.isBot)
+        XCTAssertFalse(row.isPinned)
+        XCTAssertNil(row.workspaceName)
+        XCTAssertEqual(row.offer, AidenInboxRowOffer(markRead: false, done: false, snooze: false, alsoMarkRead: false))
+        let actions = AidenInboxRowActions(offer: row.offer, perform: { _ in XCTFail("a Bot row has no actions") }, chooseSnooze: {})
+        XCTAssertNil(actions.markRead)
+        XCTAssertNil(actions.done)
+        XCTAssertNil(actions.snooze)
+    }
+
+    func testCatchUpIncludesBotsThatNeedYou() {
+        let inbox = make([
+            snapshot("mac-a", [approval("chat", waitingMinutes: 40)]),
+            snapshot("mac-b", bots: [bot("bot_cards", issues: 1, minutesAgo: 10)]),
+            snapshot("mac-off", bots: [bot("bot_far", issues: 1)], online: false),
+        ])
+        let queue = AidenCatchUpQueue(rows: inbox.needsYou)
+        XCTAssertEqual(queue.count, 2)
+        XCTAssertEqual(queue.first, hostID("mac-a", "chat"))
+        let botID = hostID("mac-b", "bot_cards")
+        XCTAssertEqual(queue.next(after: hostID("mac-a", "chat")), botID)
+        XCTAssertEqual(queue.route(for: botID), .bot(botID))
+        XCTAssertEqual(queue.route(for: hostID("mac-a", "chat")), .chat(hostID("mac-a", "chat")))
+        XCTAssertEqual(queue.ending(after: [hostID("mac-a", "chat"), botID]).unreached, 1)
+    }
+
+    @MainActor
+    func testCatchUpOpensABotOnTheInboxAndNextLeavesIt() {
+        let inbox = make([
+            snapshot("mac-a", [approval("chat", waitingMinutes: 10)]),
+            snapshot("mac-b", bots: [bot("bot_cards", issues: 1, minutesAgo: 50)]),
+        ])
+        let queue = AidenCatchUpQueue(rows: inbox.needsYou)
+        let navigation = AidenAppNavigation()
+        let botID = hostID("mac-b", "bot_cards")
+        XCTAssertEqual(navigation.startCatchUp(in: queue), hostID("mac-a", "chat"))
+        XCTAssertEqual(navigation.advanceCatchUp(in: queue), botID)
+        // A Bot step stays on the Inbox, so Back leads there.
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.inboxPath, [.bot(botID)])
+        XCTAssertEqual(navigation.catchUp?.current, botID)
+        XCTAssertNil(navigation.advanceCatchUp(in: queue))
+        XCTAssertNil(navigation.catchUp)
+        guard case .catchUpFinished(let ending)? = navigation.inboxPath.last else { return XCTFail("the run should end") }
+        XCTAssertTrue(ending.walked)
+    }
+
+    func testTwoMachinesWithTheSameBotIDStayTwoRows() {
+        let inbox = make([
+            snapshot("mac-a", bots: [bot("bot_scout", issues: 1, minutesAgo: 3)]),
+            snapshot("mac-b", bots: [bot("bot_scout", issues: 1, minutesAgo: 4)]),
+        ])
+        XCTAssertEqual(labels(inbox.needsYou), ["mac-b:bot_scout", "mac-a:bot_scout"])
+        XCTAssertEqual(Set(inbox.needsYou.map(\.id)).count, 2)
+        XCTAssertEqual(inbox.needsYouCount, 2)
+        XCTAssertEqual(Set(inbox.needsYou.map(\.route)), [.bot(hostID("mac-a", "bot_scout")), .bot(hostID("mac-b", "bot_scout"))])
+        // The filter narrows to one machine's Bot, never the other's.
+        XCTAssertEqual(labels(make([
+            snapshot("mac-a", bots: [bot("bot_scout", issues: 1)]),
+            snapshot("mac-b", bots: [bot("bot_scout", issues: 1)]),
+        ], filter: .machine("mac-b")).needsYou), ["mac-b:bot_scout"])
+    }
 }

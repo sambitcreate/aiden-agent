@@ -949,32 +949,31 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertNil(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true), "A sheet opened now would stay blank")
     }
 
-    func testFilesComeBackWhenABotsMachineIsSelectedAgain() async throws {
+    /// A Bot's chat keeps its tools on the Bot's own machine, so Files stay
+    /// while the default moves away and back, with nothing read again.
+    func testABotsFilesStayWithItsMachineWhenTheDefaultMoves() async throws {
         let responder = AidenDemoResponder()
         self.responder = responder
         coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
         await connectAll()
-        for connection in coordinator.hosts.ordered { try replyToBotCapabilities(on: connection.instanceId) }
-        let session = AidenComposerSession()
-        let window = try await show(AidenBotSessionChatView(
-            coordinator: coordinator,
-            botID: "bot_scout",
-            composerSession: session,
-            staysOnItsMachine: true
-        ))
-        defer { close(window) }
-        await assertSettles({ (session.draftOwner as? AidenBotSessionModel)?.hasLoaded == true }, timeout: 15)
-        let home = try XCTUnwrap((session.draftOwner as? AidenBotSessionModel)?.owner.instanceId)
+        let home = try XCTUnwrap(coordinator.defaultInstanceId)
+        try replyToBotCapabilities(on: home)
         let next = try XCTUnwrap(coordinator.hosts.ordered.first { $0.instanceId != home }).instanceId
-        func reads() -> Int { responder.requests(instanceId: home).filter { $0 == "GET /bot-capabilities" }.count }
-        await assertSettles({ reads() > 0 }, timeout: 15)
-        let before = reads()
+        let tools = AidenBotChatToolsModel(
+            chatID: "chat_bot_scout",
+            botID: "bot_scout",
+            machine: home,
+            cache: AidenBotCache(root: botStoreRoot())
+        )
+        await tools.load(coordinator: coordinator)
+        XCTAssertNotNil(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true))
 
         coordinator.setDefaultMachine(next)
-        await settle()
-        coordinator.setDefaultMachine(home)
 
-        await assertSettles({ reads() > before }, timeout: 5)
+        let grant = try XCTUnwrap(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true))
+        XCTAssertEqual(grant.context.instanceId, home)
+        XCTAssertTrue(grant.allowsWrites)
+        XCTAssertFalse(responder.requests(instanceId: next).contains("GET /bot-capabilities"))
     }
 
     func testAMovedBotOffersNoAdvancedUntilItCanReachIt() {

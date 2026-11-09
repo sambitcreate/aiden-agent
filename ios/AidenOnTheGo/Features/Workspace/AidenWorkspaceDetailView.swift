@@ -3,6 +3,9 @@ import SwiftUI
 struct AidenWorkspaceDetailView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
+    /// The workspace's own machine. Its settings write the selected machine, so
+    /// they're offered only there.
+    let owner: AidenRemoteRequestContext?
     let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
@@ -11,6 +14,7 @@ struct AidenWorkspaceDetailView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
+        owner: AidenRemoteRequestContext? = nil,
         onRemoved: @escaping () -> Void,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
@@ -18,6 +22,7 @@ struct AidenWorkspaceDetailView: View {
     ) {
         self.coordinator = coordinator
         self.workspace = workspace
+        self.owner = owner
         self.onRemoved = onRemoved
         self.onChatUpdated = onChatUpdated
         self.onChatRemoved = onChatRemoved
@@ -26,10 +31,16 @@ struct AidenWorkspaceDetailView: View {
 
     @State private var isShowingSettings = false
 
+    /// Workspace Settings reads and writes the selected machine.
+    private var offersSettings: Bool {
+        owner.map { $0.instanceId == coordinator.defaultInstanceId } ?? true
+    }
+
     var body: some View {
         AidenWorkspaceChatsView(
             coordinator: coordinator,
             workspace: workspace,
+            owner: owner,
             onChatUpdated: onChatUpdated,
             onChatRemoved: onChatRemoved,
             onChatActivityChanged: onChatActivityChanged
@@ -37,17 +48,19 @@ struct AidenWorkspaceDetailView: View {
         .navigationTitle(workspace.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        isShowingSettings = true
+            if offersSettings {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button {
+                            isShowingSettings = true
+                        } label: {
+                            Label("Workspace Settings", systemImage: "gearshape")
+                        }
                     } label: {
-                        Label("Workspace Settings", systemImage: "gearshape")
+                        Image(systemName: AidenChromeSymbols.overflowMenu)
                     }
-                } label: {
-                    Image(systemName: AidenChromeSymbols.overflowMenu)
+                    .accessibilityLabel("Workspace menu")
                 }
-                .accessibilityLabel("Workspace menu")
             }
         }
         .sheet(isPresented: $isShowingSettings) {

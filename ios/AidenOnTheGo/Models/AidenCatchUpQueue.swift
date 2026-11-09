@@ -1,7 +1,8 @@
 import Foundation
 
 /// The chats Catch Up walks: the rows that need the person on machines that are
-/// online, in the Inbox's order, across every machine.
+/// online, in the Inbox's order, across every machine. A Bot that needs the
+/// person is one of them, and opens as the Bot.
 ///
 /// Rows change under a run, so build one from the store at each step and don't
 /// keep it. A chat answered elsewhere, or on a machine that has dropped, is then
@@ -10,10 +11,17 @@ struct AidenCatchUpQueue: Equatable {
     private let ids: [AidenHostObjectID]
     /// Rows that need the person and can't be opened yet.
     private let offline: Set<AidenHostObjectID>
+    private let bots: Set<AidenHostObjectID>
 
     init(rows: [AidenUnifiedInboxRow]) {
         ids = rows.filter(\.isOnline).map(\.id)
         offline = Set(rows.filter { !$0.isOnline }.map(\.id))
+        bots = Set(rows.filter { $0.isOnline && $0.isBot }.map(\.id))
+    }
+
+    /// Where the queue's `id` opens: its chat, or its Bot.
+    func route(for id: AidenHostObjectID) -> AidenAppRoute {
+        bots.contains(id) ? .bot(id) : .chat(id)
     }
 
     var first: AidenHostObjectID? { ids.first }

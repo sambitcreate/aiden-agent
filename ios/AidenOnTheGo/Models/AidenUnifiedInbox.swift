@@ -16,6 +16,36 @@ struct AidenHostInboxSnapshot: Equatable, Sendable {
     /// What this machine takes from a row's swipes (`AidenInbox.rowOffer`).
     var supportsReadState = false
     var supportsTriage = false
+    /// The machine's Bots as `GET /bots` last listed them. Empty for a machine
+    /// that hasn't granted this phone `bot:read`, which is never asked.
+    var bots: [AidenBotSummary] = []
+}
+
+/// When a Bot is the Inbox's business (spec, decision 2). Bot triage doesn't
+/// exist, so a Bot is listed only while it needs the person, and shown in the
+/// accessory while it runs.
+enum AidenBotAttention {
+    /// Open "Needs you" cards, or a session that stopped and waits on the person.
+    static func needsYou(_ bot: AidenBotSummary) -> Bool {
+        (bot.issueCount ?? 0) > 0 || bot.sessionState == .interrupted || bot.sessionState == .needsModel
+    }
+
+    static func isRunning(_ bot: AidenBotSummary) -> Bool {
+        bot.sessionState == .running
+    }
+
+    /// What a Bot's row says about it. Nil for a Bot that's none of the Inbox's business.
+    static func reason(_ bot: AidenBotSummary) -> String? {
+        if let issues = bot.issueCount, issues > 0 {
+            return issues == 1 ? String(localized: "1 thing needs you") : String(localized: "\(issues) things need you")
+        }
+        switch bot.sessionState {
+        case .interrupted: return String(localized: "Interrupted")
+        case .needsModel: return String(localized: "Needs an AI model")
+        case .running: return String(localized: "Working")
+        default: return nil
+        }
+    }
 }
 
 /// Which machines the Inbox lists. `machine` carries an `instanceId`.
@@ -26,6 +56,8 @@ enum AidenMachineFilter: Hashable, Codable, Sendable {
 
 enum AidenUnifiedInboxRowContent: Equatable {
     case chat(AidenChatSummary, AidenInboxPlacement)
+    /// Opens the Bot, and offers nothing else: there's no Bot triage.
+    case bot(AidenBotSummary)
 }
 
 struct AidenUnifiedInboxRow: Identifiable, Equatable {
@@ -39,6 +71,16 @@ struct AidenUnifiedInboxRow: Identifiable, Equatable {
     let workspaceName: String?
     /// What this row's swipes offer, on its own machine.
     let offer: AidenInboxRowOffer
+
+    var isBot: Bool {
+        if case .bot = content { return true }
+        return false
+    }
+
+    /// Where tapping the row goes: a chat, or the Bot itself.
+    var route: AidenAppRoute {
+        isBot ? .bot(id) : .chat(id)
+    }
 }
 
 /// Every machine's chats merged into the Inbox sections (spec, "Inbox").
@@ -113,10 +155,12 @@ struct AidenUnifiedInbox: Equatable {
                 )
             }
             let projection = project(searchText: searchText)
+            let botsNeedingYou = Self.unique(snapshot.bots.filter(AidenBotAttention.needsYou))
             if snapshot.isOnline {
                 // Distinct chats, to agree with the deduped rows.
                 let counted = searching ? project(searchText: "") : projection
                 inbox.needsYouCount += Set(counted.needsYou.map(\.id)).count
+                inbox.needsYouCount += botsNeedingYou.count
             }
             guard listed else { continue }
 
@@ -154,6 +198,36 @@ struct AidenUnifiedInbox: Equatable {
                 pinned += entries(projection.working.filter { $0.summary.inbox.pinnedAt != nil }, isPinned: true)
                 updates += entries(projection.working.filter { $0.summary.inbox.pinnedAt == nil })
             }
+
+            // Bots after chats, so a chat keeps its row if a Bot shares its id.
+            // No Bot has a placement, so each sorts by `updatedAt` among the rows
+            // of its section. A Bot's run can't be seen on a machine that's gone,
+            // so an offline machine's running Bots are left out.
+            func botEntries(_ bots: [AidenBotSummary]) -> [Entry] {
+                bots.compactMap { bot in
+                    if searching, !bot.name.localizedCaseInsensitiveContains(searchText.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        return nil
+                    }
+                    let id = AidenHostObjectID(instanceId: snapshot.instanceId, deviceId: snapshot.deviceId, objectId: bot.id)
+                    guard seenRows.insert(id).inserted else { return nil }
+                    return Entry(
+                        row: AidenUnifiedInboxRow(
+                            id: id,
+                            content: .bot(bot),
+                            isOnline: snapshot.isOnline,
+                            isPinned: false,
+                            workspaceName: nil,
+                            offer: AidenInboxRowOffer(markRead: false, done: false, snooze: false, alsoMarkRead: false)
+                        ),
+                        tier: AidenInbox.Tier.input,
+                        sortAt: bot.updatedAt
+                    )
+                }
+            }
+            needsYou += botEntries(botsNeedingYou)
+            if snapshot.isOnline {
+                running += botEntries(Self.unique(snapshot.bots.filter { AidenBotAttention.isRunning($0) && !AidenBotAttention.needsYou($0) }))
+            }
         }
 
         needsYou.sort { left, right in
@@ -177,6 +251,12 @@ struct AidenUnifiedInbox: Equatable {
             inbox.earlierOverflow = capped.overflow
         }
         return inbox
+    }
+
+    /// One Bot per id, the first listed.
+    private static func unique(_ bots: [AidenBotSummary]) -> [AidenBotSummary] {
+        var seen = Set<String>()
+        return bots.filter { seen.insert($0.id).inserted }
     }
 
     private struct HostKey: Hashable {

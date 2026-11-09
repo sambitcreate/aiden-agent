@@ -23,11 +23,10 @@ struct AidenBotChatToolsSessionIdentity: Equatable {
     /// this alone. Nil follows the selected machine.
     @MainActor
     init(coordinator: AidenRemoteCoordinator, owner: String? = nil) {
-        let host = owner.flatMap { coordinator.hosts.connection(for: $0) }
-        let installation = owner == nil ? coordinator.installationStore.activeInstallation : host?.installation
+        let installation = coordinator.botInstallation(on: owner)
         instanceID = installation?.id
         deviceID = installation?.deviceId
-        switch owner == nil ? coordinator.connectionState : host?.connectionState ?? .needsPairing {
+        switch coordinator.botConnectionState(on: owner) {
         case .needsPairing: connection = "needs-pairing"
         case .connecting: connection = "connecting"
         case .connected: connection = "connected"
@@ -73,6 +72,8 @@ struct AidenBotConversationFileGrant: Equatable {
 final class AidenBotChatToolsModel {
     let chatID: String
     let botID: String
+    /// The Bot's own machine, which these tools read and write; nil follows the selected one.
+    let machine: String?
     var bot: AidenBotDetail?
     var catalog: AidenBotCapabilityCatalog?
     var isLoading = false
@@ -82,9 +83,10 @@ final class AidenBotChatToolsModel {
     private var loadToken: UUID?
     private let cache: AidenBotCache
 
-    init(chatID: String, botID: String, cache: AidenBotCache = .shared) {
+    init(chatID: String, botID: String, machine: String? = nil, cache: AidenBotCache = .shared) {
         self.chatID = chatID
         self.botID = botID
+        self.machine = machine
         self.cache = cache
     }
 
@@ -106,9 +108,9 @@ final class AidenBotChatToolsModel {
             catalogRevision: catalog.revision,
             allowsWrites: hostAllowsMutations
                 && bot.health == .ready
-                && coordinator.connectionState == .connected
-                && coordinator.installationStore.activeInstallation?.canWriteBots == true
-                && coordinator.isCurrent(identity.context)
+                && coordinator.botConnectionState(on: machine) == .connected
+                && coordinator.botInstallation(on: machine)?.canWriteBots == true
+                && coordinator.holds(identity.context)
         )
     }
 
@@ -120,7 +122,7 @@ final class AidenBotChatToolsModel {
         hostAllowsMutations: Bool
     ) -> AidenBotConversationFileGrant? {
         guard let grant = fileGrant(coordinator: coordinator, hostAllowsMutations: hostAllowsMutations),
-              coordinator.isCurrent(grant.context) else { return nil }
+              coordinator.holds(grant.context) else { return nil }
         return grant
     }
 
@@ -133,24 +135,24 @@ final class AidenBotChatToolsModel {
         defer {
             if loadToken == token { isLoading = false }
         }
-        if let installation = coordinator.installationStore.activeInstallation,
+        if let installation = coordinator.botInstallation(on: machine),
            let cached = await cache.load(
                instanceId: installation.id,
                deviceId: installation.deviceId
            ), loadToken == token,
-           coordinator.installationStore.activeInstallation?.id == installation.id,
-           coordinator.installationStore.activeInstallation?.deviceId == installation.deviceId {
+           coordinator.botInstallation(on: machine)?.id == installation.id,
+           coordinator.botInstallation(on: machine)?.deviceId == installation.deviceId {
             bot = cached.details.first(where: { $0.id == botID })
             catalog = cached.catalog(forBotID: botID)
         }
         do {
-            let context = try coordinator.requestContext()
+            let context = try coordinator.botContext(on: machine)
             capturedContext = context
             let client = try coordinator.remoteClient(for: context)
             async let botRequest = client.bot(id: botID)
             async let catalogRequest = client.botCapabilityCatalog(botId: botID)
             let (loadedBot, loadedCatalog) = try await (botRequest, catalogRequest)
-            guard loadToken == token, coordinator.isCurrent(context), loadedBot.id == botID else {
+            guard loadToken == token, coordinator.holds(context), loadedBot.id == botID else {
                 throw AidenRemoteClientError.invalidResponse
             }
             let retained = await coordinator.withRetainedInstallationData(for: context) {
@@ -167,7 +169,7 @@ final class AidenBotChatToolsModel {
                     deviceId: context.deviceId
                 )
             }
-            guard retained, loadToken == token, coordinator.isCurrent(context) else {
+            guard retained, loadToken == token, coordinator.holds(context) else {
                 throw CancellationError()
             }
             loadIdentity = AidenBotChatToolsLoadIdentity(context: context, botID: botID)
@@ -182,7 +184,7 @@ final class AidenBotChatToolsModel {
                 return
             }
             guard loadToken == token,
-                  capturedContext.map(coordinator.isCurrent) ?? true else { return }
+                  capturedContext.map(coordinator.holds) ?? true else { return }
             loadIdentity = nil
             errorMessage = error.localizedDescription
         }
@@ -191,7 +193,7 @@ final class AidenBotChatToolsModel {
     func refresh(coordinator: AidenRemoteCoordinator) async -> Bool {
         await load(coordinator: coordinator)
         guard let identity = loadIdentity else { return false }
-        return coordinator.isCurrent(identity.context)
+        return coordinator.holds(identity.context)
     }
 
     func resetForSessionChange() {
@@ -222,8 +224,11 @@ final class AidenBotConversationFilesModel {
 
     init(grant: AidenBotConversationFileGrant) { self.grant = grant }
 
+    /// The machine the grant was made on: its own for an owner context.
+    var machine: String? { AidenRemoteCoordinator.botMachine(of: grant.context) }
+
     func load(coordinator: AidenRemoteCoordinator) async {
-        guard !isLoading, coordinator.isCurrent(grant.context) else { return }
+        guard !isLoading, coordinator.holds(grant.context) else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -233,7 +238,7 @@ final class AidenBotConversationFilesModel {
             async let catalogRequest = client.botCapabilityCatalog(botId: grant.botID)
             async let filesRequest = client.botConversationFiles(chatId: grant.chatID)
             let (bot, catalog, files) = try await (botRequest, catalogRequest, filesRequest)
-            guard coordinator.isCurrent(grant.context),
+            guard coordinator.holds(grant.context),
                   bot.id == grant.botID,
                   bot.access.revision == grant.botPolicyRevision,
                   catalog.revision == grant.catalogRevision,
@@ -249,13 +254,13 @@ final class AidenBotConversationFilesModel {
     }
 
     func open(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async -> Bool {
-        guard entry.kind == .file, coordinator.isCurrent(grant.context) else { return false }
+        guard entry.kind == .file, coordinator.holds(grant.context) else { return false }
         errorMessage = nil
         do {
             let client = try coordinator.remoteClient(for: grant.context)
             try await validateAccess(client: client, coordinator: coordinator, requiresWrite: false)
             let value = try await client.botConversationFile(chatId: grant.chatID, fileId: entry.id)
-            guard coordinator.isCurrent(grant.context), index?.entries.contains(entry) == true else { return false }
+            guard coordinator.holds(grant.context), index?.entries.contains(entry) == true else { return false }
             document = value
             draft = value.content
             return true
@@ -268,8 +273,8 @@ final class AidenBotConversationFilesModel {
     }
 
     func save(coordinator: AidenRemoteCoordinator) async -> Bool {
-        guard grant.allowsWrites, coordinator.connectionState == .connected,
-              coordinator.isCurrent(grant.context), !isSaving, let document else { return false }
+        guard grant.allowsWrites, coordinator.botConnectionState(on: machine) == .connected,
+              coordinator.holds(grant.context), !isSaving, let document else { return false }
         isSaving = true
         errorMessage = nil
         defer { isSaving = false }
@@ -282,7 +287,7 @@ final class AidenBotConversationFilesModel {
                 content: draft,
                 expectedVersion: document.version
             )
-            guard coordinator.isCurrent(grant.context), self.document?.version == document.version else { return false }
+            guard coordinator.holds(grant.context), self.document?.version == document.version else { return false }
             self.document = saved
             draft = saved.content
             return true
@@ -308,7 +313,7 @@ final class AidenBotConversationFilesModel {
         async let botRequest = client.bot(id: grant.botID)
         async let catalogRequest = client.botCapabilityCatalog(botId: grant.botID)
         let (bot, catalog) = try await (botRequest, catalogRequest)
-        guard coordinator.isCurrent(grant.context),
+        guard coordinator.holds(grant.context),
               bot.id == grant.botID,
               bot.access.revision == grant.botPolicyRevision,
               catalog.revision == grant.catalogRevision,
@@ -325,7 +330,7 @@ final class AidenBotConversationFilesModel {
             draft = ""
             return
         }
-        guard coordinator.isCurrent(grant.context) else { return }
+        guard coordinator.holds(grant.context) else { return }
         if case AidenRemoteClientError.server(_, let body) = error,
            body.code.rawValue == "revision_conflict" {
             errorMessage = "This file changed on your Mac. Reload it before saving again."
@@ -387,7 +392,7 @@ struct AidenBotConversationFilesView: View {
 
     private var fileList: some View {
         List {
-            if coordinator.connectionState != .connected {
+            if coordinator.botConnectionState(on: model.machine) != .connected {
                 Section {
                     Label("Offline — reconnect to view files.", systemImage: "wifi.slash")
                         .foregroundStyle(palette.secondary)
@@ -404,7 +409,7 @@ struct AidenBotConversationFilesView: View {
                 } else {
                     ForEach(entries) { entry in
                         fileRow(entry)
-                        .disabled(entry.kind != .file || coordinator.connectionState != .connected)
+                        .disabled(entry.kind != .file || coordinator.botConnectionState(on: model.machine) != .connected)
                     }
                 }
             }
@@ -512,7 +517,7 @@ private struct AidenBotConversationFileEditorView: View {
                             .padding()
                             .frame(maxWidth: .infinity)
                             .background(.regularMaterial)
-                    } else if coordinator.connectionState != .connected {
+                    } else if coordinator.botConnectionState(on: model.machine) != .connected {
                         Label("Offline — reconnect to save changes.", systemImage: "wifi.slash")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -545,7 +550,7 @@ private struct AidenBotConversationFileEditorView: View {
                             Task { _ = await model.save(coordinator: coordinator) }
                         }
                         .disabled(!isDirty || model.isSaving || !model.grant.allowsWrites
-                            || coordinator.connectionState != .connected)
+                            || coordinator.botConnectionState(on: model.machine) != .connected)
                     }
                 }
         }

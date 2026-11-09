@@ -6,12 +6,13 @@ struct AidenBotCustomAccessSessionIdentity: Equatable {
     let connection: String
     let capabilityRevision: String
 
+    /// `machine` is the Bot's own machine; nil follows the selected one.
     @MainActor
-    init(coordinator: AidenRemoteCoordinator) {
-        let installation = coordinator.installationStore.activeInstallation
+    init(coordinator: AidenRemoteCoordinator, machine: String? = nil) {
+        let installation = coordinator.botInstallation(on: machine)
         instanceID = installation?.id
         deviceID = installation?.deviceId
-        switch coordinator.connectionState {
+        switch coordinator.botConnectionState(on: machine) {
         case .needsPairing: connection = "needs-pairing"
         case .connecting: connection = "connecting"
         case .connected: connection = "connected"

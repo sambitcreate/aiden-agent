@@ -1795,5 +1795,78 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         XCTAssertEqual(model.chats.map(\.id), ["mine"])
         XCTAssertEqual(polls("studio"), 0)
     }
+
+    // MARK: Bots
+
+    /// `GET /bots` with one Bot holding an open "Needs you" card.
+    private func serveBotWithCards(_ botID: String, on instanceId: String) {
+        let stamp = timestamp(now.addingTimeInterval(-600))
+        let bot: [String: Any] = [
+            "id": botID, "name": botID, "purpose": "",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
+            "health": "ready", "sessionState": "idle", "issueCount": 1,
+            "createdAt": stamp, "updatedAt": stamp, "revision": "bot_revision_1",
+        ]
+        responder.reply(
+            instanceId: instanceId,
+            path: "/bots",
+            status: 200,
+            json: try! JSONSerialization.data(withJSONObject: ["bots": [bot], "maxBots": 256])
+        )
+    }
+
+    private func botReads(_ instanceId: String) -> Int {
+        responder.requests(instanceId: instanceId).filter { $0 == "GET /bots" }.count
+    }
+
+    func testMachinesWithoutBotReadAreNotAskedForBots() async throws {
+        var withoutBots = AidenDemoHosts.installation(instanceId: "laptop", name: "laptop")
+        withoutBots.deviceCapabilities.removeAll { $0 == .botRead || $0 == .botWrite }
+        let coordinator = AidenDemoHosts.coordinator(
+            installations: [AidenDemoHosts.installation(instanceId: "studio", name: "studio"), withoutBots],
+            responder: responder
+        )
+        serveBotWithCards("bot_cards", on: "studio")
+        serveBotWithCards("bot_cards", on: "laptop")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+
+        await startAndSettle(store, machines: 2)
+
+        XCTAssertEqual(botReads("studio"), 1)
+        XCTAssertEqual(botReads("laptop"), 0)
+        XCTAssertEqual(store.snapshots["studio"]?.bots.map(\.id), ["bot_cards"])
+        XCTAssertEqual(store.snapshots["laptop"]?.bots, [])
+        let chatsNeedingYou = store.inbox.needsYou.filter { !$0.isBot }.count
+        XCTAssertEqual(store.inbox.needsYou.filter(\.isBot).map { "\($0.id.instanceId):\($0.id.objectId)" }, ["studio:bot_cards"])
+        XCTAssertEqual(store.needsYouCount, chatsNeedingYou + 1)
+        // Each poll asks again, so a Bot that's dealt with leaves.
+        responder.reply(instanceId: "studio", path: "/bots", status: 200, json: Data(#"{"bots":[],"maxBots":256}"#.utf8))
+        await store.refreshAll()
+        XCTAssertEqual(botReads("studio"), 2)
+        XCTAssertEqual(botReads("laptop"), 0)
+        XCTAssertFalse(store.inbox.needsYou.contains(where: \.isBot))
+        XCTAssertEqual(store.needsYouCount, chatsNeedingYou)
+        store.stop()
+    }
+
+    func testABotReadThatFailsKeepsTheBotsLastSeenAndTheChats() async throws {
+        let coordinator = coordinator("studio")
+        serveBotWithCards("bot_cards", on: "studio")
+        serve([row("chat", age: 3, needsYou: true)], on: "studio")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        XCTAssertEqual(store.needsYouCount, 2)
+
+        responder.reply(instanceId: "studio", path: "/bots", status: 500, json: serverErrorJSON)
+        await store.refreshAll()
+
+        XCTAssertEqual(store.snapshots["studio"]?.bots.map(\.id), ["bot_cards"])
+        XCTAssertEqual(store.needsYouCount, 2)
+        XCTAssertFalse(store.refreshFailed)
+        XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .connected)
+        store.stop()
+    }
 }
 #endif

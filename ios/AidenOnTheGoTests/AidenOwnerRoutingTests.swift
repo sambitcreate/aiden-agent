@@ -225,6 +225,81 @@ final class AidenOwnerRoutingTests: XCTestCase {
         return store
     }
 
+    // MARK: Workspaces
+
+    /// Each machine has a workspace called `"default"`, with chats of its own.
+    private func serveDefaultWorkspaces() {
+        for (instanceId, name) in [("studio", "Studio project"), ("laptop", "Laptop project")] {
+            listWorkspaces([workspaceObject("default", name: name)], on: instanceId)
+            responder.reply(
+                instanceId: instanceId,
+                path: "/chats",
+                status: 200,
+                json: json(["chats": [chatObject("\(instanceId)-chat", text: "Hi from \(instanceId)", workspace: "default")]])
+            )
+        }
+    }
+
+    func testADefaultWorkspaceOpensOnItsOwnMachine() async throws {
+        serveDefaultWorkspaces()
+        try await coordinator.hosts.connection(for: "laptop")?.refreshWorkspacesForPoll()
+        let model = AidenWorkspaceChatsModel(
+            coordinator: coordinator,
+            owner: try coordinator.ownerContext(for: "laptop"),
+            workspaceId: "default",
+            cache: cache
+        )
+
+        await model.load()
+
+        XCTAssertEqual(model.chats.map(\.id), ["laptop-chat"])
+        XCTAssertTrue(requests("laptop").contains("GET /chats"))
+        XCTAssertFalse(requests("studio").contains("GET /chats"))
+        XCTAssertTrue(model.isConnected)
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+        // The selected machine's namesake is its own.
+        let selected = AidenWorkspaceChatsModel(coordinator: coordinator, workspaceId: "default", cache: cache)
+        await selected.load()
+        XCTAssertEqual(selected.chats.map(\.id), ["studio-chat"])
+    }
+
+    func testAWorkspaceOnAMachineThatLeftReadsNothing() async throws {
+        serveDefaultWorkspaces()
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let model = AidenWorkspaceChatsModel(coordinator: coordinator, owner: owner, workspaceId: "default", cache: cache)
+        await coordinator.removeInstallation("laptop")
+
+        await model.load()
+
+        XCTAssertTrue(model.chats.isEmpty)
+        XCTAssertFalse(requests("laptop").contains("GET /chats"))
+        XCTAssertFalse(requests("studio").contains("GET /chats"))
+    }
+
+    // MARK: Bots
+
+    func testABotsDeleteGoesToItsOwnMachine() async throws {
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/bots/bot_scout", status: 204, json: Data())
+        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: "laptop"))
+
+        try await AidenBotDeletion.deleteListed(botID: "bot_scout", coordinator: coordinator, machine: "laptop")
+
+        XCTAssertTrue(requests("laptop").contains("DELETE /bots/bot_scout"))
+        XCTAssertFalse(requests("studio").contains { $0.hasPrefix("DELETE /bots") || $0 == "GET /bots/bot_scout" })
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
+    func testABotsToolsReadItsOwnMachine() async throws {
+        let tools = AidenBotChatToolsModel(chatID: "chat_bot_scout", botID: "bot_scout", machine: "laptop")
+
+        await tools.load(coordinator: coordinator)
+
+        XCTAssertTrue(requests("laptop").contains("GET /bots/bot_scout"))
+        XCTAssertFalse(requests("studio").contains("GET /bots/bot_scout"))
+        XCTAssertFalse(requests("studio").contains("GET /bot-capabilities"))
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
     // MARK: Opening
 
     func testOpeningAChatDoesNotChangeTheDefaultMachine() async throws {

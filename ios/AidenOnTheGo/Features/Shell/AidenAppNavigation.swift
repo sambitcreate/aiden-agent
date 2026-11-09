@@ -319,7 +319,7 @@ final class AidenAppNavigation {
             return nil
         }
         catchUp = AidenCatchUpRun(startingAt: first)
-        open(.chat(first))
+        openInInbox(queue.route(for: first))
         return first
     }
 
@@ -337,13 +337,21 @@ final class AidenAppNavigation {
             open(.catchUpFinished(run.ending(in: queue)))
             return nil
         }
-        open(.chat(next))
+        openInInbox(queue.route(for: next))
         catchUp = run
         return next
     }
 
     private func endCatchUpIfLeft() {
-        if let catchUp, inboxPath.last != .chat(catchUp.current) { self.catchUp = nil }
+        guard let catchUp else { return }
+        if inboxPath.last != .chat(catchUp.current), inboxPath.last != .bot(catchUp.current) { self.catchUp = nil }
+    }
+
+    /// A Catch Up step stays on the Inbox, Bot or not, so Back leads to the Inbox.
+    private func openInInbox(_ route: AidenAppRoute) {
+        chatStartingVoice = nil
+        tab = .inbox
+        Self.show(route, on: &inboxPath)
     }
 
     func finishStartingVoice(_ id: AidenHostObjectID) {

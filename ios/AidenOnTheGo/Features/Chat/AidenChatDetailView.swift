@@ -116,7 +116,7 @@ struct AidenChatDetailView: View {
             initialValue: composerSession ?? AidenComposerSession(draftOwner: model, attachmentOwner: model)
         )
         _botToolsModel = State(initialValue: chat.botId.map {
-            AidenBotChatToolsModel(chatID: chat.id, botID: $0)
+            AidenBotChatToolsModel(chatID: chat.id, botID: $0, machine: owner?.instanceId)
         })
         self.autoStartVoice = autoStartVoice
         self.allowsMutations = allowsMutations
@@ -815,7 +815,8 @@ struct AidenChatDetailView: View {
             return .botChat(
                 title: botToolsModel.bot?.name ?? model.chat.title,
                 hasFiles: botToolsModel.fileGrant(coordinator: coordinator, hostAllowsMutations: effectiveAllowsMutations) != nil,
-                canDelete: AidenBotDeletion.isAvailable(coordinator: coordinator) && botToolsModel.bot != nil,
+                canDelete: AidenBotDeletion.isAvailable(coordinator: coordinator, machine: pinnedOwner)
+                    && botToolsModel.bot != nil,
                 canReadAloud: canReadAloud,
                 isReadingAloud: isReadingAloud
             )
@@ -876,6 +877,7 @@ struct AidenChatDetailView: View {
                 if let bot = botModel.bot {
                     AidenBotCanonicalAvatarView(
                         coordinator: coordinator,
+                        machine: pinnedOwner,
                         botID: bot.id,
                         avatar: bot.avatar,
                         name: bot.name,
@@ -909,6 +911,7 @@ struct AidenChatDetailView: View {
             case .profile(let bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
+                    machine: pinnedOwner,
                     initialSummary: bot,
                     onChanged: {
                         Task { await botToolsModel.load(coordinator: coordinator) }
@@ -950,7 +953,12 @@ struct AidenChatDetailView: View {
         guard let coordinator, let bot = botToolsModel?.bot else { return }
         Task {
             do {
-                try await AidenBotDeletion.delete(botID: bot.id, revision: bot.revision, coordinator: coordinator)
+                try await AidenBotDeletion.delete(
+                    botID: bot.id,
+                    revision: bot.revision,
+                    coordinator: coordinator,
+                    machine: pinnedOwner
+                )
                 dismissChat()
             } catch is CancellationError {
                 return

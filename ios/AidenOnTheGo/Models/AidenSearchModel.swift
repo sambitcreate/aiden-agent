@@ -15,10 +15,6 @@ struct AidenSearchBotHit: Identifiable, Equatable, Sendable {
     var route: AidenAppRoute { .bot(botID) }
 }
 
-extension AidenUnifiedInboxRow {
-    var route: AidenAppRoute { .chat(id) }
-}
-
 /// What chat search reads: the same input the Inbox merges, from the Inbox store
 /// (`init(store:)`).
 struct AidenSearchChatInput {
@@ -133,7 +129,8 @@ final class AidenSearchModel {
             showAllEarlier: true
         )
         // Running chats are in no list of the Inbox, but a search must find them.
-        return inbox.needsYou + inbox.running + inbox.updates + inbox.earlier
+        // Bots are found by their own search, not as chats.
+        return (inbox.needsYou + inbox.running + inbox.updates + inbox.earlier).filter { !$0.isBot }
     }
 
     /// What a chat row says about where it lives. Built once for a render, not

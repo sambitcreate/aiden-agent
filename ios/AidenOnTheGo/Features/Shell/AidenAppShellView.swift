@@ -81,7 +81,7 @@ struct AidenAppShellView: View {
                     AidenInboxTabRootView(
                         store: inboxStore,
                         runningHome: runningHome,
-                        onOpen: openChat,
+                        onOpen: openRow,
                         onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
                         onShowRunning: { showsRunningChats = true }
                     )
@@ -125,12 +125,12 @@ struct AidenAppShellView: View {
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && navigation.openChat == nil
         ) {
-            AidenRunningAccessoryHost(store: inboxStore, onOpen: openChat) { showsRunningChats = true }
+            AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { showsRunningChats = true }
         }
         .sheet(isPresented: $showsRunningChats) {
-            AidenRunningChatsSheet(store: inboxStore) { id in
+            AidenRunningChatsSheet(store: inboxStore) { route in
                 showsRunningChats = false
-                openChat(id)
+                openRow(route)
             }
         }
         .alert(
@@ -217,6 +217,12 @@ struct AidenAppShellView: View {
     private func openChat(_ id: AidenHostObjectID) {
         markViewed(id)
         navigation.open(.chat(id))
+    }
+
+    /// An Inbox row: its chat, or its Bot.
+    private func openRow(_ route: AidenAppRoute) {
+        if case .chat(let id) = route { markViewed(id) }
+        navigation.open(route)
     }
 
     private func nextInCatchUp() {
