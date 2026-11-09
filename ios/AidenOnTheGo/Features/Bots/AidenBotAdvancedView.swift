@@ -85,7 +85,7 @@ func aidenBotAdvancedSave(
 struct AidenBotAdvancedView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     /// The Bot's own machine, which Advanced reads and writes; nil follows the selected one.
-    var machine: String? = nil
+    let machine: String?
     let botID: String
     var onSaved: (AidenBotDetail) -> Void = { _ in }
     /// A Save that didn't reach the Mac, after Advanced closed: the screen behind says so.
@@ -1405,29 +1405,72 @@ struct AidenBotChatActivityPreviewView: View {
     }
 }
 
-/// Shared across the list and Advanced for the active, authenticated connection.
+/// Bot messaging, one state for each paired machine. The Bots list and every
+/// Advanced page share it, whatever machine they're on: a page reads and writes
+/// its own machine's state, so one machine's read or save never blanks or drops
+/// another's. A selected and an owner context for the same pairing share state;
+/// a new pairing of the machine starts over.
 @MainActor
 @Observable
 final class AidenBotMessagingModel {
-    private var context: AidenRemoteRequestContext?
-    private(set) var settings: AidenBotMessagingSettings?
-    private(set) var isSaving = false
-    private(set) var generation = 0
-    private(set) var error: String?
+    private struct Pairing: Hashable {
+        let instanceId: String
+        let deviceId: String
+        let hostGeneration: Int
+
+        init(_ context: AidenRemoteRequestContext) {
+            instanceId = context.instanceId
+            deviceId = context.deviceId
+            hostGeneration = context.hostGeneration
+        }
+    }
+
+    private struct MachineState {
+        let pairing: Pairing
+        var settings: AidenBotMessagingSettings?
+        var isSaving = false
+        var generation = 0
+        var error: String?
+    }
+
+    /// Keyed by machine, so a new pairing replaces the old one's state.
+    private var machines: [String: MachineState] = [:]
+
+    private func state(for context: AidenRemoteRequestContext?) -> MachineState? {
+        guard let context, let state = machines[context.instanceId],
+              state.pairing == Pairing(context) else { return nil }
+        return state
+    }
 
     func value(for context: AidenRemoteRequestContext?) -> AidenBotMessagingSettings? {
-        self.context == context ? settings : nil
+        state(for: context)?.settings
+    }
+
+    func isSaving(for context: AidenRemoteRequestContext?) -> Bool {
+        state(for: context)?.isSaving == true
+    }
+
+    func error(for context: AidenRemoteRequestContext?) -> String? {
+        state(for: context)?.error
+    }
+
+    /// Taken before a read, so a read that started before a save can't replace its result.
+    func generation(for context: AidenRemoteRequestContext?) -> Int {
+        state(for: context)?.generation ?? 0
     }
 
     func adopt(_ value: AidenBotMessagingSettings?, context: AidenRemoteRequestContext, generation: Int? = nil) {
-        if let generation, generation != self.generation { return }
-        if self.context != context {
-            self.context = context
-            self.generation += 1
-            isSaving = false
-            error = nil
-        } else if isSaving { return }
-        settings = value
+        guard var state = state(for: context) else {
+            // A machine read for the first time, or paired again.
+            let previous = machines[context.instanceId]?.generation ?? 0
+            if let generation, generation != 0, generation != previous { return }
+            machines[context.instanceId] = MachineState(pairing: Pairing(context), settings: value, generation: previous &+ 1)
+            return
+        }
+        if let generation, generation != state.generation { return }
+        if state.isSaving { return }
+        state.settings = value
+        machines[context.instanceId] = state
     }
 
     func save(
@@ -1437,24 +1480,31 @@ final class AidenBotMessagingModel {
         read: @escaping @MainActor () async throws -> AidenBotMessagingSettings?,
         isCurrent: @MainActor () -> Bool
     ) async {
-        guard self.context == context, let previous = settings, !isSaving, isCurrent() else { return }
-        isSaving = true
-        generation += 1
-        error = nil
-        settings = AidenBotMessagingSettings(enabled: enabled)
+        guard var state = state(for: context), let previous = state.settings, !state.isSaving, isCurrent() else { return }
+        state.isSaving = true
+        state.generation &+= 1
+        state.error = nil
+        state.settings = AidenBotMessagingSettings(enabled: enabled)
+        machines[context.instanceId] = state
+        var result: AidenBotMessagingSettings
+        var failure: String?
         do {
             let call = AidenBotMainActorCall(send)
-            let saved = try await aidenBotWithin(.seconds(12)) { try await call.call() }
-            guard self.context == context, isCurrent() else { return }
-            settings = saved
+            result = try await aidenBotWithin(.seconds(12)) { try await call.call() }
         } catch {
             let call = AidenBotMainActorCall(read)
             let authoritative = try? await aidenBotWithin(.seconds(12)) { try await call.call() }
-            guard self.context == context, isCurrent() else { return }
-            settings = authoritative ?? previous
-            if authoritative?.enabled != enabled { self.error = AidenBotIdentitySaver.failedMessage }
+            result = authoritative ?? previous
+            if authoritative?.enabled != enabled { failure = AidenBotIdentitySaver.failedMessage }
         }
-        if self.context == context { isSaving = false }
+        // The machine may have been paired again while the save was out.
+        guard var current = self.state(for: context) else { return }
+        current.isSaving = false
+        if isCurrent() {
+            current.settings = result
+            current.error = failure
+        }
+        machines[context.instanceId] = current
     }
 }
 
@@ -1464,7 +1514,7 @@ func aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings?, canW
 
 struct AidenBotMessagingSection: View {
     @Bindable var coordinator: AidenRemoteCoordinator
-    var machine: String? = nil
+    let machine: String?
     let bot: AidenBotDetail
     let locked: Bool
     let onSaved: (AidenBotDetail) -> Void
@@ -1496,12 +1546,12 @@ struct AidenBotMessagingSection: View {
         }
         .disabled(!aidenBotMessagingControlsEnabled(
             settings: coordinator.botMessaging.value(for: try? coordinator.botContext(on: machine)),
-            canWrite: !locked, saving: isSaving || coordinator.botMessaging.isSaving
+            canWrite: !locked, saving: isSaving || coordinator.botMessaging.isSaving(for: try? coordinator.botContext(on: machine))
         ))
         .task(id: try? coordinator.botContext(on: machine)) {
             guard let context = try? coordinator.botContext(on: machine),
                   let client = try? coordinator.remoteClient(for: context) else { return }
-            let generation = coordinator.botMessaging.generation
+            let generation = coordinator.botMessaging.generation(for: context)
             do {
                 let list = try await client.bots()
                 guard coordinator.holds(context) else { return }

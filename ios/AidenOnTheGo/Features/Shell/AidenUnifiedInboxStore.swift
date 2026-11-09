@@ -484,9 +484,12 @@ final class AidenUnifiedInboxStore {
         let task = Task { [weak self] in
             // A poll that fails has only the saved rows to leave on screen.
             await machine.savedRows?.value
+            // The Bots are read alongside the chats, so a slow list holds up neither.
+            async let botsRead = self?.learnBots(of: machine, over: connection)
             var result = await machine.model.pollChats(host: connection, walkingPages: walkingPages, now: startedAt)
             if case .loaded = result, let self { result = await self.learnWorkspaces(of: machine, over: connection) }
-            if case .loaded = result, let self { result = await self.learnBots(of: machine, over: connection) }
+            let bots = await botsRead
+            if case .loaded = result, let bots { result = bots }
             await self?.finish(
                 result,
                 walkingPages: walkingPages,

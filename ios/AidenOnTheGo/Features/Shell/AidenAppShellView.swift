@@ -219,10 +219,10 @@ struct AidenAppShellView: View {
         navigation.open(.chat(id))
     }
 
-    /// An Inbox row: its chat, or its Bot.
+    /// An Inbox row: its chat, or its Bot, on the Inbox stack.
     private func openRow(_ route: AidenAppRoute) {
         if case .chat(let id) = route { markViewed(id) }
-        navigation.open(route)
+        navigation.openInboxRow(route)
     }
 
     private func nextInCatchUp() {

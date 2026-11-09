@@ -143,7 +143,7 @@ enum AidenBotDeletion {
 
     /// `machine` is the Bot's own machine; nil asks the selected one.
     @MainActor
-    static func isAvailable(coordinator: AidenRemoteCoordinator, machine: String? = nil) -> Bool {
+    static func isAvailable(coordinator: AidenRemoteCoordinator, machine: String?) -> Bool {
         isAvailable(
             hostFeatures: coordinator.botServer(on: machine)?.features,
             canWriteBots: coordinator.botInstallation(on: machine)?.canWriteBots == true,
@@ -158,7 +158,7 @@ enum AidenBotDeletion {
         botID: String,
         revision: String,
         coordinator: AidenRemoteCoordinator,
-        machine: String? = nil
+        machine: String?
     ) async throws {
         let context = try coordinator.botContext(on: machine)
         do {
@@ -177,7 +177,7 @@ enum AidenBotDeletion {
     static func deleteListed(
         botID: String,
         coordinator: AidenRemoteCoordinator,
-        machine: String? = nil
+        machine: String?
     ) async throws {
         let context = try coordinator.botContext(on: machine)
         do {

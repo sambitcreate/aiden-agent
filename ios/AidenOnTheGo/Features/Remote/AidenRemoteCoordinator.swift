@@ -757,6 +757,119 @@ final class AidenRemoteCoordinator {
         }
     }
 
+    // MARK: Workspace Settings, on the context it opened under
+
+    /// Workspace Settings saves through the context it opened under. A `selected`
+    /// context writes the selected machine and goes stale once the selection
+    /// moves. An `owner` context writes its own machine while it's live. Either
+    /// way a save never reaches another machine's workspace with the same id.
+    func updateWorkspaceOutcome(
+        _ workspace: AidenWorkspace,
+        name: String? = nil,
+        permission: AidenWorkspacePermission? = nil,
+        memoryEnabled: Bool? = nil,
+        on context: AidenRemoteRequestContext
+    ) async -> AidenRemoteMutationOutcome<AidenWorkspace> {
+        guard holds(context) else { return .stale }
+        guard context.scope == .owner else {
+            return await updateWorkspaceOutcome(workspace, name: name, permission: permission, memoryEnabled: memoryEnabled)
+        }
+        guard !isMutating else { return .busy }
+        guard let connection = hosts.connection(for: context.instanceId),
+              let client = try? remoteClient(for: context) else { return .stale }
+        isMutating = true
+        presentedError = nil
+        defer { isMutating = false }
+        do {
+            let updated = try await client.updateWorkspace(
+                id: workspace.id,
+                revision: workspace.revision,
+                patch: AidenWorkspacePatch(name: name, permission: permission, memoryEnabled: memoryEnabled)
+            )
+            guard holds(context) else { return .stale }
+            connection.applyWorkspaceSnapshot(Self.replacing(updated, in: connection.workspaces))
+            return .success(updated)
+        } catch let error where aidenIsCancellation(error) {
+            return holds(context) ? .cancelled : .stale
+        } catch {
+            guard holds(context) else { return .stale }
+            if let canonical = try? await client.workspaces(), holds(context) {
+                connection.applyWorkspaceSnapshot(canonical)
+                if let reconciled = canonical.first(where: { $0.id == workspace.id }),
+                   (name == nil || reconciled.name == name),
+                   (permission == nil || reconciled.permission == permission),
+                   (memoryEnabled == nil || reconciled.memoryEnabled == memoryEnabled) {
+                    return .success(reconciled)
+                }
+            }
+            _ = await handleCredentialRevocation(error, context: context)
+            return .failure
+        }
+    }
+
+    /// Removes the workspace, or deletes a managed worktree, through the context
+    /// Workspace Settings opened under (see `updateWorkspaceOutcome(_:on:)`).
+    func removeWorkspaceOutcome(
+        _ workspace: AidenWorkspace,
+        on context: AidenRemoteRequestContext
+    ) async -> AidenRemoteMutationOutcome<Void> {
+        guard holds(context) else { return .stale }
+        guard context.scope == .owner else {
+            return workspace.isManagedWorktree
+                ? await removeManagedWorktreeOutcome(workspace)
+                : await removeWorkspaceOutcome(workspace)
+        }
+        guard !isMutating else { return .busy }
+        guard let connection = hosts.connection(for: context.instanceId),
+              let client = try? remoteClient(for: context) else { return .stale }
+        isMutating = true
+        presentedError = nil
+        defer { isMutating = false }
+        let scope = "\(context.instanceId):\(workspace.id)"
+        do {
+            if workspace.isManagedWorktree {
+                let key = pendingManagedWorktreeDeletionKeys[scope] ?? UUID()
+                pendingManagedWorktreeDeletionKeys[scope] = key
+                _ = try await client.deleteManagedGitWorktree(
+                    workspaceId: workspace.id,
+                    revision: workspace.revision,
+                    idempotencyKey: key
+                )
+                pendingManagedWorktreeDeletionKeys[scope] = nil
+            } else {
+                try await client.removeWorkspace(id: workspace.id, revision: workspace.revision)
+            }
+            guard holds(context) else { return .stale }
+            // The machine may seed a replacement for its last workspace, so its own
+            // list is read back; without it, the removed one simply goes.
+            let canonical = try? await client.workspaces()
+            guard holds(context) else { return .stale }
+            connection.applyWorkspaceSnapshot(canonical ?? connection.workspaces.filter { $0.id != workspace.id })
+            return .success(())
+        } catch let error where aidenIsCancellation(error) {
+            return holds(context) ? .cancelled : .stale
+        } catch {
+            guard holds(context) else { return .stale }
+            if let canonical = try? await client.workspaces(), holds(context) {
+                connection.applyWorkspaceSnapshot(canonical)
+                if !canonical.contains(where: { $0.id == workspace.id }) {
+                    pendingManagedWorktreeDeletionKeys[scope] = nil
+                    return .success(())
+                }
+            }
+            if !Self.isAmbiguousMutationError(error) {
+                pendingManagedWorktreeDeletionKeys[scope] = nil
+            }
+            _ = await handleCredentialRevocation(error, context: context)
+            return .failure
+        }
+    }
+
+    private static func replacing(_ workspace: AidenWorkspace, in workspaces: [AidenWorkspace]) -> [AidenWorkspace] {
+        (workspaces.filter { $0.id != workspace.id } + [workspace])
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     func browserRoots(context: AidenRemoteRequestContext) async throws -> [AidenBrowserRoot] {
         try await remoteClient(for: context).browserRoots()
     }

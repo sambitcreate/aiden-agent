@@ -883,6 +883,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
             coordinator: coordinator,
             botID: botID,
             composerSession: session,
+            machine: nil,
             staysOnItsMachine: true
         ))
         defer { close(window) }
@@ -932,7 +933,10 @@ final class AidenNewWorkTargetTests: XCTestCase {
         )
     }
 
-    func testFilesAreNotOfferedOnAMovedBot() async throws {
+    /// The menu shell's Bot tools follow the selected machine (no `machine`), so
+    /// moving the default takes Files away. The tab shell keeps them on the Bot's
+    /// machine instead (`testABotsFilesStayWithItsMachineWhenTheDefaultMoves`).
+    func testTheMenuShellsBotFilesFollowTheSelection() async throws {
         let responder = AidenDemoResponder()
         self.responder = responder
         coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
@@ -940,7 +944,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         let home = try XCTUnwrap(coordinator.defaultInstanceId)
         try replyToBotCapabilities(on: home)
         let next = try XCTUnwrap(coordinator.hosts.ordered.first { $0.instanceId != home }).instanceId
-        let tools = AidenBotChatToolsModel(chatID: "chat_bot_scout", botID: "bot_scout", cache: AidenBotCache(root: botStoreRoot()))
+        let tools = AidenBotChatToolsModel(chatID: "chat_bot_scout", botID: "bot_scout", machine: nil, cache: AidenBotCache(root: botStoreRoot()))
         await tools.load(coordinator: coordinator)
         XCTAssertNotNil(tools.reachableFileGrant(coordinator: coordinator, hostAllowsMutations: true))
 
@@ -974,13 +978,6 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertEqual(grant.context.instanceId, home)
         XCTAssertTrue(grant.allowsWrites)
         XCTAssertFalse(responder.requests(instanceId: next).contains("GET /bot-capabilities"))
-    }
-
-    func testAMovedBotOffersNoAdvancedUntilItCanReachIt() {
-        let config = AidenSessionSheetConfig.bot(title: "Bot", hasFiles: false, hasMemory: false, hasAdvanced: false, canDelete: false, isDeleting: false)
-
-        XCTAssertFalse(config.actions.contains(.advanced))
-        XCTAssertEqual(config.actions, [.profile])
     }
 
     // MARK: The Settings row

@@ -8,7 +8,7 @@ struct AidenBotCustomAccessSessionIdentity: Equatable {
 
     /// `machine` is the Bot's own machine; nil follows the selected one.
     @MainActor
-    init(coordinator: AidenRemoteCoordinator, machine: String? = nil) {
+    init(coordinator: AidenRemoteCoordinator, machine: String?) {
         let installation = coordinator.botInstallation(on: machine)
         instanceID = installation?.id
         deviceID = installation?.deviceId

@@ -586,7 +586,7 @@ struct AidenBotCreateView: View {
 
     private var loadID: LoadID {
         picker.map { LoadID(pairing: nil, target: $0.target) }
-            ?? LoadID(pairing: AidenBotCustomAccessSessionIdentity(coordinator: coordinator).pairing, target: nil)
+            ?? LoadID(pairing: AidenBotCustomAccessSessionIdentity(coordinator: coordinator, machine: nil).pairing, target: nil)
     }
 
     private var pickedConnection: AidenHostConnection? {

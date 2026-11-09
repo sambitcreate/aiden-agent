@@ -557,6 +557,26 @@ final class AidenUnifiedInboxTests: XCTestCase {
         XCTAssertTrue(ending.walked)
     }
 
+    /// A plain tap on a Bot row (Inbox, accessory or running sheet) opens it on
+    /// the Inbox stack, the same as a chat row and Catch Up, so Back leads there.
+    @MainActor
+    func testTappingABotRowOpensItOnTheInbox() {
+        let navigation = AidenAppNavigation()
+        let botID = hostID("mac-b", "bot_cards")
+        let chatID = hostID("mac-a", "chat")
+
+        navigation.openInboxRow(.bot(botID))
+
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.inboxPath, [.bot(botID)])
+        XCTAssertEqual(navigation.botsPath, [])
+        navigation.openInboxRow(.chat(chatID))
+        XCTAssertEqual(navigation.inboxPath, [.bot(botID), .chat(chatID)])
+        // A row already on the stack is gone back to, not pushed twice.
+        navigation.openInboxRow(.bot(botID))
+        XCTAssertEqual(navigation.inboxPath, [.bot(botID)])
+    }
+
     func testTwoMachinesWithTheSameBotIDStayTwoRows() {
         let inbox = make([
             snapshot("mac-a", bots: [bot("bot_scout", issues: 1, minutesAgo: 3)]),

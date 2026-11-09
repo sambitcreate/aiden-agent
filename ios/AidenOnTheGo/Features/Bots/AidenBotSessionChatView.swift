@@ -59,7 +59,7 @@ struct AidenBotSessionChatView: View {
         botID: String,
         initialSummary: AidenBotSummary? = nil,
         composerSession: AidenComposerSession? = nil,
-        machine: String? = nil,
+        machine: String?,
         staysOnItsMachine: Bool = AppConfig.tabShellEnabled
     ) {
         self.coordinator = coordinator
@@ -88,6 +88,11 @@ struct AidenBotSessionChatView: View {
 
     private var activitySupported: Bool {
         aidenBotActivitySupported(server: ownerConnection?.server, installation: ownerConnection?.installation)
+    }
+
+    /// Profile, Advanced, Files and Delete, all on the chat's own machine.
+    var tools: AidenBotSessionTools {
+        AidenBotSessionTools(coordinator: coordinator, machine: openedOn, botID: botID)
     }
 
     private func machineContext() throws -> AidenRemoteRequestContext {
@@ -208,26 +213,21 @@ struct AidenBotSessionChatView: View {
         }
         .sheet(isPresented: $isShowingProfile, onDismiss: { profileOpensMemory = false }) {
             if let bot {
-                AidenBotProfileView(
-                    coordinator: coordinator,
-                    machine: openedOn,
-                    initialSummary: bot,
+                tools.profile(
+                    bot,
+                    opensMemory: profileOpensMemory,
                     onChanged: { Task { await loadSummary() } },
                     onDeleted: {
                         isShowingProfile = false
                         dismiss()
-                    },
-                    opensMemory: profileOpensMemory
+                    }
                 )
             }
         }
         .navigationDestination(isPresented: $isShowingAdvanced) {
             // "Set up" and "Advanced" land here; a saved model or access
             // change refreshes the session state.
-            AidenBotAdvancedView(
-                coordinator: coordinator,
-                machine: openedOn,
-                botID: botID,
+            tools.advanced(
                 onSaved: { updated in
                     summary = AidenBotSummary(detail: updated)
                     model?.wording = updated.chatActivity?.wording ?? .follows
@@ -337,7 +337,7 @@ struct AidenBotSessionChatView: View {
             hasFiles: filesGrant != nil,
             hasMemory: isAdvertised(AidenBotHostFeature.memory),
             hasAdvanced: true,
-            canDelete: AidenBotDeletion.isAvailable(coordinator: coordinator, machine: openedOn),
+            canDelete: tools.canDelete,
             isDeleting: isDeleting
         )
     }
@@ -369,7 +369,7 @@ struct AidenBotSessionChatView: View {
         Task {
             defer { isDeleting = false }
             do {
-                try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: openedOn)
+                try await tools.delete()
                 dismiss()
             } catch is CancellationError {
                 return
@@ -391,10 +391,10 @@ struct AidenBotSessionChatView: View {
               filesTools?.chatID != chatID || filesGrant == nil else {
             return
         }
-        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, machine: openedOn)
-        await tools.load(coordinator: coordinator)
+        let files = tools.filesTools(chatID: chatID)
+        await files.load(coordinator: coordinator)
         guard coordinator.holds(context) else { return }
-        filesTools = tools
+        filesTools = files
     }
 
     private var header: some View {
@@ -1908,5 +1908,55 @@ struct AidenBotBusyPill<ModeMenu: View>: View {
         .disabled(!isAvailable)
         .accessibilityLabel(actionLabel)
         .accessibilityHint("Touch and hold to choose Steer or Queue")
+    }
+}
+
+/// Where a Bot chat's tools go. Profile, Advanced, Files and Delete all read and
+/// write `machine`, the chat's own; nil is the menu shell's selected machine.
+@MainActor
+struct AidenBotSessionTools {
+    let coordinator: AidenRemoteCoordinator
+    let machine: String?
+    let botID: String
+
+    func profile(
+        _ bot: AidenBotSummary,
+        opensMemory: Bool,
+        onChanged: @escaping () -> Void,
+        onDeleted: @escaping () -> Void
+    ) -> AidenBotProfileView {
+        AidenBotProfileView(
+            coordinator: coordinator,
+            machine: machine,
+            initialSummary: bot,
+            onChanged: onChanged,
+            onDeleted: onDeleted,
+            opensMemory: opensMemory
+        )
+    }
+
+    func advanced(
+        onSaved: @escaping (AidenBotDetail) -> Void,
+        onSaveFailed: @escaping (String) -> Void
+    ) -> AidenBotAdvancedView {
+        AidenBotAdvancedView(
+            coordinator: coordinator,
+            machine: machine,
+            botID: botID,
+            onSaved: onSaved,
+            onSaveFailed: onSaveFailed
+        )
+    }
+
+    func filesTools(chatID: String) -> AidenBotChatToolsModel {
+        AidenBotChatToolsModel(chatID: chatID, botID: botID, machine: machine)
+    }
+
+    var canDelete: Bool {
+        AidenBotDeletion.isAvailable(coordinator: coordinator, machine: machine)
+    }
+
+    func delete() async throws {
+        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: machine)
     }
 }

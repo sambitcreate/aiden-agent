@@ -406,6 +406,7 @@ struct AidenBotsHomeView: View {
                     if let selectedBot {
                         AidenBotProfileView(
                             coordinator: coordinator,
+                            machine: nil,
                             initialSummary: selectedBot,
                             onChanged: { Task { await load() } },
                             onDeleted: { self.selectedBot = nil },
@@ -444,12 +445,14 @@ struct AidenBotsHomeView: View {
             case let .profile(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
+                    machine: nil,
                     initialSummary: bot,
                     onChanged: { Task { await load() } }
                 )
             case let .memory(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
+                    machine: nil,
                     initialSummary: bot,
                     onChanged: { Task { await load() } },
                     opensMemory: true
@@ -457,6 +460,7 @@ struct AidenBotsHomeView: View {
             case let .advanced(bot):
                 AidenBotProfileView(
                     coordinator: coordinator,
+                    machine: nil,
                     initialSummary: bot,
                     onChanged: { Task { await load() } },
                     opensAdvanced: true
@@ -577,9 +581,9 @@ struct AidenBotsHomeView: View {
                         }
                     }
                 ))
-                .disabled(coordinator.botMessaging.isSaving || coordinator.connectionState != .connected
+                .disabled(coordinator.botMessaging.isSaving(for: context) || coordinator.connectionState != .connected
                     || coordinator.installationStore.activeInstallation?.canWriteBots != true)
-                if let error = coordinator.botMessaging.error {
+                if let error = coordinator.botMessaging.error(for: context) {
                     Text(error).font(.footnote).foregroundStyle(palette.secondary)
                 }
             }
@@ -727,6 +731,7 @@ struct AidenBotsHomeView: View {
         HStack(alignment: .top, spacing: 14) {
             AidenBotCanonicalAvatarView(
                 coordinator: coordinator,
+                machine: nil,
                 botID: row.bot.id,
                 avatar: row.bot.avatar,
                 name: row.bot.name,
@@ -791,7 +796,7 @@ struct AidenBotsHomeView: View {
         Button("Advanced", systemImage: "slider.horizontal.3") {
             presentedSheet = .advanced(bot)
         }
-        if AidenBotDeletion.isAvailable(coordinator: coordinator) {
+        if AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil) {
             Divider()
             Button("Delete", systemImage: "trash", role: .destructive) {
                 pendingDelete = bot
@@ -921,7 +926,7 @@ struct AidenBotsHomeView: View {
     private func delete(_ bot: AidenBotSummary) async {
         pendingDelete = nil
         do {
-            try await AidenBotDeletion.deleteListed(botID: bot.id, coordinator: coordinator)
+            try await AidenBotDeletion.deleteListed(botID: bot.id, coordinator: coordinator, machine: nil)
             if selectedBot?.id == bot.id { selectedBot = nil }
             await load()
         } catch is CancellationError {
@@ -1010,7 +1015,7 @@ struct AidenBotsHomeView: View {
             // Bot identity and chat history are separately granted, so one
             // denied segment must not erase the other. Archived Bots are no
             // longer a phone concept and are not requested.
-            let messagingGeneration = coordinator.botMessaging.generation
+            let messagingGeneration = coordinator.botMessaging.generation(for: context)
             async let listRequest = aidenLoadBotsHomeSegment(enabled: plan.loadsList) {
                 try await client.bots()
             }

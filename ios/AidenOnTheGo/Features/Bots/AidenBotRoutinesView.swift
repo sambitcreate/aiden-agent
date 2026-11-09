@@ -126,7 +126,7 @@ enum AidenBotRoutinesCopy {
 struct AidenBotRoutinesSection: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     /// The Bot's own machine; nil follows the selected one.
-    var machine: String? = nil
+    let machine: String?
     let botID: String
     let canWrite: Bool
 
@@ -392,7 +392,7 @@ enum AidenBotRoutineFailure: Equatable {
 /// Name, then frequency first, then the day and time, then what to do.
 struct AidenBotRoutineEditorView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
-    var machine: String? = nil
+    let machine: String?
     let botID: String
     let routine: AidenBotRoutine?
     var prefill: AidenBotRoutineDraft?

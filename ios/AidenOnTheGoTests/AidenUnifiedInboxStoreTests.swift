@@ -1868,5 +1868,26 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .connected)
         store.stop()
     }
+
+    /// A slow chat list doesn't hold up the Bots: both are read at once.
+    func testBotsAreReadAlongsideTheChatsNotAfterThem() async throws {
+        let coordinator = coordinator("studio")
+        serveBotWithCards("bot_cards", on: "studio")
+        serve([row("chat", age: 3, needsYou: true)], on: "studio")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        XCTAssertEqual(botReads("studio"), 1)
+
+        let release = responder.hold(instanceId: "studio", path: "/chat-summaries")
+        let refresh = Task { await store.refreshAll() }
+        await waitUntil("the Bots read while the chats are still out") { self.botReads("studio") == 2 }
+        release()
+        await refresh.value
+
+        XCTAssertEqual(store.snapshots["studio"]?.bots.map(\.id), ["bot_cards"])
+        XCTAssertEqual(store.needsYouCount, 2)
+        store.stop()
+    }
 }
 #endif

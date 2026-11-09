@@ -18,7 +18,7 @@ struct AidenWorkspaceChatsView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
-        owner: AidenRemoteRequestContext? = nil,
+        owner: AidenRemoteRequestContext?,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }

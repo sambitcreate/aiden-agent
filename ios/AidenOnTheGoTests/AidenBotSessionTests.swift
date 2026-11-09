@@ -5406,31 +5406,60 @@ extension AidenBotSessionTests {
         let model = AidenBotMessagingModel()
         model.adopt(AidenBotMessagingSettings(enabled: true), context: context)
         await model.save(enabled: false, context: context, send: {
-            XCTAssertEqual(model.settings?.enabled, false)
-            XCTAssertTrue(model.isSaving)
+            XCTAssertEqual(model.value(for: context)?.enabled, false)
+            XCTAssertTrue(model.isSaving(for: context))
             throw URLError(.networkConnectionLost)
         }, read: { AidenBotMessagingSettings(enabled: true) }, isCurrent: { true })
-        XCTAssertEqual(model.settings?.enabled, true)
-        XCTAssertNotNil(model.error)
-        XCTAssertFalse(model.isSaving)
+        XCTAssertEqual(model.value(for: context)?.enabled, true)
+        XCTAssertNotNil(model.error(for: context))
+        XCTAssertFalse(model.isSaving(for: context))
         await model.save(enabled: false, context: context, send: {
             throw URLError(.networkConnectionLost)
         }, read: { AidenBotMessagingSettings(enabled: false) }, isCurrent: { true })
-        XCTAssertEqual(model.settings?.enabled, false)
-        XCTAssertNil(model.error)
+        XCTAssertEqual(model.value(for: context)?.enabled, false)
+        XCTAssertNil(model.error(for: context))
         model.adopt(AidenBotMessagingSettings(enabled: true), context: context, generation: 0)
-        XCTAssertEqual(model.settings?.enabled, false, "A list read started before Save must not replace its result")
+        XCTAssertEqual(model.value(for: context)?.enabled, false, "A list read started before Save must not replace its result")
         XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: nil, canWrite: true, saving: false))
-        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: model.settings, canWrite: true, saving: false))
+        XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: model.value(for: context), canWrite: true, saving: false))
         XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: false, saving: false))
         XCTAssertFalse(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: true, saving: true))
         XCTAssertTrue(aidenBotMessagingControlsEnabled(settings: AidenBotMessagingSettings(enabled: true), canWrite: true, saving: false))
         let other = AidenRemoteRequestContext(instanceId: "other", deviceId: "phone", generation: 2)
         XCTAssertNil(model.value(for: other))
         model.adopt(nil, context: other)
-        XCTAssertNil(model.settings, "An older host has no messaging state or controls")
+        XCTAssertNil(model.value(for: other), "An older host has no messaging state or controls")
         XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.botMessaging))
         XCTAssertTrue(AidenRemoteCoordinator.capabilitiesAskedForAlone.contains([.botMessaging]))
+    }
+
+    /// Each machine keeps its own messaging state: Advanced on one machine's Bot
+    /// never blanks another machine's toggle or drops its save.
+    func testMessagingKeepsEachMachinesStateApart() async {
+        let studio = AidenRemoteRequestContext(instanceId: "studio", deviceId: "phone", generation: 1)
+        let laptop = AidenRemoteRequestContext(instanceId: "laptop", deviceId: "phone", generation: 1, scope: .owner)
+        let model = AidenBotMessagingModel()
+        model.adopt(AidenBotMessagingSettings(enabled: true), context: studio)
+        model.adopt(AidenBotMessagingSettings(enabled: false), context: laptop)
+        XCTAssertEqual(model.value(for: studio)?.enabled, true)
+        XCTAssertEqual(model.value(for: laptop)?.enabled, false)
+
+        await model.save(enabled: false, context: studio, send: {
+            // Advanced opens on the laptop's Bot while the studio's save is out.
+            model.adopt(AidenBotMessagingSettings(enabled: true), context: laptop)
+            XCTAssertFalse(model.isSaving(for: laptop))
+            return AidenBotMessagingSettings(enabled: false)
+        }, read: { nil }, isCurrent: { true })
+
+        XCTAssertEqual(model.value(for: studio)?.enabled, false, "The studio's save result landed")
+        XCTAssertFalse(model.isSaving(for: studio))
+        XCTAssertEqual(model.value(for: laptop)?.enabled, true)
+        // The same machine through an owner page reads the same state.
+        let studioOwner = AidenRemoteRequestContext(instanceId: "studio", deviceId: "phone", generation: 4, scope: .owner)
+        XCTAssertEqual(model.value(for: studioOwner)?.enabled, false)
+        // A new pairing of a machine starts over.
+        let repaired = AidenRemoteRequestContext(instanceId: "studio", deviceId: "phone", generation: 1, hostGeneration: 1)
+        XCTAssertNil(model.value(for: repaired))
     }
 
     func testMessagingIdentitySaveUsesNewestRevisionAndRollsBackToHostFields() async throws {
@@ -5828,7 +5857,7 @@ private struct AidenBotViewHostView: View {
     var body: some View {
         NavigationStack {
             if host.showsBot {
-                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session)
+                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session, machine: nil)
             } else {
                 Text("Bots")
             }
@@ -5847,7 +5876,7 @@ private struct AidenBotTabHostView: View {
     var body: some View {
         TabView(selection: $host.selectedTab) {
             NavigationStack {
-                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session)
+                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session, machine: nil)
             }
             .tag(0)
             Text("Elsewhere").tag(1)
@@ -6625,7 +6654,7 @@ extension AidenBotSessionTests {
             #"{"error":{"code":"not_found","message":"No such Bot.","requestId":"req_1","retryable":false}}"#.utf8
         ))
 
-        try await AidenBotDeletion.deleteListed(botID: Self.demoBot, coordinator: coordinator)
+        try await AidenBotDeletion.deleteListed(botID: Self.demoBot, coordinator: coordinator, machine: nil)
 
         let reading = await AidenChatDraftStore.shared.beginSession(instanceId: "studio", chatId: chatId)
         let saved = await AidenChatDraftStore.shared.load(session: reading)

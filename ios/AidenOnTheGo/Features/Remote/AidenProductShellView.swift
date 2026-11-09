@@ -844,7 +844,8 @@ private struct AidenBotShellView: View {
                     AidenBotSessionChatView(
                         coordinator: coordinator,
                         botID: botID,
-                        initialSummary: sessionSummaries[botID]
+                        initialSummary: sessionSummaries[botID],
+                        machine: nil
                     )
                     .id("\(presentationScope?.instanceID ?? "none")-\(botID)")
                 } else if let scope = presentationScope,

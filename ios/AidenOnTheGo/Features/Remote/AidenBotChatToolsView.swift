@@ -83,7 +83,7 @@ final class AidenBotChatToolsModel {
     private var loadToken: UUID?
     private let cache: AidenBotCache
 
-    init(chatID: String, botID: String, machine: String? = nil, cache: AidenBotCache = .shared) {
+    init(chatID: String, botID: String, machine: String?, cache: AidenBotCache = .shared) {
         self.chatID = chatID
         self.botID = botID
         self.machine = machine

@@ -347,6 +347,12 @@ final class AidenAppNavigation {
         if inboxPath.last != .chat(catchUp.current), inboxPath.last != .bot(catchUp.current) { self.catchUp = nil }
     }
 
+    /// An Inbox, accessory or running-sheet row, chat or Bot, opens on the Inbox
+    /// stack, so Back leads to the Inbox. Catch Up steps open the same way.
+    func openInboxRow(_ route: AidenAppRoute) {
+        openInInbox(route)
+    }
+
     /// A Catch Up step stays on the Inbox, Bot or not, so Back leads to the Inbox.
     private func openInInbox(_ route: AidenAppRoute) {
         chatStartingVoice = nil

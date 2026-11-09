@@ -418,6 +418,7 @@ private struct AidenDirectoryWorkspaceDetail: View {
         AidenWorkspaceDetailView(
             coordinator: coordinator,
             workspace: workspace,
+            owner: nil,
             onRemoved: { dismiss() }
         )
         .id(workspace.revision)

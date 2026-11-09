@@ -4,6 +4,9 @@ struct AidenWorkspaceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
+    /// The machine this sheet saves on, fixed when it opened
+    /// (`AidenRemoteCoordinator.updateWorkspaceOutcome(_:on:)`).
+    let context: AidenRemoteRequestContext
     let onRemoved: () -> Void
 
     @State private var name: String
@@ -15,14 +18,26 @@ struct AidenWorkspaceSettingsView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
+        context: AidenRemoteRequestContext,
         onRemoved: @escaping () -> Void
     ) {
         self.coordinator = coordinator
         self.workspace = workspace
+        self.context = context
         self.onRemoved = onRemoved
         _name = State(initialValue: workspace.name)
         _permission = State(initialValue: workspace.permission)
         _memoryEnabled = State(initialValue: workspace.memoryEnabled)
+    }
+
+    /// The workspaces on this sheet's machine, which Remove keeps at least one of.
+    private var machineWorkspaceCount: Int {
+        coordinator.hosts.connection(for: context.instanceId)?.workspaces.count ?? 0
+    }
+
+    /// Git reads the selected machine, so it's offered only for a workspace there.
+    private var offersGit: Bool {
+        coordinator.holds(context) && context.instanceId == coordinator.defaultInstanceId
     }
 
     private var hasChanges: Bool {
@@ -67,21 +82,27 @@ struct AidenWorkspaceSettingsView: View {
 
                 Section("Workspace tools") {
                     NavigationLink {
-                        AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace)
+                        AidenWorkspaceFilesView(
+                            coordinator: coordinator,
+                            workspace: workspace,
+                            owner: context.scope == .owner ? context : nil
+                        )
                     } label: {
                         Label("Files", systemImage: "doc.text")
                     }
                     .disabled(!workspace.hasFolder)
 
-                    NavigationLink {
-                        AidenWorkspaceGitView(coordinator: coordinator, workspace: workspace)
-                    } label: {
-                        Label("Git", systemImage: "arrow.triangle.branch")
+                    if offersGit {
+                        NavigationLink {
+                            AidenWorkspaceGitView(coordinator: coordinator, workspace: workspace)
+                        } label: {
+                            Label("Git", systemImage: "arrow.triangle.branch")
+                        }
+                        .disabled(!workspace.hasFolder)
                     }
-                    .disabled(!workspace.hasFolder)
                 }
 
-                if workspace.isManagedWorktree || coordinator.workspaces.count > 1 {
+                if workspace.isManagedWorktree || machineWorkspaceCount > 1 {
                     Section {
                         Button(
                             workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent",
@@ -110,7 +131,8 @@ struct AidenWorkspaceSettingsView: View {
                                 workspace,
                                 name: trimmedName == workspace.name ? nil : trimmedName,
                                 permission: permission == workspace.permission ? nil : permission,
-                                memoryEnabled: memoryEnabled == workspace.memoryEnabled ? nil : memoryEnabled
+                                memoryEnabled: memoryEnabled == workspace.memoryEnabled ? nil : memoryEnabled,
+                                on: context
                             )
                             if case .success = outcome {
                                 coordinator.haptics.play(
@@ -124,7 +146,8 @@ struct AidenWorkspaceSettingsView: View {
                             }
                         }
                     }
-                    .disabled(!hasChanges || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || coordinator.isMutating)
+                    .disabled(!hasChanges || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || coordinator.isMutating || !coordinator.holds(context))
                 }
             }
             .confirmationDialog(
@@ -134,9 +157,7 @@ struct AidenWorkspaceSettingsView: View {
             ) {
                 Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent", role: .destructive) {
                     Task {
-                        let outcome = workspace.isManagedWorktree
-                            ? await coordinator.removeManagedWorktreeOutcome(workspace)
-                            : await coordinator.removeWorkspaceOutcome(workspace)
+                        let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: context)
                         if case .success = outcome {
                             coordinator.haptics.play(
                                 .success,

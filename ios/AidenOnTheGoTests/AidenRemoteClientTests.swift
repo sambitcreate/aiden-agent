@@ -2286,7 +2286,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
 
-        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, cache: botCache)
+        let tools = AidenBotChatToolsModel(chatID: chatID, botID: botID, machine: nil, cache: botCache)
         await tools.load(coordinator: coordinator)
         XCTAssertTrue(tools.hasFiles)
         let cachedAfterRefresh = await botCache.load(
@@ -2403,14 +2403,14 @@ final class AidenRemoteClientTests: XCTestCase {
         )
         await coordinator.start()
         XCTAssertEqual(coordinator.connectionState, .connected)
-        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator),
+        XCTAssertFalse(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil),
                        "A host that does not advertise delete must not offer Delete.")
 
         features = "[\"bot-delete-v1\"]"
         await coordinator.start()
-        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator))
+        XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: nil))
 
-        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator)
+        try await AidenBotDeletion.delete(botID: botID, revision: "bot_revision_8", coordinator: coordinator, machine: nil)
         XCTAssertEqual(deletes, ["bot_revision_8"])
     }
 
@@ -2465,13 +2465,13 @@ final class AidenRemoteClientTests: XCTestCase {
             }
         )
         await coordinator.start()
-        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+        try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: nil)
         XCTAssertEqual(deletes, 0, "A Bot the Mac no longer has needs no delete request.")
 
         // Any other failure still reports that the Bot wasn't deleted.
         detailStatus = 500
         do {
-            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator)
+            try await AidenBotDeletion.deleteListed(botID: botID, coordinator: coordinator, machine: nil)
             XCTFail("A server failure must not count as deleted.")
         } catch {
             XCTAssertFalse(AidenBotDeletion.isAlreadyGone(error))

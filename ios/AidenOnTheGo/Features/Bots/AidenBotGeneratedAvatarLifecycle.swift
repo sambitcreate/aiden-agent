@@ -44,7 +44,7 @@ struct AidenBotGeneratedAvatarSessionIdentity: Equatable {
 
     /// `machine` is the Bot's own machine; nil follows the selected one.
     @MainActor
-    init(coordinator: AidenRemoteCoordinator, machine: String? = nil) {
+    init(coordinator: AidenRemoteCoordinator, machine: String?) {
         let installation = coordinator.botInstallation(on: machine)
         instanceID = installation?.id
         deviceID = installation?.deviceId
@@ -237,7 +237,7 @@ final class AidenBotGeneratedAvatarModel {
 
     init(
         coordinator: AidenRemoteCoordinator,
-        machine: String? = nil,
+        machine: String?,
         botID: String,
         cache: AidenBotCache = .shared,
         onChanged: @escaping (AidenBotDetail) -> Void = { _ in }
@@ -1021,7 +1021,7 @@ private final class AidenBotCanonicalAvatarMemoryCache {
 struct AidenBotCanonicalAvatarView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     /// The Bot's own machine; nil follows the selected one.
-    var machine: String? = nil
+    let machine: String?
     let botID: String
     let avatar: AidenBotAvatarView
     let name: String

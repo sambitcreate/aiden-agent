@@ -1774,6 +1774,7 @@ struct AidenWorkspaceShellView: View {
             AidenWorkspaceDetailView(
                 coordinator: coordinator,
                 workspace: workspace,
+                owner: nil,
                 onRemoved: { removeWorkspaceFromNavigation(workspaceID) },
                 onChatUpdated: { homeModel.accept($0) },
                 onChatRemoved: { homeModel.removeChat(id: $0) },

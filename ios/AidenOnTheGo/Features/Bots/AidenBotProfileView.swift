@@ -118,7 +118,7 @@ private enum AidenBotProfileField: Hashable {
 struct AidenBotProfileView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     /// The Bot's own machine, which Profile reads and writes; nil follows the selected one.
-    var machine: String? = nil
+    let machine: String?
     let initialSummary: AidenBotSummary
     var onChanged: () -> Void = { }
     /// Called after the Bot is deleted, so the caller can leave its chat.

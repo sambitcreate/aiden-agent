@@ -258,7 +258,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertTrue(model.isConnected)
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         // The selected machine's namesake is its own.
-        let selected = AidenWorkspaceChatsModel(coordinator: coordinator, workspaceId: "default", cache: cache)
+        let selected = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "default", cache: cache)
         await selected.load()
         XCTAssertEqual(selected.chats.map(\.id), ["studio-chat"])
     }
@@ -276,7 +276,110 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertFalse(requests("studio").contains("GET /chats"))
     }
 
+    // MARK: Workspace Settings
+
+    /// Both machines list a "default" workspace; this is the laptop's, as it read it.
+    private func laptopsDefault() async throws -> AidenWorkspace {
+        serveDefaultWorkspaces()
+        try await connection("laptop").refreshWorkspacesForPoll()
+        return try XCTUnwrap(try connection("laptop").workspaces.first { $0.id == "default" })
+    }
+
+    func testWorkspaceSettingsSaveOnTheWorkspacesOwnMachine() async throws {
+        let workspace = try await laptopsDefault()
+        responder.reply(
+            instanceId: "laptop",
+            method: "PATCH",
+            path: "/workspaces/default",
+            status: 200,
+            json: json(workspaceObject("default", name: "Renamed"))
+        )
+
+        let outcome = await coordinator.updateWorkspaceOutcome(
+            workspace,
+            name: "Renamed",
+            on: try coordinator.ownerContext(for: "laptop")
+        )
+
+        XCTAssertEqual(outcome.value?.name, "Renamed")
+        XCTAssertTrue(requests("laptop").contains("PATCH /workspaces/default"))
+        XCTAssertFalse(requests("studio").contains("PATCH /workspaces/default"))
+        XCTAssertEqual(try connection("laptop").workspaces.first { $0.id == "default" }?.name, "Renamed")
+        XCTAssertNotEqual(coordinator.workspaces.first { $0.id == "default" }?.name, "Renamed")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
+    func testWorkspaceSettingsRemoveFromTheWorkspacesOwnMachine() async throws {
+        let workspace = try await laptopsDefault()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+
+        let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: try coordinator.ownerContext(for: "laptop"))
+
+        guard case .success = outcome else { return XCTFail("Not removed: \(outcome)") }
+        XCTAssertTrue(requests("laptop").contains("DELETE /workspaces/default"))
+        XCTAssertFalse(requests("studio").contains("DELETE /workspaces/default"))
+    }
+
+    /// An open Settings sheet stays with the machine it opened on: once the default
+    /// moves, a save can't reach the new default's same-id "default".
+    func testWorkspaceSettingsNeverSaveToANewDefaultsNamesake() async throws {
+        serveDefaultWorkspaces()
+        try await connection("studio").refreshWorkspacesForPoll()
+        let studiosDefault = try XCTUnwrap(coordinator.workspaces.first { $0.id == "default" })
+        let openedOn = try coordinator.requestContext()
+        let laptopOwner = try coordinator.ownerContext(for: "laptop")
+        let laptopsDefault = try await laptopsDefault()
+        for instanceId in ["studio", "laptop"] {
+            responder.reply(
+                instanceId: instanceId,
+                method: "PATCH",
+                path: "/workspaces/default",
+                status: 200,
+                json: json(workspaceObject("default", name: "Renamed"))
+            )
+        }
+
+        coordinator.setDefaultMachine("laptop")
+        let stale = await coordinator.updateWorkspaceOutcome(studiosDefault, name: "Renamed", on: openedOn)
+        // A sheet opened for the laptop's workspace keeps saving there.
+        let owned = await coordinator.updateWorkspaceOutcome(laptopsDefault, name: "Renamed", on: laptopOwner)
+
+        guard case .stale = stale else { return XCTFail("Saved somewhere: \(stale)") }
+        XCTAssertFalse(requests("studio").contains("PATCH /workspaces/default"))
+        XCTAssertEqual(requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count, 1)
+        XCTAssertEqual(owned.value?.name, "Renamed")
+    }
+
     // MARK: Bots
+
+    /// A Bot chat opened on the laptop, with the studio as the default, sends
+    /// Profile, Advanced, Files and Delete to the laptop.
+    func testABotChatOnAnotherMachineSendsItsToolsThere() async throws {
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/bots/bot_scout", status: 204, json: Data())
+        let list = try await coordinator.remoteClient(for: coordinator.ownerContext(for: "laptop")).bots()
+        let summary = try XCTUnwrap(list.bots.first)
+        let view = AidenBotSessionChatView(
+            coordinator: coordinator,
+            botID: "bot_scout",
+            initialSummary: summary,
+            machine: "laptop",
+            staysOnItsMachine: true
+        )
+        let tools = view.tools
+
+        XCTAssertEqual(tools.profile(summary, opensMemory: false, onChanged: {}, onDeleted: {}).machine, "laptop")
+        XCTAssertEqual(tools.advanced(onSaved: { _ in }, onSaveFailed: { _ in }).machine, "laptop")
+        let files = tools.filesTools(chatID: "chat_bot_scout")
+        XCTAssertEqual(files.machine, "laptop")
+        XCTAssertTrue(tools.canDelete)
+        await files.load(coordinator: coordinator)
+        try await tools.delete()
+
+        XCTAssertTrue(requests("laptop").contains("GET /bots/bot_scout"))
+        XCTAssertTrue(requests("laptop").contains("DELETE /bots/bot_scout"))
+        XCTAssertFalse(requests("studio").contains { $0.hasSuffix("/bots/bot_scout") })
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
 
     func testABotsDeleteGoesToItsOwnMachine() async throws {
         responder.reply(instanceId: "laptop", method: "DELETE", path: "/bots/bot_scout", status: 204, json: Data())

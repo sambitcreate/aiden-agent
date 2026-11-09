@@ -3,8 +3,8 @@ import SwiftUI
 struct AidenWorkspaceDetailView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
-    /// The workspace's own machine. Its settings write the selected machine, so
-    /// they're offered only there.
+    /// The workspace's own machine, which its chats and Settings read and write.
+    /// Nil is the menu shell's: the selected machine.
     let owner: AidenRemoteRequestContext?
     let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
@@ -14,7 +14,7 @@ struct AidenWorkspaceDetailView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
-        owner: AidenRemoteRequestContext? = nil,
+        owner: AidenRemoteRequestContext?,
         onRemoved: @escaping () -> Void,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
@@ -30,11 +30,8 @@ struct AidenWorkspaceDetailView: View {
     }
 
     @State private var isShowingSettings = false
-
-    /// Workspace Settings reads and writes the selected machine.
-    private var offersSettings: Bool {
-        owner.map { $0.instanceId == coordinator.defaultInstanceId } ?? true
-    }
+    /// What an open Settings sheet saves through, fixed when it opens.
+    @State private var settingsContext: AidenRemoteRequestContext?
 
     var body: some View {
         AidenWorkspaceChatsView(
@@ -48,30 +45,55 @@ struct AidenWorkspaceDetailView: View {
         .navigationTitle(workspace.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if offersSettings {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button {
-                            isShowingSettings = true
-                        } label: {
-                            Label("Workspace Settings", systemImage: "gearshape")
-                        }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button {
+                        settingsContext = Self.settingsContext(owner: owner, coordinator: coordinator)
+                        isShowingSettings = settingsContext != nil
                     } label: {
-                        Image(systemName: AidenChromeSymbols.overflowMenu)
+                        Label("Workspace Settings", systemImage: "gearshape")
                     }
-                    .accessibilityLabel("Workspace menu")
+                } label: {
+                    Image(systemName: AidenChromeSymbols.overflowMenu)
                 }
+                .accessibilityLabel("Workspace menu")
             }
         }
         .sheet(isPresented: $isShowingSettings) {
-            AidenWorkspaceSettingsView(
-                coordinator: coordinator,
-                workspace: workspace,
-                onRemoved: {
-                    isShowingSettings = false
-                    onRemoved()
-                }
-            )
+            if let settingsContext {
+                AidenWorkspaceSettingsView(
+                    coordinator: coordinator,
+                    workspace: workspace,
+                    context: settingsContext,
+                    onRemoved: {
+                        isShowingSettings = false
+                        onRemoved()
+                    }
+                )
+            }
         }
+        // A sheet that opened for another machine, or that follows the selection
+        // (the menu shell's, and Git), closes rather than save somewhere new.
+        .onChange(of: owner) { _, _ in isShowingSettings = false }
+        .onChange(of: coordinator.defaultInstanceId) { old, _ in
+            guard let settingsContext else { return }
+            if settingsContext.scope == .selected || settingsContext.instanceId == old {
+                isShowingSettings = false
+            }
+        }
+    }
+}
+
+extension AidenWorkspaceDetailView {
+    /// Settings save on the workspace's own machine, through its owner context.
+    /// The menu shell's, with no owner, go to the selected machine and stop once
+    /// it changes.
+    @MainActor
+    static func settingsContext(
+        owner: AidenRemoteRequestContext?,
+        coordinator: AidenRemoteCoordinator
+    ) -> AidenRemoteRequestContext? {
+        guard let owner else { return try? coordinator.requestContext() }
+        return coordinator.holds(owner) ? owner : nil
     }
 }

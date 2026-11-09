@@ -22,7 +22,7 @@ final class AidenWorkspaceChatsModel {
 
     init(
         coordinator: AidenRemoteCoordinator,
-        owner: AidenRemoteRequestContext? = nil,
+        owner: AidenRemoteRequestContext?,
         workspaceId: String,
         hapticScope: UUID = UUID(),
         cache: AidenChatCache = .shared,
