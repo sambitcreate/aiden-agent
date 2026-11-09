@@ -333,9 +333,12 @@ enum AidenDemoHosts {
         let installation: AidenInstallation
         var rowCount: Int
         var isOnline = true
-        /// Where in the row-state pattern this machine starts. The first machine
-        /// opens on the busiest rows, the others on quieter ones.
+        /// Where in the row-state pattern this machine starts. Zero opens on the
+        /// busiest rows, and a higher start on quieter ones.
         var patternStart = 0
+        /// Where in the title list this machine starts, so two machines on the
+        /// same rows don't read as one chat listed twice.
+        var titleStart = 0
         /// Whether the machine has one Bot. The empty scenario has none, so the
         /// Bots empty state stays reachable.
         var hasBot = true
@@ -380,6 +383,7 @@ enum AidenDemoHosts {
             rows: Int,
             online: Bool = true,
             start: Int = 0,
+            titleStart: Int = 0,
             hasBot: Bool = true,
             botSearchFails: Bool = false
         ) -> Machine {
@@ -388,6 +392,7 @@ enum AidenDemoHosts {
                 rowCount: rows,
                 isOnline: online,
                 patternStart: start,
+                titleStart: titleStart,
                 hasBot: hasBot,
                 botSearchFails: botSearchFails
             )
@@ -401,7 +406,14 @@ enum AidenDemoHosts {
         case .one:
             machines = [machine("studio", "Studio Mac", rows: 4)]
         case .four:
-            machines = [studio, laptop, mini, machine("build", "Build Box", rows: 0, online: false)]
+            // The mini waits on the person and runs a chat too, so Catch Up and the
+            // accessory each have more than one machine to cross.
+            machines = [
+                studio,
+                laptop,
+                machine("mini", "Home Mini", rows: 2, titleStart: 7),
+                machine("build", "Build Box", rows: 0, online: false),
+            ]
         case .empty:
             machines = [machine("studio", "Studio Mac", rows: 0, hasBot: false)]
         case .busy:
@@ -433,7 +445,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)? = nil,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         makeCoordinator(
             installations.map { Machine(installation: $0, rowCount: 4) },
@@ -441,7 +454,8 @@ enum AidenDemoHosts {
             haptics: haptics,
             keychain: keychain,
             workspaceEnvironmentCache: workspaceEnvironmentCache,
-            machinePreferences: machinePreferences
+            machinePreferences: machinePreferences,
+            tabShell: tabShell
         )
     }
 
@@ -454,7 +468,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)?,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         let store = AidenInstallationStore(keychain: keychain ?? AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
@@ -514,7 +529,8 @@ enum AidenDemoHosts {
                     credential: credential,
                     session: responder.session
                 )
-            }
+            },
+            tabShell: tabShell
         )
     }
 
@@ -537,7 +553,8 @@ enum AidenDemoHosts {
         let rows = AidenDemoContent.rows(
             instanceId: id,
             count: machine.rowCount,
-            patternStart: machine.patternStart
+            patternStart: machine.patternStart,
+            titleStart: machine.titleStart
         )
         responder.reply(instanceId: id, path: "/server", status: 200, json: AidenDemoContent.serverJSON(for: installation))
         responder.reply(instanceId: id, path: "/workspaces", status: 200, json: AidenDemoContent.workspacesJSON())
@@ -796,7 +813,7 @@ private enum AidenDemoContent {
 
     /// Chat summaries, newest first. Row `n` takes pattern slot `patternStart + n`:
     /// needs approval, working, needs input, failed, unread, pinned, then read.
-    static func rows(instanceId: String, count: Int, patternStart: Int) -> [[String: Any]] {
+    static func rows(instanceId: String, count: Int, patternStart: Int, titleStart: Int = 0) -> [[String: Any]] {
         let now = Date()
         return (0..<count).map { index in
             let updatedAt = now.addingTimeInterval(-Double(5 + index * 37) * 60)
@@ -804,7 +821,7 @@ private enum AidenDemoContent {
             var row: [String: Any] = [
                 "id": "chat_\(instanceId)_\(index + 1)",
                 "workspaceId": index % 3 == 2 ? "workspace_notes" : "workspace_app",
-                "title": titles[index % titles.count],
+                "title": titles[(titleStart + index) % titles.count],
                 "titlePending": false,
                 "createdAt": timestamp(createdAt),
                 "updatedAt": timestamp(updatedAt),
@@ -879,6 +896,23 @@ private enum AidenDemoContent {
         // Every value here is built above from literals, so serialization cannot fail.
         try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
+}
+
+/// A photo already in the composer of every chat, for screens and UI tests that
+/// need one without the photo picker. Only with `-AidenDemoStagedAttachment YES`.
+enum AidenDemoStagedAttachment {
+    static var isRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoStagedAttachment")
+    }
+
+    static let reference = AidenAttachmentReference(
+        id: "att_" + String(repeating: "a", count: 43),
+        name: "Screenshot.png",
+        mimeType: "image/png",
+        kind: .image,
+        size: 1_024,
+        expiresAt: .distantFuture
+    )
 }
 
 /// A long chat on the studio machine, served a window at a time, for screens

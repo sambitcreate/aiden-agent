@@ -520,6 +520,44 @@ final class AidenChatDockTests: XCTestCase {
         model.setViewPresent(false)
     }
 
+    /// Next closes the chat at once, and a timed write would die with its model.
+    func testADraftTypedJustBeforeLeavingIsSaved() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let store = AidenChatDraftStore(root: root.appending(path: "drafts", directoryHint: .isDirectory))
+        let model = try chatModel(owner: "laptop", draftStore: store)
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        model.draft = "Keep these words"
+
+        await model.saveDraftNow()
+
+        let session = await store.beginSession(instanceId: "laptop", chatId: "c1")
+        let saved = await store.load(session: session)
+        XCTAssertEqual(saved, "Keep these words")
+        model.setViewPresent(false)
+    }
+
+    func testLeavingAChatThatCanNoLongerBeEditedSavesNothing() async throws {
+        try makeCoordinator(.four)
+        await coordinator.start()
+        transcript(on: "laptop")
+        let store = AidenChatDraftStore(root: root.appending(path: "drafts", directoryHint: .isDirectory))
+        let model = try chatModel(owner: "laptop", draftStore: store)
+        model.setViewPresent(true)
+        await model.load(observeProgress: false)
+        model.draft = "Words"
+        model.setAllowsMutations(false)
+
+        await model.saveDraftNow()
+
+        let session = await store.beginSession(instanceId: "laptop", chatId: "c1")
+        let saved = await store.load(session: session)
+        XCTAssertNil(saved)
+        model.setViewPresent(false)
+    }
+
     /// A retry's words are in the pending send and nowhere else.
     func testARetriedRunInputOnARevokedMachineKeepsItsWords() async throws {
         try makeCoordinator(.four)

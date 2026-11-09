@@ -27,6 +27,9 @@ final class AidenUnifiedInboxStore {
     /// The tab's badge. Kept apart from `inbox`, so whoever shows it redraws
     /// when the count changes and not with every row.
     private(set) var needsYouCount = 0
+    /// Whether the accessory has anything to show. Kept apart from `inbox` for the
+    /// same reason as the badge: the shell reads it.
+    private(set) var hasRunningChats = false
     private(set) var listState = AidenInboxListState.loading
     /// A listed machine answered with a failure, and saved rows are standing in.
     private(set) var refreshFailed = false
@@ -55,6 +58,7 @@ final class AidenUnifiedInboxStore {
     @ObservationIgnored private let hosts: AidenHostRegistry
     @ObservationIgnored private let preferences: AidenMachinePreferencesStore
     @ObservationIgnored private let cache: AidenChatCache
+    @ObservationIgnored private let drafts: AidenChatDraftStore
     @ObservationIgnored private let timing: Timing
     @ObservationIgnored private let drawJitter: @MainActor () -> Double
     @ObservationIgnored private let now: @MainActor () -> Date
@@ -77,12 +81,14 @@ final class AidenUnifiedInboxStore {
         preferences: AidenMachinePreferencesStore,
         cache: AidenChatCache,
         clock: any Clock<Duration>,
+        drafts: AidenChatDraftStore = .shared,
         jitter: @escaping @MainActor () -> Double = { .random(in: AidenInboxPollPolicy.jitterRange) },
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.hosts = hosts
         self.preferences = preferences
         self.cache = cache
+        self.drafts = drafts
         timing = Timing(clock)
         drawJitter = jitter
         self.now = now
@@ -161,6 +167,7 @@ final class AidenUnifiedInboxStore {
         case .undone: await triage(.done(false))
         case .snooze(let option): await triage(.snooze(until: option.until))
         case .wake: await triage(.wake)
+        case .delete: await delete(id)
         }
     }
 
@@ -180,11 +187,13 @@ final class AidenUnifiedInboxStore {
         homeModel(for: notice.instanceId)?.inboxNotice = nil
     }
 
+    /// A row from an older pairing of a machine goes nowhere: `id` was issued to
+    /// a device that machine no longer knows, or the store no longer reads.
     private func owner(of id: AidenHostObjectID) -> (AidenHomeModel, AidenHostConnection)? {
-        guard let model = homeModel(for: id.instanceId),
+        guard let machine = machines[id.instanceId], machine.lease.deviceId == id.deviceId,
               let connection = hosts.connection(for: id.instanceId),
               connection.installation.deviceId == id.deviceId else { return nil }
-        return (model, connection)
+        return (machine.model, connection)
     }
 
     // MARK: Reading on demand
@@ -345,6 +354,8 @@ final class AidenUnifiedInboxStore {
             )
             if rebuilt != inbox { inbox = rebuilt }
             if rebuilt.needsYouCount != needsYouCount { needsYouCount = rebuilt.needsYouCount }
+            let hasRunning = !rebuilt.running.isEmpty
+            if hasRunning != hasRunningChats { hasRunningChats = hasRunning }
         }
         describeTheList(shown: shown, hasHiddenMachines: !hidden.isEmpty)
         let described = describeTheMachines(readings, shown: shown)
@@ -378,7 +389,7 @@ final class AidenUnifiedInboxStore {
         listedMachines = listed.map(\.connection.instanceId)
 
         let state = AidenInboxListState.make(
-            hasRows: !(inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty),
+            hasRows: hasRunningChats || !(inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty),
             machines: listed.map(\.read),
             hasHiddenMachines: hasHiddenMachines
         )
@@ -601,6 +612,38 @@ extension AidenUnifiedInboxStore {
             cache: coordinator.chatCache,
             clock: ContinuousClock()
         )
+    }
+
+    /// The row goes at once. If the machine doesn't take the delete it comes back.
+    func delete(_ id: AidenHostObjectID) async {
+        guard let (model, connection) = owner(of: id), let context = try? connection.homeContext(),
+              let index = model.chats.firstIndex(where: { $0.id == id.objectId }) else { return }
+        let row = model.chats[index]
+        model.removeChat(id: id.objectId)
+        do {
+            let client = try connection.homeClient(for: context)
+            // The machine wants the chat's current revision, and a row can be behind.
+            let current = try await client.chat(id: id.objectId)
+            guard connection.holdsHomeContext(context) else { return }
+            try await client.removeChat(id: id.objectId, revision: current.revision)
+            guard connection.holdsHomeContext(context) else { return }
+            await cache.removeChat(instanceId: id.instanceId, chatId: id.objectId)
+            await drafts.remove(instanceId: id.instanceId, chatId: id.objectId)
+            // The machine lets the chat's hidden folder go with it.
+            try? await connection.refreshWorkspacesForPoll()
+        } catch {
+            guard connection.holdsHomeContext(context) else { return }
+            if (error as? AidenRemoteClientError)?.isCredentialRevoked == true {
+                // Its rows go with it, so there's nothing to bring back.
+                _ = await connection.handlePollError(error, sinceConnect: connection.connectionGeneration)
+                return
+            }
+            model.restoreChat(row, at: index)
+            guard !aidenIsCancellation(error) else { return }
+            model.inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t delete that chat. It’s back where it was."))
+            // The answer may be what was lost, with the chat gone after all.
+            _ = await model.pollChats(host: connection, walkingPages: false, now: now())
+        }
     }
 }
 

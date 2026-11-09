@@ -75,6 +75,10 @@ struct AidenInboxRowStatus: Equatable {
             }
             return Self(label: "Working", tone: .working)
         case .pinned, .updates, .earlier:
+            // Listed here, not as running, because its machine is offline.
+            if row.placement.section == .working {
+                return Self(label: "Last seen running", tone: .plain)
+            }
             // As the desktop: a Done hold first, then a snooze, else the wait.
             let hold = AidenInbox.triageHold(AidenInbox.Signals(summary: chat, isOpen: false), now: now)
             if hold.done {

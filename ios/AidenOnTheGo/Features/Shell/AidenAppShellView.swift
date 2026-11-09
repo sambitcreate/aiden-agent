@@ -27,6 +27,7 @@ struct AidenAppShellView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
+    @State private var showsRunningChats = false
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -41,7 +42,10 @@ struct AidenAppShellView: View {
         self.navigationStore = navigationStore
         self.intents = intents ?? .shared
         _navigation = State(initialValue: AidenAppNavigation(
-            restoring: navigationStore.load(),
+            restoring: navigationStore.load(
+                installations: coordinator.installationStore.installations,
+                selected: coordinator.activeInstanceId
+            ),
             installations: coordinator.installationStore.installations
         ))
     }
@@ -50,12 +54,31 @@ struct AidenAppShellView: View {
         AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation)
     }
 
+    private var runningHome: AidenRunningHome {
+        .resolve(
+            accessoryCanTurnOff: AidenRunningHome.accessoryCanTurnOff,
+            horizontalSizeClass: horizontalSizeClass
+        )
+    }
+
+    /// Read at every step of a run, never kept.
+    private var catchUpQueue: AidenCatchUpQueue {
+        AidenCatchUpQueue(rows: inboxStore.inbox.needsYou)
+    }
+
     var body: some View {
         TabView(selection: $navigation.tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 NavigationStack(path: $navigation.inboxPath) {
-                    AidenInboxTabRootView(store: inboxStore, onOpen: openChat, onOpenMachines: { navigation.open(.machines) })
-                        .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                    AidenInboxTabRootView(
+                        store: inboxStore,
+                        runningHome: runningHome,
+                        onOpen: openChat,
+                        onOpenMachines: { navigation.open(.machines) },
+                        onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
+                        onShowRunning: { showsRunningChats = true }
+                    )
+                    .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
             .badge(inboxStore.needsYouCount)
@@ -85,7 +108,20 @@ struct AidenAppShellView: View {
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
-        // On every tab, so a machine page reached from any of them counts its open chats.
+        // Hiding the tab bar leaves the accessory up, under the composer.
+        .aidenRunningAccessory(
+            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && navigation.openChat == nil
+        ) {
+            AidenRunningAccessoryHost(store: inboxStore, onOpen: openChat) { showsRunningChats = true }
+        }
+        .sheet(isPresented: $showsRunningChats) {
+            AidenRunningChatsSheet(store: inboxStore) { id in
+                showsRunningChats = false
+                openChat(id)
+            }
+        }
+        // On every tab, the accessory and its sheet, so a machine page reached from
+        // any of them counts its open chats.
         .environment(inboxStore)
         .alert(
             "Aiden On The Go",
@@ -136,6 +172,7 @@ struct AidenAppShellView: View {
                 coordinator: coordinator,
                 id: id,
                 autoStartVoice: navigation.chatStartingVoice == id,
+                onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil,
                 onChatUpdated: { chat in
                     inboxStore.homeModel(for: id.instanceId)?.accept(chat)
                 },
@@ -144,6 +181,9 @@ struct AidenAppShellView: View {
                 }
             )
             .environment(\.aidenConversationMachine, inboxStore.roster.chatSubtitle(for: id.instanceId))
+            // Next swaps the route in place, and the stack would otherwise keep this
+            // view's state, so the old chat would stay on screen.
+            .id(id)
             .onDisappear { navigation.finishStartingVoice(id) }
         case .bot(let id):
             let installation = coordinator.installationStore.installations.first { $0.id == id.instanceId }
@@ -160,12 +200,23 @@ struct AidenAppShellView: View {
             AidenTabPlaceholderView(title: "Scheduled tasks", systemImage: "calendar")
         case .usage:
             AidenTabPlaceholderView(title: "Usage", systemImage: "chart.bar")
+        case .catchUpFinished(let ending):
+            AidenCatchUpFinishedView(ending: ending) { navigation.inboxPath = [] }
         }
     }
 
     private func openChat(_ id: AidenHostObjectID) {
-        inboxStore.homeModel(for: id.instanceId)?.markViewed(chatID: id.objectId)
+        markViewed(id)
         navigation.open(.chat(id))
+    }
+
+    private func nextInCatchUp() {
+        markViewed(navigation.advanceCatchUp(in: catchUpQueue))
+    }
+
+    private func markViewed(_ id: AidenHostObjectID?) {
+        guard let id else { return }
+        inboxStore.homeModel(for: id.instanceId)?.markViewed(chatID: id.objectId)
     }
 
     private func open(_ request: AidenNavigationRequest) {
@@ -242,12 +293,12 @@ final class AidenChatRouteModel {
         }
         // Saved transcript first: the chat opens at once and refreshes itself.
         if let saved = await cache.admittedChat(instanceId: id.instanceId, chatId: id.objectId) {
-            present(await cache.presenting(saved, instanceId: id.instanceId), owner: owner, coordinator: coordinator)
+            await present(await cache.presenting(saved, instanceId: id.instanceId), owner: owner, coordinator: coordinator)
             return
         }
         do {
             let chat = try await coordinator.remoteClient(for: owner).chat(id: id.objectId)
-            present(chat, owner: owner, coordinator: coordinator)
+            await present(chat, owner: owner, coordinator: coordinator)
         } catch where aidenIsCancellation(error) {
             return
         } catch {
@@ -261,7 +312,7 @@ final class AidenChatRouteModel {
         }
     }
 
-    private func present(_ chat: AidenChat, owner: AidenRemoteRequestContext, coordinator: AidenRemoteCoordinator) {
+    private func present(_ chat: AidenChat, owner: AidenRemoteRequestContext, coordinator: AidenRemoteCoordinator) async {
         guard coordinator.isLive(owner), chat.id == id.objectId else {
             state = .unavailable(String(localized: "This chat is no longer available."))
             return
@@ -272,27 +323,62 @@ final class AidenChatRouteModel {
                 state = .unavailable(explanation)
                 return
             }
+        } else if let refusal = await workspaceRefusal(of: chat, coordinator: coordinator) {
+            state = .unavailable(refusal)
+            return
         }
-        state = .ready(chat, owner: owner)
+        // Cancelled: the view is loading again, and that load decides.
+        guard !Task.isCancelled else { return }
+        state = coordinator.isLive(owner)
+            ? .ready(chat, owner: owner)
+            : .unavailable(String(localized: "This chat is no longer available."))
+    }
+
+    /// Why this chat's workspace rules it out. Only a machine that's answering
+    /// can say a workspace is gone, so a saved chat stays readable while it's away.
+    private func workspaceRefusal(of chat: AidenChat, coordinator: AidenRemoteCoordinator) async -> String? {
+        if coordinator.workspaceArchiveStore.isArchived(workspaceID: chat.workspaceId, instanceID: id.instanceId) {
+            return String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")
+        }
+        guard let connection = coordinator.hosts.connection(for: id.instanceId),
+              connection.connectionState == .connected else { return nil }
+        func isListed() -> Bool { connection.workspaces.contains { $0.id == chat.workspaceId } }
+        guard !isListed() else { return nil }
+        // A chat started without a workspace can sit in a hidden folder made
+        // after the phone last read the machine's workspaces.
+        do {
+            try await connection.refreshWorkspacesForPoll()
+        } catch {
+            return nil
+        }
+        return isListed() ? nil : String(localized: "The chat's workspace is no longer available.")
     }
 }
 
 private struct AidenChatRouteView: View {
     let coordinator: AidenRemoteCoordinator
     let autoStartVoice: Bool
+    /// Set only while this chat is a Catch Up run's. On the route rather than the
+    /// chat, so a chat that can't load can still be moved on from, and a fork
+    /// pushed over it has no Next of its own.
+    let onNext: (() -> Void)?
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     @State private var model: AidenChatRouteModel
+    @State private var holdsAttachments = false
+    @State private var isConfirmingNext = false
 
     init(
         coordinator: AidenRemoteCoordinator,
         id: AidenHostObjectID,
         autoStartVoice: Bool,
+        onNext: (() -> Void)?,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void,
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void
     ) {
         self.coordinator = coordinator
         self.autoStartVoice = autoStartVoice
+        self.onNext = onNext
         self.onChatUpdated = onChatUpdated
         self.onChatActivityChanged = onChatActivityChanged
         _model = State(initialValue: AidenChatRouteModel(id: id))
@@ -331,6 +417,29 @@ private struct AidenChatRouteView: View {
             }
         }
         .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            if let onNext {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Next") {
+                        if holdsAttachments { isConfirmingNext = true } else { onNext() }
+                    }
+                    .accessibilityHint("Opens the next chat that needs you")
+                    .confirmationDialog(
+                        "Discard attachments?",
+                        isPresented: $isConfirmingNext,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Discard attachments", role: .destructive, action: onNext)
+                        Button("Stay", role: .cancel) {}
+                    } message: {
+                        Text("They aren’t kept when you move to the next chat. Your message text is saved.")
+                    }
+                }
+            }
+        }
+        .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
+            holdsAttachments = holds
+        }
         .task(id: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState) {
             await model.load(coordinator: coordinator)
         }
