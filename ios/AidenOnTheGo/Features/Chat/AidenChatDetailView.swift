@@ -86,6 +86,8 @@ struct AidenChatDetailView: View {
     /// Opens a chat this one was forked into. Nil hides the fork actions,
     /// for surfaces that cannot navigate to a new Workspace chat.
     private let onOpenChat: (@MainActor (AidenChat) -> Void)?
+    /// The machine this chat stays on when the default moves. Nil on the old shell.
+    private let pinnedOwner: String?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -100,6 +102,7 @@ struct AidenChatDetailView: View {
     ) {
         _coordinator = State(initialValue: coordinator)
         self.onOpenChat = onOpenChat
+        pinnedOwner = owner?.instanceId
         let model = AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
@@ -137,6 +140,7 @@ struct AidenChatDetailView: View {
         autoStartVoice = false
         allowsMutations = false
         onOpenChat = nil
+        pinnedOwner = nil
     }
 #endif
 
@@ -145,7 +149,7 @@ struct AidenChatDetailView: View {
     }
 
     private var botToolsSessionIdentity: AidenBotChatToolsSessionIdentity? {
-        coordinator.map(AidenBotChatToolsSessionIdentity.init)
+        coordinator.map { AidenBotChatToolsSessionIdentity(coordinator: $0, owner: pinnedOwner) }
     }
 
     private var botPrimarySupportsImages: Bool? {

@@ -277,8 +277,27 @@ private struct InboxNoticeTiming: Hashable {
 }
 
 struct AidenWorkspaceDefaultApplication {
+    /// Where this phone keeps the permission a new workspace starts with.
+    static let permissionKey = "aiden.defaults.workspacePermission"
+
     let workspace: AidenWorkspace
     let feedback: AidenHapticEvent
+
+    /// The workspace back with `permission`, or as it was when `update` returns nil.
+    @MainActor
+    static func applying(
+        _ permission: AidenWorkspacePermission,
+        to workspace: AidenWorkspace,
+        update: (AidenWorkspacePermission) async -> AidenWorkspace?
+    ) async -> AidenWorkspaceDefaultApplication {
+        guard permission != workspace.permission else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
+        }
+        guard let updated = await update(permission) else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
+        }
+        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
+    }
 }
 
 struct AidenWorkspaceShellView: View {
@@ -324,7 +343,7 @@ struct AidenWorkspaceShellView: View {
     @Namespace private var newAgentTransition
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
-    @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
+    @AppStorage(AidenWorkspaceDefaultApplication.permissionKey) private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -1742,13 +1761,7 @@ struct AidenWorkspaceShellView: View {
     @MainActor
     private func applyGlobalDefaults(to workspace: AidenWorkspace) async -> AidenWorkspaceDefaultApplication {
         let permission = AidenWorkspacePermission(rawValue: defaultWorkspacePermissionRaw) ?? .ask
-        guard permission != workspace.permission else {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
-        }
-        guard let updated = await coordinator.updateWorkspace(workspace, permission: permission) else {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
-        }
-        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
+        return await .applying(permission, to: workspace) { await coordinator.updateWorkspace(workspace, permission: $0) }
     }
 
     @ViewBuilder

@@ -62,7 +62,7 @@ struct AidenMachineRow: Identifiable, Equatable {
 
     var accessibilityValue: String {
         var parts: [String] = []
-        if isSelected { parts.append(String(localized: "Selected machine")) }
+        if isSelected { parts.append(String(localized: "Default machine")) }
         if isHidden { parts.append(String(localized: "Hidden from Inbox, still paired")) }
         parts.append(transport)
         if status != .online { parts.append(AidenInstallationPresentation.lastConnection(lastConnectedAt)) }
@@ -185,15 +185,21 @@ final class AidenMachinesModel {
     /// Long enough for a slow network, short enough that the spinner always ends.
     private static let reconnectTimeout: TimeInterval = 30
 
-    /// Retries one machine. Nothing else connects and the selected machine stays.
+    /// Retries one machine. Nothing else connects and the default machine stays.
     func reconnect(_ instanceId: String) async {
         guard let connection = coordinator.hosts.connection(for: instanceId),
               !connection.isConnectInFlight else { return }
         await connection.connect(timeout: Self.reconnectTimeout)
     }
 
+    /// Makes it the default, then gives a machine that's down one try to answer.
+    /// Nothing on the other machines changes.
     func select(_ instanceId: String) async -> AidenRemoteMutationOutcome<Void> {
-        await coordinator.switchInstallationOutcome(to: instanceId)
+        let outcome = coordinator.setDefaultMachine(instanceId)
+        guard case .success = outcome, let connection = coordinator.hosts.connection(for: instanceId),
+              connection.connectionState != .connected, !connection.isConnectInFlight else { return outcome }
+        await connection.connect(timeout: Self.reconnectTimeout)
+        return connection.connectionState == .connected ? .success(()) : .failure
     }
 
     /// Removes the pairing, its drafts and Bot outbox, and (inside the
@@ -213,7 +219,7 @@ final class AidenMachinesModel {
         if coordinator.installationStore.installations.count == 1 {
             message += " " + String(localized: "It is your only machine, so you will be asked to pair again.")
         } else if coordinator.activeInstanceId == instanceId {
-            message += " " + String(localized: "Another machine will be selected.")
+            message += " " + String(localized: "Another machine will become the default.")
         }
         return message
     }
@@ -432,7 +438,7 @@ private struct AidenMachineRowView: View {
                         .foregroundStyle(.secondary)
                 }
                 if stacked, row.isSelected {
-                    Text("Selected machine")
+                    Text("Default machine")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

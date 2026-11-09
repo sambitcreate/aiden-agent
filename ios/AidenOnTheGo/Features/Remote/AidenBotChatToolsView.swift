@@ -19,12 +19,15 @@ struct AidenBotChatToolsSessionIdentity: Equatable {
     let connection: String
     let capabilities: String
 
+    /// `owner` is the machine an open chat stays on, so the default moving leaves
+    /// this alone. Nil follows the selected machine.
     @MainActor
-    init(coordinator: AidenRemoteCoordinator) {
-        let installation = coordinator.installationStore.activeInstallation
+    init(coordinator: AidenRemoteCoordinator, owner: String? = nil) {
+        let host = owner.flatMap { coordinator.hosts.connection(for: $0) }
+        let installation = owner == nil ? coordinator.installationStore.activeInstallation : host?.installation
         instanceID = installation?.id
         deviceID = installation?.deviceId
-        switch coordinator.connectionState {
+        switch owner == nil ? coordinator.connectionState : host?.connectionState ?? .needsPairing {
         case .needsPairing: connection = "needs-pairing"
         case .connecting: connection = "connecting"
         case .connected: connection = "connected"
@@ -107,6 +110,18 @@ final class AidenBotChatToolsModel {
                 && coordinator.installationStore.activeInstallation?.canWriteBots == true
                 && coordinator.isCurrent(identity.context)
         )
+    }
+
+    /// `fileGrant`, while these tools still read the selected machine. Once the
+    /// default moves a Files sheet can't load, so there's nothing to offer until
+    /// the tools are loaded again.
+    func reachableFileGrant(
+        coordinator: AidenRemoteCoordinator,
+        hostAllowsMutations: Bool
+    ) -> AidenBotConversationFileGrant? {
+        guard let grant = fileGrant(coordinator: coordinator, hostAllowsMutations: hostAllowsMutations),
+              coordinator.isCurrent(grant.context) else { return nil }
+        return grant
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {

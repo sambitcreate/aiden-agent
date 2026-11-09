@@ -11,6 +11,9 @@ struct AidenUsagePendingView: View {
     let retry: () -> Void
     /// True when a stack has pushed this page, so Back replaces Done.
     var isPushed = false
+    var unavailableMessage: LocalizedStringKey = "Usage appears once your Mac is reachable."
+    var failedMessage: LocalizedStringKey = "Your Mac didn't return usage this time."
+    var machinePicker: AidenNewWorkMachinePicker?
 
     var body: some View {
         AidenPresentedStack(isPushed: isPushed) {
@@ -19,13 +22,13 @@ struct AidenUsagePendingView: View {
                     ContentUnavailableView(
                         "Usage Unavailable",
                         systemImage: "chart.bar.xaxis",
-                        description: Text("Usage appears once your Mac is reachable.")
+                        description: Text(unavailableMessage)
                     )
                 } else if failed {
                     ContentUnavailableView {
                         Label("Usage Couldn't Load", systemImage: "chart.bar.xaxis")
                     } description: {
-                        Text("Your Mac didn't return usage this time.")
+                        Text(failedMessage)
                     } actions: {
                         Button("Try Again", action: retry)
                     }
@@ -48,6 +51,9 @@ struct AidenUsagePendingView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaInset(edge: .top) {
+                machinePicker?.padding(.horizontal, AidenSpacing.l)
+            }
             .background(palette.canvas.ignoresSafeArea())
             .navigationTitle("Usage")
             .navigationBarTitleDisplayMode(.inline)
@@ -62,6 +68,120 @@ struct AidenUsagePendingView: View {
     }
 }
 
+/// What a machine has used. It starts on the default machine and only ever shows
+/// the machine it's on.
+@MainActor
+@Observable
+final class AidenMachineUsageModel {
+    let picker: AidenNewWorkPicker
+    private var loadedUsage: AidenUsageSummary?
+    private var loadedProviders: [AidenProvider] = []
+    private var didFail = false
+    /// The machine those came from. Until a pick has loaded they aren't its numbers.
+    private var shown: AidenNewWorkTarget?
+
+    var usage: AidenUsageSummary? { shown == picker.target ? loadedUsage : nil }
+    var providers: [AidenProvider] { shown == picker.target ? loadedProviders : [] }
+    var loadFailed: Bool { shown == picker.target && didFail }
+
+    @ObservationIgnored private let coordinator: AidenRemoteCoordinator
+
+    init(coordinator: AidenRemoteCoordinator, preferences: AidenMachinePreferencesStore? = nil) {
+        self.coordinator = coordinator
+        picker = AidenNewWorkPicker(coordinator: coordinator, kind: .reading, preferences: preferences)
+    }
+
+    private var connection: AidenHostConnection? {
+        picker.target.flatMap { coordinator.hosts.connection(for: $0.instanceId) }
+    }
+
+    var isConnected: Bool { connection?.connectionState == .connected }
+
+    /// Still connecting isn't unreachable: the page's outline holds its place.
+    var isUnreachable: Bool {
+        switch connection?.connectionState {
+        case .connected, .connecting: false
+        case .offline, .needsPairing, nil: true
+        }
+    }
+
+    /// False for a machine that hasn't granted this phone a read of its usage.
+    var sharesUsage: Bool { AidenHomeLoadPlan(installation: connection?.installation).loadsUsage }
+
+    func load() async {
+        if shown != picker.target {
+            shown = picker.target
+            loadedUsage = nil
+            loadedProviders = []
+            didFail = false
+        }
+        guard let target = picker.target, let connection, isConnected, sharesUsage,
+              let owner = try? coordinator.ownerContext(for: target.instanceId) else { return }
+        let readsCatalog = AidenHomeLoadPlan(installation: connection.installation).loadsModelCatalog
+        do {
+            let client = try coordinator.remoteClient(for: owner)
+            async let loadedUsage = client.usage()
+            async let loadedCatalog = readsCatalog ? try? client.modelCatalog() : nil
+            let values = try await (loadedUsage, loadedCatalog)
+            guard picker.target == target, coordinator.isLive(owner) else { return }
+            self.loadedUsage = values.0
+            loadedProviders = values.1?.providers ?? loadedProviders
+            didFail = false
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: owner) { return }
+            guard picker.target == target, coordinator.isLive(owner) else { return }
+            didFail = self.loadedUsage == nil
+        }
+    }
+}
+
+/// Usage for one machine at a time, on the tab shell.
+struct AidenMachineUsageView: View {
+    private struct LoadID: Equatable {
+        let target: AidenNewWorkTarget?
+        let isConnected: Bool
+    }
+
+    @State private var model: AidenMachineUsageModel
+    private let isPushed: Bool
+
+    /// `isPushed` is true when a stack has pushed this page, so Back replaces Done.
+    init(coordinator: AidenRemoteCoordinator, isPushed: Bool = false) {
+        _model = State(initialValue: AidenMachineUsageModel(coordinator: coordinator))
+        self.isPushed = isPushed
+    }
+
+    var body: some View {
+        Group {
+            if let usage = model.usage {
+                AidenUsageView(
+                    usage: usage,
+                    providers: model.providers,
+                    isPushed: isPushed,
+                    machinePicker: AidenNewWorkMachinePicker(picker: model.picker)
+                )
+            } else {
+                AidenUsagePendingView(
+                    isOffline: model.isUnreachable || !model.sharesUsage,
+                    failed: model.loadFailed,
+                    retry: { Task { await model.load() } },
+                    isPushed: isPushed,
+                    unavailableMessage: model.sharesUsage
+                        ? "Usage appears once this machine is reachable."
+                        : "This machine doesn’t share usage with this phone.",
+                    failedMessage: "This machine didn't return usage this time.",
+                    machinePicker: AidenNewWorkMachinePicker(picker: model.picker)
+                )
+            }
+        }
+        .task(id: LoadID(target: model.picker.target, isConnected: model.isConnected)) {
+            await model.load()
+        }
+    }
+}
+
 struct AidenUsageView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -69,6 +189,7 @@ struct AidenUsageView: View {
     let providers: [AidenProvider]
     /// True when a stack has pushed this page, so Back replaces Done.
     var isPushed = false
+    var machinePicker: AidenNewWorkMachinePicker?
 
     private var heatmapDays: [AidenUsageHeatmapDay] {
         AidenUsagePresentation.heatmapDays(for: usage)
@@ -96,6 +217,7 @@ struct AidenUsageView: View {
         AidenPresentedStack(isPushed: isPushed) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 28) {
+                    machinePicker
                     usageHero
                     overviewGrid
                     tokenActivitySection

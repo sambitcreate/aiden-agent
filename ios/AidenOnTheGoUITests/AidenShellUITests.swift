@@ -524,7 +524,7 @@ final class AidenShellUITests: XCTestCase {
         let laptop = offline.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch
         XCTAssertTrue(laptop.waitForExistence(timeout: 10), "No offline machine to select")
         laptop.tap()
-        let change = offline.buttons["Switch to this machine"].firstMatch
+        let change = offline.buttons["Make this the default machine"].firstMatch
         // Far down a lazy form: it isn't built until it's scrolled to.
         for _ in 0..<6 where !change.waitForExistence(timeout: 1) { offline.swipeUp() }
         XCTAssertTrue(change.exists, "No way to select the offline machine")

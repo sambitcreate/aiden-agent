@@ -160,7 +160,7 @@ final class AidenRemoteCoordinator {
     let installationStore: AidenInstallationStore
     let haptics: any AidenHapticEmitting
     /// The phone-local machine names, symbols and colours. A machine that leaves takes its entry with it.
-    private let machinePreferences: AidenMachinePreferencesStore
+    let machinePreferences: AidenMachinePreferencesStore
     private let clientFactory: ClientFactory
     /// One connection per paired machine, the selected one included.
     let hosts: AidenHostRegistry
@@ -200,6 +200,13 @@ final class AidenRemoteCoordinator {
     var knownServerFeatures: [String]? {
         if let server { return server.features }
         let saved = installationStore.activeInstallation?.serverFeatures ?? []
+        return saved.isEmpty ? nil : saved
+    }
+    /// `knownServerFeatures`, for one machine rather than the selected one.
+    func knownServerFeatures(of instanceId: String) -> [String]? {
+        guard let connection = hosts.connection(for: instanceId) else { return nil }
+        if let server = connection.server { return server.features }
+        let saved = connection.installation.serverFeatures
         return saved.isEmpty ? nil : saved
     }
     private(set) var workspaces: [AidenWorkspace] {
@@ -401,7 +408,7 @@ final class AidenRemoteCoordinator {
         let previousDeviceId = installationStore.installations.first {
             $0.id == exchange.instanceId
         }?.deviceId
-        let knownWorkspaceIds = activeInstanceId == exchange.instanceId
+        let knownWorkspaceIds = defaultInstanceId == exchange.instanceId
             ? Set(workspaces.map(\.id))
             : []
         let installation = try installationStore.savePairing(
@@ -466,10 +473,10 @@ final class AidenRemoteCoordinator {
         isMutating = true
         defer { isMutating = false }
         do {
-            let previousInstallationId = activeInstanceId
+            let previousInstallationId = defaultInstanceId
             try installationStore.setActive(installationId)
             syncSelectedConnection()
-            if previousInstallationId != activeInstanceId {
+            if previousInstallationId != defaultInstanceId {
                 advanceActivationGeneration()
             }
             // A machine that is already connected keeps what it holds. The
@@ -481,7 +488,7 @@ final class AidenRemoteCoordinator {
             }
             updateIntentCatalog(for: nil)
             await connectActiveInstallation()
-            guard activeInstanceId == installationId else { return .stale }
+            guard defaultInstanceId == installationId else { return .stale }
             guard connectionState == .connected else { return .failure }
             return .success(())
         } catch let error where aidenIsCancellation(error) {
@@ -501,7 +508,7 @@ final class AidenRemoteCoordinator {
         isMutating = true
         defer { isMutating = false }
         do {
-            let wasSelected = activeInstanceId == installationId
+            let wasSelected = defaultInstanceId == installationId
             let knownWorkspaceIds = Set(hosts.connection(for: installationId)?.workspaces.map(\.id) ?? [])
             try installationStore.remove(installationId)
             syncSelectedConnection()
@@ -528,7 +535,7 @@ final class AidenRemoteCoordinator {
     }
 
     func refreshWorkspaces() async {
-        guard let installationId = activeInstanceId else {
+        guard let installationId = defaultInstanceId else {
             connectionState = .needsPairing
             return
         }
@@ -587,7 +594,7 @@ final class AidenRemoteCoordinator {
         presentedError = nil
         defer { isMutating = false }
 
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         let client: AidenRemoteClient
         do {
@@ -646,7 +653,7 @@ final class AidenRemoteCoordinator {
         presentedError = nil
         defer { isMutating = false }
 
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         let client: AidenRemoteClient
         do {
@@ -702,7 +709,7 @@ final class AidenRemoteCoordinator {
         presentedError = nil
         defer { isMutating = false }
 
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         let client: AidenRemoteClient
         do {
@@ -715,7 +722,7 @@ final class AidenRemoteCoordinator {
         let key = pendingManagedWorktreeDeletionKeys[scope] ?? UUID()
         pendingManagedWorktreeDeletionKeys[scope] = key
         workspaces.removeAll { $0.id == workspace.id }
-        updateIntentCatalog(for: activeInstanceId)
+        updateIntentCatalog(for: defaultInstanceId)
         persistWorkspaces()
         do {
             _ = try await client.deleteManagedGitWorktree(
@@ -808,8 +815,37 @@ final class AidenRemoteCoordinator {
         }
     }
 
-    var activeInstanceId: String? {
+    /// The machine new work starts on, and what the facade's selected-machine
+    /// reads follow. Work a person aims elsewhere leaves it alone. It's saved in
+    /// the same Keychain field as ever, so nothing migrates.
+    var defaultInstanceId: String? {
         installationStore.activeInstallationId
+    }
+
+    @available(*, deprecated, renamed: "defaultInstanceId")
+    var activeInstanceId: String? {
+        defaultInstanceId
+    }
+
+    /// Moves the default and nothing else. No machine is asked anything, a
+    /// connected machine stays connected, and work on an owner context goes on.
+    /// Work bound to the selection ends with it, as `isCurrent` has always said.
+    /// A machine that isn't connected yet is the scheduler's to reach.
+    @discardableResult
+    func setDefaultMachine(_ instanceId: String) -> AidenRemoteMutationOutcome<Void> {
+        guard !isMutating else { return .busy }
+        guard hosts.connection(for: instanceId)?.isRevoked == false else { return .stale }
+        guard defaultInstanceId != instanceId else { return .success(()) }
+        do {
+            try installationStore.setActive(instanceId)
+        } catch {
+            presentedError = error.localizedDescription
+            return .failure
+        }
+        syncSelectedConnection(stoppingOutgoingConnect: false)
+        advanceActivationGeneration()
+        updateIntentCatalog(for: instanceId)
+        return .success(())
     }
 
     func setDeviceArchivedWorkspaceIDs(_ workspaceIDs: Set<String>, for instanceId: String?) {
@@ -823,8 +859,8 @@ final class AidenRemoteCoordinator {
     }
 
     func requestContext(for instanceId: String? = nil) throws -> AidenRemoteRequestContext {
-        guard let activeInstanceId,
-              instanceId == nil || instanceId == activeInstanceId,
+        guard let defaultInstanceId,
+              instanceId == nil || instanceId == defaultInstanceId,
               let connection = syncSelectedConnection() else {
             throw AidenRemoteClientError.installationChanged
         }
@@ -861,7 +897,7 @@ final class AidenRemoteCoordinator {
     }
 
     func isCurrent(_ context: AidenRemoteRequestContext) -> Bool {
-        activeInstanceId == context.instanceId
+        defaultInstanceId == context.instanceId
             && activationGeneration == context.generation
             && isRetained(context)
     }
@@ -871,6 +907,14 @@ final class AidenRemoteCoordinator {
     /// stays live through A -> B -> A even though it stops being current.
     func isLive(_ context: AidenRemoteRequestContext) -> Bool {
         isRetained(context) && hosts.connection(for: context.instanceId)?.isLive(context) == true
+    }
+
+    /// True while work under `context` may go on, by the rule of its scope.
+    func holds(_ context: AidenRemoteRequestContext) -> Bool {
+        switch context.scope {
+        case .selected: isCurrent(context)
+        case .owner: isLive(context)
+        }
     }
 
     func isRetained(_ context: AidenRemoteRequestContext) -> Bool {
@@ -976,7 +1020,7 @@ final class AidenRemoteCoordinator {
     /// selection. Nothing the app shows moves on its own here: the callers clear
     /// and advance at the point they always have.
     @discardableResult
-    private func syncSelectedConnection() -> AidenHostConnection? {
+    private func syncSelectedConnection(stoppingOutgoingConnect: Bool = true) -> AidenHostConnection? {
         if installationStore.activeInstallation == nil, let outgoing = selectedConnection {
             unselected = NoSelection(
                 connectionState: outgoing.connectionState,
@@ -989,7 +1033,7 @@ final class AidenRemoteCoordinator {
         if selectedConnection !== connection {
             // An attempt the person was waiting on stops with the selection, so
             // its late answer can't land on a machine they have left.
-            selectedConnection?.cancelConnect()
+            if stoppingOutgoingConnect { selectedConnection?.cancelConnect() }
             selectedConnection = connection
         }
         return connection
@@ -1049,7 +1093,7 @@ final class AidenRemoteCoordinator {
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
-        guard let installationId = activeInstanceId else { return .stale }
+        guard let installationId = defaultInstanceId else { return .stale }
         let generation = connectionGeneration
         do {
             let client = try activeClient()
@@ -1068,12 +1112,12 @@ final class AidenRemoteCoordinator {
     }
 
     private func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace], instanceId: String) {
-        guard activeInstanceId == instanceId else { return }
+        guard defaultInstanceId == instanceId else { return }
         syncSelectedConnection()?.applyWorkspaceSnapshot(workspaces)
     }
 
     private func persistWorkspaces() {
-        guard let instanceId = activeInstanceId else { return }
+        guard let instanceId = defaultInstanceId else { return }
         persistWorkspaces(workspaces, instanceId: instanceId)
     }
 
@@ -1084,19 +1128,19 @@ final class AidenRemoteCoordinator {
     }
 
     private func isCurrentContext(installationId: String, generation: Int) -> Bool {
-        activeInstanceId == installationId && connectionGeneration == generation
+        defaultInstanceId == installationId && connectionGeneration == generation
     }
 
     private func upsert(_ workspace: AidenWorkspace) {
         workspaces.removeAll { $0.id == workspace.id }
         workspaces.append(workspace)
         workspaces.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        updateIntentCatalog(for: activeInstanceId)
+        updateIntentCatalog(for: defaultInstanceId)
         persistWorkspaces()
     }
 
     private func handleConnectionError(_ error: Error, installationId: String) async {
-        guard installationId == activeInstanceId,
+        guard installationId == defaultInstanceId,
               let connection = syncSelectedConnection() else { return }
         await connection.handleConnectionError(error)
     }
@@ -1146,7 +1190,7 @@ final class AidenRemoteCoordinator {
             AidenIntentInstallationRecord(id: $0.id, name: $0.name)
         }
         let cachedWorkspaces: [AidenIntentWorkspaceRecord]
-        if let instanceId, instanceId == activeInstanceId {
+        if let instanceId, instanceId == defaultInstanceId {
             let archivedWorkspaceIDs = workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
             // Shortcuts see chats without a workspace as one Chats entry, as the sidebar does.
             let hiddenIDs = workspaces.filter(\.noWorkspace).map(\.id)
@@ -1163,7 +1207,7 @@ final class AidenRemoteCoordinator {
         }
         try? AidenIntentCatalogStore.shared.update(
             installations: installations,
-            activeInstallationId: activeInstanceId,
+            activeInstallationId: defaultInstanceId,
             workspaces: cachedWorkspaces,
             for: instanceId
         )
@@ -1206,7 +1250,7 @@ final class AidenRemoteCoordinator {
 
 extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
     func hostConnectionIsSelected(_ connection: AidenHostConnection) -> Bool {
-        connection === selectedConnection && connection.instanceId == activeInstanceId
+        connection === selectedConnection && connection.instanceId == defaultInstanceId
     }
 
     func hostConnectionSavedInstallation(_ connection: AidenHostConnection) -> AidenInstallation? {
@@ -1312,7 +1356,7 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         // Everything below acts on the selected machine and the app-wide error.
         guard hostConnectionIsSelected(connection) else { return .notSelected }
         let installationId = connection.instanceId
-        let previousInstallationId = activeInstanceId
+        let previousInstallationId = defaultInstanceId
         let knownWorkspaceIds = previousInstallationId == installationId
             ? Set(workspaces.map(\.id))
             : []
@@ -1322,7 +1366,7 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
             connection.markRevoked()
         }
         syncSelectedConnection()
-        if previousInstallationId != activeInstanceId {
+        if previousInstallationId != defaultInstanceId {
             advanceActivationGeneration()
             settleArrivingMachine()
         } else {

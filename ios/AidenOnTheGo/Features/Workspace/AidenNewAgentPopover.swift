@@ -46,6 +46,10 @@ struct AidenNewAgentPopover: View {
 
     let choices: [AidenNewAgentChoice]
     let canUseExistingWorkspace: Bool
+    /// Which machine the chat goes to, when there is more than one to choose.
+    var machinePicker: AidenNewWorkMachinePicker?
+    /// False while the machine in the picker can't take the chat.
+    var canStart = true
     let onSelect: (AidenNewAgentChoice) -> Void
 
     var body: some View {
@@ -62,6 +66,12 @@ struct AidenNewAgentPopover: View {
             .padding(.horizontal, 18)
             .padding(.top, 18)
             .padding(.bottom, 10)
+
+            if let machinePicker {
+                machinePicker
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 12)
+            }
 
             ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                 Button {
@@ -97,8 +107,8 @@ struct AidenNewAgentPopover: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(choice == .existingWorkspace && !canUseExistingWorkspace)
-                .opacity(choice == .existingWorkspace && !canUseExistingWorkspace ? 0.45 : 1)
+                .disabled(!canStart || (choice == .existingWorkspace && !canUseExistingWorkspace))
+                .opacity(!canStart || (choice == .existingWorkspace && !canUseExistingWorkspace) ? 0.45 : 1)
                 .accessibilityHint(detail(for: choice))
 
                 if index < choices.count - 1 {

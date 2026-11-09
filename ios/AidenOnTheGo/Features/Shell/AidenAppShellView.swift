@@ -52,6 +52,9 @@ struct AidenAppShellView: View {
     @State private var newChat: AidenNewChatFlow
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
+    /// The Inbox's compose, on a machine the person picks. Workspaces keeps
+    /// `newChat`, on the machine its directory shows.
+    @State private var newWork: AidenNewWorkChatFlow
     @State private var showsRunningChats = false
 
     init(
@@ -83,6 +86,12 @@ struct AidenAppShellView: View {
                 navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
             }
         ))
+        _newWork = State(initialValue: AidenNewWorkChatFlow(coordinator: coordinator) { chat, id in
+            let home = inboxStore.homeModel(for: id.instanceId)
+            home?.accept(chat)
+            home?.markViewed(chatID: chat.id)
+            navigation.open(.chat(id))
+        })
     }
 
     private var botsAvailability: AidenBotsAvailability {
@@ -167,6 +176,7 @@ struct AidenAppShellView: View {
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         .aidenNewChatPresentation(newChat)
+        .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && navigation.openChat == nil
@@ -256,7 +266,7 @@ struct AidenAppShellView: View {
         }
         ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItem(placement: .primaryAction) {
-            AidenNewChatButton(flow: newChat)
+            AidenNewWorkComposeButton(flow: newWork)
         }
     }
 
@@ -316,7 +326,7 @@ struct AidenAppShellView: View {
         case .scheduled:
             AidenScheduledTasksView(coordinator: coordinator, isPushed: true)
         case .usage:
-            AidenUsageRouteView(coordinator: coordinator)
+            AidenMachineUsageView(coordinator: coordinator, isPushed: true)
         case .catchUpFinished(let ending):
             AidenCatchUpFinishedView(ending: ending) { navigation.inboxPath = [] }
         }
@@ -345,90 +355,6 @@ struct AidenAppShellView: View {
             navigation.open(route, startsVoice: request.startsVoice)
         } else {
             coordinator.presentedError = String(localized: "This machine is no longer paired. Pair it again to continue.")
-        }
-    }
-}
-
-/// What Usage reads. Its route names no machine, so it reads the selected one.
-@MainActor @Observable
-final class AidenUsageRouteModel {
-    enum State: Equatable {
-        case loading
-        case ready(AidenUsageSummary, providers: [AidenProvider])
-        case offline
-        case failed
-        /// The machine doesn't let this phone read its usage.
-        case unavailable(String)
-    }
-
-    private(set) var state = State.loading
-
-    func load(coordinator: AidenRemoteCoordinator) async {
-        guard let context = try? coordinator.requestContext() else { return }
-        let plan = AidenHomeLoadPlan(installation: coordinator.installationStore.activeInstallation)
-        guard plan.loadsUsage else {
-            state = .unavailable(String(localized: "This machine doesn’t share its usage with this phone."))
-            return
-        }
-        switch coordinator.connectionState {
-        case .connected:
-            break
-        case .connecting, .needsPairing:
-            return
-        case .offline:
-            if case .ready = state { return }
-            state = .offline
-            return
-        }
-        if case .ready = state {} else { state = .loading }
-        do {
-            let client = try coordinator.remoteClient(for: context)
-            async let catalog = plan.loadsModelCatalog ? try? await client.modelCatalog() : nil
-            let usage = try await client.usage()
-            let providers = await catalog?.providers ?? []
-            guard coordinator.isCurrent(context) else { return }
-            state = .ready(usage, providers: providers)
-        } catch where aidenIsCancellation(error) {
-            return
-        } catch {
-            if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isCurrent(context) else { return }
-            if case .ready = state { return }
-            state = .failed
-        }
-    }
-}
-
-private struct AidenUsageRouteView: View {
-    private struct LoadID: Equatable {
-        let selection: String?
-        let connectionState: AidenRemoteConnectionState
-    }
-
-    let coordinator: AidenRemoteCoordinator
-    @Environment(\.aidenPalette) private var palette
-    @State private var model = AidenUsageRouteModel()
-
-    var body: some View {
-        Group {
-            switch model.state {
-            case .ready(let usage, let providers):
-                AidenUsageView(usage: usage, providers: providers, isPushed: true)
-            case .unavailable(let message):
-                ContentUnavailableView("Usage unavailable", systemImage: "chart.bar.xaxis", description: Text(message))
-                    .background(palette.canvas.ignoresSafeArea())
-                    .navigationTitle("Usage")
-            case .loading, .offline, .failed:
-                AidenUsagePendingView(
-                    isOffline: model.state == .offline,
-                    failed: model.state == .failed,
-                    retry: { Task { await model.load(coordinator: coordinator) } },
-                    isPushed: true
-                )
-            }
-        }
-        .task(id: LoadID(selection: coordinator.activeInstanceId, connectionState: coordinator.connectionState)) {
-            await model.load(coordinator: coordinator)
         }
     }
 }

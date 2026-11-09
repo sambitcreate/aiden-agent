@@ -32,7 +32,7 @@ struct AidenAppSettingsView: View {
     @State private var memorySettings: AidenMemorySettings?
     @State private var memoryError: String?
     @State private var isSavingMemory = false
-    @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
+    @AppStorage(AidenWorkspaceDefaultApplication.permissionKey) private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
     @AppStorage(AidenVoiceInputMode.defaultsKey) private var voiceInputModeRaw = AidenVoiceInputMode.onDevice.rawValue
 
     private func loadMemorySettings() async {
@@ -86,6 +86,7 @@ struct AidenAppSettingsView: View {
                                 Label("Machines", systemImage: "desktopcomputer")
                             }
                         }
+                        AidenDefaultMachineRow(coordinator: coordinator)
                     } else {
                         Button {
                             isShowingInstallations = true

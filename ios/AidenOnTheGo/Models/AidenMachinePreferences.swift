@@ -75,6 +75,12 @@ final class AidenMachinePreferencesStore {
         return created
     }
 
+    /// What's saved for a machine, without assigning anything to one seen for the
+    /// first time. A view can call this from `body`.
+    func saved(for instanceId: String) -> AidenMachinePreferences? {
+        stored[instanceId]
+    }
+
     /// Whether the person hid the machine. Unlike `preferences(for:)` this
     /// assigns nothing, so a view body can read it.
     func isHidden(_ instanceId: String) -> Bool {

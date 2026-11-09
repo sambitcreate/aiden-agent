@@ -972,12 +972,13 @@ final class AidenAppShellTests: XCTestCase {
         installation.serverCapabilities = installation.serverCapabilities?.filter { $0 != .serverRead }
         let coordinator = AidenDemoHosts.coordinator(installations: [installation], responder: responder)
         await coordinator.start()
-        let model = AidenUsageRouteModel()
+        let model = AidenMachineUsageModel(coordinator: coordinator)
 
-        await model.load(coordinator: coordinator)
+        await model.load()
 
-        guard case .unavailable(let message) = model.state else { return XCTFail("\(model.state)") }
-        XCTAssertTrue(message.contains("machine"), message)
+        XCTAssertFalse(model.sharesUsage)
+        XCTAssertNil(model.usage)
+        XCTAssertFalse(model.loadFailed)
         XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /usage"))
     }
 
