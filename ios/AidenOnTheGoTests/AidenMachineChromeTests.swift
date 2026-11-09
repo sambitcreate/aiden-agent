@@ -289,6 +289,20 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertNil(store.roster.searchChip(for: "studio"), "Search leaves hidden machines out, so nothing needs telling apart")
     }
 
+    func testSearchNamesAMachineByItsOverride() async throws {
+        let coordinator = coordinator(.four)
+        let store = makeStore(coordinator)
+        let searchName = try XCTUnwrap(AidenSearchMachine.machines(in: coordinator).first { $0.instanceId == "laptop" }?.name)
+        XCTAssertEqual(searchName, "Laptop", "Search's own machine list carries the machine's own name")
+
+        preferences.update("laptop", { $0.nameOverride = "Travel" })
+        await waitUntil("the override") { store.roster.labels["laptop"]?.name == "Travel" }
+
+        XCTAssertEqual(store.roster.searchMachineName(for: "laptop", else: searchName), "Travel")
+        XCTAssertEqual(store.roster.searchMachineName(for: "mini", else: "Mini"), "Home Mini")
+        XCTAssertEqual(store.roster.searchMachineName(for: "gone", else: "Old Mac"), "Old Mac", "A row from a machine the roster doesn't know keeps its own name")
+    }
+
     // MARK: Chip
 
     func testChipColoursMeetContrastInEveryTheme() throws {
@@ -332,7 +346,11 @@ final class AidenMachineChromeTests: XCTestCase {
             .environment(\.dynamicTypeSize, .accessibility5))
         let size = try XCTUnwrap(renderer.uiImage).size
 
+        let large = try XCTUnwrap(ImageRenderer(content: AidenMachineChip(label: label("Studio Mac"))
+            .environment(\.dynamicTypeSize, .large)).uiImage).size
+
         XCTAssertLessThanOrEqual(size.height, 32, "A chip beside the row's words must not outgrow them")
+        XCTAssertGreaterThan(size.height, large.height, "The chip grows with the text until its limit")
     }
 
     // MARK: Offline rows
@@ -412,9 +430,26 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertTrue(summary.contains("offline"), summary)
         XCTAssertTrue(summary.contains(AidenInstallationPresentation.lastConnection(lastSeen)), summary)
 
-        let reconnect = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Reconnect" })
+        let reconnect = try XCTUnwrap(
+            elements.first { $0.accessibilityLabel == "Reconnect Build Box" },
+            "Reconnect doesn't say which machine it tries: \(elements.compactMap(\.accessibilityLabel))"
+        )
         XCTAssertTrue(reconnect.accessibilityActivate())
         XCTAssertEqual(reconnects, 1)
+    }
+
+    func testEachOfflineRowsReconnectNamesItsOwnMachine() throws {
+        let window = try show(VStack {
+            AidenMachineOfflineRow(label: label("Laptop", id: "laptop"), lastSeen: nil, onReconnect: {})
+            AidenMachineOfflineRow(label: label("Build Box", id: "build"), lastSeen: nil, onReconnect: {})
+        })
+        defer { close(window) }
+
+        let buttons = accessibleElements(in: window)
+            .filter { $0.accessibilityTraits.contains(.button) }
+            .compactMap(\.accessibilityLabel)
+
+        XCTAssertEqual(buttons, ["Reconnect Laptop", "Reconnect Build Box"], "A rotor of buttons can't tell identical names apart")
     }
 
     func testAnOfflineRowIsDimmedAndKeepsItsChip() throws {
@@ -472,6 +507,18 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertTrue(item.accessibilityTraits.contains(.button))
         XCTAssertTrue(item.accessibilityActivate())
         XCTAssertEqual(opens, 1)
+    }
+
+    func testTheStatusItemSaysMachineForASingleMachine() throws {
+        func spoken(online: Int, total: Int) throws -> String? {
+            let window = try show(AidenHostStatusItem(online: online, total: total, onOpen: {}))
+            defer { close(window) }
+            return accessibleElements(in: window).first?.accessibilityLabel
+        }
+
+        XCTAssertEqual(try spoken(online: 1, total: 1), "1 of 1 machine online")
+        XCTAssertEqual(try spoken(online: 0, total: 1), "0 of 1 machine online")
+        XCTAssertEqual(try spoken(online: 1, total: 2), "1 of 2 machines online")
     }
 
     // MARK: Chat subtitle

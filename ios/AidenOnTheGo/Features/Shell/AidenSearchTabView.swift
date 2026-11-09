@@ -83,7 +83,7 @@ struct AidenSearchTabView: View {
                         Button { open(row.route) } label: {
                             AidenSearchChatRowView(
                                 row: row,
-                                machineName: roster.labels[row.id.instanceId]?.name ?? details.machineName(for: row),
+                                machineName: roster.searchMachineName(for: row.id.instanceId, else: details.machineName(for: row)),
                                 workspaceName: details.workspaceName(for: row),
                                 chip: roster.searchChip(for: row.id.instanceId)
                             )
@@ -98,7 +98,7 @@ struct AidenSearchTabView: View {
                         Button { open(hit.route) } label: {
                             AidenSearchBotRowView(
                                 hit: hit,
-                                machineName: roster.labels[hit.id.instanceId]?.name ?? hit.machineName,
+                                machineName: roster.searchMachineName(for: hit.id.instanceId, else: hit.machineName),
                                 chip: roster.searchChip(for: hit.id.instanceId)
                             )
                         }

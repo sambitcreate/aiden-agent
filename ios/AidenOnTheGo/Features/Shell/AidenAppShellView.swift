@@ -57,7 +57,6 @@ struct AidenAppShellView: View {
                     AidenInboxTabRootView(store: inboxStore, onOpen: openChat, onOpenMachines: { navigation.open(.machines) })
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
-                .environment(inboxStore)
             }
             .badge(inboxStore.needsYouCount)
 
@@ -86,6 +85,8 @@ struct AidenAppShellView: View {
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
+        // On every tab, so a machine page reached from any of them counts its open chats.
+        .environment(inboxStore)
         .alert(
             "Aiden On The Go",
             isPresented: Binding(

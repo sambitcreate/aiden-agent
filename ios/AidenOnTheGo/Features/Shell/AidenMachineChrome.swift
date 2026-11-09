@@ -75,6 +75,17 @@ struct AidenMachineRoster: Equatable {
         visible.count > 1 ? labels[instanceId] : nil
     }
 
+    /// The name Search shows beside a row: the label's, so a rename shows there
+    /// too, else the name the row came with.
+    func searchMachineName(for instanceId: String, else fallback: String) -> String {
+        labels[instanceId]?.name ?? fallback
+    }
+
+    /// A chat row may have no machine name of its own.
+    func searchMachineName(for instanceId: String, else fallback: String?) -> String? {
+        labels[instanceId]?.name ?? fallback
+    }
+
     /// A chat on a hidden machine can still open, from a notification, so this
     /// counts more than `visible`.
     func chatSubtitle(for instanceId: String) -> String? {
@@ -254,6 +265,8 @@ struct AidenMachineOfflineRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Several rows can be offline at once, so each button says which machine it tries.
+        .accessibilityLabel(String(localized: "Reconnect \(label.name)"))
         .disabled(isReconnecting)
     }
 }
@@ -276,6 +289,13 @@ struct AidenHostStatusItem: View {
         String(localized: "\(online) of \(total)")
     }
 
+    /// What VoiceOver says for the item.
+    static func spokenTitle(online: Int, total: Int) -> String {
+        total == 1
+            ? String(localized: "\(online) of 1 machine online")
+            : String(localized: "\(online) of \(total) machines online")
+    }
+
     var body: some View {
         Button(action: onOpen) {
             // Not a `Label`: a toolbar draws one as its icon alone, and the count is the point.
@@ -293,7 +313,7 @@ struct AidenHostStatusItem: View {
             .fixedSize()
         }
         .accessibilityShowsLargeContentViewer()
-        .accessibilityLabel(String(localized: "\(online) of \(total) machines online"))
+        .accessibilityLabel(Self.spokenTitle(online: online, total: total))
         .accessibilityHint("Opens Machines")
         .accessibilityIdentifier("aiden.machine-status")
     }

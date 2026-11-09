@@ -307,6 +307,11 @@ final class AidenShellUITests: XCTestCase {
         for _ in 0..<6 where !openChats.exists { app.swipeUp() }
 
         XCTAssertTrue(openChats.exists, "The machine page doesn't count its open chats")
+        // The demo Studio Mac has six chats, and none is done. The row reads as one
+        // element, its label then its value.
+        let count = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Open chats,")).firstMatch
+        XCTAssertTrue(count.exists, "The Open chats row reads no value")
+        XCTAssertEqual(count.label, "Open chats, 6")
     }
 
     func testOneMachineHasNoStrip() {
@@ -337,7 +342,7 @@ final class AidenShellUITests: XCTestCase {
                 let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, appearance: appearance, contentSize: size)
                 let item = app.buttons["aiden.machine-status"]
                 XCTAssertTrue(item.waitForExistence(timeout: 10))
-                XCTAssertTrue(app.buttons["Reconnect"].firstMatch.waitForExistence(timeout: 15))
+                XCTAssertTrue(reconnectButton(in: app).waitForExistence(timeout: 15))
                 Thread.sleep(forTimeInterval: 2)
                 AidenStateMatrix.capture("machines-inbox-\(tag)", in: self)
                 app.swipeUp()
@@ -778,7 +783,12 @@ final class AidenShellUITests: XCTestCase {
     /// Inbox has settled at every size.
     private func openOfflineMixInbox(in app: XCUIApplication) -> XCUIElement {
         AidenStateMatrix.openArea("Inbox", in: app)
-        return app.buttons["Reconnect"].firstMatch
+        return reconnectButton(in: app)
+    }
+
+    /// Each offline row's button names its machine, as in "Reconnect Laptop".
+    private func reconnectButton(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Reconnect ")).firstMatch
     }
 
     private func botRow(in app: XCUIApplication) -> XCUIElement {
