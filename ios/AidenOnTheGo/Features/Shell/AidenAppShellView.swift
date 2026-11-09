@@ -143,6 +143,11 @@ struct AidenAppShellView: View {
                 }
             }
             .badge(inboxStore.needsYouCount)
+            // An iPad's tab strip draws the badge without saying it.
+            .accessibilityValue(
+                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
+                isEnabled: inboxStore.needsYouCount > 0
+            )
 
             Tab("Bots", systemImage: AidenProductArea.bots.symbol, value: AidenAppTab.bots) {
                 NavigationStack(path: $navigation.botsPath) {

@@ -142,6 +142,7 @@ final class AidenShellUITests: XCTestCase {
         let accessory = AidenStateMatrix.runningAccessory(in: app)
         XCTAssertTrue(accessory.waitForExistence(timeout: 15), "No accessory while chats run")
         XCTAssertTrue(accessory.label.contains("1 more"), "The accessory said \(accessory.label)")
+        hideOverlaySidebar(in: app)
 
         accessory.tap()
 
@@ -163,6 +164,7 @@ final class AidenShellUITests: XCTestCase {
         let catchUp = AidenStateMatrix.catchUpRow(in: app)
         XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
         XCTAssertTrue(catchUp.label.contains("4 chats"), "The row said \(catchUp.label)")
+        hideOverlaySidebar(in: app)
 
         catchUp.tap()
 
@@ -221,6 +223,7 @@ final class AidenShellUITests: XCTestCase {
         )
         let catchUp = AidenStateMatrix.catchUpRow(in: app)
         XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
+        hideOverlaySidebar(in: app)
         catchUp.tap()
         let next = app.navigationBars.buttons["Next"]
         XCTAssertTrue(next.waitForExistence(timeout: 10), "No Next")
@@ -247,6 +250,7 @@ final class AidenShellUITests: XCTestCase {
         let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
         let catchUp = AidenStateMatrix.catchUpRow(in: app)
         XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
+        hideOverlaySidebar(in: app)
         catchUp.tap()
 
         // A chat asking something shows a card where the composer goes.
@@ -779,6 +783,7 @@ final class AidenShellUITests: XCTestCase {
             let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance)
             let accessory = AidenStateMatrix.runningAccessory(in: app)
             XCTAssertTrue(accessory.waitForExistence(timeout: 15), "No accessory (\(tag))")
+            hideOverlaySidebar(in: app)
             AidenStateMatrix.capture("accessory-expanded-\(tag)", in: self)
 
             app.swipeUp(velocity: .slow)
@@ -1218,7 +1223,8 @@ final class AidenShellUITests: XCTestCase {
         if !app.buttons["Settings"].firstMatch.waitForExistence(timeout: 2) { menu.tap() }
     }
 
-    /// An open sidebar sits over the page in a narrow window and takes the next touch.
+    /// An open sidebar sits over the page in a narrow window and takes the next
+    /// touch. A portrait iPad opens on it.
     private func hideOverlaySidebar(in app: XCUIApplication) {
         let toggle = app.buttons["ToggleSidebar"].firstMatch
         if toggle.exists, toggle.label == "Hide Sidebar" {
@@ -1227,13 +1233,10 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
-    /// An iPad keeps the field behind a toolbar button until it's asked for.
+    /// Picking the Search tab brings its field up, at any width.
     private func searchField(in app: XCUIApplication) -> XCUIElement {
         let field = app.searchFields.firstMatch
-        if !field.waitForExistence(timeout: 5) {
-            app.navigationBars["Search"].buttons["Search"].firstMatch.tap()
-            _ = field.waitForExistence(timeout: 5)
-        }
+        _ = field.waitForExistence(timeout: 10)
         return field
     }
 
