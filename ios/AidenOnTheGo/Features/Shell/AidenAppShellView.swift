@@ -132,6 +132,7 @@ struct AidenAppShellView: View {
                         runningHome: runningHome,
                         onOpen: openChat,
                         onDelete: deleteChat,
+                        onOpenMachines: { navigation.open(.machines) },
                         onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
                         onShowRunning: { showsRunningChats = true }
                     )
@@ -194,6 +195,9 @@ struct AidenAppShellView: View {
                 openChat(id)
             }
         }
+        // On every tab, the accessory and its sheet, so a machine page reached from
+        // any of them counts its open chats.
+        .environment(inboxStore)
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -298,6 +302,7 @@ struct AidenAppShellView: View {
                 },
                 onBotChat: { bot in navigation.replace(route, with: .bot(bot)) }
             )
+            .environment(\.aidenConversationMachine, inboxStore.roster.chatSubtitle(for: id.instanceId))
             // Next swaps the route in place, and the stack would otherwise keep this
             // view's state, so the old chat would stay on screen.
             .id(id)

@@ -445,6 +445,57 @@ final class AidenMachineDetailTests: XCTestCase {
         )
     }
 
+    func testAMachinePageOnAnotherTabStillCountsItsOpenChats() async throws {
+        let preferences = AidenMachinePreferencesStore(defaults: defaults)
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
+        let scheduler = AidenHostConnectScheduler(
+            registry: coordinator.hosts,
+            pathChanges: AsyncStream { _ in },
+            maxConcurrentConnects: 2,
+            probeTimeout: 30
+        )
+        await coordinator.start()
+        await scheduler.foregrounded()
+        let inbox = AidenUnifiedInboxStore(
+            hosts: coordinator.hosts,
+            preferences: preferences,
+            cache: coordinator.chatCache,
+            clock: ContinuousClock()
+        )
+        inbox.connectScheduler = scheduler
+        inbox.start()
+        defer { inbox.stop() }
+        let deadline = Date().addingTimeInterval(15)
+        while inbox.openChatCount(on: "studio") ?? 0 == 0, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let open = try XCTUnwrap(inbox.openChatCount(on: "studio")).formatted()
+
+        let navigation = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
+        navigation.save(AidenAppNavigationSnapshot(tab: .bots, botsPath: [.machine(instanceId: "studio")]))
+        // Tall enough that the list makes the Details rows below the symbol and colour grids.
+        let window = try show(
+            AidenAppShellView(coordinator: coordinator, inboxStore: inbox, navigationStore: navigation),
+            height: 2_400
+        )
+        defer { close(window) }
+
+        func openChatsRow() -> NSObject? {
+            accessibleElements(in: window).first { $0.accessibilityLabel?.hasPrefix("Open chats") == true }
+        }
+        XCTAssertTrue(
+            runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel == "Desktop" } }),
+            "The machine page didn't open on the Bots tab"
+        )
+        _ = runMainLoop(until: { openChatsRow() != nil })
+        let row = try XCTUnwrap(
+            openChatsRow(),
+            "A machine page off the Inbox tab loses its Open chats count: \(accessibleElements(in: window).compactMap(\.accessibilityLabel))"
+        )
+        let spoken = [row.accessibilityLabel, row.accessibilityValue].compactMap { $0 }.joined(separator: " ")
+        XCTAssertTrue(spoken.contains(open), "Open chats reads \(spoken), not \(open)")
+    }
+
     // MARK: Forgetting and revoking clear a machine's choices, re-pairing keeps them
 
     private func waitUntil(_ what: String, _ condition: () -> Bool) throws {
@@ -540,14 +591,14 @@ final class AidenMachineDetailTests: XCTestCase {
 
     // MARK: Hosting
 
-    private func show(_ view: some View) throws -> UIWindow {
+    private func show(_ view: some View, height: CGFloat = 800) throws -> UIWindow {
         func connectedScene() -> UIWindowScene? {
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         }
         _ = runMainLoop(until: { connectedScene() != nil }, timeout: 10)
         let scene = try XCTUnwrap(connectedScene())
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: height)
         window.rootViewController = UIHostingController(
             rootView: view.environment(AidenHapticCenter()).environment(AidenAppearanceStore())
         )
@@ -618,7 +669,7 @@ private struct AidenMachinesInATabStack: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            AidenMachinesView(coordinator: coordinator, preferences: preferences, addMachine: {})
+            AidenMachinesView(coordinator: coordinator, preferences: preferences, pushesAppRoutes: true, addMachine: {})
                 .navigationDestination(for: AidenAppRoute.self) { route in
                     if case .machine(let instanceId) = route {
                         AidenMachineDetailView(instanceId: instanceId, coordinator: coordinator, preferences: preferences)

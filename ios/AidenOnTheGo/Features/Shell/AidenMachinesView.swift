@@ -132,6 +132,11 @@ final class AidenMachinesModel {
         rows.first { $0.id == instanceId }
     }
 
+    /// Paired, and waiting for `register()`, which runs after the first frame.
+    func isLoading(_ instanceId: String) -> Bool {
+        machineIDs.contains(instanceId) && !registered.contains(instanceId)
+    }
+
     /// Gives every paired machine its saved appearance, assigning a colour to one
     /// seen for the first time. Call from model code or `.task`.
     func register() {
@@ -264,6 +269,9 @@ struct AidenMachinesView: View {
     let preferences: AidenMachinePreferencesStore
     /// Starts pairing another machine.
     let addMachine: () -> Void
+    /// Rows push `AidenAppRoute.machine`. A stack bound to a route path can hold
+    /// nothing else, so a link with any other value there does nothing.
+    private let pushesAppRoutes: Bool
 
     @State private var model: AidenMachinesModel
     @State private var machineToForget: String?
@@ -273,10 +281,12 @@ struct AidenMachinesView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         preferences: AidenMachinePreferencesStore,
+        pushesAppRoutes: Bool = false,
         addMachine: @escaping () -> Void
     ) {
         self.coordinator = coordinator
         self.preferences = preferences
+        self.pushesAppRoutes = pushesAppRoutes
         self.addMachine = addMachine
         _model = State(initialValue: AidenMachinesModel(coordinator: coordinator, preferences: preferences))
     }
@@ -295,10 +305,7 @@ struct AidenMachinesView: View {
             } else {
                 Section {
                     ForEach(model.rows) { row in
-                        // A route: the tab's stack has a typed path, which holds nothing else.
-                        NavigationLink(value: AidenAppRoute.machine(instanceId: row.id)) {
-                            AidenMachineRowView(row: row)
-                        }
+                        link(to: row)
                         // Label and value only: hiding the children from a link drops its activation.
                         .accessibilityLabel(row.accessibilityLabel)
                         .accessibilityValue(row.accessibilityValue)
@@ -327,6 +334,10 @@ struct AidenMachinesView: View {
         }
         .navigationTitle("Machines")
         .navigationBarTitleDisplayMode(.inline)
+        // Built when a row is opened, not when the list is.
+        .navigationDestination(for: AidenMachineLink.self) { link in
+            AidenMachineDetailView(instanceId: link.instanceId, coordinator: coordinator, preferences: preferences)
+        }
         .task(id: model.machineIDs) { model.register() }
         .onAppear { model.activateHaptics(scope: hapticScope) }
         .onDisappear { model.deactivateHaptics(scope: hapticScope) }
@@ -360,6 +371,15 @@ struct AidenMachinesView: View {
         }
     }
 
+    @ViewBuilder
+    private func link(to row: AidenMachineRow) -> some View {
+        if pushesAppRoutes {
+            NavigationLink(value: AidenAppRoute.machine(instanceId: row.id)) { AidenMachineRowView(row: row) }
+        } else {
+            NavigationLink(value: AidenMachineLink(instanceId: row.id)) { AidenMachineRowView(row: row) }
+        }
+    }
+
     private var forgetTitle: String {
         guard let id = machineToForget, let row = model.row(id) else { return String(localized: "Forget this machine?") }
         return String(localized: "Forget \(row.name)?")
@@ -380,13 +400,22 @@ struct AidenMachinesView: View {
 }
 
 /// What a row pushes. The page for it is built only when it is opened.
-/// The Machines page as a route of the tab shell, with pairing as its own sheet.
+private struct AidenMachineLink: Hashable {
+    let instanceId: String
+}
+
+/// The Machines page as a route of the tab shell, which has no sheet for pairing of its own.
 struct AidenMachinesRouteView: View {
     let coordinator: AidenRemoteCoordinator
     @State private var showsPairing = false
 
     var body: some View {
-        AidenMachinesView(coordinator: coordinator, preferences: .shared, addMachine: { showsPairing = true })
+        AidenMachinesView(
+            coordinator: coordinator,
+            preferences: .shared,
+            pushesAppRoutes: true,
+            addMachine: { showsPairing = true }
+        )
             .sheet(isPresented: $showsPairing) {
                 AidenPairingView(coordinator: coordinator, onPaired: { showsPairing = false })
             }

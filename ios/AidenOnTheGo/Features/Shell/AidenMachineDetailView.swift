@@ -92,14 +92,16 @@ struct AidenMachineChipImage: View {
     let symbol: AidenMachineSymbol
     let color: AidenMachineColor
     let size: CGFloat
+    var symbolScale: CGFloat = 0.46
+    var cornerRadius = AidenRadius.code
 
     var body: some View {
         Image(systemName: symbol.systemName)
             .symbolRenderingMode(.monochrome)
-            .font(.system(size: size * 0.46, weight: .semibold))
+            .font(.system(size: size * symbolScale, weight: .semibold))
             .foregroundStyle(color.glyphColor)
             .frame(width: size, height: size)
-            .background(color.color, in: RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous))
+            .background(color.color, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .accessibilityHidden(true)
     }
 }
@@ -114,6 +116,8 @@ struct AidenMachineDetailView: View {
     let preferences: AidenMachinePreferencesStore
 
     @Environment(\.dismiss) private var dismiss
+    /// Nil in the menu shell, which has no Inbox store to count from.
+    @Environment(AidenUnifiedInboxStore.self) private var inboxStore: AidenUnifiedInboxStore?
     @State private var model: AidenMachinesModel
     @State private var draftName = ""
     @State private var loadedName = false
@@ -144,6 +148,8 @@ struct AidenMachineDetailView: View {
         Group {
             if let row = model.row(instanceId) {
                 form(for: row)
+            } else if model.isLoading(instanceId) {
+                ProgressView()
             } else {
                 ContentUnavailableView(
                     "Machine not found",
@@ -258,6 +264,9 @@ struct AidenMachineDetailView: View {
                 }
                 if row.workspaceCount > 0 {
                     LabeledContent("Workspaces", value: row.workspaceCount.formatted())
+                }
+                if let openChats = inboxStore?.openChatCount(on: instanceId) {
+                    LabeledContent("Open chats", value: openChats.formatted())
                 }
                 LabeledContent("Identity", value: String(row.id.suffix(4)).lowercased())
                 if row.offersReconnect {
