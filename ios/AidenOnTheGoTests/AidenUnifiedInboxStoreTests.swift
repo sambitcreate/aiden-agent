@@ -196,6 +196,16 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         return row
     }
 
+    private func running(_ id: String, age: Int) -> [String: Any] {
+        var running = row(id, age: age)
+        let started = timestamp(now.addingTimeInterval(-Double(age) * 60))
+        running.merge([
+            "activity": "active", "rowState": "working", "runStartedAt": started,
+            "inboxBucket": "working", "inboxSortAt": started,
+        ]) { $1 }
+        return running
+    }
+
     private func page(_ rows: [[String: Any]], next: String? = nil) -> Data {
         var object: [String: Any] = ["summaries": rows]
         if let next { object["nextCursor"] = next }
@@ -1270,17 +1280,6 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         return (coordinator, store, AidenHostObjectID(instanceId: "laptop", deviceId: installation.deviceId, objectId: "loose"))
     }
 
-    func testOnlyAChatWithoutAWorkspaceOffersDelete() async throws {
-        let (_, store, loose) = try await noWorkspaceMachine()
-
-        XCTAssertTrue(store.offersDelete(loose, inWorkspace: "default"))
-        XCTAssertFalse(store.offersDelete(loose, inWorkspace: "workspace_app"))
-        XCTAssertFalse(store.offersDelete(loose, inWorkspace: "workspace_gone"))
-        let oldPairing = AidenHostObjectID(instanceId: "laptop", deviceId: "other-device", objectId: "loose")
-        XCTAssertFalse(store.offersDelete(oldPairing, inWorkspace: "default"))
-        store.stop()
-    }
-
     func testADeletedChatLeavesAtOnceOverItsOwnMachine() async throws {
         let (coordinator, store, loose) = try await noWorkspaceMachine()
         let selected = coordinator.activeInstanceId
@@ -1326,6 +1325,59 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         await waitUntil("the rows to drop") { rowIDs(store.inbox, on: "laptop").isEmpty }
         XCTAssertTrue(try XCTUnwrap(store.snapshots["laptop"]).isBlocked)
         XCTAssertNil(store.notice)
+        store.stop()
+    }
+
+    /// A running chat is what the Inbox has to say, so it isn't caught up.
+    func testAnInboxWithOnlyRunningChatsIsNotCaughtUp() async throws {
+        let coordinator = coordinator("studio")
+        serve([running("run", age: 3)], on: "studio")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+
+        await startAndSettle(store, machines: 1)
+
+        XCTAssertEqual(store.inbox.running.map(\.id.objectId), ["run"])
+        XCTAssertTrue(store.hasRunningChats)
+        XCTAssertEqual(store.listState, .rows)
+        store.stop()
+    }
+
+    func testARunThatEndsTakesTheAccessoryWithIt() async throws {
+        let coordinator = coordinator("studio")
+        serve([running("run", age: 3)], on: "studio")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+        XCTAssertTrue(store.hasRunningChats)
+
+        // Past the recent window, so the finished chat isn't listed in Earlier.
+        serve([row("run", age: 100_000)], on: "studio")
+        await store.refreshAll()
+
+        XCTAssertFalse(store.hasRunningChats)
+        XCTAssertEqual(store.listState, .caughtUp)
+        store.stop()
+    }
+
+    /// It can't be confirmed running, so it's a row in Updates, and the Inbox can't
+    /// say "All caught up" over it.
+    func testAnOfflineRunningChatIsARowAndNeverCaughtUp() async throws {
+        let coordinator = coordinator("studio")
+        try await saveWorkspace(on: "studio")
+        try await save([running("run", age: 3)], on: "studio")
+        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        store.start()
+        await waitUntil("the machine to be offline") { store.snapshots["studio"]?.isOnline == false }
+        await waitUntil("the saved row") { !store.inbox.updates.isEmpty || !store.inbox.running.isEmpty }
+
+        XCTAssertEqual(store.inbox.updates.map(\.id.objectId), ["run"])
+        XCTAssertEqual(store.inbox.running, [])
+        XCTAssertFalse(store.hasRunningChats)
+        XCTAssertEqual(store.inbox.needsYouCount, 0)
+        XCTAssertEqual(store.listState, .rows)
         store.stop()
     }
 

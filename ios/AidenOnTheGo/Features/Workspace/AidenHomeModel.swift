@@ -364,6 +364,14 @@ final class AidenHomeModel {
         persistCurrentSummaries(changedID: id)
     }
 
+    /// Puts back a row `removeChat` took, where it was. Nothing else here can:
+    /// a list read needs the machine, and the saved row went with the list's.
+    func restoreChat(_ chat: AidenChatSummary, at index: Int) {
+        guard !chats.contains(where: { $0.id == chat.id }) else { return }
+        chats.insert(chat, at: min(index, chats.count))
+        persistCurrentSummaries(changedID: chat.id)
+    }
+
     private func persistCurrentSummaries(changedID: String, activityOnly: Bool = false, triageOnly: Bool = false, readThrough: AidenChatInboxSignals? = nil) {
         guard let context = contentContext else { return }
         let snapshot = AidenChatCache.SummarySnapshot(summaries: chats, nextCursor: nextChatCursor)

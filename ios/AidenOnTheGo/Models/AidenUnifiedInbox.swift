@@ -49,11 +49,12 @@ struct AidenUnifiedInboxRow: Identifiable, Equatable {
 /// whatever order the snapshots arrive in.
 struct AidenUnifiedInbox: Equatable {
     var needsYou: [AidenUnifiedInboxRow] = []
-    /// Pinned rows first, then replies, each newest first.
+    /// Pinned rows first, then replies, each newest first. A running chat on an
+    /// offline machine is here too, because nothing can confirm it's still running.
     var updates: [AidenUnifiedInboxRow] = []
     var earlier: [AidenUnifiedInboxRow] = []
-    /// Running chats, oldest run first. The accessory shows these; the
-    /// lists do not.
+    /// Running chats on online machines, oldest run first. The accessory shows
+    /// these; the lists do not.
     var running: [AidenUnifiedInboxRow] = []
     var earlierOverflow = 0
     /// Rows that need the person on online, visible machines. Ignores the
@@ -147,7 +148,12 @@ struct AidenUnifiedInbox: Equatable {
             pinned += entries(projection.pinned, isPinned: true)
             updates += entries(projection.updates)
             earlier += entries(projection.earlier)
-            running += entries(projection.working)
+            if snapshot.isOnline {
+                running += entries(projection.working)
+            } else {
+                pinned += entries(projection.working.filter { $0.summary.inbox.pinnedAt != nil }, isPinned: true)
+                updates += entries(projection.working.filter { $0.summary.inbox.pinnedAt == nil })
+            }
         }
 
         needsYou.sort { left, right in

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// What a row can be asked to do. Mirrors `AidenInboxRowOffer`.
+/// What a row can be asked to do. Mirrors `AidenInboxRowOffer`, plus Delete,
+/// which every row offers.
 enum AidenInboxRowAction: Equatable {
-    case markRead, done, snooze(AidenSnoozeOption), wake, undone
+    case markRead, done, snooze(AidenSnoozeOption), wake, undone, delete
 }
 
 extension AidenInboxRowActions {
@@ -20,10 +21,12 @@ extension AidenInboxRowActions {
 }
 
 /// Every machine's chats in one list: Needs you, Updates, Earlier. Running chats
-/// aren't listed here, because the accessory owns them.
+/// aren't listed here, because the accessory owns them, unless they have to make
+/// their home here (`AidenRunningHome`). Then they're the first row.
 struct AidenInboxTabView: View {
     let inbox: AidenUnifiedInbox
     var state = AidenInboxListState.rows
+    var runningHome = AidenRunningHome.accessory
     var refreshFailed = false
     var moreChats = AidenInboxMoreChats.none
     let onOpen: (AidenHostObjectID) -> Void
@@ -32,17 +35,22 @@ struct AidenInboxTabView: View {
     var onRetry: () -> Void = {}
     var onShowAllEarlier: () -> Void = {}
     var onLoadMore: () -> Void = {}
-    /// Whether a row's chat, in the workspace it names, can be deleted from here.
-    var canDelete: (AidenHostObjectID, String) -> Bool = { _, _ in false }
-    var onDelete: (AidenHostObjectID) -> Void = { _ in }
+    /// The shell's, so a deleted chat's screen closes. Without one, Delete is a row action.
+    var onDelete: ((AidenHostObjectID) -> Void)? = nil
+    var onCatchUp: () -> Void = {}
+    var onShowRunning: () -> Void = {}
 
     @Environment(\.aidenPalette) private var palette
     @State private var snoozeCandidate: AidenHostObjectID?
-    @State private var chatPendingDelete: AidenHostObjectID?
+    @State private var deleteCandidate: AidenHostObjectID?
+
+    private var catchUpCount: Int { AidenCatchUpQueue(rows: inbox.needsYou).count }
 
     var body: some View {
         List {
             if refreshFailed { refreshErrorRow }
+            if runningHome == .inboxRow, !inbox.running.isEmpty { runningRow }
+            if catchUpCount > 0 { catchUpRow }
             if state == .loading {
                 AidenChatListSkeleton(rowCount: 6, accessibilityText: "Loading Inbox")
                     .listRowInsets(EdgeInsets())
@@ -78,13 +86,15 @@ struct AidenInboxTabView: View {
         .confirmationDialog(
             "Delete this chat?",
             isPresented: Binding(
-                get: { chatPendingDelete != nil },
-                set: { if !$0 { chatPendingDelete = nil } }
+                get: { deleteCandidate != nil },
+                set: { if !$0 { deleteCandidate = nil } }
             ),
             titleVisibility: .visible,
-            presenting: chatPendingDelete
+            presenting: deleteCandidate
         ) { id in
-            Button("Delete chat", role: .destructive) { onDelete(id) }
+            Button("Delete chat", role: .destructive) {
+                if let onDelete { onDelete(id) } else { onAction(.delete, id) }
+            }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("This permanently removes the chat from its machine.")
@@ -129,18 +139,10 @@ struct AidenInboxTabView: View {
                 isPinned: row.isPinned,
                 open: { onOpen(row.id) }
             )
-            .contextMenu {
-                contextMenu(for: row, actions: actions)
-                if canDelete(row.id, summary.workspaceId) {
-                    Button(role: .destructive) { chatPendingDelete = row.id } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    .disabled(!row.isOnline)
-                }
-            }
+            .contextMenu { contextMenu(for: row, actions: actions) }
             .accessibilityActions {
-                if canDelete(row.id, summary.workspaceId), row.isOnline {
-                    Button("Delete chat") { chatPendingDelete = row.id }
+                if row.isOnline {
+                    Button("Delete chat") { deleteCandidate = row.id }
                 }
             }
         }
@@ -164,6 +166,50 @@ struct AidenInboxTabView: View {
         } else if let wake = actions.snooze {
             Button(actions.snoozeLabel, systemImage: "clock", action: wake)
         }
+        Button("Delete", systemImage: "trash", role: .destructive) { deleteCandidate = row.id }
+            .disabled(!row.isOnline)
+    }
+
+    private var runningRow: some View {
+        AidenRunningAccessory(rows: inbox.running, onOpen: onOpen, onShowAll: onShowRunning)
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.control))
+            .listRowInsets(EdgeInsets(top: AidenSpacing.s, leading: AidenSpacing.m, bottom: AidenSpacing.xs, trailing: AidenSpacing.m))
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
+    }
+
+    private var catchUpRow: some View {
+        let count = catchUpCount
+        return Button(action: onCatchUp) {
+            HStack(spacing: AidenSpacing.m) {
+                Image(systemName: "rectangle.stack")
+                    .foregroundStyle(palette.accent)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Catch Up")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+                    Text(count == 1 ? "1 chat needs you" : "\(count) chats need you")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, AidenSpacing.l)
+            .padding(.vertical, AidenSpacing.m)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.control))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("aiden.catch-up")
+        .listRowInsets(EdgeInsets(top: AidenSpacing.s, leading: AidenSpacing.m, bottom: AidenSpacing.xs, trailing: AidenSpacing.m))
+        .listRowSeparator(.hidden)
+        .listRowBackground(palette.canvas)
     }
 
     private var showMoreRow: some View {
@@ -238,6 +284,12 @@ struct AidenInboxTabView: View {
     @ViewBuilder
     private var emptyState: some View {
         switch state {
+        case .rows where runningHome.leavesListEmpty(inbox):
+            ContentUnavailableView(
+                "Nothing needs you yet",
+                systemImage: "tray",
+                description: Text("Running chats are above the tab bar until they finish or need you.")
+            )
         case .rows, .loading:
             EmptyView()
         case .caughtUp:
@@ -288,8 +340,11 @@ struct AidenInboxTabRootView: View {
     }
 
     let store: AidenUnifiedInboxStore
+    var runningHome = AidenRunningHome.accessory
     let onOpen: (AidenHostObjectID) -> Void
-    let onDelete: (AidenHostObjectID) -> Void
+    var onDelete: ((AidenHostObjectID) -> Void)? = nil
+    var onCatchUp: () -> Void = {}
+    var onShowRunning: () -> Void = {}
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -301,6 +356,7 @@ struct AidenInboxTabRootView: View {
         AidenInboxTabView(
             inbox: store.inbox,
             state: store.listState,
+            runningHome: runningHome,
             refreshFailed: store.refreshFailed,
             moreChats: store.moreChats,
             onOpen: onOpen,
@@ -311,8 +367,9 @@ struct AidenInboxTabRootView: View {
             onRetry: { Task { await store.retry() } },
             onShowAllEarlier: { store.showsAllEarlier = true },
             onLoadMore: { Task { await store.loadMoreChats() } },
-            canDelete: { store.offersDelete($0, inWorkspace: $1) },
-            onDelete: onDelete
+            onDelete: onDelete,
+            onCatchUp: onCatchUp,
+            onShowRunning: onShowRunning
         )
         .navigationTitle("Inbox")
         .overlay(alignment: .top) { noticeBanner }
@@ -356,5 +413,27 @@ struct AidenInboxTabRootView: View {
                 if store.notice?.notice.id == notice.id { store.dismissNotice() }
             }
         }
+    }
+}
+
+/// Where a Catch Up run ends, so the last Next lands on an answer and not on a
+/// chat or an empty screen.
+struct AidenCatchUpFinishedView: View {
+    let ending: AidenCatchUpEnding
+    let onDone: () -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(ending.title, systemImage: ending.walked ? "checkmark.circle" : "tray")
+        } description: {
+            Text(ending.message)
+        } actions: {
+            Button("Back to Inbox", action: onDone)
+                .buttonStyle(.borderedProminent)
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

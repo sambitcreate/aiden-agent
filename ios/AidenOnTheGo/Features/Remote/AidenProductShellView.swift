@@ -416,6 +416,15 @@ final class AidenProductNavigationStore {
         setPath(path, in: \Snapshot.compactBotPathByInstance, for: instanceID)
     }
 
+    /// The tab shell has these now. Its first saved write calls this, and the
+    /// rest of this store stays: both shells read those preferences.
+    func forgetCompactPaths() {
+        guard !snapshot.compactWorkspacePathByInstance.isEmpty || !snapshot.compactBotPathByInstance.isEmpty else { return }
+        snapshot.compactWorkspacePathByInstance = [:]
+        snapshot.compactBotPathByInstance = [:]
+        persist()
+    }
+
     func selectedBot(for instanceID: String?, deviceID: String?) -> String? {
         guard let key = Self.scopeKey(instanceID: instanceID, deviceID: deviceID) else { return nil }
         return snapshot.selectedBotByScope?[key]

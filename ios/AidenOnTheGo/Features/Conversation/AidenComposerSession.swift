@@ -131,6 +131,9 @@ final class AidenComposerSession {
         !attachments.isEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// True while leaving would lose attachments: only the words are saved with a chat.
+    var holdsAttachments: Bool { !attachments.isEmpty || isPreparingAttachments }
+
     var isRecording: Bool { voice.isListening }
     /// Also true while asking for the mic and while finishing a transcript.
     var isVoiceBusy: Bool { voice.isBusy }

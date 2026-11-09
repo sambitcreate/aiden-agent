@@ -64,7 +64,7 @@ enum AidenStateMatrix {
             // app stores its navigation as Data, so a string here reads as "nothing
             // saved" and the stored value from an earlier launch is ignored.
             "-aiden.product-navigation.v1", "reset",
-            "-aiden.app-navigation.v1", "reset",
+            "-aiden.product-navigation.v2", "reset",
             // Keep the simulator in the same language as the strings the tests look for.
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
@@ -163,6 +163,15 @@ enum AidenStateMatrix {
     }
 
     private static let compactWidth: CGFloat = 500
+
+    /// The running chats, above the tab bar or as the Inbox's first row.
+    static func runningAccessory(in app: XCUIApplication) -> XCUIElement {
+        app.buttons["aiden.running-accessory"].firstMatch
+    }
+
+    static func catchUpRow(in app: XCUIApplication) -> XCUIElement {
+        app.buttons["aiden.catch-up"].firstMatch
+    }
 
     /// The Search tab folds the tab bar away while its field is up, and Close
     /// brings it back.

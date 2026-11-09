@@ -57,6 +57,8 @@ final class AidenDemoResponder: @unchecked Sendable {
 
     private enum Outcome {
         case reply(status: Int, json: Data)
+        /// An answer that depends on the request, such as a search.
+        case computed(status: Int, json: @Sendable (URL) -> Data)
         case failure(URLError.Code)
     }
 
@@ -113,6 +115,19 @@ final class AidenDemoResponder: @unchecked Sendable {
         defer { lock.unlock() }
         // Only this method's answer is replaced; other methods on the path stay.
         outcomes[Route(instanceId: instanceId, method: method, path: path, query: query)] = .reply(status: status, json: json)
+    }
+
+    /// Answers `path` from the request's URL, for a route that reads a query.
+    func reply(
+        instanceId: String,
+        method: String = "GET",
+        path: String,
+        status: Int,
+        json: @escaping @Sendable (URL) -> Data
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        outcomes[Route(instanceId: instanceId, method: method, path: path)] = .computed(status: status, json: json)
     }
 
     /// Fails every method on `path` with a transport error. `path: "*"` takes the
@@ -212,6 +227,8 @@ final class AidenDemoResponder: @unchecked Sendable {
             return .failure(URLError(code))
         case .reply(let status, let json):
             return .success((Self.response(url: url, status: status), json))
+        case .computed(let status, let json):
+            return .success((Self.response(url: url, status: status), json(url)))
         case nil:
             return .success((Self.response(url: url, status: 404), AidenDemoContent.notFound()))
         }
@@ -327,12 +344,18 @@ enum AidenDemoHosts {
         let installation: AidenInstallation
         var rowCount: Int
         var isOnline = true
-        /// Where in the row-state pattern this machine starts. The first machine
-        /// opens on the busiest rows, the others on quieter ones.
+        /// Where in the row-state pattern this machine starts. Zero opens on the
+        /// busiest rows, and a higher start on quieter ones.
         var patternStart = 0
+        /// Where in the title list this machine starts, so two machines on the
+        /// same rows don't read as one chat listed twice.
+        var titleStart = 0
         /// Whether the machine has one Bot. The empty scenario has none, so the
         /// Bots empty state stays reachable.
         var hasBot = true
+        /// Whether the machine fails when asked for Bot conversations. Online
+        /// otherwise, so the Search tab has a machine that errors.
+        var botSearchFails = false
     }
 
     /// A paired machine as the app stores it after pairing and a first `/server`:
@@ -371,14 +394,18 @@ enum AidenDemoHosts {
             rows: Int,
             online: Bool = true,
             start: Int = 0,
-            hasBot: Bool = true
+            titleStart: Int = 0,
+            hasBot: Bool = true,
+            botSearchFails: Bool = false
         ) -> Machine {
             Machine(
                 installation: installation(instanceId: id, name: name),
                 rowCount: rows,
                 isOnline: online,
                 patternStart: start,
-                hasBot: hasBot
+                titleStart: titleStart,
+                hasBot: hasBot,
+                botSearchFails: botSearchFails
             )
         }
         let studio = machine("studio", "Studio Mac", rows: 6)
@@ -390,7 +417,14 @@ enum AidenDemoHosts {
         case .one:
             machines = [machine("studio", "Studio Mac", rows: 4)]
         case .four:
-            machines = [studio, laptop, mini, machine("build", "Build Box", rows: 0, online: false)]
+            // The mini waits on the person and runs a chat too, so Catch Up and the
+            // accessory each have more than one machine to cross.
+            machines = [
+                studio,
+                laptop,
+                machine("mini", "Home Mini", rows: 2, titleStart: 7),
+                machine("build", "Build Box", rows: 0, online: false),
+            ]
         case .empty:
             machines = [machine("studio", "Studio Mac", rows: 0, hasBot: false)]
         case .busy:
@@ -399,7 +433,7 @@ enum AidenDemoHosts {
             machines = [
                 studio,
                 machine("laptop", "Laptop", rows: 3, online: false, start: 4),
-                mini,
+                machine("mini", "Home Mini", rows: 2, start: 4, botSearchFails: true),
                 machine("build", "Build Box", rows: 0, online: false),
             ]
         case .oldHost:
@@ -422,7 +456,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)? = nil,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         makeCoordinator(
             installations.map { Machine(installation: $0, rowCount: 4) },
@@ -430,7 +465,8 @@ enum AidenDemoHosts {
             haptics: haptics,
             keychain: keychain,
             workspaceEnvironmentCache: workspaceEnvironmentCache,
-            machinePreferences: machinePreferences
+            machinePreferences: machinePreferences,
+            tabShell: tabShell
         )
     }
 
@@ -443,7 +479,8 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)?,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared
+        machinePreferences: AidenMachinePreferencesStore = .shared,
+        tabShell: Bool = AppConfig.tabShellEnabled
     ) -> AidenRemoteCoordinator {
         let store = AidenInstallationStore(keychain: keychain ?? AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
@@ -503,7 +540,8 @@ enum AidenDemoHosts {
                     credential: credential,
                     session: responder.session
                 )
-            }
+            },
+            tabShell: tabShell
         )
     }
 
@@ -526,7 +564,8 @@ enum AidenDemoHosts {
         let rows = AidenDemoContent.rows(
             instanceId: id,
             count: machine.rowCount,
-            patternStart: machine.patternStart
+            patternStart: machine.patternStart,
+            titleStart: machine.titleStart
         )
         if AidenDemoRunOptions.connectsSlowly {
             _ = responder.hold(instanceId: id, path: "/workspaces")
@@ -581,8 +620,13 @@ enum AidenDemoHosts {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
             responder.reply(instanceId: id, path: botPath, status: 200, json: AidenDemoContent.botDetailJSON())
             responder.reply(instanceId: id, path: "\(botPath)/session", status: 200, json: AidenDemoContent.botSessionJSON())
+            let fails = machine.botSearchFails
+            responder.reply(instanceId: id, path: "/bot-conversations", status: fails ? 503 : 200) { url in
+                fails ? AidenDemoContent.notFound() : AidenDemoContent.botConversationsJSON(for: url)
+            }
         } else {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.emptyBotsJSON())
+            responder.reply(instanceId: id, path: "/bot-conversations", status: 200, json: Data(#"{"conversations":[]}"#.utf8))
         }
     }
 
@@ -783,6 +827,30 @@ private enum AidenDemoContent {
         data(["bots": [botSummaryObject()], "maxBots": 256])
     }
 
+    /// `GET /bot-conversations`: Scout's one chat, when it matches the `query` item.
+    static func botConversationsJSON(for url: URL) -> Data {
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "query" }?.value?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = "Scout"
+        let preview = "Flagged the flaky upload test again this week"
+        let matches = query.isEmpty
+            || title.localizedCaseInsensitiveContains(query)
+            || preview.localizedCaseInsensitiveContains(query)
+        let conversation: [String: Any] = [
+            "chatId": "chat_bot_scout",
+            "botId": botId,
+            "title": title,
+            "preview": preview,
+            "activityState": "idle",
+            "canRespondToApproval": false,
+            "createdAt": timestamp(Date().addingTimeInterval(-3 * 86_400)),
+            "updatedAt": timestamp(Date().addingTimeInterval(-3_600)),
+            "revision": "bot_conversation_revision_1",
+        ]
+        return data(["conversations": matches ? [conversation] : [Any]()])
+    }
+
     static func botDetailJSON() -> Data {
         var detail = botSummaryObject()
         detail["instructions"] = "Find the important signal, explain it plainly, and keep the owner in control."
@@ -838,7 +906,7 @@ private enum AidenDemoContent {
 
     /// Chat summaries, newest first. Row `n` takes pattern slot `patternStart + n`:
     /// needs approval, working, needs input, failed, unread, pinned, then read.
-    static func rows(instanceId: String, count: Int, patternStart: Int) -> [[String: Any]] {
+    static func rows(instanceId: String, count: Int, patternStart: Int, titleStart: Int = 0) -> [[String: Any]] {
         let now = Date()
         return (0..<count).map { index in
             let updatedAt = now.addingTimeInterval(-Double(5 + index * 37) * 60)
@@ -846,7 +914,7 @@ private enum AidenDemoContent {
             var row: [String: Any] = [
                 "id": "chat_\(instanceId)_\(index + 1)",
                 "workspaceId": workspaceId(ofRow: index),
-                "title": titles[index % titles.count],
+                "title": titles[(titleStart + index) % titles.count],
                 "titlePending": false,
                 "createdAt": timestamp(createdAt),
                 "updatedAt": timestamp(updatedAt),
@@ -921,6 +989,23 @@ private enum AidenDemoContent {
         // Every value here is built above from literals, so serialization cannot fail.
         try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
+}
+
+/// A photo already in the composer of every chat, for screens and UI tests that
+/// need one without the photo picker. Only with `-AidenDemoStagedAttachment YES`.
+enum AidenDemoStagedAttachment {
+    static var isRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoStagedAttachment")
+    }
+
+    static let reference = AidenAttachmentReference(
+        id: "att_" + String(repeating: "a", count: 43),
+        name: "Screenshot.png",
+        mimeType: "image/png",
+        kind: .image,
+        size: 1_024,
+        expiresAt: .distantFuture
+    )
 }
 
 /// A long chat on the studio machine, served a window at a time, for screens

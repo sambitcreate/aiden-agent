@@ -87,6 +87,19 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertEqual(session.attachments, [Self.attachment])
     }
 
+    func testLeavingLosesAttachmentsThatAreStagedOrStillBeingPrepared() {
+        let owner = AidenComposerFakeAttachments()
+        let session = AidenComposerSession(text: "Words stay", attachmentOwner: owner)
+        XCTAssertFalse(session.holdsAttachments)
+
+        owner.isPreparingAttachments = true
+        XCTAssertTrue(session.holdsAttachments)
+
+        owner.isPreparingAttachments = false
+        owner.pendingAttachments = [Self.attachment]
+        XCTAssertTrue(session.holdsAttachments)
+    }
+
     // MARK: - Words go to whoever saves them
 
     func testASessionWithoutAnOwnerKeepsItsOwnWords() {
