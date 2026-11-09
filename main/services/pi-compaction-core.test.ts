@@ -163,6 +163,69 @@ test("Pi coordinator appends a native checkpoint and rebuilds from it", async ()
   );
 });
 
+test("summary instructions reach the summary request once the compaction starts", async () => {
+  const { faux, models, model } = compactionFixture();
+  const requests: string[] = [];
+  faux.setResponses([
+    (context) => {
+      requests.push(JSON.stringify(context));
+      return fauxAssistantMessage(structuredSummary("Continue."));
+    },
+  ]);
+  const session = await memorySession();
+  const last = await appendCompressibleHistory(session, model);
+  const order: string[] = [];
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    onEvent: (event) => order.push(event.type),
+    summaryInstructions: async (reason, signal) => {
+      order.push(`instructions:${reason}:${signal.aborted}`);
+      return "  KEEP_THE_MIGRATION_PLAN  ";
+    },
+  });
+
+  const result = await coordinator.check(last);
+
+  assert.equal(result.compacted, true);
+  assert.deepEqual(order, ["start", "instructions:threshold:false", "end"]);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0]!, /Additional focus: KEEP_THE_MIGRATION_PLAN/u);
+});
+
+test("a failing summary-instruction source never fails the compaction", async () => {
+  const { faux, models, model } = compactionFixture();
+  const requests: string[] = [];
+  faux.setResponses([
+    (context) => {
+      requests.push(JSON.stringify(context));
+      return fauxAssistantMessage(structuredSummary("Continue."));
+    },
+  ]);
+  const session = await memorySession();
+  await appendCompressibleHistory(session, model);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    summaryInstructions: async () => {
+      throw new Error("hook dispatcher failed");
+    },
+  });
+
+  const result = await coordinator.compact();
+
+  assert.equal(result.compacted, true);
+  assert.equal(result.errorMessage, undefined);
+  assert.equal(requests.length, 1);
+  assert.doesNotMatch(requests[0]!, /Additional focus/u);
+});
+
 test("repeated compaction updates the previous Pi summary", async () => {
   const { faux, models, model: fixtureModel } = compactionFixture();
   const model = { ...fixtureModel, contextWindow: 2_000 };

@@ -52,7 +52,7 @@ test("clicking a tab selects its section and shows only that panel", () => {
 });
 
 test("a merged page left with one tab on this host drops the strip and takes the tab's name", () => {
-  const page = availableSettingsPages({ computerUse: true, devices: true, botComputers: false }).find(
+  const page = availableSettingsPages({ computerUse: true, devices: true, botComputers: false, hooks: true }).find(
     (entry) => entry.id === pageFor("computerUse").id,
   );
   assert.ok(page);

@@ -101,6 +101,15 @@ export function botRunUnattended(requestIds: readonly (string | undefined)[]): b
   return requestIds.some((id) => { const turn = botTurnOf(id); return turn.routine || turn.telegram || turn.botMessage || turn.peer; });
 }
 
+/**
+ * Whether the person can answer an approval for a run serving these inputs:
+ * not a routine, Telegram, Bot-message, peer or self-intro turn. A run with no
+ * inputs is not.
+ */
+export function botTurnAttended(requestIds: readonly (string | undefined)[]): boolean {
+  return requestIds.length > 0 && !botRunUnattended(requestIds) && requestIds.every((requestId) => !botTurnOf(requestId).intro);
+}
+
 const UNATTENDED_WITHHELD = new Set<string>([
   ASK_USER_QUESTION_TOOL_NAME,
   ROUTINE_TOOL,

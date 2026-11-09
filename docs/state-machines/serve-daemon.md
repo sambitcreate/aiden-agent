@@ -64,6 +64,8 @@ Owner: the shared `ToolApprovalCoordinator` (`main/services/tool-approval.ts`, L
 | Event | Prior | Guard | Next | Effect | Visible result |
 |---|---|---|---|---|---|
 | tool call, `ask` | | arguments at most 1,700 bytes, run not stopping | pending | registered, expiry armed, attention raised | `chat:approval` |
+| hook `ask`, any access tier | | attended turn, same limits | pending | as above, with the hook's reason after the tool in the summary, so Remote's 2,000-character clip can't hide the end of the tool request | `chat:approval` |
+| hook `ask`, any access tier | | unattended turn or Bot turn | | no prompt | tool blocked |
 | publish throws | pending | | unavailable | attention withdrawn | tool blocked |
 | owner answer | pending | same owner | allowed or denied | journal records the decision, attention withdrawn | `approve` returns `true` |
 | host answer | pending | `runs:control` at the caller | allowed or denied | same | `approveAsHost` returns `true` |

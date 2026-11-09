@@ -4,6 +4,7 @@ export const SETTINGS_SECTIONS = [
   "limits",
   "skills",
   "mcp",
+  "hooks",
   "websearch",
   "imageGeneration",
   "telegram",
@@ -81,6 +82,11 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "mcp",
     title: "Connectors",
     keywords: ["mcp", "plugins", "apps", "integrations", "tools", "servers", "composio"],
+  },
+  {
+    id: "hooks",
+    title: "Hooks",
+    keywords: ["hooks", "hooks.json", "pretooluse", "posttooluse", "shell command", "scripts", "lint", "format", "block a tool", "claude code hooks", "automation"],
   },
   {
     id: "websearch",
@@ -277,6 +283,7 @@ export type SettingsPageId =
   | "limits"
   | "skills"
   | "mcp"
+  | "hooks"
   | "websearch"
   | "imageGeneration"
   | "memory"
@@ -308,6 +315,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "limits", title: "Context & Limits", group: "Models & Context", tabs: ["limits"] },
   { id: "skills", title: "Skills", group: "Capabilities", tabs: ["skills"] },
   { id: "mcp", title: "Connectors", group: "Capabilities", tabs: ["mcp"] },
+  { id: "hooks", title: "Hooks", group: "Capabilities", tabs: ["hooks"] },
   { id: "websearch", title: "Web Search", group: "Capabilities", tabs: ["websearch"] },
   { id: "imageGeneration", title: "Image Generation", group: "Capabilities", tabs: ["imageGeneration"] },
   { id: "memory", title: "Memory", group: "Capabilities", tabs: ["memory"] },
@@ -328,6 +336,7 @@ export type SettingsCapabilities = {
   computerUse: boolean;
   devices: boolean;
   botComputers: boolean;
+  hooks: boolean;
 };
 
 function isSettingsSectionAvailable(
@@ -337,7 +346,8 @@ function isSettingsSectionAvailable(
   return (
     (section !== "computerUse" || capabilities.computerUse) &&
     (section !== "simulator" || capabilities.devices) &&
-    (section !== "botComputers" || capabilities.botComputers)
+    (section !== "botComputers" || capabilities.botComputers) &&
+    (section !== "hooks" || capabilities.hooks)
   );
 }
 

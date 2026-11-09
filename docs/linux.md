@@ -108,7 +108,7 @@ schedules, terminal, Git, file editor, generative UI artifacts, workspace
 artifacts, coding follow-through (background jobs, followed pull requests and
 `/until` checks), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
-native subagents use the same contracts as macOS. Linux-specific integrations include:
+native subagents and [hooks](hooks.md) use the same contracts as macOS. Linux-specific integrations include:
 
 - Aiden's own title bar: no separate desktop title bar or menu bar strip.
   Minimize, maximize/restore and close sit at the right end of Aiden's top bar,
