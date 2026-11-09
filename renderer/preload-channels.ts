@@ -41,6 +41,7 @@ export const INVOKE_PREFIXES = [
   "settings:",
   "shortcut:",
   "skills:",
+  "storage:",
   "telegram:",
   "subagents:",
   "terminal:",
@@ -177,6 +178,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "terminal:exit",
   "telegram:model-selection-changed",
   "tts:event",
+  /** Settings → Storage's background scan started or finished: `{ kind }`. */
+  "storage:changed",
   /** The replies waiting for a usage limit changed: `UsageLimitsChangedEvent`. */
   "usageLimits:changed",
   "spending:changed",

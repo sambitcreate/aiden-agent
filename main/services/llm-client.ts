@@ -3,6 +3,13 @@ import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import { appControlsService } from "./app-controls-main.js";
+import {
+  decideGenerationTerminal,
+  runAdmittedGeneration,
+  runEveryStep,
+  settleGenerationOwnership,
+  type GenerationOwnershipEntry,
+} from "./generation-settlement.js";
 import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
@@ -225,7 +232,7 @@ import {
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
-import { toolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -648,26 +655,32 @@ interface ActiveGeneration {
 const active = new Map<string, ActiveGeneration>();
 const CHAT_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
 const WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
-const initializing = new Map<
-  string,
-  {
-    chatId: string;
-    owner: ChatGenerationOwner;
-    removeOwnerInvalidation: () => void;
-    stopCacheWarming?: () => void;
-    workspaceId?: string;
-    cancelRequested: boolean;
-    cancellationOrigin?: GenerationCancellationOrigin;
-    rendererDetached: boolean;
-    promptsUnattended: boolean;
-    controller: AbortController;
-    computerUse?: ComputerUseController;
-    formFill?: FormFillService;
-    loadMonitor?: LoadMonitorState;
-    releaseSkillReservation: () => void;
-    releaseBotAuthority: () => void;
-  }
->();
+/** What must happen if the current step of a run's start throws. */
+interface GenerationEscape {
+  settle(): Promise<void>;
+}
+
+interface InitializingGeneration {
+  chatId: string;
+  owner: ChatGenerationOwner;
+  removeOwnerInvalidation: () => void;
+  stopCacheWarming?: () => void;
+  workspaceId?: string;
+  cancelRequested: boolean;
+  cancellationOrigin?: GenerationCancellationOrigin;
+  rendererDetached: boolean;
+  promptsUnattended: boolean;
+  controller: AbortController;
+  computerUse?: ComputerUseController;
+  formFill?: FormFillService;
+  loadMonitor?: LoadMonitorState;
+  releaseSkillReservation: () => void;
+  releaseBotAuthority: () => void;
+  skillInvocation?: PreparedSkillInvocation;
+  skillPrompt?: string;
+}
+
+const initializing = new Map<string, InitializingGeneration>();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
@@ -738,18 +751,6 @@ function cancelChatGenerations(chatId: string, origin: GenerationCancellationOri
     if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
   }
   subagentRuntimeRegistry.abortChat(chatId);
-}
-
-function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
-  const release = entry.releaseSkillReservation;
-  entry.releaseSkillReservation = () => {};
-  release();
-}
-
-function releaseGenerationBotAuthority(entry: { releaseBotAuthority: () => void }): void {
-  const release = entry.releaseBotAuthority;
-  entry.releaseBotAuthority = () => {};
-  release();
 }
 
 function botWorkspacePromptAuthority(
@@ -858,6 +859,22 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 }
 
 const deltaCoalescer = new GenerationDeltaCoalescer();
+
+/** End this entry's ownership. Repeat calls for the same entry do nothing. */
+function settleGeneration<Entry extends GenerationOwnershipEntry>(
+  streamId: string,
+  params: { chatId: string; workspaceId?: string },
+  entry: Entry,
+  owners: Map<string, Entry>,
+): void {
+  settleGenerationOwnership(streamId, entry, owners, {
+    forgetApprovedArtifacts: () => approvedWorkspaceArtifactCalls.delete(streamId),
+    releaseApprovals: () => approvals.releaseStream(streamId),
+    releaseQuestionnaires: () => questionnaires.releaseStream(streamId),
+    broadcastSettled: () =>
+      broadcastChatSettled(streamId, params.chatId, entry.workspaceId, params.workspaceId),
+  });
+}
 
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
@@ -2289,6 +2306,16 @@ async function prepareGeneration(
           takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
           refresh: (artifact, refreshSignal) =>
             workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>
+            workspaceArtifactRunner.runAction(
+              workspace.id,
+              artifactId,
+              actionName,
+              args,
+              { folderPath, permission },
+              runSignal,
+              expectedDigest,
+            ),
           workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
         }),
@@ -2477,6 +2504,9 @@ const acpScratch = createAcpScratchDirectories({
   onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
 });
 
+/** Keeps the admitted half of `start` out of reach of anything but `start`. */
+const runAdmittedStart = Symbol("runAdmittedStart");
+
 export const llmClient = {
   /**
    * Aiden is about to quit (or the quit was called off): cards withdrawn from
@@ -2522,21 +2552,14 @@ export const llmClient = {
       }
       throw error;
     }
-    const initialization = {
+    const initialization: InitializingGeneration = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
-      stopCacheWarming: undefined as (() => void) | undefined,
-      workspaceId: undefined as string | undefined,
       cancelRequested: false,
-      cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
       rendererDetached: false,
       promptsUnattended: Boolean(options.unattended),
       controller: new AbortController(),
-      computerUse: undefined as ComputerUseController | undefined,
-      loadMonitor: undefined as LoadMonitorState | undefined,
-      skillInvocation: undefined as PreparedSkillInvocation | undefined,
-      skillPrompt: undefined as string | undefined,
       releaseSkillReservation: () => {},
       releaseBotAuthority: () => {},
     };
@@ -2561,11 +2584,46 @@ export const llmClient = {
         );
     } catch (error) {
       if (turnId) chatTurnAdmission.releaseMatching(params.chatId, turnId, owner.documentId);
+      // Registration can fail after publishing the run; nothing else ends it.
+      if (initializing.get(streamId) === initialization) {
+        settleGeneration(streamId, params, initialization, initializing);
+      }
       throw error;
     }
     if (!handedOff) {
       throw new Error("This message turn expired before generation could start.");
     }
+    const escape: GenerationEscape = {
+      settle: async () => {
+        endLoadMonitor(initialization, streamId, false);
+        settleGeneration(streamId, params, initialization, initializing);
+      },
+    };
+    return runAdmittedGeneration(
+      () => llmClient[runAdmittedStart](
+        streamId,
+        params,
+        owner,
+        options,
+        initialization,
+        computerUseGateSnapshot,
+        escape,
+      ),
+      () => escape.settle(),
+      (error) => logger.error("pi", `Could not settle failed start of stream ${streamId}.`, error),
+    );
+  },
+
+  /** The start of an admitted run, up to the point its completion task owns it. */
+  async [runAdmittedStart](
+    streamId: string,
+    params: ChatStartParams,
+    owner: ChatGenerationOwner,
+    options: GenerationExecutionOptions,
+    initialization: InitializingGeneration,
+    computerUseGateSnapshot: ReturnType<ComputerUseGenerationGate["snapshot"]>,
+    escape: GenerationEscape,
+  ): Promise<boolean> {
     options.onTurnAccepted?.();
     if (options.unattended) {
       // Nobody is there to answer: every approval or question this turn would
@@ -2607,6 +2665,15 @@ export const llmClient = {
             terminalError,
           ),
       });
+    };
+    escape.settle = async () => {
+      const cancelled = initialization.cancelRequested || initialization.controller.signal.aborted;
+      await persistInitializationTerminal(
+        cancelled ? "cancelled" : "failed",
+        cancelled ? initialization.cancellationOrigin : undefined,
+      );
+      endLoadMonitor(initialization, streamId, false);
+      settleGeneration(streamId, params, initialization, initializing);
     };
     try {
       const chat = await chatStore.get(params.chatId);
@@ -2772,30 +2839,11 @@ export const llmClient = {
           cancelled: true,
           cancellationOrigin: initialization.cancellationOrigin,
         });
-        releaseGenerationSkillReservation(initialization);
-        releaseGenerationBotAuthority(initialization);
-        approvedWorkspaceArtifactCalls.delete(streamId);
-        initializing.delete(streamId);
-        initialization.removeOwnerInvalidation();
-        approvals.releaseStream(streamId);
-        questionnaires.releaseStream(streamId);
-        broadcastChatSettled(
-          streamId,
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        settleGeneration(streamId, params, initialization, initializing);
         return false;
       }
       await persistInitializationTerminal("failed");
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
     const generationChat = authoritativeChat;
@@ -4082,8 +4130,10 @@ export const llmClient = {
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
-          /** Commands digest an allowed workspace_artifact card showed. */
+          /** What an allowed workspace_artifact card covers (see `workspaceArtifactCallApproval`). */
           let artifactApprovalDigest: string | undefined;
+          /** The resolved command a workspace_artifact run card shows. */
+          let artifactApprovalPreview: ToolApprovalPreview | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
@@ -4261,6 +4311,7 @@ export const llmClient = {
               try {
                 artifactApproval = await workspaceArtifactCallApproval(context.args, {
                   workspaceId,
+                  hasFolder: Boolean(folderPath),
                   permission: permission === "read-only" ? "none" : permission,
                   store: workspaceArtifactStore,
                 });
@@ -4273,7 +4324,10 @@ export const llmClient = {
                 };
               }
             }
-            if (artifactApproval?.required) artifactApprovalDigest = artifactApproval.digest;
+            if (artifactApproval?.required) {
+              artifactApprovalDigest = artifactApproval.digest;
+              artifactApprovalPreview = artifactApproval.preview;
+            }
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             if (
@@ -4541,7 +4595,9 @@ export const llmClient = {
                 summary,
                 details: approvalDetails,
                 ...(() => {
-                  const preview = approvalDetails ? undefined : toolApprovalPreview(context.toolCall.name, context.args);
+                  const preview = approvalDetails
+                    ? undefined
+                    : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
@@ -4897,44 +4953,18 @@ export const llmClient = {
           cancelled: true,
           cancellationOrigin: initialization.cancellationOrigin,
         });
-        releaseGenerationSkillReservation(initialization);
-        releaseGenerationBotAuthority(initialization);
-        approvedWorkspaceArtifactCalls.delete(streamId);
-        initializing.delete(streamId);
-        initialization.removeOwnerInvalidation();
-        approvals.releaseStream(streamId);
-        questionnaires.releaseStream(streamId);
-        broadcastChatSettled(
-          streamId,
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        settleGeneration(streamId, params, initialization, initializing);
         return false;
       }
       await persistInitializationTerminal("failed");
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
     const agent = candidate;
     if (!agent || !piSession) {
       await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw new Error("Could not initialize the generation agent.");
     }
     const piJournal = piSession;
@@ -5151,40 +5181,48 @@ export const llmClient = {
     // cannot fall into a map-transition gap and leave a privileged run alive.
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
+    let promotedRunAbandoned: Promise<void> | undefined;
+    const abandonPromotedRun = (status: "failed" | "cancelled"): Promise<void> => {
+      // One teardown per run: the escape path may follow a teardown that failed.
+      promotedRunAbandoned ??= (async () => {
+        await persistInitializationTerminal(status, activeGeneration.cancellationOrigin);
+        await piTurnLease?.rollback().catch((error) => {
+          logger.error(
+            "pi",
+            `Could not roll back the ${status} Pi turn for stream ${streamId}.`,
+            error,
+          );
+        });
+        try {
+          runEveryStep([
+            () => cacheWarmer?.dispose(),
+            () => visualDrafts.dispose(),
+            () => resetGenerationAgent(agent, streamId),
+            () => endLoadMonitor(activeGeneration, streamId, false),
+            () => formFill?.revoke(),
+          ]);
+        } finally {
+          await computerUse?.close().catch(() => {});
+        }
+      })();
+      return promotedRunAbandoned;
+    };
+    escape.settle = async () => {
+      try {
+        await abandonPromotedRun(activeGeneration.cancelRequested ? "cancelled" : "failed");
+      } finally {
+        settleGeneration(streamId, params, activeGeneration, active);
+      }
+    };
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
-      await persistInitializationTerminal("cancelled", activeGeneration.cancellationOrigin);
-      await piTurnLease?.rollback().catch((error) => {
-        logger.error(
-          "pi",
-          `Could not roll back the cancelled Pi turn for stream ${streamId}.`,
-          error,
-        );
-      });
-      cacheWarmer?.dispose();
-      visualDrafts.dispose();
-      resetGenerationAgent(agent, streamId);
-      endLoadMonitor(activeGeneration, streamId, false);
-      formFill?.revoke();
-      await computerUse?.close().catch(() => {});
+      await abandonPromotedRun("cancelled");
       sendGeneration(streamId, "chat:done", {
         streamId,
         content: "",
         cancelled: true,
         cancellationOrigin: activeGeneration.cancellationOrigin,
       });
-      releaseGenerationSkillReservation(activeGeneration);
-      releaseGenerationBotAuthority(activeGeneration);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      active.delete(streamId);
-      activeGeneration.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(
-        streamId,
-        params.chatId,
-        activeGeneration.workspaceId,
-        params.workspaceId,
-      );
+      settleGeneration(streamId, params, activeGeneration, active);
       return false;
     }
 
@@ -5264,6 +5302,8 @@ export const llmClient = {
             }),
           )
         : undefined;
+    // The completion task below ends the run on every path from here.
+    escape.settle = async () => {};
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -5373,50 +5413,40 @@ export const llmClient = {
           }
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
-        const spendingError = runtimeOutcome.kind === "provider_failed" ? dispatchSpendingRefusal : undefined;
-        const finalError =
-          emergencyError ?? spendingError ??
-          (runtimeOutcome.kind === "provider_failed"
-            ? runtimeOutcome.reason === "output-limit"
-              ? "The model reached its output limit."
-              : runtimeOutcome.reason === "context-overflow"
-                ? "The model context was too large to recover safely."
-                : runtimeOutcome.reason === "compaction-failed"
-                  ? "The model context could not be compacted safely."
-                  : runtimeOutcome.reason === "interrupted"
-                    ? "The provider interrupted the response."
-                    : "The model could not complete this response."
-            : runtimeOutcome.kind === "host_failed"
-              ? "The local agent runtime could not complete this response safely."
-              : null);
-        if (finalError) {
+        const terminal = decideGenerationTerminal({
+          runtime: runtimeOutcome,
+          emergencyError,
+          spendingRefusal: dispatchSpendingRefusal,
+          wasCancelled,
+          hasVisibleOutput: () => generationHasVisibleOutput(
+            full,
+            uniqueResponseImages(sharedImages, displayedImages).length +
+              displayedHtmlArtifacts.length +
+              displayedUiVisuals.length,
+          ),
+        });
+        if (terminal.kind === "failed") {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed" && !spendingError ? runtimeOutcome.providerFailure : undefined,
+            terminal.attachProviderFailure && runtimeOutcome.kind === "provider_failed"
+              ? runtimeOutcome.providerFailure
+              : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
-              ? `${finalError} The partial response could not be saved: ${persisted.error}`
-              : finalError,
+              ? `${terminal.message} The partial response could not be saved: ${persisted.error}`
+              : terminal.message,
             content: full || undefined,
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           }));
-        } else if (
-          !generationHasVisibleOutput(
-            full,
-            uniqueResponseImages(sharedImages, displayedImages).length +
-              displayedHtmlArtifacts.length +
-              displayedUiVisuals.length,
-          ) &&
-          !wasCancelled
-        ) {
+        } else if (terminal.kind === "empty") {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
@@ -5433,7 +5463,7 @@ export const llmClient = {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
             timeline.finish(
-              wasCancelled ? "cancelled" : "completed",
+              terminal.timeline,
               wasCancelled ? activeGeneration.cancellationOrigin : undefined,
             ),
             full,
@@ -5487,22 +5517,15 @@ export const llmClient = {
         } finally {
           // A run that ended for any reason (failure included) owns no more
           // child work; nothing may keep acting for it after it settles.
-          subagentRuntimeRegistry.abortGeneration(streamId);
-          unregisterAcpHost?.();
-          invalidateChatContextJournal(params.chatId);
-          releaseGenerationSkillReservation(activeGeneration);
-          releaseGenerationBotAuthority(activeGeneration);
-          approvedWorkspaceArtifactCalls.delete(streamId);
-          active.delete(streamId);
-          activeGeneration.removeOwnerInvalidation();
-          approvals.releaseStream(streamId);
-          questionnaires.releaseStream(streamId);
-          broadcastChatSettled(
-            streamId,
-            params.chatId,
-            activeGeneration.workspaceId,
-            params.workspaceId,
-          );
+          try {
+            runEveryStep([
+              () => subagentRuntimeRegistry.abortGeneration(streamId),
+              () => unregisterAcpHost?.(),
+              () => invalidateChatContextJournal(params.chatId),
+            ]);
+          } finally {
+            settleGeneration(streamId, params, activeGeneration, active);
+          }
         }
       }
     })();

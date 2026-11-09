@@ -15,6 +15,7 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
+import { storageUsageService } from "./services/storage-usage-main.js";
 import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
 import {
   registerInboxDockBadgeIpc,
@@ -198,6 +199,9 @@ import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
 import {
   createLifecycleCheck,
+  createUpdateInstallIntent,
+  settleUpdateInstallQuit,
+  whenLifecycleCheckFree,
   shouldQuitAfterAllWindowsClose,
   shouldReleaseAuxiliaryWindows,
 } from "./application-lifecycle-core.js";
@@ -256,7 +260,10 @@ const lifecycleCheck = createLifecycleCheck((error) =>
 let shutdownStarted = false;
 /** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
 const imageQuitCoverage = new ImageQuitCoverage();
-let installUpdateOnQuit = false;
+const updateInstall = createUpdateInstallIntent({
+  shutdownStarted: () => shutdownStarted,
+  onWithdrawn: () => appUpdateService.announceSnapshot(),
+});
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
 const disposeAppUpdateStateSubscription = appUpdateService.subscribe(
   (snapshot) => {
@@ -401,6 +408,8 @@ function cleanupApplication(): void {
  * service already enforces on itself.
  */
 const SHUTDOWN_BUDGET_MS = {
+  // A Storage sweep stops before its next item; this waits for the one in hand.
+  storageCleanup: 6_000,
   geminiLive: 3_000,
   // Generation grace (6 s) plus the Gemini context-cache deletes that
   // llmClient.shutdown() runs after it. A delete still in flight at the
@@ -463,7 +472,7 @@ const PRE_SHUTDOWN_BUDGET_MS = {
 const SHUTDOWN_HARD_CEILING_MS = (() => {
   const b = SHUTDOWN_BUDGET_MS;
   const serial =
-    b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
+    b.storageCleanup + b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
     b.subagentRuntime + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
   const parallel = Math.max(
     b.providerSignIn,
@@ -533,6 +542,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       await prepareComputerUseForQuit();
     } catch (error) {
       shutdownStarted = false;
+      updateInstall.withdraw();
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
@@ -544,6 +554,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
     }
   }
   const disarmShutdownCeiling = armShutdownCeiling();
+  // First, so no further chat or worktree is deleted while the rest of the app stops.
+  await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
   await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
@@ -688,8 +700,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   await flushDiagnosticJournal(1_000);
   await flushDiagnosticHealth(1_000);
   forceAppQuit = true;
-  if (installUpdateOnQuit) {
-    installUpdateOnQuit = false;
+  if (updateInstall.take()) {
     if (appUpdateService.installDownloadedUpdateAndRestart()) {
       // The installer owns the exit from here; never cut it off mid-install.
       disarmShutdownCeiling();
@@ -1093,12 +1104,22 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     await shutdownAndQuit(true);
     return shutdownStarted;
   } finally {
+    // Before the release, so work queued behind this quit sees the outcome.
+    updateInstall.withdraw();
     lifecycleCheck.release();
-    if (!shutdownStarted && installUpdateOnQuit) {
-      installUpdateOnQuit = false;
-      appUpdateService.announceSnapshot();
-    }
   }
+}
+
+/** Start a quit once the check is free, if it is still wanted by then. */
+function continueApplicationQuit(window: BrowserWindow, stillWanted: () => boolean): void {
+  whenLifecycleCheckFree(lifecycleCheck, () => {
+    if (!stillWanted() || shutdownStarted) return;
+    void settleUpdateInstallQuit(
+      () => requestApplicationQuit(window),
+      () => updateInstall.withdraw(),
+      (error) => logger.error("main", "A deferred quit failed.", error),
+    );
+  });
 }
 
 async function clearRendererOnboardingCompletion(
@@ -1150,7 +1171,7 @@ async function restoreRendererOnboardingCompletion(
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   if (
     shutdownStarted ||
-    installUpdateOnQuit ||
+    updateInstall.armed ||
     window.isDestroyed() ||
     !lifecycleCheck.tryBegin()
   ) {
@@ -1413,8 +1434,8 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
   }
 
   const window = mainWindow;
-  installUpdateOnQuit = true;
-  setImmediate(() => void requestApplicationQuit(window));
+  updateInstall.arm();
+  setImmediate(() => continueApplicationQuit(window, () => updateInstall.armed));
   return {
     accepted: true,
   };
@@ -1816,7 +1837,11 @@ async function createMainWindow(
     } else if (interruptedAction === "quit") {
       forceAppQuit = false;
       shutdownStarted = false;
-      setImmediate(() => void requestApplicationQuit(createdWindow));
+      updateInstall.retryScheduled();
+      setImmediate(() => continueApplicationQuit(createdWindow, () => {
+        updateInstall.retryBegan();
+        return true;
+      }));
     } else if (interruptedAction === "close") {
       setImmediate(() => void requestWindowClose(createdWindow));
     } else if (interruptedAction === "reload") {

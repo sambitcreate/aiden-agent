@@ -249,6 +249,8 @@ export interface GitHubRepositoryStatus {
   /** Epoch ms when a "rate-limited" read may be retried. */
   retryAt?: number;
   repository?: GitHubRepositoryRef;
+  /** The branch name the checked-out branch pushes to; absent for an explicit repository. */
+  headBranch?: string;
 }
 
 export interface GitHubPullRequestCreateInput {

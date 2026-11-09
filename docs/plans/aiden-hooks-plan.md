@@ -346,6 +346,8 @@ An end-to-end Playwright flow for each remains a follow-up.
 
 Answered 2026-10-31: 1 A (Claude-compatible schema), 2 A (repo `.aiden/hooks.json` waits for approval), 3 A (the agent may propose workspace and chat hooks), 4 yes (Stop hooks may continue a turn, capped), 5 no (no import of Claude Code or Codex hooks; Phase 4 is dropped). The first implementation covers Phases 0 to 3; Phase 5 stays a follow-up.
 
+Answered 2026-11-09: 6 A. A desktop `run_command` can write `<userData>/hooks/` and add an approved hook, since nothing sandboxes the shell and Full access shows no card. This is accepted as documented in [hooks.md](../hooks.md); sealing approvals with a key the shell can't read stays an optional follow-up.
+
 The original questions:
 
 1. **Format.**
@@ -359,3 +361,6 @@ The original questions:
    - Option B: only list and test.
 4. **Stop-continue.** Continue a turn from a Stop hook (needs a new continuation path in the harness) in Phase 3, or never.
 5. **Claude Code plugin hooks.** Whether Phase 4 import is wanted at all, given the plugin skill import was intentionally skills-only.
+6. **Hook approvals and the shell** (raised in the landing review, 2026-11-06).
+   - Option A (recommended): accept that an unsandboxed `run_command` can add an approved hook, and document it.
+   - Option B: before landing, seal approvals with a key the shell can't read (Keychain or `safeStorage`).

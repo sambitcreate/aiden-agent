@@ -128,7 +128,16 @@ export function restoreUndeliveredGuidance(chatId: string, guidance: readonly st
   write(chatId, { ...record, text: mergeRestoredGuidance(current, guidance) });
 }
 
-type StagedTextListener = (text: string) => void;
+export interface StageComposerTextOptions {
+  /**
+   * What a mounted composer says when the text arrives. Left out, it says a
+   * visual added a follow-up; `null` says nothing, for a person's own action
+   * that already moves them to the message box.
+   */
+  notice?: string | null;
+}
+
+type StagedTextListener = (text: string, options: StageComposerTextOptions) => void;
 const stagedTextListeners = new Map<string, Set<StagedTextListener>>();
 
 /**
@@ -137,11 +146,11 @@ const stagedTextListeners = new Map<string, Set<StagedTextListener>>();
  * mounted composer merges it into its live text; otherwise the saved draft is
  * extended so the text is there when the chat is reopened.
  */
-export function stageComposerText(chatId: string, text: string): void {
+export function stageComposerText(chatId: string, text: string, options: StageComposerTextOptions = {}): void {
   if (!text.trim()) return;
   const listeners = stagedTextListeners.get(chatId);
   if (listeners?.size) {
-    for (const listener of [...listeners]) listener(text);
+    for (const listener of [...listeners]) listener(text, options);
     return;
   }
   const record = read(chatId);
