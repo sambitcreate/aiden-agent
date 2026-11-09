@@ -29,6 +29,8 @@ struct AidenInboxTabView: View {
     var runningHome = AidenRunningHome.accessory
     var refreshFailed = false
     var moreChats = AidenInboxMoreChats.none
+    var roster = AidenMachineRoster()
+    var filter = Binding.constant(AidenMachineFilter.all)
     /// A chat row opens its chat, a Bot row its Bot.
     let onOpen: (AidenAppRoute) -> Void
     let onAction: (AidenInboxRowAction, AidenHostObjectID) -> Void
@@ -36,6 +38,7 @@ struct AidenInboxTabView: View {
     var onRetry: () -> Void = {}
     var onShowAllEarlier: () -> Void = {}
     var onLoadMore: () -> Void = {}
+    var onReconnect: (String) -> Void = { _ in }
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
 
@@ -47,6 +50,7 @@ struct AidenInboxTabView: View {
 
     var body: some View {
         List {
+            machineRows
             if refreshFailed { refreshErrorRow }
             if runningHome == .inboxRow, !inbox.running.isEmpty { runningRow }
             if catchUpCount > 0 { catchUpRow }
@@ -134,6 +138,8 @@ struct AidenInboxTabView: View {
                 palette: palette,
                 actions: actions,
                 isPinned: row.isPinned,
+                machine: roster.rowChip(for: row.id.instanceId, filter: filter.wrappedValue),
+                isDimmed: roster.isOffline(row.id.instanceId),
                 open: { onOpen(row.route) }
             )
             .contextMenu { contextMenu(for: row, actions: actions) }
@@ -210,6 +216,28 @@ struct AidenInboxTabView: View {
         .listRowInsets(EdgeInsets(top: AidenSpacing.s, leading: AidenSpacing.m, bottom: AidenSpacing.xs, trailing: AidenSpacing.m))
         .listRowSeparator(.hidden)
         .listRowBackground(palette.canvas)
+    }
+
+    /// The filter strip, then a row for each offline machine the filter shows.
+    @ViewBuilder
+    private var machineRows: some View {
+        if roster.showsStrip {
+            AidenMachineStrip(labels: roster.visible, filter: filter)
+                .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: 0, bottom: AidenSpacing.xs, trailing: 0))
+                .listRowSeparator(.hidden)
+                .listRowBackground(palette.canvas)
+        }
+        ForEach(roster.offlineRows(under: filter.wrappedValue)) { machine in
+            AidenMachineOfflineRow(
+                label: machine.label,
+                lastSeen: machine.lastSeen,
+                isReconnecting: machine.isReconnecting,
+                onReconnect: { onReconnect(machine.id) }
+            )
+            .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: AidenSpacing.l, bottom: AidenSpacing.xs, trailing: AidenSpacing.l))
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
+        }
     }
 
     private var showMoreRow: some View {
@@ -342,6 +370,7 @@ struct AidenInboxTabRootView: View {
     let store: AidenUnifiedInboxStore
     var runningHome = AidenRunningHome.accessory
     let onOpen: (AidenAppRoute) -> Void
+    var onOpenMachines: () -> Void = {}
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
 
@@ -358,6 +387,8 @@ struct AidenInboxTabRootView: View {
             runningHome: runningHome,
             refreshFailed: store.refreshFailed,
             moreChats: store.moreChats,
+            roster: store.roster,
+            filter: Binding(get: { store.filter }, set: { store.filter = $0 }),
             onOpen: onOpen,
             onAction: { action, id in
                 Task { await store.perform(action, on: id) }
@@ -366,10 +397,16 @@ struct AidenInboxTabRootView: View {
             onRetry: { Task { await store.retry() } },
             onShowAllEarlier: { store.showsAllEarlier = true },
             onLoadMore: { Task { await store.loadMoreChats() } },
+            onReconnect: { store.reconnect($0) },
             onCatchUp: onCatchUp,
             onShowRunning: onShowRunning
         )
         .navigationTitle("Inbox")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                AidenHostStatusItem(online: store.roster.online, total: store.roster.total, onOpen: onOpenMachines)
+            }
+        }
         .overlay(alignment: .top) { noticeBanner }
         .animation(reduceMotion ? nil : .smooth(duration: 0.24, extraBounce: 0), value: store.notice)
         .task {

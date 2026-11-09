@@ -431,6 +431,131 @@ final class AidenShellUITests: XCTestCase {
         oldHost.terminate()
     }
 
+    // MARK: Machines
+
+    func testTheStatusItemCountsMachinesAndOpensThem() {
+        let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        let item = app.buttons["aiden.machine-status"]
+        XCTAssertTrue(item.waitForExistence(timeout: 10), "The Inbox has no status item")
+        let settled = NSPredicate(format: "label == %@", "2 of 4 machines online")
+        expectation(for: settled, evaluatedWith: item)
+        waitForExpectations(timeout: 15)
+
+        item.tap()
+
+        XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "The item didn't open Machines")
+    }
+
+    func testTheStripNarrowsTheInboxToOneMachine() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let studioRow = openInbox(in: app)
+        XCTAssertTrue(studioRow.waitForExistence(timeout: 15), "No chat rows in the Inbox")
+        let onStudio = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "On Studio Mac")).firstMatch
+        XCTAssertTrue(onStudio.waitForExistence(timeout: 10), "With several machines a row says which")
+
+        let laptop = app.buttons["Laptop"].firstMatch
+        XCTAssertTrue(laptop.waitForExistence(timeout: 10), "The strip has no chip for the machine")
+        laptop.tap()
+
+        // Laptop's rows stay, and with only one machine listed they carry no chip.
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: onStudio)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(studioRow.exists, "The filter left the Inbox empty")
+
+        app.buttons["All machines"].firstMatch.tap()
+        XCTAssertTrue(onStudio.waitForExistence(timeout: 10), "All brings every machine back")
+    }
+
+    func testTheMachinePageCountsItsOpenChats() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the Inbox")
+        app.buttons["aiden.machine-status"].tap()
+        let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac,")).firstMatch
+        XCTAssertTrue(studio.waitForExistence(timeout: 10), "Machines doesn't list the machine")
+        studio.tap()
+
+        let openChats = app.staticTexts["Open chats"]
+        for _ in 0..<6 where !openChats.exists { app.swipeUp() }
+
+        XCTAssertTrue(openChats.exists, "The machine page doesn't count its open chats")
+        // The demo Studio Mac has six chats, and none is done. The row reads as one
+        // element, its label then its value.
+        let count = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Open chats,")).firstMatch
+        XCTAssertTrue(count.exists, "The Open chats row reads no value")
+        XCTAssertEqual(count.label, "Open chats, 6")
+    }
+
+    func testOneMachineHasNoStrip() {
+        let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        let row = openInbox(in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "No chat rows in the Inbox")
+        XCTAssertFalse(app.buttons["All machines"].exists)
+        XCTAssertFalse(row.label.contains("On Studio Mac"), "One machine has nothing to tell apart: \(row.label)")
+    }
+
+    func testAChatNamesItsMachineWithSeveralMachines() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let row = openInbox(in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "No chat rows in the Inbox")
+        row.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+
+        XCTAssertTrue(
+            app.navigationBars.staticTexts["Studio Mac"].waitForExistence(timeout: 5),
+            "The toolbar doesn't name the machine"
+        )
+    }
+
+    func testCaptureMachineChromeScreens() {
+        for appearance in AidenStateMatrix.Appearance.allCases {
+            for size in AidenStateMatrix.ContentSize.allCases {
+                let tag = "\(appearance.rawValue)-\(size.label)"
+                let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, appearance: appearance, contentSize: size)
+                let item = app.buttons["aiden.machine-status"]
+                XCTAssertTrue(item.waitForExistence(timeout: 10))
+                XCTAssertTrue(reconnectButton(in: app).waitForExistence(timeout: 15))
+                Thread.sleep(forTimeInterval: 2)
+                AidenStateMatrix.capture("machines-inbox-\(tag)", in: self)
+                app.swipeUp()
+                Thread.sleep(forTimeInterval: 1)
+                AidenStateMatrix.capture("machines-inbox-scrolled-\(tag)", in: self)
+                if size == .large {
+                    app.swipeDown()
+                    let all = app.buttons["All machines"].firstMatch
+                    XCTAssertTrue(all.waitForExistence(timeout: 5))
+                    all.swipeLeft()
+                    Thread.sleep(forTimeInterval: 1)
+                    app.buttons["Build Box"].firstMatch.tap()
+                    Thread.sleep(forTimeInterval: 1)
+                    AidenStateMatrix.capture("machines-inbox-filtered-\(tag)", in: self)
+                }
+                app.terminate()
+            }
+            let one = AidenStateMatrix.launch(scenario: .one, shell: .tabs, appearance: appearance)
+            XCTAssertTrue(openInbox(in: one).waitForExistence(timeout: 15))
+            AidenStateMatrix.capture("machines-one-\(appearance.rawValue)", in: self)
+            openInbox(in: one).tap()
+            XCTAssertTrue(one.buttons["Send message"].firstMatch.waitForExistence(timeout: 10))
+            Thread.sleep(forTimeInterval: 1)
+            AidenStateMatrix.capture("machines-one-chat-\(appearance.rawValue)", in: self)
+            one.terminate()
+
+            let four = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance)
+            let row = openInbox(in: four)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.tap()
+            XCTAssertTrue(four.buttons["Send message"].firstMatch.waitForExistence(timeout: 10))
+            Thread.sleep(forTimeInterval: 1)
+            AidenStateMatrix.capture("machines-chat-\(appearance.rawValue)", in: self)
+            goBack(in: four)
+            search("Fix", in: four)
+            Thread.sleep(forTimeInterval: 2)
+            AidenStateMatrix.capture("machines-search-\(appearance.rawValue)", in: self)
+            four.terminate()
+        }
+    }
+
     /// The accessory in both forms and a whole Catch Up, for a person to look at.
     /// A screen that cannot be reached fails the test.
     func testCaptureRunningAccessoryAndCatchUp() {
@@ -589,7 +714,7 @@ final class AidenShellUITests: XCTestCase {
     func testTheEmptyStatesScrollClearOfTheField() {
         for size in [AidenStateMatrix.ContentSize.large, .accessibilityExtraExtraExtraLarge] {
             let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, contentSize: size)
-            XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "\(size)")
+            XCTAssertTrue(openOfflineMixInbox(in: app).waitForExistence(timeout: 10), "\(size)")
             search("zzzz", in: app, submit: false)
             let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search")).firstMatch
             XCTAssertTrue(note.waitForExistence(timeout: 10), "No note (\(size))")
@@ -686,7 +811,7 @@ final class AidenShellUITests: XCTestCase {
             shell: .tabs,
             contentSize: .accessibilityExtraExtraExtraLarge
         )
-        XCTAssertTrue(openInbox(in: largest).waitForExistence(timeout: 10))
+        XCTAssertTrue(openOfflineMixInbox(in: largest).waitForExistence(timeout: 10))
         search("zzzz", in: largest)
         XCTAssertTrue(largest.staticTexts["No results"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("search-no-results-failing-machines-accessibilityExtraExtraExtraLarge", in: self)
@@ -866,6 +991,19 @@ final class AidenShellUITests: XCTestCase {
         return app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")
         ).firstMatch
+    }
+
+    /// Offline rows sit above the chats, and at the largest text they fill the first
+    /// screen, so the list hasn't made a chat row yet. The first of them says the
+    /// Inbox has settled at every size.
+    private func openOfflineMixInbox(in app: XCUIApplication) -> XCUIElement {
+        AidenStateMatrix.openArea("Inbox", in: app)
+        return reconnectButton(in: app)
+    }
+
+    /// Each offline row's button names its machine, as in "Reconnect Laptop".
+    private func reconnectButton(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Reconnect ")).firstMatch
     }
 
     private func botRow(in app: XCUIApplication) -> XCUIElement {
