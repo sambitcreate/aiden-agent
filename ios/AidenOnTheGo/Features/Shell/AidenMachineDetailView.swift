@@ -284,13 +284,13 @@ struct AidenMachineDetailView: View {
                     .disabled(!row.canReconnect)
                 }
                 if row.isSelected {
-                    Label("This is the selected machine", systemImage: "checkmark")
+                    Label("This is the default machine", systemImage: "checkmark")
                         .foregroundStyle(.secondary)
                 } else {
                     Button {
                         Task { await switchToMachine() }
                     } label: {
-                        Label("Switch to this machine", systemImage: "arrow.left.arrow.right")
+                        Label("Make this the default machine", systemImage: "arrow.left.arrow.right")
                     }
                     .disabled(model.isBusy || coordinator.connectionState == .connecting)
                 }
@@ -404,7 +404,7 @@ struct AidenMachineDetailView: View {
         // only "did not answer" when the selection itself went through.
         failure = model.failureMessage(
             for: outcome,
-            fallback: String(localized: "The machine did not answer. It is now the selected machine, and you can reconnect from here.")
+            fallback: String(localized: "The machine did not answer. It is now the default machine, and you can reconnect from here.")
         )
     }
 

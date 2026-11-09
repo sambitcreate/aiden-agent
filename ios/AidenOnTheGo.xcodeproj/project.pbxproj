@@ -117,9 +117,13 @@
 		A27C00000000000000000001 /* AidenMachineChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27C00000000000000000011 /* AidenMachineChrome.swift */; };
 		A23C00000000000000000003 /* AidenCatchUpQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23C00000000000000000013 /* AidenCatchUpQueueTests.swift */; };
 		A0E100000000000000000041 /* AidenMachinesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000051 /* AidenMachinesView.swift */; };
+		A0E300000000000000000001 /* AidenNewWorkMachinePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */; };
+		A0E300000000000000000003 /* AidenNewWorkChatFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */; };
+		A0E300000000000000000004 /* AidenBotCreateOperations+Machine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000014 /* AidenBotCreateOperations+Machine.swift */; };
 		A0E100000000000000000042 /* AidenMachineDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000052 /* AidenMachineDetailView.swift */; };
 		A27C00000000000000000002 /* AidenMachineChromeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27C00000000000000000012 /* AidenMachineChromeTests.swift */; };
 		A0E100000000000000000043 /* AidenMachineDetailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E100000000000000000053 /* AidenMachineDetailTests.swift */; };
+		A0E300000000000000000002 /* AidenNewWorkTargetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E300000000000000000012 /* AidenNewWorkTargetTests.swift */; };
 		A0E290000000000000000001 /* AidenOwnerRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E290000000000000000002 /* AidenOwnerRoutingTests.swift */; };
 		A0D800000000000000000003 /* AidenVoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D800000000000000000013 /* AidenVoiceInput.swift */; };
 		A0D800000000000000000002 /* AidenAppearanceV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D800000000000000000012 /* AidenAppearanceV1.json */; };
@@ -379,9 +383,13 @@
 		A27C00000000000000000011 /* AidenMachineChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachineChrome.swift; sourceTree = "<group>"; };
 		A23C00000000000000000013 /* AidenCatchUpQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenCatchUpQueueTests.swift; sourceTree = "<group>"; };
 		A0E100000000000000000051 /* AidenMachinesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachinesView.swift; sourceTree = "<group>"; };
+		A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewWorkMachinePicker.swift; sourceTree = "<group>"; };
+		A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewWorkChatFlow.swift; sourceTree = "<group>"; };
+		A0E300000000000000000014 /* AidenBotCreateOperations+Machine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AidenBotCreateOperations+Machine.swift"; sourceTree = "<group>"; };
 		A0E100000000000000000052 /* AidenMachineDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachineDetailView.swift; sourceTree = "<group>"; };
 		A27C00000000000000000012 /* AidenMachineChromeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachineChromeTests.swift; sourceTree = "<group>"; };
 		A0E100000000000000000053 /* AidenMachineDetailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMachineDetailTests.swift; sourceTree = "<group>"; };
+		A0E300000000000000000012 /* AidenNewWorkTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewWorkTargetTests.swift; sourceTree = "<group>"; };
 		A0E290000000000000000002 /* AidenOwnerRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenOwnerRoutingTests.swift; sourceTree = "<group>"; };
 		A0D800000000000000000012 /* AidenAppearanceV1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = AidenAppearanceV1.json; path = ../protocol/aiden-appearance-v1.json; sourceTree = SOURCE_ROOT; };
 		A0D900000000000000000011 /* AidenWorkspaceEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceEnvironment.swift; sourceTree = "<group>"; };
@@ -588,6 +596,7 @@
 				A23C00000000000000000013 /* AidenCatchUpQueueTests.swift */,
 				A0E100000000000000000053 /* AidenMachineDetailTests.swift */,
 				A27C00000000000000000012 /* AidenMachineChromeTests.swift */,
+				A0E300000000000000000012 /* AidenNewWorkTargetTests.swift */,
 				A0E290000000000000000002 /* AidenOwnerRoutingTests.swift */,
 				B0EB00000000000000000011 /* AidenBotMemoryTests.swift */,
 				B0E700000000000000000011 /* AidenRemoteContractFixture.swift */,
@@ -697,6 +706,8 @@
 				A0E100000000000000000051 /* AidenMachinesView.swift */,
 				A27C00000000000000000011 /* AidenMachineChrome.swift */,
 				A0E100000000000000000052 /* AidenMachineDetailView.swift */,
+				A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */,
+				A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -717,6 +728,7 @@
 			isa = PBXGroup;
 			children = (
 				B0D400000000000000000011 /* AidenBotCreateView.swift */,
+				A0E300000000000000000014 /* AidenBotCreateOperations+Machine.swift */,
 				B0D300000000000000000011 /* AidenBotAdvancedView.swift */,
 				B0D200000000000000000011 /* AidenBotSettingsDraft.swift */,
 				B0D100000000000000000011 /* AidenBotCharacter.swift */,
@@ -1279,6 +1291,9 @@
 				A0E100000000000000000002 /* AidenMachinePreferences.swift in Sources */,
 				A0E100000000000000000041 /* AidenMachinesView.swift in Sources */,
 				A27C00000000000000000001 /* AidenMachineChrome.swift in Sources */,
+				A0E300000000000000000001 /* AidenNewWorkMachinePicker.swift in Sources */,
+				A0E300000000000000000003 /* AidenNewWorkChatFlow.swift in Sources */,
+				A0E300000000000000000004 /* AidenBotCreateOperations+Machine.swift in Sources */,
 				A0E100000000000000000042 /* AidenMachineDetailView.swift in Sources */,
 				A0E100000000000000000021 /* AidenUnifiedInbox.swift in Sources */,
 				A23C00000000000000000001 /* AidenCatchUpQueue.swift in Sources */,
@@ -1336,6 +1351,7 @@
 				A23C00000000000000000003 /* AidenCatchUpQueueTests.swift in Sources */,
 				A0E100000000000000000043 /* AidenMachineDetailTests.swift in Sources */,
 				A27C00000000000000000002 /* AidenMachineChromeTests.swift in Sources */,
+				A0E300000000000000000002 /* AidenNewWorkTargetTests.swift in Sources */,
 				A0E290000000000000000001 /* AidenOwnerRoutingTests.swift in Sources */,
 				B0EB00000000000000000001 /* AidenBotMemoryTests.swift in Sources */,
 				B0E700000000000000000001 /* AidenRemoteContractFixture.swift in Sources */,

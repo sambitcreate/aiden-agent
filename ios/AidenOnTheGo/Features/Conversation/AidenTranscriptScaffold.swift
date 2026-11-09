@@ -144,13 +144,14 @@ struct AidenSessionSheetConfig: Equatable {
         title: String,
         hasFiles: Bool,
         hasMemory: Bool,
+        hasAdvanced: Bool = true,
         canDelete: Bool,
         isDeleting: Bool
     ) -> Self {
         Self(
             sheetTitle: title,
             actions: [.profile] + (hasFiles ? [.files] : []) + (hasMemory ? [.memory] : [])
-                + [.advanced] + (canDelete ? [.delete] : []),
+                + (hasAdvanced ? [.advanced] : []) + (canDelete ? [.delete] : []),
             unavailable: isDeleting ? [.delete] : []
         )
     }

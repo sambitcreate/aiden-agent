@@ -27,6 +27,7 @@ struct AidenAppShellView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
+    @State private var newChat: AidenNewWorkChatFlow
     @State private var showsRunningChats = false
 
     init(
@@ -41,13 +42,20 @@ struct AidenAppShellView: View {
         _navigationRequest = navigationRequest
         self.navigationStore = navigationStore
         self.intents = intents ?? .shared
-        _navigation = State(initialValue: AidenAppNavigation(
+        let navigation = AidenAppNavigation(
             restoring: navigationStore.load(
                 installations: coordinator.installationStore.installations,
                 selected: coordinator.activeInstanceId
             ),
             installations: coordinator.installationStore.installations
-        ))
+        )
+        _navigation = State(initialValue: navigation)
+        _newChat = State(initialValue: AidenNewWorkChatFlow(coordinator: coordinator) { chat, id in
+            let home = inboxStore.homeModel(for: id.instanceId)
+            home?.accept(chat)
+            home?.markViewed(chatID: chat.id)
+            navigation.open(.chat(id))
+        })
     }
 
     private var botsAvailability: AidenBotsAvailability {
@@ -78,6 +86,11 @@ struct AidenAppShellView: View {
                         onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
                         onShowRunning: { showsRunningChats = true }
                     )
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            AidenNewWorkComposeButton(flow: newChat)
+                        }
+                    }
                     .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
@@ -108,6 +121,7 @@ struct AidenAppShellView: View {
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
+        .aidenNewWorkPresentation(newChat, coordinator: coordinator)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && navigation.openChat == nil
@@ -199,7 +213,7 @@ struct AidenAppShellView: View {
         case .scheduled:
             AidenTabPlaceholderView(title: "Scheduled tasks", systemImage: "calendar")
         case .usage:
-            AidenTabPlaceholderView(title: "Usage", systemImage: "chart.bar")
+            AidenMachineUsageView(coordinator: coordinator)
         case .catchUpFinished(let ending):
             AidenCatchUpFinishedView(ending: ending) { navigation.inboxPath = [] }
         }

@@ -14,7 +14,7 @@ struct AidenWorkspacesDirectoryView: View {
     @State private var renameText = ""
     @State private var retainedRenameDraftWorkspaceID: String?
     @State private var hapticScope = UUID()
-    @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
+    @AppStorage(AidenWorkspaceDefaultApplication.permissionKey) private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     private var archivedWorkspaceIDs: Set<String> {
         archiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
@@ -280,13 +280,7 @@ struct AidenWorkspacesDirectoryView: View {
     @MainActor
     private func applyGlobalDefault(to workspace: AidenWorkspace) async -> AidenWorkspaceDefaultApplication {
         let permission = AidenWorkspacePermission(rawValue: defaultWorkspacePermissionRaw) ?? .ask
-        guard permission != workspace.permission else {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
-        }
-        guard let updated = await coordinator.updateWorkspace(workspace, permission: permission) else {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
-        }
-        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
+        return await .applying(permission, to: workspace) { await coordinator.updateWorkspace(workspace, permission: $0) }
     }
 }
 
