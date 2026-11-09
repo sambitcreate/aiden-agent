@@ -327,3 +327,60 @@ enum AidenInboxMoreChats: Equatable {
     case loading
     case failed(String)
 }
+
+// MARK: Tabs that list every machine
+
+/// One machine's rows in a tab that lists every machine, such as Bots or
+/// Workspaces. Ids from different machines can match ("default" is everywhere),
+/// so a row is known by its `AidenHostObjectID`, never its bare id.
+struct AidenMachineSection<Row: Identifiable>: Identifiable {
+    let instanceId: String
+    let rows: [Row]
+
+    var id: String { instanceId }
+
+    /// Under All, a section for each machine that has rows, in `machines`' order.
+    /// Under one machine, only that machine's section, even when it's empty, so the
+    /// tab can say there's nothing there.
+    static func grouped(_ machines: [(instanceId: String, rows: [Row])], filter: AidenMachineFilter) -> [Self] {
+        switch filter {
+        case .all:
+            machines.filter { !$0.rows.isEmpty }.map { Self(instanceId: $0.instanceId, rows: $0.rows) }
+        case .machine(let instanceId):
+            machines.filter { $0.instanceId == instanceId }.map { Self(instanceId: $0.instanceId, rows: $0.rows) }
+        }
+    }
+}
+
+/// A workspace as the Workspaces tab lists it, on its own machine.
+struct AidenMachineWorkspaceRow: Identifiable, Equatable {
+    let id: AidenHostObjectID
+    let workspace: AidenWorkspace
+
+    /// What one machine lists: its workspaces with a page of their own, less
+    /// those archived on this device, by name.
+    static func rows(
+        instanceId: String,
+        deviceId: String,
+        workspaces: [AidenWorkspace],
+        isArchived: (String) -> Bool
+    ) -> [Self] {
+        AidenNoWorkspace.choices(workspaces)
+            .filter { !isArchived($0.id) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .map { Self(id: AidenHostObjectID(instanceId: instanceId, deviceId: deviceId, objectId: $0.id), workspace: $0) }
+    }
+}
+
+/// A Bot as the Bots tab lists it, on its own machine.
+struct AidenMachineBotRow: Identifiable, Equatable {
+    let id: AidenHostObjectID
+    let bot: AidenBotSummary
+
+    /// One machine's Bots as its snapshot holds them, newest first.
+    static func rows(of snapshot: AidenHostInboxSnapshot) -> [Self] {
+        snapshot.bots
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .map { Self(id: AidenHostObjectID(instanceId: snapshot.instanceId, deviceId: snapshot.deviceId, objectId: $0.id), bot: $0) }
+    }
+}

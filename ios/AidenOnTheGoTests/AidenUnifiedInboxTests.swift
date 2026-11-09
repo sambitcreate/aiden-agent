@@ -572,4 +572,67 @@ final class AidenUnifiedInboxTests: XCTestCase {
             snapshot("mac-b", bots: [bot("bot_scout", issues: 1)]),
         ], filter: .machine("mac-b")).needsYou), ["mac-b:bot_scout"])
     }
+
+    // MARK: Workspaces from every machine
+
+    private func workspace(_ id: String, name: String, noWorkspace: Bool = false) -> AidenWorkspace {
+        AidenWorkspace(
+            id: id,
+            name: name,
+            permission: .ask,
+            hasFolder: true,
+            isManagedWorktree: false,
+            noWorkspace: noWorkspace,
+            branchName: nil,
+            repositoryName: nil,
+            git: nil,
+            createdAt: now,
+            updatedAt: now,
+            revision: "r1"
+        )
+    }
+
+    func testWorkspacesGroupByMachine() {
+        let studio = AidenMachineWorkspaceRow.rows(
+            instanceId: "mac-a",
+            deviceId: "phone",
+            workspaces: [workspace("site", name: "Site"), workspace("default", name: "App"), workspace("chats", name: "", noWorkspace: true)],
+            isArchived: { _ in false }
+        )
+        let laptop = AidenMachineWorkspaceRow.rows(
+            instanceId: "mac-b",
+            deviceId: "phone",
+            workspaces: [workspace("default", name: "Notes"), workspace("old", name: "Old")],
+            isArchived: { $0 == "old" }
+        )
+        let empty = AidenMachineWorkspaceRow.rows(instanceId: "mac-c", deviceId: "phone", workspaces: [], isArchived: { _ in false })
+        let machines = [(instanceId: "mac-a", rows: studio), (instanceId: "mac-b", rows: laptop), (instanceId: "mac-c", rows: empty)]
+
+        let all = AidenMachineSection.grouped(machines, filter: .all)
+        // A machine's own order is by name; a hidden home and an archived one aren't listed.
+        XCTAssertEqual(all.map(\.instanceId), ["mac-a", "mac-b"])
+        XCTAssertEqual(all.map { $0.rows.map(\.workspace.name) }, [["App", "Site"], ["Notes"]])
+        // Both "default"s stay, each on its own machine.
+        XCTAssertEqual(all.flatMap(\.rows).filter { $0.workspace.id == "default" }.map(\.id),
+                       [hostID("mac-a", "default"), hostID("mac-b", "default")])
+
+        let one = AidenMachineSection.grouped(machines, filter: .machine("mac-b"))
+        XCTAssertEqual(one.map(\.instanceId), ["mac-b"])
+        XCTAssertEqual(one.first?.rows.map(\.id), [hostID("mac-b", "default")])
+        // A machine with nothing still gets its section, so the tab can say so.
+        XCTAssertEqual(AidenMachineSection.grouped(machines, filter: .machine("mac-c")).map(\.rows.count), [0])
+    }
+
+    func testBotsGroupByMachineNewestFirst() {
+        let a = snapshot("mac-a", bots: [bot("bot_old", minutesAgo: 30), bot("bot_new", minutesAgo: 1)])
+        let b = snapshot("mac-b", bots: [bot("bot_old", minutesAgo: 5)])
+        let sections = AidenMachineSection.grouped(
+            [a, b].map { (instanceId: $0.instanceId, rows: AidenMachineBotRow.rows(of: $0)) },
+            filter: .all
+        )
+        XCTAssertEqual(sections.map { $0.rows.map(\.id) }, [
+            [hostID("mac-a", "bot_new"), hostID("mac-a", "bot_old")],
+            [hostID("mac-b", "bot_old")],
+        ])
+    }
 }
