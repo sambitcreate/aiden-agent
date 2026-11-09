@@ -8,11 +8,13 @@ enum AidenAppTab: String, Codable, CaseIterable, Hashable {
 enum AidenAppRoute: Hashable, Codable {
     case chat(AidenHostObjectID), bot(AidenHostObjectID), workspace(AidenHostObjectID)
     case machines, machine(instanceId: String), settings, scheduled, usage
+    /// Where a Catch Up run ends. It means nothing after a relaunch, so it's never saved.
+    case catchUpFinished(AidenCatchUpEnding)
 
     /// The tab whose stack holds this route.
     var tab: AidenAppTab {
         switch self {
-        case .chat, .machines, .machine, .settings, .scheduled, .usage: .inbox
+        case .chat, .machines, .machine, .settings, .scheduled, .usage, .catchUpFinished: .inbox
         case .bot: .bots
         case .workspace: .workspaces
         }
@@ -43,7 +45,7 @@ enum AidenAppRoute: Hashable, Codable {
         switch self {
         case .chat(let id), .bot(let id), .workspace(let id): id.instanceId
         case .machine(let instanceId): instanceId
-        case .machines, .settings, .scheduled, .usage: nil
+        case .machines, .settings, .scheduled, .usage, .catchUpFinished: nil
         }
     }
 
@@ -54,7 +56,7 @@ enum AidenAppRoute: Hashable, Codable {
             installations.contains { $0.id == id.instanceId && $0.deviceId == id.deviceId }
         case .machine(let instanceId):
             installations.contains { $0.id == instanceId }
-        case .machines, .settings, .scheduled, .usage:
+        case .machines, .settings, .scheduled, .usage, .catchUpFinished:
             true
         }
     }
@@ -64,7 +66,7 @@ enum AidenAppRoute: Hashable, Codable {
         switch self {
         case .chat(let id), .bot(let id), .workspace(let id): id.instanceId == instanceId
         case .machine(let id): id == instanceId
-        case .machines, .settings, .scheduled, .usage: false
+        case .machines, .settings, .scheduled, .usage, .catchUpFinished: false
         }
     }
 }
@@ -239,13 +241,18 @@ struct AidenAppNavigationStore {
 @MainActor @Observable
 final class AidenAppNavigation {
     var tab: AidenAppTab
-    var inboxPath: [AidenAppRoute]
+    var inboxPath: [AidenAppRoute] {
+        didSet { endCatchUpIfLeft() }
+    }
     var botsPath: [AidenAppRoute]
     var workspacesPath: [AidenAppRoute]
     private var savedPaths: [String: [AidenAppRoute]]
 
     /// Not saved: a relaunch must not open the microphone.
     private(set) var chatStartingVoice: AidenHostObjectID?
+    /// The Catch Up under way, while its chat is on top of the Inbox. Not saved:
+    /// a relaunch restores the chat, as an ordinary chat.
+    private(set) var catchUp: AidenCatchUpRun?
 
     init() {
         tab = .inbox
@@ -267,7 +274,7 @@ final class AidenAppNavigation {
     var snapshot: AidenAppNavigationSnapshot {
         AidenAppNavigationSnapshot(
             tab: tab,
-            inboxPath: inboxPath,
+            inboxPath: inboxPath.filter { if case .catchUpFinished = $0 { false } else { true } },
             botsPath: botsPath,
             workspacesPath: workspacesPath,
             savedPaths: savedPaths
@@ -301,6 +308,42 @@ final class AidenAppNavigation {
         case .workspaces: Self.show(route, on: &workspacesPath)
         case .search: break
         }
+    }
+
+    /// Opens the queue's first chat and starts a run on it. Returns the chat
+    /// opened, or nil when the queue was empty and the run is already over.
+    @discardableResult
+    func startCatchUp(in queue: AidenCatchUpQueue) -> AidenHostObjectID? {
+        guard let first = queue.first else {
+            open(.catchUpFinished(queue.ending()))
+            return nil
+        }
+        catchUp = AidenCatchUpRun(startingAt: first)
+        open(.chat(first))
+        return first
+    }
+
+    /// Next. The chat on screen makes way for the next one, so Back always leads
+    /// to the Inbox and a long run holds one live chat, not all of them. Returns
+    /// the chat opened, or nil when that was the last and the run is over.
+    @discardableResult
+    func advanceCatchUp(in queue: AidenCatchUpQueue) -> AidenHostObjectID? {
+        guard var run = catchUp else { return nil }
+        let next = run.advance(in: queue)
+        // Off for the swap, which would otherwise read as leaving the run.
+        catchUp = nil
+        inboxPath.removeLast()
+        guard let next else {
+            open(.catchUpFinished(run.ending(in: queue)))
+            return nil
+        }
+        open(.chat(next))
+        catchUp = run
+        return next
+    }
+
+    private func endCatchUpIfLeft() {
+        if let catchUp, inboxPath.last != .chat(catchUp.current) { self.catchUp = nil }
     }
 
     func finishStartingVoice(_ id: AidenHostObjectID) {

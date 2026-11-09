@@ -28,6 +28,7 @@ struct AidenAppShellView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
     @State private var newChat: AidenNewWorkChatFlow
+    @State private var showsRunningChats = false
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -61,17 +62,35 @@ struct AidenAppShellView: View {
         AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation)
     }
 
+    private var runningHome: AidenRunningHome {
+        .resolve(
+            accessoryCanTurnOff: AidenRunningHome.accessoryCanTurnOff,
+            horizontalSizeClass: horizontalSizeClass
+        )
+    }
+
+    /// Read at every step of a run, never kept.
+    private var catchUpQueue: AidenCatchUpQueue {
+        AidenCatchUpQueue(rows: inboxStore.inbox.needsYou)
+    }
+
     var body: some View {
         TabView(selection: $navigation.tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
                 NavigationStack(path: $navigation.inboxPath) {
-                    AidenInboxTabRootView(store: inboxStore, onOpen: openChat)
-                        .toolbar {
-                            ToolbarItem(placement: .primaryAction) {
-                                AidenNewWorkComposeButton(flow: newChat)
-                            }
+                    AidenInboxTabRootView(
+                        store: inboxStore,
+                        runningHome: runningHome,
+                        onOpen: openChat,
+                        onCatchUp: { markViewed(navigation.startCatchUp(in: catchUpQueue)) },
+                        onShowRunning: { showsRunningChats = true }
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            AidenNewWorkComposeButton(flow: newChat)
                         }
-                        .navigationDestination(for: AidenAppRoute.self, destination: destination)
+                    }
+                    .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
             .badge(inboxStore.needsYouCount)
@@ -102,6 +121,18 @@ struct AidenAppShellView: View {
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
         .aidenNewWorkPresentation(newChat, coordinator: coordinator)
+        // Hiding the tab bar leaves the accessory up, under the composer.
+        .aidenRunningAccessory(
+            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && navigation.openChat == nil
+        ) {
+            AidenRunningAccessoryHost(store: inboxStore, onOpen: openChat) { showsRunningChats = true }
+        }
+        .sheet(isPresented: $showsRunningChats) {
+            AidenRunningChatsSheet(store: inboxStore) { id in
+                showsRunningChats = false
+                openChat(id)
+            }
+        }
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -151,6 +182,7 @@ struct AidenAppShellView: View {
                 coordinator: coordinator,
                 id: id,
                 autoStartVoice: navigation.chatStartingVoice == id,
+                onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil,
                 onChatUpdated: { chat in
                     inboxStore.homeModel(for: id.instanceId)?.accept(chat)
                 },
@@ -158,6 +190,9 @@ struct AidenAppShellView: View {
                     inboxStore.homeModel(for: id.instanceId)?.setActivity(activity, forChatID: chatID)
                 }
             )
+            // Next swaps the route in place, and the stack would otherwise keep this
+            // view's state, so the old chat would stay on screen.
+            .id(id)
             .onDisappear { navigation.finishStartingVoice(id) }
         case .bot(let id):
             let installation = coordinator.installationStore.installations.first { $0.id == id.instanceId }
@@ -174,12 +209,23 @@ struct AidenAppShellView: View {
             AidenTabPlaceholderView(title: "Scheduled tasks", systemImage: "calendar")
         case .usage:
             AidenMachineUsageView(coordinator: coordinator)
+        case .catchUpFinished(let ending):
+            AidenCatchUpFinishedView(ending: ending) { navigation.inboxPath = [] }
         }
     }
 
     private func openChat(_ id: AidenHostObjectID) {
-        inboxStore.homeModel(for: id.instanceId)?.markViewed(chatID: id.objectId)
+        markViewed(id)
         navigation.open(.chat(id))
+    }
+
+    private func nextInCatchUp() {
+        markViewed(navigation.advanceCatchUp(in: catchUpQueue))
+    }
+
+    private func markViewed(_ id: AidenHostObjectID?) {
+        guard let id else { return }
+        inboxStore.homeModel(for: id.instanceId)?.markViewed(chatID: id.objectId)
     }
 
     private func open(_ request: AidenNavigationRequest) {
@@ -321,19 +367,27 @@ final class AidenChatRouteModel {
 private struct AidenChatRouteView: View {
     let coordinator: AidenRemoteCoordinator
     let autoStartVoice: Bool
+    /// Set only while this chat is a Catch Up run's. On the route rather than the
+    /// chat, so a chat that can't load can still be moved on from, and a fork
+    /// pushed over it has no Next of its own.
+    let onNext: (() -> Void)?
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
     @State private var model: AidenChatRouteModel
+    @State private var holdsAttachments = false
+    @State private var isConfirmingNext = false
 
     init(
         coordinator: AidenRemoteCoordinator,
         id: AidenHostObjectID,
         autoStartVoice: Bool,
+        onNext: (() -> Void)?,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void,
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void
     ) {
         self.coordinator = coordinator
         self.autoStartVoice = autoStartVoice
+        self.onNext = onNext
         self.onChatUpdated = onChatUpdated
         self.onChatActivityChanged = onChatActivityChanged
         _model = State(initialValue: AidenChatRouteModel(id: id))
@@ -372,6 +426,29 @@ private struct AidenChatRouteView: View {
             }
         }
         .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            if let onNext {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Next") {
+                        if holdsAttachments { isConfirmingNext = true } else { onNext() }
+                    }
+                    .accessibilityHint("Opens the next chat that needs you")
+                    .confirmationDialog(
+                        "Discard attachments?",
+                        isPresented: $isConfirmingNext,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Discard attachments", role: .destructive, action: onNext)
+                        Button("Stay", role: .cancel) {}
+                    } message: {
+                        Text("They aren’t kept when you move to the next chat. Your message text is saved.")
+                    }
+                }
+            }
+        }
+        .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
+            holdsAttachments = holds
+        }
         .task(id: coordinator.hosts.connection(for: model.id.instanceId)?.connectionState) {
             await model.load(coordinator: coordinator)
         }

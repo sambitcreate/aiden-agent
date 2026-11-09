@@ -34,6 +34,15 @@ struct AidenAttachmentButtonCenterPreferenceKey: PreferenceKey {
     }
 }
 
+/// True while a chat's composer holds attachments, for whatever would close it.
+struct AidenChatHoldsAttachmentsKey: PreferenceKey {
+    static let defaultValue = false
+
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 struct AidenChatDetailView: View {
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
@@ -342,7 +351,14 @@ struct AidenChatDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
             composerSession.stopVoice()
         }
+#if DEBUG
+        .onAppear {
+            if AidenDemoStagedAttachment.isRequested { model.pendingAttachments = [AidenDemoStagedAttachment.reference] }
+        }
+#endif
+        .preference(key: AidenChatHoldsAttachmentsKey.self, value: composerSession.holdsAttachments)
         .onDisappear {
+            Task { await model.saveDraftNow() }
             model.setViewPresent(false)
             model.readAloud.stop()
             model.setHapticsActive(false)

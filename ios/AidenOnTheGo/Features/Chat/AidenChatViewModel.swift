@@ -1630,6 +1630,15 @@ final class AidenChatViewModel {
         await draftPersistenceTask?.value
     }
 
+    /// Writes a waiting draft now, for a chat that's closing: its timed write
+    /// ends with this model. A write that was called off stays off.
+    func saveDraftNow() async {
+        guard let task = draftPersistenceTask, !task.isCancelled else { return }
+        task.cancel()
+        guard !isRemoved, coordinator.isRetained(owner), let session = draftSession else { return }
+        _ = try? await draftStore.save(draft, session: session)
+    }
+
     private func scheduleDraftPersistence() {
         // Retained, not live: a re-paired machine is still paired, so its text stays.
         guard !isReadOnlyPresentation, !isRemoved, coordinator.isRetained(owner), let session = draftSession else { return }

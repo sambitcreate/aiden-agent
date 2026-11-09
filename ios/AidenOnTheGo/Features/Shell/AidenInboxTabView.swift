@@ -21,10 +21,12 @@ extension AidenInboxRowActions {
 }
 
 /// Every machine's chats in one list: Needs you, Updates, Earlier. Running chats
-/// aren't listed here, because the accessory owns them.
+/// aren't listed here, because the accessory owns them, unless they have to make
+/// their home here (`AidenRunningHome`). Then they're the first row.
 struct AidenInboxTabView: View {
     let inbox: AidenUnifiedInbox
     var state = AidenInboxListState.rows
+    var runningHome = AidenRunningHome.accessory
     var refreshFailed = false
     var moreChats = AidenInboxMoreChats.none
     let onOpen: (AidenHostObjectID) -> Void
@@ -33,14 +35,20 @@ struct AidenInboxTabView: View {
     var onRetry: () -> Void = {}
     var onShowAllEarlier: () -> Void = {}
     var onLoadMore: () -> Void = {}
+    var onCatchUp: () -> Void = {}
+    var onShowRunning: () -> Void = {}
 
     @Environment(\.aidenPalette) private var palette
     @State private var snoozeCandidate: AidenHostObjectID?
     @State private var deleteCandidate: AidenHostObjectID?
 
+    private var catchUpCount: Int { AidenCatchUpQueue(rows: inbox.needsYou).count }
+
     var body: some View {
         List {
             if refreshFailed { refreshErrorRow }
+            if runningHome == .inboxRow, !inbox.running.isEmpty { runningRow }
+            if catchUpCount > 0 { catchUpRow }
             if state == .loading {
                 AidenChatListSkeleton(rowCount: 6, accessibilityText: "Loading Inbox")
                     .listRowInsets(EdgeInsets())
@@ -152,6 +160,48 @@ struct AidenInboxTabView: View {
         Button("Delete", systemImage: "trash", role: .destructive) { deleteCandidate = row.id }
     }
 
+    private var runningRow: some View {
+        AidenRunningAccessory(rows: inbox.running, onOpen: onOpen, onShowAll: onShowRunning)
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.control))
+            .listRowInsets(EdgeInsets(top: AidenSpacing.s, leading: AidenSpacing.m, bottom: AidenSpacing.xs, trailing: AidenSpacing.m))
+            .listRowSeparator(.hidden)
+            .listRowBackground(palette.canvas)
+    }
+
+    private var catchUpRow: some View {
+        let count = catchUpCount
+        return Button(action: onCatchUp) {
+            HStack(spacing: AidenSpacing.m) {
+                Image(systemName: "rectangle.stack")
+                    .foregroundStyle(palette.accent)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Catch Up")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+                    Text(count == 1 ? "1 chat needs you" : "\(count) chats need you")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, AidenSpacing.l)
+            .padding(.vertical, AidenSpacing.m)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(palette.raised, in: RoundedRectangle(cornerRadius: AidenRadius.control))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("aiden.catch-up")
+        .listRowInsets(EdgeInsets(top: AidenSpacing.s, leading: AidenSpacing.m, bottom: AidenSpacing.xs, trailing: AidenSpacing.m))
+        .listRowSeparator(.hidden)
+        .listRowBackground(palette.canvas)
+    }
+
     private var showMoreRow: some View {
         Button(action: onShowAllEarlier) {
             Text("Show \(inbox.earlierOverflow) more")
@@ -224,6 +274,12 @@ struct AidenInboxTabView: View {
     @ViewBuilder
     private var emptyState: some View {
         switch state {
+        case .rows where runningHome.leavesListEmpty(inbox):
+            ContentUnavailableView(
+                "Nothing needs you yet",
+                systemImage: "tray",
+                description: Text("Running chats are above the tab bar until they finish or need you.")
+            )
         case .rows, .loading:
             EmptyView()
         case .caughtUp:
@@ -274,7 +330,10 @@ struct AidenInboxTabRootView: View {
     }
 
     let store: AidenUnifiedInboxStore
+    var runningHome = AidenRunningHome.accessory
     let onOpen: (AidenHostObjectID) -> Void
+    var onCatchUp: () -> Void = {}
+    var onShowRunning: () -> Void = {}
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -286,6 +345,7 @@ struct AidenInboxTabRootView: View {
         AidenInboxTabView(
             inbox: store.inbox,
             state: store.listState,
+            runningHome: runningHome,
             refreshFailed: store.refreshFailed,
             moreChats: store.moreChats,
             onOpen: onOpen,
@@ -295,7 +355,9 @@ struct AidenInboxTabRootView: View {
             onRefresh: { await store.refreshAll() },
             onRetry: { Task { await store.retry() } },
             onShowAllEarlier: { store.showsAllEarlier = true },
-            onLoadMore: { Task { await store.loadMoreChats() } }
+            onLoadMore: { Task { await store.loadMoreChats() } },
+            onCatchUp: onCatchUp,
+            onShowRunning: onShowRunning
         )
         .navigationTitle("Inbox")
         .overlay(alignment: .top) { noticeBanner }
@@ -339,5 +401,27 @@ struct AidenInboxTabRootView: View {
                 if store.notice?.notice.id == notice.id { store.dismissNotice() }
             }
         }
+    }
+}
+
+/// Where a Catch Up run ends, so the last Next lands on an answer and not on a
+/// chat or an empty screen.
+struct AidenCatchUpFinishedView: View {
+    let ending: AidenCatchUpEnding
+    let onDone: () -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(ending.title, systemImage: ending.walked ? "checkmark.circle" : "tray")
+        } description: {
+            Text(ending.message)
+        } actions: {
+            Button("Back to Inbox", action: onDone)
+                .buttonStyle(.borderedProminent)
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

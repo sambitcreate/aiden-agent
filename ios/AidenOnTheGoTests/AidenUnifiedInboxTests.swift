@@ -383,13 +383,14 @@ final class AidenUnifiedInboxTests: XCTestCase {
         XCTAssertEqual(merged.running.map(\.id.objectId), old.working.map(\.id))
     }
 
-    func testOfflineRunningRowsStayRunningAndAreMarkedOffline() {
+    func testOfflineRunningRowsMoveToUpdatesAndAreMarkedOffline() {
         let inbox = make([
             snapshot("mac-a", [running("a-run", startedMinutesAgo: 5)]),
             snapshot("mac-off", [running("off-run", startedMinutesAgo: 15)], online: false),
         ])
-        XCTAssertEqual(labels(inbox.running), ["mac-off:off-run", "mac-a:a-run"])
-        XCTAssertEqual(inbox.running.map(\.isOnline), [false, true])
+        XCTAssertEqual(labels(inbox.running), ["mac-a:a-run"])
+        XCTAssertEqual(labels(inbox.updates), ["mac-off:off-run"])
+        XCTAssertEqual(inbox.updates.map(\.isOnline), [false])
     }
 
     func testAChatIDDuplicatedWithinOneSnapshotIsOneRowAndOneCount() {
