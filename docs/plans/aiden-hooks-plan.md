@@ -1,6 +1,6 @@
 # Aiden hooks: user and agent-configurable lifecycle hooks
 
-Status: **In review** (2026-10-31) on `feature/aiden-hooks`. Phases 0–3 are implemented; Phase 4 (import) was dropped and Phase 5 (a phone hook step kind) is a follow-up. The user guide is [docs/hooks.md](../hooks.md). The research and decisions below are the original proposal; owner decisions are listed at the end.
+Status: **Landed** (2026-11-09) in [#687](https://github.com/sambitcreate/aiden-agent/pull/687), after review from 2026-10-31 on `feature/aiden-hooks`. Phases 0–3 are implemented; Phase 4 (import) was dropped and Phase 5 (a phone hook step kind) is a follow-up. The user guide is [docs/hooks.md](../hooks.md). The research and decisions below are the original proposal; owner decisions are listed at the end.
 
 Research baseline: `main` at `8c5903a09` (Pi 1.4.0, Remote revision 47). Ten parallel research passes covered Aiden's runtime, the CLI, Bots, opencode (`~/projects/opencode`), t3code (`~/projects/opp/t3code`), the Claude Code and Codex hook specifications, and the Pi extension ecosystem.
 
