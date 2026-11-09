@@ -784,6 +784,7 @@ final class AidenShellUITests: XCTestCase {
         let settled = NSPredicate(format: "label == %@", "2 of 4 machines online")
         expectation(for: settled, evaluatedWith: item)
         waitForExpectations(timeout: 15)
+        hideOverlaySidebar(in: app)
 
         item.tap()
 
@@ -859,6 +860,7 @@ final class AidenShellUITests: XCTestCase {
                 let item = app.buttons["aiden.machine-status"]
                 XCTAssertTrue(item.waitForExistence(timeout: 10))
                 XCTAssertTrue(reconnectButton(in: app).waitForExistence(timeout: 15))
+                hideOverlaySidebar(in: app)
                 Thread.sleep(forTimeInterval: 2)
                 AidenStateMatrix.capture("machines-inbox-\(tag)", in: self)
                 app.swipeUp()
