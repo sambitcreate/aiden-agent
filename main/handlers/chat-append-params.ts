@@ -15,10 +15,15 @@ import {
   parseAttachments,
 } from "../services/attachment-contract.js";
 import { parseChatMessageContent } from "../services/chat-message-contract.js";
+import {
+  parseChatInputSourceStrict,
+  type ChatInputSourceV1,
+} from "../../renderer/shared/chat-input-source.js";
 
 const MESSAGE_KEYS = new Set(["attachments", "content", "model", "role"]);
 const META_KEYS = new Set([
   "autoTitle",
+  "inputSource",
   "model",
   "providerId",
   "skillInvocation",
@@ -37,6 +42,8 @@ export interface ParsedChatAppend {
   autoTitle: boolean;
   turnId: string;
   skillReference?: SkillInvocationV1;
+  /** Set only by Aiden Live's chat tools: the message shows "By voice". */
+  inputSource?: ChatInputSourceV1;
   retainedBytes: number;
 }
 
@@ -153,6 +160,11 @@ export function parseChatAppend(
       ? undefined
       : parseSkillInvocationV1(metaRecord.skillInvocation);
 
+  const inputSource = parseChatInputSourceStrict(
+    metaRecord.inputSource,
+    "chat message input source",
+  );
+
   let retainedBytes = FIXED_APPEND_REPRESENTATION_BYTES;
   retainedBytes += parsedChatId.bytes + contentBytes + parsedMessageModel.bytes;
   retainedBytes +=
@@ -177,6 +189,7 @@ export function parseChatAppend(
     autoTitle: metaRecord.autoTitle === true,
     turnId,
     skillReference,
+    ...(inputSource ? { inputSource } : {}),
     retainedBytes,
   };
 }

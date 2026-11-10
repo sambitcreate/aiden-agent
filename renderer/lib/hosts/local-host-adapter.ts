@@ -249,7 +249,11 @@ export class LocalHostAdapter implements HostChatAdapter {
   }
 
   submitInput(_chatId: string, input: HostChatInput): Promise<ChatRunInputAdmissionResult> {
-    return this.apis.admitRunInput(input.runId, { mode: input.mode, text: input.text });
+    return this.apis.admitRunInput(input.runId, {
+      mode: input.mode,
+      text: input.text,
+      ...(input.inputSource ? { inputSource: input.inputSource } : {}),
+    });
   }
 
   rename(chatId: string, input: HostChatRenameInput): Promise<void> {

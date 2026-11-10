@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import Ajv from "ajv";
 import { createAidenRemoteRequestHandler, type AidenRemoteRouterDependencies } from "./aiden-remote-router.js";
-import { AIDEN_REMOTE_CONTRACT_REVISION, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import { AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { BotConnectorWatchError, createBotConnectorWatchService } from "./bot-routine-events/connector-service.js";
 import { createBotEventRoutineStore } from "./bot-routine-events/store.js";
 import type { BotConnectorWatchBinding } from "./bot-routine-events/connector-types.js";
@@ -52,7 +52,7 @@ test("Electron watch routes are available on Mac and Linux Bots hosts without lo
 });
 
 test("new watch capability is advertised only with complete host routes and a Bot-negotiating device", async (t) => {
-  assert.equal(AIDEN_REMOTE_CONTRACT_REVISION, fixture.contractRevision);
+  assert.equal(AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION, fixture.contractRevision);
   for (const options of [{}, { wired: false }, { accepted: false }]) {
     const host = await server(t, options); const response = await host.request("/server"); const data = await response.json();
     assert.equal(response.status, 200); assert.equal((data.serverCapabilities ?? []).includes("bot:watches"), options.wired !== false && options.accepted !== false);

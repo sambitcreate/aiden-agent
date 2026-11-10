@@ -126,6 +126,25 @@ test("run input admission persists the user message before admitting a steer", a
   assert.equal(app.followedUp.length, 0);
 });
 
+test("a steer Aiden Live sent is saved as By voice and reaches Pi as plain text", async () => {
+  const app = fixture();
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    chatId: "chat-1",
+    mode: "steer",
+    text: "Use the staging database",
+    inputSource: "voice",
+  });
+  assert.equal(result.admitted, true);
+  assert.deepEqual(app.appended[0]!.message, {
+    id: "message_admitted_1",
+    role: "user",
+    content: "Use the staging database",
+    inputSource: "voice",
+  });
+  assert.deepEqual(app.steered, [{ role: "user", content: "Use the staging database", timestamp: 7_777 }]);
+});
+
 test("run input admission routes queue mode to the follow-up queue", async () => {
   const app = fixture();
   const result = await app.admission.admit({
