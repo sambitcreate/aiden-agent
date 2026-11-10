@@ -1532,15 +1532,18 @@ final class AidenShellUITests: XCTestCase {
         /// The system bars, the bottom accessory, the search field and the Bot's
         /// connection hint: everything drawn on glass, as drawn when the audit ran.
         let bars: [CGRect]
+        /// On iOS 26, the bands the soft scroll-edge effect fades: below the
+        /// navigation bar, and above the tab bar and the accessory. None on iOS 27.
+        let fadedEdges: [CGRect]
         /// The machine filter strip, when the screen has one.
         let strip: CGRect?
 
-        /// For contrast: the element touches glass, or on iOS 26 the band beside it
-        /// that the scroll-edge effect fades.
+        /// For contrast: the element touches glass, or on iOS 26 a band the
+        /// scroll-edge effect fades. The search field and the connection hint draw
+        /// no such edge, so nothing beside them counts.
         var touchesGlass: Bool {
             guard let frame else { return false }
-            let band = AidenShellUITests.scrollEdgeBand
-            return bars.contains { $0.insetBy(dx: 0, dy: -band).intersects(frame) }
+            return (bars + fadedEdges).contains { $0.intersects(frame) }
         }
 
         /// For text size and clipping: at least half the element is inside one bar,
@@ -1559,8 +1562,9 @@ final class AidenShellUITests: XCTestCase {
     /// the faded text up to 39 pt from a bar's edge (the Inbox's "42m" and "Aiden
     /// Agent" above the accessory, Settings' "Aiden Agent" header under the
     /// navigation bar and "Memory" header above the accessory). The band is 44 pt,
-    /// the accessory's own height, and covers contrast only. iOS 27 draws no such
-    /// band, so there it is 0.
+    /// the accessory's own height, and covers contrast only. It lies only where the
+    /// effect is drawn: below the navigation bar, above the tab bar and the
+    /// accessory. iOS 27 draws no such band, so there it is 0.
     fileprivate static let scrollEdgeBand: CGFloat = majorSystemVersion < 27 ? 44 : 0
 
     private static var majorSystemVersion: Int {
@@ -1570,16 +1574,26 @@ final class AidenShellUITests: XCTestCase {
     /// One kind of finding the gate lets through, with the reason it isn't a fault
     /// in the app and the most it may excuse on each screen in one appearance. A
     /// screen it doesn't name gets none, so a new finding of a known kind fails.
+    /// `ceilingOnIOS26` is for a rule iOS 26 finds more of: the iOS 27 gate keeps
+    /// its own lower count, so a new finding there can't hide in 26's excess.
     private struct AuditAllowance {
         let reason: String
         let ceiling: [String: Int]
+        var ceilingOnIOS26: [String: Int]? = nil
         let matches: (AuditFinding) -> Bool
+
+        func ceiling(on screen: String) -> Int {
+            let ceilings = AidenShellUITests.majorSystemVersion < 27 ? ceilingOnIOS26 ?? ceiling : ceiling
+            return ceilings[screen] ?? 0
+        }
     }
 
     /// What the compact layout's gate lets through. Anything else fails the test,
     /// and so does a rule that excuses more than its ceiling. `option-a-accessibility.md`
     /// lists these too, with what was checked by hand. The ceilings are the most
-    /// each rule excused in one appearance on iOS 27 or 26.5 (fix round 1 runs).
+    /// each rule excused in one appearance on iOS 27 or 26.5 (fix round 1 runs);
+    /// where 26.5 found more, it has its own (Task 35 fix round 1 runs,
+    /// `task-35-f1-full.log` and `task-35-f1-ios26.log`).
     private static let auditAllowances: [AuditAllowance] = [
         AuditAllowance(
             // Bars keep their height at every text size. The status item and the
@@ -1622,7 +1636,8 @@ final class AidenShellUITests: XCTestCase {
             // Transcript text is selectable, so the audit counts it as a target.
             // Text isn't a control, and a long press selects it at any size.
             reason: "Selectable transcript text read as a tap target",
-            ceiling: ["chat": 4, "bot": 5],
+            ceiling: ["chat": 2],
+            ceilingOnIOS26: ["chat": 4, "bot": 5],
             matches: { $0.type == .hitRegion && $0.elementType == .staticText }
         ),
         AuditAllowance(
@@ -1687,9 +1702,12 @@ final class AidenShellUITests: XCTestCase {
             // Transparency on the glass turns solid, and the Bot's "Connecting…"
             // hint passes at full strength (task-34 run 7). See `scrollEdgeBand`
             // for the band beside each bar on iOS 26. Last, so a finding the
-            // rules above explain is counted there.
+            // rules above explain is counted there. Settings went from 3 to 4 on
+            // iOS 27 in the final review's fix: the Connected machine row (M4) is
+            // gone, so one more Read Aloud row sits under the tab bar.
             reason: "Contrast of text in or under glass (navigation bar, tab bar, bottom accessory, search field, Bot connection hint)",
-            ceiling: ["inbox": 12, "search": 1, "bots": 1, "bot": 2, "machines": 1, "machine editor": 2, "settings": 6],
+            ceiling: ["inbox": 8, "search": 1, "bots": 1, "bot": 2, "machines": 1, "settings": 4],
+            ceilingOnIOS26: ["inbox": 12, "search": 1, "bot": 2, "machine editor": 2, "settings": 6],
             matches: { $0.type == .contrast && $0.touchesGlass }
         ),
     ]
@@ -1746,11 +1764,15 @@ final class AidenShellUITests: XCTestCase {
                     - app.tabBars.descendants(matching: .staticText).count
                 XCTAssertGreaterThanOrEqual(content, 4, "Almost nothing on \(screen) (\(appearance)) to audit")
                 AidenStateMatrix.capture("audit-\(screen)-\(appearance.rawValue)", in: self)
-                let bars = [
-                    app.navigationBars.firstMatch, app.tabBars.firstMatch,
-                    AidenStateMatrix.runningAccessory(in: app), app.searchFields.firstMatch,
-                    app.otherElements["aiden.connection-hint"].firstMatch,
-                ].filter(\.exists).map(\.frame)
+                let navigationBar = app.navigationBars.firstMatch
+                let bottomBars = [app.tabBars.firstMatch, AidenStateMatrix.runningAccessory(in: app)].filter(\.exists)
+                let bars = ([navigationBar] + bottomBars + [
+                    app.searchFields.firstMatch, app.otherElements["aiden.connection-hint"].firstMatch,
+                ]).filter(\.exists).map(\.frame)
+                let band = Self.scrollEdgeBand
+                let fadedEdges = band == 0 ? [] : (navigationBar.exists
+                    ? [CGRect(x: navigationBar.frame.minX, y: navigationBar.frame.maxY, width: navigationBar.frame.width, height: band)]
+                    : []) + bottomBars.map(\.frame).map { CGRect(x: $0.minX, y: $0.minY - band, width: $0.width, height: band) }
                 let stripElement = app.buttons["All machines"].firstMatch
                 let strip = stripElement.exists
                     ? CGRect(x: 0, y: stripElement.frame.minY, width: .greatestFiniteMagnitude, height: stripElement.frame.height)
@@ -1774,6 +1796,7 @@ final class AidenShellUITests: XCTestCase {
                             label: element?.label ?? "",
                             frame: element?.frame,
                             bars: bars,
+                            fadedEdges: fadedEdges,
                             strip: strip
                         )
                         let place = element.map { "\($0.elementType.rawValue) '\($0.label)' at \($0.frame)" } ?? "no element"
@@ -1784,7 +1807,7 @@ final class AidenShellUITests: XCTestCase {
                             wideTypes.insert(issue.auditType.rawValue)
                         } else if let allowance = Self.auditAllowances.first(where: { $0.matches(finding) }) {
                             excused[allowance.reason, default: 0] += 1
-                            let ceiling = allowance.ceiling[screen] ?? 0
+                            let ceiling = allowance.ceiling(on: screen)
                             if excused[allowance.reason]! <= ceiling {
                                 print("AUDIT ALLOWED: \(line) -- \(allowance.reason)")
                                 allowed.append("\(line) -- \(allowance.reason)")
