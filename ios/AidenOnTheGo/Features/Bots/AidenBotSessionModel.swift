@@ -25,6 +25,11 @@ enum AidenBotHostFeature {
     /// Reads the connection's `/server` answer, or the pairing's saved one
     /// while connecting, so a cold open resolves Bot routes the way the last
     /// connected open did.
+    ///
+    /// This reads the selected machine only. It's right on the single-machine
+    /// Bots page (`machines == nil`), where the selected machine is the only one
+    /// shown; anywhere that shows several machines, ask the row's own machine
+    /// with `isAdvertised(_:by: coordinator.knownServerFeatures(of:))`.
     @MainActor
     static func isAdvertised(_ token: String, coordinator: AidenRemoteCoordinator) -> Bool {
         isAdvertised(token, by: coordinator.knownServerFeatures)
@@ -39,11 +44,6 @@ enum AidenBotHostFeature {
 func aidenBotActivitySupported(server: AidenServer?, installation: AidenInstallation?) -> Bool {
     if let server { return server.supportsBotActivity }
     return installation?.cachedBotActivity == true
-}
-
-@MainActor
-func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
-    aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
 /// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`,

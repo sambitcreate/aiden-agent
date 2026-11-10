@@ -308,14 +308,22 @@ final class AidenBotRoutineNotifier {
         "aiden.botRoutineNotifications.delivered.\(instanceId)"
     }
 
-    /// Polls the connected Mac when it serves `bot-proactive-v1`.
+    /// Polls every connected machine that serves `bot-proactive-v1`, not just
+    /// the default: each notification carries its own machine, so its tap opens
+    /// the Bot chat there.
     func deliverIfSupported(coordinator: AidenRemoteCoordinator) async {
-        guard isEnabled,
-              coordinator.connectionState == .connected,
-              AidenBotHostFeature.isAdvertised(AidenBotHostFeature.proactive, coordinator: coordinator),
-              let context = try? coordinator.requestContext(),
-              let client = try? coordinator.remoteClient(for: context) else { return }
-        await deliver(instanceId: context.instanceId, transport: client)
+        guard isEnabled else { return }
+        for connection in coordinator.hosts.ordered
+        where !connection.isRevoked && connection.connectionState == .connected {
+            let instanceId = connection.instanceId
+            guard AidenBotHostFeature.isAdvertised(
+                      AidenBotHostFeature.proactive,
+                      by: coordinator.knownServerFeatures(of: instanceId)
+                  ),
+                  let context = try? coordinator.ownerContext(for: instanceId),
+                  let client = try? coordinator.remoteClient(for: context) else { continue }
+            await deliver(instanceId: instanceId, transport: client)
+        }
     }
 
     func deliver(instanceId: String, transport: any AidenBotRoutineNotificationTransport) async {

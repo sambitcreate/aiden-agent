@@ -531,4 +531,38 @@ final class AidenBotRoutineNotifierTests: XCTestCase {
 
         XCTAssertTrue(transport.cursors.isEmpty)
     }
+
+    /// A routine on a machine other than the default still lands: the
+    /// foreground poll asks every connected machine, never the offline one.
+    func testTheForegroundPollAsksEveryConnectedMachine() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        for connection in coordinator.hosts.ordered where connection.connectionState != .connected {
+            await connection.connect()
+        }
+        let connected = coordinator.hosts.ordered.filter { $0.connectionState == .connected }.map(\.instanceId)
+        XCTAssertEqual(Set(connected), ["studio", "laptop", "mini"])
+        for instanceId in connected {
+            defaults.removeObject(forKey: AidenBotRoutineNotifier.cursorKey(instanceId))
+            responder.reply(
+                instanceId: instanceId,
+                path: "/bots/routine-notifications",
+                status: 200,
+                json: Data(#"{"notifications":[],"now":"2026-08-19T15:00:00.000Z"}"#.utf8)
+            )
+        }
+        let notifier = AidenBotRoutineNotifier(defaults: defaults, center: FakeNotificationCenter())
+
+        await notifier.deliverIfSupported(coordinator: coordinator)
+
+        for instanceId in connected {
+            XCTAssertTrue(
+                responder.requests(instanceId: instanceId).contains("GET /bots/routine-notifications"),
+                "\(instanceId) was never asked"
+            )
+            XCTAssertEqual(defaults.string(forKey: AidenBotRoutineNotifier.cursorKey(instanceId)), "2026-08-19T15:00:00.000Z")
+        }
+        XCTAssertFalse(responder.requests(instanceId: "build").contains("GET /bots/routine-notifications"))
+    }
 }
