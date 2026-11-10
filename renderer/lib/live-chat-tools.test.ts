@@ -460,6 +460,43 @@ test("speech that starts while a read is on its way to Live does not authorize a
   assert.deepEqual(open.sent, []);
 });
 
+test("a chat tool queued behind a result on its way to Live waits for the hand-off, so speech from that gap can't authorize it", async () => {
+  const bus = new LiveSessionBus();
+  const handOvers: Array<() => void> = [];
+  const results: Array<Record<string, unknown>> = [];
+  bus.setSession("s1", {
+    toolResult: (_session, _request, response) =>
+      new Promise<boolean>((resolve) =>
+        handOvers.push(() => {
+          results.push(response);
+          resolve(true);
+        }),
+      ),
+    note: async () => true,
+  });
+  const gate = new LiveChatRequestGate(bus);
+  const { handlers, registry } = harness({ requests: gate });
+  const open = controller();
+  registry.register(Symbol(), open);
+  bus.registerTool("find_and_open_chat", handlers.find_and_open_chat);
+  bus.registerTool("send_to_open_chat", handlers.send_to_open_chat);
+  bus.publishVoiceInput("Open fix login");
+  const finding = bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "find_and_open_chat", args: { query: "fix login" } });
+  while (handOvers.length === 0) await new Promise((resolve) => setImmediate(resolve));
+  // The title is on its way to Live. The person speaks, and a send is queued behind it.
+  bus.publishVoiceInput("Yes");
+  const sending = bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "send_to_open_chat", args: { text: "ship it", mode: "auto" } });
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(handOvers.length, 1, "the send waits until the title has been handed to Live");
+  handOvers[0]!();
+  await finding;
+  while (handOvers.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  handOvers[1]!();
+  await sending;
+  assert.equal(code(results[1]!), "needs_user_request");
+  assert.deepEqual(open.sent, []);
+});
+
 test("a read result main refuses leaves speech begun while it was on its way eligible", async () => {
   const bus = new LiveSessionBus();
   let refuse!: () => void;
