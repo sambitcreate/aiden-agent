@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os
 
 /// What a composer offers. Everything that changes with the conversation's
 /// moment-to-moment state is in `AidenComposerControls`.
@@ -632,28 +633,52 @@ struct AidenComposerFieldReach: UIViewRepresentable {
     final class ReachView: UIView {
         var handled: AidenComposerKeyboardRequest?
 
+        #if DEBUG
+        private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "sbtbiswas.AidenOnTheGo", category: "composer")
+        #endif
+
         func carryOut(_ request: AidenComposerKeyboardRequest) {
-            guard let field = ownField() else { return }
+            let fields = ownFields()
+            if fields.isEmpty {
+                // On screen with no field under it: SwiftUI has changed how the
+                // field is backed, and every keyboard ask would quietly do nothing.
+                #if DEBUG
+                if window != nil {
+                    Self.logger.fault("The composer's keyboard reach found no editable text input under it")
+                }
+                #endif
+                return
+            }
             if request.raises {
+                // The field the reach covers most: a text view scrolling behind the
+                // dock overlaps it far less than the composer's own field does.
+                guard let field = fields.max(by: { $0.overlap < $1.overlap })?.input else { return }
                 if !field.isFirstResponder { field.becomeFirstResponder() }
-            } else if field.isFirstResponder {
+            } else if let field = fields.first(where: { $0.input.isFirstResponder })?.input {
                 field.resignFirstResponder()
             }
         }
 
-        /// The text input under this view's own view controller that covers it.
-        private func ownField() -> UIView? {
-            guard let window else { return nil }
+        /// The editable text inputs under this view's own view controller that
+        /// overlap it, with the area of each overlap.
+        func ownFields() -> [(input: UIView, overlap: CGFloat)] {
+            guard let window else { return [] }
             var root: UIView = self
             while let parent = root.superview, !(root.next is UIViewController) { root = parent }
             let area = convert(bounds, to: window)
-            return Self.textInputs(in: root).first { input in
-                input.window === window && input.convert(input.bounds, to: window).intersects(area)
+            return Self.textInputs(in: root).compactMap { input in
+                guard input.window === window else { return nil }
+                let overlap = input.convert(input.bounds, to: window).intersection(area)
+                guard !overlap.isNull else { return nil }
+                return (input, overlap.width * overlap.height)
             }
         }
 
+        /// Text fields, and text views that take typing. A read-only text view
+        /// (selectable text, say) is never the composer.
         private static func textInputs(in view: UIView) -> [UIView] {
-            if view is UITextView || view is UITextField { return [view] }
+            if let textView = view as? UITextView { return textView.isEditable ? [textView] : [] }
+            if view is UITextField { return [view] }
             return view.subviews.flatMap(textInputs(in:))
         }
     }

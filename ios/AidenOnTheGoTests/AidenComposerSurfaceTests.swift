@@ -460,6 +460,42 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertLessThanOrEqual(chip.maxX, stop.minX)
     }
 
+    // MARK: - The keyboard reach
+
+    /// A raise reaches the composer's own field and a put-away lets go of it,
+    /// with a read-only text view filling the screen behind the composer, as a
+    /// transcript's selectable text would. Unit tests run more widely than the UI
+    /// suite, so a change in how SwiftUI backs the field shows here first.
+    func testTheKeyboardReachRaisesAndPutsAwayTheComposersOwnField() throws {
+        let session = AidenComposerSession(text: "Hello", voice: AidenComposerFakeVoice())
+        let probe = AidenComposerFitProbe()
+        let behind = AidenReadOnlyTextViewBox()
+        let window = try show(ZStack {
+            AidenReadOnlyTextViewRepresentable(box: behind)
+            AidenComposerFitHost(session: session, state: .idle, probe: probe, textSize: .large)
+        })
+        defer { close(window) }
+        XCTAssertTrue(runMainLoop(until: { probe.surface != .zero && behind.view?.window != nil }))
+        drainMainLoop()
+
+        session.raiseKeyboard()
+        XCTAssertTrue(runMainLoop(until: { Self.firstResponder(in: window) != nil }), "Nothing took the keyboard")
+        let field = try XCTUnwrap(Self.firstResponder(in: window))
+        XCTAssertFalse(field === behind.view, "The read-only text behind the composer took the keyboard")
+        XCTAssertTrue(field is UITextView || field is UITextField, "\(type(of: field))")
+
+        session.putAwayKeyboard()
+        XCTAssertTrue(runMainLoop(until: { Self.firstResponder(in: window) == nil }), "The keyboard stayed up")
+    }
+
+    private static func firstResponder(in view: UIView) -> UIView? {
+        if view.isFirstResponder { return view }
+        for subview in view.subviews {
+            if let found = firstResponder(in: subview) { return found }
+        }
+        return nil
+    }
+
     // MARK: - The listening bar
 
     func testTheListeningBarAppearsOnlyWhileRecording() async throws {
@@ -891,6 +927,28 @@ private struct AidenFollowingTranscriptHost: View {
             proxy.scrollTo(AidenChatScrollPolicy.transcriptBottomAnchorID, anchor: .bottom)
         }
     }
+}
+
+/// Holds the read-only text view a test puts behind the composer.
+@MainActor
+private final class AidenReadOnlyTextViewBox {
+    var view: UITextView?
+}
+
+/// Selectable, read-only text: a text view that can hold focus but not take typing.
+private struct AidenReadOnlyTextViewRepresentable: UIViewRepresentable {
+    let box: AidenReadOnlyTextViewBox
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.text = String(repeating: "A transcript's text, selectable but not editable. ", count: 40)
+        box.view = view
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {}
 }
 
 @MainActor
