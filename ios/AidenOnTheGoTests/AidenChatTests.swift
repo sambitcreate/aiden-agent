@@ -12743,7 +12743,7 @@ final class AidenAppearanceTests: XCTestCase {
             Bundle.main.object(forInfoDictionaryKey: "NSPhotoLibraryUsageDescription") as? String
         )
         XCTAssertTrue(pickerValue.contains("when you open the attachment picker"))
-        XCTAssertTrue(pickerValue.contains("paired Mac"))
+        XCTAssertTrue(pickerValue.contains("paired machine"))
     }
 
     func testAttachmentPickerSelectionPreservesTapOrderAndHonorsCapacity() {
