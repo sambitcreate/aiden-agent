@@ -1110,63 +1110,101 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
-    /// In a chat, a drag down the transcript or a tap on it puts the keyboard
-    /// away, and the words typed so far stay in the composer.
-    private static var majorSystemVersion: Int {
-        Int(UIDevice.current.systemVersion.split(separator: ".").first ?? "") ?? 0
-    }
-
-    func testTheKeyboardGoesAwayInAChatAndKeepsTheDraft() {
-        let draft = "Half a thought"
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
-        let chat = openInbox(in: app)
-        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
-        hideOverlaySidebar(in: app)
-        chat.tap()
-        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
-        let composer = app.descendants(matching: .any).matching(NSPredicate(
+    /// The composer of whichever chat is open.
+    private func composer(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
             format: "elementType == %d OR elementType == %d",
             XCUIElement.ElementType.textField.rawValue,
             XCUIElement.ElementType.textView.rawValue
         )).firstMatch
-        XCTAssertTrue(composer.waitForExistence(timeout: 5), "The chat has no composer")
-        let keyboard = app.keyboards.firstMatch
-        let gone = NSPredicate(format: "exists == false")
-        let kept = NSPredicate(format: "value CONTAINS %@", draft)
+    }
 
+    /// Types `draft` into an empty composer, then checks that `putAway` sends the
+    /// keyboard away and leaves the words in the composer.
+    private func typeThenPutTheKeyboardAway(
+        _ draft: String,
+        in app: XCUIApplication,
+        _ what: String,
+        putAway: (XCUIElement) -> Void
+    ) {
+        let composer = composer(in: app)
+        let keyboard = app.keyboards.firstMatch
         composer.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come up (\(what))")
         // A run that stopped early leaves its draft, which the demo keeps.
         let left = (composer.value as? String)?.count ?? 0
         if left > 0 { composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: left)) }
         composer.typeText(draft)
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come up")
-        AidenStateMatrix.capture("chat-keyboard-up", in: self)
-        let window = AidenStateMatrix.window(of: app)
+        putAway(AidenStateMatrix.window(of: app))
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: keyboard)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "The keyboard stayed up (\(what))")
+        let kept = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value CONTAINS %@", draft), object: composer)
+        XCTAssertEqual(XCTWaiter.wait(for: [kept], timeout: 5), .completed, "The draft was lost (\(what))")
+    }
+
+    /// Empties the composer, because the demo keeps drafts between launches.
+    private func clearTheDraft(in app: XCUIApplication) {
+        let composer = composer(in: app)
+        composer.tap()
+        let left = (composer.value as? String)?.count ?? 0
+        if left > 0 { composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: left)) }
+        Thread.sleep(forTimeInterval: 1)
+    }
+
+    private static func drag(_ window: XCUIElement) {
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).press(
             forDuration: 0.05,
             thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)),
             withVelocity: .slow,
             thenHoldForDuration: 0.1
         )
-        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: keyboard)], timeout: 5)
-        wait(for: [XCTNSPredicateExpectation(predicate: kept, object: composer)], timeout: 5)
+    }
 
-        composer.tap()
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come back")
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
-        if Self.majorSystemVersion < 27 {
-            // On iOS 26 a tap on the transcript, on a message or beside one, leaves
-            // the keyboard up; dragging puts it away (above). Recorded in
-            // option-a-accessibility.md for Task 36. Not strict, so a fix shows up.
-            XCTExpectFailure("iOS 26: a tap on the transcript leaves the keyboard up", strict: false)
-        }
-        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: keyboard)], timeout: 5)
-        wait(for: [XCTNSPredicateExpectation(predicate: kept, object: composer)], timeout: 5)
+    private static func tapTheTranscript(_ window: XCUIElement) {
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+    }
 
-        // The demo chats' drafts are kept between launches.
-        composer.tap()
-        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: draft.count))
-        Thread.sleep(forTimeInterval: 1)
+    /// In a chat, a drag down the transcript or a tap on it puts the keyboard
+    /// away, and the words typed so far stay in the composer. The tap is a UIKit
+    /// recognizer (`AidenTranscriptTap`) because on iOS 26 a SwiftUI tap gesture
+    /// on the transcript never fires.
+    func testTheKeyboardGoesAwayInAChatAndKeepsTheDraft() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        hideOverlaySidebar(in: app)
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5), "The chat has no composer")
+
+        typeThenPutTheKeyboardAway("Half a thought", in: app, "drag", putAway: Self.drag)
+        AidenStateMatrix.capture("chat-keyboard-away", in: self)
+        typeThenPutTheKeyboardAway("Another half", in: app, "tap", putAway: Self.tapTheTranscript)
+
+        clearTheDraft(in: app)
+        app.terminate()
+    }
+
+    /// The same in a Bot's chat.
+    func testTheKeyboardGoesAwayInABotChatAndKeepsTheDraft() {
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        AidenStateMatrix.openArea("Bots", in: app)
+        let bot = botRow(in: app)
+        XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot on the Bots tab")
+        hideOverlaySidebar(in: app)
+        bot.tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                .waitForExistence(timeout: 10),
+            "The Bot did not open"
+        )
+        XCTAssertTrue(composer(in: app).waitForExistence(timeout: 5), "The Bot chat has no composer")
+
+        typeThenPutTheKeyboardAway("Half a thought", in: app, "drag", putAway: Self.drag)
+        typeThenPutTheKeyboardAway("Another half", in: app, "tap", putAway: Self.tapTheTranscript)
+
+        clearTheDraft(in: app)
         app.terminate()
     }
 
@@ -1188,7 +1226,7 @@ final class AidenShellUITests: XCTestCase {
             // Under a regular width's title the field can't cover the note, so the
             // note must also end where it can be read.
             let window = AidenStateMatrix.window(of: app).frame
-            XCTAssertLessThanOrEqual(note.frame.maxY, window.maxY, "The note ends below the window (\(size))")
+            XCTAssertTrue(window.contains(note.frame), "The note isn't wholly in the window (\(size)): \(note.frame)")
             app.terminate()
         }
 
@@ -1205,10 +1243,9 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(description.waitForExistence(timeout: 10), "No prompt")
         for _ in 0..<4 { dragResults(in: prompt, from: 0.4, to: 0.05) }
         XCTAssertFalse(description.frame.intersects(prompt.searchFields.firstMatch.frame), "The prompt is cut off by the field")
-        XCTAssertLessThanOrEqual(
-            description.frame.maxY,
-            AidenStateMatrix.window(of: prompt).frame.maxY,
-            "The prompt ends below the window"
+        XCTAssertTrue(
+            AidenStateMatrix.window(of: prompt).frame.contains(description.frame),
+            "The prompt isn't wholly in the window: \(description.frame)"
         )
         prompt.terminate()
     }
@@ -1365,7 +1402,7 @@ final class AidenShellUITests: XCTestCase {
     /// The screens the audit must reach, in order, in each appearance. A screen
     /// that can't be reached fails the test instead of passing unaudited.
     private static let auditedScreens = [
-        "inbox", "search", "bots", "bot", "chat", "machines", "machine editor", "settings",
+        "inbox", "bots", "bot", "chat", "machines", "machine editor", "settings", "search",
     ]
 
     /// One issue the audit raised, with where it sat on screen.
@@ -1382,153 +1419,209 @@ final class AidenShellUITests: XCTestCase {
         /// The machine filter strip, when the screen has one.
         let strip: CGRect?
 
-        var isUnderABar: Bool { frame.map { frame in bars.contains { $0.intersects(frame) } } ?? false }
+        /// For contrast: the element touches glass, or on iOS 26 the band beside it
+        /// that the scroll-edge effect fades.
+        var touchesGlass: Bool {
+            guard let frame else { return false }
+            let band = AidenShellUITests.scrollEdgeBand
+            return bars.contains { $0.insetBy(dx: 0, dy: -band).intersects(frame) }
+        }
+
+        /// For text size and clipping: at least half the element is inside one bar,
+        /// so it is drawn in the bar, not a row scrolled partly under it.
+        var liesInABar: Bool {
+            guard let frame, frame.width > 0, frame.height > 0 else { return false }
+            return bars.contains { bar in
+                let inside = bar.intersection(frame)
+                return !inside.isNull && inside.width * inside.height >= 0.5 * frame.width * frame.height
+            }
+        }
     }
 
-    /// What the gate lets through, each with the reason it isn't a fault in the
-    /// app. Anything else fails the test. `option-a-accessibility.md` lists these
-    /// too, with what was checked by hand.
-    private static let auditAllowances: [(reason: String, matches: (AuditFinding) -> Bool)] = [
-        (
-            // Liquid Glass draws text in a bar with vibrancy over whatever scrolls
-            // behind, and the bars keep their height at every text size. The status
-            // item and the running accessory offer the Large Content Viewer, and
-            // VoiceOver reads each one whole.
-            // With Reduce Transparency on the glass turns solid, and the Bot's
-            // "Connecting…" hint passes at full strength (task-34 run 7).
-            "Text in or under glass (navigation bar, tab bar, bottom accessory, search field, Bot connection hint)",
-            { finding in
-                [.contrast, .textClipped, .dynamicType].contains(finding.type) && finding.isUnderABar
-            }
+    /// On iOS 26 the soft scroll-edge effect fades content for a band beyond each
+    /// bar, and the audit reads the faded text as low contrast. The 26.5 runs put
+    /// the faded text up to 39 pt from a bar's edge (the Inbox's "42m" and "Aiden
+    /// Agent" above the accessory, Settings' "Aiden Agent" header under the
+    /// navigation bar and "Memory" header above the accessory). The band is 44 pt,
+    /// the accessory's own height, and covers contrast only. iOS 27 draws no such
+    /// band, so there it is 0.
+    fileprivate static let scrollEdgeBand: CGFloat = majorSystemVersion < 27 ? 44 : 0
+
+    private static var majorSystemVersion: Int {
+        Int(UIDevice.current.systemVersion.split(separator: ".").first ?? "") ?? 0
+    }
+
+    /// One kind of finding the gate lets through, with the reason it isn't a fault
+    /// in the app and the most it may excuse on each screen in one appearance. A
+    /// screen it doesn't name gets none, so a new finding of a known kind fails.
+    private struct AuditAllowance {
+        let reason: String
+        let ceiling: [String: Int]
+        let matches: (AuditFinding) -> Bool
+    }
+
+    /// What the compact layout's gate lets through. Anything else fails the test,
+    /// and so does a rule that excuses more than its ceiling. `option-a-accessibility.md`
+    /// lists these too, with what was checked by hand. The ceilings are the most
+    /// each rule excused in one appearance on iOS 27 or 26.5 (fix round 1 runs).
+    private static let auditAllowances: [AuditAllowance] = [
+        AuditAllowance(
+            // Bars keep their height at every text size. The status item and the
+            // running accessory offer the Large Content Viewer, the search field
+            // is the system's, and VoiceOver reads each one whole.
+            reason: "Text size or clipping of text drawn in a bar (the status item, the Bot's title, the search field)",
+            ceiling: ["inbox": 1, "search": 1, "bot": 1],
+            matches: { [.dynamicType, .textClipped].contains($0.type) && $0.liesInABar }
         ),
-        (
+        AuditAllowance(
             // "Nearly passed" is 3:1 or better, short of 4.5:1. Settings, Machines
             // and the machine editor are Forms drawn in the system's own
             // secondary label colour (headers, footers, a row's second line),
             // which darkens under Increase Contrast. Under 3:1 ("failed") is never
             // let through, and the app's own colours on the other screens must
             // reach 4.5:1.
-            "System secondary text in a Form, between 3:1 and 4.5:1",
-            { finding in
+            reason: "System secondary text in a Form, between 3:1 and 4.5:1",
+            ceiling: ["settings": 6, "machines": 6, "machine editor": 4],
+            matches: { finding in
                 finding.type == .contrast && finding.summary.contains("nearly passed")
+                    && finding.elementType == .staticText
                     && ["settings", "machines", "machine editor"].contains(finding.screen)
             }
         ),
-        (
+        AuditAllowance(
             // A filter chip is its name beside a coloured symbol tile. The audit
             // measures the whole 44 pt button, tile included, and the tile is a
             // graphic, whose bar is 3:1. The name itself is the foreground colour
             // on the raised surface, and the tile colours are checked against the
             // glyph in AidenMachineChromeTests.
-            "A machine filter chip, measured with its symbol tile, between 3:1 and 4.5:1",
-            { finding in
+            reason: "A machine filter chip, measured with its symbol tile, between 3:1 and 4.5:1",
+            ceiling: ["inbox": 1, "bots": 1],
+            matches: { finding in
                 guard finding.type == .contrast, finding.summary.contains("nearly passed"),
                       let frame = finding.frame, let strip = finding.strip else { return false }
                 return strip.intersects(frame)
             }
         ),
-        (
+        AuditAllowance(
             // Transcript text is selectable, so the audit counts it as a target.
             // Text isn't a control, and a long press selects it at any size.
-            "Selectable transcript text read as a tap target",
-            { $0.type == .hitRegion && ["chat", "bot"].contains($0.screen) && $0.elementType == .staticText }
+            reason: "Selectable transcript text read as a tap target",
+            ceiling: ["chat": 4, "bot": 5],
+            matches: { $0.type == .hitRegion && $0.elementType == .staticText }
         ),
-        (
+        AuditAllowance(
             // The composer's growing text field (a vertical text view, which the
             // audit reports as a text field) sits in a field at least 44 pt high
-            // (47 pt here), and a tap anywhere on the field focuses it. The Bot
-            // chat's audit names no element for the same view.
-            "The composer's text view inside its 44 pt field",
-            { finding in
-                finding.type == .hitRegion && ["chat", "bot"].contains(finding.screen)
-                    && [.textField, .textView, nil].contains(finding.elementType)
-            }
+            // (47 pt here), and a tap anywhere on the field focuses it.
+            reason: "The composer's text view inside its 44 pt field",
+            ceiling: ["chat": 1, "bot": 1],
+            matches: { $0.type == .hitRegion && [.textField, .textView].contains($0.elementType) }
         ),
-        (
+        AuditAllowance(
             // UIKit's own clear button in the search field: 46 by 46 pt, the size
             // the system draws it at. The app doesn't draw or size it.
-            "The search field's system clear button",
-            { finding in
-                finding.type == .hitRegion && finding.screen == "search"
-                    && finding.elementType == .button && finding.label == "Clear text"
-            }
+            reason: "The search field's system clear button",
+            ceiling: ["search": 1],
+            matches: { $0.type == .hitRegion && $0.elementType == .button && $0.label == "Clear text" }
         ),
-        (
+        AuditAllowance(
             // The Machines row's label, an icon and a word beside "3 of 4 online".
             // The screenshots at the largest standard size and at AX5
             // (xxxl-*-settings.png, ax5-*-settings.png) show the whole word, the
             // row stacking at the accessibility sizes. Nothing drawn is cut.
-            "Settings' Machines row label, whole at XXXL and AX5",
-            { $0.type == .textClipped && $0.screen == "settings" && $0.label == "Machines" }
+            reason: "Settings' Machines row label, whole at XXXL and AX5",
+            ceiling: ["settings": 1],
+            matches: { $0.type == .textClipped && $0.label == "Machines" }
         ),
-        (
-            // The model chip shortens rather than wrap below the accessibility
-            // sizes, so a run starting doesn't change the composer's height
-            // (AidenComposerSurface.stackedControls), and at those sizes it takes
-            // its own line and wraps. VoiceOver reads the whole model and level,
-            // and the chip's menu lists every model by its full name. The audit
-            // names no element for the chip's two texts: a probe found exactly two
-            // such findings in every chat and none in the Bot chat, which has no
-            // chip, so the gate allows two per chat and no more.
-            AidenShellUITests.modelChipAllowance,
-            { $0.type == .textClipped && $0.screen == "chat" && $0.elementType == nil }
-        ),
-        (
+        AuditAllowance(
             // The time under a message reads as "Sent November 10, 2026 at 3:14 AM"
             // to VoiceOver. The audit measures that against the "3:14 AM" drawn.
-            "A message time, whose spoken label is longer than the time drawn",
-            { $0.type == .textClipped && $0.screen == "chat" && $0.label.hasPrefix("Sent ") }
+            reason: "A message time, whose spoken label is longer than the time drawn",
+            ceiling: ["chat": 2],
+            matches: { $0.type == .textClipped && $0.label.hasPrefix("Sent ") }
         ),
-        (
+        AuditAllowance(
             // Each grows with the text size: the AX5 screenshots in
             // option-a-accessibility.md show them at full size. Larger text pushes
             // them below the bottom of the screen, and the audit reads text it can
             // no longer see as text that stopped growing. All three are system text
             // styles: a Form footer, a Form button's label and a footnote.
-            "Text the larger sizes push below the screen (Machines footer and Pair a machine, Search's unsearched note)",
-            { finding in
+            reason: "Text the larger sizes push below the screen (Machines footer and Pair a machine, Search's unsearched note)",
+            ceiling: ["machines": 2, "search": 1],
+            matches: { finding in
                 finding.type == .dynamicType
                     && [("machines", "Hiding a machine keeps it paired"), ("machines", "Pair a machine"),
                         ("search", "Couldn’t search Bot conversations on ")]
                     .contains { finding.screen == $0.0 && finding.label.hasPrefix($0.1) }
             }
         ),
-        (
+        AuditAllowance(
             // Chips in a sideways scroller, one line by design. A name only
             // truncates past 240 pt, and the chip speaks the whole name.
-            "A machine chip in the filter strip",
-            { finding in
+            reason: "A machine chip in the filter strip",
+            ceiling: ["inbox": 1, "bots": 1],
+            matches: { finding in
                 guard finding.type == .textClipped, let frame = finding.frame, let strip = finding.strip else { return false }
                 return strip.intersects(frame)
             }
         ),
+        AuditAllowance(
+            // Liquid Glass draws text in or under a bar with vibrancy over whatever
+            // scrolls behind, and the audit can't read that contrast. With Reduce
+            // Transparency on the glass turns solid, and the Bot's "Connecting…"
+            // hint passes at full strength (task-34 run 7). See `scrollEdgeBand`
+            // for the band beside each bar on iOS 26. Last, so a finding the
+            // rules above explain is counted there.
+            reason: "Contrast of text in or under glass (navigation bar, tab bar, bottom accessory, search field, Bot connection hint)",
+            ceiling: ["inbox": 12, "search": 1, "bots": 1, "bot": 2, "machines": 1, "machine editor": 2, "settings": 6],
+            matches: { $0.type == .contrast && $0.touchesGlass }
+        ),
     ]
 
-    private static let modelChipAllowance = "The composer's model chip, shortened below the accessibility sizes"
+    /// The regular-width layout (iPad's tab strip and split views) isn't held to
+    /// the rules above yet: it reports Dynamic Type findings of its own, many with
+    /// no element, on every screen, and those are open work. Until then each
+    /// screen may have at most this many findings of any kind in one appearance,
+    /// of these types only, so nothing new gets in. Pinned from the fix round 1
+    /// run on "Aiden Lane iPad" (`task-34-fix1-ipad-c.log`): the larger of the
+    /// light and dark counts, every type either showed.
+    private static let wideBaseline: [String: (count: Int, types: Set<UInt64>)] = {
+        let contrast = XCUIAccessibilityAuditType.contrast.rawValue
+        let hitRegion = XCUIAccessibilityAuditType.hitRegion.rawValue
+        let dynamicType = XCUIAccessibilityAuditType.dynamicType.rawValue
+        let textClipped = XCUIAccessibilityAuditType.textClipped.rawValue
+        return [
+            "inbox": (7, [contrast, dynamicType, textClipped]),
+            "bots": (5, [contrast, dynamicType, textClipped]),
+            "bot": (8, [contrast, hitRegion, dynamicType]),
+            "chat": (9, [hitRegion, dynamicType, textClipped]),
+            "machines": (10, [contrast, dynamicType]),
+            "machine editor": (9, [contrast, dynamicType]),
+            "settings": (13, [contrast, dynamicType]),
+            "search": (2, [hitRegion, dynamicType]),
+        ]
+    }()
 
     /// The system audit finds nothing on any main screen of the tab shell, in
-    /// light and in dark. Every audit type runs, and an issue fails the test unless
-    /// `auditAllowances` gives a reason for it. All of them are listed, not just
-    /// the first, and the allowed ones are attached to the result.
+    /// light and in dark. Every audit type runs, and in the compact layout an issue
+    /// fails the test unless `auditAllowances` gives a reason for it, within that
+    /// rule's ceiling. In the regular-width layout each screen is held to
+    /// `wideBaseline`. All findings are listed, not just the first, and the allowed
+    /// ones are attached to the result.
     func testEveryMainScreenPassesTheAudit() throws {
         var findings: [String] = []
         var allowed: [String] = []
         for appearance in AidenStateMatrix.Appearance.allCases {
             // No content size override, so the audit's Dynamic Type checks can change it.
             let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance, contentSize: .system)
-            // The rules above are for the compact layout, with its tab bar. A wide
-            // window (the sidebar and split views on iPad) reports Dynamic Type
-            // findings of its own, mostly with no element, that have not been
-            // worked through yet: option-a-accessibility.md lists them for Task 36.
-            if AidenStateMatrix.window(of: app).frame.width > 500 {
-                app.terminate()
-                throw XCTSkip("The audit gate covers the compact layout; the wide layout's findings are open for Task 36")
-            }
+            let isWide = AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth
             var audited: [String] = []
             func audit(_ screen: String) throws {
-                // An empty or loading screen would pass an audit with nothing to find.
-                let elements = app.buttons.count + app.staticTexts.count
-                XCTAssertGreaterThanOrEqual(elements, 4, "Almost nothing on \(screen) (\(appearance)) to audit")
+                // An empty or loading screen would pass an audit with nothing to
+                // find. The tab bar's own words don't count as content.
+                let content = app.staticTexts.count + app.cells.count
+                    - app.tabBars.descendants(matching: .staticText).count
+                XCTAssertGreaterThanOrEqual(content, 4, "Almost nothing on \(screen) (\(appearance)) to audit")
                 AidenStateMatrix.capture("audit-\(screen)-\(appearance.rawValue)", in: self)
                 let bars = [
                     app.navigationBars.firstMatch, app.tabBars.firstMatch,
@@ -1539,6 +1632,9 @@ final class AidenShellUITests: XCTestCase {
                 let strip = stripElement.exists
                     ? CGRect(x: 0, y: stripElement.frame.minY, width: .greatestFiniteMagnitude, height: stripElement.frame.height)
                     : nil
+                var excused: [String: Int] = [:]
+                var wide: [String] = []
+                var wideTypes: Set<UInt64> = []
                 // Every type runs, in two passes. The Dynamic Type checks change the
                 // text size and the screen lays itself out again, and checks that ran
                 // in the same pass then lost their element ("Contrast failed on no
@@ -1559,20 +1655,36 @@ final class AidenShellUITests: XCTestCase {
                         )
                         let place = element.map { "\($0.elementType.rawValue) '\($0.label)' at \($0.frame)" } ?? "no element"
                         let line = "\(screen) (\(appearance)): \(issue.compactDescription) on \(place)"
-                        if let allowance = Self.auditAllowances.first(where: { $0.matches(finding) }) {
-                            print("AUDIT ALLOWED: \(line) -- \(allowance.reason)")
-                            allowed.append("\(line) -- \(allowance.reason)")
+                        if isWide {
+                            print("AUDIT WIDE: \(line)")
+                            wide.append(line)
+                            wideTypes.insert(issue.auditType.rawValue)
+                        } else if let allowance = Self.auditAllowances.first(where: { $0.matches(finding) }) {
+                            excused[allowance.reason, default: 0] += 1
+                            let ceiling = allowance.ceiling[screen] ?? 0
+                            if excused[allowance.reason]! <= ceiling {
+                                print("AUDIT ALLOWED: \(line) -- \(allowance.reason)")
+                                allowed.append("\(line) -- \(allowance.reason)")
+                            } else {
+                                print("AUDIT ISSUE: \(line), over the ceiling of \(ceiling) for: \(allowance.reason)")
+                                findings.append("\(line), over the ceiling of \(ceiling) for: \(allowance.reason)")
+                            }
                         } else {
-                            print("AUDIT ISSUE: \(line). \(issue.detailedDescription)")
+                            print("AUDIT ISSUE: \(line). \(issue.detailedDescription) Bars: \(bars)")
                             findings.append("\(line). \(issue.detailedDescription)")
                         }
                         return true
                     }
                 }
+                if isWide {
+                    let baseline = Self.wideBaseline[screen] ?? (0, [])
+                    let newTypes = wideTypes.subtracting(baseline.types)
+                    if wide.count > baseline.count || !newTypes.isEmpty {
+                        findings.append("\(screen) (\(appearance)), regular width: \(wide.count) findings against a baseline of \(baseline.count), new types \(newTypes.sorted()):\n" + wide.joined(separator: "\n"))
+                    }
+                    print("AUDIT WIDE TALLY: \(screen) (\(appearance)) \(wide.count) of \(baseline.count), types \(wideTypes.sorted())")
+                }
                 audited.append(screen)
-            }
-            func modelChipFindings() -> Int {
-                allowed.filter { $0.hasPrefix("chat (\(appearance)):") && $0.hasSuffix(Self.modelChipAllowance) }.count
             }
 
             let row = openInbox(in: app)
@@ -1580,11 +1692,6 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(AidenStateMatrix.catchUpRow(in: app).waitForExistence(timeout: 10), "No Catch Up row")
             hideOverlaySidebar(in: app)
             try audit("inbox")
-
-            search("flaky", in: app)
-            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No Search results")
-            XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result")
-            try audit("search")
 
             AidenStateMatrix.openArea("Bots", in: app)
             let bot = botRow(in: app)
@@ -1606,7 +1713,6 @@ final class AidenShellUITests: XCTestCase {
             row.tap()
             XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
             try audit("chat")
-            XCTAssertLessThanOrEqual(modelChipFindings(), 2, "More clipped text with no element in the chat than the model chip's two")
             goBack(in: app)
 
             let status = app.buttons["aiden.machine-status"]
@@ -1626,6 +1732,14 @@ final class AidenShellUITests: XCTestCase {
             openSettings(in: app)
             XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10), "Settings did not open")
             try audit("settings")
+
+            // Last: in a regular-width window the active search field takes the
+            // tab strip's place and offers no way back to the other tabs, so a
+            // screen audited after Search would still be Search.
+            search("flaky", in: app)
+            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No Search results")
+            XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result")
+            try audit("search")
 
             XCTAssertEqual(audited, Self.auditedScreens, "The audit didn't reach every screen (\(appearance))")
             app.terminate()

@@ -170,7 +170,7 @@ enum AidenStateMatrix {
         }
     }
 
-    private static let compactWidth: CGFloat = 500
+    static let compactWidth: CGFloat = 500
 
     /// The running chats, above the tab bar or as the Inbox's first row.
     static func runningAccessory(in app: XCUIApplication) -> XCUIElement {
