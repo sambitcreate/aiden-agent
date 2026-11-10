@@ -1,8 +1,8 @@
 # Aiden Live voice upgrade
 
-Status: Active. PR 1 (ribbon, voice, speed, goodbye) is in progress; PRs 2–4 are being built in parallel.
+Status: Complete on main (2026-11-10), not yet in a release. All four PRs merged: #785 (ribbon, voice, speed, goodbye), #787 (chat by voice), #789 (approvals by voice) and #790 (Live moves through Aiden).
 Date: 2026-11-06
-Related: [Aiden Live Assistant](gemini-live-assistant-plan.md)
+Related: [Aiden Live Assistant](../gemini-live-assistant-plan.md)
 
 ## Outcome
 
@@ -29,7 +29,7 @@ The four PRs build on one shared base:
 - Main: `LiveToolProvider`, `LiveToolRegistry`, `LiveRendererToolBroker` (`main/services/gemini-live/live-tools.ts`) and `LIVE_TOOL_PROVIDER_FACTORIES` (`live-tool-providers.ts`). Each PR adds its tools as one factory entry.
 - Renderer: `liveSessionBus` (renderer tools, finalized voice input, spoken notes), `liveOpenChat`, `liveActivity` (acting, approval, confirm), `matchLiveVoicePhrase`, and `aidenLivePreferences` with the new `AppSettings` fields.
 
-## PR 1: ribbon, voice, speed and goodbye (in progress)
+## PR 1: ribbon, voice, speed and goodbye
 
 - **Ribbon pill** (`renderer/components/assistant/live-ribbon.tsx`, `live-ribbon-wave.tsx`, `use-live-ribbon-placement.ts`). Dark glass, about 380×64, centred on the chat column above the composer. It can be dragged; the place is remembered per window in local storage and double-click puts it back. The whole ribbon, including the wider captions card and any cards stacked above the pill, stays inside the window. A canvas ribbon follows the microphone while listening and Live's voice while speaking, and shimmers slowly while thinking. Reduce Motion holds a still pose. States: listening, thinking, speaking, acting (label and Take over), approval (title, chat, Deny and Allow, and "Say “allow” or “deny”" only while Live is listening for the answer) and confirm (label, Cancel and Confirm, "Say “yes, do it”"). An approval without an allow callback offers only Deny and says to open the chat. Captions show in a card above the pill. Mute, a ••• menu (voice, speaking speed, ribbon colours) and End sit on the pill; Esc on the pill ends Live. The ribbon's root and the portaled ••• menu carry `data-live-guard="you"`, so Live never presses its own controls. While Live runs, the Live shortcut first moves focus to End, and a second press while End still has focus ends Live; with no End on the pill (an approval or confirmation shows), the shortcut does not end Live.
 - **Spectrum colours** are the tokens `--live-spectrum-1` to `--live-spectrum-5` in `renderer/styles.css`; the glass is `--live-glass-*`. The pill stays dark in light themes.
@@ -54,7 +54,7 @@ The four PRs build on one shared base:
 
 Live sends what you ask to the open chat right away (1a, with a "By voice" label), reads the reply back, and can be turned off with "Let Live use the open chat" (2a).
 
-Status: built on `claude/project-thread-kc0y85-live-chat` (2026-11-06), not merged. Remote revision 60 (claimed 2026-11-10, when main was at 59).
+Status: merged in #787 (2026-11-10). Remote revision 60 (claimed 2026-11-10, when main was at 59).
 
 ### What Live can do
 
@@ -85,7 +85,7 @@ Only chats Live sent to or started in this session are watched. When one finishe
 
 ### "By voice"
 
-Messages Live sends carry `inputSource: "voice"`, saved with the message (including the saved intent a lost steer is retried from). Desktop shows a small "By voice" label under them, also while a new worktree is being made for a first message. Editing a queued voice message drops the label, since the text is then the person's. It is a shared transcript contract: the Remote chat projection carries it on user messages (revision 60, `AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION`, fixture `voiceInput`), and iOS and Android show the same label. Older clients ignore the key. See [the Remote API](../aiden-remote-api-v1.md#voice-input-label-revision-60).
+Messages Live sends carry `inputSource: "voice"`, saved with the message (including the saved intent a lost steer is retried from). Desktop shows a small "By voice" label under them, also while a new worktree is being made for a first message. Editing a queued voice message drops the label, since the text is then the person's. It is a shared transcript contract: the Remote chat projection carries it on user messages (revision 60, `AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION`, fixture `voiceInput`), and iOS and Android show the same label. Older clients ignore the key. See [the Remote API](../../aiden-remote-api-v1.md#voice-input-label-revision-60).
 
 ### Settings and notice
 
@@ -98,7 +98,7 @@ Settings → Voice & Speech → Aiden Live has a "Chats" group with **Let Live u
 
 ## PR 3: approvals by voice
 
-Status: Built on `claude/project-thread-kc0y85-live-approvals` (2026-11-06), revised after review the same day; not yet merged.
+Status: merged in #789 (2026-11-10).
 
 ### What the person gets
 
@@ -171,7 +171,7 @@ Status: Built on `claude/project-thread-kc0y85-live-approvals` (2026-11-06), rev
 
 ## PR 4: Live moves through Aiden's own window
 
-Status: built on `claude/project-thread-kc0y85-live-app-control` (2026-11-06).
+Status: merged in #790 (2026-11-10).
 
 Aiden Live can look at and use Aiden's own window by reading its accessibility
 tree. It needs no Accessibility or Screen Recording permission and works
