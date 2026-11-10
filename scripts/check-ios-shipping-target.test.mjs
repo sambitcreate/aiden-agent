@@ -368,6 +368,40 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
   );
 });
 
+test("the demo machines stay out of Release builds", async () => {
+  // The demo can run, pause and grant on its own pretend machines. A Release
+  // build must never compile it, or a launch argument could reach it.
+  const demoPath = "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift";
+  const demo = await readFile(`${iosRoot}${demoPath}`, "utf8");
+  assert.match(demo, /^#if DEBUG\n/u);
+  assert.match(demo, /\n#endif\n?$/u);
+
+  const references = /\bAidenDemo(?:Hosts|Scenario)\./u;
+  const sources = appSourcePaths.filter((path) => !path.includes("/Demo/"));
+  const texts = await Promise.all(sources.map((path) => readFile(`${iosRoot}${path}`, "utf8")));
+  let checked = 0;
+  sources.forEach((path, index) => {
+    // A stack of open #if blocks: true while the block's live branch is DEBUG.
+    const branches = [];
+    texts[index].split("\n").forEach((line, lineIndex) => {
+      const directive = line.trim();
+      if (directive.startsWith("#if ")) {
+        branches.push(directive === "#if DEBUG");
+      } else if (directive.startsWith("#elseif")) {
+        branches[branches.length - 1] = false;
+      } else if (directive === "#else") {
+        branches[branches.length - 1] = false;
+      } else if (directive === "#endif") {
+        branches.pop();
+      } else if (references.test(line) && !directive.startsWith("//")) {
+        checked += 1;
+        assert.ok(branches.includes(true), `${path}:${lineIndex + 1} reaches the demo outside #if DEBUG`);
+      }
+    });
+  });
+  assert.ok(checked > 0, "The demo's entry points have moved; this check reads nothing");
+});
+
 test("the Bot-first mobile rollout flag fails closed across pairing and product routing", async () => {
   const [project, info, appConfig, remoteClient, appShell, botsTab, botsHome] = await Promise.all([
     readFile(projectPath, "utf8"),
