@@ -12,12 +12,13 @@ export interface NewChatActions {
    * `newWorktree` (⌥↵ in New chat in…) selects New worktree when the
    * workspace is a Git repository with a commit. `initialText` starts a new
    * draft with that text in its composer, and `gitMode` sets where it runs
-   * instead of the workspace's remembered choice.
+   * instead of the workspace's remembered choice. Resolves with the draft's
+   * chat id, or undefined when nothing opened.
    */
   openNewChatIn: (
     workspaceId: string,
     options?: { newWorktree?: boolean; initialText?: string; gitMode?: ChatDraftGitMode },
-  ) => Promise<void>;
+  ) => Promise<string | undefined>;
   /** Register a folder as a workspace with the native picker, then open a draft there. */
   openFolderForNewChat: () => Promise<void>;
   /** Open the workspace menu's Clone view on the draft being viewed, or on a new draft. */

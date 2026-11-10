@@ -1404,6 +1404,9 @@ private fun UserMessageRow(
                 loadData = loadAttachmentImage
             )
         }
+        if (message.isByVoice) {
+            AidenVoiceInputLabel(palette = palette)
+        }
         if (showFooter) {
             AidenMessageFooter(
                 message = message,

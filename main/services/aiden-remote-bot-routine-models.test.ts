@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import Ajv from "ajv";
-import { AIDEN_REMOTE_CONTRACT_REVISION } from "./aiden-remote-protocol.js";
+import { AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION } from "./aiden-remote-protocol.js";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -80,7 +80,7 @@ test("disconnect after publication retains one accepted grant and replays its sa
 
 test("normative model settings, fallback and run evidence satisfy their closed wire schemas", () => {
   const fixture = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/bot-routine-models.json", import.meta.url), "utf8"));
-  assert.equal(fixture.contractRevision, AIDEN_REMOTE_CONTRACT_REVISION);
+  assert.equal(fixture.contractRevision, AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION);
   const schema = JSON.parse(readFileSync(new URL("../../protocol/aiden-remote/v1/openapi.json", import.meta.url), "utf8"));
   const ajv = new Ajv({ strict: false, validateFormats: false }); ajv.addSchema(schema, "contract");
   for (const [key, name] of [["settings", "BotRoutineModelSettings"], ["inherit", "BotRoutineModelSettings"], ["save", "BotRoutineModelSave"], ["catalog", "BotRoutineModelCatalog"], ["result", "BotRoutineModelResult"], ["conflict", "BotRoutineModelResult"], ["runs", "BotRoutineModelRuns"], ["resumeStatus", "BotExecutionResumeStatus"], ["resume", "BotResumeRequest"], ["directory", "BotRoutineModelDirectory"]]) {

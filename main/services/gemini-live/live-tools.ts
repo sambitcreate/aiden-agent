@@ -45,10 +45,34 @@ export const LIVE_TOOL_ERROR = {
   failed: "tool_failed",
   cancelled: "cancelled",
   timeout: "timeout",
+  outcomeUnknown: "outcome_unknown",
 } as const;
 
 export function liveToolError(code: string, message: string): LiveToolResponse {
   return { ok: false, error: { code, message } };
+}
+
+/**
+ * A mutating request reached the window but its result never came back. It
+ * may have been carried out, so Live must not repeat it blindly.
+ */
+export function liveToolOutcomeUnknown(): LiveToolResponse {
+  return {
+    ...liveToolError(
+      LIVE_TOOL_ERROR.outcomeUnknown,
+      "Aiden couldn't confirm whether that went through. Check the chat before trying again; do not resend it.",
+    ),
+    committed: true,
+  };
+}
+
+/**
+ * `committed: true` marks a result whose action was (or may have been) carried
+ * out. The registry reports it even when the call was cancelled meanwhile, so
+ * Live never hears "cancelled" about something that happened.
+ */
+export function isCommittedLiveToolResponse(response: LiveToolResponse): boolean {
+  return response.committed === true;
 }
 
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u;
@@ -102,7 +126,7 @@ export class LiveToolRegistry {
     this.inFlight.set(call.id, abort);
     try {
       const response = await provider.handle(call, { ...this.context, signal: abort.signal });
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted && !isCommittedLiveToolResponse(response)) {
         return liveToolError(LIVE_TOOL_ERROR.cancelled, "The request was cancelled.");
       }
       return response;
@@ -149,7 +173,18 @@ export interface LiveRendererToolRequest {
 }
 
 const DEFAULT_RENDERER_TOOL_TIMEOUT_MS = 30_000;
+/** How long a cancelled mutating request waits for the window's real outcome. */
+const DEFAULT_RENDERER_CANCEL_GRACE_MS = 2_000;
 const MAX_PENDING_RENDERER_TOOLS = 8;
+
+export interface LiveRendererToolRequestOptions {
+  /**
+   * The tool changes something (sends, stops, opens). Once the window has the
+   * request, a cancel or timeout waits briefly for its real outcome and
+   * otherwise reports `outcome_unknown`, never `cancelled`.
+   */
+  mutating?: boolean;
+}
 
 /**
  * Correlates renderer-executed tool requests with their results. The renderer
@@ -168,12 +203,14 @@ export class LiveRendererToolBroker {
     private readonly sessionId: string,
     private readonly sendToRenderer: (request: LiveRendererToolRequest | { type: "tool_cancel"; sessionId: string; requestId: string }) => void,
     private readonly timeoutMs = DEFAULT_RENDERER_TOOL_TIMEOUT_MS,
+    private readonly cancelGraceMs = DEFAULT_RENDERER_CANCEL_GRACE_MS,
   ) {}
 
   request(
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    options: LiveRendererToolRequestOptions = {},
   ): Promise<LiveToolResponse> {
     if (this.closed) {
       return Promise.resolve(liveToolError(LIVE_TOOL_ERROR.cancelled, "The Live session ended."));
@@ -184,6 +221,8 @@ export class LiveRendererToolBroker {
     this.sequence += 1;
     const requestId = `r${this.sequence}`;
     return new Promise((resolve) => {
+      let forwarded = false;
+      let givenUp = false;
       const finish = (response: LiveToolResponse) => {
         const entry = this.pending.get(requestId);
         if (!entry) return;
@@ -192,20 +231,39 @@ export class LiveRendererToolBroker {
         signal?.removeEventListener("abort", onAbort);
         resolve(response);
       };
-      const onAbort = () => {
-        if (!this.pending.has(requestId)) return;
-        try {
-          this.sendToRenderer({ type: "tool_cancel", sessionId: this.sessionId, requestId });
-        } catch {
-          // The window is gone; the cancellation result below still resolves.
-        }
-        finish(liveToolError(LIVE_TOOL_ERROR.cancelled, "The request was cancelled."));
+      // The window's answer. One that arrives after a mutating request was
+      // given up on is its real outcome: anything but its own "cancelled"
+      // means it happened.
+      const answer = (response: LiveToolResponse) => {
+        const cancelledThere =
+          (response.error as { code?: unknown } | undefined)?.code === LIVE_TOOL_ERROR.cancelled;
+        finish(givenUp && !cancelledThere ? { ...response, committed: true } : response);
       };
+      const giveUp = (fallback: LiveToolResponse) => {
+        const entry = this.pending.get(requestId);
+        if (!entry || givenUp) return;
+        givenUp = true;
+        signal?.removeEventListener("abort", onAbort);
+        if (forwarded) {
+          try {
+            this.sendToRenderer({ type: "tool_cancel", sessionId: this.sessionId, requestId });
+          } catch {
+            // The window is gone; the result below still resolves.
+          }
+        }
+        if (!forwarded || !options.mutating) {
+          finish(fallback);
+          return;
+        }
+        clearTimeout(entry.timer);
+        entry.timer = setTimeout(() => finish(liveToolOutcomeUnknown()), this.cancelGraceMs);
+      };
+      const onAbort = () => giveUp(liveToolError(LIVE_TOOL_ERROR.cancelled, "The request was cancelled."));
       const timer = setTimeout(
-        () => finish(liveToolError(LIVE_TOOL_ERROR.timeout, "Aiden's window did not answer in time.")),
+        () => giveUp(liveToolError(LIVE_TOOL_ERROR.timeout, "Aiden's window did not answer in time.")),
         this.timeoutMs,
       );
-      this.pending.set(requestId, { resolve: finish, timer });
+      this.pending.set(requestId, { resolve: answer, timer });
       if (signal?.aborted) {
         onAbort();
         return;
@@ -213,6 +271,7 @@ export class LiveRendererToolBroker {
       signal?.addEventListener("abort", onAbort, { once: true });
       try {
         this.sendToRenderer({ type: "tool_request", sessionId: this.sessionId, requestId, name, args });
+        forwarded = true;
       } catch {
         finish(liveToolError(LIVE_TOOL_ERROR.failed, "Aiden's window is not available."));
       }

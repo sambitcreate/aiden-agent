@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
@@ -293,4 +294,32 @@ fun AidenSelectTextDialog(
         shape = AidenShape.Dialog,
         containerColor = palette.raised
     )
+}
+
+/**
+ * A quiet "By voice" mark under a message Aiden Live sent for the person on
+ * the Mac (contract revision 60).
+ */
+@Composable
+fun AidenVoiceInputLabel(palette: AidenPalette, modifier: Modifier = Modifier) {
+    val description = stringResource(R.string.chat_message_by_voice_description)
+    Row(
+        modifier = modifier
+            .testTag("aiden.message.byVoice")
+            .semantics(mergeDescendants = true) { contentDescription = description },
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.Mic,
+            contentDescription = null,
+            tint = palette.secondary,
+            modifier = Modifier.size(12.dp)
+        )
+        Text(
+            text = stringResource(R.string.chat_message_by_voice),
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.secondary
+        )
+    }
 }

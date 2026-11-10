@@ -138,8 +138,15 @@ class FakeHost implements HostChatAdapter {
     this.calls.push(`question:${chatId}:${input.promptId}`);
     return { status: "elsewhere" as const };
   }
-  async submitInput(chatId: string, input: { runId: string; mode: string }) {
+  readonly inputBodies: Array<{ runId: string; mode: string; inputSource?: string }> = [];
+  loseNextInputAck = false;
+  async submitInput(chatId: string, input: { runId: string; mode: string; inputSource?: string }) {
     this.calls.push(`input:${chatId}:${input.runId}:${input.mode}`);
+    this.inputBodies.push(input);
+    if (this.loseNextInputAck) {
+      this.loseNextInputAck = false;
+      throw new HostChatControlError({ code: "outcome_unknown", message: "lost" });
+    }
     return { admitted: true, committed: true, messageId: "m-steer" };
   }
   async rename(chatId: string) {
@@ -505,4 +512,12 @@ test("a retried send repeats the model and effort it was first sent with", async
     assert.equal(body.thinkingLevel, "high");
   }
   assert.equal(host.sendBodies[0]?.idempotencyKey, host.sendBodies[1]?.idempotencyKey, "one turn, same key");
+});
+
+test("a lost voice steer is retried with its By voice marker", async () => {
+  const { host, control } = session();
+  host.loseNextInputAck = true;
+  await assert.rejects(control.submitInput("run-1", "steer", "Use staging", { inputSource: "voice" }), { code: "outcome_unknown" });
+  await control.retryUnresolved();
+  assert.deepEqual(host.inputBodies.map((body) => body.inputSource), ["voice", "voice"]);
 });

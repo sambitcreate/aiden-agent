@@ -33,6 +33,7 @@ import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../l
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
+import { LiveChatToolsHost } from "./live-chat-tools-host";
 import { KeyboardRegions } from "../components/keyboard-regions";
 import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
 import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
@@ -358,7 +359,8 @@ function RootContent() {
             .catch(() => undefined);
           if (git?.isRepo && !git.unborn) gitMode = "worktree";
         }
-        await openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
+        // The draft's id, or undefined when nothing opened (navigation blocked).
+        return openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
@@ -638,6 +640,7 @@ function RootContent() {
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <LiveChatToolsHost navigationBlockedReason={navigationBlockedReason} />
         <WindowControls />
         <KeyboardRegions />
         <KeyboardShortcutsDialog />

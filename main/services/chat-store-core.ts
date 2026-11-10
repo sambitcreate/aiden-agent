@@ -37,6 +37,7 @@ import { parseGenerationTimeline } from "../../renderer/shared/generation-timeli
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { boundedHookBlockedReason, hookBlockedField } from "./hook-blocked-prompt.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
@@ -968,6 +969,10 @@ export function createChatStore(
           message.role === "user"
             ? parseAgentNoticeV1(message.notice)
             : undefined,
+        inputSource:
+          message.role === "user"
+            ? parseChatInputSource(message.inputSource)
+            : undefined,
         // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
         ...hookBlockedField(message),
       };
@@ -1526,7 +1531,7 @@ export function createChatStore(
       model?: string;
       turnId: string;
       fingerprint: string;
-      message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model">;
+      message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model" | "inputSource">;
       assertCurrent: () => void;
     }): Promise<Chat> {
       return withImageData(await shared([input.id], true, async () => {
@@ -1566,6 +1571,7 @@ export function createChatStore(
           model: input.message.model,
           attachments: safeStoredAttachments(input.message.attachments),
           skill: parseSkillProvenanceV1(input.message.skill),
+          inputSource: parseChatInputSource(input.message.inputSource),
           createdAt: now,
         };
         const chat: Chat = {
@@ -1835,6 +1841,10 @@ export function createChatStore(
             notice:
               message.role === "user"
                 ? parseAgentNoticeV1(message.notice)
+                : undefined,
+            inputSource:
+              message.role === "user"
+                ? parseChatInputSource(message.inputSource)
                 : undefined,
             ...hookBlockedField(message),
             providerFailure:
@@ -2312,6 +2322,10 @@ export function createChatStore(
           notice:
             message.role === "user"
               ? parseAgentNoticeV1(message.notice)
+              : undefined,
+          inputSource:
+            message.role === "user"
+              ? parseChatInputSource(message.inputSource)
               : undefined,
           timeline:
             message.role === "assistant"

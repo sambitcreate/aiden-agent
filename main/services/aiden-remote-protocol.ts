@@ -1,3 +1,4 @@
+import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import { botPendingAccessRequestOf, parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import { parseBotPeerId } from "../../renderer/shared/bot-peers.js";
@@ -298,7 +299,14 @@ export const AIDEN_REMOTE_BOT_WATCHES_CONTRACT_REVISION = 59 as const;
 export const AIDEN_REMOTE_BOT_OPEN_WORK_CONTRACT_REVISION = 59 as const;
 export const AIDEN_REMOTE_BOT_ROUTINE_MODELS_CONTRACT_REVISION = 59 as const;
 export const AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION = 59 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_PEERS_CONTRACT_REVISION;
+/**
+ * Contract revision 60 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): a user message may carry
+ * `inputSource: "voice"` when Aiden Live sent it for the person on the Mac.
+ * Display-only, no capability; clients show "By voice" and older ones ignore it.
+ */
+export const AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION = 60 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -2262,6 +2270,8 @@ export interface AidenRemoteContractFixture {
   rawUploads?: AidenRemoteRawUploadsFixture;
   /** Revision 53 (`chat:new-worktree`): an empty chat moved into a new worktree, and a chat with messages refused. */
   chatNewWorktree?: AidenRemoteChatNewWorktreeFixture;
+  /** Revision 60: a user message Aiden Live sent ("By voice"), and values clients must ignore. */
+  voiceInput?: AidenRemoteVoiceInputFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -3847,6 +3857,10 @@ export function parseAidenRemoteChatProjection(
                 `${label} message ${index}`,
               ),
             }
+          : {}),
+        // Revision 60: display-only, user messages only; an unknown value is ignored.
+        ...(entry.role === "user" && parseChatInputSource(entry.inputSource)
+          ? { inputSource: "voice" as const }
           : {}),
       };
       if (hasOwn(entry, "timeline")) {
@@ -8348,6 +8362,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     chatNewWorktree = parseChatNewWorktreeFixture(value.chatNewWorktree);
   }
+  let voiceInput: AidenRemoteVoiceInputFixture | undefined;
+  if (value.voiceInput !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION) {
+      throw new Error(`Voice input fixtures require contract revision ${AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION}.`);
+    }
+    voiceInput = parseVoiceInputFixture(value.voiceInput);
+  }
   let botAllowed: AidenRemoteBotAllowedFixture | undefined;
   if (value.botAllowed !== undefined) {
     if (contractRevision < AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION) throw new Error("Bot allowed fixtures require revision 57.");
@@ -8472,7 +8493,29 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(backgroundJobs ? { backgroundJobs } : {}),
     ...(rawUploads ? { rawUploads } : {}),
     ...(chatNewWorktree ? { chatNewWorktree } : {}),
+    ...(voiceInput ? { voiceInput } : {}),
   };
+}
+
+/** Revision 60 fixture: the chat as sent, and which of its messages read as "By voice". */
+export interface AidenRemoteVoiceInputFixture {
+  chat: AidenRemoteChatProjection;
+  voiceMessageIds: string[];
+}
+
+function parseVoiceInputFixture(value: unknown): AidenRemoteVoiceInputFixture {
+  if (!isRecord(value)) throw new Error("Voice input fixture must be an object.");
+  assertExactKeys(value, ["chat", "voiceMessageIds"], "Voice input fixture");
+  const chat = parseAidenRemoteChatProjection(value.chat, "Voice input chat");
+  if (!Array.isArray(value.voiceMessageIds) || !value.voiceMessageIds.every((id) => typeof id === "string")) {
+    throw new Error("Voice input fixture voiceMessageIds must be strings.");
+  }
+  const expected = value.voiceMessageIds as string[];
+  const marked = chat.messages.filter((message) => message.inputSource === "voice").map((message) => message.id);
+  if (marked.length !== expected.length || marked.some((id, index) => id !== expected[index])) {
+    throw new Error("Voice input fixture marks different messages than the parser.");
+  }
+  return { chat, voiceMessageIds: expected };
 }
 
 const ERROR_DETAIL_DECISIONS = ["allow", "deny", "expired", "cancelled"] as const;

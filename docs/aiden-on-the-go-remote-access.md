@@ -126,6 +126,10 @@ When the paired Mac offers it (contract revision 42, `bot:issues`), a Bot's **Ne
 
 With a host offering revision 59 and `bot:peers`, iPhone and Android can manage a Bot’s routing description and named pair approvals from **Profile → Bot peers**. Pair metadata needs Bot read access; exchange content and source/result evidence also need chat read access. Changes and Stop need Bot write access. Each recipient keeps its own rules and access. The phone retains the exact request after a lost reply; a pending Stop offers acknowledgement status rather than claiming cancellation. Intermediate exchange rows stay quiet, and the initiating Bot’s final update uses the existing notification feed. See [Bot peers](bot-peers.md).
 
+## Messages Aiden Live sent
+
+When Aiden Live on the Mac sends to a chat, that message shows a small "By voice" label on iPhone and Android too (contract revision 60, `inputSource: "voice"`). It is a display label only; phones never send it.
+
 ## Images a Bot shares
 
 When a Bot shares an image (a chart it drew, a screenshot it took), the paired Mac (contract revision 45) sends it to Aiden On The Go for iPhone and Android, which shows it in the Bot's chat like a photo in any other chat: tap it to see it full screen and save it. The phone reads the picture from the Mac when it is shown and keeps a limited number of pictures only while the chat is open; one it let go is read again when you scroll back to it. Another Mac viewing the Bot shows the picture too (see [Use a paired computer](#use-a-paired-computer)). With an older phone or Mac, the chat says "I shared an image: NAME. Open this chat on your Mac to see it."

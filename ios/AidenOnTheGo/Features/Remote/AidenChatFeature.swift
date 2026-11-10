@@ -6925,6 +6925,9 @@ struct AidenMessageView: View, Equatable {
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 2) {
             messageBody
+            if message.isByVoice {
+                AidenVoiceInputLabel()
+            }
             if showsFooter {
                 AidenMessageFooter(
                     message: message,
@@ -11614,5 +11617,18 @@ private struct AidenNativeAppControlPanel: View {
             else { retryOperation = nil; status = receipt.warning ?? (receipt.effective == "now" ? "Saved." : "Saved. Applies to subsequent agent work.") }
             await refresh()
         } catch { localSnapshot = nil; status = "The change could not be confirmed. Check the change after reconnecting." }
+    }
+}
+
+/// A quiet "By voice" mark under a message Aiden Live sent for the person on
+/// the Mac (contract revision 60).
+struct AidenVoiceInputLabel: View {
+    var body: some View {
+        Label(AidenChatMessage.voiceInputLabel, systemImage: "mic")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .labelStyle(.titleAndIcon)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Sent by voice"))
     }
 }

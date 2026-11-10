@@ -119,6 +119,7 @@ export function registerChatGenerationHandlers(): void {
         streamId,
         mode: parsed.mode,
         text: parsed.text,
+        ...(parsed.inputSource ? { inputSource: parsed.inputSource } : {}),
         ownerDocumentId: owner.documentId,
       });
       // A committed input mutates the transcript for every observing document,

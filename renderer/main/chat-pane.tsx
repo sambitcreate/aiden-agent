@@ -160,6 +160,8 @@ import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import { ChatApprovalCard } from "../components/chat-approval-card";
 import { liveOpenChat } from "../lib/live-open-chat";
+import { liveChatReachable, stopForLive, useLiveChatController } from "./live-chat-controller";
+import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { ComputerUseContinueCallout } from "../components/computer-use-access-approval";
 import {
   chatsApi,
@@ -1993,8 +1995,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean },
+      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
     ) => {
+      // Only Aiden Live's chat tools set this; the message shows "By voice".
+      const inputSource = options?.inputSource;
       if (options?.btw) {
         if (getChatDraft(chatId))
           throw new Error("Send the first message before asking a side question.");
@@ -2112,6 +2116,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   attachments: attachments.length ? attachments : undefined,
                 },
                 skillInvocation,
+                ...(inputSource ? { inputSource } : {}),
               }
             : undefined;
           if (firstMessageInput && worktreeRequest) {
@@ -2124,7 +2129,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               },
               input: firstMessageInput,
               worktree: worktreeRequest,
-              message: { text, attachments },
+              message: { text, attachments, ...(inputSource ? { inputSource } : {}) },
             });
             // The progress view holds the message now; a composer that opens
             // on this draft meanwhile starts empty instead of repeating it.
@@ -2172,6 +2177,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     autoTitle: true,
                     turnId: messageTurnId,
                     skillInvocation,
+                    ...(inputSource ? { inputSource } : {}),
                   },
                 );
           }
@@ -2382,7 +2388,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean },
+      options?: { visualize?: boolean; btw?: boolean; inputSource?: ChatInputSourceV1 },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");
@@ -2392,7 +2398,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         text,
         attachments,
         skillInvocation,
-        options: options?.visualize ? { visualize: true } : undefined,
+        options:
+          options?.visualize || options?.inputSource
+            ? {
+                ...(options.visualize ? { visualize: true } : {}),
+                ...(options.inputSource ? { inputSource: options.inputSource } : {}),
+              }
+            : undefined,
       });
     },
     [messageQueue],
@@ -2400,14 +2412,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   /** Admit run input and show what main committed without waiting for the run to end. */
   const admitSteer = React.useCallback(
-    async (streamId: string, text: string) => {
+    async (streamId: string, text: string, inputSource?: ChatInputSourceV1) => {
       const receipt = await admitRunInputOnceStarted({
-        admit: () => chatControl.submitInput(streamId, "steer", text),
+        admit: () =>
+          chatControl.submitInput(streamId, "steer", text, inputSource ? { inputSource } : undefined),
         // This pane's own run can still be starting; a detached one is not retried.
         live: () => generationRef.current?.streamId === streamId && !stopRequestedRef.current,
       });
       if (receipt.committed && receipt.messageId) {
-        const committed = { messageId: receipt.messageId, text, createdAt: Date.now() };
+        const committed = {
+          messageId: receipt.messageId,
+          text,
+          createdAt: Date.now(),
+          ...(inputSource ? { inputSource } : {}),
+        };
         qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
           current ? withCommittedRunInput(current, committed) : current,
         );
@@ -2463,10 +2481,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         toast.error("The current response has ended. The message stays queued.");
         return;
       }
+      const queuedSource = messageQueue
+        .getSnapshot()
+        .messages.find((message) => message.id === id)?.options?.inputSource;
       const outcome = await steerQueuedMessage({
         queue: messageQueue,
         id,
-        admit: (text) => admitSteer(streamId, text),
+        admit: (text) => admitSteer(streamId, text, queuedSource),
       });
       if (outcome.kind === "admitted") {
         toast.info("Guidance sent. Aiden will read it at the next step.");
@@ -2482,6 +2503,48 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [admitSteer, isStoppingGeneration, messageQueue, steerableDetachedProjection],
   );
+
+  // Aiden Live's chat tools read, send to and stop this chat through the
+  // composer's own paths; the message they send shows "By voice".
+  useLiveChatController({
+    reachable: liveChatReachable(chat.data),
+    chatId,
+    workspaceId: chatWorkspaceId ?? null,
+    isDraft: Boolean(draft),
+    title: liveOpenChatTitle,
+    messages,
+    busy: isGenerating || isStartingGeneration || Boolean(visibleDetachedProjection),
+    steerAvailable: !draft && !observedRunVisible && canSteerQueued,
+    queueAvailable: !draft,
+    hasQueued: queuedState.messages.length > 0,
+    queuePaused: queuedState.paused,
+    ready: ready && !imageArtifactRecoveryPending && !imageArtifactRecoveryUnavailable,
+    firstSending: draft?.sending === true,
+    waitingForApproval: approvals.length > 0,
+    send: (text) => {
+      setDeniedApprovalChatId(null);
+      return handleSend(text, [], undefined, { inputSource: "voice" });
+    },
+    queue: (text) => {
+      setDeniedApprovalChatId(null);
+      return queueMessage(text, [], undefined, { inputSource: "voice" });
+    },
+    steer: (text) => {
+      const streamId = generationRef.current?.streamId ?? steerableDetachedProjection?.streamId;
+      if (!streamId || isStoppingGeneration || stopRequestedRef.current) return Promise.resolve(null);
+      setDeniedApprovalChatId(null);
+      return admitSteer(streamId, text, "voice");
+    },
+    stop: () =>
+      stopForLive({
+        stop: handleStop,
+        pauseQueue: () => messageQueue.pause(),
+        markStopRequested: () => {
+          stopRequestedRef.current = true;
+        },
+      }),
+    showError: (message) => toast.error(message),
+  });
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
@@ -4113,6 +4176,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <DraftWorktreeSendView
             text={worktreeSend.text}
             attachments={worktreeSend.attachments}
+            inputSource={worktreeSend.inputSource}
             view={worktreeSend.view}
             onDecide={worktreeSend.decide}
           />

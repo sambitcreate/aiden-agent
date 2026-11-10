@@ -1,5 +1,6 @@
 import * as React from "react";
 import { LiveAudioSettings } from "./live-audio-settings";
+import { LiveChatAccessSettings } from "./live-chat-access-settings";
 import { AidenLiveVoiceAndLook } from "./aiden-live-voice-settings";
 import { useNavigate } from "@tanstack/react-router";
 import { settingsLocation } from "../../lib/settings-section";
@@ -193,6 +194,7 @@ export function AidenLiveSettings(): React.ReactElement {
 
         <LiveAudioSettings />
         <AidenLiveVoiceAndLook />
+        <LiveChatAccessSettings />
 
         <FieldSet title="Actions">
           <Field
