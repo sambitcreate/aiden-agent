@@ -131,6 +131,105 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNil(route(.newChat, instanceId: "studio"))
     }
 
+    func testAChatOpenedOnATabStaysOnThatTab() {
+        let navigation = AidenAppNavigation()
+        navigation.tab = .workspaces
+
+        navigation.open(.chat(id("c1")), on: .workspaces)
+
+        XCTAssertEqual(navigation.tab, .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [.chat(id("c1"))])
+        XCTAssertEqual(navigation.inboxPath, [])
+    }
+
+    func testABotChatLeavesItsChatRouteForTheBotsTab() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.settings)
+        navigation.open(.chat(id("c1")))
+
+        navigation.replace(.chat(id("c1")), with: .bot(id("b1")))
+
+        XCTAssertEqual(navigation.tab, .bots)
+        XCTAssertEqual(navigation.inboxPath, [.settings])
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b1"))])
+    }
+
+    /// Two screens of one chat would each hold a model and a draft of their own.
+    func testAChatOpenOnAnotherTabIsGoneBackTo() {
+        let navigation = AidenAppNavigation()
+        let chat = AidenAppRoute.chat(id("chat_1"))
+        navigation.open(.workspace(id("workspace_app")))
+        navigation.open(chat, on: .workspaces)
+        navigation.open(.settings)
+
+        navigation.open(chat)
+
+        XCTAssertEqual(navigation.tab, .workspaces)
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("workspace_app")), chat])
+        XCTAssertEqual(navigation.inboxPath, [.settings], "A second screen of the chat opened on the Inbox")
+    }
+
+    func testAChatOpenOnItsOwnTabIsNotOpenedAgainFromAnother() {
+        let navigation = AidenAppNavigation()
+        let chat = AidenAppRoute.chat(id("chat_1"))
+        navigation.open(chat)
+        navigation.tab = .workspaces
+
+        navigation.open(chat, on: .workspaces)
+
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.inboxPath, [chat])
+        XCTAssertEqual(navigation.workspacesPath, [])
+    }
+
+    func testAMachineChangeClosesThePagesThatReadTheOldMachine() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.settings)
+        navigation.open(.usage)
+        let chat = AidenAppRoute.chat(id("chat_1"))
+        navigation.open(chat, on: .workspaces)
+
+        navigation.leaveSelectedMachineRoutes()
+
+        XCTAssertEqual(navigation.inboxPath, [.settings], "Usage stayed open on the wrong machine")
+        XCTAssertEqual(navigation.workspacesPath, [chat], "A chat belongs to its own machine")
+
+        navigation.open(.scheduled)
+        navigation.leaveSelectedMachineRoutes()
+        XCTAssertEqual(navigation.inboxPath, [.settings])
+    }
+
+    func testAVoiceLinkStartsTheMicOnceAndOnlyOnItsChat() {
+        let navigation = AidenAppNavigation()
+        let voice = id("chat_voice")
+
+        navigation.open(.chat(voice), startsVoice: true)
+        XCTAssertEqual(navigation.chatStartingVoice, voice)
+
+        navigation.finishStartingVoice(id("chat_other"))
+        XCTAssertEqual(navigation.chatStartingVoice, voice, "Another chat closing ended the voice start")
+
+        navigation.finishStartingVoice(voice)
+        XCTAssertNil(navigation.chatStartingVoice)
+
+        navigation.open(.chat(voice), startsVoice: true)
+        navigation.open(.chat(id("chat_other")))
+        XCTAssertNil(navigation.chatStartingVoice, "A voice start outlived the link that asked for it")
+    }
+
+    func testLeavingARouteDropsItAndWhatSitsOnIt() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.workspace(id("w1")))
+        navigation.open(.chat(id("c1")), on: .workspaces)
+        navigation.open(.scheduled)
+
+        navigation.leave(.workspace(id("w1")))
+        navigation.leave(.usage)
+
+        XCTAssertEqual(navigation.workspacesPath, [])
+        XCTAssertEqual(navigation.inboxPath, [.scheduled])
+    }
+
     // MARK: Restoration
 
     func testNavigationRoundTripsThroughTheStore() {
@@ -331,7 +430,557 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(AidenChatDetailView.owner(nil, coordinator: coordinator).instanceId, "studio")
     }
 
+    func testABotChatOnAChatRouteAsksForItsBotRoute() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        responder.reply(instanceId: "studio", path: "/chats/chat_bot", status: 200, json: try botChatJSON())
+        let model = AidenChatRouteModel(id: id("chat_bot"), cache: temporaryCache())
+
+        await model.load(coordinator: coordinator)
+
+        guard case .botChat(let route) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(route, id("bot_scout"))
+    }
+
+    func testABotChatOnAMachineWithoutBotsExplainsItself() async throws {
+        let responder = AidenDemoResponder()
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.deviceCapabilities = installation.deviceCapabilities.filter { $0 != .botRead && $0 != .botWrite }
+        installation.serverCapabilities = installation.serverCapabilities?.filter { $0 != .botRead && $0 != .botWrite }
+        let coordinator = AidenDemoHosts.coordinator(installations: [installation], responder: responder)
+        await coordinator.start()
+        responder.reply(instanceId: "studio", path: "/chats/chat_bot", status: 200, json: try botChatJSON())
+        let model = AidenChatRouteModel(id: id("chat_bot"), cache: temporaryCache())
+
+        await model.load(coordinator: coordinator)
+
+        guard case .unavailable = model.state else { return XCTFail("\(model.state)") }
+    }
+
+    func testAChatRouteOpensFromItsCreateReceiptWithoutAskingTheMachine() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let owner = try coordinator.ownerContext(for: "studio")
+        let receipt = try await coordinator.remoteClient(for: owner).chat(id: "chat_studio_1")
+        let asked = responder.requests(instanceId: "studio").count
+        let model = AidenChatRouteModel(id: id("chat_studio_1"), cache: temporaryCache(), receipt: receipt)
+
+        await model.load(coordinator: coordinator)
+
+        guard case .ready(let chat, _) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(chat.id, "chat_studio_1")
+        XCTAssertEqual(responder.requests(instanceId: "studio").count, asked)
+    }
+
+    // MARK: Bot routes
+
+    private func botChatJSON(chatId: String = "chat_bot", botId: String = "bot_scout") throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "id": chatId,
+            "workspaceId": "workspace_app",
+            "botId": botId,
+            "title": "Scout",
+            "messages": [[String: Any]](),
+            "createdAt": "2026-11-01T10:00:00.000Z",
+            "updatedAt": "2026-11-01T10:00:00.000Z",
+            "revision": "chat_revision_1",
+        ] as [String: Any])
+    }
+
+    private func conversationsJSON(chatId: String? = "chat_bot") throws -> Data {
+        let rows: [[String: Any]] = chatId.map { [[
+            "chatId": $0,
+            "botId": "bot_scout",
+            "title": "Scout",
+            "activityState": "idle",
+            "canRespondToApproval": false,
+            "createdAt": "2026-11-01T10:00:00.000Z",
+            "updatedAt": "2026-11-01T10:00:00.000Z",
+            "revision": "chat_revision_1",
+        ]] } ?? []
+        return try JSONSerialization.data(withJSONObject: ["conversations": rows])
+    }
+
+    /// A paired machine from before durable Bot sessions.
+    private func olderBotMachine(responder: AidenDemoResponder) async throws -> AidenRemoteCoordinator {
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.serverFeatures = installation.serverFeatures.filter { $0 != "bot-durable-session-v1" }
+        let coordinator = AidenDemoHosts.coordinator(installations: [installation], responder: responder)
+        await coordinator.start()
+        return coordinator
+    }
+
+    private func botRouteModel(_ route: AidenHostObjectID) -> AidenBotRouteModel {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AidenAppShellTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return AidenBotRouteModel(id: route, chatCache: temporaryCache(), botCache: AidenBotCache(root: root))
+    }
+
+    func testABotRouteOpensTheDurableSessionOfTheSelectedMachine() async {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let model = botRouteModel(id("bot_scout"))
+
+        await model.load(coordinator: coordinator)
+
+        XCTAssertEqual(model.state, .session)
+    }
+
+    /// The Bot chat is bound to the selection, so it must not open for anywhere else.
+    func testABotRouteOnAnotherMachineShowsCopyAndAsksNobody() async {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        await coordinator.start()
+        let route = id("bot_scout", on: "laptop")
+        let model = botRouteModel(route)
+        let asked = responder.requests(instanceId: "laptop").count
+
+        await model.load(coordinator: coordinator)
+
+        guard case .unavailable(let message) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertTrue(message.contains("Laptop"), message)
+        XCTAssertFalse(AidenBotRouteModel.isOnSelectedMachine(route, coordinator: coordinator))
+        XCTAssertEqual(responder.requests(instanceId: "laptop").count, asked)
+        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+    }
+
+    func testABotRouteFromAnOlderPairingStaysClosed() async {
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: AidenDemoResponder())
+        await coordinator.start()
+        let route = id("bot_scout", device: "older-device")
+        let model = botRouteModel(route)
+
+        await model.load(coordinator: coordinator)
+
+        guard case .unavailable = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertFalse(AidenBotRouteModel.isOnSelectedMachine(route, coordinator: coordinator))
+    }
+
+    /// A Bot chat through a chat route used to open read-only.
+    func testABotChatOnAnOlderMachineOpensAndCanSend() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        responder.reply(instanceId: "studio", path: "/bot-conversations", status: 200, json: try conversationsJSON())
+        responder.reply(instanceId: "studio", path: "/chats/chat_bot", status: 200, json: try botChatJSON())
+        let model = botRouteModel(id("bot_scout"))
+
+        await model.load(coordinator: coordinator)
+
+        guard case .chat(let chat, let allowsMutations) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(chat.id, "chat_bot")
+        XCTAssertTrue(allowsMutations)
+    }
+
+    /// A Bot whose newest chat is on this phone, and a model to open it with.
+    private func savedBotChat() async throws -> AidenBotRouteModel {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "AidenAppShellTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let botCache = AidenBotCache(root: root)
+        let activation = await botCache.activate(instanceId: "studio", deviceId: "demo-device")
+        let conversations = try AidenRemoteJSONDecoder.decode(AidenBotConversationPage.self, from: try conversationsJSON())
+        let stored = try await botCache.store(AidenBotCacheSnapshot(conversations: conversations), activation: activation)
+        XCTAssertTrue(stored)
+        let chatCache = temporaryCache()
+        let chat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: try botChatJSON())
+        let saved = try await chatCache.saveChat(chat, instanceId: "studio", writeToken: chatCache.reserveChatWrite())
+        XCTAssertTrue(saved)
+        return AidenBotRouteModel(id: id("bot_scout"), chatCache: chatCache, botCache: botCache)
+    }
+
+    func testASavedBotChatShowsAtOnceButSendingWaitsForTheLiveCheck() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let release = responder.hold(instanceId: "studio", path: "/bots/bot_scout")
+        let model = try await savedBotChat()
+
+        let load = Task { await model.load(coordinator: coordinator) }
+        let deadline = Date().addingTimeInterval(10)
+        while model.state == .loading, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+
+        guard case .chat(let saved, let allowsMutations) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(saved.id, "chat_bot")
+        XCTAssertFalse(allowsMutations, "Saved words granted sending with the live check out")
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /chats/chat_bot"), "The saved chat was read again")
+
+        release()
+        await load.value
+        guard case .chat(_, let live) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertTrue(live)
+    }
+
+    func testASavedBotChatOnAnOfflineMachineStaysReadOnly() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        await coordinator.connectActiveInstallation()
+        let model = try await savedBotChat()
+
+        await model.load(coordinator: coordinator)
+
+        guard case .chat(let saved, let allowsMutations) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(saved.id, "chat_bot")
+        XCTAssertFalse(allowsMutations)
+    }
+
+    func testARetryAfterAnUnclearFailureReusesItsKey() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let starter = AidenBotChatStarter(cache: temporaryCache())
+        responder.fail(instanceId: "studio", path: "/bots/bot_scout/chats", code: .timedOut)
+
+        let first = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(first)
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 201, json: try botChatJSON())
+        let second = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertTrue(second)
+        let third = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertTrue(third)
+
+        let keys = responder.idempotencyKeys(instanceId: "studio")
+        XCTAssertEqual(keys.count, 3)
+        XCTAssertEqual(keys[0], keys[1], "The machine may have made the chat, so the retry must name it")
+        XCTAssertNotEqual(keys[1], keys[2], "A chat that was made doesn't hold the key")
+    }
+
+    func testARetryAfterAClearRefusalGetsANewKey() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let starter = AidenBotChatStarter(cache: temporaryCache())
+        let refusal = Data("""
+        {"error":{"code":"invalid_request","message":"No.","requestId":"request-400","retryable":false}}
+        """.utf8)
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 400, json: refusal)
+
+        let first = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(first)
+        XCTAssertNotNil(coordinator.presentedError)
+        let second = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(second)
+
+        let keys = responder.idempotencyKeys(instanceId: "studio")
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertNotEqual(keys[0], keys[1])
+    }
+
+    func testAMachineChangeDropsTheKeptKey() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let starter = AidenBotChatStarter(cache: temporaryCache())
+        responder.fail(instanceId: "studio", path: "/bots/bot_scout/chats", code: .timedOut)
+
+        _ = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        starter.forgetAttempt()
+        _ = await starter.start(botID: "bot_scout", coordinator: coordinator)
+
+        let keys = responder.idempotencyKeys(instanceId: "studio")
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertNotEqual(keys[0], keys[1])
+    }
+
+    func testABotChatStaysReadOnlyWhenThisPhoneCannotWrite() async throws {
+        let responder = AidenDemoResponder()
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.serverFeatures = installation.serverFeatures.filter { $0 != "bot-durable-session-v1" }
+        installation.deviceCapabilities = installation.deviceCapabilities.filter { $0 != .botWrite }
+        let coordinator = AidenDemoHosts.coordinator(installations: [installation], responder: responder)
+        await coordinator.start()
+        responder.reply(instanceId: "studio", path: "/bot-conversations", status: 200, json: try conversationsJSON())
+        responder.reply(instanceId: "studio", path: "/chats/chat_bot", status: 200, json: try botChatJSON())
+        let model = botRouteModel(id("bot_scout"))
+
+        await model.load(coordinator: coordinator)
+
+        guard case .chat(_, let allowsMutations) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertFalse(allowsMutations)
+    }
+
+    /// A route never creates anything: a Bot with no chat says so.
+    func testABotWithNoChatYetExplainsItselfAndCreatesNothing() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        responder.reply(instanceId: "studio", path: "/bot-conversations", status: 200, json: try conversationsJSON(chatId: nil))
+        let model = botRouteModel(id("bot_scout"))
+
+        await model.load(coordinator: coordinator)
+
+        guard case .unavailable(let message) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertTrue(message.contains("Scout"), message)
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains { $0.hasPrefix("POST") })
+    }
+
+    func testAnOfflineBotRouteWithNothingSavedExplainsItself() async throws {
+        let responder = AidenDemoResponder()
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.serverFeatures = installation.serverFeatures.filter { $0 != "bot-durable-session-v1" }
+        let coordinator = AidenDemoHosts.coordinator(installations: [installation], responder: responder)
+        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        await coordinator.start()
+        let model = botRouteModel(id("bot_scout"))
+
+        await model.load(coordinator: coordinator)
+
+        guard case .unavailable(let message) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertFalse(message.contains("Mac"), message)
+    }
+
+    // MARK: Workspace routes
+
+    /// Two machines can both have a workspace with one ID. The route must not show
+    /// the selected machine's for the other's.
+    func testAWorkspaceRouteOnlyFindsItsWorkspaceOnTheSelectedMachine() async {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: AidenDemoResponder())
+        await coordinator.start()
+
+        XCTAssertEqual(
+            AidenWorkspaceRoute.workspace(for: id("workspace_app"), coordinator: coordinator)?.name,
+            "Aiden Agent"
+        )
+        XCTAssertNil(AidenWorkspaceRoute.workspace(for: id("workspace_app", on: "laptop"), coordinator: coordinator))
+        XCTAssertNil(AidenWorkspaceRoute.workspace(for: id("workspace_app", device: "older-device"), coordinator: coordinator))
+    }
+
+    func testAWorkspaceRouteDoesNotOpenAHiddenOrArchivedWorkspace() async {
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: AidenDemoResponder())
+        await coordinator.start()
+
+        XCTAssertNil(AidenWorkspaceRoute.workspace(for: id("default"), coordinator: coordinator), "A hidden home has no page")
+
+        coordinator.workspaceArchiveStore.archive(workspaceID: "workspace_app", instanceID: "studio")
+        XCTAssertNil(AidenWorkspaceRoute.workspace(for: id("workspace_app"), coordinator: coordinator))
+    }
+
+    // MARK: New chat
+
+    private func newChatJSON(id chatId: String = "chat_new", botId: String? = nil, workspaceId: String = "workspace_app") throws -> Data {
+        var object: [String: Any] = [
+            "id": chatId,
+            "workspaceId": workspaceId,
+            "title": "New chat",
+            "messages": [[String: Any]](),
+            "createdAt": "2026-11-01T10:00:00.000Z",
+            "updatedAt": "2026-11-01T10:00:00.000Z",
+            "revision": "chat_revision_1",
+        ]
+        if let botId { object["botId"] = botId }
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func flow(
+        _ coordinator: AidenRemoteCoordinator,
+        home: AidenHomeModel,
+        wait: Duration = .seconds(30),
+        opened: @escaping @MainActor (AidenHostObjectID) -> Void = { _ in }
+    ) -> AidenNewChatFlow {
+        AidenNewChatFlow(
+            coordinator: coordinator,
+            home: { home },
+            reload: { await home.load(coordinator: coordinator) },
+            readinessWait: wait,
+            onOpen: opened
+        )
+    }
+
+    private func workspace(_ id: String, in coordinator: AidenRemoteCoordinator) throws -> AidenWorkspace {
+        try XCTUnwrap(coordinator.workspaces.first { $0.id == id })
+    }
+
+    func testANewChatOpensOnItsOwnMachineFromTheReceipt() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        await home.load(coordinator: coordinator)
+        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
+        var opened: [AidenHostObjectID] = []
+        let flow = flow(coordinator, home: home) { opened.append($0) }
+
+        await flow.create(in: try workspace("workspace_app", in: coordinator))
+
+        XCTAssertEqual(opened, [id("chat_new")])
+        XCTAssertEqual(flow.receipt(for: id("chat_new"))?.id, "chat_new")
+        XCTAssertNil(flow.receipt(for: id("chat_new", on: "laptop")))
+        XCTAssertTrue(home.chats.contains { $0.id == "chat_new" }, "The Inbox does not list it")
+        XCTAssertFalse(flow.isCreating)
+    }
+
+    /// A receipt is the chat as it was made. Reopened later, it would hide what
+    /// has happened to the chat since.
+    func testANewChatForgetsItsReceiptWhenItsScreenCloses() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        await home.load(coordinator: coordinator)
+        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
+        let flow = flow(coordinator, home: home)
+        await flow.create(in: try workspace("workspace_app", in: coordinator))
+
+        flow.forgetReceipt(id("chat_other"))
+        XCTAssertNotNil(flow.receipt(for: id("chat_new")), "Another chat's screen took this chat's receipt")
+
+        flow.forgetReceipt(id("chat_new"))
+        XCTAssertNil(flow.receipt(for: id("chat_new")))
+    }
+
+    func testANewChatTappedWhileConnectingWaitsForTheMachine() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
+        let target = try AidenRemoteJSONDecoder.decode(AidenWorkspace.self, from: Data("""
+        {"id":"workspace_app","name":"Aiden Agent","permission":"ask","memoryEnabled":true,"hasFolder":true,
+        "isManagedWorktree":false,"createdAt":"2026-11-05T09:00:00.000Z","updatedAt":"2026-11-05T09:00:00.000Z",
+        "revision":"workspace_revision_7"}
+        """.utf8))
+        let release = responder.hold(instanceId: "studio", path: "/workspaces")
+        let start = Task { await coordinator.start() }
+        while coordinator.connectionState != .connecting { await Task.yield() }
+        let home = AidenHomeModel()
+        var opened: [AidenHostObjectID] = []
+        let flow = flow(coordinator, home: home) { opened.append($0) }
+        XCTAssertFalse(flow.isUnavailable, "Compose stays usable while the machine connects")
+
+        let creating = Task { await flow.create(in: target) }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(flow.status, "Waiting for your machine…")
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("POST /chats"), "It sent before the machine was ready")
+        release()
+        await start.value
+        await home.load(coordinator: coordinator)
+
+        await creating.value
+        XCTAssertTrue(responder.requests(instanceId: "studio").contains("POST /chats"), "The wait ended and no chat was made")
+        XCTAssertEqual(opened, [id("chat_new")])
+        XCTAssertEqual(flow.status, "")
+    }
+
+    func testANewChatStopsWaitingAtTheDeadlineAndSendsNothing() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        let release = responder.hold(instanceId: "studio", path: "/chat-summaries")
+        defer { release() }
+        let load = Task { await home.load(coordinator: coordinator) }
+        defer { load.cancel() }
+        while home.chatListLoadState != .loading { await Task.yield() }
+        var opened: [AidenHostObjectID] = []
+        let flow = flow(coordinator, home: home, wait: .milliseconds(400)) { opened.append($0) }
+
+        await flow.create(in: try workspace("workspace_app", in: coordinator))
+
+        XCTAssertEqual(opened, [])
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("POST /chats"))
+        XCTAssertNotNil(coordinator.presentedError)
+    }
+
+    func testANewChatOnAnOfflineMachineSaysSoInMachineCopy() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        await home.load(coordinator: coordinator)
+        let workspace = try workspace("workspace_app", in: coordinator)
+        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
+        await coordinator.refreshWorkspaces()
+        guard case .offline = coordinator.connectionState else {
+            return XCTFail("\(coordinator.connectionState)")
+        }
+        let flow = flow(coordinator, home: home)
+        XCTAssertTrue(flow.isUnavailable)
+
+        await flow.create(in: workspace)
+
+        let message = try XCTUnwrap(coordinator.presentedError)
+        XCTAssertTrue(message.contains("machine"), message)
+        XCTAssertFalse(message.contains("Mac"), message)
+    }
+
+    func testANewWorkspaceIsMadeBeforeItsChat() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        await home.load(coordinator: coordinator)
+        responder.reply(
+            instanceId: "studio",
+            method: "POST",
+            path: "/workspaces",
+            status: 201,
+            json: try JSONSerialization.data(withJSONObject: [
+                "id": "workspace_made", "name": "Made", "permission": "ask", "memoryEnabled": true,
+                "hasFolder": false, "isManagedWorktree": false,
+                "createdAt": "2026-11-01T10:00:00.000Z", "updatedAt": "2026-11-01T10:00:00.000Z",
+                "revision": "workspace_revision_9",
+            ] as [String: Any])
+        )
+        responder.reply(
+            instanceId: "studio",
+            method: "POST",
+            path: "/chats",
+            status: 201,
+            json: try newChatJSON(workspaceId: "workspace_made")
+        )
+        var opened: [AidenHostObjectID] = []
+        let flow = flow(coordinator, home: home) { opened.append($0) }
+
+        await flow.create(inNewWorkspaceNamed: "Made")
+
+        let posts = responder.requests(instanceId: "studio").filter { $0.hasPrefix("POST") }
+        XCTAssertEqual(posts, ["POST /workspaces", "POST /chats"])
+        XCTAssertEqual(opened, [id("chat_new")])
+    }
+
+    func testANewChatThatComesBackAsABotChatDoesNotOpen() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        await home.load(coordinator: coordinator)
+        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON(botId: "bot_scout"))
+        var opened: [AidenHostObjectID] = []
+        let flow = flow(coordinator, home: home) { opened.append($0) }
+
+        await flow.create(in: try workspace("workspace_app", in: coordinator))
+
+        XCTAssertEqual(opened, [])
+        XCTAssertNotNil(coordinator.presentedError)
+    }
+
+    func testTheChoicesLeaveOutArchivedWorkspaces() async throws {
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: AidenDemoResponder())
+        await coordinator.start()
+        let flow = flow(coordinator, home: AidenHomeModel())
+        XCTAssertEqual(flow.existingWorkspaces.map { $0.id }, ["workspace_app", "workspace_notes"])
+
+        coordinator.workspaceArchiveStore.archive(workspaceID: "workspace_app", instanceID: "studio")
+
+        XCTAssertEqual(flow.existingWorkspaces.map { $0.id }, ["workspace_notes"])
+    }
+
     // MARK: Bots
+
+    /// Nothing will ever answer, so a skeleton here would never end.
+    func testUsageOnAMachineThatKeepsItToItselfSaysSo() async throws {
+        let responder = AidenDemoResponder()
+        var installation = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        installation.deviceCapabilities = installation.deviceCapabilities.filter { $0 != .serverRead }
+        installation.serverCapabilities = installation.serverCapabilities?.filter { $0 != .serverRead }
+        let coordinator = AidenDemoHosts.coordinator(installations: [installation], responder: responder)
+        await coordinator.start()
+        let model = AidenMachineUsageModel(coordinator: coordinator)
+
+        await model.load()
+
+        XCTAssertFalse(model.sharesUsage)
+        XCTAssertNil(model.usage)
+        XCTAssertFalse(model.loadFailed)
+        XCTAssertFalse(responder.requests(instanceId: "studio").contains("GET /usage"))
+    }
 
     func testEveryUnavailableBotsStateExplainsItselfInTabCopy() {
         for state: AidenBotsAvailability in [.mobileDisabled, .unsupported, .notGranted] {

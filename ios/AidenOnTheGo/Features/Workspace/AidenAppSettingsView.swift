@@ -5,7 +5,10 @@ struct AidenAppSettingsView: View {
     @Environment(AidenHapticCenter.self) private var haptics
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
-    let addInstallation: () -> Void
+    /// For the installations sheet, which the tab shell has no use for: Machines pairs there.
+    var addInstallation: () -> Void = {}
+    /// True when a stack has pushed this page, so Back replaces Done.
+    var isPushed = false
     var tabShellEnabled = AppConfig.tabShellEnabled
 
     @State private var isShowingInstallations = false
@@ -68,7 +71,7 @@ struct AidenAppSettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        AidenPresentedStack(isPushed: isPushed) {
             Form {
                 Section("Aiden Agent") {
                     LabeledContent(
@@ -76,13 +79,7 @@ struct AidenAppSettingsView: View {
                         value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
                     )
                     if tabShellEnabled {
-                        NavigationLink {
-                            AidenMachinesView(
-                                coordinator: coordinator,
-                                preferences: .shared,
-                                addMachine: addInstallation
-                            )
-                        } label: {
+                        NavigationLink(value: AidenAppRoute.machines) {
                             LabeledContent {
                                 Text(machinesSummary)
                             } label: {
@@ -198,8 +195,10 @@ struct AidenAppSettingsView: View {
             .navigationTitle("App Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !isPushed {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }

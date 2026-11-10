@@ -38,6 +38,8 @@ struct AidenInboxTabView: View {
     var onRetry: () -> Void = {}
     var onShowAllEarlier: () -> Void = {}
     var onLoadMore: () -> Void = {}
+    /// The shell's, so a deleted chat's screen closes. Without one, Delete is a row action.
+    var onDelete: ((AidenHostObjectID) -> Void)? = nil
     var onReconnect: (String) -> Void = { _ in }
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
@@ -95,7 +97,9 @@ struct AidenInboxTabView: View {
             titleVisibility: .visible,
             presenting: deleteCandidate
         ) { id in
-            Button("Delete chat", role: .destructive) { onAction(.delete, id) }
+            Button("Delete chat", role: .destructive) {
+                if let onDelete { onDelete(id) } else { onAction(.delete, id) }
+            }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("This permanently removes the chat from its machine.")
@@ -143,6 +147,11 @@ struct AidenInboxTabView: View {
                 open: { onOpen(row.route) }
             )
             .contextMenu { contextMenu(for: row, actions: actions) }
+            .accessibilityActions {
+                if row.isOnline {
+                    Button("Delete chat") { deleteCandidate = row.id }
+                }
+            }
         case .bot(let bot):
             // No Bot triage exists, so a Bot row has no swipes and no menu.
             Button { onOpen(row.route) } label: {
@@ -174,6 +183,7 @@ struct AidenInboxTabView: View {
             Button(actions.snoozeLabel, systemImage: "clock", action: wake)
         }
         Button("Delete", systemImage: "trash", role: .destructive) { deleteCandidate = row.id }
+            .disabled(!row.isOnline)
     }
 
     private var runningRow: some View {
@@ -370,6 +380,7 @@ struct AidenInboxTabRootView: View {
     let store: AidenUnifiedInboxStore
     var runningHome = AidenRunningHome.accessory
     let onOpen: (AidenAppRoute) -> Void
+    var onDelete: ((AidenHostObjectID) -> Void)? = nil
     var onOpenMachines: () -> Void = {}
     var onCatchUp: () -> Void = {}
     var onShowRunning: () -> Void = {}
@@ -397,6 +408,7 @@ struct AidenInboxTabRootView: View {
             onRetry: { Task { await store.retry() } },
             onShowAllEarlier: { store.showsAllEarlier = true },
             onLoadMore: { Task { await store.loadMoreChats() } },
+            onDelete: onDelete,
             onReconnect: { store.reconnect($0) },
             onCatchUp: onCatchUp,
             onShowRunning: onShowRunning

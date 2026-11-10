@@ -284,6 +284,8 @@ struct AidenForkableChatDetailView: View {
             onChatActivityChanged: onChatActivityChanged,
             onForkOpened: onForkOpened
         )
+        // The composer owns the bottom edge, whichever list pushed this chat.
+        .toolbar(.hidden, for: .tabBar)
     }
 }
 

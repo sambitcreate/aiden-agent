@@ -87,6 +87,7 @@ final class AidenDemoResponder: @unchecked Sendable {
     private var outcomes: [Route: Outcome] = [:]
     private var holds: [HoldKey: Hold] = [:]
     private var log: [String: [String]] = [:]
+    private var keyLog: [String: [String]] = [:]
     private let token = UUID().uuidString
 
     /// Pass this to clients. Its requests never leave the process.
@@ -165,6 +166,13 @@ final class AidenDemoResponder: @unchecked Sendable {
         return log[instanceId] ?? []
     }
 
+    /// Every `Idempotency-Key` the machine was sent, oldest first.
+    func idempotencyKeys(instanceId: String) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return keyLog[instanceId] ?? []
+    }
+
     fileprivate func handle(
         _ request: URLRequest,
         deliver: @escaping @Sendable (Result<(HTTPURLResponse, Data), URLError>) -> Void
@@ -179,6 +187,9 @@ final class AidenDemoResponder: @unchecked Sendable {
 
         lock.lock()
         log[instanceId, default: []].append("\(method) \(path)")
+        if let key = request.value(forHTTPHeaderField: "Idempotency-Key") {
+            keyLog[instanceId, default: []].append(key)
+        }
         let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
         if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)], !hold.isReleased {
             hold.waiting.append { [self] in
@@ -556,6 +567,12 @@ enum AidenDemoHosts {
             patternStart: machine.patternStart,
             titleStart: machine.titleStart
         )
+        if AidenDemoRunOptions.connectsSlowly {
+            _ = responder.hold(instanceId: id, path: "/workspaces")
+        }
+        if AidenDemoRunOptions.hasNoWorkspaceChat, let chatId = rows.first?["id"] as? String {
+            responder.reply(instanceId: id, method: "DELETE", path: "/chats/\(chatId)", status: 204, json: Data())
+        }
         responder.reply(instanceId: id, path: "/server", status: 200, json: AidenDemoContent.serverJSON(for: installation))
         responder.reply(instanceId: id, path: "/workspaces", status: 200, json: AidenDemoContent.workspacesJSON())
         // Served for old hosts too, but only reached when a host advertises it.
@@ -574,8 +591,30 @@ enum AidenDemoHosts {
                 json: AidenDemoContent.chatJSON(row: row, index: index)
             )
         }
+        // Compose, and a fork of each chat.
+        responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
+        responder.reply(instanceId: id, path: "/chats/\(AidenDemoContent.newChatId)", status: 200, json: AidenDemoContent.newChatJSON())
+        for (index, row) in rows.enumerated() {
+            guard let chatId = row["id"] as? String else { continue }
+            let forkId = "\(chatId)_fork"
+            responder.reply(
+                instanceId: id,
+                method: "POST",
+                path: "/chats/\(chatId)/fork",
+                status: 201,
+                json: AidenDemoContent.forkResultJSON(row: row, index: index, forkId: forkId)
+            )
+            responder.reply(
+                instanceId: id,
+                path: "/chats/\(forkId)",
+                status: 200,
+                json: AidenDemoContent.forkChatJSON(row: row, index: index, forkId: forkId)
+            )
+        }
+        // An older Mac's chat list, and a workspace page's on every machine.
+        responder.reply(instanceId: id, path: "/chats", status: 200, json: AidenDemoContent.legacyChatsJSON(rows))
         if installation.serverCapabilities == nil {
-            responder.reply(instanceId: id, path: "/chats", status: 200, json: AidenDemoContent.legacyChatsJSON(rows))
+            // Nothing else: an older Mac has no Bots.
         } else if machine.hasBot {
             let botPath = "/bots/\(AidenDemoContent.botId)"
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
@@ -614,7 +653,7 @@ private enum AidenDemoContent {
         "chat-agent-interrupt-v1", "chat-read-state-v1", "bot-delete-v1",
         "bot-durable-session-v1", "bot-routines-v1", "bot-connection-requests-v1",
         "bot-presets-v1", "bot-memory-v1", "bot-proactive-v1", "speech-request-gzip-v1",
-        "chat-triage-v1",
+        "chat-triage-v1", "chat-fork-v1",
     ] + (AidenDemoLongChat.isRequested ? ["chat-messages-window-v1", "chat-messages-window-metadata-v1"] : [])
 
     private static let titles = [
@@ -716,6 +755,55 @@ private enum AidenDemoContent {
         ])
     }
 
+    static let newChatId = "chat_demo_new"
+
+    /// What `POST /chats` answers. Every new demo chat is this one.
+    static func newChatJSON() -> Data {
+        let now = timestamp(Date())
+        return data([
+            "id": newChatId,
+            "workspaceId": "workspace_app",
+            "title": "New chat",
+            "messages": [[String: Any]](),
+            "createdAt": now,
+            "updatedAt": now,
+            "revision": "chat_revision_new",
+        ])
+    }
+
+    private static func forkObject(row: [String: Any], index: Int, forkId: String) -> [String: Any] {
+        let updated = row["updatedAt"] as? String ?? timestamp(Date())
+        let created = row["createdAt"] as? String ?? updated
+        let title = row["title"] as? String ?? "Chat"
+        return [
+            "id": forkId,
+            "workspaceId": row["workspaceId"] as Any,
+            "title": "\(title) (fork)",
+            "messages": [
+                ["id": "message_\(index + 1)_user", "role": "user", "text": "\(title). Where do we stand?", "createdAt": created],
+                ["id": "message_\(index + 1)_assistant", "role": "assistant", "text": answers[index % answers.count], "createdAt": updated],
+            ],
+            "createdAt": updated,
+            "updatedAt": updated,
+            "revision": "chat_revision_fork_\(index + 1)",
+            "forkedFrom": [
+                "chatId": row["id"] as Any,
+                "messageId": "message_\(index + 1)_assistant",
+                "position": "after",
+                "at": updated,
+            ],
+        ]
+    }
+
+    static func forkChatJSON(row: [String: Any], index: Int, forkId: String) -> Data {
+        data(forkObject(row: row, index: index, forkId: forkId))
+    }
+
+    /// What `POST /chats/{id}/fork` answers for a fork of the latest reply.
+    static func forkResultJSON(row: [String: Any], index: Int, forkId: String) -> Data {
+        data(["chat": forkObject(row: row, index: index, forkId: forkId)])
+    }
+
     // MARK: Bot
 
     static let botId = "bot_scout"
@@ -811,6 +899,11 @@ private enum AidenDemoContent {
         ]])
     }
 
+    private static func workspaceId(ofRow index: Int) -> String {
+        if AidenDemoRunOptions.hasNoWorkspaceChat, index == 0 { return "default" }
+        return index % 3 == 2 ? "workspace_notes" : "workspace_app"
+    }
+
     /// Chat summaries, newest first. Row `n` takes pattern slot `patternStart + n`:
     /// needs approval, working, needs input, failed, unread, pinned, then read.
     static func rows(instanceId: String, count: Int, patternStart: Int, titleStart: Int = 0) -> [[String: Any]] {
@@ -820,7 +913,7 @@ private enum AidenDemoContent {
             let createdAt = updatedAt.addingTimeInterval(-30 * 60)
             var row: [String: Any] = [
                 "id": "chat_\(instanceId)_\(index + 1)",
-                "workspaceId": index % 3 == 2 ? "workspace_notes" : "workspace_app",
+                "workspaceId": workspaceId(ofRow: index),
                 "title": titles[(titleStart + index) % titles.count],
                 "titlePending": false,
                 "createdAt": timestamp(createdAt),
@@ -918,6 +1011,19 @@ enum AidenDemoStagedAttachment {
 /// A long chat on the studio machine, served a window at a time, for screens
 /// and UI tests that need Load earlier. Only with `-AidenDemoLongChat YES`, so
 /// no other launch sees it. Its newest replies carry fenced code.
+/// What a UI test can ask of a demo run beyond its scenario.
+enum AidenDemoRunOptions {
+    /// Every machine stays on connecting.
+    static var connectsSlowly: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoSlowConnect")
+    }
+
+    /// Each machine's first chat sits under No workspace, and can be deleted.
+    static var hasNoWorkspaceChat: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoNoWorkspaceChat")
+    }
+}
+
 enum AidenDemoLongChat {
     static let chatId = "chat_studio_8"
 

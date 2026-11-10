@@ -9,12 +9,14 @@ struct AidenUsagePendingView: View {
     let isOffline: Bool
     let failed: Bool
     let retry: () -> Void
+    /// True when a stack has pushed this page, so Back replaces Done.
+    var isPushed = false
     var unavailableMessage: LocalizedStringKey = "Usage appears once your Mac is reachable."
     var failedMessage: LocalizedStringKey = "Your Mac didn't return usage this time."
     var machinePicker: AidenNewWorkMachinePicker?
 
     var body: some View {
-        NavigationStack {
+        AidenPresentedStack(isPushed: isPushed) {
             Group {
                 if isOffline {
                     ContentUnavailableView(
@@ -56,8 +58,10 @@ struct AidenUsagePendingView: View {
             .navigationTitle("Usage")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !isPushed {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }
@@ -141,9 +145,12 @@ struct AidenMachineUsageView: View {
     }
 
     @State private var model: AidenMachineUsageModel
+    private let isPushed: Bool
 
-    init(coordinator: AidenRemoteCoordinator) {
+    /// `isPushed` is true when a stack has pushed this page, so Back replaces Done.
+    init(coordinator: AidenRemoteCoordinator, isPushed: Bool = false) {
         _model = State(initialValue: AidenMachineUsageModel(coordinator: coordinator))
+        self.isPushed = isPushed
     }
 
     var body: some View {
@@ -152,6 +159,7 @@ struct AidenMachineUsageView: View {
                 AidenUsageView(
                     usage: usage,
                     providers: model.providers,
+                    isPushed: isPushed,
                     machinePicker: AidenNewWorkMachinePicker(picker: model.picker)
                 )
             } else {
@@ -159,6 +167,7 @@ struct AidenMachineUsageView: View {
                     isOffline: model.isUnreachable || !model.sharesUsage,
                     failed: model.loadFailed,
                     retry: { Task { await model.load() } },
+                    isPushed: isPushed,
                     unavailableMessage: model.sharesUsage
                         ? "Usage appears once this machine is reachable."
                         : "This machine doesn’t share usage with this phone.",
@@ -178,6 +187,8 @@ struct AidenUsageView: View {
     @Environment(\.aidenPalette) private var palette
     let usage: AidenUsageSummary
     let providers: [AidenProvider]
+    /// True when a stack has pushed this page, so Back replaces Done.
+    var isPushed = false
     var machinePicker: AidenNewWorkMachinePicker?
 
     private var heatmapDays: [AidenUsageHeatmapDay] {
@@ -203,7 +214,7 @@ struct AidenUsageView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        AidenPresentedStack(isPushed: isPushed) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 28) {
                     machinePicker
@@ -223,8 +234,10 @@ struct AidenUsageView: View {
             .navigationTitle("Usage")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                if !isPushed {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
         }

@@ -59,7 +59,7 @@ private struct AidenProminentGlassButtonModifier: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func aidenLiquidGlassCapsule(tint: Color) -> some View {
         modifier(AidenLiquidGlassCapsuleModifier(tint: tint))
     }
@@ -100,7 +100,7 @@ struct AidenChatListSkeleton: View {
 }
 
 /// A quiet one-line connection status in place of a modal overlay.
-private struct AidenConnectingHint: View {
+struct AidenConnectingHint: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let installationName: String?

@@ -21,6 +21,9 @@
 		A2E000000000000000000001 /* AidenAppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000011 /* AidenAppNavigation.swift */; };
 		A2E000000000000000000002 /* AidenAppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000012 /* AidenAppShellView.swift */; };
 		A2E000000000000000000003 /* AidenAppShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000013 /* AidenAppShellTests.swift */; };
+		A2E000000000000000000004 /* AidenBotsTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000014 /* AidenBotsTabView.swift */; };
+		A2E000000000000000000005 /* AidenWorkspacesTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000015 /* AidenWorkspacesTabView.swift */; };
+		A2E000000000000000000006 /* AidenNewChatFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E000000000000000000016 /* AidenNewChatFlow.swift */; };
 		A4B240000000000000000002 /* AidenSearchTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B240000000000000000012 /* AidenSearchTabView.swift */; };
 		A4B240000000000000000001 /* AidenSearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B240000000000000000011 /* AidenSearchModel.swift */; };
 		A4B240000000000000000003 /* AidenSearchModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B240000000000000000013 /* AidenSearchModelTests.swift */; };
@@ -274,6 +277,9 @@
 		A2E000000000000000000011 /* AidenAppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppNavigation.swift; sourceTree = "<group>"; };
 		A2E000000000000000000012 /* AidenAppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppShellView.swift; sourceTree = "<group>"; };
 		A2E000000000000000000013 /* AidenAppShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAppShellTests.swift; sourceTree = "<group>"; };
+		A2E000000000000000000014 /* AidenBotsTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotsTabView.swift; sourceTree = "<group>"; };
+		A2E000000000000000000015 /* AidenWorkspacesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspacesTabView.swift; sourceTree = "<group>"; };
+		A2E000000000000000000016 /* AidenNewChatFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewChatFlow.swift; sourceTree = "<group>"; };
 		A4B240000000000000000012 /* AidenSearchTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSearchTabView.swift; sourceTree = "<group>"; };
 		A4B240000000000000000011 /* AidenSearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSearchModel.swift; sourceTree = "<group>"; };
 		A4B240000000000000000013 /* AidenSearchModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSearchModelTests.swift; sourceTree = "<group>"; };
@@ -799,6 +805,9 @@
 			children = (
 				A2E000000000000000000011 /* AidenAppNavigation.swift */,
 				A2E000000000000000000012 /* AidenAppShellView.swift */,
+				A2E000000000000000000014 /* AidenBotsTabView.swift */,
+				A2E000000000000000000015 /* AidenWorkspacesTabView.swift */,
+				A2E000000000000000000016 /* AidenNewChatFlow.swift */,
 				A4B240000000000000000012 /* AidenSearchTabView.swift */,
 				A0E100000000000000000055 /* AidenUnifiedInboxStore.swift */,
 				A2E0000000000000000000B3 /* AidenInboxTabView.swift */,
@@ -1305,6 +1314,9 @@
 				A0E200000000000000000007 /* AidenHostConnectScheduler.swift in Sources */,
 				A2E000000000000000000001 /* AidenAppNavigation.swift in Sources */,
 				A2E000000000000000000002 /* AidenAppShellView.swift in Sources */,
+				A2E000000000000000000004 /* AidenBotsTabView.swift in Sources */,
+				A2E000000000000000000005 /* AidenWorkspacesTabView.swift in Sources */,
+				A2E000000000000000000006 /* AidenNewChatFlow.swift in Sources */,
 				A4B240000000000000000002 /* AidenSearchTabView.swift in Sources */,
 				A0E200000000000000000001 /* AidenHostConnection.swift in Sources */,
 				A0E200000000000000000004 /* AidenHostRegistry.swift in Sources */,

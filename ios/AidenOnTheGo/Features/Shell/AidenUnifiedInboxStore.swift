@@ -1,6 +1,14 @@
 import Foundation
 import Observation
 
+enum AidenInboxDeletion: Equatable {
+    case deleted
+    /// The machine kept the chat, and a notice says so.
+    case failed
+    /// The pairing ended or the request was cancelled: there's nothing to report.
+    case abandoned
+}
+
 /// Every paired machine's chats in one Inbox (spec, "Feed"). Phones get no
 /// list-level live feed, so this polls each machine while the app is in the
 /// foreground, and only then. `start()` and `stop()` follow the scene.
@@ -168,6 +176,44 @@ final class AidenUnifiedInboxStore {
         case .snooze(let option): await triage(.snooze(until: option.until))
         case .wake: await triage(.wake)
         case .delete: await delete(id)
+        }
+    }
+
+    /// The row goes at once. If the machine doesn't take the delete it comes back
+    /// where it was, and a notice says so.
+    @discardableResult
+    func delete(_ id: AidenHostObjectID) async -> AidenInboxDeletion {
+        guard let (model, connection) = owner(of: id), let context = try? connection.homeContext(),
+              let index = model.chats.firstIndex(where: { $0.id == id.objectId }) else { return .abandoned }
+        let connectBefore = connection.connectionGeneration
+        let row = model.chats[index]
+        machines.values.forEach { $0.model.inboxNotice = nil }
+        model.removeChat(id: id.objectId)
+        do {
+            let client = try connection.homeClient(for: context)
+            // The machine wants the chat's current revision, and a row can be behind.
+            let current = try await client.chat(id: id.objectId)
+            guard connection.holdsHomeContext(context) else { return .abandoned }
+            try await client.removeChat(id: id.objectId, revision: current.revision)
+            guard connection.holdsHomeContext(context) else { return .abandoned }
+            await cache.removeChat(instanceId: id.instanceId, chatId: id.objectId)
+            await drafts.remove(instanceId: id.instanceId, chatId: id.objectId)
+            // The machine lets the chat's hidden folder go with it. The chat is gone either way.
+            try? await connection.refreshWorkspacesForPoll()
+            return .deleted
+        } catch {
+            if (error as? AidenRemoteClientError)?.isCredentialRevoked == true {
+                // Its rows go with it, so there's nothing to bring back.
+                _ = await connection.handlePollError(error, sinceConnect: connectBefore)
+                return .abandoned
+            }
+            guard connection.holdsHomeContext(context) else { return .abandoned }
+            model.restoreChat(row, at: index)
+            guard !aidenIsCancellation(error) else { return .abandoned }
+            model.inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t delete that chat. It’s back where it was."))
+            // The answer may be what was lost, with the chat gone after all.
+            _ = await model.pollChats(host: connection, walkingPages: false, now: now())
+            return .failed
         }
     }
 
@@ -645,38 +691,6 @@ extension AidenUnifiedInboxStore {
             cache: coordinator.chatCache,
             clock: ContinuousClock()
         )
-    }
-
-    /// The row goes at once. If the machine doesn't take the delete it comes back.
-    func delete(_ id: AidenHostObjectID) async {
-        guard let (model, connection) = owner(of: id), let context = try? connection.homeContext(),
-              let index = model.chats.firstIndex(where: { $0.id == id.objectId }) else { return }
-        let row = model.chats[index]
-        model.removeChat(id: id.objectId)
-        do {
-            let client = try connection.homeClient(for: context)
-            // The machine wants the chat's current revision, and a row can be behind.
-            let current = try await client.chat(id: id.objectId)
-            guard connection.holdsHomeContext(context) else { return }
-            try await client.removeChat(id: id.objectId, revision: current.revision)
-            guard connection.holdsHomeContext(context) else { return }
-            await cache.removeChat(instanceId: id.instanceId, chatId: id.objectId)
-            await drafts.remove(instanceId: id.instanceId, chatId: id.objectId)
-            // The machine lets the chat's hidden folder go with it.
-            try? await connection.refreshWorkspacesForPoll()
-        } catch {
-            guard connection.holdsHomeContext(context) else { return }
-            if (error as? AidenRemoteClientError)?.isCredentialRevoked == true {
-                // Its rows go with it, so there's nothing to bring back.
-                _ = await connection.handlePollError(error, sinceConnect: connection.connectionGeneration)
-                return
-            }
-            model.restoreChat(row, at: index)
-            guard !aidenIsCancellation(error) else { return }
-            model.inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t delete that chat. It’s back where it was."))
-            // The answer may be what was lost, with the chat gone after all.
-            _ = await model.pollChats(host: connection, walkingPages: false, now: now())
-        }
     }
 }
 

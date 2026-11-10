@@ -283,31 +283,68 @@ final class AidenAppNavigation {
 
     /// The chat on screen: the top of the tab that's showing.
     var openChat: AidenHostObjectID? {
-        let path = switch tab {
-        case .inbox: inboxPath
-        case .bots: botsPath
-        case .workspaces: workspacesPath
-        case .search: [AidenAppRoute]()
-        }
-        guard case .chat(let id)? = path.last else { return nil }
+        guard case .chat(let id)? = path(of: tab).last else { return nil }
         return id
     }
 
-    /// Selects the route's tab and shows the route there. A route already on
-    /// that path is gone back to, so one chat never has two screens.
-    /// `startsVoice` is a voice intent's: the chat starts listening when it opens.
+    private func path(of tab: AidenAppTab) -> [AidenAppRoute] {
+        switch tab {
+        case .inbox: inboxPath
+        case .bots: botsPath
+        case .workspaces: workspacesPath
+        case .search: []
+        }
+    }
+
+    /// Selects the route's tab and shows the route there, or goes back to it
+    /// wherever it's already open. `startsVoice` is a voice shortcut's: the chat starts listening when it opens.
     func open(_ route: AidenAppRoute, startsVoice: Bool = false) {
-        chatStartingVoice = nil
+        open(route, on: route.tab)
         if startsVoice, case .chat(let id) = route {
             chatStartingVoice = id
         }
-        tab = route.tab
-        switch route.tab {
+    }
+
+    func finishStartingVoice(_ id: AidenHostObjectID) {
+        if chatStartingVoice == id { chatStartingVoice = nil }
+    }
+
+    /// Shows the route on `tab`, which needn't be its own: a chat started from the
+    /// Workspaces tab stays there, so Back returns to where it was started. A route
+    /// already open on another tab is gone back to there, so one chat never has
+    /// two screens.
+    func open(_ route: AidenAppRoute, on tab: AidenAppTab) {
+        chatStartingVoice = nil
+        let holders = AidenAppTab.allCases.filter { path(of: $0).contains(route) }
+        let tab = holders.contains(tab) ? tab : holders.first ?? tab
+        self.tab = tab
+        switch tab {
         case .inbox: Self.show(route, on: &inboxPath)
         case .bots: Self.show(route, on: &botsPath)
         case .workspaces: Self.show(route, on: &workspacesPath)
         case .search: break
         }
+    }
+
+    /// Goes back to just below the route, wherever it is. Nothing happens when
+    /// it isn't on a path.
+    func leave(_ route: AidenAppRoute) {
+        Self.remove(route, from: &inboxPath)
+        Self.remove(route, from: &botsPath)
+        Self.remove(route, from: &workspacesPath)
+    }
+
+    /// The selected machine changed. Scheduled tasks and Usage read the machine
+    /// they opened on, so neither stays open on another.
+    func leaveSelectedMachineRoutes() {
+        leave(.scheduled)
+        leave(.usage)
+    }
+
+    /// Swaps a route that turned out to be something else for the right one.
+    func replace(_ route: AidenAppRoute, with replacement: AidenAppRoute) {
+        leave(route)
+        open(replacement)
     }
 
     /// Opens the queue's first chat and starts a run on it. Returns the chat
@@ -360,10 +397,6 @@ final class AidenAppNavigation {
         Self.show(route, on: &inboxPath)
     }
 
-    func finishStartingVoice(_ id: AidenHostObjectID) {
-        if chatStartingVoice == id { chatStartingVoice = nil }
-    }
-
     /// A tab holding a route to a machine that's gone returns to its root.
     func dropRoutes(outside installations: [AidenInstallation]) {
         func reachable(_ path: [AidenAppRoute]) -> [AidenAppRoute] {
@@ -373,6 +406,11 @@ final class AidenAppNavigation {
         botsPath = reachable(botsPath)
         workspacesPath = reachable(workspacesPath)
         savedPaths = savedPaths.filter { _, path in path.allSatisfy { $0.isReachable(on: installations) } }
+    }
+
+    private static func remove(_ route: AidenAppRoute, from path: inout [AidenAppRoute]) {
+        guard let index = path.firstIndex(of: route) else { return }
+        path.removeSubrange(index...)
     }
 
     private static func show(_ route: AidenAppRoute, on path: inout [AidenAppRoute]) {

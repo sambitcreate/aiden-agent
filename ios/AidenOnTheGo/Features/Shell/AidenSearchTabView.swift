@@ -12,6 +12,13 @@ struct AidenSearchTabView: View {
     /// text size, never sits on it.
     @ScaledMetric(relativeTo: .body) private var fieldClearance: CGFloat = 72
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    /// A regular-width toolbar folds the field into a button, even with the tab
+    /// picked, so there the field sits under the title, always up.
+    private var fieldPlacement: SearchFieldPlacement {
+        horizontalSizeClass == .regular ? .navigationBarDrawer(displayMode: .always) : .automatic
+    }
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -31,7 +38,7 @@ struct AidenSearchTabView: View {
             .background(palette.canvas.ignoresSafeArea())
             .navigationTitle("Search")
             // Each change of the trimmed query searches again.
-            .searchable(text: $model.query, prompt: "Chats and Bots")
+            .searchable(text: $model.query, placement: fieldPlacement, prompt: "Chats and Bots")
             .searchFocused($searchIsFocused)
             .task(id: model.trimmedQuery) { await model.run() }
     }
