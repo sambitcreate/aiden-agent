@@ -18,7 +18,6 @@ import {
 
 test.use({
   workspaceSeed: true,
-  appEnvironment: { AIDEN_EXPERIMENTAL_DESIGN_MODE: "1" },
 });
 
 /**

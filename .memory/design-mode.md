@@ -1,6 +1,6 @@
 # Design mode
 
-Status: active. P0 (retire Studio), P1 (layout shell) and P2 (canvas and frames, Tasks 1–7) are done. The Mac Studio work was pushed as `claude/design-mode-deep-dive` on 2026-11-05, then merged with `origin/main` on `claude/project-thread-29fzrr` (the PR branch). P3 (Aiden on the canvas) is done (2026-11-05, P3a–P3d, on the PR #778 branch), plan `docs/superpowers/plans/2026-11-05-design-mode-p3-aiden-on-canvas.md`. P3a (canvas tools) is done: `main/services/design-canvas/canvas-tools.ts` (four tools, 20 calls per turn, `designCanvasToolsAllowed` gate, `DESIGN_MODE_PROMPT_SECTION`), wired in `llm-client.ts` as the `aiden.design-canvas` runtime extension (static prompt section + volatile `canvasPromptLine` so the prompt cache holds). P3b (artifact frames) is done: `artifact-frames.ts` places committed `render_artifact` visuals after `generativeUiArtifactStore.commit` (never on a failed turn), same-title Aiden frames swap `mediaId` and keep their box; `ArtifactNode` keys its loaded src by mediaId. P3c (skill) is done: `design-canvas/skill.ts` (`aiden-design`, `DESIGN_CANVAS_SKILLS`), registered in `skill-registry-main.ts` only when the flag is on, dropped by `withoutSkills` unless `designCanvasOffered` in llm-client, and from Remote and Telegram catalogs. P3d is done: `design-mode-tool.ts` (`DesignModeConsent`, `design_mode`, on-demand), `canvas-snapshots.ts`, card `renderer/design/design-mode-consent.tsx`, focus store `renderer/design/canvas-focus-requests.ts`; canvas tools held back and added by `withEnteredCanvasTools` after Enter; new tests must also go in `scripts/ci-test-registry.json` or `npm test` fails its registry check. P4 plan (owner chose everything in their reference screenshots): `docs/superpowers/plans/2026-11-05-design-mode-p4-full-canvas.md`; P4a built 2026-11-05, P4e and P4b built 2026-11-06, P4c next. Placement moved to `renderer/shared/design-canvas/placement.ts`; summaries in `canvas-summary.ts`. P4–P5 plans are written before each phase.
+Status: active. P0 (retire Studio), P1 (layout shell) and P2 (canvas and frames, Tasks 1–7) are done. The Mac Studio work was pushed as `claude/design-mode-deep-dive` on 2026-11-05, then merged with `origin/main` on `claude/project-thread-29fzrr` (the PR branch). P3 (Aiden on the canvas) is done (2026-11-05, P3a–P3d, on the PR #778 branch), plan `docs/superpowers/plans/2026-11-05-design-mode-p3-aiden-on-canvas.md`. P3a (canvas tools) is done: `main/services/design-canvas/canvas-tools.ts` (four tools, 20 calls per turn, `designCanvasToolsAllowed` gate, `DESIGN_MODE_PROMPT_SECTION`), wired in `llm-client.ts` as the `aiden.design-canvas` runtime extension (static prompt section + volatile `canvasPromptLine` so the prompt cache holds). P3b (artifact frames) is done: `artifact-frames.ts` places committed `render_artifact` visuals after `generativeUiArtifactStore.commit` (never on a failed turn), same-title Aiden frames swap `mediaId` and keep their box; `ArtifactNode` keys its loaded src by mediaId. P3c (skill) is done: `design-canvas/skill.ts` (`aiden-design`, `DESIGN_CANVAS_SKILLS`), registered in `skill-registry-main.ts` only when the flag is on, dropped by `withoutSkills` unless `designCanvasOffered` in llm-client, and from Remote and Telegram catalogs. P3d is done: `design-mode-tool.ts` (`DesignModeConsent`, `design_mode`, on-demand), `canvas-snapshots.ts`, card `renderer/design/design-mode-consent.tsx`, focus store `renderer/design/canvas-focus-requests.ts`; canvas tools held back and added by `withEnteredCanvasTools` after Enter; new tests must also go in `scripts/ci-test-registry.json` or `npm test` fails its registry check. P4 plan (owner chose everything in their reference screenshots): `docs/superpowers/plans/2026-11-05-design-mode-p4-full-canvas.md`; P4a built 2026-11-05, P4e, P4b, P4c, P4d, P4f, P4g and P4h built 2026-11-06, P5 (launch) built 2026-11-06. Placement moved to `renderer/shared/design-canvas/placement.ts`; summaries in `canvas-summary.ts`. P4–P5 plans are written before each phase.
 
 - Spec: `docs/superpowers/specs/2026-10-31-design-mode-design.md`. Plans: `docs/superpowers/plans/2026-10-31-design-mode-p0-retire-studio.md`, `docs/superpowers/plans/2026-10-31-design-mode-p1-layout.md`.
 - It replaces Design Studio (DS-1a, #385). P0 deletes the Studio code. It keeps the canvas, studio assets, the `finishTurn` harness, `generation-stream` and the `ChatOwnerV1` parser, and leaves data on disk.
@@ -8,7 +8,7 @@ Status: active. P0 (retire Studio), P1 (layout shell) and P2 (canvas and frames,
 ## Owner decisions (2026-10-31)
 
 - Attached to a workspace or an Aiden private folder (#667 removed no-workspace chats).
-- Ships to people: default-on with a kill switch in P5. Until then behind `AIDEN_EXPERIMENTAL_DESIGN_MODE`.
+- Ships to people: default-on since P5 (2026-11-06); `AIDEN_DESIGN_MODE=0` (or false/off/no) is the kill switch. The old `AIDEN_EXPERIMENTAL_DESIGN_MODE` does nothing now.
 - Desktop only now, Remote-ready later. The Remote projection must not expose `designMode` yet.
 - The right side is an infinite canvas "like Create Images / Figma / open-design / Paper" where the agent creates things and the person points and annotates (owner, 2026-10-31). This superseded v1's browser-tabs canvas.
 
@@ -36,7 +36,7 @@ Status: active. P0 (retire Studio), P1 (layout shell) and P2 (canvas and frames,
 
 Module map:
 
-- Flag: `AIDEN_EXPERIMENTAL_DESIGN_MODE` in `main/services/studio/feature-flags.ts`, surfaced as `AppCapabilities.designMode` (`renderer/lib/app-capabilities.tsx`). Off means no UI, no shortcut, no `/design`, and `chats:setDesignMode` refuses.
+- Flag (now a kill switch, `AIDEN_DESIGN_MODE=0`): in `main/services/studio/feature-flags.ts`, surfaced as `AppCapabilities.designMode` (`renderer/lib/app-capabilities.tsx`). Off means no UI, no shortcut, no `/design`, and `chats:setDesignMode` refuses.
 - Storage: `Chat.designMode?: boolean` (omitted means off) in `chat-store-core.ts`; written through `chat-application-service.ts` and the `chats:setDesignMode` handler (`main/handlers/chats.ts`, params in `chat-renderer-mutations.ts`), broadcast on `chats:design-mode-changed`. Bot and `owner` chats are never eligible. Not in the Remote projection.
 - Window: `app:widenForDesign` (`main/handlers/design-window.ts`, pure `widenedBounds` in `main/windows/design-window-core.ts`) widens to 1280 only when `canWidenForDesign` allows it (not fullscreen or maximized, work area at least 1280), otherwise `{widened:false}`; `app:designWindowCanWiden` asks the same question without resizing.
 - Renderer state: `renderer/lib/design-mode.ts` has `designModeAvailable`, the optimistic `useSetDesignMode` hook (module-level in-flight map, settles on the latest), `DesignModeControlsContext` / `useDesignModeControls(chatId)`.
@@ -174,3 +174,39 @@ Deviations from the P1 plan:
 - Second round: canvas sessions report unsaved edits to the renderer close guard as a `design` source (dirty while unsent, saving while in flight). A closed session that stops retrying keeps its edits and its lifecycle flush until a flush saves them or the person discards at the quit/close/reload prompt. Main's prompt wording moved to `main/services/close-guard-prompt.ts` and names "the design canvas".
 - The watcher's debounce test runs on a fake watch with mocked timers (the real-file version split one burst on a loaded CI runner).
 - Agent `canvas_remove_frame` drops the frame's comments, through the shared `commentsWithoutFrames` (also used by the canvas adapter).
+
+## P4d download, full window, Present (2026-11-06)
+
+- `renderer/shared/design-canvas/frame-export.ts` (formats, file names, export width, PDF layout) and `presentation.ts` (row order). Frames carry `paper` / `printMode` (file and artifact only, `isDesignPrintable`).
+- Export: `designCanvas:export` reads the frame from the store, so the renderer calls `useDesignCanvas().flush()` first (saves are debounced 800 ms). `frame-render.ts` draws in a hidden sandboxed window; PNG = window `zoomFactor: 2` + `capturePage(rect, {stayHidden: true})`. CDP `Page.captureScreenshot` hangs in a hidden window on Linux/xvfb; don't go back to it.
+- Present / Open full window share `DesignPresentation` state; the wrapper becomes `fixed inset-0 z-[70]`, and `onMoveEnd` doesn't save while presenting. Fit each frame with `getViewportForBounds` + `setViewport`, not `fitView`: xyflow queues fitView until the next node update, so it could land after Exit and undo the restore.
+- `StudioCanvas` top row uses `useTrailingWindowControlsClearance` (Linux Aiden-drawn window buttons, z-80, cover the canvas's top right otherwise).
+- Open full window is a single-frame present view, not the browser panel (keeps the `aiden-design:` sandbox). Artboards don't export yet.
+
+## P4f side panel (2026-11-06)
+
+- `renderer/design/design-side-panel.tsx` (Properties / Layers / Code), toggled by `I` (keymap `{type:"panel"}`; ⌥⌘I is the menu's DevTools) or the PanelRight button; open state in localStorage `aiden.design.sidePanel`. Hidden while presenting.
+- `layers-core.ts`: `designLayers`, `reorderLayer`, `stepLayer`. The canvas draws containers first, then the rest, each in document order, so reordering only swaps siblings (same parent, same container-ness).
+- Frame fields `radius`, `guide` (`columns-4/8/12`, `grid-8`; `canDesignGuide`), `hidden`, `locked` (`true` only). Hidden: not drawn (members of a hidden container too), not presented, not live. Locked: `draggable/deletable: false`, `applyNodeChanges` skips it, duplicates drop it.
+- `designCanvas:source(chatId, frameId)` returns a page file or artifact HTML, cut at 512 KiB (`DESIGN_SOURCE_MAX_BYTES`).
+- `update(id, patch: DesignFramePatch, {record})` in the node context; the toolbar wraps (`flex-wrap`) instead of scrolling.
+
+## P4g tweaks (2026-11-06)
+
+- `renderer/shared/design-canvas/tweaks.ts`: controls from `<script type="application/aiden-tweaks">` (switch/choice/number/color, target `var` or `attr`), stored as `frame.tweaks` keyed by target name (only non-default values), `designTweakState` → `{dark, vars, attrs}`, `withDesignTweakQuery` adds `aiden-dark` / `aiden-tweaks` to the address.
+- Bridge `set-tweaks` applies on `<html>` and restores originals for anything dropped; it also reads the query at script start (head), so first loads, reloads and exports never flash untweaked. `FileFrame` keeps the boot query fixed per address (derived state) and posts later changes, so a tweak never reloads the iframe.
+- Artifacts: `readDesignArtifactTheme(dark)` builds the dark theme from the appearance config's dark variant; `HtmlArtifactIframe` got a `readTheme` prop. Export passes the theme (main uses it only when `frame.dark`).
+- The panel reads source through `readSource` = `flush()` + `designCanvas:source`: main reads the stored canvas, and a just-added frame isn't saved for 800 ms.
+
+## P4h page text editing (2026-11-06)
+
+- Bridge: `edit-enable {on}` (posted while the frame is entered), `edit-command`, `edit-finish`; it sends `edit-start` / `edit-end {plain, changes, beforeHtml, afterHtml, element}`. Plain = same element, style, inline shape and text-run count. Chromium leaves `style=""` after select-all + typing, so an empty style counts as none.
+- `renderer/shared/design-canvas/text-edit.ts` plans the file write (exactly once, whole text run, stamp narrows to 30 lines); `designCanvas:editText` writes it. `renderer/design/page-text-edits.ts` flushes first (main reads the stored canvas), keeps its own undo stack, and hands non-plain or unplaced edits to Aiden as a queued comment.
+- The canvas `change` wrapper forgets the text undo stack only when a recorded change really alters the doc, on its first run (saves replay mutations). Otherwise xyflow's measurement changes wiped it.
+- E2E: Playwright's `dblclick` misses inside the CSS-scaled iframe; use `dblclickInPage`. `getByText` resolves to an inner `<b>` after Bold, so locate by tag.
+
+## P5 launch (2026-11-06)
+
+- Kill switch: `designModeEnabled` = not `AIDEN_DESIGN_MODE` in 0/false/off/no. Studio-foundation's "flags off" E2E sets `AIDEN_DESIGN_MODE: "0"`; design specs no longer set any env.
+- Analytics: `design_mode_entered {source}` and `design_mode_exited` from `chats:setDesignMode` (renderer passes the source as a 3rd arg; previous state read through the service's `assertCurrent`, so a no-op counts nothing), `design_mode_entered {source: "aiden"}` and `design_mode_declined` from `DesignModeConsent.answer`, `design_comments_sent {count_bucket}` from desktop `chat:start` via `reportDesignCommentsSent` (counts the block's JSON list with `attachedDesignCommentCount`).
+- Onboarding: `designMode` tile in "Build in your workspace" (mint tint, `DesignModeArt` in create-art), hidden by `visibleOnboardingFeatures` when `designMode === false`.

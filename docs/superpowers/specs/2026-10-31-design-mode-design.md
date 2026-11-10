@@ -1,6 +1,6 @@
 # Design mode
 
-Status: proposed 2026-10-31 (v2, canvas). It replaces the Design Studio half of the [Design Studio + Create Images rebuild](../../plans/design-studio-create-images-rebuild-plan.md). DS-1a merged in #385, DS-1b never started, and nothing has ever been visible without `AIDEN_EXPERIMENTAL_DESIGN_STUDIO`. Create Images is not affected.
+Status: built 2026-11-06 (P0 to P5; on by default). Proposed 2026-10-31 (v2, canvas). It replaces the Design Studio half of the [Design Studio + Create Images rebuild](../../plans/design-studio-create-images-rebuild-plan.md). DS-1a merged in #385, DS-1b never started, and nothing has ever been visible without `AIDEN_EXPERIMENTAL_DESIGN_STUDIO`. Create Images is not affected.
 
 v1 of this spec used browser tabs as the canvas. v2 replaces them with an infinite canvas, at the owner's request ("a canvas like the Create Images panel where the user can roam around like Figma, open-design or Paper; the user creates things with an agent, points, annotates").
 
@@ -374,6 +374,7 @@ Studio data already on disk is left untouched: no migration and no deletion.
 
 - P1 to P4 build behind `AIDEN_EXPERIMENTAL_DESIGN_MODE` (capability `designMode`).
 - P5 makes it default-on. `AIDEN_DESIGN_MODE=0` turns it off, and a patch release can flip the default back.
+- As built (2026-11-06): `designModeEnabled` in `main/services/studio/feature-flags.ts` is true unless `AIDEN_DESIGN_MODE` is `0`, `false`, `off` or `no`. The old `AIDEN_EXPERIMENTAL_DESIGN_MODE` no longer changes anything. While it is off there is no Design button, shortcut, `/design`, canvas IPC, `aiden-design:` scheme, canvas tools, `aiden-design` skill or onboarding tile.
 - There are no remote feature flags.
 
 ## 10. Phases

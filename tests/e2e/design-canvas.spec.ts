@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
-import type { ElectronApplication, Page } from "@playwright/test";
+import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import {
   capture,
   chooseWorkspace,
@@ -21,7 +21,6 @@ import {
 
 test.use({
   workspaceSeed: true,
-  appEnvironment: { AIDEN_EXPERIMENTAL_DESIGN_MODE: "1" },
 });
 
 const NOTE_TEXT = "Hero: a bigger headline and a softer call to action.";
@@ -563,6 +562,14 @@ type SavedFrame = {
   size?: string;
   color?: string;
   fill?: string;
+  paper?: string;
+  printMode?: string;
+  radius?: number;
+  guide?: string;
+  hidden?: boolean;
+  locked?: boolean;
+  dark?: boolean;
+  tweaks?: Record<string, string>;
 };
 
 async function savedFrames(userDataDir: string): Promise<SavedFrame[]> {
@@ -822,4 +829,471 @@ test("notes and text take formatting from the bar above them: marks, a link, a l
   await expect(reloaded.locator("b")).toHaveText("Launch plan");
   await expect(reloaded.locator('a[href="https://example.com/brief"]')).toHaveText("brief");
   await expect(designCanvas(aiden.page).getByRole("group", { name: "Text: Checkout" }).locator("i")).toHaveText("Checkout");
+});
+
+/** Answers the next Save dialog with this path, the way a person choosing it would. */
+async function answerNextSave(app: ElectronApplication, file: string): Promise<void> {
+  await app.evaluate(({ dialog }, chosen) => {
+    dialog.showSaveDialog = (async () => ({ canceled: false, filePath: chosen })) as unknown as typeof dialog.showSaveDialog;
+  }, file);
+}
+
+/**
+ * The presented page fills the window along one side once its move settles,
+ * and nothing else in the app (the sidebar, the Live control) draws over it.
+ */
+async function expectPresentedAlone(page: Page, title: string): Promise<void> {
+  const frame = page.locator(`iframe[title="${title}"]`);
+  await expect.poll(async () => {
+    const first = await frame.boundingBox();
+    await page.waitForTimeout(100);
+    const second = await frame.boundingBox();
+    if (!first || !second || first.x !== second.x || first.width !== second.width) return "moving";
+    const [width, height] = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+    const fits = second.x >= -1 && second.y >= -1 && second.x + second.width <= width + 1 && second.y + second.height <= height + 1;
+    const fills = second.width >= width * 0.85 || second.height >= height * 0.85;
+    return fits && fills ? "fitted" : `at ${JSON.stringify(second)}`;
+  }, { timeout: 10_000 }).toBe("fitted");
+  const covered = await page.evaluate(() => {
+    const wrapper = document.querySelector("[data-presenting]");
+    // Where the sidebar, the middle of the page and the Live control would be.
+    const points = [[60, 400], [window.innerWidth / 2, window.innerHeight / 2], [window.innerWidth * 0.45, window.innerHeight - 32]];
+    return points.filter(([x, y]) => !wrapper?.contains(document.elementFromPoint(x!, y!) ?? null)).length;
+  });
+  expect(covered).toBe(0);
+}
+
+test("a page downloads as a PNG, a PDF and its own file, and Present walks the page and comes back", async ({ aiden }) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  const outDir = path.join(userDataDir, "downloads-test");
+  await mkdir(designDir, { recursive: true });
+  await mkdir(outDir, { recursive: true });
+  const hero = path.join(designDir, "hero.html");
+  await writeFile(hero, page_("Hero", "Ship faster", "#3b6cf6"));
+  await writeFile(path.join(designDir, "pricing.html"), page_("Pricing", "Simple pricing", "#1f9d6b"));
+
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  await answerNextPick(app, hero);
+  await addFromMenu(page, "File…");
+  await answerNextPick(app, path.join(designDir, "pricing.html"));
+  await addFromMenu(page, "File…");
+  await addNote(page);
+  await page.keyboard.type("Ship the pricing page next.");
+  await clickEmptyCanvas(page);
+
+  // Download: a 2× picture of the whole page, a PDF on A4, and the file itself.
+  const heroFrame = frame(page, "hero.html");
+  const pngPath = path.join(outDir, "hero.png");
+  await answerNextSave(app, pngPath);
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await capture(page, "1440-frame-download-menu");
+  await page.getByRole("menuitem", { name: "PNG image" }).click();
+  await expect.poll(async () => (await readFile(pngPath).catch(() => Buffer.alloc(0))).length, { timeout: 30_000 }).toBeGreaterThan(1000);
+  const png = await readFile(pngPath);
+  expect(png.subarray(1, 4).toString("latin1")).toBe("PNG");
+  // A 1 280 px design width drawn at twice its pixels.
+  expect(png.readUInt32BE(16)).toBe(2560);
+
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await page.getByRole("menuitemradio", { name: "A4" }).click();
+  await expect
+    .poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.title === "hero.html")?.paper)
+    .toBe("a4");
+  const pdfPath = path.join(outDir, "hero.pdf");
+  await answerNextSave(app, pdfPath);
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await page.getByRole("menuitem", { name: "PDF" }).click();
+  await expect.poll(async () => (await readFile(pdfPath).catch(() => Buffer.alloc(0))).subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  // A4 is 595 × 842 points.
+  expect((await readFile(pdfPath)).toString("latin1")).toMatch(/MediaBox\s*\[\s*0 0 595(?:\.\d+)? 842/u);
+
+  const sourcePath = path.join(outDir, "hero-copy.html");
+  await answerNextSave(app, sourcePath);
+  await heroFrame.getByRole("button", { name: "Download hero.html" }).click();
+  await page.getByRole("menuitem", { name: "Original file" }).click();
+  await expect.poll(async () => readFile(sourcePath, "utf8").catch(() => "")).toBe(await readFile(hero, "utf8"));
+
+  // Present fills the window and walks the page in reading order, then gives the canvas back.
+  const before = (await savedCanvases(userDataDir))[0]!.pages[0]!.viewport;
+  await canvas.getByRole("button", { name: "Present this page" }).click();
+  const bar = canvas.getByRole("toolbar", { name: "Presentation" });
+  await expect(bar).toContainText("1 of 3 · hero.html");
+  await expect(canvas.getByRole("toolbar", { name: "Canvas tools" })).toHaveCount(0);
+  const wrapperBox = async () =>
+    page.locator('[data-presenting="page"]').evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return [rect.width, rect.height, window.innerWidth, window.innerHeight];
+    });
+  await expect.poll(async () => {
+    const [w, h, iw, ih] = await wrapperBox();
+    return w === iw && h === ih;
+  }).toBe(true);
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
+  await expectPresentedAlone(page, "hero.html");
+  // Only the presented frame is drawn, not its neighbours on the page.
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(1);
+  await expect(page.locator('iframe[title="pricing.html"]')).toHaveCount(0);
+  await capture(page, "1440-present");
+  await page.keyboard.press("ArrowRight");
+  await expect(bar).toContainText("2 of 3 · pricing.html");
+  await page.keyboard.press("End");
+  await expect(bar).toContainText("3 of 3 · Note");
+  await expect(bar.getByRole("button", { name: "Next frame" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(bar).toHaveCount(0);
+  await expect(canvas.getByRole("toolbar", { name: "Canvas tools" })).toBeVisible();
+  expect((await savedCanvases(userDataDir))[0]!.pages[0]!.viewport).toEqual(before);
+
+  // Open full window shows one page alone, taking input, until Close.
+  await heroFrame.getByRole("button", { name: "Open hero.html in a full window" }).click();
+  const single = canvas.getByRole("toolbar", { name: "Full window" });
+  await expect(single).toContainText("hero.html");
+  await expect(page.locator('[data-presenting="frame"]')).toBeVisible();
+  await expect(pageInFrame(page, "hero.html").locator("h1")).toBeVisible();
+  await expectPresentedAlone(page, "hero.html");
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(1);
+  await capture(page, "1440-open-full-window");
+  await single.getByRole("button", { name: "Close full window" }).click();
+  await expect(single).toHaveCount(0);
+  await expect(canvas.locator(".react-flow__node")).toHaveCount(3);
+});
+
+test("the side panel edits the selected item, lists the page's layers to hide, lock, rename and reorder, and shows a page's code", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const hero = path.join(designDir, "hero.html");
+  await writeFile(hero, page_("Hero", "Ship faster", "#3b6cf6"));
+
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  await answerNextPick(app, hero);
+  await addFromMenu(page, "File…");
+  await addNote(page);
+  await page.keyboard.type("Launch plan");
+  await clickEmptyCanvas(page);
+  const tools = canvas.getByRole("toolbar", { name: "Canvas tools" });
+  // Scroll the page up out of the way, so there is room below it however small the window is.
+  const pane = (await canvas.locator(".react-flow__pane").boundingBox())!;
+  const heroBottom = async () => {
+    const box = (await frame(page, "hero.html").boundingBox())!;
+    return box.y + box.height - pane.y;
+  };
+  const resting = await heroBottom();
+  // With the hand, from beside the page.
+  await tools.getByRole("button", { name: "Hand", exact: true }).click();
+  await dragOnCanvas(page, { x: 20, y: pane.height - 20 }, { x: 20, y: pane.height - 420 });
+  await expect.poll(heroBottom).toBeLessThan(resting - 300);
+  const top = Math.round(await heroBottom()) + 24;
+  expect(top + 170).toBeLessThan(pane.height);
+  await tools.getByRole("button", { name: "Frame", exact: true }).click();
+  await dragOnCanvas(page, { x: 60, y: top }, { x: 420, y: top + 160 });
+  await page.keyboard.press("r");
+  await dragOnCanvas(page, { x: 100, y: top + 30 }, { x: 240, y: top + 110 });
+  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.shape ?? entry.kind)).toEqual([
+    "file",
+    "note",
+    "frame",
+    "rect",
+  ]);
+
+  // I opens the panel; Properties follows the selection.
+  await canvas.focus();
+  await page.keyboard.press("i");
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await expect(panel).toBeVisible();
+  await expect(canvas.getByRole("button", { name: "Hide side panel" })).toHaveAttribute("aria-pressed", "true");
+  const rectangle = canvas.getByRole("group", { name: "Rectangle" });
+  await rectangle.click();
+  await expect(panel).toContainText("Rectangle");
+  await panel.getByRole("textbox", { name: "Width", exact: true }).fill("300");
+  await page.keyboard.press("Enter");
+  await panel.getByRole("textbox", { name: "Radius" }).fill("24");
+  await page.keyboard.press("Enter");
+  await panel.getByRole("combobox", { name: "Fill" }).click();
+  await page.getByRole("option", { name: "Green" }).click();
+  await expect
+    .poll(async () => {
+      const rect = (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect");
+      return rect && { w: rect.w, radius: rect.radius, fill: rect.fill };
+    })
+    .toEqual({ w: 300, radius: 24, fill: "green" });
+  await capture(page, "1440-side-panel-properties");
+
+  // An artboard takes a background and a layout guide drawn over it.
+  await canvas.getByRole("group", { name: "Frame", exact: true }).click({ position: { x: 320, y: 140 } });
+  await expect(panel).toContainText("Artboard");
+  await panel.getByRole("combobox", { name: "Layout guide" }).click();
+  await page.getByRole("option", { name: "12 columns" }).click();
+  await panel.getByRole("combobox", { name: "Background" }).click();
+  await page.getByRole("option", { name: "Teal" }).click();
+  await expect
+    .poll(async () => {
+      const board = (await savedFrames(userDataDir)).find((entry) => entry.kind === "frame");
+      return board && { guide: board.guide, fill: board.fill };
+    })
+    .toEqual({ guide: "columns-12", fill: "teal" });
+  await expect(canvas.locator('[data-design-guide="columns-12"] > *')).toHaveCount(12);
+
+  // Layers: front-most first, the rectangle under its artboard.
+  await panel.getByRole("radio", { name: "Layers" }).click();
+  const layers = panel.getByRole("list", { name: "Layers" });
+  const rows = async () => layers.locator("[data-layer-name]").allTextContents();
+  await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
+  await expect(panel.getByRole("list", { name: "In Frame" })).toContainText("Rectangle");
+  await capture(page, "1440-side-panel-layers");
+
+  // ⌥↓ sends the note behind the page; dragging it onto the page's top half brings it back in front.
+  await layers.getByRole("button", { name: "Launch plan", exact: true }).focus();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect.poll(rows).toEqual(["hero.html", "Launch plan", "Frame", "Rectangle"]);
+  await expect.poll(async () => (await savedFrames(userDataDir)).map((entry) => entry.kind).slice(0, 2)).toEqual(["note", "file"]);
+  const heroRow = layers.locator("[data-layer-id]").filter({ hasText: "hero.html" });
+  await layers.locator("[data-layer-id]").filter({ hasText: "Launch plan" }).dragTo(heroRow, { targetPosition: { x: 60, y: 4 } });
+  await expect.poll(rows).toEqual(["Launch plan", "hero.html", "Frame", "Rectangle"]);
+
+  // Hide takes a page off the canvas until Show; it stays in the list.
+  await layers.getByRole("button", { name: "Hide hero.html" }).click();
+  await expect(frame(page, "hero.html")).toHaveCount(0);
+  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "file")?.hidden).toBe(true);
+  await layers.getByRole("button", { name: "Show hero.html" }).click();
+  await expect(frame(page, "hero.html")).toBeVisible();
+
+  // A locked rectangle can still be selected, but stays where it is and survives Delete.
+  await layers.getByRole("button", { name: "Lock Rectangle" }).click();
+  await layers.getByRole("button", { name: "Rectangle", exact: true }).click();
+  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect")?.locked).toBe(true);
+  const before = (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect")!;
+  const box = (await rectangle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 60, { steps: 8 });
+  await page.mouse.up();
+  await expect(rectangle).toHaveAttribute("data-selected", "true");
+  await canvas.focus();
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(1000);
+  const after = (await savedFrames(userDataDir)).find((entry) => entry.shape === "rect");
+  expect(after && { x: after.x, y: after.y }).toEqual({ x: before.x, y: before.y });
+
+  // A double-click renames from the list.
+  await layers.getByRole("button", { name: "Frame", exact: true }).dblclick();
+  await panel.getByRole("textbox", { name: "Name" }).fill("Mobile home");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await savedFrames(userDataDir)).find((entry) => entry.kind === "frame")?.title).toBe("Mobile home");
+
+  // Code: the selected page's file, read only, and Copy puts it on the clipboard.
+  await layers.getByRole("button", { name: "hero.html", exact: true }).click();
+  await panel.getByRole("radio", { name: "Code" }).click();
+  const code = panel.getByRole("region", { name: "Code" }).or(panel.locator('pre[aria-label="Code"]'));
+  await expect(code).toContainText("Ship faster");
+  await capture(page, "1440-side-panel-code");
+  await panel.getByRole("button", { name: "Copy code" }).click();
+  await expect.poll(async () => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(await readFile(hero, "utf8"));
+
+  // I again closes it, and it comes back on the tab it was on.
+  await canvas.focus();
+  await page.keyboard.press("i");
+  await expect(panel).toHaveCount(0);
+  await canvas.getByRole("button", { name: "Show side panel" }).click();
+  await expect(panel.getByRole("radio", { name: "Code" })).toHaveAttribute("aria-checked", "true");
+});
+
+function tweakablePage(headline: string): string {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tweaks</title>
+    <script type="application/aiden-tweaks">
+    { "controls": [
+      { "id": "accent", "label": "Accent", "type": "color", "default": "#3b6cf6", "var": "--accent" },
+      { "id": "density", "label": "Density", "type": "choice", "options": ["compact", "cozy"], "default": "cozy", "attr": "data-density" },
+      { "id": "promo", "label": "Promo banner", "type": "switch", "default": true, "attr": "data-promo" },
+      { "id": "radius", "label": "Corners", "type": "number", "min": 0, "max": 24, "step": 2, "unit": "px", "default": 8, "var": "--radius" }
+    ] }
+    </script>
+    <style>
+      :root { --bg: #fbfaf7; --ink: #1d1d1f; --accent: #3b6cf6; --radius: 8px; }
+      :root[data-theme="dark"] { --bg: #16171a; --ink: #f2f2f4; }
+      body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+      .promo { padding: 10px 48px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+      :root[data-promo="false"] .promo { display: none; }
+      main { padding: 72px 48px; }
+      :root[data-density="compact"] main { padding: 24px 48px; }
+      h1 { margin: 0 0 16px; font-size: 56px; line-height: 1.05; }
+      a.cta { display: inline-block; margin-top: 24px; padding: 12px 22px; border-radius: var(--radius); background: var(--accent); color: white; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <div class="promo">Spring launch: 20% off this week</div>
+    <main>
+      <h1>${headline}</h1>
+      <p>Plan, build and ship with one calm workspace for the whole team.</p>
+      <a class="cta" href="#">Get started</a>
+    </main>
+  </body>
+</html>
+`;
+}
+
+test("the Tweaks tab shows a page dark and changes the page's own controls, kept on the frame and not in its file", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const file = path.join(designDir, "tweaks.html");
+  const original = tweakablePage("Ship faster");
+  await writeFile(file, original);
+
+  await openDesignChat(app, page);
+  const canvas = designCanvas(page);
+  await answerNextPick(app, file);
+  await addFromMenu(page, "File…");
+  const live = pageInFrame(page, "tweaks.html");
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+  const root = live.locator("html");
+  const styleOf = (selector: string, property: string) =>
+    live.locator(selector).evaluate((element, name) => getComputedStyle(element).getPropertyValue(name), property);
+
+  await frame(page, "tweaks.html").click({ position: { x: 200, y: 12 } });
+  await canvas.focus();
+  await page.keyboard.press("i");
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("radio", { name: "Tweaks" }).click();
+  await expect(panel.getByRole("switch", { name: "Promo banner" })).toBeVisible();
+
+  // Dark: the page's own dark look, through data-theme on its root.
+  await panel.getByRole("switch", { name: "Dark" }).click();
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => styleOf("body", "background-color")).toBe("rgb(22, 23, 26)");
+  await expect.poll(async () => (await savedFrames(userDataDir))[0]?.dark).toBe(true);
+
+  // The page's declared controls.
+  await panel.getByRole("radio", { name: "compact" }).click();
+  await expect(root).toHaveAttribute("data-density", "compact");
+  await panel.getByRole("switch", { name: "Promo banner" }).click();
+  await expect(live.locator(".promo")).toBeHidden();
+  // A second pick lands too, after the first has redrawn the well.
+  await panel.getByLabel("Accent").fill("#30a46c");
+  await expect.poll(() => styleOf("a.cta", "background-color")).toBe("rgb(48, 164, 108)");
+  await panel.getByLabel("Accent").fill("#e5484d");
+  await expect.poll(() => styleOf("a.cta", "background-color")).toBe("rgb(229, 72, 77)");
+  const corners = panel.getByRole("slider", { name: "Corners" });
+  await corners.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => styleOf("a.cta", "border-top-left-radius")).toBe("12px");
+  await expect
+    .poll(async () => (await savedFrames(userDataDir))[0]?.tweaks)
+    .toEqual({ "data-density": "compact", "data-promo": "false", "--accent": "#e5484d", "--radius": "12px" });
+  await capture(page, "1440-tweaks");
+  expect(await readFile(file, "utf8")).toBe(original);
+
+  // A change on disk reloads the page, and it comes back dark and tweaked.
+  await writeFile(file, tweakablePage("Ship sooner"));
+  await expect(live.getByRole("heading", { name: "Ship sooner" })).toBeVisible();
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect(root).toHaveAttribute("data-density", "compact");
+  await expect(live.locator(".promo")).toBeHidden();
+
+  // Reset puts back what the file says; Dark stays until it is switched off.
+  await panel.getByRole("button", { name: "Reset tweaks" }).click();
+  await expect(root).not.toHaveAttribute("data-density", "compact");
+  await expect(live.locator(".promo")).toBeVisible();
+  await expect.poll(async () => (await savedFrames(userDataDir))[0]?.tweaks).toBeUndefined();
+  await panel.getByRole("switch", { name: "Dark" }).click();
+  await expect(root).not.toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => styleOf("body", "background-color")).toBe("rgb(251, 250, 247)");
+});
+
+/**
+ * Double-clicks an element inside a scaled page the way a person would, at
+ * its centre on screen. (Playwright's own aim misses inside a CSS-scaled
+ * iframe.)
+ */
+async function dblclickInPage(page: Page, title: string, target: Locator): Promise<void> {
+  const iframe = designCanvas(page).locator(`iframe[title="${title}"]`);
+  const box = (await iframe.boundingBox())!;
+  const width = await iframe.evaluate((element) => (element as HTMLIFrameElement).offsetWidth);
+  const scale = box.width / width;
+  const rect = await target.evaluate((element) => {
+    const r = element.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  await page.mouse.dblclick(box.x + rect.x * scale, box.y + rect.y * scale);
+}
+
+test("words edited inside a page are written into its file and ⌘Z puts them back; a formatting change goes to Aiden", async ({
+  aiden,
+}) => {
+  const { app, page, workspaceDir, userDataDir } = aiden;
+  const designDir = path.join(workspaceDir, "design");
+  await mkdir(designDir, { recursive: true });
+  const hero = path.join(designDir, "hero.html");
+  const original = page_("Hero", "Ship faster", "#3b6cf6");
+  await writeFile(hero, original);
+
+  await openDesignChat(app, page);
+  await answerNextPick(app, hero);
+  await addFromMenu(page, "File…");
+  const live = pageInFrame(page, "hero.html");
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+  const iframe = designCanvas(page).locator('iframe[title="hero.html"]');
+  await frame(page, "hero.html").dblclick();
+  await expect(iframe).toHaveAttribute("tabindex", "0");
+
+  // A double-click inside the entered page edits that heading's words.
+  const heading = live.getByRole("heading", { name: "Ship faster" });
+  await dblclickInPage(page, "hero.html", heading);
+  await expect(heading).toHaveAttribute("contenteditable", "true");
+  const bar = page.getByRole("toolbar", { name: "Page text formatting" });
+  await expect(bar).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Text style: Heading 1" })).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type("Ship sooner");
+  await capture(page, "1440-page-text-editing");
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => readFile(hero, "utf8")).toBe(original.replace("Ship faster", "Ship sooner"));
+  await expect(live.getByRole("heading", { name: "Ship sooner" })).toBeVisible();
+  await expect(bar).toHaveCount(0);
+
+  // ⌘Z on the canvas writes the old words back.
+  await clickEmptyCanvas(page);
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
+  await expect.poll(async () => readFile(hero, "utf8")).toBe(original);
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+
+  // Bold is formatting, so it is queued for Aiden as a comment on that element and the file stays as it is.
+  await frame(page, "hero.html").dblclick();
+  await expect(iframe).toHaveAttribute("tabindex", "0");
+  const paragraph = live.locator("main p");
+  await dblclickInPage(page, "hero.html", paragraph);
+  await expect(paragraph).toHaveAttribute("contenteditable", "true");
+  await page.keyboard.press("ControlOrMeta+a");
+  await bar.getByRole("button", { name: "Bold" }).click();
+  await expect(paragraph.locator("b, strong")).toHaveCount(1);
+  await bar.getByRole("button", { name: "Done" }).click();
+  await expect
+    .poll(async () => (await savedComments(userDataDir)).map((comment) => ({ queued: comment.queued, tag: comment.anchor?.tag })))
+    .toEqual([{ queued: true, tag: "p" }]);
+  const [queued] = await savedComments(userDataDir);
+  expect(queued!.note).toContain("Make it:");
+  expect(queued!.note).toMatch(/<(b|strong)>Plan, build and ship/u);
+  expect(await readFile(hero, "utf8")).toBe(original);
+
+  // Esc throws an edit away.
+  await dblclickInPage(page, "hero.html", live.getByRole("heading", { name: "Ship faster" }));
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toHaveAttribute("contenteditable", "true");
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type("Never mind");
+  await page.keyboard.press("Escape");
+  await expect(live.getByRole("heading", { name: "Ship faster" })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(await readFile(hero, "utf8")).toBe(original);
 });

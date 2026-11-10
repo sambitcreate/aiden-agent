@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { IpcMainInvokeEvent } from "electron";
+import { captureAnalyticsEvents } from "../services/analytics/test-support.js";
 import {
   createChatApplicationService,
   type ChatApplicationDependencies,
@@ -324,11 +325,12 @@ const projectWorkspaces = {
 };
 
 test("design mode turns on for a project chat, tells every window, and turns off again", async (t) => {
+  const events = captureAnalyticsEvents(t);
   const f = await fixture(t, { workspaces: projectWorkspaces });
   await f.chatStore.create({ id: "site-chat", title: "Landing hero", workspaceId: "site" });
   const before = await f.chatStore.get("site-chat");
 
-  const on = (await f.invoke("chats:setDesignMode", "site-chat", true)) as { id: string; designMode?: true };
+  const on = (await f.invoke("chats:setDesignMode", "site-chat", true, "shortcut")) as { id: string; designMode?: true };
   assert.deepEqual([on.id, on.designMode], ["site-chat", true]);
   const stored = await f.chatStore.get("site-chat");
   assert.equal(stored?.designMode, true);
@@ -341,8 +343,15 @@ test("design mode turns on for a project chat, tells every window, and turns off
   assert.equal(f.broadcasts[f.broadcasts.length - 1]?.designMode, false);
 
   // A No workspace chat lives in Aiden's own folder, so it is a project chat too.
-  await f.invoke("chats:setDesignMode", "regular-chat", true);
+  await f.invoke("chats:setDesignMode", "regular-chat", true, "/etc/passwd");
   assert.equal((await f.chatStore.get("regular-chat"))?.designMode, true);
+  // Asking again for the state a chat already has changes nothing and counts nothing.
+  await f.invoke("chats:setDesignMode", "regular-chat", true, "slash");
+  assert.deepEqual(events, [
+    { event: "design_mode_entered", props: { source: "shortcut" } },
+    { event: "design_mode_exited", props: {} },
+    { event: "design_mode_entered", props: { source: "toggle" } },
+  ], "an unknown source counts as the toggle");
 });
 
 test("design mode is refused outside project chats and leaves them unchanged", async (t) => {

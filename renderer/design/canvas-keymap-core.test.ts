@@ -53,6 +53,13 @@ test("F2 renames the selected frame and N adds a note, but not with a modifier o
   assert.equal(resolveDesignCanvasKey(key("KeyN"), { editable: true, platform: "darwin" }), null, "typing n in a note");
 });
 
+test("I shows or hides the side panel, but not with a modifier or while typing", () => {
+  assert.deepEqual(resolveDesignCanvasKey(key("KeyI"), mac), { type: "panel" });
+  assert.equal(resolveDesignCanvasKey(key("KeyI", { metaKey: true, altKey: true }), mac), null, "Option-Command-I stays the developer tools");
+  assert.equal(resolveDesignCanvasKey(key("KeyI", { shiftKey: true, key: "I" }), other), null);
+  assert.equal(resolveDesignCanvasKey(key("KeyI"), { editable: true, platform: "darwin" }), null, "typing i in a note");
+});
+
 test("C turns on the comment tool, but Command-C still copies", () => {
   assert.deepEqual(resolveDesignCanvasKey(key("KeyC"), mac), { type: "comment" });
   assert.equal(resolveDesignCanvasKey(key("KeyC", { metaKey: true }), mac), null);

@@ -37,6 +37,12 @@ export type CanvasFrameSummary = {
   from?: { x: number; y: number; frameId?: string };
   to?: { x: number; y: number; frameId?: string };
   arrow?: "none" | "end" | "both";
+  /** The person shows this page or artifact with its dark look. */
+  dark?: true;
+  /** The page's tweak values the person changed, by CSS variable or data attribute. */
+  tweaks?: Record<string, string>;
+  /** Hidden from the canvas by the person (still on the page). */
+  hidden?: true;
   openComments?: number;
 };
 
@@ -107,6 +113,9 @@ export function summarizeFrame(frame: DesignFrame, openComments = 0): CanvasFram
     ...(frame.ends
       ? { from: endSummary(frame.ends[0]), to: endSummary(frame.ends[1]), arrow: frame.arrow ?? "none" }
       : {}),
+    ...(frame.dark ? { dark: true as const } : {}),
+    ...(frame.tweaks ? { tweaks: { ...frame.tweaks } } : {}),
+    ...(frame.hidden ? { hidden: true as const } : {}),
     ...(openComments > 0 ? { openComments } : {}),
   };
 }

@@ -25,7 +25,6 @@ const NOTES_CHAT = "Notes chat about something else";
 
 test.use({
   workspaceSeed: true,
-  appEnvironment: { AIDEN_EXPERIMENTAL_DESIGN_MODE: "1" },
 });
 
 /** A No workspace chat and then a workspace chat, which is left open. */

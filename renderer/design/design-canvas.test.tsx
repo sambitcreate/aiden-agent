@@ -514,3 +514,39 @@ test("the pen in the comment box draws marks over a frame, saved as fractions of
   assert.deepEqual(saved()!.comments[0]!.marks, [{ points: [[0, 0], [0.5, 0.5], [1, 1]] }]);
   assert.equal(document.querySelector("[data-design-draw]"), null, "saving puts the pen away");
 });
+
+test("the side panel opens again on the tab it was left on, Tweaks included", async () => {
+  setup(canvasWith());
+  window.localStorage.setItem("aiden.design.sidePanel", JSON.stringify({ open: true, tab: "tweaks" }));
+  try {
+    await mount();
+    const tweaks = screen.getByRole("radio", { name: "Tweaks" });
+    assert.equal(tweaks.getAttribute("aria-checked"), "true");
+    assert.ok(screen.getByText("Select a page or an artifact to change how it looks."));
+  } finally {
+    window.localStorage.removeItem("aiden.design.sidePanel");
+  }
+});
+
+test("while the canvas can't be saved, the Code tab says so instead of reading an older copy of the page", async () => {
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const { calls } = setup(canvasWith(hero), {
+    "designCanvas:save": () => {
+      throw new Error("chat is gone");
+    },
+    "designCanvas:source": () => ({ text: "<h1>Hero</h1>", truncated: false }),
+  });
+  render(<Toaster />);
+  window.localStorage.setItem("aiden.design.sidePanel", JSON.stringify({ open: true, tab: "code" }));
+  try {
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
+    assert.ok(await screen.findByText("The canvas couldn't save your latest changes.", {}, SAVE_WAIT));
+
+    fireEvent.click(screen.getByRole("group", { name: "Hero" }));
+    assert.ok(await screen.findByText("The canvas couldn't be saved, so the code can't be shown yet.", {}, SAVE_WAIT));
+    assert.equal(calls.some((call) => call.channel === "designCanvas:source"), false);
+  } finally {
+    window.localStorage.removeItem("aiden.design.sidePanel");
+  }
+});

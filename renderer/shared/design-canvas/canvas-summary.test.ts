@@ -86,3 +86,14 @@ test("a canvas with pages describes one page at a time and lists them all", () =
     'The canvas has 3 frames, 1 open comment. It has 2 pages; the person is looking at "Pricing".',
   );
 });
+
+test("Aiden reads which pages the person shows dark or tweaked, and which items they hid", () => {
+  const view = { x: 0, y: 0, w: 2000, h: 2000 };
+  const page = note("page", 0, 0, { kind: "file", path: "design/a.html", text: undefined, dark: true, tweaks: { "--accent": "#ff0055" } });
+  const answer = describeCanvas(canvas([page, note("gone", 300, 0, { hidden: true }), note("plain", 600, 0)]), { view });
+  const byId = new Map(answer.inView.map((frame) => [frame.id, frame]));
+  assert.equal(byId.get("page")!.dark, true);
+  assert.deepEqual(byId.get("page")!.tweaks, { "--accent": "#ff0055" });
+  assert.equal(byId.get("gone")!.hidden, true);
+  assert.deepEqual([byId.get("plain")!.dark, byId.get("plain")!.tweaks, byId.get("plain")!.hidden], [undefined, undefined, undefined]);
+});

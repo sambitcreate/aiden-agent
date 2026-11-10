@@ -9,6 +9,7 @@ import { BotPeersArt } from "./bot-peers-art";
 import {
   BrowserArt,
   ComputerUseArt,
+  DesignModeArt,
   FilesEditorArt,
   GitWorkflowsArt,
   InlineVisualsArt,
@@ -64,6 +65,7 @@ export const FEATURE_ART = {
   browser: { tint: "peach", Art: BrowserArt },
   inlineVisuals: { tint: "rose", Art: InlineVisualsArt },
   workspaceArtifacts: { tint: "lilac", Art: WorkspaceArtifactsArt },
+  designMode: { tint: "mint", Art: DesignModeArt },
   filesEditor: { tint: "sun", Art: FilesEditorArt },
   reviewDiffs: { tint: "aqua", Art: ReviewDiffsArt },
   terminal: { tint: "periwinkle", Art: TerminalArt },

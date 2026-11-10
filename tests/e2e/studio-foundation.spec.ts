@@ -100,7 +100,8 @@ async function expectHomeChat(page: Page) {
 }
 
 test.describe("Studio foundation with both flags off", () => {
-  test.use({ workspaceSeed: true });
+  // Design mode is on by default, so its kill switch turns it off here.
+  test.use({ workspaceSeed: true, appEnvironment: { AIDEN_DESIGN_MODE: "0" } });
 
   test("adds no studio rows, commands, chunks or routes", async ({ aiden }) => {
     const { page } = aiden;

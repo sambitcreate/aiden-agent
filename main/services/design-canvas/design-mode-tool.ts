@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 
@@ -96,6 +97,7 @@ export class DesignModeConsent {
     }
     if (answer === "decline") {
       request.finish("declined");
+      reportAnalyticsEvent("design_mode_declined", {});
       return true;
     }
     try {
@@ -105,6 +107,7 @@ export class DesignModeConsent {
       throw error;
     }
     request.finish("entered");
+    reportAnalyticsEvent("design_mode_entered", { source: "aiden" });
     return true;
   }
 }

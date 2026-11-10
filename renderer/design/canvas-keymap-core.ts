@@ -44,6 +44,7 @@ export type DesignCanvasCommand =
   | { type: "rename" }
   | { type: "addNote" }
   | { type: "comment" }
+  | { type: "panel" }
   | { type: "draw"; tool: DesignDrawTool };
 
 export function resolveDesignCanvasKey(
@@ -69,6 +70,7 @@ export function resolveDesignCanvasKey(
     if (!event.shiftKey && event.code === "F2") return { type: "rename" };
     if (!event.shiftKey && event.code === "KeyN") return { type: "addNote" };
     if (!event.shiftKey && event.code === "KeyC") return { type: "comment" };
+    if (!event.shiftKey && event.code === "KeyI") return { type: "panel" };
     const draw = DRAW_KEYS[event.code];
     const tool = event.shiftKey ? draw?.shift : draw?.plain;
     if (tool) return { type: "draw", tool };

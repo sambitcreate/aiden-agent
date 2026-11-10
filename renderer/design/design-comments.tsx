@@ -32,6 +32,7 @@ import {
   setCommentQueued,
   type DesignCommentPlace,
   type DesignLocated,
+  type DesignPageElement,
 } from "../shared/design-canvas/comments";
 import { showPage } from "../shared/design-canvas/pages";
 import type { DesignCanvas, DesignComment, DesignCommentAnchor, DesignFrame } from "../shared/design-canvas/schema";
@@ -76,7 +77,7 @@ function asPinComment(id: string, source: PinSource): DesignComment {
   return comment;
 }
 
-function frameIframe(wrapper: HTMLElement | null, frameId: string): HTMLIFrameElement | null {
+export function frameIframe(wrapper: HTMLElement | null, frameId: string): HTMLIFrameElement | null {
   if (!wrapper) return null;
   for (const iframe of wrapper.querySelectorAll<HTMLIFrameElement>("iframe[data-frame-id]")) {
     if (iframe.getAttribute("data-frame-id") === frameId) return iframe;
@@ -312,6 +313,48 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
     });
   }, []);
 
+  // Comments on an element of a page the person is editing words in: the
+  // text bar's Comment opens the box there; an edit only Aiden can make is
+  // queued there with the edit as its note.
+  const elementPlace = (frame: DesignFrame, element: DesignPageElement): DesignCommentPlace => {
+    const scale = frame.w / (frame.designWidth ?? DESIGN_DEFAULT_WIDTH);
+    const point: [number, number] = [Math.round(element.rect.x + element.rect.w / 2), Math.round(element.rect.y)];
+    const { selector, text, tag, rect, sourcePath } = element;
+    return {
+      frameId: frame.id,
+      x: Math.min(frame.w, Math.max(0, point[0] * scale)),
+      y: Math.min(frame.h, Math.max(0, point[1] * scale)),
+      anchor: { selector, text, tag, rect, point, ...(sourcePath ? { sourcePath } : {}) },
+    };
+  };
+  const commentOnElement = React.useCallback((frameId: string, element: DesignPageElement) => {
+    const frame = docRef.current.frames.find((entry) => entry.id === frameId);
+    if (!frame) return;
+    startDraftRef.current({
+      id: crypto.randomUUID(),
+      place: elementPlace(frame, element),
+      label: `${frame.title} › ${elementLabel(element)}`,
+    });
+  }, []);
+  const captureSpotRef = React.useRef<(id: string, place: PinSource) => Promise<void>>(async () => undefined);
+  const queueOnElement = React.useCallback(
+    (frameId: string, element: DesignPageElement, note: string): boolean => {
+      const frame = docRef.current.frames.find((entry) => entry.id === frameId);
+      if (!frame) return false;
+      const id = crypto.randomUUID();
+      const place = elementPlace(frame, element);
+      let added = false;
+      change((latest) => {
+        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true });
+        added = next !== null;
+        return next ?? latest;
+      });
+      if (added) void captureSpotRef.current(id, place);
+      return added;
+    },
+    [change],
+  );
+
   const hoverFrame = React.useRef<number | null>(null);
   const onNodeMouseMove = (event: React.MouseEvent, node: Node) => {
     if (!active || draft) return;
@@ -396,7 +439,7 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
   }, [highlightKey, pageWindow]);
 
   /** Takes a picture of the spot a comment is about, with its box out of the way. */
-  const captureSpot = async (commentId: string, comment: PinSource) => {
+  const captureSpot = async (commentId: string, comment: PinSource): Promise<void> => {
     const region = wrapper.current?.getBoundingClientRect();
     const instance = flow.current;
     if (!region || !instance || region.width < 1 || region.height < 1 || document.visibilityState === "hidden") return;
@@ -418,6 +461,8 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
       setCapturing(false);
     }
   };
+
+  captureSpotRef.current = captureSpot;
 
   const saveDraft = async (note: string, queued: boolean) => {
     if (!draft) return;
@@ -542,6 +587,8 @@ export function useDesignComments({ chatId, doc, change, flow, wrapper, live, ve
     escape,
     open,
     commentOn,
+    commentOnElement,
+    queueOnElement,
     layer,
   };
 }
