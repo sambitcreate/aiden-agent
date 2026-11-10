@@ -987,7 +987,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
             coordinator: coordinator,
             botID: botID,
             composerSession: session,
-            machine: nil
+            machine: try XCTUnwrap(coordinator.defaultInstanceId)
         ))
         defer { close(window) }
         await assertSettles({ (session.draftOwner as? AidenBotSessionModel)?.hasLoaded == true }, timeout: 15)

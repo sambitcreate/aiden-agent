@@ -263,8 +263,8 @@ enum AidenChatForkPrefillHandoff {
 struct AidenForkableChatDetailView: View {
     let coordinator: AidenRemoteCoordinator
     let chat: AidenChat
-    /// The machine the chat belongs to. Nil means the selected one.
-    var owner: AidenRemoteRequestContext?
+    /// The machine the chat belongs to.
+    let owner: AidenRemoteRequestContext
     var autoStartVoice = false
     var onChatUpdated: @MainActor (AidenChat) -> Void = { _ in }
     var onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
@@ -295,7 +295,7 @@ private struct AidenChatForkLevel: View {
     let coordinator: AidenRemoteCoordinator
     let depth: Int
     let chat: AidenChat
-    let owner: AidenRemoteRequestContext?
+    let owner: AidenRemoteRequestContext
     let autoStartVoice: Bool
     @Binding var trail: AidenChatForkTrail
     let onChatUpdated: @MainActor (AidenChat) -> Void

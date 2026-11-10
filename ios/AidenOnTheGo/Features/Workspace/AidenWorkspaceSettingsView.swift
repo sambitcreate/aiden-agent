@@ -80,7 +80,7 @@ struct AidenWorkspaceSettingsView: View {
                         AidenWorkspaceFilesView(
                             coordinator: coordinator,
                             workspace: workspace,
-                            owner: context.scope == .owner ? context : nil
+                            owner: context
                         )
                     } label: {
                         Label("Files", systemImage: "doc.text")

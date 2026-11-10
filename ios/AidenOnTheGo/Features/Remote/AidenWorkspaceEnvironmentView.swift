@@ -151,14 +151,14 @@ final class AidenWorkspaceFilesModel {
     var errorMessage: String?
 
     private let workspace: AidenWorkspace
-    /// The machine whose files these are. Nil follows the selected machine.
-    private let owner: AidenRemoteRequestContext?
+    /// The machine whose files these are.
+    private let owner: AidenRemoteRequestContext
     private let cache: AidenWorkspaceEnvironmentCache
     private let hapticScope = UUID()
 
     init(
         workspace: AidenWorkspace,
-        owner: AidenRemoteRequestContext? = nil,
+        owner: AidenRemoteRequestContext,
         cache: AidenWorkspaceEnvironmentCache = .shared
     ) {
         self.workspace = workspace
@@ -166,17 +166,14 @@ final class AidenWorkspaceFilesModel {
         self.cache = cache
     }
 
-    private func context(on coordinator: AidenRemoteCoordinator) -> AidenRemoteRequestContext? {
-        owner ?? (try? coordinator.requestContext())
-    }
+    private func context(on coordinator: AidenRemoteCoordinator) -> AidenRemoteRequestContext? { owner }
 
     private func stillHolds(_ context: AidenRemoteRequestContext, _ coordinator: AidenRemoteCoordinator) -> Bool {
         coordinator.holds(context)
     }
 
     func isConnected(_ coordinator: AidenRemoteCoordinator) -> Bool {
-        guard let owner else { return coordinator.connectionState == .connected }
-        return coordinator.hosts.connection(for: owner.instanceId)?.connectionState == .connected
+        coordinator.hosts.connection(for: owner.instanceId)?.connectionState == .connected
     }
 
     func setHapticsActive(_ active: Bool, coordinator: AidenRemoteCoordinator) {
@@ -395,7 +392,7 @@ struct AidenWorkspaceFilesView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
-        owner: AidenRemoteRequestContext? = nil,
+        owner: AidenRemoteRequestContext,
         initialReference: String? = nil
     ) {
         self.initialReference = initialReference

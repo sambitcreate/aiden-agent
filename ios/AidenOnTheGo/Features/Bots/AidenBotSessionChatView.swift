@@ -58,21 +58,21 @@ struct AidenBotSessionChatView: View {
         botID: String,
         initialSummary: AidenBotSummary? = nil,
         composerSession: AidenComposerSession? = nil,
-        machine: String?
+        machine: String
     ) {
         self.coordinator = coordinator
         self.botID = botID
         self.initialSummary = initialSummary
         _composerSession = State(initialValue: composerSession ?? AidenComposerSession())
-        // A Bot opened from a list stays on the machine it's on; otherwise the default's.
-        _openedOn = State(initialValue: machine ?? coordinator.defaultInstanceId)
+        // A Bot chat stays on the machine it opened on, whatever the default does.
+        _openedOn = State(initialValue: machine)
     }
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
     /// The machine the chat opened on, so moving the default leaves it there.
-    @State private var openedOn: String?
-    private var machineID: String { openedOn ?? coordinator.defaultInstanceId ?? "" }
+    @State private var openedOn: String
+    private var machineID: String { openedOn }
 
     /// The machine this chat belongs to.
     private var ownerConnection: AidenHostConnection? {
@@ -93,21 +93,20 @@ struct AidenBotSessionChatView: View {
     }
 
     private func machineContext() throws -> AidenRemoteRequestContext {
-        try openedOn.map(coordinator.ownerContext(for:)) ?? coordinator.requestContext()
+        try coordinator.ownerContext(for: openedOn)
     }
 
     private var canWrite: Bool {
         ownerConnection?.connectionState == .connected && canCompose
     }
 
-    /// The chat's own machine; with none known, the selected one.
+    /// Whether the chat's own machine keeps spending limits.
     private var supportsSpending: Bool {
-        (openedOn == nil ? coordinator.server : ownerConnection?.server)?.supportsSpendingLimits == true
+        ownerConnection?.server?.supportsSpendingLimits == true
     }
 
     private var spendingTransport: AidenSpendingTransport? {
         guard supportsSpending else { return nil }
-        guard openedOn != nil else { return try? coordinator.remoteClient() }
         guard let context = try? coordinator.ownerContext(for: model?.owner.instanceId ?? machineID) else { return nil }
         return try? coordinator.remoteClient(for: context)
     }
@@ -1912,11 +1911,11 @@ struct AidenBotBusyPill<ModeMenu: View>: View {
 }
 
 /// Where a Bot chat's tools go. Profile, Advanced, Files and Delete all read and
-/// write `machine`, the chat's own; nil is the selected machine.
+/// write `machine`, the chat's own.
 @MainActor
 struct AidenBotSessionTools {
     let coordinator: AidenRemoteCoordinator
-    let machine: String?
+    let machine: String
     let botID: String
 
     func profile(

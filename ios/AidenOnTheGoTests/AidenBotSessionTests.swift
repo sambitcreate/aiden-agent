@@ -5857,7 +5857,7 @@ private struct AidenBotViewHostView: View {
     var body: some View {
         NavigationStack {
             if host.showsBot {
-                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session, machine: nil)
+                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session, machine: "studio")
             } else {
                 Text("Bots")
             }
@@ -5876,7 +5876,7 @@ private struct AidenBotTabHostView: View {
     var body: some View {
         TabView(selection: $host.selectedTab) {
             NavigationStack {
-                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session, machine: nil)
+                AidenBotSessionChatView(coordinator: coordinator, botID: botID, composerSession: host.session, machine: "studio")
             }
             .tag(0)
             Text("Elsewhere").tag(1)

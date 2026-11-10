@@ -4,8 +4,7 @@ struct AidenWorkspaceDetailView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
     /// The workspace's own machine, which its chats and Settings read and write.
-    /// Nil is the default machine.
-    let owner: AidenRemoteRequestContext?
+    let owner: AidenRemoteRequestContext
     let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
@@ -14,7 +13,7 @@ struct AidenWorkspaceDetailView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
-        owner: AidenRemoteRequestContext?,
+        owner: AidenRemoteRequestContext,
         onRemoved: @escaping () -> Void,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
@@ -77,7 +76,7 @@ struct AidenWorkspaceDetailView: View {
         .onChange(of: owner) { _, _ in isShowingSettings = false }
         .onChange(of: coordinator.defaultInstanceId) { old, _ in
             guard let settingsContext else { return }
-            if settingsContext.scope == .selected || settingsContext.instanceId == old {
+            if settingsContext.instanceId == old {
                 isShowingSettings = false
             }
         }
@@ -85,14 +84,13 @@ struct AidenWorkspaceDetailView: View {
 }
 
 extension AidenWorkspaceDetailView {
-    /// Settings save on the workspace's own machine, through its owner context.
-    /// With no owner they go to the default machine and stop once it changes.
+    /// Settings save on the workspace's own machine, through its owner context,
+    /// and only while the coordinator still holds that machine's pairing.
     @MainActor
     static func settingsContext(
-        owner: AidenRemoteRequestContext?,
+        owner: AidenRemoteRequestContext,
         coordinator: AidenRemoteCoordinator
     ) -> AidenRemoteRequestContext? {
-        guard let owner else { return try? coordinator.requestContext() }
-        return coordinator.holds(owner) ? owner : nil
+        coordinator.holds(owner) ? owner : nil
     }
 }

@@ -4,8 +4,8 @@ struct AidenWorkspaceChatsView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.aidenPalette) private var palette
     let workspace: AidenWorkspace
-    /// The workspace's machine, whose chats these are. Nil is the selected machine.
-    let owner: AidenRemoteRequestContext?
+    /// The workspace's machine, whose chats these are.
+    let owner: AidenRemoteRequestContext
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
     let onChatActivityChanged: @MainActor (String, AidenChatSummaryActivity) -> Void
@@ -18,7 +18,7 @@ struct AidenWorkspaceChatsView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
-        owner: AidenRemoteRequestContext?,
+        owner: AidenRemoteRequestContext,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
         onChatActivityChanged: @escaping @MainActor (String, AidenChatSummaryActivity) -> Void = { _, _ in }
@@ -102,7 +102,7 @@ struct AidenWorkspaceChatsView: View {
         .overlay { if model.isLoading && model.chats.isEmpty { ProgressView() } }
         .refreshable { await model.load() }
         // An owned workspace's chats don't follow the selection.
-        .task(id: owner == nil ? coordinator.defaultInstanceId : owner?.instanceId) { await model.load() }
+        .task(id: owner.instanceId) { await model.load() }
         .navigationDestination(isPresented: Binding(
             get: { createdChat != nil },
             set: { if !$0 { createdChat = nil } }

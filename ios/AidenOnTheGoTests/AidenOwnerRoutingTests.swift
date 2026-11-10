@@ -256,8 +256,13 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertFalse(requests("studio").contains("GET /chats"))
         XCTAssertTrue(model.isConnected)
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
-        // The selected machine's namesake is its own.
-        let selected = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "default", cache: cache)
+        // The default machine's namesake is its own.
+        let selected = AidenWorkspaceChatsModel(
+            coordinator: coordinator,
+            owner: try coordinator.ownerContext(for: "studio"),
+            workspaceId: "default",
+            cache: cache
+        )
         await selected.load()
         XCTAssertEqual(selected.chats.map(\.id), ["studio-chat"])
     }

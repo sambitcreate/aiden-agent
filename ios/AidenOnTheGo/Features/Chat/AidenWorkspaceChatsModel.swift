@@ -8,8 +8,8 @@ import Observation
 final class AidenWorkspaceChatsModel {
     private var presentationGenerations: [String: UInt64] = [:]
     private let coordinator: AidenRemoteCoordinator
-    /// The workspace's machine. Nil follows the default machine.
-    private let owner: AidenRemoteRequestContext?
+    /// The workspace's machine.
+    private let owner: AidenRemoteRequestContext
     private let workspaceId: String
     private let cache: AidenChatCache
     private let hapticScope: UUID
@@ -22,7 +22,7 @@ final class AidenWorkspaceChatsModel {
 
     init(
         coordinator: AidenRemoteCoordinator,
-        owner: AidenRemoteRequestContext?,
+        owner: AidenRemoteRequestContext,
         workspaceId: String,
         hapticScope: UUID = UUID(),
         cache: AidenChatCache = .shared,
@@ -39,13 +39,11 @@ final class AidenWorkspaceChatsModel {
     }
 
     var isConnected: Bool {
-        guard let owner else { return coordinator.connectionState == .connected }
-        return coordinator.hosts.connection(for: owner.instanceId)?.connectionState == .connected
+        coordinator.hosts.connection(for: owner.instanceId)?.connectionState == .connected
     }
 
-    /// The owner's context while it's live, else the selected machine's.
+    /// The owner's context while it's live.
     private func requestContext() throws -> AidenRemoteRequestContext {
-        guard let owner else { return try coordinator.requestContext() }
         guard coordinator.isLive(owner) else { throw AidenRemoteClientError.installationChanged }
         return owner
     }

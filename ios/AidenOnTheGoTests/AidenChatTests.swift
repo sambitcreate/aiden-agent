@@ -2237,7 +2237,7 @@ final class AidenChatTests: XCTestCase {
         draftStore: AidenChatDraftStore? = nil,
         modelPreferenceStore: AidenModelPreferenceStore? = nil,
         visualDocumentCache: AidenVisualDocumentCache? = nil,
-        onCoordinator: (@MainActor (AidenRemoteCoordinator) -> Void)? = nil,
+        onCoordinator: (@MainActor (AidenRemoteCoordinator) throws -> Void)? = nil,
         initialChat: AidenChat? = nil,
         responseOverride: AidenChatProgressLifecycleURLProtocol.Override? = nil,
         extraCapabilities: [AidenRemoteCapability] = [],
@@ -2292,7 +2292,7 @@ final class AidenChatTests: XCTestCase {
         )
         await coordinator.start()
         if expectsConnection { XCTAssertEqual(coordinator.connectionState, .connected) }
-        onCoordinator?(coordinator)
+        try onCoordinator?(coordinator)
 
         let chat: AidenChat
         if let initialChat {
@@ -3977,7 +3977,7 @@ final class AidenChatTests: XCTestCase {
             var publications: [AidenChat] = []
             var removals: [String] = []
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) }, onChatRemoved: { removals.append($0) })
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) }, onChatRemoved: { removals.append($0) })
             })
             let instance = "instance-progress-lifecycle"
             if mode == "stale" {
@@ -4036,7 +4036,7 @@ final class AidenChatTests: XCTestCase {
             var workspace: AidenWorkspaceChatsModel!
             var publications: [AidenChat] = []
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
             })
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -4069,7 +4069,7 @@ final class AidenChatTests: XCTestCase {
             var workspace: AidenWorkspaceChatsModel!
             var publications: [AidenChat] = []
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
             })
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -4104,7 +4104,7 @@ final class AidenChatTests: XCTestCase {
             var workspace: AidenWorkspaceChatsModel!
             var publications: [AidenChat] = []
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
             })
             var remote = detail.chat
             remote.title = "Rejected mutation"
@@ -4174,7 +4174,7 @@ final class AidenChatTests: XCTestCase {
             var publications: [AidenChat] = []
             var removals: [String] = []
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) }, onChatRemoved: { removals.append($0) })
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) }, onChatRemoved: { removals.append($0) })
             })
             var remote = detail.chat
             remote.title = "Rejected mutation"
@@ -4221,7 +4221,7 @@ final class AidenChatTests: XCTestCase {
             var publications: [AidenChat] = []
             var removals: [String] = []
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) }, onChatRemoved: { removals.append($0) })
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) }, onChatRemoved: { removals.append($0) })
             })
             var remote = detail.chat
             remote.title = "Rejected mutation"
@@ -4375,7 +4375,7 @@ final class AidenChatTests: XCTestCase {
         var workspace: AidenWorkspaceChatsModel!
         var publications: [AidenChat] = []
         let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-            workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
+            workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache, onChatUpdated: { publications.append($0) })
         })
         var receipt = detail.chat
         receipt.title = "PATCH title"
@@ -4420,7 +4420,7 @@ final class AidenChatTests: XCTestCase {
             let cache = AidenChatCache(root: root)
             var workspace: AidenWorkspaceChatsModel!
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache)
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache)
             })
             let instance = "instance-progress-lifecycle"
             let old = detail.chat
@@ -4728,7 +4728,7 @@ final class AidenChatTests: XCTestCase {
             let cache = AidenChatCache(root: root)
             var workspace: AidenWorkspaceChatsModel!
             let detail = try await makeProgressLifecycleModel(mode: .denied, cache: cache, onCoordinator: { coordinator in
-                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: nil, workspaceId: "workspace-1", cache: cache)
+                workspace = AidenWorkspaceChatsModel(coordinator: coordinator, owner: try coordinator.ownerContext(for: "instance-progress-lifecycle"), workspaceId: "workspace-1", cache: cache)
             })
             let instance = "instance-progress-lifecycle"
             let old = detail.chat
