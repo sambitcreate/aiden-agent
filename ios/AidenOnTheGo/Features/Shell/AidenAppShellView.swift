@@ -66,6 +66,9 @@ private struct AidenArchiveSyncID: Equatable {
 struct AidenAppShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Binding private var navigationRequest: AidenNavigationRequest?
+    /// A route asked for from outside the shell, such as Machines from the
+    /// connection recovery banner. Shown on its own tab, then cleared.
+    @Binding private var routeRequest: AidenAppRoute?
     private let inboxStore: AidenUnifiedInboxStore
     private let navigationStore: AidenAppNavigationStore
     private let intents: AidenForegroundIntentRouter
@@ -85,12 +88,14 @@ struct AidenAppShellView: View {
         coordinator: AidenRemoteCoordinator,
         inboxStore: AidenUnifiedInboxStore,
         navigationRequest: Binding<AidenNavigationRequest?> = .constant(nil),
+        routeRequest: Binding<AidenAppRoute?> = .constant(nil),
         navigationStore: AidenAppNavigationStore = AidenAppNavigationStore(),
         intents: AidenForegroundIntentRouter? = nil
     ) {
         self.coordinator = coordinator
         self.inboxStore = inboxStore
         _navigationRequest = navigationRequest
+        _routeRequest = routeRequest
         self.navigationStore = navigationStore
         self.intents = intents ?? .shared
         let navigation = AidenAppNavigation(
@@ -256,6 +261,11 @@ struct AidenAppShellView: View {
             guard let request else { return }
             navigationRequest = nil
             open(request)
+        }
+        .onChange(of: routeRequest, initial: true) { _, route in
+            guard let route else { return }
+            routeRequest = nil
+            navigation.open(route)
         }
         .onChange(of: intents.routes, initial: true) {
             for queued in intents.takeRoutes(openableOn: coordinator) {

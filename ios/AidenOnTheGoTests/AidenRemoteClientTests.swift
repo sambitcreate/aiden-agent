@@ -4902,25 +4902,7 @@ final class AidenRemoteClientTests: XCTestCase {
             ),
             "Local Network"
         )
-        XCTAssertEqual(
-            AidenInstallationPresentation.reachability(
-                installationID: "instance-a",
-                activeInstallationID: "instance-b",
-                connectionState: .connected
-            ),
-            "Not checked"
-        )
-        XCTAssertEqual(AidenInstallationPresentation.identitySuffix("instance_studio_abcdef"), "abcdef")
-        XCTAssertEqual(
-            AidenInstallationPresentation.accessibilityValue(
-                installationID: "instance-a",
-                activeInstallationID: "instance-a",
-                connectionState: .connected,
-                endpoint: URL(string: "https://studio.local:49220/api/aiden/v1")!,
-                lastConnectedAt: nil
-            ),
-            "Selected, Connected, Local Network, Never connected"
-        )
+        XCTAssertEqual(AidenInstallationPresentation.lastConnection(nil), "Never connected")
     }
 
     @MainActor

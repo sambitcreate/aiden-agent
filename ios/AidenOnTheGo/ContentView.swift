@@ -178,11 +178,6 @@ extension AidenRemoteCoordinator {
 }
 
 struct ContentView: View {
-    private enum ConnectionRecoveryDestination: String, Identifiable {
-        case installations, pairing
-        var id: Self { self }
-    }
-
     @Bindable var coordinator: AidenRemoteCoordinator
     var inboxStore: AidenUnifiedInboxStore
     @Environment(\.scenePhase) private var scenePhase
@@ -193,16 +188,19 @@ struct ContentView: View {
     @State private var foregroundIntents = AidenForegroundIntentRouter.shared
     @State private var showsNewChatConsent = false
     @State private var navigationRequest: AidenNavigationRequest?
+    /// A place in the shell to show, asked for from outside it.
+    @State private var shellRoute: AidenAppRoute?
     @State private var sceneConnectionRefreshInProgress = false
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
-    @State private var connectionRecoveryDestination: ConnectionRecoveryDestination?
     @State private var connectScheduler: AidenHostConnectScheduler?
 
     @ViewBuilder
     private var connectionRecovery: some View {
         if case .offline = coordinator.connectionState, let issue = coordinator.connectionIssue {
+            // The Machines page reports each machine's own state, and makes
+            // another the default or pairs a new one.
             AidenConnectionRecoveryView(coordinator: coordinator, issue: issue) {
-                connectionRecoveryDestination = .installations
+                shellRoute = .machines
             }
         }
     }
@@ -228,20 +226,13 @@ struct ContentView: View {
                 // navigation bars behind the banner, Back included.
                 VStack(spacing: 0) {
                     connectionRecovery
-                    AidenAppShellView(coordinator: coordinator, inboxStore: inboxStore, navigationRequest: $navigationRequest)
+                    AidenAppShellView(
+                        coordinator: coordinator,
+                        inboxStore: inboxStore,
+                        navigationRequest: $navigationRequest,
+                        routeRequest: $shellRoute
+                    )
                 }
-            }
-        }
-        // Keep the sheet on the stable root so a foreground reconnect cannot
-        // remove connection management while the person is using it.
-        .sheet(item: $connectionRecoveryDestination) { destination in
-            switch destination {
-            case .installations:
-                AidenInstallationsView(coordinator: coordinator, addInstallation: {
-                    connectionRecoveryDestination = .pairing
-                })
-            case .pairing:
-                AidenPairingView(coordinator: coordinator, onPaired: { connectionRecoveryDestination = nil })
             }
         }
         .task { await coordinator.start() }
@@ -317,7 +308,6 @@ struct ContentView: View {
         .onChange(of: coordinator.connectionState) { _, state in
             if state == .needsPairing {
                 externalNewChats.invalidate()
-                connectionRecoveryDestination = nil
             }
             if state == .connected {
                 consumeExternalNewChatIfReady()
@@ -526,7 +516,7 @@ struct AidenConnectionRecoveryView: View {
             Button("Retry connection") { Task { await coordinator.connectActiveInstallation() } }
         }
         Button("Switch connection", action: switchConnection)
-            .accessibilityHint("Choose a paired computer or pair another Aiden Agent.")
+            .accessibilityHint("Opens Machines, to choose another machine or pair one.")
     }
 }
 

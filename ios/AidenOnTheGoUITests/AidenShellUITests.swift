@@ -1256,9 +1256,10 @@ final class AidenShellUITests: XCTestCase {
     }
 
     /// With the default machine out of reach, the recovery banner sits above the
-    /// tabs, not over their bars, and still opens connection management. The
-    /// other machines' chats stay in the Inbox under it.
-    func testTheRecoveryBannerSitsAboveTheTabsAndOpensConnections() {
+    /// tabs, not over their bars, and Switch connection opens the Machines page,
+    /// where each machine reports its own state. The other machines' chats stay
+    /// in the Inbox under it.
+    func testTheRecoveryBannerSitsAboveTheTabsAndOpensMachines() {
         let app = AidenStateMatrix.launch(scenario: .four, extraArguments: ["-AidenDemoDefaultOffline"])
         let switchConnection = app.buttons["Switch connection"].firstMatch
         XCTAssertTrue(switchConnection.waitForExistence(timeout: 15), "No recovery banner")
@@ -1270,7 +1271,11 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(laptopRow.waitForExistence(timeout: 10), "The other machines' chats left the Inbox")
 
         switchConnection.tap()
-        XCTAssertTrue(app.navigationBars["Aiden Installations"].waitForExistence(timeout: 10), "Switch connection opened nothing")
+        XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "Switch connection didn't open Machines")
+        let studio = app.buttons.matching(NSPredicate(format: "label == %@", "Studio Mac, Offline")).firstMatch
+        XCTAssertTrue(studio.waitForExistence(timeout: 10), "Machines doesn't say the default is offline")
+        let laptop = app.buttons.matching(NSPredicate(format: "label == %@", "Laptop, Online")).firstMatch
+        XCTAssertTrue(laptop.waitForExistence(timeout: 10), "Machines doesn't say the laptop is online")
         app.terminate()
     }
 

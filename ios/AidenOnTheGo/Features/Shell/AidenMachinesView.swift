@@ -26,6 +26,23 @@ enum AidenMachineStatus: Equatable {
     }
 }
 
+/// How the machine pages describe a pairing's transport and last connection.
+enum AidenInstallationPresentation {
+    static func endpointType(_ endpoint: URL) -> String {
+        guard let host = endpoint.host?.lowercased() else { return String(localized: "Remote") }
+        return host.hasSuffix(".ts.net")
+            ? String(localized: "Tailscale")
+            : String(localized: "Local Network")
+    }
+
+    static func lastConnection(_ date: Date?, now: Date = Date()) -> String {
+        guard let date else { return String(localized: "Never connected") }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return String(localized: "Last connected \(formatter.localizedString(for: date, relativeTo: now))")
+    }
+}
+
 /// What one line of the Machines page shows. Built by the model, so a view only
 /// formats it.
 struct AidenMachineRow: Identifiable, Equatable {
