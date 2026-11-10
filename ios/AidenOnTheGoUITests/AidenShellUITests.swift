@@ -671,6 +671,10 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "Back did not reach the Inbox")
         let returned = expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: tabBar)
         wait(for: [returned], timeout: 5)
+        // The window keeps its size into the next launch, so give the next test a full one.
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            try AidenStateMatrix.widenTheWindow(of: app)
+        }
         app.terminate()
     }
 
@@ -772,6 +776,9 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(app.tabBars.buttons[title].firstMatch.exists, "No \(title) tab at compact width")
         }
         XCTAssertFalse(AidenStateMatrix.sidebarRow("Bots", in: app).exists, "A sidebar showed at compact width")
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            try AidenStateMatrix.widenTheWindow(of: app)
+        }
         app.terminate()
     }
 
@@ -1015,9 +1022,12 @@ final class AidenShellUITests: XCTestCase {
     /// A drag that XCUITest's `swipeUp()` doesn't make: slow, from one spot to another.
     /// A flick from `swipeUp()` left the list where it was, which is why an earlier
     /// attempt saw no scroll and no change of keyboard.
+    /// Measured on the window: a narrowed iPad window can sit away from the
+    /// screen's left edge while the app's frame still starts at zero.
     private func dragResults(in app: XCUIApplication, from: Double = 0.45, to: Double = 0.1) {
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to))
+        let window = app.windows.firstMatch
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+        let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
 
