@@ -443,11 +443,19 @@ final class AidenOwnerRoutingTests: XCTestCase {
         var older = laptop
         older.serverFeatures = older.serverFeatures.filter { $0 != "bot-durable-session-v1" }
         try await connect([studio, older])
-        let model = AidenBotRouteModel(id: id("bot_scout", on: "laptop"))
+        var botChat = chatObject("chat_bot_scout", text: "From the laptop")
+        botChat["botId"] = "bot_scout"
+        responder.reply(instanceId: "laptop", path: "/chats/chat_bot_scout", status: 200, json: json(botChat))
+        let model = AidenBotRouteModel(id: id("bot_scout", on: "laptop"), chatCache: cache)
 
         await model.load(coordinator: coordinator)
 
-        XCTAssertNotEqual(model.state, .session)
+        guard case .chat(let chat, let allowsMutations) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(chat.id, "chat_bot_scout")
+        XCTAssertEqual(chat.botId, "bot_scout")
+        XCTAssertTrue(allowsMutations)
+        XCTAssertTrue(requests("laptop").contains("GET /chats/\(chat.id)"))
+        XCTAssertFalse(requests("studio").contains("GET /chats/\(chat.id)"))
         XCTAssertTrue(requests("laptop").contains("GET /bot-conversations"))
         XCTAssertFalse(requests("studio").contains("GET /bot-conversations"))
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
@@ -503,6 +511,87 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertFalse(requests("studio").contains("GET /bots/bot_scout"))
         XCTAssertFalse(requests("studio").contains("GET /bot-capabilities"))
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
+    /// A Bot with no chat yet on a machine from before durable sessions starts
+    /// its first chat there, from the route, rather than sending the person back
+    /// to a list that can't.
+    func testABotWithNoChatOnAnOlderMachineStartsOneThere() async throws {
+        var older = laptop
+        older.serverFeatures = older.serverFeatures.filter { $0 != "bot-durable-session-v1" }
+        try await connect([studio, older])
+        responder.reply(instanceId: "laptop", path: "/bot-conversations", status: 200, json: json(["conversations": [[String: Any]]()]))
+        var created = chatObject("chat_new", text: "Hello")
+        created["botId"] = "bot_scout"
+        responder.reply(instanceId: "laptop", method: "POST", path: "/bots/bot_scout/chats", status: 201, json: json(created))
+        let model = AidenBotRouteModel(id: id("bot_scout", on: "laptop"), chatCache: cache)
+
+        await model.load(coordinator: coordinator)
+        guard case .noChat(let name, let canStart) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(name, "Scout")
+        XCTAssertTrue(canStart)
+
+        responder.reply(instanceId: "laptop", path: "/bot-conversations", status: 200, json: json(["conversations": [[
+            "chatId": "chat_new", "botId": "bot_scout", "title": "Scout", "activityState": "idle",
+            "canRespondToApproval": false, "createdAt": "2026-11-05T09:00:00.000Z",
+            "updatedAt": "2026-11-05T09:00:01.000Z", "revision": "r1",
+        ]]]))
+        responder.reply(instanceId: "laptop", path: "/chats/chat_new", status: 200, json: json(created))
+        await model.startChat(coordinator: coordinator)
+
+        XCTAssertEqual(requests("laptop").filter { $0 == "POST /bots/bot_scout/chats" }.count, 1)
+        XCTAssertFalse(requests("studio").contains { $0.hasPrefix("POST /bots") })
+        guard case .chat(let chat, _) = model.state else { return XCTFail("\(model.state)") }
+        XCTAssertEqual(chat.id, "chat_new")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
+    /// Each machine's "Bots can message each other" reads and writes that machine.
+    func testBotMessagingOnAnotherMachineIsReadAndChangedThere() async throws {
+        var withMessaging = laptop
+        withMessaging.deviceCapabilities.append(.botMessaging)
+        withMessaging.serverCapabilities?.append(.botMessaging)
+        try await connect([studio, withMessaging])
+        responder.reply(instanceId: "laptop", path: "/bots", status: 200, json: json([
+            "bots": [[String: Any]](), "maxBots": 256, "messaging": ["enabled": false],
+        ]))
+        responder.reply(instanceId: "laptop", method: "PUT", path: "/bots/messaging", status: 200, json: json(["enabled": true]))
+        let messaging = AidenMachineBotMessaging(coordinator: coordinator, instanceId: "laptop")
+        XCTAssertTrue(messaging.isOffered)
+
+        await messaging.load()
+        XCTAssertEqual(messaging.value?.enabled, false)
+        XCTAssertTrue(messaging.canChange)
+        // Off for every Bot is where it must stay reachable.
+        await messaging.set(enabled: true)
+
+        XCTAssertEqual(messaging.value?.enabled, true)
+        XCTAssertTrue(requests("laptop").contains("PUT /bots/messaging"))
+        XCTAssertFalse(requests("studio").contains("PUT /bots/messaging"))
+        XCTAssertNil(AidenMachineBotMessaging(coordinator: coordinator, instanceId: "studio").value)
+    }
+
+    func testAManagedWorktreeRefreshesItsOwnMachinesWorkspaces() async throws {
+        _ = try await laptopsDefault()
+        let laptopReads = workspaceReads("laptop")
+        let studioReads = workspaceReads("studio")
+
+        await AidenWorkspaceGitTarget(coordinator: coordinator, context: try coordinator.ownerContext(for: "laptop"))
+            .refreshWorkspaces()
+
+        XCTAssertEqual(workspaceReads("laptop"), laptopReads + 1)
+        XCTAssertEqual(workspaceReads("studio"), studioReads)
+    }
+
+    func testAGitWriteGoesToTheWorkspacesOwnMachine() async throws {
+        _ = try await laptopsDefault()
+        let target = AidenWorkspaceGitTarget(coordinator: coordinator, context: try coordinator.ownerContext(for: "laptop"))
+        let client = try XCTUnwrap(target.client())
+
+        await AidenWorkspaceGitModel().createBranch(client: client, workspaceId: "default", name: "topic", isCurrent: target.holds)
+
+        XCTAssertTrue(requests("laptop").contains { $0.hasPrefix("POST /workspaces/default/git/") })
+        XCTAssertFalse(requests("studio").contains { $0.contains("/git/") })
     }
 
     // MARK: Opening

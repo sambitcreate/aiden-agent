@@ -34,9 +34,9 @@ struct AidenWorkspacesTabView: View {
     }
 
     private var machines: AidenWorkspacesTabMachines? {
-        guard store.roster.showsStrip else { return nil }
+        guard store.roster.showsTabStrip else { return nil }
         let archive = coordinator.workspaceArchiveStore
-        let shown = store.roster.visible.map(\.instanceId)
+        let shown = store.roster.tabMachines.map(\.instanceId)
         return AidenWorkspacesTabMachines(
             roster: store.roster,
             filter: Binding(get: { store.filter }, set: { store.filter = $0 }),
@@ -51,13 +51,17 @@ struct AidenWorkspacesTabView: View {
     }
 
     var body: some View {
+        let machines = machines
         AidenWorkspacesDirectoryView(
             coordinator: coordinator,
             archiveStore: coordinator.workspaceArchiveStore,
             tabChrome: AidenWorkspacesTabChrome(route: route, newChat: newChat, machines: machines)
         )
         .safeAreaInset(edge: .top, spacing: 0) {
-            AidenConnectionNotice(coordinator: coordinator)
+            // Grouped, each machine says its own state under its name.
+            if machines == nil {
+                AidenConnectionNotice(coordinator: coordinator)
+            }
         }
     }
 }

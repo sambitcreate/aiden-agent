@@ -173,10 +173,17 @@ struct AidenRunningChatsSheet: View {
                     row: AidenInboxProjection.Row(summary: summary, placement: placement),
                     section: .working,
                     workspaceName: row.workspaceName,
-                    palette: palette
+                    palette: palette,
+                    machine: store.roster.rowChip(for: row.id.instanceId, filter: .all),
+                    isDimmed: store.roster.isOffline(row.id.instanceId)
                 )
             case .bot(let bot):
-                AidenInboxBotRowView(bot: bot, palette: palette)
+                AidenInboxBotRowView(
+                    bot: bot,
+                    palette: palette,
+                    machine: store.roster.rowChip(for: row.id.instanceId, filter: .all),
+                    isDimmed: store.roster.isOffline(row.id.instanceId)
+                )
             }
         }
         .buttonStyle(.plain)

@@ -895,6 +895,16 @@ struct AidenWorkspaceGitTarget {
         guard holds() else { return nil }
         return try? coordinator.remoteClient(for: context)
     }
+
+    /// Reads the target machine's workspace list again, as after a new worktree.
+    func refreshWorkspaces() async {
+        guard holds() else { return }
+        if context.scope == .owner {
+            try? await coordinator.hosts.connection(for: context.instanceId)?.refreshWorkspacesForPoll()
+        } else {
+            await coordinator.refreshWorkspaces()
+        }
+    }
 }
 
 struct AidenWorkspaceGitView: View {
@@ -1100,7 +1110,7 @@ struct AidenWorkspaceGitView: View {
                             isCurrent: { coordinator.holds(context) }
                         )
                         guard coordinator.holds(context) else { return }
-                        await coordinator.refreshWorkspaces()
+                        await target.refreshWorkspaces()
                     }
                 }
             }

@@ -695,8 +695,9 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertFalse(allowsMutations)
     }
 
-    /// A route never creates anything: a Bot with no chat says so.
-    func testABotWithNoChatYetExplainsItselfAndCreatesNothing() async throws {
+    /// A route never creates anything by itself: a Bot with no chat offers to
+    /// start one and waits for the tap.
+    func testABotWithNoChatYetOffersToStartOneAndCreatesNothing() async throws {
         let responder = AidenDemoResponder()
         let coordinator = try await olderBotMachine(responder: responder)
         responder.reply(instanceId: "studio", path: "/bot-conversations", status: 200, json: try conversationsJSON(chatId: nil))
@@ -704,8 +705,7 @@ final class AidenAppShellTests: XCTestCase {
 
         await model.load(coordinator: coordinator)
 
-        guard case .unavailable(let message) = model.state else { return XCTFail("\(model.state)") }
-        XCTAssertTrue(message.contains("Scout"), message)
+        XCTAssertEqual(model.state, .noChat(name: "Scout", canStart: true))
         XCTAssertFalse(responder.requests(instanceId: "studio").contains { $0.hasPrefix("POST") })
     }
 

@@ -155,7 +155,12 @@ struct AidenInboxTabView: View {
         case .bot(let bot):
             // No Bot triage exists, so a Bot row has no swipes and no menu.
             Button { onOpen(row.route) } label: {
-                AidenInboxBotRowView(bot: bot, palette: palette)
+                AidenInboxBotRowView(
+                    bot: bot,
+                    palette: palette,
+                    machine: roster.rowChip(for: row.id.instanceId, filter: filter.wrappedValue),
+                    isDimmed: roster.isOffline(row.id.instanceId)
+                )
             }
             .buttonStyle(.plain)
             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
@@ -399,7 +404,7 @@ struct AidenInboxTabRootView: View {
             refreshFailed: store.refreshFailed,
             moreChats: store.moreChats,
             roster: store.roster,
-            filter: Binding(get: { store.filter }, set: { store.filter = $0 }),
+            filter: Binding(get: { store.inboxFilter }, set: { store.filter = $0 }),
             onOpen: onOpen,
             onAction: { action, id in
                 Task { await store.perform(action, on: id) }
@@ -490,26 +495,49 @@ struct AidenCatchUpFinishedView: View {
 struct AidenInboxBotRowView: View {
     let bot: AidenBotSummary
     let palette: AidenPalette
+    /// Says which machine the Bot is on. Nil when only one is listed.
+    var machine: AidenMachineLabel? = nil
+    /// The Bot's machine is offline: the row stays, in secondary colours.
+    var isDimmed = false
+
+    private var reason: String? { AidenBotAttention.reason(bot) }
+
+    /// "Bot Scout, On Laptop, Offline, 1 thing needs you", like a chat row.
+    var accessibilityName: String {
+        [
+            String(localized: "Bot \(bot.name)"),
+            machine?.accessibilityLabel,
+            isDimmed ? String(localized: "Offline") : nil,
+            reason,
+        ]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+    }
 
     var body: some View {
-        let reason = AidenBotAttention.reason(bot)
+        let needsYou = AidenBotAttention.needsYou(bot)
+        let tint = isDimmed ? palette.secondary : needsYou ? palette.warning : palette.secondary
         HStack(alignment: .center, spacing: 10) {
             AidenBotAvatarSymbol(name: bot.name, palette: palette)
-            Text(bot.name)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(palette.foreground)
-                .lineLimit(1)
+                .opacity(isDimmed ? 0.6 : 1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(bot.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
+                    .lineLimit(1)
+                if let machine { AidenMachineChip(label: machine) }
+            }
             Spacer(minLength: 8)
-            if AidenBotAttention.isRunning(bot), !AidenBotAttention.needsYou(bot) {
+            if AidenBotAttention.isRunning(bot), !needsYou, !isDimmed {
                 AidenWorkingIndicator(size: 12)
             }
             if let reason {
                 Text(reason)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(AidenBotAttention.needsYou(bot) ? palette.warning : palette.secondary)
+                    .foregroundStyle(tint)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background((AidenBotAttention.needsYou(bot) ? palette.warning : palette.secondary).opacity(0.12), in: Capsule())
+                    .background(tint.opacity(0.12), in: Capsule())
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -519,7 +547,7 @@ struct AidenInboxBotRowView: View {
         .frame(minHeight: 44)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([String(localized: "Bot \(bot.name)"), reason].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(accessibilityName)
         .accessibilityHint("Opens the Bot")
     }
 }

@@ -279,6 +279,29 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertFalse(spoken(machine: nil, isDimmed: false).contains("On "))
     }
 
+    func testABotRowSaysItsMachineAndThatItIsOfflineToVoiceOver() throws {
+        let bot = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "bot_scout", "name": "Scout", "purpose": "",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
+            "health": "ready", "sessionState": "idle", "issueCount": 1,
+            "createdAt": "2026-11-05T09:00:00.000Z", "updatedAt": "2026-11-05T09:00:00.000Z", "revision": "r1",
+        ] as [String: Any]))
+
+        func spoken(machine: AidenMachineLabel?, isDimmed: Bool) -> String {
+            AidenInboxBotRowView(
+                bot: bot,
+                palette: AidenThemeCatalog.palette(preset: .aiden, scheme: .light),
+                machine: machine,
+                isDimmed: isDimmed
+            ).accessibilityName
+        }
+
+        XCTAssertTrue(spoken(machine: label("Laptop"), isDimmed: false).contains("On Laptop"))
+        XCTAssertFalse(spoken(machine: label("Laptop"), isDimmed: false).contains("Offline"))
+        XCTAssertTrue(spoken(machine: label("Laptop"), isDimmed: true).contains("Offline"))
+        XCTAssertFalse(spoken(machine: nil, isDimmed: false).contains("On "))
+    }
+
     func testSearchChipsFollowTheMachinesSearchReaches() async throws {
         let store = makeStore(coordinator(.four))
         XCTAssertEqual(store.roster.searchChip(for: "laptop")?.name, "Laptop")

@@ -351,11 +351,6 @@ struct AidenAppShellView: View {
         }
     }
 
-    private func openChat(_ id: AidenHostObjectID) {
-        markViewed(id)
-        navigation.open(.chat(id))
-    }
-
     /// An Inbox row: its chat, or its Bot, on the Inbox stack.
     private func openRow(_ route: AidenAppRoute) {
         if case .chat(let id) = route { markViewed(id) }

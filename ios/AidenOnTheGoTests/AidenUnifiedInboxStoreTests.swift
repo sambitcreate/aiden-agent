@@ -1996,5 +1996,35 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         XCTAssertEqual(store.workspaceSections { _, _ in false }.map(\.instanceId), ["laptop"])
         store.stop()
     }
+
+    /// Hiding only covers the Inbox: the Bots and Workspaces tabs still list the
+    /// machine, its strip chip still filters them, and the Inbox reads that as All.
+    func testAMachineHiddenFromTheInboxStaysInTheBotsAndWorkspacesTabs() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        serveBotWithCards("bot_cards", on: "studio")
+        serveBotWithCards("bot_cards", on: "laptop")
+        await connectAll(coordinator)
+        preferences.update("laptop") { $0.isHidden = true }
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 1)
+
+        await store.readHiddenMachinesBots()
+
+        XCTAssertEqual(store.roster.visible.map(\.instanceId), ["studio"])
+        XCTAssertEqual(store.roster.tabMachines.map(\.instanceId), ["studio", "laptop"])
+        XCTAssertTrue(store.roster.showsTabStrip)
+        XCTAssertEqual(Set(store.botSections().map(\.instanceId)), ["studio", "laptop"])
+        XCTAssertEqual(Set(store.workspaceSections { _, _ in false }.map(\.instanceId)), ["studio", "laptop"])
+        XCTAssertEqual(botReads("laptop"), 1)
+
+        store.filter = .machine("laptop")
+
+        XCTAssertEqual(store.filter, .machine("laptop"))
+        XCTAssertEqual(store.botSections().map(\.instanceId), ["laptop"])
+        XCTAssertEqual(store.inboxFilter, .all)
+        XCTAssertFalse(rowIDs(store.inbox, on: "studio").isEmpty)
+        XCTAssertTrue(rowIDs(store.inbox, on: "laptop").isEmpty)
+        store.stop()
+    }
 }
 #endif

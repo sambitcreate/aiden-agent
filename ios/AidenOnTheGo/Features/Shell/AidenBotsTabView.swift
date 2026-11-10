@@ -29,7 +29,7 @@ struct AidenBotsTabView: View {
     }
 
     private var machines: AidenBotsHomeMachines? {
-        guard store.roster.showsStrip else { return nil }
+        guard store.roster.showsTabStrip else { return nil }
         return AidenBotsHomeMachines(
             roster: store.roster,
             filter: Binding(get: { store.filter }, set: { store.filter = $0 }),
@@ -74,6 +74,10 @@ struct AidenBotsTabView: View {
             .onChange(of: coordinator.activeInstanceId) { _, _ in
                 chatStarter.forgetAttempt()
             }
+            .task(id: machines?.roster.tabMachines.map(\.instanceId)) {
+                guard machines != nil else { return }
+                await store.readHiddenMachinesBots()
+            }
         }
     }
 
@@ -102,12 +106,17 @@ final class AidenBotChatStarter {
         retainedAttempt = nil
     }
 
-    /// True once the chat is made and saved, ready to open.
-    func start(botID: String, coordinator: AidenRemoteCoordinator) async -> Bool {
+    /// True once the chat is made and saved, ready to open. Nil `context` makes
+    /// it on the selected machine; an owner context, on that machine.
+    func start(
+        botID: String,
+        coordinator: AidenRemoteCoordinator,
+        context ownerContext: AidenRemoteRequestContext? = nil
+    ) async -> Bool {
         var capturedContext: AidenRemoteRequestContext?
         var sentAttempt: AidenBotConversationCreateAttempt?
         do {
-            let context = try coordinator.requestContext()
+            let context = try ownerContext ?? coordinator.requestContext()
             capturedContext = context
             let client = try coordinator.remoteClient(for: context)
             let request = try AidenBotChatCreateRequest()
@@ -124,11 +133,11 @@ final class AidenBotChatStarter {
                 request: request,
                 idempotencyKey: attempt.idempotencyKey
             )
-            guard coordinator.isCurrent(context), chat.botId == botID,
+            guard coordinator.holds(context), chat.botId == botID,
                   retainedAttempt == attempt else { return false }
             retainedAttempt = nil
             let saved = await aidenPersistBotChatForPresentation(chat, context: context, coordinator: coordinator, cache: cache)
-            return saved != nil && coordinator.isCurrent(context)
+            return saved != nil && coordinator.holds(context)
         } catch is CancellationError {
             return false
         } catch {
@@ -137,7 +146,7 @@ final class AidenBotChatStarter {
                 if retainedAttempt == sentAttempt { retainedAttempt = nil }
                 return false
             }
-            guard capturedContext.map({ coordinator.isCurrent($0) }) ?? false else { return false }
+            guard capturedContext.map({ coordinator.holds($0) }) ?? false else { return false }
             if let sentAttempt, retainedAttempt == sentAttempt,
                !aidenBotConversationCreateFailureIsAmbiguous(error) {
                 retainedAttempt = nil
@@ -159,18 +168,24 @@ final class AidenBotRouteModel {
         case session
         /// A machine from before durable sessions: the Bot's newest chat.
         case chat(AidenChat, allowsMutations: Bool)
+        /// A machine from before durable sessions, and the Bot has no chat yet.
+        /// `canStart` says whether its machine can make one now.
+        case noChat(name: String, canStart: Bool)
         case unavailable(String)
     }
 
     let id: AidenHostObjectID
     private(set) var state = State.loading
+    private(set) var isStarting = false
     @ObservationIgnored private let chatCache: AidenChatCache
     @ObservationIgnored private let botCache: AidenBotCache
+    @ObservationIgnored private let starter: AidenBotChatStarter
 
     init(id: AidenHostObjectID, chatCache: AidenChatCache = .shared, botCache: AidenBotCache = .shared) {
         self.id = id
         self.chatCache = chatCache
         self.botCache = botCache
+        starter = AidenBotChatStarter(cache: chatCache)
     }
 
     /// The Bot's machine, as long as it's still the pairing the route was made on.
@@ -185,6 +200,18 @@ final class AidenBotRouteModel {
     func accept(_ chat: AidenChat) {
         guard case .chat(let current, let allowsMutations) = state, current.id == chat.id else { return }
         state = .chat(chat, allowsMutations: allowsMutations)
+    }
+
+    /// Makes the Bot's first chat on its own machine, then opens it. A link
+    /// never does this on the person's behalf; only the button on `.noChat` does.
+    func startChat(coordinator: AidenRemoteCoordinator) async {
+        guard case .noChat(_, true) = state, !isStarting,
+              let context = try? coordinator.ownerContext(for: id.instanceId) else { return }
+        isStarting = true
+        defer { isStarting = false }
+        guard await starter.start(botID: id.objectId, coordinator: coordinator, context: context) else { return }
+        state = .loading
+        await load(coordinator: coordinator)
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
@@ -255,10 +282,14 @@ final class AidenBotRouteModel {
                     botID: id.objectId,
                     conversations: page.conversations
                 ) else {
-                    // A link never starts a chat on the person's behalf.
+                    // A link never starts a chat on the person's behalf: the
+                    // route offers to, on the Bot's own machine.
                     let bot = try await client.bot(id: id.objectId)
                     guard coordinator.holds(context) else { return }
-                    state = .unavailable(String(localized: "\(bot.name) has no chat yet. Open it from Bots to start one."))
+                    state = .noChat(
+                        name: bot.name,
+                        canStart: canWrite && bot.health == .ready && connection.installation.canWriteBots
+                    )
                     return
                 }
                 let fetched = try await client.chat(id: chatID)
@@ -361,6 +392,24 @@ struct AidenBotRouteView: View {
                     onChatUpdated: { model.accept($0) }
                 )
                 .id("\(model.id.instanceId)-\(chat.id)")
+            case .noChat(let name, let canStart):
+                ContentUnavailableView {
+                    Label("No chat yet", systemImage: "bubble.left.and.bubble.right")
+                } description: {
+                    Text(canStart
+                        ? String(localized: "Start a chat with \(name).")
+                        : String(localized: "\(name) has no chat yet, and its machine can’t start one right now."))
+                } actions: {
+                    if canStart {
+                        Button("Start chat") {
+                            Task { await model.startChat(coordinator: coordinator) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .disabled(model.isStarting)
+                    }
+                }
+                .background(palette.canvas.ignoresSafeArea())
             case .unavailable(let message):
                 ContentUnavailableView(
                     "Bot unavailable",
@@ -396,6 +445,124 @@ struct AidenBotRouteView: View {
         }
         .task(id: loadID) {
             await model.load(coordinator: coordinator)
+        }
+    }
+}
+
+/// One machine's "Bots can message each other", read and written on that
+/// machine whichever is selected.
+@MainActor
+struct AidenMachineBotMessaging {
+    let coordinator: AidenRemoteCoordinator
+    let instanceId: String
+
+    private var connection: AidenHostConnection? {
+        coordinator.hosts.connection(for: instanceId)
+    }
+
+    var context: AidenRemoteRequestContext? {
+        try? connection?.requestContext(scope: .owner)
+    }
+
+    /// The machine lets this phone see and change the setting.
+    var isOffered: Bool {
+        connection?.installation.hasNegotiatedAccess(to: .botMessaging) == true
+    }
+
+    var value: AidenBotMessagingSettings? {
+        coordinator.botMessaging.value(for: context)
+    }
+
+    var error: String? {
+        coordinator.botMessaging.error(for: context)
+    }
+
+    var canChange: Bool {
+        guard let context, let connection, value != nil else { return false }
+        return !coordinator.botMessaging.isSaving(for: context)
+            && connection.connectionState == .connected
+            && connection.installation.canWriteBots
+    }
+
+    /// Reads the setting from the machine's Bot list.
+    func load() async {
+        guard isOffered, let context, let client = try? coordinator.remoteClient(for: context) else { return }
+        let generation = coordinator.botMessaging.generation(for: context)
+        guard let list = try? await client.bots(), coordinator.holds(context) else { return }
+        coordinator.botMessaging.adopt(list.messaging, context: context, generation: generation)
+    }
+
+    func set(enabled: Bool) async {
+        guard canChange, let context, let client = try? coordinator.remoteClient(for: context) else { return }
+        await coordinator.botMessaging.save(
+            enabled: enabled,
+            context: context,
+            send: { try await client.setBotMessaging(enabled: enabled) },
+            read: { try await client.bots().messaging },
+            isCurrent: { coordinator.holds(context) }
+        )
+    }
+}
+
+/// The switch at the foot of a machine's Bots, when that machine offers it.
+struct AidenMachineBotMessagingRow: View {
+    let messaging: AidenMachineBotMessaging
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        Group {
+            if messaging.isOffered, let value = messaging.value {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Bots can message each other", isOn: Binding(
+                        get: { value.enabled },
+                        set: { enabled in Task { await messaging.set(enabled: enabled) } }
+                    ))
+                    .disabled(!messaging.canChange)
+                    if let error = messaging.error {
+                        Text(error).font(.footnote).foregroundStyle(palette.secondary)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            } else {
+                Color.clear.frame(height: 0)
+            }
+        }
+        .task(id: messaging.context) {
+            if messaging.value == nil { await messaging.load() }
+        }
+    }
+}
+
+/// A machine's line under its name in the Bots and Workspaces tabs: what its
+/// connection says, when it isn't simply connected.
+struct AidenMachineSectionStatus: View {
+    let coordinator: AidenRemoteCoordinator
+    let instanceId: String
+    /// "Bots" or "workspaces", as the saved list is named.
+    let savedListName: String
+
+    @Environment(\.aidenPalette) private var palette
+
+    private var text: String? {
+        switch coordinator.hosts.connection(for: instanceId)?.connectionState {
+        case .offline?:
+            String(localized: "Offline — showing saved \(savedListName)")
+        case .needsPairing?:
+            String(localized: "Pair this machine again to see its \(savedListName).")
+        case .connecting?:
+            String(localized: "Connecting…")
+        case .connected?, nil:
+            nil
+        }
+    }
+
+    var body: some View {
+        if let text {
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
         }
     }
 }

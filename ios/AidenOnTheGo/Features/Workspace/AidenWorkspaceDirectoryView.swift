@@ -54,7 +54,7 @@ struct AidenWorkspacesDirectoryView: View {
     /// actions; another machine's open its page, where Settings works on it.
     @ViewBuilder
     private func machineRows(_ machines: AidenWorkspacesTabMachines) -> some View {
-        AidenMachineStrip(labels: machines.roster.visible, filter: machines.filter)
+        AidenMachineStrip(labels: machines.roster.tabMachines, filter: machines.filter)
             .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: 0, bottom: AidenSpacing.xs, trailing: 0))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
@@ -84,8 +84,16 @@ struct AidenWorkspacesDirectoryView: View {
                         }
                     }
                 } header: {
-                    if machines.filter.wrappedValue == .all {
-                        Text(machines.roster.labels[section.instanceId]?.name ?? "")
+                    VStack(alignment: .leading, spacing: 2) {
+                        if machines.filter.wrappedValue == .all {
+                            Text(machines.roster.labels[section.instanceId]?.name ?? "")
+                        }
+                        AidenMachineSectionStatus(
+                            coordinator: coordinator,
+                            instanceId: section.instanceId,
+                            savedListName: String(localized: "workspaces")
+                        )
+                        .textCase(nil)
                     }
                 }
             }

@@ -62,8 +62,13 @@ struct AidenMachineRoster: Equatable {
     var total = 0
     /// Paired and not blocked, hidden or not.
     var usable = 0
+    /// What the Bots and Workspaces tabs list: paired and not blocked, hidden
+    /// from the Inbox or not, in pairing order. Hiding only covers the Inbox.
+    var tabMachines: [AidenMachineLabel] = []
 
     var showsStrip: Bool { AidenMachineStrip.isShown(for: visible) }
+    /// The Bots and Workspaces tabs' strip, over `tabMachines`.
+    var showsTabStrip: Bool { AidenMachineStrip.isShown(for: tabMachines) }
 
     /// Nil unless the list holds rows from more than one machine.
     func rowChip(for instanceId: String, filter: AidenMachineFilter) -> AidenMachineLabel? {

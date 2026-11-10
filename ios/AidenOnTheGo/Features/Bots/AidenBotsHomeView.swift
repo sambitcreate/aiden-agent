@@ -768,7 +768,7 @@ struct AidenBotsHomeView: View {
     /// when the strip says All. A row opens the Bot on its own machine.
     @ViewBuilder
     private func machinesContent(_ machines: AidenBotsHomeMachines) -> some View {
-        AidenMachineStrip(labels: machines.roster.visible, filter: machines.filter)
+        AidenMachineStrip(labels: machines.roster.tabMachines, filter: machines.filter)
             .padding(.vertical, AidenSpacing.xs)
         if let shown = shownPendingCreate {
             AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
@@ -798,6 +798,8 @@ struct AidenBotsHomeView: View {
                     .padding(.top, AidenSpacing.m)
                     .accessibilityAddTraits(.isHeader)
             }
+            AidenMachineSectionStatus(coordinator: coordinator, instanceId: section.instanceId, savedListName: String(localized: "Bots"))
+                .padding(.horizontal, 20)
             ForEach(section.rows) { row in
                 Button {
                     machines.onOpen(row)
@@ -806,6 +808,8 @@ struct AidenBotsHomeView: View {
                 }
                 .buttonStyle(.plain)
             }
+            // Each machine's own switch, so one that's off can be turned back on.
+            AidenMachineBotMessagingRow(messaging: AidenMachineBotMessaging(coordinator: coordinator, instanceId: section.instanceId))
         }
     }
 

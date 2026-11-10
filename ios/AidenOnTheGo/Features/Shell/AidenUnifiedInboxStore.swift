@@ -44,10 +44,16 @@ final class AidenUnifiedInboxStore {
     private(set) var moreChats = AidenInboxMoreChats.none
     /// The newest banner. `perform` clears the others, so there's only ever one.
     private(set) var notice: AidenInboxMachineNotice?
-    /// A machine that stops being shown puts this back to `.all`.
+    /// Shared by the Inbox, Bots and Workspaces strips. A machine that stops
+    /// being shown, by being hidden, blocked or forgotten, puts this back to
+    /// `.all`. One already hidden can still be picked on the Bots and Workspaces
+    /// tabs, which list it; the Inbox then lists as `inboxFilter` says.
     var filter: AidenMachineFilter = .all {
         didSet { if filter != oldValue { settle() } }
     }
+    /// `filter` as the Inbox reads it: All while it names a machine hidden from
+    /// the Inbox.
+    private(set) var inboxFilter: AidenMachineFilter = .all
     /// The chat on screen, which is never news.
     var openChat: AidenHostObjectID? {
         didSet { if openChat != oldValue { settle() } }
@@ -161,24 +167,42 @@ final class AidenUnifiedInboxStore {
 
     // MARK: The Bots and Workspaces tabs
 
-    /// The Bots tab under `filter`: each shown machine's Bots, newest first, in
-    /// the strip's order.
+    /// The Inbox doesn't poll a machine hidden from it, but the Bots tab still
+    /// lists that machine's Bots. Reads them once for each connected one, for the
+    /// Bots tab to call when it shows and when it's pulled.
+    func readHiddenMachinesBots() async {
+        var reads: [Task<Void, Never>] = []
+        for connection in hosts.ordered
+        where !connection.isBlockedFromInbox
+            && connection.connectionState == .connected
+            && preferences.preferences(for: connection.instanceId).isHidden {
+            guard let machine = machines[connection.instanceId] else { continue }
+            reads.append(Task { [weak self] in _ = await self?.learnBots(of: machine, over: connection) })
+        }
+        guard !reads.isEmpty else { return }
+        for read in reads { await read.value }
+        settle()
+    }
+
+    /// The Bots tab under `filter`: each listed machine's Bots, newest first, in
+    /// the strip's order. A machine hidden from the Inbox is listed too.
     func botSections() -> [AidenMachineSection<AidenMachineBotRow>] {
         AidenMachineSection.grouped(
-            roster.visible.map { label in
+            roster.tabMachines.map { label in
                 (instanceId: label.instanceId, rows: snapshots[label.instanceId].map(AidenMachineBotRow.rows(of:)) ?? [])
             },
             filter: filter
         )
     }
 
-    /// The Workspaces tab under `filter`: each shown machine's workspaces by name,
-    /// less those archived on this device, in the strip's order.
+    /// The Workspaces tab under `filter`: each listed machine's workspaces by
+    /// name, less those archived on this device, in the strip's order. A machine
+    /// hidden from the Inbox is listed too.
     func workspaceSections(
         isArchived: (_ instanceId: String, _ workspaceId: String) -> Bool
     ) -> [AidenMachineSection<AidenMachineWorkspaceRow>] {
         AidenMachineSection.grouped(
-            roster.visible.compactMap { label in
+            roster.tabMachines.compactMap { label in
                 guard let connection = hosts.connection(for: label.instanceId) else { return nil }
                 let rows = AidenMachineWorkspaceRow.rows(
                     instanceId: label.instanceId,
@@ -408,14 +432,26 @@ final class AidenUnifiedInboxStore {
         if isRunning { followPollers(readings) }
 
         let shown = readings.filter { !$0.isBlocked && !$0.isHidden }
-        if case .machine(let instanceId) = filter, !shown.contains(where: { $0.connection.instanceId == instanceId }) {
-            filter = .all
-        }
         let hidden = Set(readings.filter(\.isHidden).map(\.connection.instanceId))
+        if case .machine(let instanceId) = filter {
+            let isUsable = readings.contains { $0.connection.instanceId == instanceId && !$0.isBlocked }
+            let wasJustHidden = hidden.contains(instanceId) && !hiddenMachines.contains(instanceId)
+            if !isUsable || wasJustHidden {
+                filter = .all
+                return
+            }
+        }
         if hidden != hiddenMachines { hiddenMachines = hidden }
+        let listedFilter: AidenMachineFilter
+        if case .machine(let instanceId) = filter, hidden.contains(instanceId) {
+            listedFilter = .all
+        } else {
+            listedFilter = filter
+        }
+        if listedFilter != inboxFilter { inboxFilter = listedFilter }
         let inputs = InboxInputs(
             snapshots: snapshots,
-            filter: filter,
+            filter: listedFilter,
             hiddenMachines: hidden,
             openChat: openChat,
             searchText: searchText,
@@ -426,7 +462,7 @@ final class AidenUnifiedInboxStore {
             builtFrom = inputs
             let rebuilt = AidenUnifiedInbox.make(
                 snapshots: Array(snapshots.values),
-                filter: filter,
+                filter: listedFilter,
                 hiddenMachines: hidden,
                 openChat: openChat,
                 now: now(),
@@ -460,13 +496,14 @@ final class AidenUnifiedInboxStore {
             },
             online: readings.filter(\.isOnline).count,
             total: readings.count,
-            usable: readings.filter { !$0.isBlocked }.count
+            usable: readings.filter { !$0.isBlocked }.count,
+            tabMachines: readings.filter { !$0.isBlocked }.compactMap(label)
         )
     }
 
     /// Everything the list says besides its rows.
     private func describeTheList(shown: [MachineReading], hasHiddenMachines: Bool) {
-        let listed = shown.filter { filter == .all || filter == .machine($0.connection.instanceId) }
+        let listed = shown.filter { inboxFilter == .all || inboxFilter == .machine($0.connection.instanceId) }
         listedMachines = listed.map(\.connection.instanceId)
 
         let state = AidenInboxListState.make(
