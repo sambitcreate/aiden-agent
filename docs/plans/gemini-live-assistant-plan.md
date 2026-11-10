@@ -114,7 +114,9 @@ revision 60). Settings → Aiden Live → **Let Live use the open
 chat** (on by default) and `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0` turn the
 tools off. No chat tool can answer an approval. Chat text and titles reach
 Live as untrusted data, and a send, stop or new chat with text needs speech
-that started after Live last read a chat or received a chat note.
+that started after Live last got chat content: any chat tool result carrying
+`untrusted_chat_content` (a read's messages, or a title, close matches or
+workspace name from send, stop, find or start) or a delivered chat note.
 
 ## Evidence and architecture decision
 
