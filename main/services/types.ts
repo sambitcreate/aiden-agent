@@ -1,4 +1,5 @@
 import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
+import type { AidenLiveSettingsFields } from "../../renderer/shared/aiden-live-settings.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
 import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
@@ -812,7 +813,7 @@ export interface AssistantConfigSnapshot {
 }
 
 /** Persisted lightweight app settings. */
-export interface AppSettings {
+export interface AppSettings extends AidenLiveSettingsFields {
   /** App effects are separately authorized from workspace file access. */
   appControlPolicy?: import("../../renderer/shared/app-controls.js").AppControlPolicy;
   /** Explicit host-owner consent; older pairings cannot enable this. */

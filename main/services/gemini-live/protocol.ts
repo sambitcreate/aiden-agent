@@ -123,6 +123,8 @@ export type GeminiLiveProtocolEvent =
       direction: "input" | "output";
       final: boolean;
       text: string;
+      /** Google marked this transcription finished, which ends the user's utterance. */
+      finished?: true;
     }
   | { type: "model_text"; text: string }
   | { type: "turn"; state: "generation_complete" | "turn_complete" | "waiting" }
@@ -206,6 +208,10 @@ export interface GeminiLiveProtocolOptions {
   signal?: AbortSignal;
   /** Exact Aiden custom declarations admitted by the main-owned session gate. */
   tools?: LiveConnectConfig["tools"];
+  /** Extra system-instruction lines from the session's Live tool providers. */
+  instructions?: readonly string[];
+  /** Gemini's prebuilt voice for replies; omitted keeps the provider default. */
+  voice?: string;
 }
 
 const systemClock: GeminiLiveClock = {
@@ -489,23 +495,39 @@ function liveConnectConfig(
   model: string,
   handle?: string,
   tools?: LiveConnectConfig["tools"],
+  instructions: readonly string[] = [],
+  voice?: string,
 ): GeminiLiveConnectConfig {
+  const extra = instructions.filter((line) => line.trim().length > 0).join(" ");
+  const withExtra = (base: string) => (extra ? `${base} ${extra}` : base);
+  const hasComputerUse =
+    tools?.some(
+      (tool) =>
+        "functionDeclarations" in tool &&
+        tool.functionDeclarations?.some((declaration) => declaration.name === "computer_use") === true,
+    ) === true;
   return {
     abortSignal: signal,
     responseModalities: [Modality.AUDIO],
     inputAudioTranscription: {},
     outputAudioTranscription: {},
+    ...(voice
+      ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } }
+      : {}),
     ...(model.endsWith("-extended-thinking")
       ? {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           // The screen-action contract only applies when Computer Use tools
           // were granted; without them, Live must not promise screen control.
-          systemInstruction:
-            tools && tools.length > 0
+          systemInstruction: withExtra(
+            hasComputerUse
               ? "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. Execute the user's requested screen actions directly during this Live session without per-action approval prompts. Stop when the user cancels. Never claim that an action completed until its tool result confirms it."
               : "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning is still running. You cannot click, type or act on the user's screen in this session; if asked, say so plainly.",
+          ),
         }
-      : {}),
+      : extra
+        ? { systemInstruction: extra }
+        : {}),
     ...(handle
       ? {}
       : { historyConfig: { initialHistoryInClientContent: true } }),
@@ -814,6 +836,8 @@ export class GeminiLiveProtocol {
         this.options.model,
         handle,
         this.options.tools,
+        this.options.instructions,
+        this.options.voice,
       ),
     };
     let timeoutTimer: unknown = null;
@@ -1312,6 +1336,7 @@ export class GeminiLiveProtocol {
         final:
           typeof value.finished === "boolean" ? value.finished : defaultFinal,
         text,
+        ...(value.finished === true ? { finished: true as const } : {}),
       });
     }
   }

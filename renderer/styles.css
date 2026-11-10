@@ -3518,6 +3518,186 @@ textarea {
   transition: none;
 }
 
+/* Aiden Live's floating ribbon: a dark glass pill above the chat composer.
+   Live tokens. Two owner-approved exceptions to the theme palette live here
+   and nowhere else (decisions 5a and 6a in docs/plans/aiden-live-voice-upgrade.md):
+   - --live-glass-*: the pill stays dark glass in light themes too, so it
+     carries its own fill, ink and control tokens and re-scopes the shared
+     control tokens for the buttons inside it.
+   - --live-spectrum-1..5: the Spectrum ribbon colours, read by the ribbon
+     canvas and the onboarding art. "Theme accent" uses --accent instead. */
+:root {
+  --live-spectrum-1: #ff5a5f;
+  --live-spectrum-2: #ffb020;
+  --live-spectrum-3: #fff6d6;
+  --live-spectrum-4: #3e97f6;
+  --live-spectrum-5: #8b5cf6;
+  --live-glass-fill: rgb(12 13 17 / 0.92);
+  --live-glass-ink: #f2f4f7;
+  --live-glass-ink-secondary: #b0b7c0;
+  --live-glass-control: rgb(209 212 218 / 0.1);
+  --live-glass-control-hover: rgb(209 212 218 / 0.16);
+  --live-glass-control-active: rgb(209 212 218 / 0.22);
+  --live-glass-elevation: 0 18px 44px rgb(16 24 40 / 0.28), 0 1px 2px rgb(16 24 40 / 0.2);
+}
+:root.dark {
+  --live-glass-elevation: 0 18px 52px rgb(0 0 0 / 0.5), 0 0 0 0.5px rgb(255 255 255 / 0.1);
+}
+.live-ribbon {
+  position: fixed;
+  z-index: 45;
+  display: flex;
+  width: min(380px, calc(100vw - 32px));
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.live-ribbon > * {
+  pointer-events: auto;
+}
+.live-ribbon-pill {
+  color-scheme: dark;
+  --text-primary: var(--live-glass-ink);
+  --text-secondary: var(--live-glass-ink-secondary);
+  --text-tertiary: var(--live-glass-ink-secondary);
+  --toolbar-icon: var(--live-glass-ink);
+  --surface-control: var(--live-glass-control);
+  --surface-control-hover: var(--live-glass-control-hover);
+  --surface-control-active: var(--live-glass-control-active);
+  --surface-list-hover: var(--live-glass-control);
+  --surface-list-selection: var(--live-glass-control-hover);
+  --elevation-control: none;
+  --elevation-control-hover: none;
+  --focus-ring: var(--live-glass-ink);
+  display: flex;
+  width: 100%;
+  height: 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 18px;
+  border-radius: var(--radius-pill);
+  background: var(--live-glass-fill);
+  box-shadow: var(--live-glass-elevation);
+  color: var(--text-primary);
+  backdrop-filter: blur(20px);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.live-ribbon[data-dragging] .live-ribbon-pill {
+  cursor: grabbing;
+}
+.live-ribbon-pill[data-compact] {
+  padding-left: 12px;
+}
+.live-ribbon-wave {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.live-ribbon-spacer {
+  flex: 1;
+}
+.live-ribbon-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.live-ribbon-title,
+.live-ribbon-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-ribbon-title {
+  color: var(--text-primary);
+  font-size: var(--text-regular);
+  font-weight: 600;
+}
+.live-ribbon-detail {
+  color: var(--text-secondary);
+  font-size: var(--text-small);
+}
+.live-ribbon-control {
+  flex: none;
+  color: var(--text-primary);
+}
+.live-ribbon-control[aria-pressed="true"] {
+  background: var(--surface-control-hover);
+}
+/* Ending is quiet but recognisable: a soft red fill and glyph, no border. */
+.live-ribbon-end {
+  background: color-mix(in srgb, var(--support-red) 18%, transparent);
+  color: var(--support-red);
+}
+.live-ribbon-end:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--support-red) 26%, transparent);
+}
+.live-ribbon-action {
+  flex: none;
+}
+.live-ribbon-card {
+  max-width: 100%;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-popover);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  color: var(--text-primary);
+  font-size: var(--text-small);
+  line-height: 1.45;
+}
+.live-ribbon-captions {
+  display: grid;
+  width: calc(100% + 60px);
+  max-width: calc(100vw - 32px);
+  gap: 4px;
+}
+.live-ribbon-captions p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.live-ribbon-captions p[data-speaker="aiden"] {
+  color: var(--text-secondary);
+}
+.live-ribbon-speaker {
+  font-weight: 600;
+}
+.live-ribbon-hint {
+  color: var(--text-secondary);
+}
+.live-ribbon-error {
+  background: var(--status-red-surface);
+  color: var(--status-red);
+}
+.live-ribbon-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--status-accent-surface);
+  color: var(--status-accent);
+  font-size: var(--text-small);
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .live-ribbon-pill {
+    animation: live-ribbon-in var(--motion-duration) var(--motion-easing) both;
+  }
+}
+@keyframes live-ribbon-in {
+  from { opacity: 0; translate: 0 6px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
 /* ---- Generated-image "Lens" placeholder ------------------------------------
    Shown where a chat's generated image will appear while generate_image runs.
    Numbers mirror IMAGE_SCAN_SPEC in renderer/shared/image-generation/placeholder-spec.ts

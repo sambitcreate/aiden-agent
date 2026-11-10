@@ -1,4 +1,8 @@
-import type { AssistantLiveStartIntent } from "../../renderer/shared/assistant-live.js";
+import {
+  ASSISTANT_LIVE_MAX_NOTE_CHARS,
+  ASSISTANT_LIVE_MAX_TOOL_RESULT_BYTES,
+  type AssistantLiveStartIntent,
+} from "../../renderer/shared/assistant-live.js";
 import { GEMINI_LIVE_MAX_JPEG_BYTES } from "../services/gemini-live/protocol.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -101,4 +105,66 @@ export function parseAssistantLiveDisplayReleaseIntent(
     throw new Error("Invalid Assistant Live display-release request.");
   }
   return { bindingId: value.bindingId };
+}
+
+function validSessionId(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= 128;
+}
+
+export interface AssistantLiveToolResultIntent {
+  sessionId: string;
+  requestId: string;
+  response: Record<string, unknown>;
+}
+
+export function parseAssistantLiveToolResultIntent(value: unknown): AssistantLiveToolResultIntent {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["requestId", "response", "sessionId"]) ||
+    !validSessionId(value.sessionId) ||
+    typeof value.requestId !== "string" ||
+    !/^r[0-9]{1,9}$/u.test(value.requestId) ||
+    !isRecord(value.response)
+  ) {
+    throw new Error("Invalid Assistant Live tool result.");
+  }
+  let json: string;
+  try {
+    json = JSON.stringify(value.response);
+  } catch {
+    throw new Error("Invalid Assistant Live tool result.");
+  }
+  if (Buffer.byteLength(json, "utf8") > ASSISTANT_LIVE_MAX_TOOL_RESULT_BYTES) {
+    throw new Error("Assistant Live tool result is too large.");
+  }
+  return {
+    sessionId: value.sessionId,
+    requestId: value.requestId,
+    response: JSON.parse(json) as Record<string, unknown>,
+  };
+}
+
+export interface AssistantLiveNoteIntent {
+  sessionId: string;
+  text: string;
+  /** Answer only once the note has reached Live, or false if it never does. */
+  awaitDelivery?: true;
+}
+
+export function parseAssistantLiveNoteIntent(value: unknown): AssistantLiveNoteIntent {
+  const awaitDelivery = isRecord(value) && "awaitDelivery" in value;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, awaitDelivery ? ["awaitDelivery", "sessionId", "text"] : ["sessionId", "text"]) ||
+    (awaitDelivery && value.awaitDelivery !== true) ||
+    !validSessionId(value.sessionId) ||
+    typeof value.text !== "string" ||
+    value.text.trim().length === 0 ||
+    value.text.length > ASSISTANT_LIVE_MAX_NOTE_CHARS
+  ) {
+    throw new Error("Invalid Assistant Live note.");
+  }
+  return awaitDelivery
+    ? { sessionId: value.sessionId, text: value.text, awaitDelivery: true }
+    : { sessionId: value.sessionId, text: value.text };
 }

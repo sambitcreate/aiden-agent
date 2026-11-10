@@ -581,6 +581,13 @@ export const assistantLiveApi = {
     invoke<boolean>("assistant-live:display-release", { bindingId }),
   sendFrame: (sessionId: string, frame: Uint8Array) =>
     invoke<boolean>("assistant-live:frame", { sessionId, frame }),
+  toolResult: (sessionId: string, requestId: string, response: Record<string, unknown>) =>
+    invoke<boolean>("assistant-live:tool-result", { sessionId, requestId, response }),
+  note: (sessionId: string, text: string, options?: { awaitDelivery?: boolean }) =>
+    invoke<boolean>(
+      "assistant-live:note",
+      options?.awaitDelivery ? { sessionId, text, awaitDelivery: true } : { sessionId, text },
+    ),
   onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>
     onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
 };
