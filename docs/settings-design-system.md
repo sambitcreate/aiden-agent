@@ -87,6 +87,8 @@ A "Chats" group follows Voice and look with one trailing switch, **Let Live use 
 
 An "Approvals" group (`live-voice-approval-settings.tsx`) follows Chats and has one trailing switch, **Answer approvals by voice** (`aidenLiveVoiceApprovals`, omitted means on), whose description names the 11 phrase languages. While it is on, a **What to say** `SettingsDisclosure` under it lists the allow-once and deny phrases for each language from `liveVoicePhrases`.
 
+An "In Aiden" group follows Approvals and holds one trailing switch, **Let Live move through Aiden** (`aidenLiveAppControl`, omitted means on); its row lives in `live-app-control-settings.tsx`. Pages that grant access, pair devices, set approvals or spending, add MCP servers, schedule work, choose providers, endpoints or where recordings and speech go, fetch catalogs, download models, install updates, run your own commands or delete files (including Aiden Live, Voice, Speech, Computer Use, Hooks and Storage) are wrapped in `LiveGuard guard="you"` by `settings-view.tsx`, so Live can show them but never change them, portaled menus and dialogs included. Every other switch and checkbox is the user's too, except on the Appearance and Links pages, which are marked `data-live-safe`.
+
 ## Page notes
 
 - **Text to Speech** has three groups: Setup, Voice and delivery, and Privacy and storage.

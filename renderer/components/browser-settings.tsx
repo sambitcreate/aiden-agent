@@ -83,9 +83,9 @@ export function BrowserSettings({ state, open, onOpenChange, run, error = null }
             <option value="external">System browser</option>
           </select>
         </label>
-        <label className="browser-setting-row"><span>Allow Aiden to use browsers by default</span><input type="checkbox" checked={state.defaults.agentAccess === "allow"} onChange={(event) => updateDefaults({ agentAccess: event.target.checked ? "allow" : "off" })} /></label>
+        <label className="browser-setting-row"><span>Allow Aiden to use browsers by default</span><input data-live-guard="you" type="checkbox" checked={state.defaults.agentAccess === "allow"} onChange={(event) => updateDefaults({ agentAccess: event.target.checked ? "allow" : "off" })} /></label>
         <label className="browser-setting-row">Access in this workspace
-          <select className="browser-select" value={state.agentAccessOverride} onChange={(event) => void run({ action: "agent_access", access: event.target.value as BrowserState["agentAccessOverride"] })}>
+          <select data-live-guard="you" className="browser-select" value={state.agentAccessOverride} onChange={(event) => void run({ action: "agent_access", access: event.target.value as BrowserState["agentAccessOverride"] })}>
             <option value="inherit">Use global default</option><option value="allow">Allow</option><option value="off">Off</option>
           </select>
         </label>

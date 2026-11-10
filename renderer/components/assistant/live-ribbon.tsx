@@ -11,6 +11,7 @@ import {
   type AidenLivePreferences,
   type AidenLiveRibbonColors,
 } from "../../shared/aiden-live-settings";
+import { LIVE_CONFIRM_ANSWER_ATTRIBUTE } from "../../shared/live-app-control";
 import {
   Button,
   DropdownMenu,
@@ -299,10 +300,22 @@ export function LiveRibbon({
         ) : null}
         {state === "confirm" && activity?.kind === "confirm" ? (
           <>
-            <Button size="medium" variant="filled" className="live-ribbon-action" onClick={activity.cancel}>
+            <Button
+              size="medium"
+              variant="filled"
+              className="live-ribbon-action"
+              {...{ [LIVE_CONFIRM_ANSWER_ATTRIBUTE]: "" }}
+              onClick={activity.cancel}
+            >
               Cancel
             </Button>
-            <Button size="medium" variant="accent" className="live-ribbon-action" onClick={activity.confirm}>
+            <Button
+              size="medium"
+              variant="accent"
+              className="live-ribbon-action"
+              {...{ [LIVE_CONFIRM_ANSWER_ATTRIBUTE]: "" }}
+              onClick={activity.confirm}
+            >
               Confirm
             </Button>
           </>

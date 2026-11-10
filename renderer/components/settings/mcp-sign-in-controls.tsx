@@ -52,7 +52,7 @@ export function McpSignInControls({
         </span>
       ) : null}
       {!authorizing && (authorized || needsSignIn || hasSession) ? (
-        <Button size="small" variant="transparent" onClick={onSignOut} disabled={signingOut}>
+        <Button size="small" variant="transparent" data-live-guard="confirm" onClick={onSignOut} disabled={signingOut}>
           {signingOut ? "Signing out…" : "Sign out"}
         </Button>
       ) : null}

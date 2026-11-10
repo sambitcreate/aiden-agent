@@ -13,6 +13,7 @@ export function AssistantComputerUseApproval({
 }): React.ReactElement {
   return (
     <section
+      data-live-guard="you"
       aria-labelledby={`assistant-live-computer-use-title-${prompt.approvalId}`}
       aria-describedby={`assistant-live-computer-use-summary-${prompt.approvalId}`}
       aria-busy={deciding}

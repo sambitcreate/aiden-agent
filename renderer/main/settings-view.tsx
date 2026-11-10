@@ -69,6 +69,7 @@ import {
   SettingsPageTabs,
 } from "../components/settings/settings-page";
 import { MemorySettings } from "../components/settings/memory-settings";
+import { LiveGuard } from "../components/live-guard";
 import { StorageSettingsPage } from "../components/settings/storage-settings";
 
 const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
@@ -133,6 +134,53 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   storage: StorageSettingsPage,
   about: AboutSettings,
 };
+
+// Pages that grant access, pair devices, set approvals or spending, run
+// commands (MCP servers), work in the background, choose where chats, search
+// queries, prompts, recordings or keys are sent (endpoints, providers, voice
+// and speech providers and routing), download models, fetch catalogs over the
+// network or install updates are the user's alone: Aiden
+// Live can read them but never use them (portaled menus and dialogs too).
+const LIVE_USER_ONLY_SECTIONS = new Set<SettingsSection>([
+  "providers",
+  "modelData",
+  "websearch",
+  "imageGeneration",
+  "about",
+  "voice",
+  "tts",
+  "geminiLive",
+  "computerUse",
+  "approvals",
+  "appControls",
+  "remoteAccess",
+  "peerHosts",
+  "telegram",
+  "bots",
+  "botComputers",
+  "simulator",
+  "mcp",
+  "scheduledTasks",
+  "limits",
+  "hooks",
+  "storage",
+]);
+
+// Live may flip switches only where they change how Aiden looks; every other
+// switch or checkbox is the user's (main's guard rule treats them as "you").
+const LIVE_SAFE_TOGGLE_SECTIONS = new Set<SettingsSection>(["appearance", "links"]);
+
+function SettingsLiveGuard({ section, children }: { section: SettingsSection; children: React.ReactNode }) {
+  if (LIVE_USER_ONLY_SECTIONS.has(section)) return <LiveGuard guard="you">{children}</LiveGuard>;
+  if (LIVE_SAFE_TOGGLE_SECTIONS.has(section)) {
+    return (
+      <div className="contents" data-live-safe="">
+        {children}
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
 
 const DESCRIPTIONS: Record<SettingsSection, string> = {
   providers: "Connect models to Aiden and manage the providers you use.",
@@ -280,7 +328,9 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
               <SettingsAnchorContext.Provider value={section === "links" ? { section, request: anchorRequest ?? 0 } : null}>
-                <ActiveSection />
+                <SettingsLiveGuard section={section}>
+                  <ActiveSection />
+                </SettingsLiveGuard>
               </SettingsAnchorContext.Provider>
             </SettingsPageTabs>
           </SettingsPage>

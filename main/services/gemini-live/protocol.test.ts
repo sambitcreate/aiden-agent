@@ -180,6 +180,18 @@ test("without screen tools, Live is told it cannot act on the screen", async () 
   assert.doesNotMatch(instruction, /Execute the user's requested screen actions/u);
 });
 
+test("with Aiden's own window tools, Live may act only inside Aiden", async () => {
+  const subject = harness({
+    model: "gemini-3.8-live-extended-thinking",
+    tools: [{ functionDeclarations: [{ name: "look_at_aiden" }, { name: "use_aiden" }] }],
+  });
+  await subject.protocol.start();
+  const instruction = String(subject.server.latest.params.config!.systemInstruction);
+  assert.match(instruction, /act inside Aiden's own window only through your Aiden tools/u);
+  assert.match(instruction, /cannot act on other apps or the user's screen outside Aiden/u);
+  assert.doesNotMatch(instruction, /Execute the user's requested screen actions/u);
+});
+
 test("accepts only bounded 16 kHz 20-40 ms PCM and emits an exact SDK audio blob", async () => {
   const subject = harness();
   await subject.protocol.start();

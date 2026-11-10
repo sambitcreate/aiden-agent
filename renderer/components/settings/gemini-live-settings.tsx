@@ -2,6 +2,7 @@ import * as React from "react";
 import { LiveAudioSettings } from "./live-audio-settings";
 import { LiveChatAccessSettings } from "./live-chat-access-settings";
 import { AidenLiveVoiceAndLook } from "./aiden-live-voice-settings";
+import { LiveAppControlSettings } from "./live-app-control-settings";
 import { LiveVoiceApprovalSettings } from "./live-voice-approval-settings";
 import { useNavigate } from "@tanstack/react-router";
 import { settingsLocation } from "../../lib/settings-section";
@@ -197,6 +198,8 @@ export function AidenLiveSettings(): React.ReactElement {
         <AidenLiveVoiceAndLook />
         <LiveChatAccessSettings />
         <LiveVoiceApprovalSettings />
+
+        <LiveAppControlSettings />
 
         <FieldSet title="Actions">
           <Field

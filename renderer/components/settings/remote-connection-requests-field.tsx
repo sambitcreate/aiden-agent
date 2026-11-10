@@ -27,6 +27,7 @@ export function AcceptConnectionRequestsField({
           onCheckedChange={onChange}
           disabled={disabled}
           aria-label="Accept connection requests"
+          data-live-guard="you"
         />
       </div>
     </Field>
