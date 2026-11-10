@@ -103,6 +103,12 @@ export interface TerminalHistoryStoreLike {
   append(workspaceId: string, data: string): void;
   flush(workspaceId: string): Promise<void>;
   flushAll?(): Promise<void>;
+  /**
+   * Drop every workspace's scrollback, pending writes included. Used by
+   * Settings → Storage, which reports the space as freed; a debounced write
+   * from state that was never invalidated would silently bring it back.
+   */
+  clearAll?(): Promise<void>;
 }
 
 function terminalId(): string {
@@ -275,6 +281,18 @@ export class TerminalService {
       [...this.sessions.values()].map((session) => session.historyWorkspaceId),
     );
     await Promise.all([...workspaceIds].map((workspaceId) => this.historyStore!.flush(workspaceId)));
+  }
+
+  /**
+   * Erase all terminal scrollback through the installed store, so its pending
+   * writes and in-memory history are invalidated with the files. Returns false
+   * when no store is installed (nothing has opened a terminal yet), in which
+   * case the caller may remove files directly.
+   */
+  async clearAllHistory(): Promise<boolean> {
+    if (!this.historyStore?.clearAll) return false;
+    await this.historyStore.clearAll();
+    return true;
   }
 
   async create(
@@ -473,6 +491,11 @@ export class TerminalService {
       if (session.ownerWebContentsId !== webContentsId) continue;
       this.terminate(id, session);
     }
+  }
+
+  /** Whether a shell is open in this workspace, so removing it would end that shell. */
+  hasOpenSession(workspaceId: string): boolean {
+    return [...this.sessions.values()].some((session) => session.workspaceId === workspaceId);
   }
 
   closeForWorkspace(workspaceId: string): void {

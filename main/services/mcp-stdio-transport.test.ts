@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { McpClient } from "@earendil-works/pi-mcp";
-import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
+import { createMcpStdioTransport, watchMcpProcessGroups } from "./mcp-stdio-transport.js";
 
 /**
  * A wrapper-shaped server (like `npx`/`uvx`): it starts a long-lived
@@ -18,7 +18,10 @@ import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
 const SERVER = `
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
-const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+const stay = process.env.STUBBORN_READY
+  ? "process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(process.env.STUBBORN_READY, ''); setInterval(() => {}, 1000)"
+  : "setInterval(() => {}, 1000)";
+const grandchild = spawn(process.execPath, ["-e", stay], { stdio: "ignore" });
 writeFileSync(process.env.REPORT_FILE, JSON.stringify({
   grandchild: grandchild.pid,
   inherited: process.env.AIDEN_STDIO_INHERITED_MARKER ?? null,
@@ -115,6 +118,69 @@ test("a wrapper that exits on its own does not leave its server running after th
   for (let attempt = 0; attempt < 150 && alive(report.grandchild); attempt += 1) await delay(20);
   assert.equal(alive(report.grandchild), false, "the server the wrapper left behind was terminated without client.close()");
   await client.close();
+});
+
+test("a closed transport means the whole group is gone, even a descendant that ignores SIGTERM", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+  timeout: 15_000,
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reportFile = join(directory, "report.json");
+  const ready = join(directory, "ready");
+  const transport = createMcpStdioTransport({
+    command: "node",
+    args: ["-e", SERVER],
+    env: { REPORT_FILE: reportFile, STUBBORN_READY: ready },
+    closeGraceMs: 200,
+  });
+  const client = new McpClient({ name: "stdio-stubborn", version: "1" });
+  await client.connect(transport);
+  const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number };
+  t.after(() => { try { process.kill(report.grandchild, "SIGKILL"); } catch { /* already gone */ } });
+  for (let attempt = 0; attempt < 250 && !existsSync(ready); attempt += 1) await delay(20);
+  assert.equal(existsSync(ready), true);
+
+  let listedWhileAlive = true;
+  let tracked = false;
+  const stop = watchMcpProcessGroups((groups) => {
+    if (groups.length > 0) tracked = true;
+    else if (tracked && alive(report.grandchild)) listedWhileAlive = false;
+  });
+  t.after(stop);
+  await client.close();
+  assert.equal(alive(report.grandchild), false, "close resolved with a descendant still running");
+  assert.equal(listedWhileAlive, true, "a running group left the list a force-stop owner reads");
+});
+
+test("a group that survives close leaves the list once it is gone, so its ID is never signalled again", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+  timeout: 15_000,
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reportFile = join(directory, "report.json");
+  let survives = true;
+  const transport = createMcpStdioTransport({
+    command: "node",
+    args: ["-e", SERVER],
+    env: { REPORT_FILE: reportFile },
+    closeGraceMs: 100,
+    // SIGKILL cannot be ignored, so the survivor is reported by the probe.
+    groupStillRuns: async () => survives,
+  });
+  const client = new McpClient({ name: "stdio-survivor", version: "1" });
+  await client.connect(transport);
+  let latest: readonly number[] = [];
+  const stop = watchMcpProcessGroups((groups) => { latest = groups; });
+  t.after(stop);
+  const listed = latest.length;
+  assert.ok(listed > 0);
+  await client.close();
+  assert.equal(latest.length, listed, "a survivor stays where a force-stop owner can find it");
+  survives = false;
+  for (let attempt = 0; attempt < 150 && latest.length === listed; attempt += 1) await delay(20);
+  assert.equal(latest.length, listed - 1);
 });
 
 /** A newline-framed MCP server with one tool, `echo`, that returns its input as text and structured content. */

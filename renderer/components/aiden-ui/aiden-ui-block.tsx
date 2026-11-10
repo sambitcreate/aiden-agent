@@ -1,8 +1,9 @@
 import * as React from "react";
 import { Copy, X } from "lucide-react";
-import { AIDEN_UI_LIMITS, type AidenUiActionV1, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
+import { AIDEN_UI_LIMITS, AIDEN_UI_RENDER_BUDGET, type AidenUiActionV1, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
 import { evaluate, truthy, type AidenUiScope } from "../../shared/aiden-ui/evaluate";
 import { ownEntry, ownField } from "../../shared/aiden-ui/own";
+import { parseAidenUiData } from "../../shared/aiden-ui/props";
 import { MAX_GUEST_PROMPT_CHARS } from "../../shared/generative-ui-bridge";
 import { cn } from "../../lib/ui-utils";
 import { Button, ErrorBoundary, toast, TooltipProvider } from "../ui";
@@ -26,16 +27,6 @@ export type AidenUiAction =
   /** Workspace artifacts only: run one of the page's declared buttons with these values. */
   | { kind: "run"; name: string; args: unknown[] };
 
-function parseData(dataJson: string | undefined): Record<string, unknown> {
-  if (!dataJson) return {};
-  try {
-    const parsed = JSON.parse(dataJson) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
 function initialState(visual: ChatUiVisualV1): Record<string, unknown> {
   return { ...(visual.state ?? {}) };
 }
@@ -45,9 +36,6 @@ function renderNodes(nodes: readonly AidenUiNodeV1[] | undefined, ctx: AidenUiRe
   return nodes.map((node) => renderNode(node, ctx, node.k));
 }
 
-/** One render draws at most this many loop iterations and components in total. */
-const RENDER_ITERATION_BUDGET = AIDEN_UI_LIMITS.eachIterations * 4;
-const RENDER_NODE_BUDGET = AIDEN_UI_LIMITS.nodes * 2;
 
 function renderNode(node: AidenUiNodeV1, ctx: AidenUiRenderContext, key: string): React.ReactNode {
   if (ctx.budget.nodes <= 0) return null;
@@ -152,7 +140,7 @@ function AidenUiVisualBody({
     stateRef.current = next;
     setLocalState(next);
   }, [savedState]);
-  const data = React.useMemo(() => parseData(visual.dataJson), [visual.dataJson]);
+  const data = React.useMemo(() => parseAidenUiData(visual.dataJson), [visual.dataJson]);
   const onActionRef = React.useRef(onAction);
   const onStateChangeRef = React.useRef(onStateChange);
   const onFollowUpRef = React.useRef(onFollowUp);
@@ -243,7 +231,7 @@ function AidenUiVisualBody({
   );
 
   // A fresh budget per render: nested loops share it rather than multiply.
-  const budget = { iterations: RENDER_ITERATION_BUDGET, nodes: RENDER_NODE_BUDGET };
+  const budget = { iterations: AIDEN_UI_RENDER_BUDGET.iterations, nodes: AIDEN_UI_RENDER_BUDGET.nodes };
   const make = (scope: AidenUiScope): AidenUiRenderContext => {
     const context: AidenUiRenderContext = {
       scope,

@@ -488,7 +488,8 @@ test("input saved as history but not taken by the run reads the same as on the p
     "Saved to the chat — the run was cancelled before it could use it",
   );
   assert.equal(committedRunInputNotice("capacity"), "Saved to the chat — the run queue was full");
-  for (const reason of ["run_not_active", "invalid", undefined] as const) {
+  assert.equal(committedRunInputNotice("invalid"), "Saved to the chat — it wasn't sent to the run");
+  for (const reason of ["run_not_active", undefined] as const) {
     assert.equal(
       committedRunInputNotice(reason),
       "Saved to the chat — the run ended before it could use it",

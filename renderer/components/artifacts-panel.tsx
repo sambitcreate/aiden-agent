@@ -1,5 +1,16 @@
 import * as React from "react";
-import { MessageSquarePlus, MoreHorizontal, Pencil, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import {
+  Download,
+  History,
+  MessageSquarePlus,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { AidenUiBlock, type AidenUiAction } from "./aiden-ui/aiden-ui-block";
 import {
   AlertDialog,
@@ -13,6 +24,7 @@ import {
   DropdownMenuTrigger,
   EmptyState,
   Input,
+  Label,
   Select,
   SelectContent,
   SelectItem,
@@ -22,6 +34,7 @@ import {
   toast,
 } from "./ui";
 import { workspaceArtifactsApi } from "../lib/ipc";
+import { focusRegionEntry } from "../lib/focus-regions";
 import { formatRelativeTime } from "../lib/relative-time";
 import { cn } from "../lib/ui-utils";
 import type { Workspace } from "../lib/types";
@@ -31,13 +44,19 @@ import {
   pickWorkspaceArtifact,
   workspaceArtifactPage,
   workspaceArtifactCanRefresh,
+  WORKSPACE_ARTIFACT_PAGE_IDEAS,
+  workspaceArtifactImportAccess,
+  workspaceArtifactNewPageRequest,
   workspaceArtifactPageAccess,
   workspaceArtifactProblems,
+  workspaceArtifactRevisionWaitsForApproval,
 } from "../lib/workspace-artifacts-view";
 import {
   WORKSPACE_ARTIFACT_LIMITS,
   resolveWorkspaceArtifactCommand,
   workspaceArtifactCommandList,
+  type WorkspaceArtifactImportPreview,
+  type WorkspaceArtifactRevisionSummary,
   type WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
 
@@ -57,7 +76,19 @@ export interface ArtifactsPanelProps {
   onAskAiden: (view: WorkspaceArtifactView) => void;
   /** Follow-ups and composer text the page hands to the chat; buttons (`run`) are handled here. */
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
+  /**
+   * Stages a request for a new page in the active chat's composer, never
+   * sending it. Without it the panel offers no New page entry.
+   */
+  onDraftNewPage?: (request: string) => void;
+  /** Why there is no chat to draft into right now; New page explains this instead of drafting. */
+  newPageUnavailable?: string | null;
 }
+
+/** Opens the New page dialog; focus goes back to `opener` if nothing is drafted. */
+type OpenNewPage = (opener: HTMLElement | null) => void;
+/** Asks for a page file to import; its preview returns focus to `opener`. */
+type StartImport = (opener: HTMLElement | null) => void;
 
 /**
  * The Tools panel's Artifacts tab: the workspace's saved pages, one at a
@@ -65,11 +96,41 @@ export interface ArtifactsPanelProps {
  * as inline visuals; everything around it (switching, approval, rename,
  * delete) is Aiden's own UI.
  */
-export function ArtifactsPanel({ workspace, active, artifacts, selectedId, onSelect, onAskAiden, onAction }: ArtifactsPanelProps) {
+export function ArtifactsPanel({
+  workspace,
+  active,
+  artifacts,
+  selectedId,
+  onSelect,
+  onAskAiden,
+  onAction,
+  onDraftNewPage,
+  newPageUnavailable = null,
+}: ArtifactsPanelProps) {
   const current = artifacts.workspaceId === (workspace?.id ?? null);
   const views = current ? artifacts.views : [];
   const activeId = pickWorkspaceArtifact(views, selectedId);
   const view = views.find((entry) => entry.artifact.id === activeId) ?? null;
+  // One New page dialog for the tab: it belongs to the workspace, not to the page shown.
+  const [creating, setCreating] = React.useState(false);
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  const openNewPage: OpenNewPage | null = onDraftNewPage
+    ? (opener) => {
+        openerRef.current = opener;
+        setCreating(true);
+      }
+    : null;
+  const newPageDialog = onDraftNewPage ? (
+    <NewArtifactPageDialog
+      open={creating}
+      onOpenChange={setCreating}
+      onDraft={onDraftNewPage}
+      unavailable={newPageUnavailable}
+      returnFocus={() => openerRef.current}
+    />
+  ) : null;
+  // Import, like New page, belongs to the workspace rather than the page shown.
+  const importer = useArtifactImport(workspace, onSelect);
 
   if (!workspace) {
     return <EmptyState className="h-full" title="No workspace" description="Choose a workspace to see its artifacts." />;
@@ -85,26 +146,247 @@ export function ArtifactsPanel({ workspace, active, artifacts, selectedId, onSel
         action={<Button size="small" onClick={artifacts.reload}>Try again</Button>}
       />
     ) : (
-      <EmptyState
-        className="h-full"
-        title="No artifacts yet"
-        description="Ask Aiden to make one, like a page of this repository's open pull requests."
-      />
+      <>
+        <ArtifactsEmptyState onNewPage={openNewPage} onImport={importer.start} />
+        {newPageDialog}
+        {importer.dialog}
+      </>
     );
   }
   return (
-    <ArtifactView
-      workspace={workspace}
-      active={active}
-      views={views}
-      view={view}
-      onSelect={onSelect}
-      onAskAiden={onAskAiden}
-      onAction={onAction}
-      artifactsError={artifacts.error}
-      onRetry={artifacts.reload}
-      onStateSaved={artifacts.rememberState}
-    />
+    <>
+      <ArtifactView
+        workspace={workspace}
+        active={active}
+        views={views}
+        view={view}
+        onSelect={onSelect}
+        onAskAiden={onAskAiden}
+        onAction={onAction}
+        onNewPage={openNewPage}
+        onImport={importer.start}
+        artifactsError={artifacts.error}
+        onRetry={artifacts.reload}
+        onStateSaved={artifacts.rememberState}
+      />
+      {newPageDialog}
+      {importer.dialog}
+    </>
+  );
+}
+
+type ReadyImport = Extract<WorkspaceArtifactImportPreview, { status: "ready" }> & { workspaceId: string };
+
+/**
+ * Import page: main asks for the file, checks it like any page Aiden saves,
+ * and holds it under a token. Nothing is added, and so nothing runs, until
+ * the person reads what it can run and presses Import; Cancel lets main
+ * forget it. The imported page is never approved.
+ */
+function useArtifactImport(workspace: Workspace | null, onSelect: (artifactId: string) => void) {
+  const [preview, setPreview] = React.useState<ReadyImport | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const previewRef = React.useRef(preview);
+  previewRef.current = preview;
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  // A ref, so a second press while the file dialog is up opens no other.
+  const choosingRef = React.useRef(false);
+  const workspaceId = workspace?.id ?? null;
+  const workspaceIdRef = React.useRef(workspaceId);
+  workspaceIdRef.current = workspaceId;
+  const onSelectRef = React.useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const discard = React.useCallback((held: ReadyImport) => {
+    // Main also forgets it once it expires, so a failed discard costs nothing.
+    void workspaceArtifactsApi.importDiscard(held.workspaceId, held.token).catch(() => undefined);
+  }, []);
+  // A preview belongs to the workspace it was read for.
+  React.useEffect(() => {
+    const held = previewRef.current;
+    if (held && held.workspaceId !== workspaceId) {
+      setPreview(null);
+      discard(held);
+    }
+  }, [discard, workspaceId]);
+  React.useEffect(
+    () => () => {
+      if (previewRef.current) discard(previewRef.current);
+    },
+    [discard],
+  );
+  const start = React.useCallback<StartImport>(
+    (opener) => {
+      if (!workspace || choosingRef.current) return;
+      choosingRef.current = true;
+      openerRef.current = opener;
+      const id = workspace.id;
+      void workspaceArtifactsApi
+        .importPreview(id)
+        .then(
+          (result) => {
+            if (result.status !== "ready") return;
+            const held = { ...result, workspaceId: id };
+            if (workspaceIdRef.current === id) setPreview(held);
+            else discard(held);
+          },
+          (cause: unknown) => {
+            toast.error(cause instanceof Error ? cause.message : "Could not import this page.");
+          },
+        )
+        .finally(() => {
+          choosingRef.current = false;
+        });
+    },
+    [discard, workspace],
+  );
+  const confirm = async () => {
+    const held = previewRef.current;
+    if (!held || busy) return;
+    setBusy(true);
+    try {
+      const artifact = await workspaceArtifactsApi.importConfirm(held.workspaceId, held.token);
+      setPreview(null);
+      onSelectRef.current(artifact.id);
+      toast.success(`Imported “${artifact.visual.title}”`);
+    } catch (cause) {
+      // Main spent the token either way, so the preview cannot be confirmed again.
+      setPreview(null);
+      toast.error(cause instanceof Error ? cause.message : "Could not import this page.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const dialog = (
+    <Dialog
+      open={preview !== null}
+      onOpenChange={(open) => {
+        if (open) return;
+        const held = previewRef.current;
+        setPreview(null);
+        if (held) discard(held);
+      }}
+      title={preview ? `Import “${preview.title}”?` : ""}
+      // Aiden's own words; the file's description is shown as the file's, below.
+      description={workspace ? `Adds this page to ${workspace.name}.` : undefined}
+      confirmLabel={preview && workspace && importRunsAtOnce(preview, workspace) ? "Import and run" : "Import"}
+      busy={busy}
+      size={preview?.commands.length ? "large" : undefined}
+      onConfirm={confirm}
+      returnFocus={() => (openerRef.current?.isConnected ? openerRef.current : null)}
+    >
+      {preview && workspace ? <ArtifactImportDetails preview={preview} workspace={workspace} /> : null}
+    </Dialog>
+  );
+  return { start, dialog };
+}
+
+/** Whether confirming would run commands straight away: Full access, and command sources read as the page opens. */
+function importRunsAtOnce(preview: ReadyImport, workspace: Workspace): boolean {
+  return workspaceArtifactImportAccess(workspace) === "run" && preview.shellSources && preview.refresh?.onOpen === true;
+}
+
+/** "every 5 minutes", "every minute", or "every 90 seconds". */
+function everyInterval(seconds: number): string {
+  if (seconds % 60 !== 0) return `every ${seconds} seconds`;
+  const minutes = seconds / 60;
+  return minutes === 1 ? "every minute" : `every ${minutes} minutes`;
+}
+
+/** Under Full access, when this page's commands run once it is imported. */
+function fullAccessCommandNote(preview: ReadyImport): string {
+  const interval = preview.shellSources ? preview.refresh?.intervalSeconds : undefined;
+  if (preview.shellSources && preview.refresh?.onOpen) {
+    return interval ? `These run as soon as you import it, then ${everyInterval(interval)}.` : "These run as soon as you import it.";
+  }
+  if (interval) return `These run ${everyInterval(interval)} once you import it, and its buttons run theirs when pressed.`;
+  return preview.shellSources
+    ? "These run when you refresh the page or press its buttons."
+    : "These run when you press the page’s buttons.";
+}
+
+/** What an imported page can run and read here, and what happens to it under this workspace's access. */
+function ArtifactImportDetails({ preview, workspace }: { preview: ReadyImport; workspace: Workspace }) {
+  const access = workspaceArtifactImportAccess(workspace);
+  const described = preview.description ? (
+    <Text variant="small" as="p">
+      The file describes it as: {preview.description}
+    </Text>
+  ) : null;
+  if (preview.commands.length === 0 && preview.files.length === 0) {
+    return (
+      <div className="flex flex-col gap-3">
+        {described}
+        <Text variant="small" color="secondary" as="p">
+          It runs no commands and reads no workspace files.
+        </Text>
+      </div>
+    );
+  }
+  const commandNote =
+    access === "needs-approval"
+      ? "You’ll be asked to allow these before they run."
+      : access === "run"
+        ? fullAccessCommandNote(preview)
+        : access === "no-folder"
+          ? "This workspace has no folder, so these won’t run."
+          : "These won’t run while workspace access is off.";
+  // Files are read under Ask too: only commands wait to be allowed.
+  const fileNote =
+    access === "no-folder"
+      ? "This workspace has no folder, so Aiden won’t read these files."
+      : access === "off"
+        ? "Aiden won’t read these files while workspace access is off."
+        : preview.refresh?.onOpen
+          ? "Aiden reads these files as soon as the page opens."
+          : "Aiden reads these files when the page refreshes.";
+  return (
+    <div className="flex flex-col gap-3">
+      {described}
+      {preview.commands.length > 0 ? (
+        <>
+          <Text variant="small" as="p">
+            It can run these commands in {workspace.name}:
+          </Text>
+          <ArtifactCommandList commands={preview.commands} />
+          <Callout color={access === "run" ? "warning" : undefined}>
+            <Text variant="small">{commandNote}</Text>
+          </Callout>
+        </>
+      ) : null}
+      {preview.files.length > 0 ? (
+        <>
+          <Text variant="small" as="p">
+            It reads these files in {workspace.name}:
+          </Text>
+          <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Files">
+            {preview.files.map((file, index) => (
+              <li key={index} className="rounded-card bg-well p-3">
+                <pre className="m-0 whitespace-pre-wrap break-words font-mono text-small">{file}</pre>
+              </li>
+            ))}
+          </ul>
+          <Callout>
+            <Text variant="small">{fileNote}</Text>
+          </Callout>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** Each command a page can run, labelled and verbatim, as the person approves them. */
+function ArtifactCommandList({ commands }: { commands: readonly { label: string; command: string }[] }) {
+  return (
+    <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Commands">
+      {commands.map((entry, index) => (
+        <li key={index} className="rounded-card bg-well p-3">
+          <Text variant="small-strong" as="p">
+            {entry.label}
+          </Text>
+          <pre className="m-0 mt-1 whitespace-pre-wrap break-words font-mono text-small">{entry.command}</pre>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -112,6 +394,14 @@ export function ArtifactsPanel({ workspace, active, artifacts, selectedId, onSel
  * Re-reads the page's sources when it is shown, when the person asks, and on
  * its interval while visible. Only pages allowed to run do.
  */
+/**
+ * When saved data was read, if it was read for this revision of the page.
+ * After a restore or a change it belongs to another version and isn't fresh.
+ */
+function freshAt(snapshot: WorkspaceArtifactView["snapshot"], revision: number): number | undefined {
+  return snapshot?.revision === revision ? snapshot.refreshedAt : undefined;
+}
+
 function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, active: boolean) {
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -137,10 +427,10 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
     setError(null);
     setRefreshing(false);
   }, [artifactId]);
-  const refreshedAtRef = React.useRef(view.snapshot?.refreshedAt);
+  const refreshedAtRef = React.useRef(freshAt(view.snapshot, view.artifact.revision));
   React.useLayoutEffect(() => {
-    refreshedAtRef.current = view.snapshot?.refreshedAt;
-  }, [view.snapshot?.refreshedAt]);
+    refreshedAtRef.current = freshAt(view.snapshot, view.artifact.revision);
+  }, [view.snapshot, view.artifact.revision]);
   const onOpen = view.artifact.refresh.onOpen;
   const approved = view.artifact.approvedDigest === view.digest;
   const approvedRef = React.useRef({ artifactId, approved });
@@ -162,7 +452,28 @@ function useArtifactRefresh(workspace: Workspace, view: WorkspaceArtifactView, a
     }, intervalSeconds * 1_000);
     return () => window.clearInterval(timer);
   }, [active, intervalSeconds, refresh]);
-  return { canRun, refreshing, error, refresh };
+  // A restore made here brings back sources whose saved data is from another
+  // version: once that revision arrives, re-read them if the page may run.
+  const [awaiting, setAwaiting] = React.useState<{ artifactId: string; revision: number } | null>(null);
+  const revision = view.artifact.revision;
+  React.useEffect(() => {
+    if (!awaiting) return;
+    if (awaiting.artifactId !== artifactId) {
+      setAwaiting(null);
+      return;
+    }
+    // Wait until the tab is shown again: refreshing then is what replaces the
+    // older version's data.
+    if (revision < awaiting.revision || !active) return;
+    setAwaiting(null);
+    void refresh();
+  }, [active, artifactId, awaiting, refresh, revision]);
+  // Named by the restored page, which may no longer be the one shown when the restore finishes.
+  const refreshAtRevision = React.useCallback(
+    (restoredId: string, target: number) => setAwaiting({ artifactId: restoredId, revision: target }),
+    [],
+  );
+  return { canRun, refreshing, error, refresh, refreshAtRevision };
 }
 
 function ArtifactView({
@@ -173,6 +484,8 @@ function ArtifactView({
   onSelect,
   onAskAiden,
   onAction,
+  onNewPage,
+  onImport,
   artifactsError,
   onRetry,
   onStateSaved,
@@ -184,9 +497,11 @@ function ArtifactView({
   onSelect: (artifactId: string) => void;
   onAskAiden: (view: WorkspaceArtifactView) => void;
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
+  onNewPage: OpenNewPage | null;
+  onImport: StartImport;
   artifactsError: string | null;
   onRetry: () => void;
-  onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
+  onStateSaved: (artifactId: string, revision: number, state: Record<string, unknown>) => void;
 }) {
   const refresh = useArtifactRefresh(workspace, view, active);
   const pageRef = React.useRef<HTMLDivElement | null>(null);
@@ -202,12 +517,14 @@ function ArtifactView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ArtifactsHeader
-        workspaceId={workspace.id}
+        workspace={workspace}
         views={views}
         view={view}
         refresh={refresh}
         onSelect={onSelect}
         onAskAiden={onAskAiden}
+        onNewPage={onNewPage}
+        onImport={onImport}
       />
       <div ref={pageRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none" data-artifact-page={view.artifact.id}>
         {artifactsError ? (
@@ -364,39 +681,170 @@ function useArtifactButtons(workspace: Workspace, view: WorkspaceArtifactView, r
   return { press, dialog };
 }
 
+/** Placeholder rows, one per width (a percentage of the row). */
+function SkeletonRows({ widths }: { widths: readonly number[] }) {
+  return widths.map((width, index) => (
+    <div key={index} className="flex h-12 items-center rounded-card bg-well px-3">
+      <span className="h-2.5 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
+    </div>
+  ));
+}
+
 function ArtifactsSkeleton() {
   return (
     <div role="status" className="space-y-3 p-4" aria-label="Loading artifacts" aria-busy="true">
       <span className="block h-3 w-1/3 animate-pulse rounded-pill bg-control" />
-      {[86, 64, 78].map((width, index) => (
-        <div key={index} className="flex h-12 items-center rounded-card bg-well px-3">
-          <span className="h-2.5 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
-        </div>
-      ))}
+      <SkeletonRows widths={[86, 64, 78]} />
     </div>
   );
 }
 
+function ArtifactsEmptyState({ onNewPage, onImport }: { onNewPage: OpenNewPage | null; onImport: StartImport }) {
+  return (
+    <EmptyState
+      className="h-full"
+      title="No artifacts yet"
+      description={
+        onNewPage
+          ? "Pages Aiden keeps for this workspace, like its open pull requests or CI on main. Ask in chat, or start one here."
+          : "Ask Aiden to make one, like a page of this repository's open pull requests."
+      }
+      action={
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {onNewPage ? (
+            <Button variant="accent" size="small" onClick={(event) => onNewPage(event.currentTarget)}>
+              <Plus aria-hidden="true" />
+              New page…
+            </Button>
+          ) : null}
+          <Button size="small" onClick={(event) => onImport(event.currentTarget)}>
+            <Upload aria-hidden="true" />
+            Import page…
+          </Button>
+        </div>
+      }
+    />
+  );
+}
+
+/**
+ * Starts a page by adding the request to the chat's message box. The dialog
+ * never builds or sends anything: the person reads the request and sends it.
+ */
+function NewArtifactPageDialog({
+  open,
+  onOpenChange,
+  onDraft,
+  unavailable,
+  returnFocus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDraft: (request: string) => void;
+  /** Why there is no chat to add the request to; shown instead of drafting. */
+  unavailable: string | null;
+  returnFocus: () => HTMLElement | null;
+}) {
+  const [subject, setSubject] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  // Set when the request was drafted, so focus follows it to the message box.
+  const draftedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (open) draftedRef.current = false;
+  }, [open]);
+  const request = workspaceArtifactNewPageRequest(subject);
+  const inputId = React.useId();
+  const reasonId = React.useId();
+  const close = (next: boolean) => {
+    // Cleared on close, so reopening never shows the last text first.
+    if (!next) setSubject("");
+    onOpenChange(next);
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={close}
+      title="New page"
+      description={
+        unavailable ? (
+          <span id={reasonId}>{unavailable}</span>
+        ) : (
+          "Aiden adds the request to your chat’s message box. Review it there, then send."
+        )
+      }
+      confirmLabel="Draft in chat"
+      confirmDisabled={!request || unavailable !== null}
+      confirmDescribedBy={unavailable ? reasonId : undefined}
+      submitOnEnter
+      onConfirm={() => {
+        onDraft(request);
+        draftedRef.current = true;
+        close(false);
+      }}
+      returnFocus={() => (draftedRef.current ? focusRegionEntry("composer") : null) ?? returnFocus()}
+    >
+      <div>
+        <Label htmlFor={inputId}>What should it show?</Label>
+        <Input
+          ref={inputRef}
+          id={inputId}
+          value={subject}
+          placeholder="For example, failing tests on this branch"
+          onChange={(event) => setSubject(event.target.value)}
+          className="mt-1.5"
+          autoFocus
+        />
+      </div>
+      <div role="group" aria-label="Suggestions" className="mt-3 flex flex-wrap gap-2">
+        {WORKSPACE_ARTIFACT_PAGE_IDEAS.map((idea) => (
+          <Button
+            key={idea.label}
+            variant="muted"
+            size="small"
+            aria-label={`Use: ${idea.label}`}
+            onClick={() => {
+              setSubject(idea.subject);
+              inputRef.current?.focus();
+            }}
+          >
+            {idea.label}
+          </Button>
+        ))}
+      </div>
+    </Dialog>
+  );
+}
+
 function ArtifactsHeader({
-  workspaceId,
+  workspace,
   views,
   view,
   refresh,
   onSelect,
   onAskAiden,
+  onNewPage,
+  onImport,
 }: {
-  workspaceId: string;
+  workspace: Workspace;
   views: readonly WorkspaceArtifactView[];
   view: WorkspaceArtifactView;
   refresh: ReturnType<typeof useArtifactRefresh>;
   onSelect: (artifactId: string) => void;
   onAskAiden: (view: WorkspaceArtifactView) => void;
+  onNewPage: OpenNewPage | null;
+  onImport: StartImport;
 }) {
   // Each dialog belongs to the page it was opened on, and closes if another page takes its place.
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
+  const [browsing, setBrowsing] = React.useState<string | null>(null);
+  // Read when a restore finishes, which may be after another page took this one's place.
+  const browsingRef = React.useRef(browsing);
+  browsingRef.current = browsing;
+  const workspaceId = workspace.id;
   const artifactId = view.artifact.id;
   const menuTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const askedRef = React.useRef(false);
   const title = view.artifact.visual.title;
   const refreshedAt = view.snapshot?.refreshedAt;
   const problems = workspaceArtifactProblems(view);
@@ -420,6 +868,18 @@ function ArtifactsHeader({
           {title}
         </Text>
       )}
+      {onNewPage ? (
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          aria-label="New page…"
+          title="New page"
+          onClick={(event) => onNewPage(event.currentTarget)}
+        >
+          <Plus aria-hidden="true" />
+        </Button>
+      ) : null}
       <span className="min-w-0 flex-1 truncate text-small text-tertiary">
         {refresh.error ? (
           <span role="status" className="text-status-warning">Couldn’t refresh: {refresh.error}</span>
@@ -450,14 +910,54 @@ function ArtifactsHeader({
             <MoreHorizontal aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem onSelect={() => onAskAiden(view)}>
+        <DropdownMenuContent
+          align="end"
+          className="w-56"
+          onCloseAutoFocus={(event) => {
+            // After Ask Aiden, focus follows the request to the message box (or stays on the trigger).
+            if (!askedRef.current) return;
+            askedRef.current = false;
+            const composer = focusRegionEntry("composer");
+            if (!composer) return;
+            event.preventDefault();
+            composer.focus();
+          }}
+        >
+          <DropdownMenuItem
+            onSelect={() => {
+              askedRef.current = true;
+              onAskAiden(view);
+            }}
+          >
             <MessageSquarePlus aria-hidden="true" />
             Ask Aiden to change this
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setRenaming(artifactId)}>
             <Pencil aria-hidden="true" />
             Rename…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setBrowsing(artifactId)}>
+            <History aria-hidden="true" />
+            Earlier versions…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => {
+              const name = title;
+              workspaceArtifactsApi.exportPage(workspaceId, artifactId).then(
+                (result) => {
+                  if (result.status === "saved") toast.success(`Exported “${name}”`);
+                },
+                (cause: unknown) => toast.error(cause instanceof Error ? cause.message : "Could not export this page."),
+              );
+            }}
+          >
+            <Download aria-hidden="true" />
+            Export page…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onImport(menuTriggerRef.current)}>
+            <Upload aria-hidden="true" />
+            Import page…
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem color="red" onSelect={() => setDeleting(artifactId)}>
@@ -479,7 +979,157 @@ function ArtifactsHeader({
         workspaceId={workspaceId}
         view={view}
       />
+      <ArtifactHistoryDialog
+        // A fresh dialog per page, so a restore still running for another page shows nothing here.
+        key={artifactId}
+        open={browsing === artifactId}
+        onOpenChange={(open) => setBrowsing(open ? artifactId : null)}
+        workspace={workspace}
+        view={view}
+        onRestored={(restoredId, revision) => {
+          refresh.refreshAtRevision(restoredId, revision);
+          // A dialog opened on another page since the restore began stays open.
+          if (browsingRef.current === restoredId) setBrowsing(null);
+        }}
+        returnFocus={() => menuTriggerRef.current}
+      />
     </div>
+  );
+}
+
+type HistoryLoad =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; entries: WorkspaceArtifactRevisionSummary[] };
+
+/**
+ * The page's kept earlier versions, newest first. Restoring one makes it the
+ * page again as a new version, so a restore can itself be undone here.
+ */
+function ArtifactHistoryDialog({
+  open,
+  onOpenChange,
+  workspace,
+  view,
+  onRestored,
+  returnFocus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  workspace: Workspace;
+  view: WorkspaceArtifactView;
+  /**
+   * Called with the page and its new revision, so it can re-read its sources
+   * once it arrives and close this dialog if it still belongs to that page.
+   */
+  onRestored: (artifactId: string, revision: number) => void;
+  returnFocus: () => HTMLElement | null;
+}) {
+  const [load, setLoad] = React.useState<HistoryLoad>({ status: "loading" });
+  const [restoring, setRestoring] = React.useState<number | null>(null);
+  const [attempt, setAttempt] = React.useState(0);
+  const artifactId = view.artifact.id;
+  const title = view.artifact.visual.title;
+  // Read each time the dialog opens, so it lists what is kept now.
+  React.useEffect(() => {
+    if (!open) {
+      // Forget the list on close, so reopening never shows a stale one first.
+      setLoad({ status: "loading" });
+      return;
+    }
+    let cancelled = false;
+    setLoad({ status: "loading" });
+    workspaceArtifactsApi.history(workspace.id, artifactId).then(
+      (entries) => {
+        if (!cancelled) setLoad({ status: "ready", entries });
+      },
+      (cause: unknown) => {
+        if (!cancelled) setLoad({ status: "error", message: cause instanceof Error ? cause.message : "Could not load earlier versions." });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactId, attempt, open, workspace.id]);
+  // A ref, so a second press in the same frame sees the first one.
+  const restoringRef = React.useRef(false);
+  const restore = async (revision: number) => {
+    if (restoringRef.current) return;
+    restoringRef.current = true;
+    setRestoring(revision);
+    try {
+      const restored = await workspaceArtifactsApi.restore(workspace.id, artifactId, revision);
+      onRestored(artifactId, restored.revision);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Could not restore this version.");
+    } finally {
+      restoringRef.current = false;
+      setRestoring(null);
+    }
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Earlier versions"
+      description={`Restore an earlier version of “${title}”. It keeps its current name, and you can undo a restore here too.`}
+      confirmHidden
+      returnFocus={returnFocus}
+    >
+      {load.status === "loading" ? (
+        <div role="status" aria-label="Loading earlier versions" aria-busy="true" className="flex flex-col gap-2">
+          <SkeletonRows widths={[72, 56]} />
+        </div>
+      ) : load.status === "error" ? (
+        <Callout color="warning" role="alert">
+          <div className="flex items-center gap-3">
+            <Text variant="small" className="min-w-0 flex-1">
+              {load.message}
+            </Text>
+            <Button size="small" onClick={() => setAttempt((value) => value + 1)}>
+              Try again
+            </Button>
+          </div>
+        </Callout>
+      ) : load.entries.length === 0 ? (
+        <Text variant="small" color="secondary" as="p">
+          No earlier versions yet. Aiden keeps the last {WORKSPACE_ARTIFACT_LIMITS.history} versions of a page.
+        </Text>
+      ) : (
+        <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Earlier versions">
+          {load.entries.map((entry) => (
+            <li key={entry.revision} className="flex items-center gap-3 rounded-card bg-well p-3">
+              <div className="min-w-0 flex-1">
+                <Text variant="small-strong" as="p">
+                  Revision {entry.revision}
+                  <span className="font-normal text-tertiary"> · {formatRelativeTime(entry.savedAt)}</span>
+                </Text>
+                {entry.title !== title ? (
+                  <Text variant="small" color="secondary" as="p" truncate>
+                    Named “{entry.title}”
+                  </Text>
+                ) : null}
+                {workspaceArtifactRevisionWaitsForApproval(entry, workspace) ? (
+                  <Text variant="small" as="p" className="text-status-warning">
+                    Different commands — needs allowing again
+                  </Text>
+                ) : null}
+              </div>
+              {/* Not disabled while a restore runs: that would drop keyboard focus inside the dialog. It looks disabled instead. */}
+              <Button
+                size="small"
+                className="aria-disabled:pointer-events-none aria-disabled:opacity-45"
+                aria-disabled={restoring !== null || undefined}
+                aria-label={`Restore revision ${entry.revision}`}
+                onClick={() => void restore(entry.revision)}
+              >
+                {restoring === entry.revision ? "Restoring…" : "Restore"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Dialog>
   );
 }
 
@@ -666,16 +1316,7 @@ function ArtifactAccessNotice({
             <Text variant="small">This page’s commands changed while you were reading. Close this and review them again.</Text>
           </Callout>
         ) : null}
-        <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Commands">
-          {reviewing?.commands.map((entry, index) => (
-            <li key={index} className="rounded-card bg-well p-3">
-              <Text variant="small-strong" as="p">
-                {entry.label}
-              </Text>
-              <pre className="m-0 mt-1 whitespace-pre-wrap break-words font-mono text-small">{entry.command}</pre>
-            </li>
-          ))}
-        </ul>
+        <ArtifactCommandList commands={reviewing?.commands ?? []} />
       </Dialog>
     </Callout>
     </LiveGuard>
@@ -692,7 +1333,7 @@ function ArtifactPage({
   view: WorkspaceArtifactView;
   onAction?: (view: WorkspaceArtifactView, action: AidenUiAction) => void;
   /** Keeps the list's copy current, so switching pages and back shows the page as it was left. */
-  onStateSaved: (artifactId: string, state: Record<string, unknown>) => void;
+  onStateSaved: (artifactId: string, revision: number, state: Record<string, unknown>) => void;
 }) {
   const onStateSavedRef = React.useRef(onStateSaved);
   React.useLayoutEffect(() => {
@@ -700,6 +1341,7 @@ function ArtifactPage({
   }, [onStateSaved]);
   const visual = React.useMemo(() => workspaceArtifactPage(view), [view]);
   const artifactId = view.artifact.id;
+  const revision = view.artifact.revision;
   const pending = React.useRef<{ timer: ReturnType<typeof setTimeout>; save: () => void } | null>(null);
   const flush = React.useCallback(() => {
     const current = pending.current;
@@ -708,27 +1350,29 @@ function ArtifactPage({
     clearTimeout(current.timer);
     current.save();
   }, []);
-  // A page switch or unmount saves what is still waiting.
-  React.useEffect(() => flush, [artifactId, flush]);
+  // A page switch, a new revision or an unmount saves what is still waiting.
+  React.useEffect(() => flush, [artifactId, revision, flush]);
   const onStateChange = React.useCallback(
     (state: Record<string, unknown>) => {
       if (pending.current) clearTimeout(pending.current.timer);
       const save = () => {
-        onStateSavedRef.current(artifactId, state);
-        void workspaceArtifactsApi.saveState(workspaceId, artifactId, state).catch(() => {
+        onStateSavedRef.current(artifactId, revision, state);
+        void workspaceArtifactsApi.saveState(workspaceId, artifactId, revision, state).catch(() => {
           // State is a convenience: the page still works, it just reopens as it was.
         });
       };
       pending.current = { save, timer: setTimeout(() => { pending.current = null; save(); }, STATE_SAVE_DELAY_MS) };
     },
-    [artifactId, workspaceId],
+    [artifactId, revision, workspaceId],
   );
   const handleAction = React.useCallback((action: AidenUiAction) => onAction?.(view, action), [onAction, view]);
   // AidenUiBlock contains its own render failures, falling back to the page's text.
+  // Each revision starts from its own state: a touched block would otherwise
+  // keep showing the old values over the state a restore brought back.
   // An artifact's text and buttons come from the workspace: Aiden Live never reads or presses them.
   return (
     <div className="contents" data-live-content="artifact">
-      <AidenUiBlock key={artifactId} visual={visual} hideCaption onStateChange={onStateChange} onAction={handleAction} />
+      <AidenUiBlock key={`${artifactId}:${revision}`} visual={visual} hideCaption onStateChange={onStateChange} onAction={handleAction} />
     </div>
   );
 }

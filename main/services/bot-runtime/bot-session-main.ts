@@ -128,7 +128,7 @@ import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
 
 import { BOT_CONNECT_CARD_ENTRY_KIND, createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
-import { botIngressAllowsTool } from "./bot-tool-policy.js";
+import { botIngressAllowsTool, botTurnAttended } from "./bot-tool-policy.js";
 
 export { BOT_CONNECT_CARD_ENTRY_KIND };
 const MODEL_CACHE_MS = 30_000;
@@ -691,6 +691,13 @@ const extension: BotExtensionDeps = {
   },
   imageInput,
   spending: botSpending,
+  // The person's global and Bot hooks, run in the Bot's own folder.
+  hooks: {
+    cwd: async (botId) => (await botManagedWorkspace.resolve(botId)).homePath,
+    attended: botTurnAttended,
+    // A Bot run has no transcript notice row, so hook messages go to the app log.
+    report: (botId, lines) => logger.info("hooks", `Bot ${botId} hook messages.`, lines),
+  },
 };
 
 /**

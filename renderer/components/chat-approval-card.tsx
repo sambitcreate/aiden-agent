@@ -23,6 +23,8 @@ import {
   subagentMcpMutationAllowLabel,
 } from "./subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "./subagent-shell-approval";
+import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval, hookProposalHeadline } from "./hook-proposal-approval";
+import { HOOK_PROPOSAL_APPROVAL_KIND, isHookProposalApprovalDetails } from "../shared/hook-proposal-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
 import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval, scheduleApprovalHeadline } from "./scheduled-task-approval";
@@ -57,6 +59,7 @@ const TOOL_LABELS: Record<string, string> = {
   agent_tool: "Agent tool",
   computer_use: "Computer Use",
   form_fill: "Form fill",
+  workspace_artifact: "Artifact",
 };
 
 /** A tool's name as an approval heading: known labels, otherwise sentence case. */
@@ -327,6 +330,7 @@ export function ChatApprovalCard({
   const pendingShell = isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingRunGrant = isSubagentRunGrantApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingFormFill = isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingHook = isHookProposalApprovalDetails(details) ? details : undefined;
   const pendingClassifier = classifierApprovalState(pending.toolName, details);
   const invalidPendingPrivilegedApproval =
     (claimsKind(details, "scheduled-task") && !schedule) ||
@@ -336,7 +340,8 @@ export function ChatApprovalCard({
     (claimsKind(details, "subagent-mcp-mutation") && pendingMcpMutation === undefined) ||
     (claimsKind(details, "subagent-shell") && pendingShell === undefined) ||
     (claimsKind(details, "subagent-run-grant") && pendingRunGrant === undefined) ||
-    (claimsKind(details, "form-fill-batch") && pendingFormFill === undefined);
+    (claimsKind(details, "form-fill-batch") && pendingFormFill === undefined) ||
+    (claimsKind(details, HOOK_PROPOSAL_APPROVAL_KIND) && pendingHook === undefined);
   const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
   React.useEffect(() => {
     setFormFillExcludedOrders([]);
@@ -345,7 +350,7 @@ export function ChatApprovalCard({
   // Only plain workspace writes and shell commands can be remembered; the main
   // process offers scopes solely for those, and specialized cards keep once.
   const pendingRememberScopes =
-    !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
+    !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant && !pendingHook
       ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
       : [];
   const computerUseAccess = isComputerUseAccessApprovalDetails(details);
@@ -386,7 +391,7 @@ export function ChatApprovalCard({
   // and invalid approvals keep their own review bodies.
   const plainApproval =
     !invalidPendingPrivilegedApproval && pendingCanAllow && !schedule && !pendingClassifier.details &&
-    !pendingWorkspaceWrite && !pendingMcpMutation && !pendingShell && !pendingRunGrant && !pendingFormFill;
+    !pendingWorkspaceWrite && !pendingMcpMutation && !pendingShell && !pendingRunGrant && !pendingFormFill && !pendingHook;
   const plainPreview = plainApproval ? pending.preview : undefined;
   const plainCommand = plainApproval ? approvalCommand(pending) : undefined;
 
@@ -429,7 +434,9 @@ export function ChatApprovalCard({
                     ? `${pendingShell.childLabel} wants to run a full-host command`
                     : pendingRunGrant
                       ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
-                      : schedule
+                      : pendingHook && pendingCanAllow
+                        ? hookProposalHeadline(pendingHook)
+                        : schedule
                         ? scheduleApprovalHeadline(schedule)
                         : approvalHeadline(pending)}
             {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
@@ -452,6 +459,8 @@ export function ChatApprovalCard({
           <SubagentShellApproval details={pendingShell} descriptionId={summaryId} />
         ) : pendingRunGrant ? (
           <SubagentRunGrantApproval details={pendingRunGrant} descriptionId={summaryId} />
+        ) : pendingHook ? (
+          <HookProposalApproval details={pendingHook} descriptionId={summaryId} />
         ) : pendingFormFill ? (
           <FormFillApproval
             details={pendingFormFill}
@@ -484,7 +493,9 @@ export function ChatApprovalCard({
                   ? "Review this one exact full-host command before Aiden continues."
                   : pendingRunGrant
                     ? "Review this grant for the entire subagent run."
-                    : schedule
+                    : pendingHook && pendingCanAllow
+                      ? HOOK_PROPOSAL_APPROVAL_FOOTER
+                      : schedule
                       ? SCHEDULE_APPROVAL_FOOTER
                       : approvalMeta(plainPreview)}
         </Text>

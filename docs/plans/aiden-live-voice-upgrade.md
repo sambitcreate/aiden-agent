@@ -141,9 +141,10 @@ and refused with `user_only`, when:
   **Let Live use the open chat** is off, and these whole Settings pages: Aiden
   Live, Voice, Speech, Computer Use, Approvals, App controls, Remote Access,
   Connections, Telegram, Bots, Bot computers, Simulator, MCP, Scheduled tasks,
-  Limits, Providers, Model data, Web Search, Image Generation and About
-  (anything that chooses where chats, recordings, prompts, queries or keys go,
-  fetches catalogs, downloads models or installs updates);
+  Limits, Hooks, Storage, Providers, Model data, Web Search, Image Generation
+  and About (anything that chooses where chats, recordings, prompts, queries or
+  keys go, fetches catalogs, downloads models, installs updates, runs your own
+  commands or deletes files);
 - it is a password, one-time code or card field;
 - it is a switch or checkbox anywhere in Aiden, unless it sits inside
   `data-live-safe` (only the Appearance and Links pages are marked safe);
