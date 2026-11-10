@@ -695,14 +695,16 @@ final class AidenUnifiedInboxStore {
     /// A machine's Bots, read with its chats. A machine that hasn't granted this
     /// phone `bot:read` is never asked. A read that doesn't land keeps the Bots
     /// last seen, as a failed poll keeps its rows, unless the machine said this
-    /// pairing is over.
+    /// pairing is over. It goes over the probe client, as the chat read does, so
+    /// a machine that can't be reached fails fast instead of holding the poll
+    /// (and a pull to refresh) until the network comes back.
     private func learnBots(of machine: Machine, over connection: AidenHostConnection) async -> AidenHomePollResult {
         guard Self.readsBots(connection) else {
             machine.bots = []
             return .loaded
         }
         do {
-            let list = try await connection.client().bots()
+            let list = try await connection.probeClient().bots()
             guard machines[connection.instanceId] === machine else { return .abandoned }
             machine.bots = list.bots
         } catch let error where aidenIsCancellation(error) {

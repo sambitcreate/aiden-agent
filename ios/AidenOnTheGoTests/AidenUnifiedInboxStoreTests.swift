@@ -85,6 +85,12 @@ private actor AidenInboxSaveGate {
     }
 }
 
+/// Whether a pull to refresh has come back, read while it may still be out.
+@MainActor
+private final class AidenInboxPull {
+    var isBack = false
+}
+
 /// The store over the demo machines, so every request is one the contract has,
 /// and over a clock the tests move, so nothing here waits for a poll to come due.
 @MainActor
@@ -1952,6 +1958,37 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
         XCTAssertEqual(store.snapshots["studio"]?.bots.map(\.id), ["bot_cards"])
         XCTAssertEqual(store.needsYouCount, 2)
+        store.stop()
+    }
+
+    /// With no network the interactive client waits for one, so a Bots read on
+    /// it would hold the poll and the pull. The poll's reads fail fast instead:
+    /// the pull comes back, and the machine reports its own failure.
+    func testAnUnreachableMachinesPollFinishesAndReportsItsError() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        serveBotWithCards("bot_cards", on: "laptop")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 2)
+        let laptop = try connection("laptop", in: coordinator)
+        XCTAssertEqual(laptop.connectionState, .connected)
+        let botReadsBefore = botReads("laptop")
+        let reconnect = responder.dropNetwork(
+            instanceId: "laptop",
+            code: .notConnectedToInternet,
+            parking: ["/bots", "/chat-summaries", "/workspaces"]
+        )
+        defer { reconnect() }
+
+        let pull = AidenInboxPull()
+        Task { await store.refreshAll(); pull.isBack = true }
+        await waitUntil("the pull to come back") { pull.isBack }
+
+        XCTAssertGreaterThan(botReads("laptop"), botReadsBefore, "The poll asked for the Bots")
+        await waitUntil("the machine to say it can't be reached") { self.isOffline(laptop) }
+        XCTAssertEqual(store.snapshots["laptop"]?.isOnline, false)
+        XCTAssertEqual(store.snapshots["laptop"]?.bots.map(\.id), ["bot_cards"], "The Bots last seen stay")
+        XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .connected)
         store.stop()
     }
 

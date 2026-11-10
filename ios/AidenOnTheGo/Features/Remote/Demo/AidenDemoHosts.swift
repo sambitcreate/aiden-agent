@@ -43,6 +43,8 @@ final class AidenDemoResponder: @unchecked Sendable {
     static let hostSuffix = ".demo.invalid"
     static let apiRoot = "/api/aiden/v1"
     fileprivate static let routeHeader = "X-Aiden-Demo-Responder"
+    /// Marks a request from `probeSession`.
+    private static let probeHeader = "X-Aiden-Demo-Probe"
 
     private enum Outcome {
         case reply(status: Int, json: Data)
@@ -76,25 +78,42 @@ final class AidenDemoResponder: @unchecked Sendable {
     private var outcomes: [Route: Outcome] = [:]
     private var delays: [HoldKey: @Sendable () -> TimeInterval] = [:]
     private var holds: [HoldKey: Hold] = [:]
+    /// Parks only the interactive client's requests, the way a session that
+    /// waits for connectivity does with no network.
+    private var interactiveHolds: [HoldKey: Hold] = [:]
+    /// Fails only the probe client's requests, the way one that doesn't wait does.
+    private var probeFailures: [String: URLError.Code] = [:]
     private var log: [String: [String]] = [:]
     private var keyLog: [String: [String]] = [:]
     private let token = UUID().uuidString
 
     /// Pass this to clients. Its requests never leave the process.
     let session: URLSession
+    /// Pass this to probe clients (connect checks and Inbox polling). Its
+    /// requests get the same answers as `session`'s, except where
+    /// `failProbes` or `holdInteractive` tells the two apart.
+    let probeSession: URLSession
 
     init() {
+        session = URLSession(configuration: Self.configuration(token: token, probe: false))
+        probeSession = URLSession(configuration: Self.configuration(token: token, probe: true))
+        AidenDemoURLProtocol.register(self, token: token)
+    }
+
+    private static func configuration(token: String, probe: Bool) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AidenDemoURLProtocol.self]
         // The protocol finds its responder through this header, so every test
         // can own a responder even though machine ids repeat between them.
-        configuration.httpAdditionalHeaders = [Self.routeHeader: token]
-        session = URLSession(configuration: configuration)
-        AidenDemoURLProtocol.register(self, token: token)
+        var headers = [routeHeader: token]
+        if probe { headers[probeHeader] = "1" }
+        configuration.httpAdditionalHeaders = headers
+        return configuration
     }
 
     deinit {
         session.invalidateAndCancel()
+        probeSession.invalidateAndCancel()
         AidenDemoURLProtocol.unregister(token: token)
     }
 
@@ -148,6 +167,26 @@ final class AidenDemoResponder: @unchecked Sendable {
         }
     }
 
+    /// A machine with no network as each client meets it: the probe client's
+    /// requests fail at once with `code`, and the interactive client's to the
+    /// paths in `parking` wait until the returned closure is called.
+    func dropNetwork(instanceId: String, code: URLError.Code, parking paths: [String]) -> @Sendable () -> Void {
+        let hold = Hold()
+        lock.lock()
+        probeFailures[instanceId] = code
+        for path in paths { interactiveHolds[HoldKey(instanceId: instanceId, path: path)] = hold }
+        lock.unlock()
+        return { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            hold.isReleased = true
+            let waiting = hold.waiting
+            hold.waiting = []
+            self.lock.unlock()
+            waiting.forEach { $0() }
+        }
+    }
+
     /// Answers each request to `path` once `wait` has passed, which it works
     /// out when the request arrives.
     func delay(instanceId: String, path: String, by wait: @escaping @Sendable () -> TimeInterval) {
@@ -188,8 +227,15 @@ final class AidenDemoResponder: @unchecked Sendable {
         if let key = request.value(forHTTPHeaderField: "Idempotency-Key") {
             keyLog[instanceId, default: []].append(key)
         }
+        let isProbe = request.value(forHTTPHeaderField: Self.probeHeader) != nil
+        if isProbe, let code = probeFailures[instanceId] {
+            lock.unlock()
+            deliver(.failure(URLError(code)))
+            return
+        }
         let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
-        if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)], !hold.isReleased {
+        let interactiveHold = isProbe ? nil : interactiveHolds[HoldKey(instanceId: instanceId, path: path)]
+        if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)] ?? interactiveHold, !hold.isReleased {
             hold.waiting.append { [self] in
                 deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
             }
@@ -549,6 +595,13 @@ enum AidenDemoHosts {
                     endpoint: installation.endpoint,
                     credential: credential,
                     session: responder.session
+                )
+            },
+            probeClientFactory: { installation, credential in
+                AidenRemoteClient(
+                    endpoint: installation.endpoint,
+                    credential: credential,
+                    session: responder.probeSession
                 )
             }
         )
