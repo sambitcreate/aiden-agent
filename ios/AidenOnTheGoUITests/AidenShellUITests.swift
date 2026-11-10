@@ -1977,13 +1977,15 @@ final class AidenShellUITests: XCTestCase {
         for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No long chat in the inbox")
         // The list scrolls under the running accessory, and XCUITest calls a row
-        // there hittable, but a tap on it opens the accessory's chat instead.
+        // there hittable, but a tap on it opens the accessory's chat instead. The
+        // accessory is under the list on a phone and beside the tabs at the top
+        // of a regular width.
         let accessory = app.buttons["aiden.running-accessory"].firstMatch
-        for _ in 0..<4 where accessory.exists && row.frame.maxY > accessory.frame.minY {
+        for _ in 0..<4 where accessory.exists && row.frame.intersects(accessory.frame) {
             dragResults(in: app, from: 0.6, to: 0.4)
         }
         if accessory.exists {
-            XCTAssertLessThanOrEqual(row.frame.maxY, accessory.frame.minY, "The long chat's row is still under the running accessory")
+            XCTAssertFalse(row.frame.intersects(accessory.frame), "The long chat's row is still under the running accessory")
         }
         hideOverlaySidebar(in: app)
         row.tap()
