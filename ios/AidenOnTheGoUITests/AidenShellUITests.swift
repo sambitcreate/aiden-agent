@@ -1241,7 +1241,9 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertFalse(copyQuestion.exists, "A footer showed before any tap")
         XCTAssertFalse(copyReply.exists, "A footer showed before any tap")
         // A drag on a message scrolls; it never shows the footer.
-        reply.swipeDown()
+        // A real drag: `swipeDown()` on a one-line reply (iPad) moves only a few points.
+        let middle = reply.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        middle.press(forDuration: 0.05, thenDragTo: middle.withOffset(CGVector(dx: 0, dy: 120)))
         XCTAssertFalse(copyReply.waitForExistence(timeout: 1), "A drag on the reply showed its footer")
 
         question.tap()
@@ -1786,7 +1788,13 @@ final class AidenShellUITests: XCTestCase {
             "chat": (9, [hitRegion, dynamicType, textClipped]),
             "machines": (10, [contrast, dynamicType]),
             "machine editor": (9, [contrast, dynamicType]),
-            "settings": (13, [contrast, dynamicType]),
+            // Re-pinned in the final review's fix (`final-fix-ipad.log`), from 13:
+            // the Connected machine row (M4) is gone, so the page rises 52 pt and
+            // three rows that sat below the audited screen come into it (contrast
+            // on the haptics note, Dynamic Type on "New workspace permission" and
+            // "Transcription"). The same findings the rows above them have; no
+            // new types.
+            "settings": (16, [contrast, dynamicType]),
             // Re-pinned in Task 35 (`task-35-ipad-shell.log`), from 2: Search now
             // keeps its bar while the field is up (the only way back to the other
             // tabs). The two it had stay: the system field's Clear text button and

@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// Elapsed-time presentation for assistant turns. Durations come from the
 /// Mac-owned generation timeline already carried by the Remote protocol, so a
@@ -177,34 +178,47 @@ struct AidenMessageTap: UIGestureRecognizerRepresentable {
 
     let onTap: () -> Void
 
-    func makeUIGestureRecognizer(context: Context) -> UITapGestureRecognizer {
-        let recognizer = UITapGestureRecognizer()
+    func makeUIGestureRecognizer(context: Context) -> StillTapRecognizer {
+        let recognizer = StillTapRecognizer()
         recognizer.cancelsTouchesInView = false
         recognizer.delaysTouchesEnded = false
         recognizer.delegate = context.coordinator
         return recognizer
     }
 
-    func handleUIGestureRecognizerAction(_ recognizer: UITapGestureRecognizer, context: Context) {
+    func handleUIGestureRecognizerAction(_ recognizer: StillTapRecognizer, context: Context) {
         guard recognizer.state == .ended else { return }
-        let end = recognizer.location(in: nil)
-        if let start = context.coordinator.touchStart,
-           hypot(end.x - start.x, end.y - start.y) > Self.slop {
-            return
-        }
         onTap()
     }
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var touchStart: CGPoint?
+    /// A tap that fails as soon as the finger travels past `slop`. A plain tap
+    /// recogniser allows far more, so a short drag over a wide, low message
+    /// (an iPad reply) would still count as a tap.
+    final class StillTapRecognizer: UITapGestureRecognizer {
+        private var start: CGPoint?
 
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            touchStart = touch.location(in: nil)
-            return true
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesBegan(touches, with: event)
+            if start == nil { start = touches.first?.location(in: nil) }
         }
 
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesMoved(touches, with: event)
+            guard let start, let point = touches.first?.location(in: nil) else { return }
+            if hypot(point.x - start.x, point.y - start.y) > AidenMessageTap.slop {
+                state = .failed
+            }
+        }
+
+        override func reset() {
+            super.reset()
+            start = nil
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
