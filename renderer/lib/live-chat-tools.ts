@@ -61,7 +61,7 @@ export class LiveChatRequestGate {
     });
   }
 
-  /** Chat content has just reached Live (a read result it is being handed, a delivered note). */
+  /** Chat content has just reached Live (any tool result carrying `untrusted_chat_content`: messages, a title, close matches or a workspace name; or a delivered note). */
   exposed(): void {
     this.fence = Math.max(this.fence, this.voice.voiceInputFence());
   }
