@@ -80,6 +80,20 @@ extension AidenBotCreateFlow {
             && pairings(coordinator).allSatisfy { hasLooked(instanceId: $0.instanceId, deviceId: $0.deviceId) }
     }
 
+    /// Whether Bots home's New Bot is enabled. Listing one machine, it follows
+    /// that machine (`defaultCanCreate`). Listing several, it opens while any of
+    /// them has the Bot grant, whatever the default's, and the picker inside
+    /// offers that machine; one that's only offline still opens it, to say why.
+    static func canTapNewBot(
+        groupsMachines: Bool,
+        defaultCanCreate: Bool,
+        canOpen: Bool,
+        coordinator: AidenRemoteCoordinator
+    ) -> Bool {
+        guard groupsMachines else { return defaultCanCreate }
+        return canOpen && AidenNewWorkPicker(coordinator: coordinator, kind: .bot).someMachineAllowsTheWork
+    }
+
     /// The Bot on its way that Bots home shows, and its machine when that isn't the
     /// default.
     func shownPending(coordinator: AidenRemoteCoordinator) -> (pending: Pending, machine: String?)? {

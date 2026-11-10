@@ -163,11 +163,25 @@ final class AidenNewWorkPicker {
     /// `preferred` is the machine the page it was opened from is showing (the
     /// Workspaces tab filtered to one machine): it starts there instead, and says
     /// so if that machine can't take the work right now, as the default would.
+    /// A new Bot never starts on a machine whose pairing can't make Bots while
+    /// another's can: the picker offers that one first.
     func startOver(preferring preferred: String? = nil) {
         let rows = machines
-        let start = preferred.flatMap { id in rows.first { $0.id == id } }
+        var start = preferred.flatMap { id in rows.first { $0.id == id } }
             ?? rows.first(where: \.isDefault) ?? rows.first(where: \.canBePicked) ?? rows.first
+        if kind == .bot, start?.refusal == .cannotCreateBots,
+           let able = rows.first(where: { $0.refusal != .cannotCreateBots }) {
+            start = able
+        }
         target = (pinnedMachine ?? start?.id).map(AidenNewWorkTarget.init(instanceId:))
+    }
+
+    /// True while some machine in the picker has the grant this work needs,
+    /// offline or not. An offline one opens the picker to say why it can't take
+    /// the work yet; one whose pairing can never take it doesn't.
+    var someMachineAllowsTheWork: Bool {
+        Self.visibleConnections(coordinator: coordinator, preferences: preferences, keeping: pinnedMachine)
+            .contains { kind.refusal(on: $0.installation) == nil }
     }
 
     /// A pinned machine has no other to send the person to, so what it says when

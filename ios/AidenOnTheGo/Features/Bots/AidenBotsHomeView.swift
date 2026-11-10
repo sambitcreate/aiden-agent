@@ -347,7 +347,10 @@ struct AidenBotsHomeView: View {
         createFlow.parkedAskScopes(coordinator: coordinator)
     }
 
-    /// New Bot opens at once, connected or not (R15); the Bot is made once the Mac answers.
+    /// The default machine can make Bots and start their chats. It gates what
+    /// this list does on the default machine alone: a first chat with a Bot it
+    /// lists, the presets, and New Bot while it's the only machine listed. New
+    /// Bot opens at once, connected or not (R15); the Bot is made once it answers.
     private var canCreateBot: Bool {
         availability.canWrite
             && coordinator.installationStore.activeInstallation?.canWriteBots == true
@@ -358,6 +361,17 @@ struct AidenBotsHomeView: View {
     /// Bots doesn't close it for the others.
     private var canOpenNewBot: Bool {
         createFlow.canOpenNewBot(coordinator: coordinator)
+    }
+
+    /// The toolbar's New Bot. With several machines listed it opens while any of
+    /// them can make Bots, and its picker starts on one that can.
+    private var canTapNewBot: Bool {
+        AidenBotCreateFlow.canTapNewBot(
+            groupsMachines: machines != nil,
+            defaultCanCreate: canCreateBot,
+            canOpen: canOpenNewBot,
+            coordinator: coordinator
+        )
     }
 
     var body: some View {
@@ -486,7 +500,7 @@ struct AidenBotsHomeView: View {
                     } label: {
                         Label("New Bot", systemImage: "plus")
                     }
-                    .disabled(!canCreateBot)
+                    .disabled(!canTapNewBot)
                 }
             }
     }

@@ -608,6 +608,54 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertTrue(flow.canOpenNewBot(coordinator: coordinator))
     }
 
+    /// A default machine that can't make Bots doesn't close New Bot for another
+    /// that can: with both listed it opens, and its picker starts on that one.
+    func testNewBotOpensWhenAnotherMachineThanTheDefaultCanMakeBots() async throws {
+        var studio = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+        studio.deviceCapabilities.removeAll { $0 == .botRead || $0 == .botWrite }
+        coordinator = makeCoordinator([studio, AidenDemoHosts.installation(instanceId: "laptop", name: "Laptop")])
+        await connectAll()
+        let flow = AidenBotCreateFlow(store: AidenBotOutboxStore(root: botStoreRoot()))
+        await flow.restoreEveryMachine(coordinator: coordinator)
+        let defaultCanCreate = AidenBotsAvailability.resolve(try connection("studio").installation).canWrite
+        XCTAssertFalse(defaultCanCreate)
+        func canTap(grouped: Bool) -> Bool {
+            AidenBotCreateFlow.canTapNewBot(
+                groupsMachines: grouped,
+                defaultCanCreate: defaultCanCreate,
+                canOpen: flow.canOpenNewBot(coordinator: coordinator),
+                coordinator: coordinator
+            )
+        }
+
+        XCTAssertTrue(canTap(grouped: true), "Laptop can make Bots")
+        XCTAssertFalse(canTap(grouped: false), "Listing only the default, it follows the default")
+        let picker = picker(.bot)
+        XCTAssertEqual(picker.target, AidenNewWorkTarget(instanceId: "laptop"), "It starts on a machine that can")
+        XCTAssertTrue(picker.canStart)
+        XCTAssertEqual(picker.machines.first { $0.id == "studio" }?.refusal, .cannotCreateBots)
+        XCTAssertFalse(picker.pick("studio"))
+
+        try await takeOffline("laptop")
+        XCTAssertTrue(canTap(grouped: true), "Offline, it still opens and says why inside")
+
+        var laptop = try connection("laptop").installation
+        laptop.deviceCapabilities.removeAll { $0 == .botWrite }
+        coordinator = makeCoordinator([studio, laptop])
+        await connectAll()
+        let none = AidenBotCreateFlow(store: AidenBotOutboxStore(root: botStoreRoot()))
+        await none.restoreEveryMachine(coordinator: coordinator)
+        XCTAssertFalse(
+            AidenBotCreateFlow.canTapNewBot(
+                groupsMachines: true,
+                defaultCanCreate: false,
+                canOpen: none.canOpenNewBot(coordinator: coordinator),
+                coordinator: coordinator
+            ),
+            "No machine can make Bots"
+        )
+    }
+
     func testNewBotOpensWithEveryMachineOfflineAndSaysWhyInside() async throws {
         await connectAll()
         for id in ["studio", "laptop", "mini"] { try await takeOffline(id) }
