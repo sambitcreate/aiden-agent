@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Copy for an Advanced Save that didn't stick, shown by the screen behind it.
 enum AidenBotAdvancedCopy {
-    static let unreachable = "Aiden couldn’t reach your Mac, so Advanced wasn’t saved. Open it to try again."
-    static let changedOnMac = "Something changed on your Mac, so Advanced wasn’t saved. Open it to check and save again."
+    static let unreachable = "Aiden couldn’t reach your machine, so Advanced wasn’t saved. Open it to try again."
+    static let changedOnMac = "Something changed on your machine, so Advanced wasn’t saved. Open it to check and save again."
     static let couldNotCheck = "Aiden couldn’t check what Advanced saved. Open it again to see."
 }
 
@@ -295,7 +295,7 @@ struct AidenBotAdvancedView: View {
             case .none:
                 EmptyView()
             case .unavailable:
-                Text("To look at photos, add an AI that can see images on your Mac.")
+                Text("To look at photos, add an AI that can see images on your machine.")
                     .foregroundStyle(palette.secondary)
             case .choose:
                 AidenBotModelRow(
@@ -326,7 +326,7 @@ struct AidenBotAdvancedView: View {
             Text("What it can use")
         } footer: {
             if draft?.usesFullAccess == true {
-                Text("It can use everything your Mac allows. Your Mac still asks before risky steps.")
+                Text("It can use everything your machine allows. Your machine still asks before risky steps.")
             } else {
                 Text("Turn on only what this Bot needs.")
             }
@@ -358,7 +358,7 @@ struct AidenBotAdvancedView: View {
                 .buttonStyle(.plain)
                 .disabled(isDirty)
             } footer: {
-                Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your Mac while it works.")
+                Text(isDirty ? "Save or cancel your changes first." : "What you see in its chat on your machine while it works.")
             }
         }
     }
@@ -530,7 +530,7 @@ struct AidenBotAdvancedView: View {
     }
 
     private var readOnlyMessage: String {
-        if capturedContext == nil { return "Connect to your Mac to change this." }
+        if capturedContext == nil { return "Connect to your machine to change this." }
         return "This phone can look but not change Bots."
     }
 
@@ -682,7 +682,7 @@ struct AidenBotAdvancedView: View {
 /// Plain-language load errors for Bot surfaces.
 func aidenBotFriendlyLoadError(_ error: Error) -> String {
     if case AidenBotContractError.invalidCombination("no available provider and model") = error {
-        return "Needs an AI model. Set one up on your Mac, then try again."
+        return "Needs an AI model. Set one up on your machine, then try again."
     }
     return error.localizedDescription
 }
@@ -805,7 +805,7 @@ struct AidenBotModelListView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.label).foregroundStyle(palette.foreground)
-                    Text(usable ? (model.supportsImages ? "Reads images" : "Text only") : "Set up on your Mac")
+                    Text(usable ? (model.supportsImages ? "Reads images" : "Text only") : "Set up on your machine")
                         .font(.footnote)
                         .foregroundStyle(palette.secondary)
                 }
@@ -878,8 +878,8 @@ enum AidenBotChatActivityCopy {
     static let phonesFooter = "Always just the line, with the same words."
     static let recommended = "Recommended"
     static let saveFailed = "Aiden couldn’t save that choice."
-    static let saveConflict = "This changed on your Mac. Showing what it has now."
-    static let saveUnreachable = "Aiden couldn’t reach your Mac to save that choice."
+    static let saveConflict = "This changed on your machine. Showing what it has now."
+    static let saveUnreachable = "Aiden couldn’t reach your machine to save that choice."
 
     static func message(_ failure: AidenBotChatActivityFailure) -> String {
         switch failure {
@@ -926,7 +926,7 @@ enum AidenBotChatActivityCopy {
     }
 
     static func description(botName: String) -> String {
-        "What you see in \(botName)’s chat on your Mac while it works. Changes save as you pick them."
+        "What you see in \(botName)’s chat on your machine while it works. Changes save as you pick them."
     }
 }
 

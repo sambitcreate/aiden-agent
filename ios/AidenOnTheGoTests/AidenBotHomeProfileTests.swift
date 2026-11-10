@@ -482,7 +482,7 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertEqual(draft.photoModelNeed(catalog: catalog), .unavailable, "New Bot and Advanced explain it")
         XCTAssertEqual(
             draft.noImageModelNote(catalog: catalog),
-            "Fixture Model reads text only, and no model that reads images is set up on your Mac."
+            "Fixture Model reads text only, and no model that reads images is set up on your machine."
         )
 
         // New Bot creates it reading text only, and Advanced saves it the same way.

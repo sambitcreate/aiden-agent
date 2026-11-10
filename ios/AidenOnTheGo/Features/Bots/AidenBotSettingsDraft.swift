@@ -271,7 +271,7 @@ struct AidenBotEditorDraft: Codable, Equatable {
     func noImageModelNote(catalog: AidenBotCapabilityCatalog) -> String {
         let label = catalog.model(providerId: customAccess.providerID, modelId: customAccess.modelID)?.label
             ?? "This model"
-        return "\(label) reads text only, and no model that reads images is set up on your Mac."
+        return "\(label) reads text only, and no model that reads images is set up on your machine."
     }
 
     func visionSelection(catalog: AidenBotCapabilityCatalog) throws -> AidenBotModelSelection? {

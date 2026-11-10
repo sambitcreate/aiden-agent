@@ -131,7 +131,7 @@ final class AidenHomeModel {
         } catch {
             await rollBack(chatID: chatID, optimistic: optimistic, before: before, viewed: viewed, context: context, host: host)
             guard host.holdsHomeContext(context) else { return }
-            inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t mark that chat read. Try again once your Mac is reachable."))
+            inboxNotice = AidenInboxNotice(message: String(localized: "Couldn’t mark that chat read. Try again once your machine is reachable."))
             return
         }
         settleRead(chatID: chatID, readThrough: optimistic, context: context, host: host)

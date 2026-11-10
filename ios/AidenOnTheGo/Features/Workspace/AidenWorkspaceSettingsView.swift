@@ -72,7 +72,7 @@ struct AidenWorkspaceSettingsView: View {
                 } header: {
                     Text("Memory")
                 } footer: {
-                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your Mac.")
+                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your machine.")
                 }
 
                 Section("Workspace tools") {

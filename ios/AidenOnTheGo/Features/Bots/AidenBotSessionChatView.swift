@@ -1329,7 +1329,7 @@ extension AidenBotSessionCopy {
     static let tryAgain = "Try again"
     static let connecting = "Connecting…"
     static let removeMessage = "Remove message"
-    static let unreachable = "Aiden couldn’t reach your Mac. Try again."
+    static let unreachable = "Aiden couldn’t reach your machine. Try again."
 }
 
 /// The Steer/Queue pill's mode: Queue by default, kept while the Bot works, and
@@ -1564,7 +1564,7 @@ struct AidenBotRoutineProposalCardView: View {
 
 /// Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to
 /// two actions. A card that offers nothing a phone can do (the Mac's own
-/// settings opened it) says "Open on your Mac".
+/// settings opened it) says "Open on your machine".
 struct AidenBotIssueCardView: View {
     let issue: AidenRemoteBotIssue
     let canAct: Bool

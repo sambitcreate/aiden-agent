@@ -633,7 +633,7 @@ enum AidenNoWorkspace {
     /// Shown when a new chat landed in a hidden folder the phone couldn't list yet (the workspace
     /// re-read failed), so the chat exists on the Mac but can't open until the list refreshes.
     static var startedButUnlistedMessage: String {
-        String(localized: "Your new chat was started on your Mac but couldn't open yet. It will appear under Chats once Aiden On The Go reconnects.")
+        String(localized: "Your new chat was started on your machine but couldn't open yet. It will appear under Chats once Aiden On The Go reconnects.")
     }
 
     /// Workspaces a person picks, opens or manages: everything but the hidden records, except
@@ -4217,7 +4217,7 @@ struct AidenReadAloudStatus: Codable, Sendable {
     let settingsRevision: String
     let source: AidenReadAloudSource?
     let job: AidenReadAloudJob?
-    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Text to Speech. Voice and credentials are managed on your Mac. Selected response text is sent from your Mac to Google and may incur charges."
+    static let setupGuidance = "Enable Read Aloud in the desktop app: Settings → Text to Speech. Voice and credentials are managed on your machine. Selected response text is sent from your machine to Google and may incur charges."
 }
 struct AidenReadAloudAudio: Codable, Sendable {
     let bytesBase64: String

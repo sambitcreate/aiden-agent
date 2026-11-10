@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Usage before its first read: the dashboard's outline, or an explanation
-/// when the Mac can't be reached or the read failed.
+/// when the machine can't be reached or the read failed.
 struct AidenUsagePendingView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
@@ -11,8 +11,8 @@ struct AidenUsagePendingView: View {
     let retry: () -> Void
     /// True when a stack has pushed this page, so Back replaces Done.
     var isPushed = false
-    var unavailableMessage: LocalizedStringKey = "Usage appears once your Mac is reachable."
-    var failedMessage: LocalizedStringKey = "Your Mac didn't return usage this time."
+    var unavailableMessage: LocalizedStringKey = "Usage appears once your machine is reachable."
+    var failedMessage: LocalizedStringKey = "Your machine didn't return usage this time."
     var machinePicker: AidenNewWorkMachinePicker?
 
     var body: some View {
@@ -20,32 +20,32 @@ struct AidenUsagePendingView: View {
             Group {
                 if isOffline {
                     ContentUnavailableView(
-                        "Usage Unavailable",
+                        "Usage unavailable",
                         systemImage: "chart.bar.xaxis",
                         description: Text(unavailableMessage)
                     )
                 } else if failed {
                     ContentUnavailableView {
-                        Label("Usage Couldn't Load", systemImage: "chart.bar.xaxis")
+                        Label("Usage couldn't load", systemImage: "chart.bar.xaxis")
                     } description: {
                         Text(failedMessage)
                     } actions: {
-                        Button("Try Again", action: retry)
+                        Button("Try again", action: retry)
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 20) {
-                        HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: AidenSpacing.xl) {
+                        HStack(spacing: AidenSpacing.m) {
                             ForEach(0..<3, id: \.self) { _ in
-                                AidenBotSkeletonBlock(width: nil, height: 72, radius: 14, reduceMotion: reduceMotion)
+                                AidenBotSkeletonBlock(width: nil, height: 72, radius: AidenRadius.card, reduceMotion: reduceMotion)
                             }
                         }
-                        AidenBotSkeletonBlock(width: nil, height: 132, radius: 14, reduceMotion: reduceMotion)
+                        AidenBotSkeletonBlock(width: nil, height: 132, radius: AidenRadius.card, reduceMotion: reduceMotion)
                         ForEach(0..<4, id: \.self) { _ in
-                            AidenBotSkeletonBlock(width: nil, height: 44, radius: 10, reduceMotion: reduceMotion)
+                            AidenBotSkeletonBlock(width: nil, height: 44, radius: AidenRadius.code, reduceMotion: reduceMotion)
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(24)
+                    .padding(AidenSpacing.xxl)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Loading usage")
                 }
@@ -216,7 +216,7 @@ struct AidenUsageView: View {
     var body: some View {
         AidenPresentedStack(isPushed: isPushed) {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
+                LazyVStack(alignment: .leading, spacing: AidenSpacing.xxl) {
                     machinePicker
                     usageHero
                     overviewGrid
@@ -225,9 +225,9 @@ struct AidenUsageView: View {
                     modelSection
                     privacyNote
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 36)
+                .padding(.horizontal, AidenSpacing.xl)
+                .padding(.top, AidenSpacing.m)
+                .padding(.bottom, AidenSpacing.xxxl)
             }
             .scrollContentBackground(.hidden)
             .background(palette.canvas.ignoresSafeArea())
@@ -244,8 +244,8 @@ struct AidenUsageView: View {
     }
 
     private var usageHero: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Your Activity")
+        VStack(alignment: .leading, spacing: AidenSpacing.xs) {
+            Text("Your activity")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(palette.foreground)
 
@@ -257,10 +257,10 @@ struct AidenUsageView: View {
     }
 
     private var overviewGrid: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: AidenSpacing.m) {
             LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-                spacing: 12
+                columns: [GridItem(.flexible(), spacing: AidenSpacing.m), GridItem(.flexible(), spacing: AidenSpacing.m)],
+                spacing: AidenSpacing.m
             ) {
                 metricCard(
                     value: usage.totals.requests.formatted(),
@@ -284,13 +284,13 @@ struct AidenUsageView: View {
                 )
             }
 
-            HStack(alignment: .center, spacing: 14) {
+            HStack(alignment: .center, spacing: AidenSpacing.m) {
                 Image(systemName: "circle.hexagongrid.fill")
                     .font(.title2)
                     .foregroundStyle(palette.accent)
                     .frame(width: 34, height: 34)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: AidenSpacing.xs) {
                     Text(AidenUsagePresentation.tokenCount(usage.totals.tokens.total))
                         .font(.title2.weight(.bold).monospacedDigit())
                         .foregroundStyle(palette.foreground)
@@ -305,7 +305,7 @@ struct AidenUsageView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(18)
+            .padding(AidenSpacing.l)
             .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
             .aidenUsageCard(palette: palette)
             .accessibilityElement(children: .combine)
@@ -314,14 +314,14 @@ struct AidenUsageView: View {
     }
 
     private func metricCard(value: String, label: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AidenSpacing.m) {
             Image(systemName: symbol)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(palette.accent)
                 .frame(width: 30, height: 30)
-                .background(palette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .background(palette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: AidenSpacing.xs) {
                 Text(value)
                     .font(.title3.weight(.bold))
                     .foregroundStyle(palette.foreground)
@@ -331,7 +331,7 @@ struct AidenUsageView: View {
                     .foregroundStyle(palette.secondary)
             }
         }
-        .padding(16)
+        .padding(AidenSpacing.l)
         .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
         .aidenUsageCard(palette: palette)
         .accessibilityElement(children: .combine)
@@ -339,7 +339,7 @@ struct AidenUsageView: View {
 
     private var tokenActivitySection: some View {
         usageSection(title: "Token activity") {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: AidenSpacing.l) {
                 HStack {
                     Text("Daily totals")
                         .font(.subheadline.weight(.semibold))
@@ -348,14 +348,14 @@ struct AidenUsageView: View {
                     Text("Last 30 days")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(palette.secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, AidenSpacing.s)
+                        .padding(.vertical, AidenSpacing.xs)
                         .background(palette.sidebar, in: Capsule())
                 }
 
                 LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 10),
-                    spacing: 6
+                    columns: Array(repeating: GridItem(.flexible(), spacing: AidenSpacing.xs), count: 10),
+                    spacing: AidenSpacing.xs
                 ) {
                     ForEach(heatmapDays) { day in
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -366,7 +366,7 @@ struct AidenUsageView: View {
                     }
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: AidenSpacing.xs) {
                     Text("Less")
                     ForEach(0..<5, id: \.self) { level in
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -382,13 +382,13 @@ struct AidenUsageView: View {
 
                 tokenBreakdown
             }
-            .padding(18)
+            .padding(AidenSpacing.l)
             .aidenUsageCard(palette: palette)
         }
     }
 
     private var tokenBreakdown: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: AidenSpacing.m) {
             usageValueRow("Input", value: usage.totals.tokens.input.formatted(), color: palette.accent)
             usageValueRow("Output", value: usage.totals.tokens.output.formatted(), color: palette.success)
             usageValueRow("Reasoning", value: usage.totals.tokens.reasoning.formatted(), color: palette.warning)
@@ -410,7 +410,7 @@ struct AidenUsageView: View {
                     value: usage.totals.hostedCostSummary
                 )
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, AidenSpacing.l)
             .aidenUsageCard(palette: palette)
         }
     }
@@ -421,7 +421,7 @@ struct AidenUsageView: View {
             usageSection(title: "Most used models") {
                 VStack(spacing: 0) {
                     ForEach(Array(usage.models.prefix(5).enumerated()), id: \.element.id) { index, model in
-                        HStack(spacing: 12) {
+                        HStack(spacing: AidenSpacing.m) {
                             AidenProviderIcon(
                                 providerID: model.providerId,
                                 providerLabel: model.providerLabel,
@@ -431,9 +431,9 @@ struct AidenUsageView: View {
                                 color: palette.accent
                             )
                                 .frame(width: 34, height: 34)
-                                .background(palette.sidebar, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .background(palette.sidebar, in: RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous))
 
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: AidenSpacing.xs) {
                                 Text(model.modelLabel)
                                     .font(.body.weight(.semibold))
                                     .foregroundStyle(palette.foreground)
@@ -444,28 +444,28 @@ struct AidenUsageView: View {
                                     .lineLimit(1)
                             }
 
-                            Spacer(minLength: 8)
+                            Spacer(minLength: AidenSpacing.s)
 
                             Text("\(model.requests.formatted()) runs")
                                 .font(.subheadline)
                                 .foregroundStyle(palette.secondary)
                                 .fixedSize(horizontal: true, vertical: false)
                         }
-                        .padding(.vertical, 14)
+                        .padding(.vertical, AidenSpacing.m)
 
                         if index < min(usage.models.count, 5) - 1 {
                             insightDivider
                         }
                     }
                 }
-                .padding(.horizontal, 18)
+                .padding(.horizontal, AidenSpacing.l)
                 .aidenUsageCard(palette: palette)
             }
         }
     }
 
     private var privacyNote: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: AidenSpacing.m) {
             Image(systemName: "lock.shield")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(palette.accent)
@@ -476,9 +476,9 @@ struct AidenUsageView: View {
                 .foregroundStyle(palette.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(16)
+        .padding(AidenSpacing.l)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 
@@ -486,17 +486,17 @@ struct AidenUsageView: View {
         title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AidenSpacing.m) {
             Text(title)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(palette.secondary)
-                .padding(.leading, 4)
+                .padding(.leading, AidenSpacing.xs)
             content()
         }
     }
 
     private func usageValueRow(_ label: String, value: String, color: Color) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: AidenSpacing.s) {
             Circle()
                 .fill(color)
                 .frame(width: 8, height: 8)
@@ -512,16 +512,16 @@ struct AidenUsageView: View {
     }
 
     private func insightRow(_ label: String, value: String) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: AidenSpacing.m) {
             Text(label)
                 .foregroundStyle(palette.foreground)
-            Spacer(minLength: 12)
+            Spacer(minLength: AidenSpacing.m)
             Text(value)
                 .foregroundStyle(palette.secondary)
                 .monospacedDigit()
         }
         .font(.body)
-        .padding(.vertical, 16)
+        .padding(.vertical, AidenSpacing.l)
         .accessibilityElement(children: .combine)
     }
 
@@ -614,10 +614,10 @@ private extension View {
     func aidenUsageCard(palette: AidenPalette) -> some View {
         background(
             palette.raised,
-            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            in: RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: AidenRadius.card, style: .continuous)
                 .stroke(palette.foreground.opacity(0.06), lineWidth: 0.5)
         }
     }

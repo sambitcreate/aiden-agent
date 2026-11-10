@@ -113,9 +113,9 @@ final class AidenBotCreateFlow {
         var sentAt: Date?
     }
 
-    static let unreachable = "Aiden couldn’t reach your Mac, so the Bot wasn’t made. Try again."
+    static let unreachable = "Aiden couldn’t reach your machine, so the Bot wasn’t made. Try again."
     static let interrupted = "Aiden closed before the Bot was ready. Try again to finish making it."
-    static let notKept = "Aiden couldn’t store this Bot on your iPhone, so it wasn’t sent to your Mac. Try again."
+    static let notKept = "Aiden couldn’t store this Bot on your iPhone, so it wasn’t sent to your machine. Try again."
 
     /// What Try Again on Bots home does with a failure.
     enum Retry: Equatable {
@@ -773,9 +773,9 @@ struct AidenBotCreateView: View {
 
     private var accessNote: String {
         if allowsModellessCreate {
-            return "It needs an AI model before it can reply. Choose one on your Mac."
+            return "It needs an AI model before it can reply. Choose one on your machine."
         }
-        return "It can use everything your Mac allows. You can change this later in Advanced."
+        return "It can use everything your machine allows. You can change this later in Advanced."
     }
 
     private func prefill() {

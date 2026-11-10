@@ -3,6 +3,7 @@ import SwiftUI
 struct AidenAppSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AidenHapticCenter.self) private var haptics
+    @Environment(\.aidenPalette) private var palette
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
     /// For the installations sheet, which the tab shell has no use for: Machines pairs there.
@@ -108,7 +109,7 @@ struct AidenAppSettingsView: View {
                         }
                     }
                 } header: {
-                    Text("Global Defaults")
+                    Text("Global defaults")
                 } footer: {
                     Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
                 }
@@ -117,7 +118,7 @@ struct AidenAppSettingsView: View {
                     NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
                         Label("Providers", systemImage: "server.rack")
                     }
-                } footer: { Text("Manage model connections on your paired Mac.") }
+                } footer: { Text("Manage model connections on your paired machine.") }
 
                 Section {
                     Toggle(
@@ -129,16 +130,16 @@ struct AidenAppSettingsView: View {
                     )
                     .disabled(memorySettings == nil || isSavingMemory)
                     if let memoryError {
-                        Text(memoryError).foregroundStyle(.red)
+                        Text(memoryError).foregroundStyle(palette.dangerText)
                     }
                 } header: {
                     Text("Memory")
                 } footer: {
-                    Text("This controls memory on your paired Mac. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
+                    Text("This controls memory on your paired machine. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
                 }
 
                 Section {
-                    Text(readAloudStatus?.ready == true ? "Ready on your Mac" : "Set up on your Mac")
+                    Text(readAloudStatus?.ready == true ? "Ready on your machine" : "Set up on your machine")
                     if let readAloudError { Text(readAloudError).foregroundStyle(.secondary) }
                     Button("Refresh status") { Task { await loadReadAloudStatus() } }
                 } header: { Text("Read Aloud") } footer: {
@@ -159,11 +160,11 @@ struct AidenAppSettingsView: View {
                         }
                     }
                 } header: {
-                    Text("Voice Input")
+                    Text("Voice input")
                 } footer: {
                     Text(
                         voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired Mac, and not retained. Text appears after you stop recording."
+                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired machine, and not retained. Text appears after you stop recording."
                             : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
                     )
                 }
@@ -184,7 +185,7 @@ struct AidenAppSettingsView: View {
 
                 Section("About") {
                     Link(destination: AppConfig.privacyPolicyURL) {
-                        Label("Privacy Policy", systemImage: "hand.raised")
+                        Label("Privacy policy", systemImage: "hand.raised")
                     }
                     Link(destination: AppConfig.supportURL) {
                         Label("Support", systemImage: "questionmark.circle")
@@ -192,7 +193,7 @@ struct AidenAppSettingsView: View {
                     LabeledContent("License", value: "MIT")
                 }
             }
-            .navigationTitle("App Settings")
+            .navigationTitle("App settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !isPushed {

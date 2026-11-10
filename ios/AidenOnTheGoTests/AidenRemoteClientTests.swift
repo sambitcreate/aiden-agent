@@ -3374,7 +3374,7 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTFail("A loser must surface the first-responder conflict.")
         } catch {
             let loser = try XCTUnwrap(AidenForeignRunResolution.loser(from: error))
-            XCTAssertEqual(loser.notice, "Answered on Mac: allowed")
+            XCTAssertEqual(loser.notice, "Answered on your machine: allowed")
         }
     }
 

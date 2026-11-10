@@ -316,7 +316,7 @@ struct AidenBotProfileView: View {
             ContentUnavailableView {
                 Label("Couldn’t Load Bot", systemImage: "exclamationmark.bubble")
             } description: {
-                Text(loadError ?? "Connect to your Mac, then try again.")
+                Text(loadError ?? "Connect to your machine, then try again.")
             } actions: {
                 Button("Try Again") {
                     let expectedSession = sessionIdentity

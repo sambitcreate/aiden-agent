@@ -54,7 +54,7 @@ func aidenTranscribeSpeech(
         throw NSError(
             domain: "AidenVoiceInput",
             code: 2,
-            userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a desktop speech model in App Settings before using this option.")]
+            userInfo: [NSLocalizedDescriptionKey: String(localized: "Download a desktop speech model in App settings before using this option.")]
         )
     }
     if status.selectedModelId != model.id { _ = try await speech.selectSpeechModel(model.id) }

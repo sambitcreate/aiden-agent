@@ -601,7 +601,7 @@ extension AidenChatViewModel {
             case .allowed:
                 nil
             case .approvalResponseRequired:
-                String(localized: "This paired device can't answer requests from runs it didn't start. Answer it on your Mac.")
+                String(localized: "This paired device can't answer requests from runs it didn't start. Answer it on your machine.")
             case .scheduleWriteRequired:
                 String(localized: "Schedule write access was removed from this paired device. The task was not approved.")
             case .hostApprovalRequired:
@@ -636,7 +636,7 @@ extension AidenChatViewModel {
                 showForeignRunNotice(loser.notice)
                 return
             }
-            presentedError = String(localized: "The approval response was not confirmed. Check the request on your Mac.")
+            presentedError = String(localized: "The approval response was not confirmed. Check the request on your machine.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
@@ -672,12 +672,12 @@ extension AidenChatViewModel {
                 showForeignRunNotice(loser.notice)
                 return
             }
-            presentedError = String(localized: "The question response was not confirmed. Check the prompt on your Mac.")
+            presentedError = String(localized: "The question response was not confirmed. Check the prompt on your machine.")
             coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
-    /// "Answered on Mac": the transient composer caption a losing phone shows.
+    /// "Answered on your machine": the transient composer caption a losing phone shows.
     private func showForeignRunNotice(_ text: String) {
         showRunInputReceipt(text)
     }

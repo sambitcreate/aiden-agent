@@ -725,7 +725,7 @@ struct AidenAttachmentPickerOverlay: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .accessibilityHint(enabled ? "" : "Reconnect to your Mac to use this attachment option")
+        .accessibilityHint(enabled ? "" : "Reconnect to your machine to use this attachment option")
     }
 
     private var photoPanel: some View {

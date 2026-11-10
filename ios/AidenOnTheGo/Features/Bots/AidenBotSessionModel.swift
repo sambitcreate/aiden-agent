@@ -249,7 +249,7 @@ enum AidenBotSessionCopy {
     /// Revision 37: the person paused the Bot.
     static let pausedSubtitle = "Paused"
     static let needsModel = "Needs an AI model"
-    static let needsModelHint = "Set up on your Mac"
+    static let needsModelHint = "Set up on your machine"
     static let setUp = "Set up"
     static let queued = "Queued"
     /// The outbox file a previous launch left couldn't be read; it was set aside, not deleted.
@@ -259,9 +259,9 @@ enum AidenBotSessionCopy {
         "Set up an AI model so \(botName) can reply."
     }
     static let sessionReset = "This chat was restarted."
-    static let finishOnMac = "Finish on your Mac"
-    static let finishOnMacReadOnly = "Finish this on your Mac."
-    static let checkYourMac = "Check your Mac to finish."
+    static let finishOnMac = "Finish on your machine"
+    static let finishOnMacReadOnly = "Finish this on your machine."
+    static let checkYourMac = "Check your machine to finish."
     static let connected = "Connected ✓"
     static let failedTurn = "I couldn't finish that reply."
     static let retry = "Retry"
@@ -274,7 +274,7 @@ enum AidenBotSessionCopy {
     static let handoffSkip = "Skip"
     static let handoffOpen = "Open"
     static let handoffNotePlaceholder = "Add a note and send to mark it done"
-    static let signInPlaceholder = "Finish signing in on your Mac, or skip it."
+    static let signInPlaceholder = "Finish signing in on your machine, or skip it."
     /// Revision 40: a password-or-code card takes no note, so the composer waits.
     static let handoffNoNotePlaceholder = "Enter it yourself, then tap Done."
     static let handoffExpired = "That card was already answered or closed."
@@ -282,12 +282,12 @@ enum AidenBotSessionCopy {
     static let handoffNoteTooLong = "Keep the note under 4,000 characters."
     static let handoffPhotosWait = "Send photos after you answer the card."
     static let handoffFilesWait = "Send files after you answer the card."
-    static let finishSigningInOnMac = "Finish signing in on your Mac."
-    static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
+    static let finishSigningInOnMac = "Finish signing in on your machine."
+    static let openAidenOnMac = "Open Aiden on your machine to finish signing in."
     /// Revision 43: a step on the Bot's own browser or computer.
-    static let finishStepOnMac = "Finish this step on your Mac."
-    static let openAidenOnMacForStep = "Open Aiden on your Mac to finish this step."
-    static let handoffOnMacDetail = "This step is on the Bot’s own screen on your Mac."
+    static let finishStepOnMac = "Finish this step on your machine."
+    static let openAidenOnMacForStep = "Open Aiden on your machine to finish this step."
+    static let handoffOnMacDetail = "This step is on the Bot’s own screen on your machine."
     static let pauseBot = "Pause Bot"
     static let resumeBot = "Resume Bot"
     static func pausedTitle(_ name: String) -> String { "\(name) is paused." }
@@ -297,20 +297,20 @@ enum AidenBotSessionCopy {
     // Revision 42 (`bot:issues`), shared with desktop and Android.
     static let issueNeedsYou = "Needs you"
     /// A card whose only action opens the Mac's own settings.
-    static let issueOpenOnMac = "Open on your Mac"
+    static let issueOpenOnMac = "Open on your machine"
     static let issueOpenChat = "Open chat"
     static let issueResumeRoutine = "Resume routine"
     static let issueStop = "Stop"
     static let issueKeepWaiting = "Keep waiting"
     static let issueStale = "This card changed. Pull to refresh and try again."
-    static let issueNotSent = "That didn’t reach your Mac. Please try again."
+    static let issueNotSent = "That didn’t reach your machine. Please try again."
 
     static let memoryUpdated = "Memory updated"
     static let proposalTitle = "Add a routine?"
     static let addRoutine = "Add routine"
     static let notNow = "Not now"
     static let notAdded = "Not added"
-    static let proposalFailed = "That didn’t reach your Mac. Please try again."
+    static let proposalFailed = "That didn’t reach your machine. Please try again."
 
     static func proposalBody(name: String, label: String) -> String { "\(name) · \(label)" }
     static func proposalAdded(label: String) -> String { "Added ✓ · \(label)" }
@@ -1034,7 +1034,7 @@ func aidenBotSessionFailureIsAmbiguous(_ error: Error) -> Bool {
 /// A Bot request that didn't answer in time: it may still have reached the Mac,
 /// so it is ambiguous and keeps its Idempotency-Key.
 struct AidenBotRequestTimedOut: LocalizedError {
-    var errorDescription: String? { "Your Mac didn’t answer in time." }
+    var errorDescription: String? { "Your machine didn’t answer in time." }
 }
 
 /// Runs `operation`, giving up after `limit`. The phone's URLSession waits for
@@ -3077,7 +3077,7 @@ final class AidenBotSessionModel {
                 // The Mac can't set up this app; say so instead of "try again".
                 errorMessage = body.message
             } else {
-                errorMessage = "Your Mac didn’t get that request. Please try again."
+                errorMessage = "Your machine didn’t get that request. Please try again."
             }
         }
     }

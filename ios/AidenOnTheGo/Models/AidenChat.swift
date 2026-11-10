@@ -831,8 +831,8 @@ enum AidenBrowserRecordingLoad: Equatable, Sendable {
     /// Anything else: offline, refused, or an answer the phone rejected.
     case failed
 
-    static let watchOnMacMessage = "Watch this recording on your Mac."
-    static let missingMessage = "This recording is no longer on the Mac."
+    static let watchOnMacMessage = "Watch this recording on your machine."
+    static let missingMessage = "This recording is no longer on the machine."
     static let failedMessage = "This recording can\u{2019}t be played right now."
 
     /// A 404 means the recording is gone; every other failure may pass.
@@ -3436,7 +3436,7 @@ enum AidenApprovalPresentation {
         if !canAllow {
             return kind == .scheduledTask
                 ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired desktop."), symbol: "desktopcomputer")
-                : AidenApprovalLimit(text: String(localized: "Allow this on your Mac. You can deny it here."), symbol: "desktopcomputer")
+                : AidenApprovalLimit(text: String(localized: "Allow this on your machine. You can deny it here."), symbol: "desktopcomputer")
         }
         return nil
     }
@@ -3936,13 +3936,13 @@ struct AidenForeignRunResolution: Equatable, Sendable {
     var notice: String {
         switch prompt {
         case .approval(.allow?):
-            String(localized: "Answered on Mac: allowed")
+            String(localized: "Answered on your machine: allowed")
         case .approval(.deny?):
-            String(localized: "Answered on Mac: denied")
+            String(localized: "Answered on your machine: denied")
         case .question("expired"):
-            String(localized: "Question expired on Mac")
+            String(localized: "Question expired on your machine")
         case .approval(nil), .question:
-            String(localized: "Answered on Mac")
+            String(localized: "Answered on your machine")
         }
     }
 

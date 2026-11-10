@@ -7419,11 +7419,11 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(resolved.providerId, "google")
         XCTAssertEqual(
             AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: "Gemini Flash"),
-            "This chat used Google Antigravity, which runs only on your Mac. Replies from here use Gemini Flash."
+            "This chat used Google Antigravity, which runs only on your machine. Replies from here use Gemini Flash."
         )
         XCTAssertEqual(
             AidenChatModelAuthority.macOnlyAgentNotice(chat: chat, catalog: catalog, replyModelLabel: nil),
-            "This chat used Google Antigravity, which runs only on your Mac. Choose a model for replies from here."
+            "This chat used Google Antigravity, which runs only on your machine. Choose a model for replies from here."
         )
 
         // A chat on a model this phone can use, or a Bot chat, says nothing.
@@ -9533,7 +9533,7 @@ final class AidenChatTests: XCTestCase {
             AidenApprovalPresentation.limit(kind: kind, canRespond: respond, hasRequiredWriteCapability: write, canAllow: allow)
         }
         XCTAssertNil(limit(.action), "An approval this phone can answer shows the paused note instead.")
-        XCTAssertEqual(limit(.action, allow: false), AidenApprovalLimit(text: "Allow this on your Mac. You can deny it here.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.action, allow: false), AidenApprovalLimit(text: "Allow this on your machine. You can deny it here.", symbol: "desktopcomputer"))
         XCTAssertEqual(limit(.scheduledTask, allow: false), AidenApprovalLimit(text: "This task must be approved on your paired desktop.", symbol: "desktopcomputer"))
         XCTAssertEqual(limit(.scheduledTask, write: false), AidenApprovalLimit(text: "Schedule write access is required to approve this task.", symbol: "lock.fill"))
         XCTAssertEqual(

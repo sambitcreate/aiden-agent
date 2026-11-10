@@ -128,7 +128,7 @@ struct AidenVisualViewer: View {
     }
 
     private var outdatedNote: some View {
-        Label("May be out of date. Your Mac couldn't be reached.", systemImage: "clock.arrow.circlepath")
+        Label("May be out of date. Your machine couldn't be reached.", systemImage: "clock.arrow.circlepath")
             .font(.caption)
             .foregroundStyle(palette.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)

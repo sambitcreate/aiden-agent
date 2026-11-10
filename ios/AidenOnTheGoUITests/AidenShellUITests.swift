@@ -450,13 +450,13 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Settings"].firstMatch.waitForExistence(timeout: 5))
         AidenStateMatrix.capture("tabs-inbox-menu", in: self)
         app.buttons["Settings"].firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["App Settings"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-settings", in: self)
         goBack(in: app)
 
         openInboxMenu(in: app)
         app.buttons["Scheduled tasks"].firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Scheduled Tasks"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["Scheduled tasks"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-scheduled", in: self)
         goBack(in: app)
 
@@ -558,7 +558,7 @@ final class AidenShellUITests: XCTestCase {
         let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
-        for (entry, title) in [("Settings", "App Settings"), ("Scheduled tasks", "Scheduled Tasks"), ("Usage", "Usage")] {
+        for (entry, title) in [("Settings", "App settings"), ("Scheduled tasks", "Scheduled tasks"), ("Usage", "Usage")] {
             openInboxMenu(in: app)
             let item = app.buttons[entry].firstMatch
             XCTAssertTrue(item.waitForExistence(timeout: 5), "No \(entry) in the Inbox menu")
@@ -648,7 +648,7 @@ final class AidenShellUITests: XCTestCase {
         goBack(in: app)
         XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "Back left Machines")
         goBack(in: app)
-        XCTAssertTrue(app.navigationBars["App Settings"].waitForExistence(timeout: 10), "Back left Settings")
+        XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10), "Back left Settings")
         app.terminate()
     }
 
