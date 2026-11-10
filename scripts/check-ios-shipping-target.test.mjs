@@ -1015,7 +1015,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(
     chat,
-    /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?TapGesture\(\)\.onEnded[\s\S]*?composerIsFocused = false/u,
+    /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?\.gesture\(AidenTranscriptTap \{ composerIsFocused = false \}\)/u,
   );
   assert.match(
     chat,
