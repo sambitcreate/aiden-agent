@@ -170,6 +170,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         autoTitle,
         turnId,
         skillReference,
+        inputSource,
         retainedBytes,
       } = parsed;
       const owner = rendererDocumentOwner(
@@ -260,6 +261,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                     model: messageModel,
                     attachments,
                     skill: skill?.provenance,
+                    ...(inputSource ? { inputSource } : {}),
                     // Reasoning and generation timelines are persisted by the trusted
                     // main-process generation owner, never accepted from renderer data.
                     reasoning: undefined,

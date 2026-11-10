@@ -134,3 +134,61 @@ test("a non-object renderer result becomes a fixed failure", async () => {
   broker.resolve(sent[0]!.requestId, ["not", "an", "object"]);
   assert.equal(((await pending).error as { code: string }).code, "tool_failed");
 });
+
+test("a timeout tells the window to cancel too, so a late request cannot still act", async () => {
+  const sent: Array<{ type: string; requestId: string }> = [];
+  const broker = new LiveRendererToolBroker("s1", (request) => sent.push(request), 20);
+  const timedOut = await broker.request("read_open_chat", {});
+  assert.equal((timedOut.error as { code: string }).code, "timeout");
+  assert.deepEqual(sent.map((entry) => entry.type), ["tool_request", "tool_cancel"]);
+  assert.equal(sent[1]!.requestId, sent[0]!.requestId);
+});
+
+test("a mutating request the window already has reports its real outcome, or outcome_unknown, never cancelled", async () => {
+  const sent: Array<{ type: string; requestId: string }> = [];
+  const broker = new LiveRendererToolBroker("s1", (request) => sent.push(request), 20, 30);
+  // Timed out, and the window never answers: it may have gone through.
+  const lost = await broker.request("send_to_open_chat", { text: "Hi" }, undefined, { mutating: true });
+  assert.equal((lost.error as { code: string }).code, "outcome_unknown");
+  assert.equal(lost.committed, true);
+  assert.equal(sent.filter((entry) => entry.type === "tool_cancel").length, 1);
+
+  // Cancelled while the window was sending: its answer after the cancel is the outcome.
+  const abort = new AbortController();
+  const sending = broker.request("send_to_open_chat", { text: "Hi" }, abort.signal, { mutating: true });
+  abort.abort();
+  const lastRequest = () => sent.filter((entry) => entry.type === "tool_request").reverse()[0]!;
+  const request = lastRequest();
+  broker.resolve(request.requestId, { ok: true, status: "sent" });
+  assert.deepEqual(await sending, { ok: true, status: "sent", committed: true });
+
+  // The window had not started it: its own "cancelled" stands.
+  const early = new AbortController();
+  const notStarted = broker.request("send_to_open_chat", { text: "Hi" }, early.signal, { mutating: true });
+  early.abort();
+  const second = lastRequest();
+  broker.resolve(second.requestId, { ok: false, error: { code: "cancelled", message: "The request was cancelled." } });
+  assert.equal(((await notStarted).error as { code: string }).code, "cancelled");
+
+  // Cancelled before it ever reached the window: plainly cancelled.
+  const before = new AbortController();
+  before.abort();
+  const never = await broker.request("send_to_open_chat", {}, before.signal, { mutating: true });
+  assert.equal((never.error as { code: string }).code, "cancelled");
+});
+
+test("the registry reports a committed result even when the call was cancelled meanwhile", async () => {
+  const registry = new LiveToolRegistry(
+    [
+      provider(["send"], (_call, context) =>
+        new Promise((resolve) => {
+          context.signal.addEventListener("abort", () => resolve({ ok: true, status: "sent", committed: true }));
+        }),
+      ),
+    ],
+    { sessionId: "s1", owner },
+  );
+  const pending = registry.dispatch({ id: "c1", name: "send", args: {} });
+  registry.cancel("c1");
+  assert.deepEqual(await pending, { ok: true, status: "sent", committed: true });
+});

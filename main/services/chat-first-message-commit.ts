@@ -145,6 +145,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
             model: input.messageModel,
             attachments: input.attachments,
             skill: prepared?.provenance,
+            ...(input.inputSource ? { inputSource: input.inputSource } : {}),
           },
           assertCurrent,
         });

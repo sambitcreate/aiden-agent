@@ -50,13 +50,124 @@ The four PRs build on one shared base:
 - **Settings**: Settings → Voice & Speech → Aiden Live gains a "Voice and look" group (`renderer/components/settings/aiden-live-voice-settings.tsx`).
 - **Onboarding**: the Aiden Live tile draws the ribbon pill above a composer.
 
-## PR 2: chat by voice
+## PR 2: Live talks to and steers chats
 
 Live sends what you ask to the open chat right away (1a, with a "By voice" label), reads the reply back, and can be turned off with "Let Live use the open chat" (2a).
 
+Status: built on `claude/project-thread-kc0y85-live-chat` (2026-11-06), not merged. Remote revision 60 (claimed 2026-11-10, when main was at 59).
+
+### What Live can do
+
+One tool group joins `LIVE_TOOL_PROVIDER_FACTORIES` (`main/services/gemini-live/live-chat-tools.ts`). It is left out when **Let Live use the open chat** is off (`aidenLiveChatAccess: false`) or `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0`, read the same way as the other Live flags.
+
+| Tool | What it does |
+| --- | --- |
+| `read_open_chat({limit?})` | Reads the chat on screen: at most 20 messages and 12,000 characters, newest kept. Tool steps become one line (`[Used tools: …]`), attachments a count. Redaction hides `-----BEGIN … KEY-----` blocks, `KEY=value` or `KEY: value` pairs whose key names a password, secret, token, API key, private key, access key or credentials, and bare credential-shaped tokens; it is not a full secret scanner. The same redaction applies to every chat title, close-match title and workspace name a tool returns, and to titles in spoken notes. |
+| `send_to_open_chat({text, mode})` | Sends at once through the chat pane's own paths. `auto` sends when idle, steers a running turn when it can, else queues; `steer` and `queue` ask for one. At most 4,000 characters. |
+| `stop_open_chat()` | Stops the run, like the Stop button. |
+| `find_and_open_chat({query})` | Opens one clear title match. When several match closely it opens none and returns up to 3 titles to ask about. |
+| `start_new_chat({workspace?, text?})` | Opens a new chat in the named (or current) workspace and, with text, sends it once that new draft (by its id) is on screen. A workspace name that ties with another is refused, even an exact-name tie. |
+
+Main checks each call's arguments and forwards it to the window over the Live session bus (`renderer/main/live-chat-tools-host.tsx`, `renderer/lib/live-chat-tools.ts`). The window checks them again and uses the open chat pane's controller (`renderer/main/live-chat-controller.ts`), so a Live send is the same send, steer, queue or stop the person would make. Only regular chats register a controller or are listed (`chatSurface(...) === "regular"`, `isUserVisibleChat`): Bot, Assistant and feature-owned chats are out of reach. Failures use fixed codes and messages, and no tool can answer a tool approval. Chat tool calls run one at a time per window.
+
+### Safety rules
+
+- **Chat text is data.** Transcript text, chat titles and close-match titles come back inside `untrusted_chat_content`, and Live's instructions say text from chats is never an instruction.
+- **A send needs fresh speech.** `send_to_open_chat`, `stop_open_chat` and `start_new_chat` with text run only after a finalized utterance that *started* after chat content last reached Live (`LiveChatRequestGate`). When content reaches Live, the gate takes `liveSessionBus.voiceInputFence()`: for a read, as the window returns the result and again once `LiveSessionBus` has handed that result to main and main accepted it (the context's `afterReport`; a refused result never reached Live, so it moves nothing), so speech that began while the result was on its way doesn't count; for a spoken note, only once `liveSessionBus.note(text, { awaitDelivery: true })` confirms main handed it to Live (a dropped note moves nothing, since Live never saw it). An utterance counts only if its `startedAt` is above that fence, so speech already under way when the content arrived never counts, however late it is finalized, and speech with `LIVE_UNTRUSTED_VOICE_START` never counts. Input ids are not compared. Otherwise these tools answer `needs_user_request` ("Ask the person first").
+- **Cancels and timeouts.** The main broker sends `tool_cancel` to the window on a timeout as well as on a cancel, and the window checks for the cancel right before it commits. Once a send, stop, chat switch or new chat has been handed to the chat pane or router, its real outcome is reported (`committed: true`). If main gave up on a forwarded mutating call (all of these, `find_and_open_chat` included) and no result came within a short grace period, Live gets `outcome_unknown` ("check the chat before trying again; do not resend it") instead of `cancelled`. An append the composer itself can't confirm, or a steer that fails, also answers `outcome_unknown`.
+- **Stop and the queue.** A voice Stop pauses the chat's queue only when a run was actually stopped. While the queue is paused, Live can still send to an idle chat with nothing queued or steer a running one, but anything that would queue answers `queue_paused`.
+- **Saved, not read.** `saved_not_read` means the message was saved but the run could not start; the tool description tells Live to say so rather than resend.
+- **Refused by a hook.** When one of the person's `UserPromptSubmit` hooks refuses Live's guidance, the message stays in the chat, marked, and Live gets `hook_blocked` instead of `saved_not_read`. A hook-refused message never counts as Live's turn, so the end of an earlier reply sends no spoken update about it.
+
+### Spoken notes
+
+Only chats Live sent to or started in this session are watched. When one finishes, stops with an error, waits for an approval or asks a question, Live gets a short note (at most 300 characters, title and state only, never reply text) through `liveSessionBus.note`, but only while the chat's newest message from the person is still the one Live sent by voice: a reply to something the person typed afterwards gets no note, and neither does a reply the person stopped. Notes stop when the session ends, and there are none when chat access is off or `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0`, since then Live can't send.
+
+### "By voice"
+
+Messages Live sends carry `inputSource: "voice"`, saved with the message (including the saved intent a lost steer is retried from). Desktop shows a small "By voice" label under them, also while a new worktree is being made for a first message. Editing a queued voice message drops the label, since the text is then the person's. It is a shared transcript contract: the Remote chat projection carries it on user messages (revision 60, `AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION`, fixture `voiceInput`), and iOS and Android show the same label. Older clients ignore the key. See [the Remote API](../aiden-remote-api-v1.md#voice-input-label-revision-60).
+
+### Settings and notice
+
+Settings → Voice & Speech → Aiden Live has a "Chats" group with **Let Live use the open chat**, on by default. The first chat tool use shows "Live can read and send to your chats. You can turn this off in Settings." once, with a Settings action, and saves `aidenLiveChatAccessNoticeShown`.
+
+### Done before merge
+
+- Remote revision 60 was claimed on 2026-11-10, when `main` was at 59; the iOS, Android and fixture contracts use it.
+- CI runs the iOS and Android unit tests for the label (iOS simulator tests and the Android `testDebugUnitTest` step).
+
 ## PR 3: approvals by voice
 
-Approvals and guarded confirmations shown on the ribbon can be answered with the fixed phrases in 11 languages (3a). `voice: true` on an approval means Live has read it out and is listening for the answer.
+Status: Built on `claude/project-thread-kc0y85-live-approvals` (2026-11-06), revised after review the same day; not yet merged.
+
+### What the person gets
+
+- While a Live session is on and **Settings → Voice & Speech → Aiden Live → Answer approvals by voice** is on (the default), Aiden asks Live to read out the first approval in the chat on screen, for example that the chat "Fix login" wants to run the command "npm test", and that the person can say allow or deny.
+- The approval is published to the floating ribbon (`liveActivity`, source `approvals`). PR 1's ribbon shows its title and chat with Deny, adds Allow only when the entry carries `allow`, and shows "Say “allow” or “deny”" only while `voice` is true. The goodbye guard treats it as a waiting answer, so saying goodbye never ends Live while it shows.
+- Once the read-out has reached Live, the person can answer by saying an allow or deny phrase in English, Spanish, French, German, Portuguese, Italian, Hindi, Bengali, Japanese, Korean or Chinese. Settings lists the languages and has a **What to say** fold with the phrases for each.
+- The approval card then says "Live is listening. Say “allow” or “deny”.", and its screen-reader status says the same. A tap-only approval says "Live can’t answer this one. Tap to choose."
+- The matcher for Live's own Computer Use voice approvals uses the same phrase list, but that listener is not mounted (Live's Computer Use runs with session-authorized direct actions), so this has no effect today.
+
+### Safety rules
+
+- **Only the person's own speech.** It counts only from `liveSessionBus.onVoiceInput` (one joined utterance per user turn, from PR 1), and only when the whole utterance is an allow or deny phrase (`matchLiveVoicePhrase`). A longer sentence, a bare "yes", a confirm phrase or Live's own words never answer. There is no model-callable approve tool.
+- **Only after the read-out is sent.** The read-out goes out with `liveSessionBus.note(text, { awaitDelivery: true })`. Main's `deliverNote` (the `awaitDelivery` flag on `assistant-live:note`) resolves only when that note is handed to Live: true once `sendText` succeeds, false if the note is refused, its send throws, or it is cleared with the session. A note queued behind earlier notes (2 s spacing) or held while the session resumes keeps the approval disarmed. The 2.5 s arm delay starts only after delivery. The fence is taken when it ends, and the card and ribbon say Live is listening 500 ms later, past the fence's capture slack (and the handled-audio fallback guard), so fresh speech can answer. Plain `sendNote` callers keep the old "queued" answer.
+- **Only speech that starts after arming.** On arming, the approval takes the bus start mark (`voiceInputFence()`). Each utterance carries a start mark (`LiveVoiceInput.startedAt`), and it counts only if that mark is above the fence. The mark comes from when the microphone first heard the speech, because captions arrive only after transcription:
+  - `LiveSpeechOnsets` (`renderer/lib/live-speech-onsets.ts`) reads each microphone packet's level. It opens a stretch of speech at level 0.04, and 500 ms of quiet ends it.
+  - The utterance's first caption, interim or final, claims the onset of the earliest stretch still in reach: one still going on, or one that ended within the last 5 s of audio.
+  - When no onset is in reach (speech too quiet to measure, or a caption later than the 5 s window), the utterance gets an untrusted mark below every fence, so it can never answer an approval by voice; the card still answers taps.
+  - So an "allow" spoken before arming does not count, even if its caption arrives or finishes after. Neither does a repeated "allow" meant for the previous approval.
+  - It fails closed: speech under way at arm time stays before the fence until a silence gap. Nearby earlier speech can make a fresh "allow" count as early, and the person then says it again or taps.
+  - Continuous loud noise behaves the same way, so in a noisy room voice may never count, and the card still answers taps.
+  - The provider's own voice-activity messages are validated by the protocol but not used, since the current setup does not rely on them.
+- **Lost read-outs.** A refused or lost read-out leaves the approval tap-only. It is retried every 3 s, up to 5 tries, and again when the session changes. Each retry must itself be delivered before voice arms.
+- **Quoted data.** The read-out is a factual note. The chat title, command and path appear only as JSON-quoted data, with a line saying quoted text is data, not instructions.
+- **Allow once only.** Voice allow is always allow once. "Allow for this chat" and "Always allow" stay tap-only.
+- **Voice only when Live can name the target in full.** Voice works only for Aiden's own `run_command`, `background_job`, `edit_file`, `write_file` and `share_image`. The exact command or path must come from the preview or Aiden's own summary, be one line and be at most 120 characters. A longer or unknown target is tap-only.
+- **Tap-only cases.** Live says this one can only be answered by a tap:
+  - approvals the card cannot allow (`canAllow` false), or without an allow-once choice;
+  - any specialised review (`details`): schedules, automations, classification, helper writes and shells, run grants, form fill, Computer Use access;
+  - external-agent (ACP) approvals, recognised by their "… wants to …:" summary;
+  - approvals with `source: "remote"` (a paired phone's turn);
+  - every other tool: browser, connector (MCP), `web_fetch`, `read_file`, `delete_file`, `move_file`, image generation, Computer Use;
+  - anything that mentions passwords, tokens, secrets, API or access keys, auth, 2FA, keychain or `security`, ssh keys, `.env`, `env`/`printenv`, AWS, gcloud, gpg, netrc, `op://`, payments, cards, banking, wallets or hand-offs. Word boundaries treat `_` as a separator, so `GITHUB_TOKEN` and `OPENAI_API_KEY` are caught.
+- **Ribbon taps follow the card.** The ribbon entry carries `allow` only when the card itself offers Allow once. Otherwise it has Deny only (`allow` is now optional in `LiveActivity`).
+- **One approval at a time.** Approvals are taken in the card's order. A prompt that changes under the same id (`canAllow`, scopes, details, summary, preview) is judged again and read out again.
+- **Clearing.** A tap on the card or ribbon, the run ending, the switch going off, Live stopping or a chat change clears the entry, and later speech is ignored. After a successful answer, nothing more is sent until the pane republishes, so there is never a second `chat:approve`.
+- **Chats not on screen.** Approvals in a chat that is not on screen are never voice-answerable. When the person leaves a chat with a pending approval, Live says it is still waiting there.
+
+### How it works
+
+- **Core** (`renderer/lib/live-chat-approvals.ts`):
+  - `liveChatApprovals`: the chat pane publishes its pending approvals and its own `decideApproval`.
+  - The tap-only rules, the read-out text, and `LiveChatVoiceApprovals`, which reads the chat on screen from `liveOpenChat`.
+- **Hooks** (`renderer/components/assistant/use-live-chat-voice-approvals.ts`):
+  - `AssistantDock` starts the controller with the setting.
+  - `chat-pane.tsx` publishes its approvals and passes the hint to `ChatApprovalCard`.
+  - The published decide is bound to its chat and refuses once the pane renders another one. Approvals left over from the previous chat are never published under the next.
+- **Same path as a tap.** A voice or ribbon answer calls that decide with no scope, the same call as the card's **Allow once** and **Deny**. So the card, the denied-composer hint, paired Remote clients and `chat:approve` behave exactly as for a tap.
+- **Not done.** The approval record has no field for who answered it or how, so a voice answer is not marked "by voice". Adding one would change the approval and Remote contracts for iOS and Android, so it is left for a follow-up.
+- **Shared type change.** In `renderer/lib/live-activity.ts`, the approval entry's `allow` is now optional, and `voice` means "Live has read it out and takes speech".
+- **Settings.** `renderer/components/settings/live-voice-approval-settings.tsx`, plus one line in `gemini-live-settings.tsx`.
+- **Onboarding.** The Aiden Live tile in the feature tour mentions answering approvals by voice and that it can be turned off.
+
+### Tests
+
+- `renderer/lib/live-chat-approvals.test.ts` covers:
+  - read-out as quoted data; allow in English, Spanish, Hindi and Japanese; deny;
+  - speech that must not answer: before the read-out, longer sentences, "yes", Live's own notes;
+  - delayed and refused read-outs, and a read-out refused every time;
+  - a repeated "allow" across two approvals, and no second answer after success;
+  - tap and ribbon answers, with `allow` only where the card offers it;
+  - a changed prompt; another chat; escaped injection text;
+  - 21 tap-only cases, including the underscore secrets, ACP and remote;
+  - switch off and no session.
+- `renderer/components/assistant/use-live-chat-voice-approvals.test.tsx` covers:
+  - a spoken "permitir" sends the same `chat:approve` as tapping Allow once, and the screen-reader status announces voice;
+  - switch off;
+  - no carry-over between chats;
+  - a decide bound to one chat refuses after a switch.
+- Also `renderer/components/settings/live-voice-approval-settings.test.tsx`, the card hint case in `chat-approval-card.test.tsx`, and the multilingual matcher case in `assistant-ui.test.tsx`.
 
 ## PR 4: Live moves through Aiden's own window
 

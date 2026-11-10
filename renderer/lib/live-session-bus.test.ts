@@ -35,20 +35,49 @@ test("a missing or throwing handler answers with a fixed error", async () => {
   assert.doesNotMatch(JSON.stringify(log), /private detail/u);
 });
 
-test("a request for another session, or one cancelled while running, sends nothing", async () => {
+test("a request for another session sends nothing; one cancelled before it commits answers cancelled at once", async () => {
   const bus = new LiveSessionBus();
-  const log: unknown[] = [];
+  const log: Array<{ requestId?: string; response?: { ok?: unknown; error?: { code: string } } }> = [];
   bus.setSession("s1", transport(log));
   await bus.runToolRequest({ sessionId: "old", requestId: "r1", name: "x", args: {} });
+  assert.equal(log.length, 0);
   let release!: () => void;
+  let sawAbort = false;
   bus.registerTool("slow", (_args, context) => new Promise((resolve) => {
-    release = () => resolve({ ok: true, aborted: context.signal.aborted });
+    release = () => {
+      sawAbort = context.signal.aborted;
+      resolve({ ok: true });
+    };
   }));
   const running = bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "slow", args: {} });
   bus.cancelToolRequest("s1", "r2");
+  await Promise.resolve();
+  assert.deepEqual(log.map((entry) => entry.response?.error?.code), ["cancelled"]);
   release();
   await running;
-  assert.deepEqual(log, []);
+  assert.equal(sawAbort, true);
+  assert.equal(log.length, 1, "the handler's later result is not reported");
+});
+
+test("a cancel after the handler committed still reports what really happened", async () => {
+  const bus = new LiveSessionBus();
+  const log: Array<{ requestId?: string; response?: Record<string, unknown> }> = [];
+  bus.setSession("s1", transport(log));
+  let finish!: () => void;
+  bus.registerTool("send", (_args, context) => {
+    if (context.signal.aborted) return { ok: false };
+    context.commit();
+    return new Promise((resolve) => {
+      finish = () => resolve({ ok: true, status: "sent", aborted: context.signal.aborted });
+    });
+  });
+  const running = bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "send", args: {} });
+  await Promise.resolve();
+  bus.cancelToolRequest("s1", "r1");
+  assert.deepEqual(log, [], "nothing until the send settles");
+  finish();
+  await running;
+  assert.deepEqual(log, [{ sessionId: "s1", requestId: "r1", response: { ok: true, status: "sent", aborted: true } }]);
 });
 
 test("unregistering keeps a newer registration of the same tool", () => {

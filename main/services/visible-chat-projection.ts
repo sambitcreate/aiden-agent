@@ -12,6 +12,10 @@ import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js"
 import { parseAgentNoticeV1, type AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { hookBlockedField, type HookBlockedPromptV1 } from "./hook-blocked-prompt.js";
 import {
+  parseChatInputSource,
+  type ChatInputSourceV1,
+} from "../../renderer/shared/chat-input-source.js";
+import {
   parseProviderFailureV1,
   type ProviderFailureV1,
 } from "../../renderer/shared/provider-failure.js";
@@ -46,6 +50,8 @@ export interface VisibleChatMessage {
   skill?: SkillProvenanceV1;
   /** A follow-up notice from a background job, followed pull request or check. */
   notice?: AgentNoticeV1;
+  /** Aiden Live sent this user message for the person ("By voice"). */
+  inputSource?: ChatInputSourceV1;
   /** A UserPromptSubmit hook blocked this prompt; copies keep it out of every model's context. */
   hookBlocked?: HookBlockedPromptV1;
   providerFailure?: ProviderFailureV1;
@@ -214,6 +220,10 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     notice:
       message.role === "user"
         ? parseAgentNoticeV1(message.notice)
+        : undefined,
+    inputSource:
+      message.role === "user"
+        ? parseChatInputSource(message.inputSource)
         : undefined,
     ...hookBlockedField(message),
     providerFailure:

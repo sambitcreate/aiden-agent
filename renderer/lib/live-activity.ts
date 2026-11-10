@@ -18,9 +18,12 @@ export type LiveActivity =
       title: string;
       /** The chat it is in. */
       chatTitle: string;
-      /** True once Live has read the request out and is listening for the answer. */
+      /** True once Live has read the request out and is listening for a spoken allow or deny. */
       voice: boolean;
-      /** Absent when the ribbon can only deny; allowing needs the chat itself. */
+      /**
+       * Allow once. Absent when the ribbon can only deny: the approval's own
+       * card does not offer Allow once, or it needs its specialised review.
+       */
       allow?: () => void;
       deny(): void;
     }
