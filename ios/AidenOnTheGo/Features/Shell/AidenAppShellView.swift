@@ -62,6 +62,27 @@ private struct AidenArchiveSyncID: Equatable {
     let archivedIDs: Set<String>
 }
 
+/// What the shell makes once, the first time it draws, and keeps.
+@MainActor
+final class AidenAppShellParts {
+    struct Built {
+        let navigation: AidenAppNavigation
+        let newWork: AidenNewWorkChatFlow
+    }
+
+    private var made: Built?
+    /// How many times `make` ran, for the test that pins it to once.
+    private(set) var makeCount = 0
+
+    func built(_ make: () -> Built) -> Built {
+        if let made { return made }
+        makeCount += 1
+        let built = make()
+        made = built
+        return built
+    }
+}
+
 /// The app: four tabs, each with its own stack.
 struct AidenAppShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
@@ -75,12 +96,12 @@ struct AidenAppShellView: View {
 
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var navigation: AidenAppNavigation
+    /// The navigation and compose flow, made on the shell's first draw. `init`
+    /// runs on every ContentView render and `State` keeps only its first value,
+    /// so building them there read and decoded the saved navigation each time.
+    @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
-    /// Compose in the Inbox and on the Workspaces tab, on a machine the person
-    /// picks. A chat started from Workspaces stays there; anywhere else it's the Inbox's.
-    @State private var newWork: AidenNewWorkChatFlow
     @State private var showsRunningChats = false
 
     init(
@@ -97,20 +118,32 @@ struct AidenAppShellView: View {
         _routeRequest = routeRequest
         self.navigationStore = navigationStore
         self.intents = intents ?? .shared
-        let navigation = AidenAppNavigation(
-            restoring: navigationStore.load(
-                installations: coordinator.installationStore.installations,
-                selected: coordinator.defaultInstanceId
-            ),
-            installations: coordinator.installationStore.installations
-        )
-        _navigation = State(initialValue: navigation)
-        _newWork = State(initialValue: AidenNewWorkChatFlow(coordinator: coordinator) { chat, id in
-            let home = inboxStore.homeModel(for: id.instanceId)
-            home?.accept(chat)
-            home?.markViewed(chatID: chat.id)
-            navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
-        })
+    }
+
+    private var navigation: AidenAppNavigation { built.navigation }
+
+    /// Compose in the Inbox and on the Workspaces tab, on a machine the person
+    /// picks. A chat started from Workspaces stays there; anywhere else it's the Inbox's.
+    private var newWork: AidenNewWorkChatFlow { built.newWork }
+
+    private var built: AidenAppShellParts.Built {
+        parts.built { [coordinator, inboxStore, navigationStore] in
+            let navigation = AidenAppNavigation(
+                restoring: navigationStore.load(
+                    installations: coordinator.installationStore.installations,
+                    selected: coordinator.defaultInstanceId
+                ),
+                installations: coordinator.installationStore.installations
+            )
+            let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation] chat, id in
+                let home = inboxStore.homeModel(for: id.instanceId)
+                home?.accept(chat)
+                home?.markViewed(chatID: chat.id)
+                guard let navigation else { return }
+                navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
+            }
+            return AidenAppShellParts.Built(navigation: navigation, newWork: newWork)
+        }
     }
 
     private var botsAvailability: AidenBotsAvailability {
@@ -143,9 +176,9 @@ struct AidenAppShellView: View {
     }
 
     var body: some View {
-        TabView(selection: $navigation.tab) {
+        TabView(selection: Bindable(navigation).tab) {
             Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                NavigationStack(path: $navigation.inboxPath) {
+                NavigationStack(path: Bindable(navigation).inboxPath) {
                     AidenInboxTabRootView(
                         store: inboxStore,
                         runningHome: runningHome,
@@ -170,7 +203,7 @@ struct AidenAppShellView: View {
             )
 
             Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
-                NavigationStack(path: $navigation.botsPath) {
+                NavigationStack(path: Bindable(navigation).botsPath) {
                     AidenBotsTabView(
                         coordinator: coordinator,
                         store: inboxStore,
@@ -183,7 +216,7 @@ struct AidenAppShellView: View {
             }
 
             Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
-                NavigationStack(path: $navigation.workspacesPath) {
+                NavigationStack(path: Bindable(navigation).workspacesPath) {
                     AidenWorkspacesTabView(coordinator: coordinator, store: inboxStore, newWork: newWork)
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }

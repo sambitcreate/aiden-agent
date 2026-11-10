@@ -419,6 +419,33 @@ final class AidenMachineDetailTests: XCTestCase {
         )
     }
 
+    /// ContentView re-renders on every connection change, and each render runs
+    /// the shell's init. The saved navigation is read when the shell first
+    /// draws, never in init, and the route it holds still comes back.
+    func testTheShellReadsItsSavedNavigationOnlyWhenItDraws() throws {
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
+        let suite = "shell-reads-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(AidenSnapshotReadCountingDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        let store = AidenAppNavigationStore(defaults: defaults)
+        store.save(AidenAppNavigationSnapshot(tab: .inbox, inboxPath: [.machines]))
+        let inbox = AidenUnifiedInboxStore(coordinator: coordinator)
+        defaults.snapshotReads = 0
+
+        for _ in 0..<3 {
+            _ = AidenAppShellView(coordinator: coordinator, inboxStore: inbox, navigationStore: store)
+        }
+        XCTAssertEqual(defaults.snapshotReads, 0, "Each init read and decoded the saved navigation")
+
+        let window = try show(AidenAppShellView(coordinator: coordinator, inboxStore: inbox, navigationStore: store))
+        defer { close(window) }
+        XCTAssertTrue(
+            runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel == "Pair a machine" } }),
+            "The shell lost its saved route"
+        )
+        XCTAssertGreaterThan(defaults.snapshotReads, 0)
+    }
+
     func testTheTabShellShowsOneMachinesPageForItsRoute() throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         let store = AidenAppNavigationStore(defaults: AidenDemoHosts.isolatedDefaults())
@@ -667,5 +694,15 @@ private struct AidenMachinesInATabStack: View {
                     }
                 }
         }
+    }
+}
+
+/// Counts reads of the saved tab navigation.
+private final class AidenSnapshotReadCountingDefaults: UserDefaults {
+    var snapshotReads = 0
+
+    override func object(forKey defaultName: String) -> Any? {
+        if defaultName == AidenAppNavigationStore.snapshotKey { snapshotReads += 1 }
+        return super.object(forKey: defaultName)
     }
 }
