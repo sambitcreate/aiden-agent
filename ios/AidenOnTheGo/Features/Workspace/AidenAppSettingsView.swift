@@ -67,10 +67,6 @@ struct AidenAppSettingsView: View {
     var body: some View {
         Form {
             Section("Aiden Agent") {
-                LabeledContent(
-                    "Connected machine",
-                    value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
-                )
                 NavigationLink(value: AidenAppRoute.machines) {
                     LabeledContent {
                         Text(machinesSummary)

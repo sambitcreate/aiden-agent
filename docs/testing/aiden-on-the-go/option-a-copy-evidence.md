@@ -151,7 +151,7 @@ Three "desktop" strings sat next to new "machine" copy in the same section, so t
 | Where | Before | After |
 | --- | --- | --- |
 | `Config/AidenVoiceInput.swift:10` (Settings, Voice input picker) | Paired desktop | Paired machine |
-| `Features/Workspace/AidenAppSettingsView.swift:79` | Connected desktop | Connected machine |
+| `Features/Workspace/AidenAppSettingsView.swift:79` | Connected desktop | Connected machine (the row was later removed: it named the default machine whatever its state, under "Default machine"; final review M4) |
 | `Features/Workspace/AidenUsageView.swift` privacy note | …recorded by Aiden Agent on your desktop. | …recorded by Aiden Agent on your machine. |
 
 `Paired Installations` in Settings is left as it is. It shows only with the flag off, and `AidenMachineDetailTests` pins it there.
