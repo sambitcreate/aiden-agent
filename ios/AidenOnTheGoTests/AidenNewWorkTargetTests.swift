@@ -456,6 +456,48 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"))
     }
 
+    /// The Workspaces tab's compose is the Inbox's: with several machines it
+    /// starts on the picker, on the default machine, or on the machine the strip
+    /// is filtered to.
+    func testWorkspacesComposeStartsOnTheFilteredMachineOrTheDefault() async throws {
+        await connectAll()
+        let flow = flow()
+        var filter = AidenMachineFilter.all
+        func chrome(grouped: Bool = true) -> AidenWorkspacesTabChrome {
+            AidenWorkspacesTabChrome(
+                route: { _ in .machines },
+                newWork: flow,
+                machines: grouped ? AidenWorkspacesTabMachines(
+                    roster: AidenMachineRoster(),
+                    filter: Binding(get: { filter }, set: { filter = $0 }),
+                    sections: [],
+                    refresh: {}
+                ) : nil
+            )
+        }
+        XCTAssertTrue(flow.picker.showsPicker)
+
+        flow.picker.startOver(preferring: chrome().composeMachine)
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"), "All starts on the default")
+
+        filter = .machine("laptop")
+        flow.picker.startOver(preferring: chrome().composeMachine)
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "laptop"), "A filter starts on its machine")
+
+        try await takeOffline("mini")
+        filter = .machine("mini")
+        flow.picker.startOver(preferring: chrome().composeMachine)
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "mini"), "It stays on the filtered machine")
+        XCTAssertFalse(flow.canStart)
+        XCTAssertEqual(flow.picker.refusalMessage, "Mini is offline. Pick another machine, or try again once it’s back.")
+
+        flow.picker.startOver(preferring: chrome(grouped: false).composeMachine)
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"), "One machine listed starts on the default")
+
+        flow.picker.startOver(preferring: "gone")
+        XCTAssertEqual(flow.picker.target, AidenNewWorkTarget(instanceId: "studio"), "A machine that left falls back to the default")
+    }
+
     // MARK: A new Bot
 
     func testANewBotIsCreatedOnThePickedMachine() async throws {

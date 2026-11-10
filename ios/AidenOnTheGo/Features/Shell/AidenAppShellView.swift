@@ -76,11 +76,10 @@ struct AidenAppShellView: View {
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var navigation: AidenAppNavigation
-    @State private var newChat: AidenNewChatFlow
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var searchText = ""
-    /// The Inbox's compose, on a machine the person picks. Workspaces keeps
-    /// `newChat`, on the machine its directory shows.
+    /// Compose in the Inbox and on the Workspaces tab, on a machine the person
+    /// picks. A chat started from Workspaces stays there; anywhere else it's the Inbox's.
     @State private var newWork: AidenNewWorkChatFlow
     @State private var showsRunningChats = false
 
@@ -106,20 +105,11 @@ struct AidenAppShellView: View {
             installations: coordinator.installationStore.installations
         )
         _navigation = State(initialValue: navigation)
-        // A chat started from Workspaces stays there; anywhere else it's the Inbox's.
-        _newChat = State(initialValue: AidenNewChatFlow(
-            coordinator: coordinator,
-            home: { coordinator.defaultInstanceId.flatMap(inboxStore.homeModel(for:)) },
-            reload: { await inboxStore.refreshAll() },
-            onOpen: { id in
-                navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
-            }
-        ))
         _newWork = State(initialValue: AidenNewWorkChatFlow(coordinator: coordinator) { chat, id in
             let home = inboxStore.homeModel(for: id.instanceId)
             home?.accept(chat)
             home?.markViewed(chatID: chat.id)
-            navigation.open(.chat(id))
+            navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
         })
     }
 
@@ -194,7 +184,7 @@ struct AidenAppShellView: View {
 
             Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
                 NavigationStack(path: $navigation.workspacesPath) {
-                    AidenWorkspacesTabView(coordinator: coordinator, store: inboxStore, newChat: newChat)
+                    AidenWorkspacesTabView(coordinator: coordinator, store: inboxStore, newWork: newWork)
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
@@ -211,7 +201,6 @@ struct AidenAppShellView: View {
         .defaultAdaptableTabBarPlacement(.sidebar)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
         .tabViewSearchActivation(.searchTabSelection)
-        .aidenNewChatPresentation(newChat)
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
@@ -278,8 +267,6 @@ struct AidenAppShellView: View {
         .task(id: archiveSyncID) {
             coordinator.setDeviceArchivedWorkspaceIDs(archiveSyncID.archivedIDs, for: archiveSyncID.instanceID)
         }
-        .onAppear { coordinator.haptics.activate(scope: newChat.hapticScope) }
-        .onDisappear { coordinator.haptics.deactivate(scope: newChat.hapticScope) }
     }
 
     private func deleteChat(_ id: AidenHostObjectID) {
@@ -287,9 +274,9 @@ struct AidenAppShellView: View {
         Task {
             switch await inboxStore.delete(id) {
             case .deleted:
-                coordinator.haptics.play(.success, scope: newChat.hapticScope, dedupeKey: "chat-remove:\(id.objectId)")
+                coordinator.haptics.play(.success, scope: newWork.hapticScope, dedupeKey: "chat-remove:\(id.objectId)")
             case .failed:
-                coordinator.haptics.play(.error, scope: newChat.hapticScope)
+                coordinator.haptics.play(.error, scope: newWork.hapticScope)
             case .abandoned:
                 break
             }
@@ -321,7 +308,7 @@ struct AidenAppShellView: View {
             AidenChatRouteView(
                 coordinator: coordinator,
                 id: id,
-                receipt: newChat.receipt(for: id),
+                receipt: newWork.receipt(for: id),
                 autoStartVoice: navigation.chatStartingVoice == id,
                 onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil,
                 onChatUpdated: { chat in
@@ -343,7 +330,7 @@ struct AidenAppShellView: View {
             .id(id)
             .onDisappear {
                 navigation.finishStartingVoice(id)
-                newChat.forgetReceipt(id)
+                newWork.forgetReceipt(id)
             }
         case .bot(let id):
             AidenBotRouteView(

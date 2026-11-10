@@ -755,17 +755,9 @@ final class AidenAppShellTests: XCTestCase {
 
     private func flow(
         _ coordinator: AidenRemoteCoordinator,
-        home: AidenHomeModel,
-        wait: Duration = .seconds(30),
-        opened: @escaping @MainActor (AidenHostObjectID) -> Void = { _ in }
-    ) -> AidenNewChatFlow {
-        AidenNewChatFlow(
-            coordinator: coordinator,
-            home: { home },
-            reload: { await home.load(coordinator: coordinator) },
-            readinessWait: wait,
-            onOpen: opened
-        )
+        created: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void = { _, _ in }
+    ) -> AidenNewWorkChatFlow {
+        AidenNewWorkChatFlow(coordinator: coordinator, onCreated: created)
     }
 
     private func workspace(_ id: String, in coordinator: AidenRemoteCoordinator) throws -> AidenWorkspace {
@@ -786,9 +778,7 @@ final class AidenAppShellTests: XCTestCase {
         let haptics = RecordingHaptics()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder, haptics: haptics)
         await coordinator.start()
-        let home = AidenHomeModel()
-        await home.load(coordinator: coordinator)
-        let flow = flow(coordinator, home: home)
+        let flow = flow(coordinator)
         responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
 
         await flow.create(in: try workspace("workspace_app", in: coordinator))
@@ -807,18 +797,15 @@ final class AidenAppShellTests: XCTestCase {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
         await coordinator.start()
-        let home = AidenHomeModel()
-        await home.load(coordinator: coordinator)
         responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
         var opened: [AidenHostObjectID] = []
-        let flow = flow(coordinator, home: home) { opened.append($0) }
+        let flow = flow(coordinator) { _, id in opened.append(id) }
 
         await flow.create(in: try workspace("workspace_app", in: coordinator))
 
         XCTAssertEqual(opened, [id("chat_new")])
         XCTAssertEqual(flow.receipt(for: id("chat_new"))?.id, "chat_new")
         XCTAssertNil(flow.receipt(for: id("chat_new", on: "laptop")))
-        XCTAssertTrue(home.chats.contains { $0.id == "chat_new" }, "The Inbox does not list it")
         XCTAssertFalse(flow.isCreating)
     }
 
@@ -828,10 +815,8 @@ final class AidenAppShellTests: XCTestCase {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
         await coordinator.start()
-        let home = AidenHomeModel()
-        await home.load(coordinator: coordinator)
         responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
-        let flow = flow(coordinator, home: home)
+        let flow = flow(coordinator)
         await flow.create(in: try workspace("workspace_app", in: coordinator))
 
         flow.forgetReceipt(id("chat_other"))
@@ -841,134 +826,25 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNil(flow.receipt(for: id("chat_new")))
     }
 
-    func testANewChatTappedWhileConnectingWaitsForTheMachine() async throws {
-        let responder = AidenDemoResponder()
-        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
-        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
-        let target = try AidenRemoteJSONDecoder.decode(AidenWorkspace.self, from: Data("""
-        {"id":"workspace_app","name":"Aiden Agent","permission":"ask","memoryEnabled":true,"hasFolder":true,
-        "isManagedWorktree":false,"createdAt":"2026-11-05T09:00:00.000Z","updatedAt":"2026-11-05T09:00:00.000Z",
-        "revision":"workspace_revision_7"}
-        """.utf8))
-        let release = responder.hold(instanceId: "studio", path: "/workspaces")
-        let start = Task { await coordinator.start() }
-        while coordinator.connectionState != .connecting { await Task.yield() }
-        let home = AidenHomeModel()
-        var opened: [AidenHostObjectID] = []
-        let flow = flow(coordinator, home: home) { opened.append($0) }
-        XCTAssertFalse(flow.isUnavailable, "Compose stays usable while the machine connects")
-
-        let creating = Task { await flow.create(in: target) }
-        try await Task.sleep(for: .milliseconds(300))
-        XCTAssertEqual(flow.status, "Waiting for your machine…")
-        XCTAssertFalse(responder.requests(instanceId: "studio").contains("POST /chats"), "It sent before the machine was ready")
-        release()
-        await start.value
-        await home.load(coordinator: coordinator)
-
-        await creating.value
-        XCTAssertTrue(responder.requests(instanceId: "studio").contains("POST /chats"), "The wait ended and no chat was made")
-        XCTAssertEqual(opened, [id("chat_new")])
-        XCTAssertEqual(flow.status, "")
-    }
-
-    func testANewChatStopsWaitingAtTheDeadlineAndSendsNothing() async throws {
-        let responder = AidenDemoResponder()
-        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
-        await coordinator.start()
-        let home = AidenHomeModel()
-        let release = responder.hold(instanceId: "studio", path: "/chat-summaries")
-        defer { release() }
-        let load = Task { await home.load(coordinator: coordinator) }
-        defer { load.cancel() }
-        while home.chatListLoadState != .loading { await Task.yield() }
-        var opened: [AidenHostObjectID] = []
-        let flow = flow(coordinator, home: home, wait: .milliseconds(400)) { opened.append($0) }
-
-        await flow.create(in: try workspace("workspace_app", in: coordinator))
-
-        XCTAssertEqual(opened, [])
-        XCTAssertFalse(responder.requests(instanceId: "studio").contains("POST /chats"))
-        XCTAssertNotNil(coordinator.presentedError)
-    }
-
-    func testANewChatOnAnOfflineMachineSaysSoInMachineCopy() async throws {
-        let responder = AidenDemoResponder()
-        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
-        await coordinator.start()
-        let home = AidenHomeModel()
-        await home.load(coordinator: coordinator)
-        let workspace = try workspace("workspace_app", in: coordinator)
-        responder.fail(instanceId: "studio", path: "*", code: .notConnectedToInternet)
-        await coordinator.refreshWorkspaces()
-        guard case .offline = coordinator.connectionState else {
-            return XCTFail("\(coordinator.connectionState)")
-        }
-        let flow = flow(coordinator, home: home)
-        XCTAssertTrue(flow.isUnavailable)
-
-        await flow.create(in: workspace)
-
-        let message = try XCTUnwrap(coordinator.presentedError)
-        XCTAssertTrue(message.contains("machine"), message)
-        XCTAssertFalse(message.contains("Mac"), message)
-    }
-
-    func testANewWorkspaceIsMadeBeforeItsChat() async throws {
-        let responder = AidenDemoResponder()
-        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
-        await coordinator.start()
-        let home = AidenHomeModel()
-        await home.load(coordinator: coordinator)
-        responder.reply(
-            instanceId: "studio",
-            method: "POST",
-            path: "/workspaces",
-            status: 201,
-            json: try JSONSerialization.data(withJSONObject: [
-                "id": "workspace_made", "name": "Made", "permission": "ask", "memoryEnabled": true,
-                "hasFolder": false, "isManagedWorktree": false,
-                "createdAt": "2026-11-01T10:00:00.000Z", "updatedAt": "2026-11-01T10:00:00.000Z",
-                "revision": "workspace_revision_9",
-            ] as [String: Any])
-        )
-        responder.reply(
-            instanceId: "studio",
-            method: "POST",
-            path: "/chats",
-            status: 201,
-            json: try newChatJSON(workspaceId: "workspace_made")
-        )
-        var opened: [AidenHostObjectID] = []
-        let flow = flow(coordinator, home: home) { opened.append($0) }
-
-        await flow.create(inNewWorkspaceNamed: "Made")
-
-        let posts = responder.requests(instanceId: "studio").filter { $0.hasPrefix("POST") }
-        XCTAssertEqual(posts, ["POST /workspaces", "POST /chats"])
-        XCTAssertEqual(opened, [id("chat_new")])
-    }
-
     func testANewChatThatComesBackAsABotChatDoesNotOpen() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
         await coordinator.start()
-        let home = AidenHomeModel()
-        await home.load(coordinator: coordinator)
         responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON(botId: "bot_scout"))
         var opened: [AidenHostObjectID] = []
-        let flow = flow(coordinator, home: home) { opened.append($0) }
+        let flow = flow(coordinator) { _, id in opened.append(id) }
 
         await flow.create(in: try workspace("workspace_app", in: coordinator))
 
         XCTAssertEqual(opened, [])
+        XCTAssertNil(flow.receipt(for: id("chat_new")))
         XCTAssertNotNil(coordinator.presentedError)
     }
 
     func testTheChoicesLeaveOutArchivedWorkspaces() async throws {
         let coordinator = AidenDemoHosts.coordinator(.one, responder: AidenDemoResponder())
         await coordinator.start()
-        let flow = flow(coordinator, home: AidenHomeModel())
+        let flow = flow(coordinator)
         XCTAssertEqual(flow.existingWorkspaces.map { $0.id }, ["workspace_app", "workspace_notes"])
 
         coordinator.workspaceArchiveStore.archive(workspaceID: "workspace_app", instanceID: "studio")

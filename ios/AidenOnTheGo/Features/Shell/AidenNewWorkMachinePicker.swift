@@ -160,10 +160,14 @@ final class AidenNewWorkPicker {
 
     /// Back to the default, for the next piece of work. A hidden default isn't in
     /// the picker, so the first machine that can take the work stands in for it.
-    func startOver() {
+    /// `preferred` is the machine the page it was opened from is showing (the
+    /// Workspaces tab filtered to one machine): it starts there instead, and says
+    /// so if that machine can't take the work right now, as the default would.
+    func startOver(preferring preferred: String? = nil) {
         let rows = machines
-        let start = pinnedMachine ?? (rows.first(where: \.isDefault) ?? rows.first(where: \.canBePicked) ?? rows.first)?.id
-        target = start.map(AidenNewWorkTarget.init(instanceId:))
+        let start = preferred.flatMap { id in rows.first { $0.id == id } }
+            ?? rows.first(where: \.isDefault) ?? rows.first(where: \.canBePicked) ?? rows.first
+        target = (pinnedMachine ?? start?.id).map(AidenNewWorkTarget.init(instanceId:))
     }
 
     /// A pinned machine has no other to send the person to, so what it says when

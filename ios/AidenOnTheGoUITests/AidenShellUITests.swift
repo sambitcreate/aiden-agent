@@ -841,6 +841,32 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(onStudio.waitForExistence(timeout: 10), "All brings every machine back")
     }
 
+    /// Compose on the Workspaces tab starts on the machine picker with several
+    /// machines, on the default machine, or on the one the strip is filtered to.
+    func testWorkspacesComposeStartsOnThePickerAtTheFilteredMachine() {
+        let app = AidenStateMatrix.launch(scenario: .four)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the Inbox")
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10))
+        let compose = app.navigationBars.buttons["New chat"].firstMatch
+        let machine = app.buttons["Machine"].firstMatch
+
+        compose.tap()
+        XCTAssertTrue(machine.waitForExistence(timeout: 5), "Compose on Workspaces has no machine picker")
+        XCTAssertTrue((machine.value as? String)?.hasPrefix("Studio Mac") == true, "\(String(describing: machine.value))")
+        AidenStateMatrix.tapOutsidePopover(in: app)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let laptop = app.buttons["Laptop"].firstMatch
+        XCTAssertTrue(laptop.waitForExistence(timeout: 10), "The Workspaces strip has no chip for the machine")
+        laptop.tap()
+        compose.tap()
+        XCTAssertTrue(machine.waitForExistence(timeout: 5), "Compose lost its picker under a filter")
+        XCTAssertTrue((machine.value as? String)?.hasPrefix("Laptop") == true, "\(String(describing: machine.value))")
+        AidenStateMatrix.tapOutsidePopover(in: app)
+        app.terminate()
+    }
+
     func testTheMachinePageCountsItsOpenChats() {
         let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the Inbox")

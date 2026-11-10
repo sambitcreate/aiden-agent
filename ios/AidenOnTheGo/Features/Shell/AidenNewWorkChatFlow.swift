@@ -109,6 +109,7 @@ final class AidenNewWorkChatFlow {
     @ObservationIgnored private let coordinator: AidenRemoteCoordinator
     @ObservationIgnored private let readinessWait: Duration
     @ObservationIgnored private let onCreated: @MainActor (AidenChat, AidenHostObjectID) -> Void
+    @ObservationIgnored private var latestReceipt: (id: AidenHostObjectID, chat: AidenChat)?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -144,6 +145,16 @@ final class AidenNewWorkChatFlow {
 
     var choices: [AidenNewAgentChoice] {
         AidenNewAgentChoice.available(noWorkspace: AidenNoWorkspace.home(in: connection?.workspaces ?? []) != nil)
+    }
+
+    /// The chat the flow just made, so its route opens without asking the machine.
+    func receipt(for id: AidenHostObjectID) -> AidenChat? {
+        latestReceipt?.id == id ? latestReceipt?.chat : nil
+    }
+
+    /// The chat's screen closed, so whatever opens it next asks the machine.
+    func forgetReceipt(_ id: AidenHostObjectID) {
+        if latestReceipt?.id == id { latestReceipt = nil }
     }
 
     func select(_ choice: AidenNewAgentChoice) async {
@@ -243,6 +254,7 @@ final class AidenNewWorkChatFlow {
         }
         do {
             guard let created = try await coordinator.createChat(on: target, in: workspace) else { return }
+            latestReceipt = (created.id, created.chat)
             onCreated(created.chat, created.id)
             coordinator.haptics.play(
                 feedback,
@@ -259,15 +271,18 @@ final class AidenNewWorkChatFlow {
     }
 }
 
-/// The compose button. It opens on the default machine each time.
+/// The compose button, in the Inbox and on the Workspaces tab. It opens on the
+/// default machine each time, or on `preferredMachine` when the page it's on is
+/// showing just that one.
 struct AidenNewWorkComposeButton: View {
     let flow: AidenNewWorkChatFlow
+    var preferredMachine: String? = nil
 
     @State private var isShowingChoices = false
 
     var body: some View {
         Button {
-            flow.picker.startOver()
+            flow.picker.startOver(preferring: preferredMachine)
             isShowingChoices = true
         } label: {
             Label("New chat", systemImage: "square.and.pencil")

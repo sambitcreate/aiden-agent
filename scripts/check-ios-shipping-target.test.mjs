@@ -122,7 +122,6 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
   "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
   "AidenOnTheGo/Features/Shell/AidenBotsTabView.swift",
-  "AidenOnTheGo/Features/Shell/AidenNewChatFlow.swift",
   "AidenOnTheGo/Features/Shell/AidenSearchTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenWorkspacesTabView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnection.swift",
@@ -233,7 +232,6 @@ const workspaceShellSourcePaths = [
   "AidenOnTheGo/Features/Shell/AidenWorkspacesTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenBotsTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenSearchTabView.swift",
-  "AidenOnTheGo/Features/Shell/AidenNewChatFlow.swift",
   "AidenOnTheGo/Features/Shell/AidenNewWorkChatFlow.swift",
   "AidenOnTheGo/Features/Shell/AidenUnifiedInboxStore.swift",
   "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
@@ -672,7 +670,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     shell,
     /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Desktop Folder"/u,
   );
-  assert.match(shell, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
+  // Compose's "Opening chat…" status floats on glass that never reacts to touch.
+  assert.match(shell, /if flow\.isCreating \{[\s\S]{0,400}?\.glassEffect\(\.regular, in: \.capsule\)/u);
   assert.match(
     shell,
     /case \.existingWorkspace: "Existing Workspace"[\s\S]*?case \.newWorkspace: "New Workspace"[\s\S]*?case \.scratchWorkspace: "Managed Scratch Workspace"/u,

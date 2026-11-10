@@ -3,9 +3,16 @@ import SwiftUI
 /// What the Workspaces list needs from its tab.
 struct AidenWorkspacesTabChrome {
     let route: (AidenWorkspace) -> AidenAppRoute
-    let newChat: AidenNewChatFlow
+    /// The Inbox's compose: with several machines it starts on a picker.
+    let newWork: AidenNewWorkChatFlow
     /// Set with more than one machine shown: every shown machine's workspaces.
     var machines: AidenWorkspacesTabMachines? = nil
+
+    /// Where compose starts: the machine the strip is filtered to, else the default.
+    var composeMachine: String? {
+        guard case .machine(let instanceId)? = machines?.filter.wrappedValue else { return nil }
+        return instanceId
+    }
 }
 
 /// Every shown machine's workspaces, under the Inbox's machine filter.
@@ -22,8 +29,10 @@ struct AidenWorkspacesTabMachines {
 struct AidenWorkspacesTabView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let store: AidenUnifiedInboxStore
-    let newChat: AidenNewChatFlow
+    let newWork: AidenNewWorkChatFlow
 
+    /// A row of the single-machine list, which shows only the default machine's
+    /// workspaces (`coordinator.workspaces`). Grouped rows carry their own id.
     private func route(_ workspace: AidenWorkspace) -> AidenAppRoute {
         let installation = coordinator.installationStore.activeInstallation
         return .workspace(AidenHostObjectID(
@@ -55,7 +64,7 @@ struct AidenWorkspacesTabView: View {
         AidenWorkspacesDirectoryView(
             coordinator: coordinator,
             archiveStore: coordinator.workspaceArchiveStore,
-            tabChrome: AidenWorkspacesTabChrome(route: route, newChat: newChat, machines: machines)
+            tabChrome: AidenWorkspacesTabChrome(route: route, newWork: newWork, machines: machines)
         )
         .safeAreaInset(edge: .top, spacing: 0) {
             // Grouped, each machine says its own state under its name.
