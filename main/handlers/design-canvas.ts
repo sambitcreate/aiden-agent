@@ -431,8 +431,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         const current = await fs.readFile(resolved.absolute, "utf8").catch(() => null);
         if (current === null) return { ok: false, reason: "missing" };
         if (current !== source) return { ok: false, reason: "changed" };
-        const written = await replaceWorkspaceText(resolved.absolute, plan.source);
-        return written === "written" ? { ok: true } : { ok: false, reason: "missing" };
+        const written = await replaceWorkspaceText(resolved.absolute, plan.source, source);
+        if (written === "written") return { ok: true };
+        return { ok: false, reason: written === "changed" ? "changed" : "missing" };
       });
     },
   );
