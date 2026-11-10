@@ -82,9 +82,10 @@ struct AidenRunningAccessory: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     if summary.othersCount > 0 {
+                        // On glass the quieter colour falls under 4.5:1 over light content.
                         Text("+\(summary.othersCount)")
                             .font(.footnote.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(palette.secondary)
+                            .foregroundStyle(palette.foreground)
                     }
                 }
                 .padding(.horizontal, isCompact ? AidenSpacing.m : AidenSpacing.l)
@@ -92,6 +93,8 @@ struct AidenRunningAccessory: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // A bar's height doesn't grow with the text, so a held press shows it large.
+            .accessibilityShowsLargeContentViewer()
             .accessibilityLabel(accessibilityLabel(title: title))
             .accessibilityHint(summary.tap == .showAll ? "Shows all running chats" : "Opens the chat")
             .accessibilityIdentifier("aiden.running-accessory")

@@ -400,11 +400,26 @@ final class AidenShellUITests: XCTestCase {
 
     /// Every tab and a pushed chat, for a person to look at. A screen that cannot
     /// be reached fails the test.
+    ///
+    /// Search comes last, so nothing here reads what Search leaves behind. The
+    /// launch also ignores any saved navigation (`AidenStateMatrix.launch`).
     func testCaptureTabShellScreens() {
         let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
         let chat = openInbox(in: app)
         XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
         AidenStateMatrix.capture("tabs-inbox", in: self)
+
+        hideOverlaySidebar(in: app)
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        AidenStateMatrix.capture("tabs-pushed-chat", in: self)
+        goBack(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "Back did not return to the Inbox")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        Thread.sleep(forTimeInterval: 1)
+        AidenStateMatrix.capture("tabs-landscape", in: self)
+        XCUIDevice.shared.orientation = .portrait
 
         AidenStateMatrix.openArea("Bots", in: app)
         XCTAssertTrue(app.navigationBars["Bots"].waitForExistence(timeout: 10))
@@ -417,17 +432,6 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.openArea("Search", in: app)
         XCTAssertTrue(searchField(in: app).exists)
         AidenStateMatrix.capture("tabs-search", in: self)
-
-        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10))
-        chat.tap()
-        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
-        AidenStateMatrix.capture("tabs-pushed-chat", in: self)
-        goBack(in: app)
-
-        XCUIDevice.shared.orientation = .landscapeLeft
-        Thread.sleep(forTimeInterval: 1)
-        AidenStateMatrix.capture("tabs-landscape", in: self)
-        XCUIDevice.shared.orientation = .portrait
         app.terminate()
 
         let oldHost = AidenStateMatrix.launch(scenario: .oldHost, shell: .tabs)
@@ -657,6 +661,7 @@ final class AidenShellUITests: XCTestCase {
         let row = openInbox(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat rows in the inbox")
         if UIDevice.current.userInterfaceIdiom == .pad {
+            restoreTheWindowAfterwards(of: app)
             try AidenStateMatrix.narrowTheWindow(of: app)
         }
         let tabBar = app.tabBars.firstMatch
@@ -671,10 +676,6 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "Back did not reach the Inbox")
         let returned = expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: tabBar)
         wait(for: [returned], timeout: 5)
-        // The window keeps its size into the next launch, so give the next test a full one.
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            try AidenStateMatrix.widenTheWindow(of: app)
-        }
         app.terminate()
     }
 
@@ -690,6 +691,7 @@ final class AidenShellUITests: XCTestCase {
         let send = app.buttons["Send message"].firstMatch
         XCTAssertTrue(send.waitForExistence(timeout: 10), "The chat did not open")
 
+        restoreTheWindowAfterwards(of: app)
         try AidenStateMatrix.narrowTheWindow(of: app)
         XCTAssertTrue(send.waitForExistence(timeout: 10), "Narrowing the window closed the chat")
         XCTAssertFalse(app.navigationBars["Inbox"].exists, "Narrowing the window went back to the Inbox")
@@ -767,6 +769,7 @@ final class AidenShellUITests: XCTestCase {
         let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
         if UIDevice.current.userInterfaceIdiom == .pad {
+            restoreTheWindowAfterwards(of: app)
             try AidenStateMatrix.narrowTheWindow(of: app)
             AidenStateMatrix.capture("tabs-ipad-compact-window", in: self)
         }
@@ -776,10 +779,18 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(app.tabBars.buttons[title].firstMatch.exists, "No \(title) tab at compact width")
         }
         XCTAssertFalse(AidenStateMatrix.sidebarRow("Bots", in: app).exists, "A sidebar showed at compact width")
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            try AidenStateMatrix.widenTheWindow(of: app)
-        }
         app.terminate()
+    }
+
+    /// The window keeps its size into the next launch, so a test that narrows it
+    /// gives the next test a full one back, pass or fail. A window that won't
+    /// widen again can't turn this test's result into a skip.
+    private func restoreTheWindowAfterwards(of app: XCUIApplication) {
+        addTeardownBlock {
+            if app.state == .notRunning { app.launch() }
+            try? AidenStateMatrix.widenTheWindow(of: app)
+            app.terminate()
+        }
     }
 
     // MARK: Machines
@@ -1066,6 +1077,99 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// A name given on this phone is the name Search shows, for chats and Bots
+    /// alike. The demo keeps each launch's machine choices apart.
+    func testSearchShowsTheNameThisPhoneGaveTheMachine() {
+        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the inbox")
+        hideOverlaySidebar(in: app)
+        app.buttons["aiden.machine-status"].tap()
+        let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac,")).firstMatch
+        XCTAssertTrue(studio.waitForExistence(timeout: 10), "Machines doesn't list the machine")
+        studio.tap()
+        let name = app.textFields["aiden.machine-name"].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "The machine editor did not open")
+        name.tap()
+        name.typeText("Desk\n")
+        XCTAssertTrue(app.navigationBars["Desk"].waitForExistence(timeout: 5), "The name didn't save")
+        goBack(in: app)
+        goBack(in: app)
+
+        search("flaky", in: app)
+
+        XCTAssertTrue(
+            searchRow("Fix the flaky upload test, chat on Desk", in: app).waitForExistence(timeout: 10),
+            "The chat result doesn't use the new name"
+        )
+        XCTAssertTrue(
+            searchRow("Scout, Bot conversation on Desk", in: app).waitForExistence(timeout: 10),
+            "The Bot result doesn't use the new name"
+        )
+        let oldName = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "on Studio Mac")).firstMatch
+        XCTAssertFalse(oldName.exists, "A result still says \(oldName.label)")
+        app.terminate()
+    }
+
+    /// In a chat, a drag down the transcript or a tap on it puts the keyboard
+    /// away, and the words typed so far stay in the composer.
+    private static var majorSystemVersion: Int {
+        Int(UIDevice.current.systemVersion.split(separator: ".").first ?? "") ?? 0
+    }
+
+    func testTheKeyboardGoesAwayInAChatAndKeepsTheDraft() {
+        let draft = "Half a thought"
+        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        hideOverlaySidebar(in: app)
+        chat.tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        let composer = app.descendants(matching: .any).matching(NSPredicate(
+            format: "elementType == %d OR elementType == %d",
+            XCUIElement.ElementType.textField.rawValue,
+            XCUIElement.ElementType.textView.rawValue
+        )).firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 5), "The chat has no composer")
+        let keyboard = app.keyboards.firstMatch
+        let gone = NSPredicate(format: "exists == false")
+        let kept = NSPredicate(format: "value CONTAINS %@", draft)
+
+        composer.tap()
+        // A run that stopped early leaves its draft, which the demo keeps.
+        let left = (composer.value as? String)?.count ?? 0
+        if left > 0 { composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: left)) }
+        composer.typeText(draft)
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come up")
+        AidenStateMatrix.capture("chat-keyboard-up", in: self)
+        let window = AidenStateMatrix.window(of: app)
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).press(
+            forDuration: 0.05,
+            thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: keyboard)], timeout: 5)
+        wait(for: [XCTNSPredicateExpectation(predicate: kept, object: composer)], timeout: 5)
+
+        composer.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come back")
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        if Self.majorSystemVersion < 27 {
+            // On iOS 26 a tap on the transcript, on a message or beside one, leaves
+            // the keyboard up; dragging puts it away (above). Recorded in
+            // option-a-accessibility.md for Task 36. Not strict, so a fix shows up.
+            XCTExpectFailure("iOS 26: a tap on the transcript leaves the keyboard up", strict: false)
+        }
+        wait(for: [XCTNSPredicateExpectation(predicate: gone, object: keyboard)], timeout: 5)
+        wait(for: [XCTNSPredicateExpectation(predicate: kept, object: composer)], timeout: 5)
+
+        // The demo chats' drafts are kept between launches.
+        composer.tap()
+        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: draft.count))
+        Thread.sleep(forTimeInterval: 1)
+        app.terminate()
+    }
+
     /// Without a list the empty states still scroll, so none of their words or
     /// the note about unsearched machines can sit behind the field.
     func testTheEmptyStatesScrollClearOfTheField() {
@@ -1081,6 +1185,10 @@ final class AidenShellUITests: XCTestCase {
             // regular one. Either way, nothing may sit behind it.
             let field = app.searchFields.firstMatch
             XCTAssertFalse(note.frame.intersects(field.frame), "The note sits behind the field (\(size))")
+            // Under a regular width's title the field can't cover the note, so the
+            // note must also end where it can be read.
+            let window = AidenStateMatrix.window(of: app).frame
+            XCTAssertLessThanOrEqual(note.frame.maxY, window.maxY, "The note ends below the window (\(size))")
             app.terminate()
         }
 
@@ -1097,6 +1205,11 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(description.waitForExistence(timeout: 10), "No prompt")
         for _ in 0..<4 { dragResults(in: prompt, from: 0.4, to: 0.05) }
         XCTAssertFalse(description.frame.intersects(prompt.searchFields.firstMatch.frame), "The prompt is cut off by the field")
+        XCTAssertLessThanOrEqual(
+            description.frame.maxY,
+            AidenStateMatrix.window(of: prompt).frame.maxY,
+            "The prompt ends below the window"
+        )
         prompt.terminate()
     }
 
@@ -1247,33 +1360,371 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
-    /// Counts what the system audit finds today. It never fails on an issue:
-    /// the count is the baseline the later accessibility gate starts from.
-    func testRecordAccessibilityAuditBaseline() throws {
-        let app = AidenStateMatrix.launch(scenario: .busy)
-        XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10))
+    // MARK: Accessibility
 
-        var report: [String] = []
-        for screen in ["inbox", "bots"] {
-            // Audit a screen with its content on it, not a loading state.
-            if screen == "inbox" {
-                XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
-            } else {
-                AidenStateMatrix.openArea("Bots", in: app)
-                XCTAssertTrue(botRow(in: app).waitForExistence(timeout: 10), "No Bot on the Bots home")
+    /// The screens the audit must reach, in order, in each appearance. A screen
+    /// that can't be reached fails the test instead of passing unaudited.
+    private static let auditedScreens = [
+        "inbox", "search", "bots", "bot", "chat", "machines", "machine editor", "settings",
+    ]
+
+    /// One issue the audit raised, with where it sat on screen.
+    private struct AuditFinding {
+        let screen: String
+        let type: XCUIAccessibilityAuditType
+        let summary: String
+        let elementType: XCUIElement.ElementType?
+        let label: String
+        let frame: CGRect?
+        /// The system bars, the bottom accessory, the search field and the Bot's
+        /// connection hint: everything drawn on glass, as drawn when the audit ran.
+        let bars: [CGRect]
+        /// The machine filter strip, when the screen has one.
+        let strip: CGRect?
+
+        var isUnderABar: Bool { frame.map { frame in bars.contains { $0.intersects(frame) } } ?? false }
+    }
+
+    /// What the gate lets through, each with the reason it isn't a fault in the
+    /// app. Anything else fails the test. `option-a-accessibility.md` lists these
+    /// too, with what was checked by hand.
+    private static let auditAllowances: [(reason: String, matches: (AuditFinding) -> Bool)] = [
+        (
+            // Liquid Glass draws text in a bar with vibrancy over whatever scrolls
+            // behind, and the bars keep their height at every text size. The status
+            // item and the running accessory offer the Large Content Viewer, and
+            // VoiceOver reads each one whole.
+            // With Reduce Transparency on the glass turns solid, and the Bot's
+            // "Connecting…" hint passes at full strength (task-34 run 7).
+            "Text in or under glass (navigation bar, tab bar, bottom accessory, search field, Bot connection hint)",
+            { finding in
+                [.contrast, .textClipped, .dynamicType].contains(finding.type) && finding.isUnderABar
             }
-            var issueCount = 0
-            try app.performAccessibilityAudit { _ in
-                issueCount += 1
-                return true
+        ),
+        (
+            // "Nearly passed" is 3:1 or better, short of 4.5:1. Settings, Machines
+            // and the machine editor are Forms drawn in the system's own
+            // secondary label colour (headers, footers, a row's second line),
+            // which darkens under Increase Contrast. Under 3:1 ("failed") is never
+            // let through, and the app's own colours on the other screens must
+            // reach 4.5:1.
+            "System secondary text in a Form, between 3:1 and 4.5:1",
+            { finding in
+                finding.type == .contrast && finding.summary.contains("nearly passed")
+                    && ["settings", "machines", "machine editor"].contains(finding.screen)
             }
-            report.append("\(screen): \(issueCount)")
+        ),
+        (
+            // A filter chip is its name beside a coloured symbol tile. The audit
+            // measures the whole 44 pt button, tile included, and the tile is a
+            // graphic, whose bar is 3:1. The name itself is the foreground colour
+            // on the raised surface, and the tile colours are checked against the
+            // glyph in AidenMachineChromeTests.
+            "A machine filter chip, measured with its symbol tile, between 3:1 and 4.5:1",
+            { finding in
+                guard finding.type == .contrast, finding.summary.contains("nearly passed"),
+                      let frame = finding.frame, let strip = finding.strip else { return false }
+                return strip.intersects(frame)
+            }
+        ),
+        (
+            // Transcript text is selectable, so the audit counts it as a target.
+            // Text isn't a control, and a long press selects it at any size.
+            "Selectable transcript text read as a tap target",
+            { $0.type == .hitRegion && ["chat", "bot"].contains($0.screen) && $0.elementType == .staticText }
+        ),
+        (
+            // The composer's growing text field (a vertical text view, which the
+            // audit reports as a text field) sits in a field at least 44 pt high
+            // (47 pt here), and a tap anywhere on the field focuses it. The Bot
+            // chat's audit names no element for the same view.
+            "The composer's text view inside its 44 pt field",
+            { finding in
+                finding.type == .hitRegion && ["chat", "bot"].contains(finding.screen)
+                    && [.textField, .textView, nil].contains(finding.elementType)
+            }
+        ),
+        (
+            // UIKit's own clear button in the search field: 46 by 46 pt, the size
+            // the system draws it at. The app doesn't draw or size it.
+            "The search field's system clear button",
+            { finding in
+                finding.type == .hitRegion && finding.screen == "search"
+                    && finding.elementType == .button && finding.label == "Clear text"
+            }
+        ),
+        (
+            // The Machines row's label, an icon and a word beside "3 of 4 online".
+            // The screenshots at the largest standard size and at AX5
+            // (xxxl-*-settings.png, ax5-*-settings.png) show the whole word, the
+            // row stacking at the accessibility sizes. Nothing drawn is cut.
+            "Settings' Machines row label, whole at XXXL and AX5",
+            { $0.type == .textClipped && $0.screen == "settings" && $0.label == "Machines" }
+        ),
+        (
+            // The model chip shortens rather than wrap below the accessibility
+            // sizes, so a run starting doesn't change the composer's height
+            // (AidenComposerSurface.stackedControls), and at those sizes it takes
+            // its own line and wraps. VoiceOver reads the whole model and level,
+            // and the chip's menu lists every model by its full name. The audit
+            // names no element for the chip's two texts: a probe found exactly two
+            // such findings in every chat and none in the Bot chat, which has no
+            // chip, so the gate allows two per chat and no more.
+            AidenShellUITests.modelChipAllowance,
+            { $0.type == .textClipped && $0.screen == "chat" && $0.elementType == nil }
+        ),
+        (
+            // The time under a message reads as "Sent November 10, 2026 at 3:14 AM"
+            // to VoiceOver. The audit measures that against the "3:14 AM" drawn.
+            "A message time, whose spoken label is longer than the time drawn",
+            { $0.type == .textClipped && $0.screen == "chat" && $0.label.hasPrefix("Sent ") }
+        ),
+        (
+            // Each grows with the text size: the AX5 screenshots in
+            // option-a-accessibility.md show them at full size. Larger text pushes
+            // them below the bottom of the screen, and the audit reads text it can
+            // no longer see as text that stopped growing. All three are system text
+            // styles: a Form footer, a Form button's label and a footnote.
+            "Text the larger sizes push below the screen (Machines footer and Pair a machine, Search's unsearched note)",
+            { finding in
+                finding.type == .dynamicType
+                    && [("machines", "Hiding a machine keeps it paired"), ("machines", "Pair a machine"),
+                        ("search", "Couldn’t search Bot conversations on ")]
+                    .contains { finding.screen == $0.0 && finding.label.hasPrefix($0.1) }
+            }
+        ),
+        (
+            // Chips in a sideways scroller, one line by design. A name only
+            // truncates past 240 pt, and the chip speaks the whole name.
+            "A machine chip in the filter strip",
+            { finding in
+                guard finding.type == .textClipped, let frame = finding.frame, let strip = finding.strip else { return false }
+                return strip.intersects(frame)
+            }
+        ),
+    ]
+
+    private static let modelChipAllowance = "The composer's model chip, shortened below the accessibility sizes"
+
+    /// The system audit finds nothing on any main screen of the tab shell, in
+    /// light and in dark. Every audit type runs, and an issue fails the test unless
+    /// `auditAllowances` gives a reason for it. All of them are listed, not just
+    /// the first, and the allowed ones are attached to the result.
+    func testEveryMainScreenPassesTheAudit() throws {
+        var findings: [String] = []
+        var allowed: [String] = []
+        for appearance in AidenStateMatrix.Appearance.allCases {
+            // No content size override, so the audit's Dynamic Type checks can change it.
+            let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance, contentSize: .system)
+            var audited: [String] = []
+            func audit(_ screen: String) throws {
+                // An empty or loading screen would pass an audit with nothing to find.
+                let elements = app.buttons.count + app.staticTexts.count
+                XCTAssertGreaterThanOrEqual(elements, 4, "Almost nothing on \(screen) (\(appearance)) to audit")
+                AidenStateMatrix.capture("audit-\(screen)-\(appearance.rawValue)", in: self)
+                let bars = [
+                    app.navigationBars.firstMatch, app.tabBars.firstMatch,
+                    AidenStateMatrix.runningAccessory(in: app), app.searchFields.firstMatch,
+                    app.otherElements["aiden.connection-hint"].firstMatch,
+                ].filter(\.exists).map(\.frame)
+                let stripElement = app.buttons["All machines"].firstMatch
+                let strip = stripElement.exists
+                    ? CGRect(x: 0, y: stripElement.frame.minY, width: .greatestFiniteMagnitude, height: stripElement.frame.height)
+                    : nil
+                // Every type runs, in two passes. The Dynamic Type checks change the
+                // text size and the screen lays itself out again, and checks that ran
+                // in the same pass then lost their element ("Contrast failed on no
+                // element"). Run alone, contrast names every element it fails.
+                let sizeTypes: XCUIAccessibilityAuditType = [.dynamicType, .textClipped]
+                for types in [XCUIAccessibilityAuditType.all.subtracting(sizeTypes), sizeTypes] {
+                    try app.performAccessibilityAudit(for: types) { issue in
+                        let element = issue.element
+                        let finding = AuditFinding(
+                            screen: screen,
+                            type: issue.auditType,
+                            summary: issue.compactDescription,
+                            elementType: element?.elementType,
+                            label: element?.label ?? "",
+                            frame: element?.frame,
+                            bars: bars,
+                            strip: strip
+                        )
+                        let place = element.map { "\($0.elementType.rawValue) '\($0.label)' at \($0.frame)" } ?? "no element"
+                        let line = "\(screen) (\(appearance)): \(issue.compactDescription) on \(place)"
+                        if let allowance = Self.auditAllowances.first(where: { $0.matches(finding) }) {
+                            print("AUDIT ALLOWED: \(line) -- \(allowance.reason)")
+                            allowed.append("\(line) -- \(allowance.reason)")
+                        } else {
+                            print("AUDIT ISSUE: \(line). \(issue.detailedDescription)")
+                            findings.append("\(line). \(issue.detailedDescription)")
+                        }
+                        return true
+                    }
+                }
+                audited.append(screen)
+            }
+            func modelChipFindings() -> Int {
+                allowed.filter { $0.hasPrefix("chat (\(appearance)):") && $0.hasSuffix(Self.modelChipAllowance) }.count
+            }
+
+            let row = openInbox(in: app)
+            XCTAssertTrue(row.waitForExistence(timeout: 15), "No chat rows in the Inbox")
+            XCTAssertTrue(AidenStateMatrix.catchUpRow(in: app).waitForExistence(timeout: 10), "No Catch Up row")
+            hideOverlaySidebar(in: app)
+            try audit("inbox")
+
+            search("flaky", in: app)
+            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No Search results")
+            XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result")
+            try audit("search")
+
+            AidenStateMatrix.openArea("Bots", in: app)
+            let bot = botRow(in: app)
+            XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot on the Bots tab")
+            hideOverlaySidebar(in: app)
+            try audit("bots")
+            bot.tap()
+            XCTAssertTrue(
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                    .waitForExistence(timeout: 10),
+                "The Bot did not open"
+            )
+            try audit("bot")
+            goBack(in: app)
+
+            AidenStateMatrix.openArea("Inbox", in: app)
+            XCTAssertTrue(row.waitForExistence(timeout: 10))
+            hideOverlaySidebar(in: app)
+            row.tap()
+            XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+            try audit("chat")
+            XCTAssertLessThanOrEqual(modelChipFindings(), 2, "More clipped text with no element in the chat than the model chip's two")
+            goBack(in: app)
+
+            let status = app.buttons["aiden.machine-status"]
+            XCTAssertTrue(status.waitForExistence(timeout: 10), "The Inbox has no status item")
+            hideOverlaySidebar(in: app)
+            status.tap()
+            XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 10), "Machines did not open")
+            let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac,")).firstMatch
+            XCTAssertTrue(studio.waitForExistence(timeout: 10), "Machines doesn't list the machine")
+            try audit("machines")
+            studio.tap()
+            XCTAssertTrue(app.textFields["aiden.machine-name"].firstMatch.waitForExistence(timeout: 10), "The machine editor did not open")
+            try audit("machine editor")
+            goBack(in: app)
+            goBack(in: app)
+
+            openSettings(in: app)
+            XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10), "Settings did not open")
+            try audit("settings")
+
+            XCTAssertEqual(audited, Self.auditedScreens, "The audit didn't reach every screen (\(appearance))")
+            app.terminate()
         }
-
-        let attachment = XCTAttachment(string: report.joined(separator: "\n"))
-        attachment.name = "accessibility-audit-issue-counts"
+        let attachment = XCTAttachment(string: allowed.joined(separator: "\n"))
+        attachment.name = "accessibility-audit-allowed"
         attachment.lifetime = .keepAlways
         add(attachment)
+        XCTAssertTrue(findings.isEmpty, "\(findings.count) audit issues:\n" + findings.joined(separator: "\n"))
+    }
+
+    /// The simulator half of the manual accessibility pass, for a person to look
+    /// at. It runs only when asked, because it is slow and saves files:
+    /// `TEST_RUNNER_AIDEN_CAPTURE_DIR=<folder>` says where the screenshots go,
+    /// `TEST_RUNNER_AIDEN_CAPTURE_SET` picks `themes` (every theme, light and
+    /// dark) or `screens` (each main screen once), and
+    /// `TEST_RUNNER_AIDEN_CAPTURE_TAG` names the run. Text size, Reduce
+    /// Transparency and Differentiate Without Colour are set on the simulator
+    /// before the run; `TEST_RUNNER_AIDEN_CAPTURE_REDUCE_MOTION=1` turns on the
+    /// app's own Reduce Motion. A screen that can't be reached fails the test.
+    func testCaptureTheAccessibilityPass() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let folder = environment["AIDEN_CAPTURE_DIR"] else {
+            throw XCTSkip("Set TEST_RUNNER_AIDEN_CAPTURE_DIR to capture the accessibility pass")
+        }
+        let tag = environment["AIDEN_CAPTURE_TAG"] ?? "pass"
+        let extra = environment["AIDEN_CAPTURE_REDUCE_MOTION"] == "1" ? ["-aiden.appearance.reduceMotion", "on"] : []
+        func save(_ name: String) {
+            Thread.sleep(forTimeInterval: 1)
+            let url = URL(fileURLWithPath: folder).appending(path: "\(tag)-\(name).png")
+            XCTAssertNoThrow(try XCUIScreen.main.screenshot().pngRepresentation.write(to: url), "Couldn't save \(name)")
+        }
+
+        if environment["AIDEN_CAPTURE_SET"] == "themes" {
+            let themes = ["aiden", "slate", "berry", "moss", "paper", "calm", "graphite", "dusk", "midnight", "monochrome"]
+            for theme in themes {
+                for appearance in AidenStateMatrix.Appearance.allCases {
+                    let app = AidenStateMatrix.launch(
+                        scenario: .four, shell: .tabs, appearance: appearance, contentSize: .system,
+                        theme: theme, extraArguments: extra
+                    )
+                    let catchUp = AidenStateMatrix.catchUpRow(in: app)
+                    XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row (\(theme))")
+                    hideOverlaySidebar(in: app)
+                    save("\(theme)-\(appearance.rawValue)-inbox")
+                    catchUp.tap()
+                    XCTAssertTrue(app.navigationBars.buttons["Next"].waitForExistence(timeout: 10), "No Next (\(theme))")
+                    save("\(theme)-\(appearance.rawValue)-catch-up")
+                    app.terminate()
+                }
+            }
+            return
+        }
+
+        for appearance in AidenStateMatrix.Appearance.allCases {
+            let app = AidenStateMatrix.launch(
+                scenario: .four, shell: .tabs, appearance: appearance, contentSize: .system, extraArguments: extra
+            )
+            let tagged = { (name: String) in save("\(appearance.rawValue)-\(name)") }
+            let catchUp = AidenStateMatrix.catchUpRow(in: app)
+            XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
+            hideOverlaySidebar(in: app)
+            tagged("inbox")
+            dragResults(in: app, from: 0.7, to: 0.2)
+            tagged("inbox-scrolled")
+            app.swipeDown()
+            catchUp.tap()
+            XCTAssertTrue(app.navigationBars.buttons["Next"].waitForExistence(timeout: 10), "No Next")
+            tagged("catch-up-approval")
+            goBack(in: app)
+
+            search("flaky", in: app)
+            XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10))
+            tagged("search")
+
+            AidenStateMatrix.openArea("Bots", in: app)
+            let bot = botRow(in: app)
+            XCTAssertTrue(bot.waitForExistence(timeout: 10))
+            tagged("bots")
+            bot.tap()
+            XCTAssertTrue(
+                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                    .waitForExistence(timeout: 10)
+            )
+            tagged("bot")
+            goBack(in: app)
+
+            AidenStateMatrix.openArea("Inbox", in: app)
+            let status = app.buttons["aiden.machine-status"]
+            XCTAssertTrue(status.waitForExistence(timeout: 10))
+            status.tap()
+            let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac,")).firstMatch
+            XCTAssertTrue(studio.waitForExistence(timeout: 10))
+            tagged("machines")
+            studio.tap()
+            XCTAssertTrue(app.textFields["aiden.machine-name"].firstMatch.waitForExistence(timeout: 10))
+            tagged("machine-editor")
+            goBack(in: app)
+            goBack(in: app)
+
+            openSettings(in: app)
+            XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
+            tagged("settings")
+            dragResults(in: app, from: 0.7, to: 0.35)
+            tagged("settings-scrolled")
+            app.terminate()
+        }
     }
 
     // MARK: Load earlier
@@ -1360,6 +1811,17 @@ final class AidenShellUITests: XCTestCase {
         menu.tap()
         // An open sidebar sits over the page in a narrow window: the first tap closes it.
         if !app.buttons["Settings"].firstMatch.waitForExistence(timeout: 2) { menu.tap() }
+    }
+
+    /// Settings from the Inbox menu. On iOS 26 a tap that lands while the menu
+    /// is still opening can do nothing and leave the menu up, so it taps again.
+    private func openSettings(in app: XCUIApplication) {
+        openInboxMenu(in: app)
+        let entry = app.buttons["Settings"].firstMatch
+        entry.tap()
+        if !app.navigationBars["App settings"].waitForExistence(timeout: 3), entry.exists, entry.isHittable {
+            entry.tap()
+        }
     }
 
     /// An open sidebar sits over the page in a narrow window and takes the next

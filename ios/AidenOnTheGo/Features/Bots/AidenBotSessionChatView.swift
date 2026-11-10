@@ -550,7 +550,9 @@ struct AidenBotSessionChatView: View {
             .buttonStyle(.plain)
         }
         .font(.footnote)
-        .foregroundStyle(palette.secondary)
+        // Full strength: the glass under it takes on whatever scrolls behind,
+        // and a secondary tint fell under 3:1 on it.
+        .foregroundStyle(palette.foreground)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
     }
@@ -864,6 +866,7 @@ struct AidenBotSessionChatView: View {
             connectionHint(hint, model: model)
                 .padding(.horizontal, 14)
                 .aidenChromeGlass(in: Capsule())
+                .accessibilityIdentifier("aiden.connection-hint")
         }
         // An offline Bot keeps its composer for the outbox, so its question stays
         // in view above it until the machine can take an answer.

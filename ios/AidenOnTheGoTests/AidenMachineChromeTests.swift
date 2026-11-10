@@ -376,6 +376,65 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertGreaterThan(size.height, large.height, "The chip grows with the text until its limit")
     }
 
+    // MARK: Differentiate Without Colour
+
+    /// The width a view draws at, with Differentiate Without Colour on or off.
+    private func drawnWidth(_ view: some View, withoutColour: Bool) throws -> CGFloat {
+        let renderer = ImageRenderer(content: view
+            .environment(\._accessibilityDifferentiateWithoutColor, withoutColour))
+        return try XCTUnwrap(renderer.uiImage, "The view drew nothing").size.width
+    }
+
+    /// Machines share a symbol until someone picks another, so without colour a
+    /// row's chip names its machine. A chip with the name beside it already doesn't.
+    func testWithoutColourARowChipNamesItsMachine() throws {
+        let rowChip = AidenMachineChip(label: label("Studio Mac"), namesItselfWithoutColor: true)
+        XCTAssertGreaterThan(
+            try drawnWidth(rowChip, withoutColour: true),
+            try drawnWidth(rowChip, withoutColour: false) + 20,
+            "The chip drew no name without colour"
+        )
+
+        let besideItsName = AidenMachineChip(label: label("Studio Mac"))
+        XCTAssertEqual(
+            try drawnWidth(besideItsName, withoutColour: true),
+            try drawnWidth(besideItsName, withoutColour: false)
+        )
+    }
+
+    /// The fill says which filter is picked. Without colour a checkmark says it too,
+    /// and only on the picked one.
+    func testWithoutColourThePickedFilterHasACheckmark() throws {
+        let picked = AidenMachineFilterChoiceLabel(isSelected: true) { Text("All") }
+        XCTAssertGreaterThan(
+            try drawnWidth(picked, withoutColour: true),
+            try drawnWidth(picked, withoutColour: false),
+            "Nothing but the fill marks the pick"
+        )
+
+        let other = AidenMachineFilterChoiceLabel(isSelected: false) { Text("All") }
+        XCTAssertEqual(try drawnWidth(other, withoutColour: true), try drawnWidth(other, withoutColour: false))
+    }
+
+    /// Warning and danger chips share a shape. Without colour each gets its own symbol.
+    func testWithoutColourStatusChipsCarryASymbolThatTellsThemApart() throws {
+        // Dimmed, both take the secondary tint, so only the symbol can differ.
+        let warning = AidenStatusChip("Waiting", kind: .warning, isDimmed: true)
+        let danger = AidenStatusChip("Waiting", kind: .danger, isDimmed: true)
+
+        XCTAssertGreaterThan(try drawnWidth(warning, withoutColour: true), try drawnWidth(warning, withoutColour: false))
+        XCTAssertNotEqual(
+            try pixels(of: warning.environment(\._accessibilityDifferentiateWithoutColor, true)),
+            try pixels(of: danger.environment(\._accessibilityDifferentiateWithoutColor, true)),
+            "In one tint the two read the same"
+        )
+        XCTAssertEqual(
+            try pixels(of: warning.environment(\._accessibilityDifferentiateWithoutColor, false)),
+            try pixels(of: danger.environment(\._accessibilityDifferentiateWithoutColor, false)),
+            "With colour on, the tint alone tells them apart"
+        )
+    }
+
     // MARK: Offline rows
 
     func testAnOfflineMachineGetsARowUntilItIsHidden() async throws {

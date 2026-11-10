@@ -26,6 +26,23 @@ final class AidenDesignTokenTests: XCTestCase {
         } }
     }
 
+    /// "Approval" and "Failed" sit on a 12% tint of their own colour, over the
+    /// canvas or a raised row. The text holds 4.5:1 there too.
+    func testStatusTextMeetsFourPointFiveToOneOnItsOwnChip() {
+        for (name, p) in allPalettes() {
+            for (fill, text) in [(p.warningHex, p.warningTextHex), (p.dangerHex, p.dangerTextHex)] {
+                for ground in [p.canvasHex, p.raisedHex] {
+                    let chip = Color.mixHex(ground, fill, fraction: AidenPalette.statusChipFillOpacity)
+                    XCTAssertGreaterThanOrEqual(
+                        p.contrastRatio(foregroundHex: text, backgroundHex: chip),
+                        4.5,
+                        "\(name): \(text) on its chip over \(ground)"
+                    )
+                }
+            }
+        }
+    }
+
     func testStatusTextKeepsAStatusHexThatAlreadyPasses() {
         for (name, p) in allPalettes() {
             let pairs = [
@@ -34,7 +51,7 @@ final class AidenDesignTokenTests: XCTestCase {
                 (p.dangerHex, p.dangerTextHex),
             ]
             for (fill, text) in pairs {
-                let passes = [p.canvasHex, p.raisedHex].allSatisfy {
+                let passes = AidenPalette.statusTextGrounds(fill, canvasHex: p.canvasHex, raisedHex: p.raisedHex).allSatisfy {
                     p.contrastRatio(foregroundHex: fill, backgroundHex: $0) >= 4.5
                 }
                 if passes {

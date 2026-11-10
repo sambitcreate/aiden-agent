@@ -164,7 +164,7 @@ struct AidenInboxRowView: View {
                 .lineLimit(isStacked ? 3 : 1)
             if machine != nil || detail != nil {
                 HStack(spacing: AidenSpacing.xs) {
-                    if let machine { AidenMachineChip(label: machine) }
+                    if let machine { AidenMachineChip(label: machine, namesItselfWithoutColor: true) }
                     if let detail {
                         Text(detail)
                             .font(.caption)
@@ -202,14 +202,7 @@ struct AidenInboxRowView: View {
     private func statusLabel(_ label: String, tone: AidenInboxRowStatus.Tone) -> some View {
         switch tone {
         case .warning, .danger:
-            let tint = isDimmed ? palette.secondary : tone == .danger ? palette.danger : palette.warning
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(tint)
-                .lineLimit(1)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(tint.opacity(0.12), in: Capsule())
+            AidenStatusChip(label, kind: tone == .danger ? .danger : .warning, isDimmed: isDimmed)
         case .working, .plain:
             Text(label)
                 .font(.caption)
@@ -230,6 +223,51 @@ struct AidenInboxRowView: View {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: ", ")
+    }
+}
+
+/// A row's status on a tinted capsule: "Needs approval", "Failed". Warning and
+/// danger differ by colour, so with Differentiate Without Colour on, a symbol
+/// says which one it is. The words use the palette's text-safe tint, which
+/// holds 4.5:1 where the fill colour itself would not.
+struct AidenStatusChip: View {
+    enum Kind { case warning, danger }
+
+    private let text: String
+    private let kind: Kind
+    private let isDimmed: Bool
+
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+
+    init(_ text: String, kind: Kind, isDimmed: Bool = false) {
+        self.text = text
+        self.kind = kind
+        self.isDimmed = isDimmed
+    }
+
+    private var fill: Color {
+        isDimmed ? palette.secondary : kind == .danger ? palette.danger : palette.warning
+    }
+
+    private var ink: Color {
+        isDimmed ? palette.secondary : kind == .danger ? palette.dangerText : palette.warningText
+    }
+
+    var body: some View {
+        HStack(spacing: AidenSpacing.xs) {
+            if differentiateWithoutColor {
+                Image(systemName: kind == .danger ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                    .accessibilityHidden(true)
+            }
+            Text(text)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(ink)
+        .lineLimit(1)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(fill.opacity(AidenPalette.statusChipFillOpacity), in: Capsule())
     }
 }
 
@@ -286,9 +324,10 @@ struct AidenInboxSectionHeader: View {
             Text(section.title)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(palette.secondary)
+            // Faded any further, the count would fall under 4.5:1.
             Text("\(count)")
                 .font(.footnote.monospacedDigit())
-                .foregroundStyle(palette.secondary.opacity(0.8))
+                .foregroundStyle(palette.secondary)
         }
         .padding(.horizontal, 24)
         .padding(.top, 14)

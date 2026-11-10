@@ -126,6 +126,7 @@ struct AidenMachineDetailView: View {
     @State private var hapticScope = UUID()
     @FocusState private var nameIsFocused: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @ScaledMetric(relativeTo: .body) private var scaledTileSize: CGFloat = 44
     @ScaledMetric(relativeTo: .body) private var scaledHeaderChipSize: CGFloat = 56
 
@@ -197,6 +198,7 @@ struct AidenMachineDetailView: View {
 
             Section {
                 TextField("Name", text: $draftName, prompt: Text(row.ownName))
+                    .accessibilityIdentifier("aiden.machine-name")
                     .focused($nameIsFocused)
                     .submitLabel(.done)
                     .textInputAutocapitalization(.words)
@@ -344,6 +346,14 @@ struct AidenMachineDetailView: View {
                     selected ? row.color.color : Color(.tertiarySystemFill),
                     in: RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
                 )
+                // The fill says which is picked. Without colour, an outline does, as on the colours.
+                .overlay {
+                    if selected && differentiateWithoutColor {
+                        RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
+                            .strokeBorder(Color.primary, lineWidth: 2)
+                            .padding(-AidenSpacing.xs)
+                    }
+                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

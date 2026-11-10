@@ -108,6 +108,7 @@ struct AidenAppSettingsView: View {
                             Text(permission.title).tag(permission.rawValue)
                         }
                     }
+                    .aidenPickerThatWrapsWhenLarge()
                 } header: {
                     Text("Global defaults")
                 } footer: {
@@ -152,6 +153,7 @@ struct AidenAppSettingsView: View {
                             Text(mode.title).tag(mode.rawValue)
                         }
                     }
+                    .aidenPickerThatWrapsWhenLarge()
                     if voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue {
                         NavigationLink {
                             AidenMacTranscriptionSettingsView(coordinator: coordinator)
@@ -218,5 +220,26 @@ struct AidenAppSettingsView: View {
         .sheet(isPresented: $isShowingAppearance) {
             AidenAppearanceSettingsView(appearance: appearance)
         }
+    }
+}
+
+/// A menu picker shows its value on one line, which the system cuts in the
+/// middle at the accessibility sizes ("Ask…ctions"). There it becomes a row
+/// that pushes the list of choices, and the value wraps like any other text.
+private struct AidenPickerThatWrapsWhenLarge: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            content.pickerStyle(.navigationLink)
+        } else {
+            content.pickerStyle(.menu)
+        }
+    }
+}
+
+extension View {
+    func aidenPickerThatWrapsWhenLarge() -> some View {
+        modifier(AidenPickerThatWrapsWhenLarge())
     }
 }

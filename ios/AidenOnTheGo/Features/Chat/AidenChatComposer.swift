@@ -264,7 +264,6 @@ struct AidenComposerView: View {
                 Text(selectedModel.label).lineLimit(1)
                 Text("· Hidden")
                     .lineLimit(1)
-                    .foregroundStyle(palette.secondary.opacity(0.8))
             }
             .font(.caption)
             .foregroundStyle(palette.secondary)
@@ -378,11 +377,17 @@ struct AidenComposerModelChipLabel: View {
                     color: palette.secondary
                 )
             }
-            Text(modelLabel).lineLimit(1)
-            if let thinkingLevel {
-                Text("· \(thinkingLevel.capitalized)")
-                    .lineLimit(1)
-                    .foregroundStyle(palette.secondary.opacity(0.8))
+            if dynamicTypeSize.isAccessibilitySize {
+                // One text that wraps, so neither half is cut to a few letters.
+                Text(thinkingLevel.map { "\(modelLabel) · \($0.capitalized)" } ?? modelLabel)
+                    .multilineTextAlignment(.leading)
+            } else {
+                Text(modelLabel).lineLimit(1)
+                if let thinkingLevel {
+                    // Faded any further, the level would fall under 4.5:1.
+                    Text("· \(thinkingLevel.capitalized)")
+                        .lineLimit(1)
+                }
             }
             Image(systemName: "chevron.down").font(.caption2)
         }

@@ -34,11 +34,17 @@ enum AidenStateMatrix {
     enum ContentSize: String, CaseIterable {
         case large = "UICTContentSizeCategoryL"
         case accessibilityExtraExtraExtraLarge = "UICTContentSizeCategoryAccessibilityXXXL"
+        /// Whatever the simulator is set to, with no override. The audit's Dynamic
+        /// Type checks change the size themselves, which an override would pin.
+        case system = ""
+
+        static var allCases: [Self] { [.large, .accessibilityExtraExtraExtraLarge] }
 
         var label: String {
             switch self {
             case .large: "large"
             case .accessibilityExtraExtraExtraLarge: "accessibilityExtraExtraExtraLarge"
+            case .system: "system"
             }
         }
     }
@@ -57,7 +63,6 @@ enum AidenStateMatrix {
         var arguments = [
             "-AidenDemoScenario", scenario.rawValue,
             "-aiden.appearance.mode", appearance.rawValue,
-            "-UIPreferredContentSizeCategoryName", contentSize.rawValue,
             // The first-run tour is not what these tests are about.
             "-aiden.mobileOnboarding.v1.complete", "YES",
             // Every launch starts on the shell's default area with no chat open. The
@@ -69,6 +74,9 @@ enum AidenStateMatrix {
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]
+        if contentSize != .system {
+            arguments += ["-UIPreferredContentSizeCategoryName", contentSize.rawValue]
+        }
         if shell == .tabs {
             arguments += [tabShellArgument, "YES"]
         }

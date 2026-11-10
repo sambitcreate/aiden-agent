@@ -298,10 +298,12 @@ struct AidenPalette: Equatable, Sendable {
         self.successHex = successHex
         self.warningHex = warningHex
         self.dangerHex = dangerHex
-        let grounds = [canvasHex, raisedHex]
-        successTextHex = Self.textSafeHex(successHex, on: grounds)
-        warningTextHex = Self.textSafeHex(warningHex, on: grounds)
-        dangerTextHex = Self.textSafeHex(dangerHex, on: grounds)
+        func grounds(_ statusHex: String) -> [String] {
+            Self.statusTextGrounds(statusHex, canvasHex: canvasHex, raisedHex: raisedHex)
+        }
+        successTextHex = Self.textSafeHex(successHex, on: grounds(successHex))
+        warningTextHex = Self.textSafeHex(warningHex, on: grounds(warningHex))
+        dangerTextHex = Self.textSafeHex(dangerHex, on: grounds(dangerHex))
     }
 
     var canvas: Color { Color(aidenHex: canvasHex) }
@@ -389,7 +391,8 @@ struct AidenSolidFill: Equatable, Sendable {
 /// Text moves each one away from the ground (toward black on a light theme,
 /// toward white on a dark one) one percent at a time, only as far as 4.5:1
 /// needs on both the canvas and the raised surface. A hex that already passes
-/// does not move. Derived when the palette is made, so a new theme or a
+/// does not move. A status chip's own tint counts as a ground too, so its
+/// words pass on it. Derived when the palette is made, so a new theme or a
 /// contrast adjustment needs no extra constants and a read costs nothing.
 extension AidenPalette {
     static let minimumTextContrast = 4.5
@@ -409,7 +412,17 @@ extension AidenPalette {
     static var statusTextResolutionCount: Int { statusTextResolutions.withLock { $0 } }
     #endif
 
-    /// `grounds` is the canvas then the raised surface.
+    /// How strongly a status chip ("Approval", "Failed") tints its capsule.
+    static let statusChipFillOpacity = 0.12
+
+    /// Where status text is drawn: the canvas, the raised surface, and a status
+    /// chip's tint over each. The canvas comes first.
+    static func statusTextGrounds(_ statusHex: String, canvasHex: String, raisedHex: String) -> [String] {
+        let plain = [canvasHex, raisedHex]
+        return plain + plain.map { Color.mixHex($0, statusHex, fraction: statusChipFillOpacity) }
+    }
+
+    /// `grounds` starts with the canvas.
     fileprivate static func textSafeHex(_ statusHex: String, on grounds: [String]) -> String {
         #if DEBUG
         statusTextResolutions.withLock { $0 += 1 }

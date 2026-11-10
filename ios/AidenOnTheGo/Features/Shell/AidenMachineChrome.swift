@@ -115,24 +115,41 @@ struct AidenMachineRoster: Equatable {
 /// symbol are the same in every theme, so the contrast holds in all of them.
 struct AidenMachineChip: View {
     private let label: AidenMachineLabel
+    private let namesItselfWithoutColor: Bool
 
     @ScaledMetric(relativeTo: .caption) private var scaledSize: CGFloat = 18
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.aidenPalette) private var palette
     /// Past this it would outgrow the words beside it for no gain in telling
     /// machines apart.
     private var size: CGFloat { min(scaledSize, 28) }
 
-    init(label: AidenMachineLabel) {
+    /// `namesItselfWithoutColor` is for a chip with no name beside it. Machines
+    /// share a symbol until someone picks another, so with Differentiate Without
+    /// Colour on, colour can't be what tells them apart: the chip shows the name.
+    init(label: AidenMachineLabel, namesItselfWithoutColor: Bool = false) {
         self.label = label
+        self.namesItselfWithoutColor = namesItselfWithoutColor
     }
 
+    var showsName: Bool { namesItselfWithoutColor && differentiateWithoutColor }
+
     var body: some View {
-        AidenMachineChipImage(
-            symbol: label.symbol,
-            color: label.color,
-            size: size,
-            symbolScale: 0.66,
-            cornerRadius: size * 0.29
-        )
+        HStack(spacing: AidenSpacing.xs) {
+            AidenMachineChipImage(
+                symbol: label.symbol,
+                color: label.color,
+                size: size,
+                symbolScale: 0.66,
+                cornerRadius: size * 0.29
+            )
+            if showsName {
+                Text(label.name)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label.accessibilityLabel)
     }
@@ -143,7 +160,6 @@ struct AidenMachineStrip: View {
     private let labels: [AidenMachineLabel]
     @Binding private var filter: AidenMachineFilter
 
-    @Environment(\.aidenPalette) private var palette
     /// Past this a long name truncates, however large the text is.
     @ScaledMetric(relativeTo: .subheadline) private var scaledNameWidth: CGFloat = 160
     private var nameWidth: CGFloat { min(scaledNameWidth, 240) }
@@ -186,20 +202,42 @@ struct AidenMachineStrip: View {
         @ViewBuilder content: () -> some View
     ) -> some View {
         let isSelected = filter == choice
+        let label = content()
         return Button { filter = choice } label: {
-            HStack(spacing: AidenSpacing.s) { content() }
-                .font(.subheadline.weight(isSelected ? .semibold : .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundStyle(isSelected ? palette.onFillAccent : palette.foreground)
-                .padding(.horizontal, AidenSpacing.m)
-                .frame(minHeight: 44)
-                .background(isSelected ? palette.fillAccent : palette.raised, in: Capsule())
-                .contentShape(Capsule())
+            AidenMachineFilterChoiceLabel(isSelected: isSelected) { label }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(name)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// One choice in the strip. The fill says which is picked, and with
+/// Differentiate Without Colour on, a checkmark says it too.
+struct AidenMachineFilterChoiceLabel<Content: View>: View {
+    let isSelected: Bool
+    @ViewBuilder let content: () -> Content
+
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+
+    var body: some View {
+        HStack(spacing: AidenSpacing.s) {
+            if isSelected && differentiateWithoutColor {
+                Image(systemName: "checkmark")
+                    .font(.caption.weight(.bold))
+                    .accessibilityHidden(true)
+            }
+            content()
+        }
+        .font(.subheadline.weight(isSelected ? .semibold : .medium))
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .foregroundStyle(isSelected ? palette.onFillAccent : palette.foreground)
+        .padding(.horizontal, AidenSpacing.m)
+        .frame(minHeight: 44)
+        .background(isSelected ? palette.fillAccent : palette.raised, in: Capsule())
+        .contentShape(Capsule())
     }
 }
 
@@ -235,11 +273,13 @@ struct AidenMachineOfflineRow: View {
                     Text(title)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(palette.foreground)
+                    // The warning tint behind it takes the quieter colour under 4.5:1.
                     Text(detail)
                         .font(.caption)
-                        .foregroundStyle(palette.secondary)
+                        .foregroundStyle(palette.foreground)
                 }
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
+                // A long name wraps rather than cutting off what the row says.
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(title), \(detail)")

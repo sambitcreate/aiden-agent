@@ -281,6 +281,7 @@ struct AidenBotsHomeView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var snapshot: AidenBotCacheSnapshot?
     @State private var snapshotScope: AidenBotsHomeScope?
     @State private var query = ""
@@ -829,7 +830,13 @@ struct AidenBotsHomeView: View {
                 working: row.isWorking
             )
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+                // At the accessibility sizes the purpose and time go under the
+                // name, so none of the three has to squeeze into a third of a row.
+                let stacked = dynamicTypeSize.isAccessibilitySize
+                let header = stacked
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+                    : AnyLayout(HStackLayout(spacing: 8))
+                header {
                     Text(row.bot.name)
                         .font(.headline)
                         .foregroundStyle(palette.foreground)
@@ -839,12 +846,12 @@ struct AidenBotsHomeView: View {
                         Text(row.bot.purpose)
                             .font(.subheadline)
                             .foregroundStyle(palette.secondary)
-                            .lineLimit(1)
+                            .lineLimit(stacked ? nil : 2)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
                             .background(palette.raised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    Spacer(minLength: 4)
+                    if !stacked { Spacer(minLength: 4) }
                     if let conversation = row.conversation {
                         AidenRelativeTimestampView(date: conversation.updatedAt)
                             .font(.subheadline)

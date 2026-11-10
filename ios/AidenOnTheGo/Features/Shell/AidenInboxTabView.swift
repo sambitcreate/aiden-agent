@@ -525,21 +525,27 @@ struct AidenInboxBotRowView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
                     .lineLimit(1)
-                if let machine { AidenMachineChip(label: machine) }
+                if let machine { AidenMachineChip(label: machine, namesItselfWithoutColor: true) }
             }
             Spacer(minLength: 8)
             if AidenBotAttention.isRunning(bot), !needsYou, !isDimmed {
                 AidenWorkingIndicator(size: 12)
             }
             if let reason {
-                Text(reason)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(tint)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(tint.opacity(0.12), in: Capsule())
-                    .lineLimit(1)
-                    .fixedSize()
+                if needsYou {
+                    AidenStatusChip(reason, kind: .warning, isDimmed: isDimmed)
+                        .fixedSize()
+                } else {
+                    // Running: no tint to tell apart, so no symbol either.
+                    Text(reason)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(tint.opacity(0.12), in: Capsule())
+                        .lineLimit(1)
+                        .fixedSize()
+                }
             }
         }
         .padding(.horizontal, 12)

@@ -328,6 +328,8 @@ struct AidenNewWorkMachinePicker: View {
 struct AidenDefaultMachineRow: View {
     let coordinator: AidenRemoteCoordinator
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     private var selection: Binding<String> {
         Binding(
             get: { coordinator.defaultInstanceId ?? "" },
@@ -344,7 +346,13 @@ struct AidenDefaultMachineRow: View {
         if machines.count > 1 {
             Picker("Default machine", selection: selection) {
                 ForEach(machines) { machine in
-                    Label(machine.label.name, systemImage: machine.label.symbol.systemName).tag(machine.id)
+                    // At the accessibility sizes the symbol would take half the
+                    // row and cut the name short, so the name stands alone.
+                    if dynamicTypeSize.isAccessibilitySize {
+                        Text(machine.label.name).tag(machine.id)
+                    } else {
+                        Label(machine.label.name, systemImage: machine.label.symbol.systemName).tag(machine.id)
+                    }
                 }
             }
             .accessibilityHint("New work starts here. You can pick another machine each time.")

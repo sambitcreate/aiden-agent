@@ -387,9 +387,10 @@ struct AidenCodeBlockView: View {
     private var header: some View {
         HStack(spacing: 8) {
             if let language {
+                // `.secondary` reads under 4.5:1 on the code background.
                 Text(verbatim: language)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .padding(.leading, 12)
             }
@@ -403,7 +404,7 @@ struct AidenCodeBlockView: View {
                     Text(copy.isConfirming ? "Copied" : "Copy")
                 }
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(copy.isConfirming ? Color.primary : Color.secondary)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 12)
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
