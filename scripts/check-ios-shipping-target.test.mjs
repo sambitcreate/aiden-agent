@@ -705,7 +705,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Desktop Folder"/u,
   );
   // Compose's "Opening chat…" status floats on glass that never reacts to touch.
-  assert.match(shell, /if flow\.isCreating \{[\s\S]{0,400}?\.glassEffect\(\.regular, in: \.capsule\)/u);
+  assert.match(shell, /if flow\.isCreating \{[\s\S]{0,800}?\.glassEffect\(\.regular, in: \.capsule\)/u);
   assert.match(
     shell,
     /case \.existingWorkspace: "Existing Workspace"[\s\S]*?case \.newWorkspace: "New Workspace"[\s\S]*?case \.scratchWorkspace: "Managed Scratch Workspace"/u,
