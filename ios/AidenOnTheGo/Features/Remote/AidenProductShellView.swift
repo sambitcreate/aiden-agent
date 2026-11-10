@@ -16,7 +16,7 @@ func aidenPersistBotChatForPresentation(
         _ = try? await cache.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
         candidate = await cache.admittedChat(instanceId: context.instanceId, chatId: chat.id)
     }
-    guard retained, coordinator.isCurrent(context),
+    guard retained, coordinator.holds(context),
           let candidate, candidate.id == chat.id, candidate.botId == chat.botId else { return nil }
     return candidate
 }

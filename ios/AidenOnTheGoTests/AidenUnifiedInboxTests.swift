@@ -577,6 +577,21 @@ final class AidenUnifiedInboxTests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [.bot(botID)])
     }
 
+    /// A Bot on top has a composer like a chat, so the running accessory makes way.
+    @MainActor
+    func testABotOnTopIsAConversationOnScreen() {
+        let navigation = AidenAppNavigation()
+        XCTAssertFalse(navigation.showsConversation)
+
+        navigation.openInboxRow(.bot(hostID("mac-b", "bot_cards")))
+        XCTAssertTrue(navigation.showsConversation)
+        XCTAssertNil(navigation.openChat)
+        navigation.openInboxRow(.chat(hostID("mac-a", "chat")))
+        XCTAssertTrue(navigation.showsConversation)
+        navigation.tab = .workspaces
+        XCTAssertFalse(navigation.showsConversation)
+    }
+
     func testTwoMachinesWithTheSameBotIDStayTwoRows() {
         let inbox = make([
             snapshot("mac-a", bots: [bot("bot_scout", issues: 1, minutesAgo: 3)]),

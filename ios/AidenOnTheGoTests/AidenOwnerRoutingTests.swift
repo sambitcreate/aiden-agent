@@ -350,7 +350,109 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(owned.value?.name, "Renamed")
     }
 
+    func testAWorkspaceRouteFindsItsOwnMachinesWorkspace() async throws {
+        serveDefaultWorkspaces()
+        try await connection("studio").refreshWorkspacesForPoll()
+        try await connection("laptop").refreshWorkspacesForPoll()
+
+        XCTAssertEqual(AidenWorkspaceRoute.workspace(for: id("default", on: "laptop"), coordinator: coordinator)?.name, "Laptop project")
+        XCTAssertEqual(AidenWorkspaceRoute.workspace(for: id("default", on: "studio"), coordinator: coordinator)?.name, "Studio project")
+        // An older pairing of the laptop finds nothing.
+        let older = AidenHostObjectID(instanceId: "laptop", deviceId: "older-device", objectId: "default")
+        XCTAssertNil(AidenWorkspaceRoute.workspace(for: older, coordinator: coordinator))
+        // Archived on this device for the laptop only.
+        coordinator.workspaceArchiveStore.archive(workspaceID: "default", instanceID: "laptop")
+        XCTAssertNil(AidenWorkspaceRoute.workspace(for: id("default", on: "laptop"), coordinator: coordinator))
+        XCTAssertNotNil(AidenWorkspaceRoute.workspace(for: id("default", on: "studio"), coordinator: coordinator))
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
+    func testWorkspaceGitRunsOnTheWorkspacesOwnMachine() async throws {
+        _ = try await laptopsDefault()
+        let model = AidenWorkspaceGitModel()
+
+        await model.refresh(
+            on: AidenWorkspaceGitTarget(coordinator: coordinator, context: try coordinator.ownerContext(for: "laptop")),
+            workspaceId: "default"
+        )
+
+        XCTAssertTrue(requests("laptop").contains("GET /workspaces/default/git/review"))
+        XCTAssertFalse(requests("studio").contains { $0.contains("/git/") })
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
+    func testWorkspaceGitWaitsForItsOwnMachineToConnect() async throws {
+        _ = try await laptopsDefault()
+        let target = AidenWorkspaceGitTarget(coordinator: coordinator, context: try coordinator.ownerContext(for: "laptop"))
+        XCTAssertTrue(target.isConnected)
+        try connection("laptop").adopt(connectionState: .offline(message: "Away"))
+        XCTAssertFalse(target.isConnected)
+        XCTAssertEqual(coordinator.connectionState, .connected)
+
+        let model = AidenWorkspaceGitModel()
+        await model.refresh(on: target, workspaceId: "default")
+
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertFalse(requests("laptop").contains { $0.contains("/git/") })
+    }
+
+    private var serverFailure: Data {
+        json(["error": ["code": "internal_error", "message": "No.", "requestId": "r", "retryable": false]])
+    }
+
+    func testAFailedWorkspaceSaveOnAnotherMachineSaysSo() async throws {
+        let workspace = try await laptopsDefault()
+        responder.reply(instanceId: "laptop", method: "PATCH", path: "/workspaces/default", status: 500, json: serverFailure)
+
+        let outcome = await coordinator.updateWorkspaceOutcome(
+            workspace,
+            name: "Renamed",
+            on: try coordinator.ownerContext(for: "laptop")
+        )
+
+        guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
+        let message = try XCTUnwrap(coordinator.presentedError)
+        XCTAssertTrue(message.hasPrefix("Couldn’t save this workspace on Laptop."), message)
+    }
+
+    func testAFailedWorkspaceRemoveOnAnotherMachineSaysSo() async throws {
+        let workspace = try await laptopsDefault()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 500, json: serverFailure)
+
+        let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: try coordinator.ownerContext(for: "laptop"))
+
+        guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
+        let message = try XCTUnwrap(coordinator.presentedError)
+        XCTAssertTrue(message.hasPrefix("Couldn’t remove this workspace from Laptop."), message)
+    }
+
     // MARK: Bots
+
+    /// A Bot on the laptop opens there, with the studio still the default.
+    func testABotRouteOpensOnItsOwnMachine() async throws {
+        let model = AidenBotRouteModel(id: id("bot_scout", on: "laptop"))
+
+        await model.load(coordinator: coordinator)
+
+        XCTAssertEqual(model.state, .session)
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
+    /// A machine from before durable sessions finds the Bot's chat on itself.
+    func testABotRouteOnAnOlderMachineAsksThatMachine() async throws {
+        var older = laptop
+        older.serverFeatures = older.serverFeatures.filter { $0 != "bot-durable-session-v1" }
+        try await connect([studio, older])
+        let model = AidenBotRouteModel(id: id("bot_scout", on: "laptop"))
+
+        await model.load(coordinator: coordinator)
+
+        XCTAssertNotEqual(model.state, .session)
+        XCTAssertTrue(requests("laptop").contains("GET /bot-conversations"))
+        XCTAssertFalse(requests("studio").contains("GET /bot-conversations"))
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
+    }
+
 
     /// A Bot chat opened on the laptop, with the studio as the default, sends
     /// Profile, Advanced, Files and Delete to the laptop.

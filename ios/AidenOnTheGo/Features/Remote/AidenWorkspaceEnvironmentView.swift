@@ -171,7 +171,7 @@ final class AidenWorkspaceFilesModel {
     }
 
     private func stillHolds(_ context: AidenRemoteRequestContext, _ coordinator: AidenRemoteCoordinator) -> Bool {
-        context.scope == .owner ? coordinator.isLive(context) : coordinator.isCurrent(context)
+        coordinator.holds(context)
     }
 
     func isConnected(_ coordinator: AidenRemoteCoordinator) -> Bool {
@@ -616,6 +616,16 @@ final class AidenWorkspaceGitModel {
 
     var canRetryPendingMutation: Bool { pendingMutation != nil }
 
+    /// Reads Git on the target's machine, once it's connected.
+    func refresh(on target: AidenWorkspaceGitTarget, workspaceId: String) async {
+        guard target.isConnected else {
+            errorMessage = String(localized: "Connect to Aiden Agent to use Git.")
+            return
+        }
+        guard let client = target.client() else { return }
+        await refresh(client: client, workspaceId: workspaceId, isCurrent: target.holds)
+    }
+
     func refresh(
         client: AidenRemoteClient,
         workspaceId: String,
@@ -864,9 +874,33 @@ final class AidenWorkspaceGitModel {
     }
 }
 
+/// The machine Git runs on: the one Workspace Settings opened under. A `selected`
+/// context is the selected machine's until the selection moves; an `owner`
+/// context is its own machine's while that pairing lasts.
+@MainActor
+struct AidenWorkspaceGitTarget {
+    let coordinator: AidenRemoteCoordinator
+    let context: AidenRemoteRequestContext
+
+    var isConnected: Bool {
+        guard context.scope == .owner else { return coordinator.connectionState == .connected }
+        return coordinator.hosts.connection(for: context.instanceId)?.connectionState == .connected
+    }
+
+    func holds() -> Bool {
+        coordinator.holds(context)
+    }
+
+    func client() -> AidenRemoteClient? {
+        guard holds() else { return nil }
+        return try? coordinator.remoteClient(for: context)
+    }
+}
+
 struct AidenWorkspaceGitView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
+    let target: AidenWorkspaceGitTarget
     @State private var model: AidenWorkspaceGitModel
     @State private var commitMessage = ""
     @State private var stagedOnly = false
@@ -882,9 +916,10 @@ struct AidenWorkspaceGitView: View {
     @State private var worktreeName = ""
     @State private var isShowingNewWorktree = false
 
-    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace) {
+    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace, context: AidenRemoteRequestContext) {
         self.coordinator = coordinator
         self.workspace = workspace
+        target = AidenWorkspaceGitTarget(coordinator: coordinator, context: context)
         _model = State(initialValue: AidenWorkspaceGitModel(haptics: coordinator.haptics))
     }
 
@@ -930,16 +965,16 @@ struct AidenWorkspaceGitView: View {
                             await model.preparePush(
                                 client: client,
                                 workspaceId: workspace.id,
-                                isCurrent: { coordinator.isCurrent(context) }
+                                isCurrent: { coordinator.holds(context) }
                             )
-                            guard coordinator.isCurrent(context) else { return }
+                            guard coordinator.holds(context) else { return }
                             isConfirmingPush = model.pushCapability?.allowed == true
                         }
                     }
                 }
                 Button("Compare branch", systemImage: "arrow.left.arrow.right") { isShowingCompare = true }
             }
-            .disabled(coordinator.connectionState != .connected || model.isLoading)
+            .disabled(!target.isConnected || model.isLoading)
 
             if let branches = model.branches {
                 Section("Branches") {
@@ -957,7 +992,7 @@ struct AidenWorkspaceGitView: View {
                     }
                     Button("New Branch", systemImage: "plus") { isShowingNewBranch = true }
                 }
-                .disabled(coordinator.connectionState != .connected || model.isLoading)
+                .disabled(!target.isConnected || model.isLoading)
             }
 
             Section("Managed worktrees") {
@@ -966,7 +1001,7 @@ struct AidenWorkspaceGitView: View {
                 }
                 Button("New Managed Worktree", systemImage: "hammer") { isShowingNewWorktree = true }
             }
-            .disabled(coordinator.connectionState != .connected || model.isLoading)
+            .disabled(!target.isConnected || model.isLoading)
 
             if let message = model.lastMessage {
                 Section { Label(message, systemImage: "checkmark.circle") }
@@ -979,7 +1014,7 @@ struct AidenWorkspaceGitView: View {
                                 await model.retryPendingMutation(
                                     client: client,
                                     workspaceId: workspace.id,
-                                    isCurrent: { coordinator.isCurrent(context) }
+                                    isCurrent: { coordinator.holds(context) }
                                 )
                             }
                         }
@@ -987,7 +1022,7 @@ struct AidenWorkspaceGitView: View {
                 } footer: {
                     Text("Reuses the original idempotency key so reconnecting cannot duplicate the mutation.")
                 }
-                .disabled(coordinator.connectionState != .connected || model.isLoading)
+                .disabled(!target.isConnected || model.isLoading)
             }
         }
         .navigationTitle("Git")
@@ -1025,7 +1060,7 @@ struct AidenWorkspaceGitView: View {
                             client: client,
                             workspaceId: workspace.id,
                             baseRef: base,
-                            isCurrent: { coordinator.isCurrent(context) }
+                            isCurrent: { coordinator.holds(context) }
                         )
                     }
                 }
@@ -1042,7 +1077,7 @@ struct AidenWorkspaceGitView: View {
                             client: client,
                             workspaceId: workspace.id,
                             name: value,
-                            isCurrent: { coordinator.isCurrent(context) }
+                            isCurrent: { coordinator.holds(context) }
                         )
                     }
                 }
@@ -1062,9 +1097,9 @@ struct AidenWorkspaceGitView: View {
                             workspaceId: workspace.id,
                             branch: branch,
                             name: name,
-                            isCurrent: { coordinator.isCurrent(context) }
+                            isCurrent: { coordinator.holds(context) }
                         )
-                        guard coordinator.isCurrent(context) else { return }
+                        guard coordinator.holds(context) else { return }
                         await coordinator.refreshWorkspaces()
                     }
                 }
@@ -1089,7 +1124,7 @@ struct AidenWorkspaceGitView: View {
                             client: client,
                             workspaceId: workspace.id,
                             branch: branch,
-                            isCurrent: { coordinator.isCurrent(context) }
+                            isCurrent: { coordinator.holds(context) }
                         )
                     }
                 }
@@ -1103,7 +1138,7 @@ struct AidenWorkspaceGitView: View {
                         await model.push(
                             client: client,
                             workspaceId: workspace.id,
-                            isCurrent: { coordinator.isCurrent(context) }
+                            isCurrent: { coordinator.holds(context) }
                         )
                     }
                 }
@@ -1143,7 +1178,7 @@ struct AidenWorkspaceGitView: View {
                                 workspaceId: workspace.id,
                                 message: message,
                                 stagedOnly: stagedOnly,
-                                isCurrent: { coordinator.isCurrent(context) }
+                                isCurrent: { coordinator.holds(context) }
                             )
                         }
                     }
@@ -1187,7 +1222,7 @@ struct AidenWorkspaceGitView: View {
                         workspaceId: workspace.id,
                         file: file,
                         comparisonMode: comparisonMode,
-                        isCurrent: { coordinator.isCurrent(context) }
+                        isCurrent: { coordinator.holds(context) }
                     )
                 }
             }
@@ -1205,25 +1240,16 @@ struct AidenWorkspaceGitView: View {
     }
 
     private func refresh() async {
-        guard coordinator.connectionState == .connected else {
-            model.errorMessage = "Connect to Aiden Agent to use Git."
-            return
-        }
-        await withRemoteContext { client, context in
-            await model.refresh(
-                client: client,
-                workspaceId: workspace.id,
-                isCurrent: { coordinator.isCurrent(context) }
-            )
-        }
+        await model.refresh(on: target, workspaceId: workspace.id)
     }
 
+    /// Every Git call goes to the machine Settings opened under, never to
+    /// whichever machine is selected now.
     private func withRemoteContext(
         _ operation: @MainActor (AidenRemoteClient, AidenRemoteRequestContext) async -> Void
     ) async {
-        guard let context = try? coordinator.requestContext(),
-              let client = try? coordinator.remoteClient(for: context) else { return }
-        await operation(client, context)
+        guard let client = target.client() else { return }
+        await operation(client, target.context)
     }
 }
 

@@ -154,6 +154,7 @@ struct AidenAppShellView: View {
                 NavigationStack(path: $navigation.botsPath) {
                     AidenBotsTabView(
                         coordinator: coordinator,
+                        store: inboxStore,
                         navigation: navigation,
                         availability: botsAvailability,
                         onOpenBot: { id, bot in botSummaries[id] = bot }
@@ -164,7 +165,7 @@ struct AidenAppShellView: View {
 
             Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
                 NavigationStack(path: $navigation.workspacesPath) {
-                    AidenWorkspacesTabView(coordinator: coordinator, newChat: newChat)
+                    AidenWorkspacesTabView(coordinator: coordinator, store: inboxStore, newChat: newChat)
                         .navigationDestination(for: AidenAppRoute.self, destination: destination)
                 }
             }
@@ -185,7 +186,7 @@ struct AidenAppShellView: View {
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
-            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && navigation.openChat == nil
+            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
         ) {
             AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { showsRunningChats = true }
         }
@@ -311,7 +312,15 @@ struct AidenAppShellView: View {
                 newChat.forgetReceipt(id)
             }
         case .bot(let id):
-            AidenBotRouteView(coordinator: coordinator, id: id, initialSummary: botSummaries[id])
+            AidenBotRouteView(
+                coordinator: coordinator,
+                id: id,
+                initialSummary: botSummaries[id],
+                onNext: navigation.catchUp?.current == id ? nextInCatchUp : nil
+            )
+            .environment(\.aidenConversationMachine, inboxStore.roster.chatSubtitle(for: id.instanceId))
+            // Next swaps the route in place, as for a chat.
+            .id(id)
         case .workspace(let id):
             AidenWorkspaceRouteView(
                 coordinator: coordinator,

@@ -159,6 +159,39 @@ final class AidenUnifiedInboxStore {
         machines[instanceId]?.model
     }
 
+    // MARK: The Bots and Workspaces tabs
+
+    /// The Bots tab under `filter`: each shown machine's Bots, newest first, in
+    /// the strip's order.
+    func botSections() -> [AidenMachineSection<AidenMachineBotRow>] {
+        AidenMachineSection.grouped(
+            roster.visible.map { label in
+                (instanceId: label.instanceId, rows: snapshots[label.instanceId].map(AidenMachineBotRow.rows(of:)) ?? [])
+            },
+            filter: filter
+        )
+    }
+
+    /// The Workspaces tab under `filter`: each shown machine's workspaces by name,
+    /// less those archived on this device, in the strip's order.
+    func workspaceSections(
+        isArchived: (_ instanceId: String, _ workspaceId: String) -> Bool
+    ) -> [AidenMachineSection<AidenMachineWorkspaceRow>] {
+        AidenMachineSection.grouped(
+            roster.visible.compactMap { label in
+                guard let connection = hosts.connection(for: label.instanceId) else { return nil }
+                let rows = AidenMachineWorkspaceRow.rows(
+                    instanceId: label.instanceId,
+                    deviceId: connection.installation.deviceId,
+                    workspaces: connection.workspaces,
+                    isArchived: { isArchived(label.instanceId, $0) }
+                )
+                return (instanceId: label.instanceId, rows: rows)
+            },
+            filter: filter
+        )
+    }
+
     // MARK: Acting on rows
 
     /// One swipe, on the model the row is drawn from, so its optimistic edit is

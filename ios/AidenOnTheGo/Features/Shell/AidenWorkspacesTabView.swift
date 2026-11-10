@@ -4,11 +4,24 @@ import SwiftUI
 struct AidenWorkspacesTabChrome {
     let route: (AidenWorkspace) -> AidenAppRoute
     let newChat: AidenNewChatFlow
+    /// Set with more than one machine shown: every shown machine's workspaces.
+    var machines: AidenWorkspacesTabMachines? = nil
 }
 
-/// The workspace list as a tab root.
+/// Every shown machine's workspaces, under the Inbox's machine filter.
+struct AidenWorkspacesTabMachines {
+    let roster: AidenMachineRoster
+    let filter: Binding<AidenMachineFilter>
+    let sections: [AidenMachineSection<AidenMachineWorkspaceRow>]
+    /// Reads every shown machine's list again.
+    let refresh: () async -> Void
+}
+
+/// The workspace list as a tab root. With more than one machine it lists every
+/// machine's workspaces, by machine under All.
 struct AidenWorkspacesTabView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    let store: AidenUnifiedInboxStore
     let newChat: AidenNewChatFlow
 
     private func route(_ workspace: AidenWorkspace) -> AidenAppRoute {
@@ -20,11 +33,28 @@ struct AidenWorkspacesTabView: View {
         ))
     }
 
+    private var machines: AidenWorkspacesTabMachines? {
+        guard store.roster.showsStrip else { return nil }
+        let archive = coordinator.workspaceArchiveStore
+        let shown = store.roster.visible.map(\.instanceId)
+        return AidenWorkspacesTabMachines(
+            roster: store.roster,
+            filter: Binding(get: { store.filter }, set: { store.filter = $0 }),
+            sections: store.workspaceSections { archive.isArchived(workspaceID: $1, instanceID: $0) },
+            refresh: { [coordinator] in
+                await coordinator.refreshWorkspaces()
+                for instanceId in shown where instanceId != coordinator.activeInstanceId {
+                    try? await coordinator.hosts.connection(for: instanceId)?.refreshWorkspacesForPoll()
+                }
+            }
+        )
+    }
+
     var body: some View {
         AidenWorkspacesDirectoryView(
             coordinator: coordinator,
             archiveStore: coordinator.workspaceArchiveStore,
-            tabChrome: AidenWorkspacesTabChrome(route: route, newChat: newChat)
+            tabChrome: AidenWorkspacesTabChrome(route: route, newChat: newChat, machines: machines)
         )
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
@@ -76,24 +106,22 @@ struct AidenConnectionNotice: View {
 }
 
 enum AidenWorkspaceRoute {
-    /// The workspace a route points at. Only the selected machine's workspaces are
-    /// loaded, and machines can share workspace IDs, so a route to another machine
-    /// finds nothing rather than the selected machine's namesake.
+    /// The workspace a route points at, on its own machine. Machines can share
+    /// workspace IDs, so it's looked up on that machine's list and never the
+    /// selected one's. An older pairing of the machine finds nothing.
     @MainActor
     static func workspace(for id: AidenHostObjectID, coordinator: AidenRemoteCoordinator) -> AidenWorkspace? {
-        guard let installation = coordinator.installationStore.activeInstallation,
-              installation.id == id.instanceId,
-              installation.deviceId == id.deviceId,
+        guard let connection = coordinator.hosts.connection(for: id.instanceId),
+              connection.installation.deviceId == id.deviceId,
               !coordinator.workspaceArchiveStore.isArchived(workspaceID: id.objectId, instanceID: id.instanceId) else {
             return nil
         }
         // A hidden home has no page of its own (no chat list, settings or Remove).
-        return coordinator.workspaces.first { $0.id == id.objectId && !$0.noWorkspace }
+        return connection.workspaces.first { $0.id == id.objectId && !$0.noWorkspace }
     }
 }
 
-/// A pushed workspace page. It's bound to the selection, so a route to another
-/// machine says so instead of opening.
+/// A pushed workspace page, on the workspace's own machine whichever is selected.
 struct AidenWorkspaceRouteView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let id: AidenHostObjectID
@@ -104,27 +132,29 @@ struct AidenWorkspaceRouteView: View {
 
     @Environment(\.aidenPalette) private var palette
 
+    private var connection: AidenHostConnection? {
+        coordinator.hosts.connection(for: id.instanceId)
+    }
+
     private var isLoadingWorkspaces: Bool {
-        coordinator.activeInstanceId == id.instanceId
-            && coordinator.connectionState == .connecting
-            && coordinator.workspaces.isEmpty
+        guard let connection else { return false }
+        return connection.connectionState == .connecting && connection.workspaces.isEmpty
     }
 
     private var unavailableMessage: String {
-        if coordinator.activeInstanceId == id.instanceId {
-            return String(localized: "This workspace is no longer available on this machine.")
+        guard let connection, connection.installation.deviceId == id.deviceId else {
+            return String(localized: "This machine is no longer paired. Pair it again to open this workspace.")
         }
-        let name = coordinator.installationStore.installations.first { $0.id == id.instanceId }?.name
-        return name.map { String(localized: "This workspace is on \($0). Select that machine in Settings to open it.") }
-            ?? String(localized: "This machine is no longer paired. Pair it again to open this workspace.")
+        return String(localized: "This workspace is no longer available on \(connection.installation.name).")
     }
 
     var body: some View {
-        if let workspace = AidenWorkspaceRoute.workspace(for: id, coordinator: coordinator) {
+        if let workspace = AidenWorkspaceRoute.workspace(for: id, coordinator: coordinator),
+           let owner = try? connection?.requestContext(scope: .owner) {
             AidenWorkspaceDetailView(
                 coordinator: coordinator,
                 workspace: workspace,
-                owner: nil,
+                owner: owner,
                 onRemoved: onRemoved,
                 onChatUpdated: onChatUpdated,
                 onChatRemoved: onChatRemoved,

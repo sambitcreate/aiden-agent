@@ -1954,5 +1954,47 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         XCTAssertEqual(store.needsYouCount, 2)
         store.stop()
     }
+
+    // MARK: The Bots and Workspaces tabs
+
+    func testTheBotsTabListsEachMachinesBotsUnderTheFilter() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        serveBotWithCards("bot_cards", on: "studio")
+        serveBotWithCards("bot_cards", on: "laptop")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 2)
+
+        let all = store.botSections()
+        XCTAssertEqual(Set(all.map(\.instanceId)), ["studio", "laptop"])
+        XCTAssertEqual(all.flatMap(\.rows).count, 2)
+        store.filter = .machine("laptop")
+        let one = store.botSections()
+        XCTAssertEqual(one.map(\.instanceId), ["laptop"])
+        XCTAssertEqual(one.first?.rows.map(\.id), [AidenHostObjectID(instanceId: "laptop", deviceId: "demo-device", objectId: "bot_cards")])
+        store.stop()
+    }
+
+    func testTheWorkspacesTabListsEachMachinesWorkspacesUnderTheFilter() async throws {
+        let coordinator = coordinator("studio", "laptop")
+        await connectAll(coordinator)
+        let store = makeStore(coordinator)
+        await startAndSettle(store, machines: 2)
+
+        let all = store.workspaceSections { _, _ in false }
+        XCTAssertEqual(Set(all.map(\.instanceId)), ["studio", "laptop"])
+        let studios = try XCTUnwrap(all.first { $0.instanceId == "studio" }).rows
+        let first = try XCTUnwrap(studios.first)
+        XCTAssertEqual(first.id.instanceId, "studio")
+        XCTAssertEqual(studios.map(\.workspace.id), AidenNoWorkspace.choices(coordinator.hosts.connection(for: "studio")?.workspaces ?? [])
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map(\.id))
+        // Archived here for the laptop only.
+        let archived = store.workspaceSections { $0 == "laptop" && $1 == first.workspace.id }
+        XCTAssertEqual(archived.first { $0.instanceId == "studio" }?.rows, studios)
+        XCTAssertEqual(archived.first { $0.instanceId == "laptop" }?.rows.contains { $0.workspace.id == first.workspace.id }, false)
+        store.filter = .machine("laptop")
+        XCTAssertEqual(store.workspaceSections { _, _ in false }.map(\.instanceId), ["laptop"])
+        store.stop()
+    }
 }
 #endif

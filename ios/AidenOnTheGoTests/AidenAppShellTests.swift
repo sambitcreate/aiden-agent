@@ -530,21 +530,18 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(model.state, .session)
     }
 
-    /// The Bot chat is bound to the selection, so it must not open for anywhere else.
-    func testABotRouteOnAnotherMachineShowsCopyAndAsksNobody() async {
+    /// A Bot on another machine opens there, and the selection stays put.
+    func testABotRouteOnAnotherMachineOpensThere() async {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         await coordinator.start()
-        let route = id("bot_scout", on: "laptop")
-        let model = botRouteModel(route)
-        let asked = responder.requests(instanceId: "laptop").count
+        let model = botRouteModel(id("bot_scout", on: "laptop"))
+        let asked = responder.requests(instanceId: "studio").count
 
         await model.load(coordinator: coordinator)
 
-        guard case .unavailable(let message) = model.state else { return XCTFail("\(model.state)") }
-        XCTAssertTrue(message.contains("Laptop"), message)
-        XCTAssertFalse(AidenBotRouteModel.isOnSelectedMachine(route, coordinator: coordinator))
-        XCTAssertEqual(responder.requests(instanceId: "laptop").count, asked)
+        XCTAssertEqual(model.state, .session)
+        XCTAssertEqual(responder.requests(instanceId: "studio").count, asked)
         XCTAssertEqual(coordinator.activeInstanceId, "studio")
     }
 
@@ -557,7 +554,6 @@ final class AidenAppShellTests: XCTestCase {
         await model.load(coordinator: coordinator)
 
         guard case .unavailable = model.state else { return XCTFail("\(model.state)") }
-        XCTAssertFalse(AidenBotRouteModel.isOnSelectedMachine(route, coordinator: coordinator))
     }
 
     /// A Bot chat through a chat route used to open read-only.

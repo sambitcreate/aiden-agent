@@ -35,11 +35,6 @@ struct AidenWorkspaceSettingsView: View {
         coordinator.hosts.connection(for: context.instanceId)?.workspaces.count ?? 0
     }
 
-    /// Git reads the selected machine, so it's offered only for a workspace there.
-    private var offersGit: Bool {
-        coordinator.holds(context) && context.instanceId == coordinator.defaultInstanceId
-    }
-
     private var hasChanges: Bool {
         name.trimmingCharacters(in: .whitespacesAndNewlines) != workspace.name || permission != workspace.permission || memoryEnabled != workspace.memoryEnabled
     }
@@ -92,14 +87,12 @@ struct AidenWorkspaceSettingsView: View {
                     }
                     .disabled(!workspace.hasFolder)
 
-                    if offersGit {
-                        NavigationLink {
-                            AidenWorkspaceGitView(coordinator: coordinator, workspace: workspace)
-                        } label: {
-                            Label("Git", systemImage: "arrow.triangle.branch")
-                        }
-                        .disabled(!workspace.hasFolder)
+                    NavigationLink {
+                        AidenWorkspaceGitView(coordinator: coordinator, workspace: workspace, context: context)
+                    } label: {
+                        Label("Git", systemImage: "arrow.triangle.branch")
                     }
+                    .disabled(!workspace.hasFolder)
                 }
 
                 if workspace.isManagedWorktree || machineWorkspaceCount > 1 {
@@ -176,6 +169,19 @@ struct AidenWorkspaceSettingsView: View {
                      ? "This destructive Git operation is performed by Aiden Agent using its persisted worktree ownership record."
                      : "The folder, its files, and chats remain on your desktop, but the chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
             }
+        }
+        // The shell's alert sits under this sheet, so a failed Save or Remove says
+        // so here.
+        .alert(
+            "Aiden On The Go",
+            isPresented: Binding(
+                get: { coordinator.presentedError != nil },
+                set: { if !$0 { coordinator.presentedError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { coordinator.presentedError = nil }
+        } message: {
+            Text(coordinator.presentedError ?? "The operation could not be completed.")
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }

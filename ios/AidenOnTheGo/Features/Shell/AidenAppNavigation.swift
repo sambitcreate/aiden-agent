@@ -287,6 +287,14 @@ final class AidenAppNavigation {
         return id
     }
 
+    /// A chat or a Bot on top of the tab that's showing: either has a composer.
+    var showsConversation: Bool {
+        switch path(of: tab).last {
+        case .chat?, .bot?: true
+        default: false
+        }
+    }
+
     private func path(of tab: AidenAppTab) -> [AidenAppRoute] {
         switch tab {
         case .inbox: inboxPath

@@ -1,9 +1,20 @@
 import SwiftUI
 
+/// What the Bots home lists when more than one machine is shown: every shown
+/// machine's Bots, under the Inbox's machine filter.
+struct AidenBotsHomeMachines {
+    let roster: AidenMachineRoster
+    let filter: Binding<AidenMachineFilter>
+    let sections: [AidenMachineSection<AidenMachineBotRow>]
+    let onOpen: (AidenMachineBotRow) -> Void
+}
+
 /// The Bots home as a tab root. Bots stays selectable when a machine can't offer
-/// them, and says why.
+/// them, and says why. With more than one machine it lists every machine's Bots,
+/// by machine under All.
 struct AidenBotsTabView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    let store: AidenUnifiedInboxStore
     let navigation: AidenAppNavigation
     let availability: AidenBotsAvailability
     /// A Bot the home already knows, so its chat opens with a title at once.
@@ -17,8 +28,22 @@ struct AidenBotsTabView: View {
         return AidenHostObjectID(instanceId: installation.id, deviceId: installation.deviceId, objectId: botID)
     }
 
+    private var machines: AidenBotsHomeMachines? {
+        guard store.roster.showsStrip else { return nil }
+        return AidenBotsHomeMachines(
+            roster: store.roster,
+            filter: Binding(get: { store.filter }, set: { store.filter = $0 }),
+            sections: store.botSections(),
+            onOpen: { row in
+                onOpenBot(row.id, row.bot)
+                navigation.open(.bot(row.id))
+            }
+        )
+    }
+
     var body: some View {
-        if let explanation = availability.tabExplanation {
+        let machines = machines
+        if machines == nil, let explanation = availability.tabExplanation {
             ContentUnavailableView(
                 "Bots unavailable",
                 systemImage: "person.2.slash",
@@ -43,7 +68,8 @@ struct AidenBotsTabView: View {
                     onOpenBot(id, bot)
                     navigation.open(.bot(id))
                 },
-                isInTabShell: true
+                isInTabShell: true,
+                machines: machines
             )
             .onChange(of: coordinator.activeInstanceId) { _, _ in
                 chatStarter.forgetAttempt()
@@ -122,8 +148,9 @@ final class AidenBotChatStarter {
     }
 }
 
-/// Finds what a `.bot` route opens. The Bot chat is bound to the selected machine,
-/// so a route to any other machine stops here without asking it for anything.
+/// Finds what a `.bot` route opens, on the Bot's own machine whichever machine
+/// is selected. Only an older pairing of that machine, or one that's gone, stops
+/// it.
 @MainActor @Observable
 final class AidenBotRouteModel {
     enum State: Equatable {
@@ -146,19 +173,14 @@ final class AidenBotRouteModel {
         self.botCache = botCache
     }
 
-    static func isOnSelectedMachine(_ id: AidenHostObjectID, coordinator: AidenRemoteCoordinator) -> Bool {
-        let installation = coordinator.installationStore.activeInstallation
-        return installation?.id == id.instanceId && installation?.deviceId == id.deviceId
+    /// The Bot's machine, as long as it's still the pairing the route was made on.
+    static func connection(for id: AidenHostObjectID, coordinator: AidenRemoteCoordinator) -> AidenHostConnection? {
+        guard let connection = coordinator.hosts.connection(for: id.instanceId),
+              connection.installation.deviceId == id.deviceId else { return nil }
+        return connection
     }
 
-    /// Why this route can't open here, in the words the screen shows.
-    static func elsewhereMessage(_ id: AidenHostObjectID, coordinator: AidenRemoteCoordinator) -> String {
-        let installation = coordinator.installationStore.installations.first {
-            $0.id == id.instanceId && $0.deviceId == id.deviceId
-        }
-        return installation.map { String(localized: "This Bot is on \($0.name). Select that machine in Settings to open it.") }
-            ?? String(localized: "This machine is no longer paired. Pair it again to open this Bot.")
-    }
+    static let machineGoneMessage = String(localized: "This machine is no longer paired. Pair it again to open this Bot.")
 
     func accept(_ chat: AidenChat) {
         guard case .chat(let current, let allowsMutations) = state, current.id == chat.id else { return }
@@ -166,21 +188,23 @@ final class AidenBotRouteModel {
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
-        guard Self.isOnSelectedMachine(id, coordinator: coordinator),
-              let installation = coordinator.installationStore.activeInstallation else {
-            state = .unavailable(Self.elsewhereMessage(id, coordinator: coordinator))
+        guard let connection = Self.connection(for: id, coordinator: coordinator) else {
+            state = .unavailable(Self.machineGoneMessage)
             return
         }
-        let availability = AidenBotsAvailability.resolve(installation)
+        let availability = AidenBotsAvailability.resolve(connection.installation)
         if let explanation = availability.tabExplanation {
             state = .unavailable(explanation)
             return
         }
-        if case .durableSession = AidenBotChatRoute.resolve(botID: id.objectId, hostFeatures: coordinator.knownServerFeatures) {
+        if case .durableSession = AidenBotChatRoute.resolve(
+            botID: id.objectId,
+            hostFeatures: coordinator.knownServerFeatures(of: id.instanceId)
+        ) {
             state = .session
             return
         }
-        await loadChat(canWrite: availability.canWrite, coordinator: coordinator)
+        await loadChat(canWrite: availability.canWrite, over: connection, coordinator: coordinator)
     }
 
     private func savedChat() async -> AidenChat? {
@@ -196,25 +220,29 @@ final class AidenBotRouteModel {
         )
     }
 
-    private func loadChat(canWrite: Bool, coordinator: AidenRemoteCoordinator) async {
-        guard let context = try? coordinator.requestContext() else { return }
+    private func loadChat(
+        canWrite: Bool,
+        over connection: AidenHostConnection,
+        coordinator: AidenRemoteCoordinator
+    ) async {
+        guard let context = try? coordinator.ownerContext(for: id.instanceId) else { return }
         var chat: AidenChat?
         if case .chat(let current, _) = state {
             chat = current
         } else if let saved = await savedChat() {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             chat = saved
             // Saved words show at once; only a live check grants sending.
             state = .chat(saved, allowsMutations: false)
         }
-        switch coordinator.connectionState {
+        switch connection.connectionState {
         case .connected:
             break
         case .connecting:
             return
         case .offline, .needsPairing:
             if chat == nil {
-                state = .unavailable(String(localized: "Reconnect to your paired machine to open this Bot chat."))
+                state = .unavailable(String(localized: "Reconnect to \(connection.installation.name) to open this Bot chat."))
             }
             return
         }
@@ -222,19 +250,19 @@ final class AidenBotRouteModel {
             let client = try coordinator.remoteClient(for: context)
             if chat == nil {
                 let page = try await client.botConversations(query: AidenBotConversationQuery(botId: id.objectId))
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.holds(context) else { return }
                 guard case .openChat(let chatID) = aidenResolvedBotDeepLink(
                     botID: id.objectId,
                     conversations: page.conversations
                 ) else {
                     // A link never starts a chat on the person's behalf.
                     let bot = try await client.bot(id: id.objectId)
-                    guard coordinator.isCurrent(context) else { return }
+                    guard coordinator.holds(context) else { return }
                     state = .unavailable(String(localized: "\(bot.name) has no chat yet. Open it from Bots to start one."))
                     return
                 }
                 let fetched = try await client.chat(id: chatID)
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.holds(context) else { return }
                 guard fetched.id == chatID, fetched.botId == id.objectId,
                       let admitted = await aidenPersistBotChatForPresentation(
                         fetched,
@@ -249,16 +277,16 @@ final class AidenBotRouteModel {
                 state = .chat(admitted, allowsMutations: false)
             }
             let bot = try await client.bot(id: id.objectId)
-            guard coordinator.isCurrent(context), let chat else { return }
+            guard coordinator.holds(context), let chat else { return }
             state = .chat(chat, allowsMutations: aidenBotChatAllowsMutations(canWrite: canWrite, botHealth: bot.health))
         } catch where aidenIsCancellation(error) {
             return
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) {
-                state = .unavailable(Self.elsewhereMessage(id, coordinator: coordinator))
+                state = .unavailable(Self.machineGoneMessage)
                 return
             }
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.holds(context) else { return }
             if chat != nil {
                 coordinator.presentedError = String(localized: "Couldn’t refresh this Bot chat. Showing the saved conversation.")
             } else {
@@ -268,75 +296,106 @@ final class AidenBotRouteModel {
     }
 }
 
-/// A pushed Bot chat.
+/// A pushed Bot chat, on the Bot's own machine.
 struct AidenBotRouteView: View {
     private struct LoadID: Equatable {
-        let selection: String?
-        let connectionState: AidenRemoteConnectionState
+        let pairing: String?
+        let connectionState: AidenRemoteConnectionState?
         let canWrite: Bool
     }
 
     let coordinator: AidenRemoteCoordinator
     let initialSummary: AidenBotSummary?
+    /// Set only while this Bot is a Catch Up run's, as on a chat route.
+    let onNext: (() -> Void)?
 
     @Environment(\.aidenPalette) private var palette
     @State private var model: AidenBotRouteModel
+    @State private var holdsAttachments = false
+    @State private var isConfirmingNext = false
 
-    init(coordinator: AidenRemoteCoordinator, id: AidenHostObjectID, initialSummary: AidenBotSummary?) {
+    init(
+        coordinator: AidenRemoteCoordinator,
+        id: AidenHostObjectID,
+        initialSummary: AidenBotSummary?,
+        onNext: (() -> Void)? = nil
+    ) {
         self.coordinator = coordinator
         self.initialSummary = initialSummary
+        self.onNext = onNext
         _model = State(initialValue: AidenBotRouteModel(id: id))
+    }
+
+    private var connection: AidenHostConnection? {
+        AidenBotRouteModel.connection(for: model.id, coordinator: coordinator)
     }
 
     private var loadID: LoadID {
         LoadID(
-            selection: coordinator.activeInstanceId,
-            connectionState: coordinator.connectionState,
-            canWrite: coordinator.installationStore.activeInstallation?.canWriteBots == true
+            pairing: connection?.installation.deviceId,
+            connectionState: connection?.connectionState,
+            canWrite: connection?.installation.canWriteBots == true
         )
     }
 
     var body: some View {
         Group {
-            if !AidenBotRouteModel.isOnSelectedMachine(model.id, coordinator: coordinator) {
-                unavailable(AidenBotRouteModel.elsewhereMessage(model.id, coordinator: coordinator))
-            } else {
-                switch model.state {
-                case .loading:
-                    AidenBotChatSkeletonView()
-                case .session:
-                    AidenBotSessionChatView(
-                        coordinator: coordinator,
-                        botID: model.id.objectId,
-                        initialSummary: initialSummary,
-                        machine: nil
-                    )
-                    .id("\(model.id.instanceId)-\(model.id.objectId)")
-                case .chat(let chat, let allowsMutations):
-                    AidenChatDetailView(
-                        coordinator: coordinator,
-                        chat: chat,
-                        allowsMutations: allowsMutations,
-                        onChatUpdated: { model.accept($0) }
-                    )
-                    .id("\(model.id.instanceId)-\(chat.id)")
-                case .unavailable(let message):
-                    unavailable(message)
-                }
+            switch model.state {
+            case .loading:
+                AidenBotChatSkeletonView()
+            case .session:
+                AidenBotSessionChatView(
+                    coordinator: coordinator,
+                    botID: model.id.objectId,
+                    initialSummary: initialSummary,
+                    machine: model.id.instanceId,
+                    staysOnItsMachine: true
+                )
+                .id("\(model.id.instanceId)-\(model.id.objectId)")
+            case .chat(let chat, let allowsMutations):
+                AidenChatDetailView(
+                    coordinator: coordinator,
+                    chat: chat,
+                    owner: try? connection?.requestContext(scope: .owner),
+                    allowsMutations: allowsMutations,
+                    onChatUpdated: { model.accept($0) }
+                )
+                .id("\(model.id.instanceId)-\(chat.id)")
+            case .unavailable(let message):
+                ContentUnavailableView(
+                    "Bot unavailable",
+                    systemImage: "exclamationmark.bubble",
+                    description: Text(message)
+                )
+                .background(palette.canvas.ignoresSafeArea())
             }
         }
         .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            if let onNext {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Next") {
+                        if holdsAttachments { isConfirmingNext = true } else { onNext() }
+                    }
+                    .accessibilityHint("Opens the next chat that needs you")
+                    .confirmationDialog(
+                        "Discard attachments?",
+                        isPresented: $isConfirmingNext,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Discard attachments", role: .destructive, action: onNext)
+                        Button("Stay", role: .cancel) {}
+                    } message: {
+                        Text("They aren’t kept when you move to the next chat. Your message text is saved.")
+                    }
+                }
+            }
+        }
+        .onPreferenceChange(AidenChatHoldsAttachmentsKey.self) { holds in
+            holdsAttachments = holds
+        }
         .task(id: loadID) {
             await model.load(coordinator: coordinator)
         }
-    }
-
-    private func unavailable(_ message: String) -> some View {
-        ContentUnavailableView(
-            "Bot unavailable",
-            systemImage: "exclamationmark.bubble",
-            description: Text(message)
-        )
-        .background(palette.canvas.ignoresSafeArea())
     }
 }

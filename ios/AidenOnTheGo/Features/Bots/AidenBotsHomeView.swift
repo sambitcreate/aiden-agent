@@ -274,6 +274,9 @@ struct AidenBotsHomeView: View {
     var isInTabShell = false
     /// A new Bot was made on a machine this list doesn't show.
     var onCreatedElsewhere: (AidenHostObjectID, AidenBotSummary) -> Void = { _, _ in }
+    /// On the tab shell with more than one machine shown: every machine's Bots,
+    /// listed in place of the selected machine's.
+    var machines: AidenBotsHomeMachines? = nil
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -577,13 +580,17 @@ struct AidenBotsHomeView: View {
                 if isSearching {
                     searchField
                 }
-                if let loadError {
-                    statusBanner(loadError)
-                } else if isInTabShell, case .offline = coordinator.connectionState {
-                    statusBanner("Offline — showing saved Bots")
+                if let machines {
+                    machinesContent(machines)
+                } else {
+                    if let loadError {
+                        statusBanner(loadError)
+                    } else if isInTabShell, case .offline = coordinator.connectionState {
+                        statusBanner("Offline — showing saved Bots")
+                    }
+                    messagingControl
+                    content
                 }
-                messagingControl
-                content
             }
             .padding(.bottom, 12)
         }
@@ -757,11 +764,62 @@ struct AidenBotsHomeView: View {
         }
     }
 
-    private func botRow(_ row: AidenBotHomeRow) -> some View {
+    /// Every shown machine's Bots: the strip, then each machine's under its name
+    /// when the strip says All. A row opens the Bot on its own machine.
+    @ViewBuilder
+    private func machinesContent(_ machines: AidenBotsHomeMachines) -> some View {
+        AidenMachineStrip(labels: machines.roster.visible, filter: machines.filter)
+            .padding(.vertical, AidenSpacing.xs)
+        if let shown = shownPendingCreate {
+            AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
+        }
+        let sections = machines.sections.map { section in
+            AidenMachineSection(instanceId: section.instanceId, rows: section.rows.filter(matchesQuery))
+        }
+        if sections.allSatisfy(\.rows.isEmpty) {
+            if normalizedQuery.isEmpty {
+                ContentUnavailableView(
+                    "No Bots",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text("A Bot is a helper you can chat with anytime.")
+                )
+                .padding(.top, 54)
+            } else {
+                ContentUnavailableView.search(text: normalizedQuery)
+                    .padding(.top, 54)
+            }
+        }
+        ForEach(sections) { section in
+            if machines.filter.wrappedValue == .all, !section.rows.isEmpty {
+                Text(machines.roster.labels[section.instanceId]?.name ?? "")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.top, AidenSpacing.m)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            ForEach(section.rows) { row in
+                Button {
+                    machines.onOpen(row)
+                } label: {
+                    botRow(AidenBotHomeRow(bot: row.bot, conversation: nil), machine: row.id.instanceId)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func matchesQuery(_ row: AidenMachineBotRow) -> Bool {
+        normalizedQuery.isEmpty
+            || row.bot.name.localizedCaseInsensitiveContains(normalizedQuery)
+            || row.bot.purpose.localizedCaseInsensitiveContains(normalizedQuery)
+    }
+
+    private func botRow(_ row: AidenBotHomeRow, machine: String? = nil) -> some View {
         HStack(alignment: .top, spacing: 14) {
             AidenBotCanonicalAvatarView(
                 coordinator: coordinator,
-                machine: nil,
+                machine: machine,
                 botID: row.bot.id,
                 avatar: row.bot.avatar,
                 name: row.bot.name,

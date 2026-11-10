@@ -802,7 +802,12 @@ final class AidenRemoteCoordinator {
                     return .success(reconciled)
                 }
             }
-            _ = await handleCredentialRevocation(error, context: context)
+            if await !handleCredentialRevocation(error, context: context), holds(context) {
+                presentedError = Self.workspaceFailure(
+                    String(localized: "Couldn’t save this workspace on \(machineName(of: context.instanceId))."),
+                    error
+                )
+            }
             return .failure
         }
     }
@@ -860,9 +865,26 @@ final class AidenRemoteCoordinator {
             if !Self.isAmbiguousMutationError(error) {
                 pendingManagedWorktreeDeletionKeys[scope] = nil
             }
-            _ = await handleCredentialRevocation(error, context: context)
+            if await !handleCredentialRevocation(error, context: context), holds(context) {
+                presentedError = Self.workspaceFailure(
+                    String(localized: "Couldn’t remove this workspace from \(machineName(of: context.instanceId))."),
+                    error
+                )
+            }
             return .failure
         }
+    }
+
+    /// A machine's name for a sentence about it.
+    private func machineName(of instanceId: String) -> String {
+        hosts.connection(for: instanceId)?.installation.name ?? String(localized: "its machine")
+    }
+
+    /// What went wrong on a machine other than the selected one, which the
+    /// selected machine's own error handling never hears about.
+    private static func workspaceFailure(_ summary: String, _ error: Error) -> String {
+        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? summary : "\(summary) \(detail)"
     }
 
     private static func replacing(_ workspace: AidenWorkspace, in workspaces: [AidenWorkspace]) -> [AidenWorkspace] {

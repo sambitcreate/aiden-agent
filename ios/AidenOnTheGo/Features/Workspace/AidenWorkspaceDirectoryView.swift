@@ -42,9 +42,61 @@ struct AidenWorkspacesDirectoryView: View {
         }
     }
 
+    private func matchesSearch(_ workspace: AidenWorkspace) -> Bool {
+        searchText.isEmpty
+            || workspace.name.localizedCaseInsensitiveContains(searchText)
+            || workspace.repositoryName?.localizedCaseInsensitiveContains(searchText) == true
+            || workspace.branchName?.localizedCaseInsensitiveContains(searchText) == true
+    }
+
+    /// Every shown machine's workspaces: the strip, then each machine's under its
+    /// name when the strip says All. The selected machine's rows keep their
+    /// actions; another machine's open its page, where Settings works on it.
+    @ViewBuilder
+    private func machineRows(_ machines: AidenWorkspacesTabMachines) -> some View {
+        AidenMachineStrip(labels: machines.roster.visible, filter: machines.filter)
+            .listRowInsets(EdgeInsets(top: AidenSpacing.xs, leading: 0, bottom: AidenSpacing.xs, trailing: 0))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        let sections = machines.sections.map { section in
+            AidenMachineSection(instanceId: section.instanceId, rows: section.rows.filter { matchesSearch($0.workspace) })
+        }
+        if sections.allSatisfy(\.rows.isEmpty) {
+            ContentUnavailableView(
+                searchText.isEmpty ? "No Workspaces" : "No Matching Workspaces",
+                systemImage: searchText.isEmpty ? "folder" : "magnifyingglass",
+                description: Text(searchText.isEmpty
+                    ? "Create a workspace or add a desktop folder to get started."
+                    : "Try a different search term.")
+            )
+            .listRowBackground(Color.clear)
+        }
+        ForEach(sections) { section in
+            if !section.rows.isEmpty {
+                Section {
+                    ForEach(section.rows) { row in
+                        if row.id.instanceId == coordinator.activeInstanceId {
+                            interactiveRow(row.workspace, isArchived: false)
+                        } else {
+                            NavigationLink(value: AidenAppRoute.workspace(row.id)) {
+                                AidenWorkspaceRow(workspace: row.workspace)
+                            }
+                        }
+                    }
+                } header: {
+                    if machines.filter.wrappedValue == .all {
+                        Text(machines.roster.labels[section.instanceId]?.name ?? "")
+                    }
+                }
+            }
+        }
+    }
+
     var body: some View {
         List {
-            if filteredWorkspaces.isEmpty {
+            if let machines = tabChrome?.machines {
+                machineRows(machines)
+            } else if filteredWorkspaces.isEmpty {
                 ContentUnavailableView(
                     searchText.isEmpty ? "No Workspaces" : "No Matching Workspaces",
                     systemImage: searchText.isEmpty ? "folder" : "magnifyingglass",
@@ -85,7 +137,11 @@ struct AidenWorkspacesDirectoryView: View {
         .searchable(text: $searchText, prompt: "Search workspaces")
         .searchToolbarBehavior(tabChrome == nil ? .automatic : .minimize)
         .refreshable {
-            await coordinator.refreshWorkspaces()
+            if let machines = tabChrome?.machines {
+                await machines.refresh()
+            } else {
+                await coordinator.refreshWorkspaces()
+            }
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
