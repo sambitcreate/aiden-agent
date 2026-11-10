@@ -110,6 +110,36 @@ struct AidenMachineChipImage: View {
 
 /// One machine: its name, symbol and colour, whether it shows in the Inbox, its
 /// connection, and forgetting it. Edits save as they are made.
+/// One symbol in the editor's grid. The fill says which is picked. Without colour,
+/// an outline does, as on the colours.
+struct AidenMachineSymbolTileFace: View {
+    let symbol: AidenMachineSymbol
+    let color: AidenMachineColor
+    let isSelected: Bool
+    let tileSize: CGFloat
+
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+
+    var body: some View {
+        Image(systemName: symbol.systemName)
+            .font(.title3)
+            .foregroundStyle(isSelected ? color.glyphColor : Color.primary)
+            .frame(maxWidth: .infinity, minHeight: tileSize)
+            .background(
+                isSelected ? color.color : Color(.tertiarySystemFill),
+                in: RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
+            )
+            .overlay {
+                if isSelected && differentiateWithoutColor {
+                    RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
+                        .strokeBorder(Color.primary, lineWidth: 2)
+                        .padding(-AidenSpacing.xs)
+                }
+            }
+            .contentShape(Rectangle())
+    }
+}
+
 struct AidenMachineDetailView: View {
     let instanceId: String
     let coordinator: AidenRemoteCoordinator
@@ -126,7 +156,6 @@ struct AidenMachineDetailView: View {
     @State private var hapticScope = UUID()
     @FocusState private var nameIsFocused: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @ScaledMetric(relativeTo: .body) private var scaledTileSize: CGFloat = 44
     @ScaledMetric(relativeTo: .body) private var scaledHeaderChipSize: CGFloat = 56
 
@@ -338,23 +367,7 @@ struct AidenMachineDetailView: View {
         return Button {
             model.setSymbol(instanceId, symbol)
         } label: {
-            Image(systemName: symbol.systemName)
-                .font(.title3)
-                .foregroundStyle(selected ? row.color.glyphColor : Color.primary)
-                .frame(maxWidth: .infinity, minHeight: tileSize)
-                .background(
-                    selected ? row.color.color : Color(.tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
-                )
-                // The fill says which is picked. Without colour, an outline does, as on the colours.
-                .overlay {
-                    if selected && differentiateWithoutColor {
-                        RoundedRectangle(cornerRadius: AidenRadius.code, style: .continuous)
-                            .strokeBorder(Color.primary, lineWidth: 2)
-                            .padding(-AidenSpacing.xs)
-                    }
-                }
-                .contentShape(Rectangle())
+            AidenMachineSymbolTileFace(symbol: symbol, color: row.color, isSelected: selected, tileSize: tileSize)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(symbol.title)

@@ -81,9 +81,11 @@ extension AidenRemoteCoordinator {
     }
 
     /// Nothing on screen says which machine a link was for, so the message names
-    /// it as this phone does, or says "That machine" when the phone doesn't know it.
+    /// it as the Inbox does, suffix included when two machines share a name, or
+    /// says "That machine" when the phone doesn't know it.
     func noLongerPairedMessage(for instanceId: String?) -> String {
-        guard let name = instanceId.flatMap(machineName(of:)) else {
+        let labels = AidenMachineLabel.labels(connections: hosts.ordered, preferences: machinePreferences)
+        guard let name = instanceId.flatMap({ labels[$0]?.name }) else {
             return String(localized: "That machine is no longer paired. Pair it again to continue.")
         }
         return String(localized: "\(name) is no longer paired. Pair it again to continue.")

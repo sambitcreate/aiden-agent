@@ -481,6 +481,7 @@ struct AidenBotSessionChatView: View {
                     for: .sizeChanges
                 )
                 .scrollDismissesKeyboard(.interactively)
+                .gesture(AidenTranscriptTap { composerFocused = false })
                 .aidenReportsTranscriptFit(to: follow)
                 .aidenOnComposerInsetChange { followIfAtEnd(proxy) }
                 .onChange(of: model.approval?.waitId) { _, waitId in

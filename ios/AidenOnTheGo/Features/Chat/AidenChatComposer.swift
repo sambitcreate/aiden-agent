@@ -358,12 +358,24 @@ enum AidenVoiceCaptureLifecyclePolicy {
 
 /// The face of the model chip: the provider, the model and its thinking level.
 struct AidenComposerModelChipLabel: View {
+    /// What the chip shows on one line, in the order it tries them.
+    enum Fit: CaseIterable {
+        /// "Claude Sonnet 4.5 · Medium"
+        case full
+        /// "Claude Sonnet 4.5": the level goes first, since the menu shows it.
+        case model
+        /// Both, each cut short. Only when even the model alone won't fit.
+        case shortened
+    }
+
     @Environment(\.aidenPalette) private var palette
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let provider: AidenProvider?
     let modelID: String?
     let modelLabel: String
     let thinkingLevel: String?
+    /// For tests: draws one face instead of the first that fits.
+    var fit: Fit?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -381,12 +393,16 @@ struct AidenComposerModelChipLabel: View {
                 // One text that wraps, so neither half is cut to a few letters.
                 Text(thinkingLevel.map { "\(modelLabel) · \($0.capitalized)" } ?? modelLabel)
                     .multilineTextAlignment(.leading)
+            } else if let fit {
+                face(fit)
             } else {
-                Text(modelLabel).lineLimit(1)
-                if let thinkingLevel {
-                    // Faded any further, the level would fall under 4.5:1.
-                    Text("· \(thinkingLevel.capitalized)")
-                        .lineLimit(1)
+                // The composer keeps one line below the accessibility sizes, so a
+                // run starting doesn't change its height. Rather than cut both
+                // words, the chip drops the level when the pair won't fit.
+                ViewThatFits(in: .horizontal) {
+                    face(.full)
+                    if thinkingLevel != nil { face(.model) }
+                    face(.shortened)
                 }
             }
             Image(systemName: "chevron.down").font(.caption2)
@@ -394,8 +410,26 @@ struct AidenComposerModelChipLabel: View {
         .font(.caption)
         .foregroundStyle(palette.secondary)
         // At accessibility sizes the chip has its own line to use.
-        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : 180, alignment: .leading)
+        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : AidenComposerLayout.longestChip, alignment: .leading)
         .frame(minHeight: 44)
+    }
+
+    @ViewBuilder
+    private func face(_ fit: Fit) -> some View {
+        switch fit {
+        case .full, .shortened:
+            HStack(spacing: 4) {
+                Text(modelLabel).lineLimit(1)
+                if let thinkingLevel {
+                    // Faded any further, the level would fall under 4.5:1.
+                    Text("· \(thinkingLevel.capitalized)")
+                        .lineLimit(1)
+                }
+            }
+            .fixedSize(horizontal: fit == .full, vertical: false)
+        case .model:
+            Text(modelLabel).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+        }
     }
 }
 

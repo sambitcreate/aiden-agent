@@ -8,6 +8,28 @@ import XCTest
 /// person is doing in it belongs to the conversation.
 @MainActor
 final class AidenComposerSurfaceTests: XCTestCase {
+    /// Below the accessibility sizes the chip keeps one line. At the largest
+    /// standard size it drops the level rather than cut the model short, and at
+    /// the default size it shows both whole.
+    func testTheModelChipDropsTheLevelBeforeCuttingTheModel() throws {
+        func drawn(_ fit: AidenComposerModelChipLabel.Fit?, at size: DynamicTypeSize) throws -> Data {
+            let chip = AidenComposerModelChipLabel(
+                provider: nil, modelID: nil, modelLabel: "Claude Sonnet 4.5", thinkingLevel: "medium", fit: fit
+            )
+            // About what a phone's control row leaves the chip beside the attach,
+            // microphone and send buttons, less the provider icon.
+            .frame(width: 200, alignment: .leading)
+            .dynamicTypeSize(size)
+            let renderer = ImageRenderer(content: chip)
+            renderer.scale = 2
+            return try XCTUnwrap(renderer.uiImage?.pngData(), "The chip drew nothing")
+        }
+
+        XCTAssertEqual(try drawn(nil, at: .xxxLarge), try drawn(.model, at: .xxxLarge), "At XXXL the chip cut the model short")
+        XCTAssertNotEqual(try drawn(.model, at: .xxxLarge), try drawn(.shortened, at: .xxxLarge))
+        XCTAssertEqual(try drawn(nil, at: .large), try drawn(.full, at: .large), "At the default size the level went missing")
+    }
+
 
     override func setUp() {
         super.setUp()

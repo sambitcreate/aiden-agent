@@ -846,6 +846,9 @@ struct AidenBotsHomeView: View {
                         Text(row.bot.purpose)
                             .font(.subheadline)
                             .foregroundStyle(palette.secondary)
+                            // Two lines below the accessibility sizes: on one, the audit finds
+                            // a purpose such as "Finds the signal in a busy week" cut short
+                            // at the larger standard sizes (task-34 fix round 1).
                             .lineLimit(stacked ? nil : 2)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)

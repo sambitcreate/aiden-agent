@@ -200,3 +200,45 @@ struct AidenSessionSheet: View {
         .presentationDetents([.medium, .large])
     }
 }
+
+/// A tap anywhere on a transcript, on a message or between messages, puts the
+/// keyboard away. On iOS 26 a SwiftUI tap gesture on the scroll view never
+/// fires: selectable text and the scroll view take the touch first. A UIKit
+/// recogniser that recognises alongside them and lets the touch through still
+/// sees it, so links, buttons and text selection keep working.
+struct AidenTranscriptTap: UIGestureRecognizerRepresentable {
+    let onTap: () -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UITapGestureRecognizer {
+        let recognizer = UITapGestureRecognizer()
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesEnded = false
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UITapGestureRecognizer, context: Context) {
+        guard recognizer.state == .ended else { return }
+        // Resigning in UIKit too, in case the focus binding is slow to follow.
+        recognizer.view?.window?.endEditing(false)
+        onTap()
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+    }
+}

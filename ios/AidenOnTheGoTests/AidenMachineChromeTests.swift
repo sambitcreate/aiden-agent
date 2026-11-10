@@ -402,6 +402,21 @@ final class AidenMachineChromeTests: XCTestCase {
         )
     }
 
+    /// Without colour the row chip's name would run into the workspace's, so a
+    /// "·" goes between them. With no workspace there is nothing to separate.
+    func testWithoutColourADotSeparatesTheMachineNameFromTheWorkspace() throws {
+        let chip = AidenMachineChip(label: label("Studio Mac"), namesItselfWithoutColor: true)
+        let nameWidth = try drawnWidth(chip, withoutColour: true) - drawnWidth(chip, withoutColour: false)
+
+        let line = AidenInboxRowMachineLine(machine: label("Studio Mac"), detail: "Website")
+        let lineGrowth = try drawnWidth(line, withoutColour: true) - drawnWidth(line, withoutColour: false)
+        XCTAssertGreaterThan(lineGrowth, nameWidth + 4, "Nothing separates the name from the workspace")
+
+        let alone = AidenInboxRowMachineLine(machine: label("Studio Mac"), detail: nil)
+        let aloneGrowth = try drawnWidth(alone, withoutColour: true) - drawnWidth(alone, withoutColour: false)
+        XCTAssertEqual(aloneGrowth, nameWidth, accuracy: 0.5, "A separator with nothing after it")
+    }
+
     /// The fill says which filter is picked. Without colour a checkmark says it too,
     /// and only on the picked one.
     func testWithoutColourThePickedFilterHasACheckmark() throws {
@@ -414,6 +429,22 @@ final class AidenMachineChromeTests: XCTestCase {
 
         let other = AidenMachineFilterChoiceLabel(isSelected: false) { Text("All") }
         XCTAssertEqual(try drawnWidth(other, withoutColour: true), try drawnWidth(other, withoutColour: false))
+    }
+
+    /// In the editor the fill says which symbol is picked. Without colour an outline
+    /// says it too, and only around the picked one.
+    func testWithoutColourThePickedSymbolHasAnOutline() throws {
+        func drawn(_ isSelected: Bool, withoutColour: Bool) throws -> Int {
+            // The outline sits just outside the tile, in the grid's gap.
+            try pixels(of: AidenMachineSymbolTileFace(symbol: .laptop, color: .blue, isSelected: isSelected, tileSize: 44)
+                .frame(width: 60)
+                .padding(AidenSpacing.s)
+                .environment(\._accessibilityDifferentiateWithoutColor, withoutColour)).count
+        }
+
+        XCTAssertGreaterThan(try drawn(true, withoutColour: true), try drawn(true, withoutColour: false),
+                             "Nothing but the fill marks the picked symbol")
+        XCTAssertEqual(try drawn(false, withoutColour: true), try drawn(false, withoutColour: false))
     }
 
     /// Warning and danger chips share a shape. Without colour each gets its own symbol.

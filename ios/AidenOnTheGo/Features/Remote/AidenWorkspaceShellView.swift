@@ -2087,9 +2087,9 @@ private struct AidenOfflineBanner: View {
 extension AidenWorkspacePermission {
     var title: String {
         switch self {
-        case .full: "Full Access"
-        case .ask: "Ask Before Actions"
-        case .none: "No Access"
+        case .full: "Full access"
+        case .ask: "Ask before actions"
+        case .none: "No access"
         }
     }
 

@@ -56,6 +56,11 @@ enum AidenComposerLayout {
     /// Below this a chip no longer names its model, so it moves to its own line.
     static let shortestChip: CGFloat = 72
 
+    /// Room for "Claude Sonnet 4.5 · Medium" whole at the default size, and the
+    /// model alone up to the largest standard size. A run's extra controls take
+    /// width from the chip, which then drops the level first.
+    static let longestChip: CGFloat = 240
+
     /// The glyphs stop here so they stay inside a control that has stopped growing.
     static let largestGlyphSize = DynamicTypeSize.accessibility1
 
@@ -203,7 +208,7 @@ struct AidenComposerSurface<
                 .frame(
                     minWidth: AidenComposerLayout.shortestChip,
                     idealWidth: AidenComposerLayout.shortestChip,
-                    maxWidth: 180,
+                    maxWidth: AidenComposerLayout.longestChip,
                     alignment: .leading
                 )
                 .layoutPriority(1)

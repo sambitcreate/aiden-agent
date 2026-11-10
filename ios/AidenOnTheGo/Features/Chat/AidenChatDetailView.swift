@@ -435,9 +435,7 @@ struct AidenChatDetailView: View {
             .aidenReportsTranscriptFit(to: follow)
             .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
-            .simultaneousGesture(
-                TapGesture().onEnded { composerIsFocused = false }
-            )
+            .gesture(AidenTranscriptTap { composerIsFocused = false })
             .background {
                 // A leaf reads the per-tick trigger, so a reveal tick re-snaps
                 // a following reader without re-running this screen.

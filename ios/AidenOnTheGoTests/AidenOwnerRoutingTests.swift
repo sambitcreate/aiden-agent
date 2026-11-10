@@ -1330,6 +1330,21 @@ final class AidenOwnerRoutingTests: XCTestCase {
         )
     }
 
+    /// Two machines with one name read as the Inbox shows them, suffix and all.
+    func testTheMessageNamesASharedNameAsTheInboxDoes() {
+        coordinator.machinePreferences.update("studio") { $0.nameOverride = "Laptop" }
+        let labels = AidenMachineLabel.labels(
+            connections: coordinator.hosts.ordered,
+            preferences: coordinator.machinePreferences
+        )
+
+        XCTAssertEqual(labels["laptop"]?.name, "Laptop (ptop)")
+        XCTAssertEqual(
+            coordinator.noLongerPairedMessage(for: "laptop"),
+            "Laptop (ptop) is no longer paired. Pair it again to continue."
+        )
+    }
+
     func testALinkThatNamesNoMachineOpensOnTheSelectedOne() async throws {
         let link = try XCTUnwrap(AidenDeepLink.request(from: try XCTUnwrap(AidenDeepLink.botChatURL(instanceId: nil, botId: "b1"))))
 

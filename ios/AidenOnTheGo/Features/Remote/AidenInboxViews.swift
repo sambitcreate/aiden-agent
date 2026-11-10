@@ -95,6 +95,37 @@ struct AidenInboxRowStatus: Equatable {
 }
 
 /// One compact Inbox row: title, workspace, status and wait.
+/// The chip and the workspace under a row's title. Without colour the chip shows
+/// the machine's name, so a "·" keeps it from running into the workspace's.
+struct AidenInboxRowMachineLine: View {
+    let machine: AidenMachineLabel?
+    let detail: String?
+    var isStacked = false
+
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+
+    var body: some View {
+        HStack(spacing: AidenSpacing.xs) {
+            if let machine {
+                AidenMachineChip(label: machine, namesItselfWithoutColor: true)
+                if differentiateWithoutColor, detail != nil {
+                    Text(verbatim: "·")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .accessibilityHidden(true)
+                }
+            }
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(isStacked ? 2 : 1)
+            }
+        }
+    }
+}
+
 struct AidenInboxRowView: View {
     let row: AidenInboxProjection.Row
     let section: AidenInboxSection
@@ -163,15 +194,7 @@ struct AidenInboxRowView: View {
                 .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
                 .lineLimit(isStacked ? 3 : 1)
             if machine != nil || detail != nil {
-                HStack(spacing: AidenSpacing.xs) {
-                    if let machine { AidenMachineChip(label: machine, namesItselfWithoutColor: true) }
-                    if let detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(palette.secondary)
-                            .lineLimit(isStacked ? 2 : 1)
-                    }
-                }
+                AidenInboxRowMachineLine(machine: machine, detail: detail, isStacked: isStacked)
             }
         }
     }
@@ -324,9 +347,10 @@ struct AidenInboxSectionHeader: View {
             Text(section.title)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(palette.secondary)
-            // Faded any further, the count would fall under 4.5:1.
+            // In the title's weight: a lone regular-weight digit read under 4.5:1
+            // in the iPad layout's audit, in the same colour as the title.
             Text("\(count)")
-                .font(.footnote.monospacedDigit())
+                .font(.footnote.weight(.semibold).monospacedDigit())
                 .foregroundStyle(palette.secondary)
         }
         .padding(.horizontal, 24)
