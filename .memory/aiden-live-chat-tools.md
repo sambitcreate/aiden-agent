@@ -1,6 +1,6 @@
 # Aiden Live chat tools (voice upgrade PR 2)
 
-- Branch `claude/project-thread-kc0y85-live-chat` (2026-11-06). Plan: `docs/plans/aiden-live-voice-upgrade.md` (PR 2 section).
+- Merged in #787 (2026-11-10). Plan: `docs/plans/completed/aiden-live-voice-upgrade.md` (PR 2 section).
 - Five tools: `read_open_chat`, `send_to_open_chat`, `stop_open_chat`, `find_and_open_chat`, `start_new_chat`. Main (`main/services/gemini-live/live-chat-tools.ts`) declares them, validates arguments and forwards to the window through the renderer tool broker; the factory returns null when `aidenLiveChatAccess === false` or `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0`.
 - The window side: `LiveChatToolsHost` (mounted in root-view) registers handlers on `liveSessionBus`; ChatPane registers its controller via `useLiveChatController` into `liveChatControl`, so sends reuse `handleSend` / `queueMessage` / `admitSteer` / `handleStop`. `start_new_chat` waits up to 5 s for an `isDraft` controller in the target workspace.
 - Shared rules (limits, fixed error codes, transcript shaping, title matching, note text) live in `renderer/shared/live-chat-tools.ts`. `auto` sends when idle, steers when the run can take it, else queues.

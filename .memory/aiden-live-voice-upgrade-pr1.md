@@ -1,6 +1,6 @@
 # Aiden Live voice upgrade, PR 1 (2026-11-06)
 
-Plan: `docs/plans/aiden-live-voice-upgrade.md`. PR 1 is the ribbon pill, voice, speaking speed and goodbye.
+Merged in #785 (2026-11-10); PRs 2-4 merged as #787, #789 and #790. Plan: `docs/plans/completed/aiden-live-voice-upgrade.md`. PR 1 is the ribbon pill, voice, speaking speed and goodbye.
 
 ## Where things live
 - Ribbon UI: `renderer/components/assistant/live-ribbon.tsx` (states, menu), `live-ribbon-wave.tsx` (canvas), `use-live-ribbon-placement.ts` (drag, per-window offset in localStorage), `live-ribbon-session.ts` (end_session renderer tool and the exact end phrase). Mounted by `assistant-dock.tsx` while `live.active`.
