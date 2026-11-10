@@ -472,6 +472,33 @@ test("only a card that takes approval keys answers them, and one that can't allo
   assert.deepEqual(denyOnly.decisions, [["deny", undefined]]);
 });
 
+test("while Aiden Live is on an approval, the card says whether to speak or tap", () => {
+  const pending: ApprovalPrompt = {
+    approvalId: "approval-1",
+    toolCallId: "call-1",
+    toolName: "run_command",
+    summary: "Run command: npm test",
+  };
+  const view = render(
+    <TooltipProvider>
+      <ChatApprovalCard pending={pending} deciding={false} onDecide={() => undefined} liveVoice="voice" />
+    </TooltipProvider>,
+  );
+  assert.equal(screen.getByRole("note").textContent, "Live is listening. Say “allow” or “deny”.");
+  view.rerender(
+    <TooltipProvider>
+      <ChatApprovalCard pending={pending} deciding={false} onDecide={() => undefined} liveVoice="tap" />
+    </TooltipProvider>,
+  );
+  assert.equal(screen.getByRole("note").textContent, "Live can’t answer this one. Tap to choose.");
+  view.rerender(
+    <TooltipProvider>
+      <ChatApprovalCard pending={pending} deciding={false} onDecide={() => undefined} />
+    </TooltipProvider>,
+  );
+  assert.ok(!screen.queryByRole("note"), "no hint when Live is not on it");
+});
+
 /** A hook the agent proposed, as the hooks tool hands it to the card. */
 function hookProposal(overrides: Partial<HookProposalApprovalDetails> = {}): HookProposalApprovalDetails {
   return {

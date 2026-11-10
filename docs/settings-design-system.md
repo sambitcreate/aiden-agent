@@ -85,6 +85,8 @@ While Live is on, a "Voice and look" group (`aiden-live-voice-settings.tsx`) fol
 
 A "Chats" group follows Voice and look with one trailing switch, **Let Live use the open chat** (`AppSettings.aidenLiveChatAccess`, omitted means on; `renderer/components/settings/live-chat-access-settings.tsx`). Off, every Live chat tool answers `chat_access_off` and no spoken chat notes are sent. The first time Live uses a chat tool, a toast says "Live can read and send to your chats. You can turn this off in Settings." with a Settings action; `aidenLiveChatAccessNoticeShown` keeps it from showing again.
 
+An "Approvals" group (`live-voice-approval-settings.tsx`) follows Chats and has one trailing switch, **Answer approvals by voice** (`aidenLiveVoiceApprovals`, omitted means on), whose description names the 11 phrase languages. While it is on, a **What to say** `SettingsDisclosure` under it lists the allow-once and deny phrases for each language from `liveVoicePhrases`.
+
 ## Page notes
 
 - **Text to Speech** has three groups: Setup, Voice and delivery, and Privacy and storage.

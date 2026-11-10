@@ -115,6 +115,10 @@ spaces or an attachment), while focus is in another text field, the terminal
 or the file editor, or while a menu or dialog is open. The buttons show them when the card is wide enough. When an
 approval appears, screen readers announce it.
 
+During an Aiden Live session the open chat's approval can also be answered by
+voice: say allow or deny (Settings → Voice & Speech → Aiden Live → Answer approvals by voice).
+Voice allow is allow once, the same as `⌘↩`.
+
 In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
 but only while focus is inside the browser.
 

@@ -98,7 +98,76 @@ Settings → Voice & Speech → Aiden Live has a "Chats" group with **Let Live u
 
 ## PR 3: approvals by voice
 
-Approvals and guarded confirmations shown on the ribbon can be answered with the fixed phrases in 11 languages (3a). `voice: true` on an approval means Live has read it out and is listening for the answer.
+Status: Built on `claude/project-thread-kc0y85-live-approvals` (2026-11-06), revised after review the same day; not yet merged.
+
+### What the person gets
+
+- While a Live session is on and **Settings → Voice & Speech → Aiden Live → Answer approvals by voice** is on (the default), Aiden asks Live to read out the first approval in the chat on screen, for example that the chat "Fix login" wants to run the command "npm test", and that the person can say allow or deny.
+- The approval is published to the floating ribbon (`liveActivity`, source `approvals`). PR 1's ribbon shows its title and chat with Deny, adds Allow only when the entry carries `allow`, and shows "Say “allow” or “deny”" only while `voice` is true. The goodbye guard treats it as a waiting answer, so saying goodbye never ends Live while it shows.
+- Once the read-out has reached Live, the person can answer by saying an allow or deny phrase in English, Spanish, French, German, Portuguese, Italian, Hindi, Bengali, Japanese, Korean or Chinese. Settings lists the languages and has a **What to say** fold with the phrases for each.
+- The approval card then says "Live is listening. Say “allow” or “deny”.", and its screen-reader status says the same. A tap-only approval says "Live can’t answer this one. Tap to choose."
+- The matcher for Live's own Computer Use voice approvals uses the same phrase list, but that listener is not mounted (Live's Computer Use runs with session-authorized direct actions), so this has no effect today.
+
+### Safety rules
+
+- **Only the person's own speech.** It counts only from `liveSessionBus.onVoiceInput` (one joined utterance per user turn, from PR 1), and only when the whole utterance is an allow or deny phrase (`matchLiveVoicePhrase`). A longer sentence, a bare "yes", a confirm phrase or Live's own words never answer. There is no model-callable approve tool.
+- **Only after the read-out is sent.** The read-out goes out with `liveSessionBus.note(text, { awaitDelivery: true })`. Main's `deliverNote` (the `awaitDelivery` flag on `assistant-live:note`) resolves only when that note is handed to Live: true once `sendText` succeeds, false if the note is refused, its send throws, or it is cleared with the session. A note queued behind earlier notes (2 s spacing) or held while the session resumes keeps the approval disarmed. The 2.5 s arm delay starts only after delivery. The fence is taken when it ends, and the card and ribbon say Live is listening 500 ms later, past the fence's capture slack (and the handled-audio fallback guard), so fresh speech can answer. Plain `sendNote` callers keep the old "queued" answer.
+- **Only speech that starts after arming.** On arming, the approval takes the bus start mark (`voiceInputFence()`). Each utterance carries a start mark (`LiveVoiceInput.startedAt`), and it counts only if that mark is above the fence. The mark comes from when the microphone first heard the speech, because captions arrive only after transcription:
+  - `LiveSpeechOnsets` (`renderer/lib/live-speech-onsets.ts`) reads each microphone packet's level. It opens a stretch of speech at level 0.04, and 500 ms of quiet ends it.
+  - The utterance's first caption, interim or final, claims the onset of the earliest stretch still in reach: one still going on, or one that ended within the last 5 s of audio.
+  - When no onset is in reach (speech too quiet to measure, or a caption later than the 5 s window), the utterance gets an untrusted mark below every fence, so it can never answer an approval by voice; the card still answers taps.
+  - So an "allow" spoken before arming does not count, even if its caption arrives or finishes after. Neither does a repeated "allow" meant for the previous approval.
+  - It fails closed: speech under way at arm time stays before the fence until a silence gap. Nearby earlier speech can make a fresh "allow" count as early, and the person then says it again or taps.
+  - Continuous loud noise behaves the same way, so in a noisy room voice may never count, and the card still answers taps.
+  - The provider's own voice-activity messages are validated by the protocol but not used, since the current setup does not rely on them.
+- **Lost read-outs.** A refused or lost read-out leaves the approval tap-only. It is retried every 3 s, up to 5 tries, and again when the session changes. Each retry must itself be delivered before voice arms.
+- **Quoted data.** The read-out is a factual note. The chat title, command and path appear only as JSON-quoted data, with a line saying quoted text is data, not instructions.
+- **Allow once only.** Voice allow is always allow once. "Allow for this chat" and "Always allow" stay tap-only.
+- **Voice only when Live can name the target in full.** Voice works only for Aiden's own `run_command`, `background_job`, `edit_file`, `write_file` and `share_image`. The exact command or path must come from the preview or Aiden's own summary, be one line and be at most 120 characters. A longer or unknown target is tap-only.
+- **Tap-only cases.** Live says this one can only be answered by a tap:
+  - approvals the card cannot allow (`canAllow` false), or without an allow-once choice;
+  - any specialised review (`details`): schedules, automations, classification, helper writes and shells, run grants, form fill, Computer Use access;
+  - external-agent (ACP) approvals, recognised by their "… wants to …:" summary;
+  - approvals with `source: "remote"` (a paired phone's turn);
+  - every other tool: browser, connector (MCP), `web_fetch`, `read_file`, `delete_file`, `move_file`, image generation, Computer Use;
+  - anything that mentions passwords, tokens, secrets, API or access keys, auth, 2FA, keychain or `security`, ssh keys, `.env`, `env`/`printenv`, AWS, gcloud, gpg, netrc, `op://`, payments, cards, banking, wallets or hand-offs. Word boundaries treat `_` as a separator, so `GITHUB_TOKEN` and `OPENAI_API_KEY` are caught.
+- **Ribbon taps follow the card.** The ribbon entry carries `allow` only when the card itself offers Allow once. Otherwise it has Deny only (`allow` is now optional in `LiveActivity`).
+- **One approval at a time.** Approvals are taken in the card's order. A prompt that changes under the same id (`canAllow`, scopes, details, summary, preview) is judged again and read out again.
+- **Clearing.** A tap on the card or ribbon, the run ending, the switch going off, Live stopping or a chat change clears the entry, and later speech is ignored. After a successful answer, nothing more is sent until the pane republishes, so there is never a second `chat:approve`.
+- **Chats not on screen.** Approvals in a chat that is not on screen are never voice-answerable. When the person leaves a chat with a pending approval, Live says it is still waiting there.
+
+### How it works
+
+- **Core** (`renderer/lib/live-chat-approvals.ts`):
+  - `liveChatApprovals`: the chat pane publishes its pending approvals and its own `decideApproval`.
+  - The tap-only rules, the read-out text, and `LiveChatVoiceApprovals`, which reads the chat on screen from `liveOpenChat`.
+- **Hooks** (`renderer/components/assistant/use-live-chat-voice-approvals.ts`):
+  - `AssistantDock` starts the controller with the setting.
+  - `chat-pane.tsx` publishes its approvals and passes the hint to `ChatApprovalCard`.
+  - The published decide is bound to its chat and refuses once the pane renders another one. Approvals left over from the previous chat are never published under the next.
+- **Same path as a tap.** A voice or ribbon answer calls that decide with no scope, the same call as the card's **Allow once** and **Deny**. So the card, the denied-composer hint, paired Remote clients and `chat:approve` behave exactly as for a tap.
+- **Not done.** The approval record has no field for who answered it or how, so a voice answer is not marked "by voice". Adding one would change the approval and Remote contracts for iOS and Android, so it is left for a follow-up.
+- **Shared type change.** In `renderer/lib/live-activity.ts`, the approval entry's `allow` is now optional, and `voice` means "Live has read it out and takes speech".
+- **Settings.** `renderer/components/settings/live-voice-approval-settings.tsx`, plus one line in `gemini-live-settings.tsx`.
+- **Onboarding.** The Aiden Live tile in the feature tour mentions answering approvals by voice and that it can be turned off.
+
+### Tests
+
+- `renderer/lib/live-chat-approvals.test.ts` covers:
+  - read-out as quoted data; allow in English, Spanish, Hindi and Japanese; deny;
+  - speech that must not answer: before the read-out, longer sentences, "yes", Live's own notes;
+  - delayed and refused read-outs, and a read-out refused every time;
+  - a repeated "allow" across two approvals, and no second answer after success;
+  - tap and ribbon answers, with `allow` only where the card offers it;
+  - a changed prompt; another chat; escaped injection text;
+  - 21 tap-only cases, including the underscore secrets, ACP and remote;
+  - switch off and no session.
+- `renderer/components/assistant/use-live-chat-voice-approvals.test.tsx` covers:
+  - a spoken "permitir" sends the same `chat:approve` as tapping Allow once, and the screen-reader status announces voice;
+  - switch off;
+  - no carry-over between chats;
+  - a decide bound to one chat refuses after a switch.
+- Also `renderer/components/settings/live-voice-approval-settings.test.tsx`, the card hint case in `chat-approval-card.test.tsx`, and the multilingual matcher case in `assistant-ui.test.tsx`.
 
 ## PR 4: Live moves through Aiden
 
