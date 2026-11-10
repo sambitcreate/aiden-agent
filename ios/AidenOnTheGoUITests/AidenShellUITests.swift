@@ -1221,6 +1221,61 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// A message's time and Copy show only once it is tapped: one message at a
+    /// time, and a tap elsewhere in the transcript hides it again.
+    func testAMessageShowsItsTimeAndCopyOnlyOnTap() {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        hideOverlaySidebar(in: app)
+        chat.tap()
+        let question = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Where do we stand?")).firstMatch
+        let reply = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+            "I found the cause", "Here is a first pass", "The review had three themes"
+        )).firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 10), "The chat did not open")
+        XCTAssertTrue(reply.waitForExistence(timeout: 5), "The chat has no reply")
+        let copyQuestion = app.buttons["Copy message"].firstMatch
+        let copyReply = app.buttons["Copy response"].firstMatch
+        XCTAssertFalse(copyQuestion.exists, "A footer showed before any tap")
+        XCTAssertFalse(copyReply.exists, "A footer showed before any tap")
+        // A drag on a message scrolls; it never shows the footer.
+        reply.swipeDown()
+        XCTAssertFalse(copyReply.waitForExistence(timeout: 1), "A drag on the reply showed its footer")
+
+        question.tap()
+        XCTAssertTrue(copyQuestion.waitForExistence(timeout: 3), "A tap on the question didn't show its footer")
+        XCTAssertFalse(copyReply.exists)
+
+        reply.tap()
+        XCTAssertTrue(copyReply.waitForExistence(timeout: 3), "A tap on the reply didn't show its footer")
+        XCTAssertTrue(waitForAbsence(copyQuestion), "Two footers showed at once")
+        AidenStateMatrix.capture("chat-footer-on-tap", in: self)
+
+        reply.tap()
+        XCTAssertTrue(waitForAbsence(copyReply), "A second tap on the reply left its footer")
+
+        reply.tap()
+        XCTAssertTrue(copyReply.waitForExistence(timeout: 3))
+        // Somewhere in the transcript clear of both messages and the footer.
+        let window = app.windows.firstMatch
+        let field = composer(in: app).frame
+        let below = reply.frame.maxY + 56
+        let y = field.minY - below > 40 ? below : question.frame.minY - 24
+        window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: window.frame.midX, dy: y))
+            .tap()
+        XCTAssertTrue(waitForAbsence(copyReply), "A tap elsewhere in the transcript left the footer")
+        XCTAssertFalse(copyQuestion.exists)
+        app.terminate()
+    }
+
+    private func waitForAbsence(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        return XCTWaiter.wait(for: [gone], timeout: timeout) == .completed
+    }
+
     /// The same in a Bot's chat.
     func testTheKeyboardGoesAwayInABotChatAndKeepsTheDraft() {
         let app = AidenStateMatrix.launch(scenario: .busy)

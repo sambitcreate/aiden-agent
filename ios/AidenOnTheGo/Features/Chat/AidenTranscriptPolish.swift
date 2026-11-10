@@ -128,11 +128,118 @@ struct AidenSelectTextRequest: Identifiable {
     let text: String
 }
 
-/// Compact footer under each settled message: timestamp, the completed turn's
-/// "Worked for" duration, copy, and (latest reply only) Read Aloud.
+/// Which settled message shows its footer. Footers are hidden until a message
+/// is tapped; a second tap on it, or a tap anywhere else in the transcript,
+/// hides it again, and only one shows at a time. A message being read aloud
+/// keeps its footer, so Stop stays in reach.
+///
+/// The transcript's own tap (`AidenTranscriptTap`, for the keyboard) also sees a
+/// tap on a message, in either order. It asks after a short beat and does
+/// nothing if a message, or a footer button, took the same tap.
+struct AidenMessageFooterReveal: Equatable {
+    /// How close a transcript tap and a message tap are to count as one.
+    static let sameTap: TimeInterval = 0.35
+
+    private(set) var shownID: String?
+    private var messageTouchedAt = Date.distantPast
+
+    func shows(_ messageID: String, readingAloud: Bool = false) -> Bool {
+        readingAloud || shownID == messageID
+    }
+
+    /// A tap on a message: shows its footer, or hides it if it already shows.
+    mutating func tapMessage(_ messageID: String, at now: Date = .now) {
+        shownID = shownID == messageID ? nil : messageID
+        messageTouchedAt = now
+    }
+
+    /// A tap on a shown footer's own button, which leaves the footer up.
+    mutating func touchFooter(at now: Date = .now) {
+        messageTouchedAt = now
+    }
+
+    /// A tap anywhere in the transcript. Hides the footer unless a message or
+    /// footer took the same tap.
+    mutating func tapTranscript(at now: Date = .now) {
+        guard abs(now.timeIntervalSince(messageTouchedAt)) > Self.sameTap else { return }
+        shownID = nil
+    }
+}
+
+/// A tap on one message, which shows its footer. A UIKit recogniser like
+/// `AidenTranscriptTap`, because on iOS 26 a SwiftUI tap on selectable text
+/// never fires. It lets the touch through, so links, Copy buttons, text
+/// selection and the long-press menu keep working, and it waits for the
+/// transcript's scroll to fail, so a drag or a fling never counts as a tap.
+struct AidenMessageTap: UIGestureRecognizerRepresentable {
+    /// How far the finger may travel and still tap.
+    static let slop: CGFloat = 10
+
+    let onTap: () -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UITapGestureRecognizer {
+        let recognizer = UITapGestureRecognizer()
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesEnded = false
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UITapGestureRecognizer, context: Context) {
+        guard recognizer.state == .ended else { return }
+        let end = recognizer.location(in: nil)
+        if let start = context.coordinator.touchStart,
+           hypot(end.x - start.x, end.y - start.y) > Self.slop {
+            return
+        }
+        onTap()
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var touchStart: CGPoint?
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            touchStart = touch.location(in: nil)
+            return true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            otherGestureRecognizer is UIPanGestureRecognizer && otherGestureRecognizer.view is UIScrollView
+        }
+    }
+}
+
+/// What VoiceOver hears for a message's footer without tapping for it: the
+/// time it was sent, and how long the turn worked.
+enum AidenMessageFooterAccessibility {
+    static func value(for message: AidenChatMessage) -> String {
+        [
+            AidenMessageTimestamp.accessibilityLabel(for: message.createdAt),
+            AidenTurnElapsed.workedForLabel(for: message),
+        ]
+        .compactMap { $0 }
+        .joined(separator: ", ")
+    }
+}
+
+/// Compact footer under a settled message: timestamp, the completed turn's
+/// "Worked for" duration, copy, and (latest reply only) Read Aloud. Shown on
+/// tap (`AidenMessageFooterReveal`).
 struct AidenMessageFooter: View {
-    /// The live reply reserves this height for its "Working for" row, so the
-    /// settled footer replaces it without moving the reply.
+    /// The footer row's height, which the live reply's "Working for" row shares
+    /// while the turn runs.
     static let minimumHeight: CGFloat = 32
 
     @Environment(\.aidenPalette) private var palette
@@ -140,6 +247,10 @@ struct AidenMessageFooter: View {
     let copyText: String?
     var readAloudAction: (() -> Void)?
     var readAloudActive = false
+    /// A tap on the footer, its buttons included, so the transcript's own tap
+    /// doesn't hide the footer under the finger. A UIKit recogniser like the
+    /// transcript's, so both see the same touch and the buttons still get it.
+    var onTouch: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
@@ -176,6 +287,45 @@ struct AidenMessageFooter: View {
         .foregroundStyle(palette.secondary)
         .buttonStyle(.borderless)
         .frame(minHeight: Self.minimumHeight)
+        .contentShape(Rectangle())
+        .gesture(AidenTranscriptTap(onTap: onTouch))
+    }
+}
+
+/// The VoiceOver actions on a settled message, in order. The footer's Copy and
+/// Read Aloud are here too, so VoiceOver reaches them without the tap that
+/// shows the footer.
+enum AidenMessageAccessibilityAction: Hashable {
+    case copy
+    case selectText
+    case askAbout
+    case readAloud
+    case stopReadingAloud
+
+    static func actions(
+        canCopy: Bool,
+        canAskAbout: Bool,
+        canReadAloud: Bool,
+        readAloudActive: Bool
+    ) -> [Self] {
+        var actions: [Self] = []
+        if canCopy {
+            actions.append(.copy)
+            actions.append(.selectText)
+            if canAskAbout { actions.append(.askAbout) }
+        }
+        if canReadAloud { actions.append(readAloudActive ? .stopReadingAloud : .readAloud) }
+        return actions
+    }
+
+    func title(role: AidenChatRole) -> String {
+        switch self {
+        case .copy: role == .user ? "Copy message" : "Copy response"
+        case .selectText: "Select text"
+        case .askAbout: "Ask about this"
+        case .readAloud: "Read response aloud"
+        case .stopReadingAloud: "Stop reading aloud"
+        }
     }
 }
 

@@ -63,6 +63,8 @@ struct AidenChatDetailView: View {
     @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
     @State private var follow = AidenTranscriptFollowController()
+    /// The one settled message whose footer a tap has shown.
+    @State private var footerReveal = AidenMessageFooterReveal()
     @State private var attachmentPicker = AidenAttachmentPickerState()
     @State private var isFileImporterPresented = false
     @State private var attachmentButtonCenter: CGPoint?
@@ -434,7 +436,14 @@ struct AidenChatDetailView: View {
             .aidenReportsTranscriptFit(to: follow)
             .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
-            .gesture(AidenTranscriptTap { composerSession.putAwayKeyboard() })
+            .gesture(AidenTranscriptTap {
+                composerSession.putAwayKeyboard()
+                // A beat later, so a message or footer that took the same tap
+                // has had its say, in whichever order UIKit asked them.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    revealFooter { $0.tapTranscript() }
+                }
+            })
             .background {
                 // A leaf reads the per-tick trigger, so a reveal tick re-snaps
                 // a following reader without re-running this screen.
@@ -496,6 +505,9 @@ struct AidenChatDetailView: View {
                 presentationStyle: presentationStyle,
                 readAloudCandidateID: model.readAloudCandidateID,
                 readAloudActiveID: model.readAloud.activeMessageID,
+                revealedFooterID: footerReveal.shownID,
+                onTapMessage: { messageID in revealFooter { $0.tapMessage(messageID) } },
+                onTouchFooter: { footerReveal.touchFooter() },
                 renderIDs: model.messageRenderIDs,
                 imageArrivalRevealIDs: model.imageArrivalRevealGenerationIDs,
                 appControlsAvailable: model.canReadAppControls,
@@ -525,6 +537,17 @@ struct AidenChatDetailView: View {
         }
         .padding(.horizontal)
         .padding(.top, 20)
+    }
+
+    /// Shows or hides a message footer with a short fade, or at once under Reduce Motion.
+    private func revealFooter(_ change: (inout AidenMessageFooterReveal) -> Void) {
+        var next = footerReveal
+        change(&next)
+        guard next.shownID != footerReveal.shownID else {
+            footerReveal = next
+            return
+        }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { footerReveal = next }
     }
 
     private func performFork(messageID: String, action: AidenChatForkMenuAction, focus: String = "") {

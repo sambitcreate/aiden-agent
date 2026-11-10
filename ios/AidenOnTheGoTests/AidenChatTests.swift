@@ -7886,6 +7886,127 @@ final class AidenChatTests: XCTestCase {
         )))
     }
 
+    /// Footers are hidden until a message is tapped. A second tap, or a tap
+    /// anywhere else, hides it; one message shows its footer at a time.
+    func testAMessageFooterShowsOnTapOneAtATime() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var reveal = AidenMessageFooterReveal()
+        XCTAssertNil(reveal.shownID, "every footer starts hidden")
+        XCTAssertFalse(reveal.shows("u"))
+        XCTAssertFalse(reveal.shows("a"))
+
+        reveal.tapMessage("u", at: start)
+        XCTAssertTrue(reveal.shows("u"), "a tap on a message shows its footer")
+        XCTAssertFalse(reveal.shows("a"))
+
+        // The transcript's own recogniser sees the same tap, a beat later; it
+        // must not hide the footer the tap just showed.
+        reveal.tapTranscript(at: start.addingTimeInterval(0.05))
+        XCTAssertTrue(reveal.shows("u"), "the same tap reaching the transcript leaves the footer")
+
+        reveal.tapMessage("a", at: start.addingTimeInterval(2))
+        XCTAssertTrue(reveal.shows("a"), "a tap on another message moves the footer there")
+        XCTAssertFalse(reveal.shows("u"), "only one message shows its footer at a time")
+
+        reveal.tapMessage("a", at: start.addingTimeInterval(4))
+        XCTAssertNil(reveal.shownID, "a second tap on the same message hides it")
+
+        reveal.tapMessage("a", at: start.addingTimeInterval(6))
+        reveal.tapTranscript(at: start.addingTimeInterval(8))
+        XCTAssertNil(reveal.shownID, "a tap anywhere else in the transcript hides it")
+
+        // A tap on the shown footer's own buttons keeps it up.
+        reveal.tapMessage("a", at: start.addingTimeInterval(10))
+        reveal.touchFooter(at: start.addingTimeInterval(12))
+        reveal.tapTranscript(at: start.addingTimeInterval(12.05))
+        XCTAssertTrue(reveal.shows("a"), "Copy or Read Aloud in the footer doesn't hide it")
+        // The transcript tap may arrive first, before the footer's.
+        reveal.tapTranscript(at: start.addingTimeInterval(14))
+        XCTAssertNil(reveal.shownID)
+        reveal.tapMessage("u", at: start.addingTimeInterval(16))
+        XCTAssertTrue(reveal.shows("u"))
+    }
+
+    /// A reply being read aloud keeps its footer, so Stop stays in reach.
+    func testAMessageReadingAloudKeepsItsFooter() {
+        var reveal = AidenMessageFooterReveal()
+        XCTAssertTrue(reveal.shows("a", readingAloud: true))
+        reveal.tapMessage("u")
+        XCTAssertTrue(reveal.shows("a", readingAloud: true), "showing another footer leaves the reading one up")
+        reveal.tapTranscript(at: .distantFuture)
+        XCTAssertTrue(reveal.shows("a", readingAloud: true), "a tap elsewhere leaves the reading one up")
+        XCTAssertFalse(reveal.shows("a", readingAloud: false))
+    }
+
+    /// The hidden footer takes no room; a tap, or Read Aloud, gives it its row.
+    @MainActor
+    func testAHiddenFooterTakesNoRoomUntilTappedOrReadingAloud() {
+        let message = AidenChatMessage(
+            id: "a", role: .assistant, text: "Here is what changed.",
+            timeline: polishTimeline(status: .completed, startedAt: 1_000_000, finishedAt: 1_042_000),
+            createdAt: Date()
+        )
+        func height(revealed: Bool, readingAloud: Bool) -> CGFloat {
+            let view = AidenMessageView(
+                message: message,
+                presentationStyle: .workspace,
+                loadAttachmentImage: { _ in nil },
+                readAloudAction: {},
+                readAloudActive: readingAloud,
+                footerRevealed: revealed
+            )
+            .environment(AidenHapticCenter())
+            return UIHostingController(rootView: view)
+                .sizeThatFits(in: CGSize(width: 390, height: CGFloat.greatestFiniteMagnitude)).height
+        }
+        let hidden = height(revealed: false, readingAloud: false)
+        let shown = height(revealed: true, readingAloud: false)
+        XCTAssertGreaterThanOrEqual(
+            shown - hidden, AidenMessageFooter.minimumHeight,
+            "the footer is hidden by default and a tap gives it its row"
+        )
+        XCTAssertEqual(height(revealed: false, readingAloud: true), shown, accuracy: 0.5, "Read Aloud keeps the footer shown")
+    }
+
+    /// VoiceOver hears the footer's time and "Worked for" as the message's
+    /// value, and reaches Copy and Read Aloud as actions, with no tap.
+    func testVoiceOverReachesTheFooterWithoutATap() {
+        let sent = Date(timeIntervalSince1970: 1_787_079_660)
+        let reply = AidenChatMessage(
+            id: "a", role: .assistant, text: "Done",
+            timeline: polishTimeline(status: .completed, startedAt: 1_787_079_660_000, finishedAt: 1_787_079_702_000),
+            createdAt: sent
+        )
+        XCTAssertEqual(
+            AidenMessageFooterAccessibility.value(for: reply),
+            AidenMessageTimestamp.accessibilityLabel(for: sent) + ", Worked for 42s"
+        )
+        let question = AidenChatMessage(id: "u", role: .user, text: "Hi", createdAt: sent)
+        XCTAssertEqual(
+            AidenMessageFooterAccessibility.value(for: question),
+            AidenMessageTimestamp.accessibilityLabel(for: sent)
+        )
+        XCTAssertTrue(AidenMessageFooterAccessibility.value(for: question).hasPrefix("Sent"))
+
+        let readable = AidenMessageAccessibilityAction.actions(
+            canCopy: true, canAskAbout: true, canReadAloud: true, readAloudActive: false
+        )
+        XCTAssertEqual(readable, [.copy, .selectText, .askAbout, .readAloud])
+        XCTAssertEqual(
+            readable.map { $0.title(role: .assistant) },
+            ["Copy response", "Select text", "Ask about this", "Read response aloud"]
+        )
+        let reading = AidenMessageAccessibilityAction.actions(
+            canCopy: true, canAskAbout: false, canReadAloud: true, readAloudActive: true
+        )
+        XCTAssertEqual(reading.map { $0.title(role: .assistant) }, ["Copy response", "Select text", "Stop reading aloud"])
+        XCTAssertEqual(
+            AidenMessageAccessibilityAction.actions(canCopy: true, canAskAbout: false, canReadAloud: false, readAloudActive: false)
+                .map { $0.title(role: .user) },
+            ["Copy message", "Select text"]
+        )
+    }
+
     func testLiveWorkingTimerStartsAtTheTimelineOrTheTurnsUserMessage() {
         let userSent = Date(timeIntervalSince1970: 1_000)
         let messages = [

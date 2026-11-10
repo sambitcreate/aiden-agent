@@ -3,6 +3,7 @@ import UIKit
 
 struct AidenLiveResponseView: View {
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
@@ -75,9 +76,10 @@ struct AidenLiveResponseView: View {
         let chronologicalRows = chronologicalRows
         let visibleText = botReply?.finalText ?? model.liveText
         let visibleActivitySteps = chronologicalRows == nil ? visibleActivitySteps : []
-        // Laid out like a settled message (content, then a footer row), so
-        // the hand-off to the settled reply swaps the footer's text in place
-        // instead of moving the reply.
+        // Laid out like a settled message: content, then, while the run goes
+        // on, a "Working for" row at the footer's height. A settled message
+        // hides its footer until tapped, so the row folds away when the run
+        // ends and the hand-off to the settled reply doesn't move it.
         VStack(alignment: .leading, spacing: 2) {
             content(
                 botReply: botReply,
@@ -85,18 +87,21 @@ struct AidenLiveResponseView: View {
                 visibleText: visibleText,
                 visibleActivitySteps: visibleActivitySteps
             )
-            liveFooter
+            if model.isStreaming {
+                liveFooter
+                    .transition(.opacity)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A short fold the bottom scroll anchor follows, so a reader at the
+        // latest message stays there and nobody sees a blank row go.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.isStreaming)
     }
 
-    /// "Working for" sits where the settled footer will, at the footer's
-    /// height. Once the run ends the row stays, empty, until the settled
-    /// reply (whose footer shows "Worked for") replaces this view.
+    /// "Working for" sits where the settled footer would, at the footer's height.
     private var liveFooter: some View {
         HStack(spacing: 0) {
-            if model.isStreaming,
-               let start = AidenTurnElapsed.liveStart(
+            if let start = AidenTurnElapsed.liveStart(
                    timeline: model.activityTimeline,
                    messages: model.chat.messages
                ) {

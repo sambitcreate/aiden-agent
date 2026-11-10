@@ -33,6 +33,13 @@ struct AidenSettledMessageRows: View, Equatable {
     /// change re-evaluates the rows even though `model` compares equal.
     let readAloudCandidateID: String?
     let readAloudActiveID: String?
+    /// `AidenMessageFooterReveal.shownID`: the one message whose footer a tap
+    /// has shown.
+    var revealedFooterID: String? = nil
+    /// A tap on a message, and a tap on its shown footer.
+    /// Closure identity is excluded from equality like the stable `model`.
+    var onTapMessage: ((String) -> Void)? = nil
+    var onTouchFooter: (() -> Void)? = nil
     /// `AidenChatViewModel.messageRenderIDs`: rows keep the identity they
     /// were first drawn with when the Mac assigns a message its ID.
     var renderIDs: [String: String] = [:]
@@ -70,6 +77,8 @@ struct AidenSettledMessageRows: View, Equatable {
         lhs.chat == rhs.chat && lhs.presentationStyle == rhs.presentationStyle &&
             lhs.readAloudCandidateID == rhs.readAloudCandidateID &&
             lhs.readAloudActiveID == rhs.readAloudActiveID &&
+            lhs.revealedFooterID == rhs.revealedFooterID &&
+            (lhs.onTapMessage == nil) == (rhs.onTapMessage == nil) &&
             lhs.renderIDs == rhs.renderIDs &&
             lhs.imageArrivalRevealIDs == rhs.imageArrivalRevealIDs &&
             lhs.appControlsAvailable == rhs.appControlsAvailable
@@ -129,6 +138,9 @@ struct AidenSettledMessageRows: View, Equatable {
             readAloudAction: readAloudCandidateID == message.id ? { model.toggleReadAloud(message.id) } : nil,
             readAloudActive: readAloudActiveID == message.id,
             showsFooter: showsFooter,
+            footerRevealed: revealedFooterID == message.id,
+            onTapMessage: onTapMessage.map { handler in { handler(message.id) } },
+            onTouchFooter: onTouchFooter,
             onAskAbout: onAskAbout,
             forkActions: onFork == nil ? [] : forkActions,
             onFork: onFork.map { handler in { (action: AidenChatForkMenuAction) in handler(message.id, action) } },
@@ -164,7 +176,13 @@ struct AidenMessageView: View, Equatable {
     let loadAttachmentImage: (AidenMessageAttachment) async -> Data?
     var readAloudAction: (() -> Void)? = nil
     var readAloudActive = false
+    /// The message can carry a footer: every message, or a Bot cluster's last bubble.
     var showsFooter = true
+    /// A tap has shown this message's footer (`AidenMessageFooterReveal`).
+    /// Footers stay hidden otherwise, except while the reply reads aloud.
+    var footerRevealed = false
+    var onTapMessage: (() -> Void)? = nil
+    var onTouchFooter: (() -> Void)? = nil
     var onAskAbout: ((String) -> Void)? = nil
     var forkActions: [AidenChatForkMenuAction] = []
     var onFork: ((AidenChatForkMenuAction) -> Void)? = nil
@@ -190,6 +208,8 @@ struct AidenMessageView: View, Equatable {
             (lhs.readAloudAction == nil) == (rhs.readAloudAction == nil) &&
             lhs.readAloudActive == rhs.readAloudActive &&
             lhs.showsFooter == rhs.showsFooter &&
+            lhs.footerRevealed == rhs.footerRevealed &&
+            (lhs.onTapMessage == nil) == (rhs.onTapMessage == nil) &&
             (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
             lhs.forkActions == rhs.forkActions &&
             (lhs.onFork == nil) == (rhs.onFork == nil) &&
@@ -220,13 +240,15 @@ struct AidenMessageView: View, Equatable {
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 2) {
             messageBody
-            if showsFooter {
+            if showsFooter, footerRevealed || readAloudActive {
                 AidenMessageFooter(
                     message: message,
                     copyText: AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle),
                     readAloudAction: readAloudAction,
-                    readAloudActive: readAloudActive
+                    readAloudActive: readAloudActive,
+                    onTouch: { onTouchFooter?() }
                 )
+                .transition(.opacity)
             }
         }
         .sheet(item: $selectTextRequest) { request in
@@ -286,22 +308,11 @@ struct AidenMessageView: View, Equatable {
                 }
             }
         }
+        // A tap shows the footer; a drag or a long press never counts.
+        .gesture(AidenMessageTap { onTapMessage?() })
         .accessibilityActions {
-            if let copyText = AidenMessageActionContent.copyText(
-                for: message,
-                presentationStyle: presentationStyle
-            ) {
-                Button(message.role == .user ? "Copy message" : "Copy response") {
-                    UIPasteboard.general.string = copyText
-                }
-                Button("Select text") {
-                    selectTextRequest = AidenSelectTextRequest(text: selectableText)
-                }
-                if let onAskAbout {
-                    Button("Ask about this") {
-                        onAskAbout(selectableText)
-                    }
-                }
+            ForEach(accessibilityMessageActions, id: \.self) { action in
+                Button(action.title(role: message.role)) { perform(action) }
             }
             if let onFork {
                 ForEach(forkActions, id: \.self) { action in
@@ -311,7 +322,33 @@ struct AidenMessageView: View, Equatable {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message.role == .user ? "You" : "Aiden")
+        // The footer's time and "Worked for", which VoiceOver hears without the tap.
+        .accessibilityValue(showsFooter ? AidenMessageFooterAccessibility.value(for: message) : "")
+    }
 
+    private var accessibilityMessageActions: [AidenMessageAccessibilityAction] {
+        AidenMessageAccessibilityAction.actions(
+            canCopy: AidenMessageActionContent.copyText(for: message, presentationStyle: presentationStyle) != nil,
+            canAskAbout: onAskAbout != nil,
+            canReadAloud: readAloudAction != nil,
+            readAloudActive: readAloudActive
+        )
+    }
+
+    private func perform(_ action: AidenMessageAccessibilityAction) {
+        switch action {
+        case .copy:
+            UIPasteboard.general.string = AidenMessageActionContent.copyText(
+                for: message,
+                presentationStyle: presentationStyle
+            )
+        case .selectText:
+            selectTextRequest = AidenSelectTextRequest(text: selectableText)
+        case .askAbout:
+            onAskAbout?(selectableText)
+        case .readAloud, .stopReadingAloud:
+            readAloudAction?()
+        }
     }
 
     /// A committed assistant reply's rows in the order they happened, with each
