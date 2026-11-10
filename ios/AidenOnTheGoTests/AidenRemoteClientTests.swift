@@ -2218,6 +2218,7 @@ final class AidenRemoteClientTests: XCTestCase {
         var revokeCredential = false
         var chatAccessReads = 0
         var writeCount = 0
+        var conflictOnWrite = false
 
         func mutatedBotDetail(_ change: (inout [String: Any]) -> Void) throws -> Data {
             var object = try XCTUnwrap(JSONSerialization.jsonObject(with: botDetail) as? [String: Any])
@@ -2260,6 +2261,12 @@ final class AidenRemoteClientTests: XCTestCase {
             case ("GET", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
                 return Self.response(for: request, status: 200, data: document)
             case ("PUT", "/api/aiden/v1/bot-conversations/\(chatID)/files/\(fileID)"):
+                if conflictOnWrite {
+                    return Self.response(for: request, status: 409, json: """
+                    {"error":{"code":"revision_conflict","message":"The file changed.",
+                    "requestId":"request-bot-tools-conflict","retryable":false}}
+                    """)
+                }
                 writeCount += 1
                 let body = try Self.jsonBody(request)
                 XCTAssertEqual(body["expectedVersion"] as? String, "file_revision_1")
@@ -2314,6 +2321,18 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(savedFile)
         XCTAssertEqual(writeCount, 1)
         XCTAssertEqual(chatAccessReads, 0, "Bot chats no longer read per-chat access.")
+        XCTAssertFalse(files.offersReload)
+
+        // The file changed on the machine since it was opened: the editor offers Reload.
+        conflictOnWrite = true
+        files.draft = "third"
+        let savedOverConflict = await files.save(coordinator: coordinator)
+        XCTAssertFalse(savedOverConflict)
+        XCTAssertTrue(files.offersReload, "A revision conflict offers Reload")
+        await files.reloadDocument(coordinator: coordinator)
+        XCTAssertFalse(files.offersReload, "Reloading clears the conflict")
+        XCTAssertEqual(files.draft, "second")
+        conflictOnWrite = false
 
         // A Bot access change on the Mac invalidates the grant before any write.
         currentBotDetail = try mutatedBotDetail { object in

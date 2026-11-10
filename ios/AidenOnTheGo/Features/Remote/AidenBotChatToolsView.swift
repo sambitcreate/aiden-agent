@@ -222,6 +222,10 @@ final class AidenBotConversationFilesModel {
     var isSaving = false
     var errorMessage: String?
 
+    /// The open file changed on its machine since it was read (`revision_conflict`),
+    /// so the editor offers Reload. Cleared whenever the error is.
+    private(set) var offersReload = false
+
     init(grant: AidenBotConversationFileGrant) { self.grant = grant }
 
     /// The machine the grant was made on: its own for an owner context.
@@ -231,6 +235,7 @@ final class AidenBotConversationFilesModel {
         guard !isLoading, coordinator.holds(grant.context) else { return }
         isLoading = true
         errorMessage = nil
+        offersReload = false
         defer { isLoading = false }
         do {
             let client = try coordinator.remoteClient(for: grant.context)
@@ -256,6 +261,7 @@ final class AidenBotConversationFilesModel {
     func open(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async -> Bool {
         guard entry.kind == .file, coordinator.holds(grant.context) else { return false }
         errorMessage = nil
+        offersReload = false
         do {
             let client = try coordinator.remoteClient(for: grant.context)
             try await validateAccess(client: client, coordinator: coordinator, requiresWrite: false)
@@ -277,6 +283,7 @@ final class AidenBotConversationFilesModel {
               coordinator.holds(grant.context), !isSaving, let document else { return false }
         isSaving = true
         errorMessage = nil
+        offersReload = false
         defer { isSaving = false }
         do {
             let client = try coordinator.remoteClient(for: grant.context)
@@ -324,6 +331,7 @@ final class AidenBotConversationFilesModel {
     }
 
     private func handle(_ error: Error, coordinator: AidenRemoteCoordinator) async {
+        offersReload = false
         if await coordinator.handleCredentialRevocation(error, context: grant.context) {
             index = nil
             document = nil
@@ -334,6 +342,7 @@ final class AidenBotConversationFilesModel {
         if case AidenRemoteClientError.server(_, let body) = error,
            body.code.rawValue == "revision_conflict" {
             errorMessage = "This file changed on your machine. Reload it before saving again."
+            offersReload = true
         } else if error is AidenRemoteClientError {
             errorMessage = "Something changed on your machine. Go back to the chat and open Files again."
         } else {
@@ -527,8 +536,8 @@ private struct AidenBotConversationFileEditorView: View {
                     } else if let message = model.errorMessage {
                         VStack(spacing: 8) {
                             Text(message).font(.footnote).foregroundStyle(.secondary)
-                            if message.contains("changed on the paired desktop") {
-                                Button("Reload from machine") {
+                            if model.offersReload {
+                                Button("Reload from your machine") {
                                     Task { await model.reloadDocument(coordinator: coordinator) }
                                 }
                             }
