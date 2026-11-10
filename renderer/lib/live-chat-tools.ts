@@ -164,7 +164,17 @@ export function createLiveChatToolHandlers(
         if (!deps.enabled()) return liveChatFailure(LIVE_CHAT_ERRORS.off);
         if (context.signal.aborted) return cancelled();
         deps.used();
-        return run(args ?? {}, context);
+        const result = await run(args ?? {}, context);
+        // Chat-derived text (messages, a title, close matches, a workspace
+        // name) is going to Live now: from here on, a send, Stop or new chat
+        // needs speech that starts later. The fence moves again once the
+        // result has actually been handed over, so speech that began on the
+        // way doesn't count either.
+        if (result.untrusted_chat_content !== undefined) {
+          deps.requests.exposed();
+          context.afterReport?.(() => deps.requests.exposed());
+        }
+        return result;
       });
       tail = next.catch(() => undefined);
       return next;
@@ -189,7 +199,7 @@ export function createLiveChatToolHandlers(
   };
 
   return {
-    read_open_chat: guarded((args, context) => {
+    read_open_chat: guarded((args) => {
       const controller = deps.controller();
       if (!controller) return liveChatFailure(LIVE_CHAT_ERRORS.noChat);
       const limit =
@@ -197,11 +207,6 @@ export function createLiveChatToolHandlers(
           ? Math.min(LIVE_CHAT_MAX_READ_MESSAGES, Math.max(1, Math.floor(args.limit)))
           : undefined;
       const snapshot = controller.read(limit);
-      // The result goes to Live now: from here on, a send needs speech that
-      // starts later. The fence moves again once the result has actually been
-      // handed over, so speech that began on the way doesn't count either.
-      deps.requests.exposed();
-      context.afterReport?.(() => deps.requests.exposed());
       return {
         ok: true,
         chat: {
