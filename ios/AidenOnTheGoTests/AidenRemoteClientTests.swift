@@ -4427,7 +4427,7 @@ final class AidenRemoteClientTests: XCTestCase {
         let outcome = await coordinator.switchInstallationOutcome(to: "available")
 
         guard case .success = outcome else { return XCTFail("Switch should connect to the available computer") }
-        XCTAssertEqual(coordinator.activeInstanceId, "available")
+        XCTAssertEqual(coordinator.defaultInstanceId, "available")
         XCTAssertEqual(coordinator.connectionState, .connected)
         XCTAssertNil(coordinator.connectionIssue)
         XCTAssertEqual(unavailableAttempts, 1, "Switching must not first retry the unavailable computer")
@@ -6086,7 +6086,7 @@ final class AidenRemoteClientTests: XCTestCase {
         await coordinator.switchInstallation(to: "instance-2")
         await slowLoad.value
 
-        XCTAssertEqual(coordinator.activeInstanceId, "instance-2")
+        XCTAssertEqual(coordinator.defaultInstanceId, "instance-2")
         XCTAssertEqual(coordinator.server?.instanceId, "instance-2")
         XCTAssertEqual(coordinator.workspaces.map(\.id), ["workspace-instance-2"])
         XCTAssertEqual(coordinator.connectionState, .connected)
@@ -7934,7 +7934,7 @@ extension AidenRemoteClientTests {
                 markRead: { readMarks += 1; return readRefused ? 500 : 204 }
             )
             defer { try? FileManager.default.removeItem(at: inbox.root) }
-            XCTAssertEqual(inbox.coordinator.activeInstanceId, "instance-inbox")
+            XCTAssertEqual(inbox.coordinator.defaultInstanceId, "instance-inbox")
             AidenRemoteMockURLProtocol.hold = { request in
                 guard request.url?.path.hasSuffix("/triage") == true else { return nil }
                 arrived.fulfill()
@@ -7945,7 +7945,7 @@ extension AidenRemoteClientTests {
             let write = Task { await inbox.home.setTriage(.done(true), chatID: Self.inboxChatID, coordinator: inbox.coordinator) }
             await fulfillment(of: [arrived], timeout: 5)
             await inbox.coordinator.switchInstallation(to: Self.otherMacID)
-            XCTAssertEqual(inbox.coordinator.activeInstanceId, Self.otherMacID)
+            XCTAssertEqual(inbox.coordinator.defaultInstanceId, Self.otherMacID)
             let saved = await inbox.cache.loadChatSummaries(instanceId: "instance-inbox")?.summaries.first
             XCTAssertNotNil(saved?.inbox.doneAt, "The optimistic Done was saved for the first Mac.")
             release.signal()

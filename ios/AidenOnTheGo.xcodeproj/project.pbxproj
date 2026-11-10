@@ -71,8 +71,7 @@
 		A0D600000000000000000005 /* AidenPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000015 /* AidenPairingView.swift */; };
 		A0F200000000000000000011 /* AidenOnboardingArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F200000000000000000010 /* AidenOnboardingArtwork.swift */; };
 		A0F200000000000000000021 /* AidenOnboardingVignettes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F200000000000000000020 /* AidenOnboardingVignettes.swift */; };
-		A0D600000000000000000006 /* AidenWorkspaceShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D600000000000000000016 /* AidenWorkspaceShellView.swift */; };
-		A8C200000000000000000001 /* AidenChatRowStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000001 /* AidenChatRowStatusView.swift */; };
+		A8C200000000000000000001 /* AidenRelativeTimestamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000001 /* AidenRelativeTimestamp.swift */; };
 		A8C200000000000000000002 /* AidenNewAgentPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000002 /* AidenNewAgentPopover.swift */; };
 		A8C200000000000000000003 /* AidenWorkspaceArchiveStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000003 /* AidenWorkspaceArchiveStore.swift */; };
 		A8C200000000000000000004 /* AidenHomeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8C100000000000000000004 /* AidenHomeModel.swift */; };
@@ -165,7 +164,6 @@
 		A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DB00000000000000000012 /* AidenNativeIntegrationTests.swift */; };
 		B07300000000000000000001 /* AidenBot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07300000000000000000011 /* AidenBot.swift */; };
 		B07300000000000000000002 /* AidenBotContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07300000000000000000012 /* AidenBotContractTests.swift */; };
-		B07400000000000000000001 /* AidenProductShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07400000000000000000011 /* AidenProductShellView.swift */; };
 		B07400000000000000000002 /* AidenProductShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07400000000000000000012 /* AidenProductShellTests.swift */; };
 		B07500000000000000000001 /* AidenBotCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000011 /* AidenBotCache.swift */; };
 		B07500000000000000000002 /* AidenChatDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07500000000000000000012 /* AidenChatDraftStore.swift */; };
@@ -330,8 +328,7 @@
 		A0D600000000000000000015 /* AidenPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenPairingView.swift; sourceTree = "<group>"; };
 		A0F200000000000000000010 /* AidenOnboardingArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenOnboardingArtwork.swift; sourceTree = "<group>"; };
 		A0F200000000000000000020 /* AidenOnboardingVignettes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenOnboardingVignettes.swift; sourceTree = "<group>"; };
-		A0D600000000000000000016 /* AidenWorkspaceShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceShellView.swift; sourceTree = "<group>"; };
-		A8C100000000000000000001 /* AidenChatRowStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatRowStatusView.swift; sourceTree = "<group>"; };
+		A8C100000000000000000001 /* AidenRelativeTimestamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRelativeTimestamp.swift; sourceTree = "<group>"; };
 		A8C100000000000000000002 /* AidenNewAgentPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNewAgentPopover.swift; sourceTree = "<group>"; };
 		A8C100000000000000000003 /* AidenWorkspaceArchiveStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenWorkspaceArchiveStore.swift; sourceTree = "<group>"; };
 		A8C100000000000000000004 /* AidenHomeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenHomeModel.swift; sourceTree = "<group>"; };
@@ -449,7 +446,6 @@
 		A716739233F64F4FA4C2B710 /* AidenImageGenerationPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenImageGenerationPlaceholder.swift; sourceTree = "<group>"; };
 		B07300000000000000000011 /* AidenBot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBot.swift; sourceTree = "<group>"; };
 		B07300000000000000000012 /* AidenBotContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotContractTests.swift; sourceTree = "<group>"; };
-		B07400000000000000000011 /* AidenProductShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProductShellView.swift; sourceTree = "<group>"; };
 		B07400000000000000000012 /* AidenProductShellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProductShellTests.swift; sourceTree = "<group>"; };
 		B07500000000000000000011 /* AidenBotCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotCache.swift; sourceTree = "<group>"; };
 		B07500000000000000000012 /* AidenChatDraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatDraftStore.swift; sourceTree = "<group>"; };
@@ -699,23 +695,10 @@
 				1A2B3C4D5E6F7000000000C5 /* SessionList */,
 				1A2B3C4D5E6F7000000000C6 /* Chat */,
 				1A2B3C4D5E6F7000000000C7 /* Workspace */,
-				A0E100000000000000000050 /* Shell */,
 				1A2B3C4D5E6F7000000000F7 /* Settings */,
 				3F91D2A54B9A4F66A2C01020 /* Tasks */,
 			);
 			path = Features;
-			sourceTree = "<group>";
-		};
-		A0E100000000000000000050 /* Shell */ = {
-			isa = PBXGroup;
-			children = (
-				A0E100000000000000000051 /* AidenMachinesView.swift */,
-				A27C00000000000000000011 /* AidenMachineChrome.swift */,
-				A0E100000000000000000052 /* AidenMachineDetailView.swift */,
-				A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */,
-				A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */,
-			);
-			path = Shell;
 			sourceTree = "<group>";
 		};
 		A0F500000000000000000020 /* Conversation */ = {
@@ -778,7 +761,6 @@
 				DE30000000000000000000A3 /* Demo */,
 				A0E200000000000000000020 /* Hosts */,
 				B07A00000000000000000011 /* AidenBotChatToolsView.swift */,
-				B07400000000000000000011 /* AidenProductShellView.swift */,
 				A0DA00000000000000000012 /* AidenScheduledTasksView.swift */,
 				A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */,
 				A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */,
@@ -787,7 +769,6 @@
 				A0F200000000000000000010 /* AidenOnboardingArtwork.swift */,
 				A0F200000000000000000020 /* AidenOnboardingVignettes.swift */,
 				A10520260000000000000002 /* AidenProvidersView.swift */,
-				A0D600000000000000000016 /* AidenWorkspaceShellView.swift */,
 				A1B0C0DE0000000000000012 /* AidenInboxViews.swift */,
 				A0F300000000000000000011 /* AidenVisualViewer.swift */,
 				A0F300000000000000000013 /* AidenVisualDocument.swift */,
@@ -812,6 +793,11 @@
 				A0E100000000000000000055 /* AidenUnifiedInboxStore.swift */,
 				A2E0000000000000000000B3 /* AidenInboxTabView.swift */,
 				A23C00000000000000000012 /* AidenRunningAccessory.swift */,
+				A0E100000000000000000051 /* AidenMachinesView.swift */,
+				A27C00000000000000000011 /* AidenMachineChrome.swift */,
+				A0E100000000000000000052 /* AidenMachineDetailView.swift */,
+				A0E300000000000000000011 /* AidenNewWorkMachinePicker.swift */,
+				A0E300000000000000000013 /* AidenNewWorkChatFlow.swift */,
 			);
 			path = Shell;
 			sourceTree = "<group>";
@@ -897,7 +883,7 @@
 		1A2B3C4D5E6F7000000000C7 /* Workspace */ = {
 			isa = PBXGroup;
 			children = (
-				A8C100000000000000000001 /* AidenChatRowStatusView.swift */,
+				A8C100000000000000000001 /* AidenRelativeTimestamp.swift */,
 				A8C100000000000000000002 /* AidenNewAgentPopover.swift */,
 				A8C100000000000000000003 /* AidenWorkspaceArchiveStore.swift */,
 				A8C100000000000000000004 /* AidenHomeModel.swift */,
@@ -1202,7 +1188,6 @@
 				D85700000000000000000005 /* AidenBotAllowedView.swift in Sources */,
 				B07500000000000000000002 /* AidenChatDraftStore.swift in Sources */,
 				B0D00000000000000000A001 /* AidenModelPreferenceStore.swift in Sources */,
-				B07400000000000000000001 /* AidenProductShellView.swift in Sources */,
 				B07300000000000000000001 /* AidenBot.swift in Sources */,
 				B0E200000000000000000001 /* AidenBotRoutine.swift in Sources */,
 				B0E100000000000000000001 /* AidenBotSession.swift in Sources */,
@@ -1260,8 +1245,7 @@
 				A0F200000000000000000011 /* AidenOnboardingArtwork.swift in Sources */,
 				A0F200000000000000000021 /* AidenOnboardingVignettes.swift in Sources */,
 				A10520260000000000000001 /* AidenProvidersView.swift in Sources */,
-				A0D600000000000000000006 /* AidenWorkspaceShellView.swift in Sources */,
-				A8C200000000000000000001 /* AidenChatRowStatusView.swift in Sources */,
+				A8C200000000000000000001 /* AidenRelativeTimestamp.swift in Sources */,
 				A8C200000000000000000002 /* AidenNewAgentPopover.swift in Sources */,
 				A8C200000000000000000003 /* AidenWorkspaceArchiveStore.swift in Sources */,
 				A8C200000000000000000004 /* AidenHomeModel.swift in Sources */,
@@ -1549,7 +1533,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				AIDEN_BOT_FIRST_ENABLED = YES;
-				AIDEN_TAB_SHELL_ENABLED = NO;
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconMonochrome;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -1580,7 +1563,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				AIDEN_BOT_FIRST_ENABLED = YES;
-				AIDEN_TAB_SHELL_ENABLED = NO;
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconMonochrome;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

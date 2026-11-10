@@ -187,3 +187,48 @@ struct AidenWorkspaceSettingsView: View {
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
     }
 }
+
+struct AidenWorkspaceDefaultApplication {
+    /// Where this phone keeps the permission a new workspace starts with.
+    static let permissionKey = "aiden.defaults.workspacePermission"
+
+    let workspace: AidenWorkspace
+    let feedback: AidenHapticEvent
+
+    /// The workspace back with `permission`, or as it was when `update` returns nil.
+    @MainActor
+    static func applying(
+        _ permission: AidenWorkspacePermission,
+        to workspace: AidenWorkspace,
+        update: (AidenWorkspacePermission) async -> AidenWorkspace?
+    ) async -> AidenWorkspaceDefaultApplication {
+        guard permission != workspace.permission else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
+        }
+        guard let updated = await update(permission) else {
+            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
+        }
+        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
+    }
+}
+
+extension AidenWorkspacePermission {
+    var title: String {
+        switch self {
+        case .full: "Full access"
+        case .ask: "Ask before actions"
+        case .none: "No access"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .full:
+            "Aiden can use this workspace's approved tools without asking for each ordinary action. Consequential Git actions still require confirmation."
+        case .ask:
+            "Aiden asks before actions that need approval in this workspace."
+        case .none:
+            "Aiden can show existing chats but cannot use workspace tools."
+        }
+    }
+}

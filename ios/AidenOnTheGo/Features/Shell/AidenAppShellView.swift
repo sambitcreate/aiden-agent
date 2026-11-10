@@ -1,5 +1,44 @@
 import SwiftUI
 
+enum AidenChromeSymbols {
+    static let overflowMenu = "ellipsis"
+    /// The Bots tab, and a Bot's row in Search.
+    static let bots = "person.2.fill"
+}
+
+enum AidenBotsAvailability: Equatable, Sendable {
+    case available(canWrite: Bool)
+    case mobileDisabled
+    case unsupported
+    case notGranted
+
+    var canOpen: Bool {
+        if case .available = self { return true }
+        return false
+    }
+
+    var canWrite: Bool {
+        if case .available(canWrite: true) = self { return true }
+        return false
+    }
+
+    static func resolve(
+        _ installation: AidenInstallation?,
+        mobileEnabled: Bool = AppConfig.botFirstMobileEnabled
+    ) -> Self {
+        guard mobileEnabled else { return .mobileDisabled }
+        guard let installation,
+              let supported = installation.serverCapabilities,
+              supported.contains(.botRead) else {
+            return .unsupported
+        }
+        guard installation.deviceCapabilities.contains(.botRead) else {
+            return .notGranted
+        }
+        return .available(canWrite: installation.canWriteBots)
+    }
+}
+
 extension AidenBotsAvailability {
     /// Why the Bots tab has nothing to show. The tab stays selectable in every
     /// state, so this is what it says instead of going away.
@@ -17,28 +56,13 @@ extension AidenBotsAvailability {
     }
 }
 
-/// A page that's a sheet in the menu shell and pushed in the tab shell. A sheet
-/// needs its own stack, and a pushed page must not bring a second one.
-struct AidenPresentedStack<Content: View>: View {
-    let isPushed: Bool
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        if isPushed {
-            content
-        } else {
-            NavigationStack { content }
-        }
-    }
-}
-
 private struct AidenArchiveSyncID: Equatable {
     let instanceID: String?
     let workspaceRevision: Int
     let archivedIDs: Set<String>
 }
 
-/// The four tabs, behind `AppConfig.tabShellEnabled`. Each tab has its own stack.
+/// The app: four tabs, each with its own stack.
 struct AidenAppShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Binding private var navigationRequest: AidenNavigationRequest?
@@ -72,7 +96,7 @@ struct AidenAppShellView: View {
         let navigation = AidenAppNavigation(
             restoring: navigationStore.load(
                 installations: coordinator.installationStore.installations,
-                selected: coordinator.activeInstanceId
+                selected: coordinator.defaultInstanceId
             ),
             installations: coordinator.installationStore.installations
         )
@@ -80,7 +104,7 @@ struct AidenAppShellView: View {
         // A chat started from Workspaces stays there; anywhere else it's the Inbox's.
         _newChat = State(initialValue: AidenNewChatFlow(
             coordinator: coordinator,
-            home: { coordinator.activeInstanceId.flatMap(inboxStore.homeModel(for:)) },
+            home: { coordinator.defaultInstanceId.flatMap(inboxStore.homeModel(for:)) },
             reload: { await inboxStore.refreshAll() },
             onOpen: { id in
                 navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
@@ -100,9 +124,9 @@ struct AidenAppShellView: View {
 
     private var archiveSyncID: AidenArchiveSyncID {
         AidenArchiveSyncID(
-            instanceID: coordinator.activeInstanceId,
+            instanceID: coordinator.defaultInstanceId,
             workspaceRevision: coordinator.workspaceSnapshotRevision,
-            archivedIDs: coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
+            archivedIDs: coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: coordinator.defaultInstanceId)
         )
     }
 
@@ -150,7 +174,7 @@ struct AidenAppShellView: View {
                 isEnabled: inboxStore.needsYouCount > 0
             )
 
-            Tab("Bots", systemImage: AidenProductArea.bots.symbol, value: AidenAppTab.bots) {
+            Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
                 NavigationStack(path: $navigation.botsPath) {
                     AidenBotsTabView(
                         coordinator: coordinator,
@@ -238,7 +262,7 @@ struct AidenAppShellView: View {
                 navigation.open(queued.route, startsVoice: queued.startsVoice)
             }
         }
-        .onChange(of: coordinator.activeInstanceId) { _, _ in
+        .onChange(of: coordinator.defaultInstanceId) { _, _ in
             navigation.leaveSelectedMachineRoutes()
         }
         .task(id: archiveSyncID) {
@@ -337,15 +361,11 @@ struct AidenAppShellView: View {
         case .machine(let instanceId):
             AidenMachineDetailView(instanceId: instanceId, coordinator: coordinator, preferences: .shared)
         case .settings:
-            AidenAppSettingsView(
-                coordinator: coordinator,
-                appearance: appearance,
-                isPushed: true
-            )
+            AidenAppSettingsView(coordinator: coordinator, appearance: appearance)
         case .scheduled:
-            AidenScheduledTasksView(coordinator: coordinator, isPushed: true)
+            AidenScheduledTasksView(coordinator: coordinator)
         case .usage:
-            AidenMachineUsageView(coordinator: coordinator, isPushed: true)
+            AidenMachineUsageView(coordinator: coordinator)
         case .catchUpFinished(let ending):
             AidenCatchUpFinishedView(ending: ending) { navigation.inboxPath = [] }
         }
@@ -370,25 +390,12 @@ struct AidenAppShellView: View {
         if let route = AidenAppRoute(
             request: request,
             installations: coordinator.installationStore.installations,
-            activeInstanceId: coordinator.activeInstanceId
+            defaultInstanceId: coordinator.defaultInstanceId
         ) {
             navigation.open(route, startsVoice: request.startsVoice)
         } else {
             coordinator.presentedError = coordinator.noLongerPairedMessage(for: request.instanceId)
         }
-    }
-}
-
-private struct AidenTabPlaceholderView: View {
-    let title: LocalizedStringKey
-    let systemImage: String
-
-    @Environment(\.aidenPalette) private var palette
-
-    var body: some View {
-        ContentUnavailableView(title, systemImage: systemImage)
-            .background(palette.canvas.ignoresSafeArea())
-            .navigationTitle(title)
     }
 }
 

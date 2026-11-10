@@ -498,7 +498,7 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(responder.requests(instanceId: "mini").count, before.mini, "Searching retried a machine that isn't connected")
         XCTAssertEqual(model.bots.map(\.title), ["Scout on studio"])
         XCTAssertEqual(model.unsearchedMachines, ["Mini"])
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
     func testARealMachineThatErrorsIsNamedAndTheRestStay() async throws {
@@ -682,7 +682,7 @@ final class AidenSearchModelTests: XCTestCase {
         pastDebounce()
         await run.value
         XCTAssertEqual(Set(model.bots.map(\.title)), ["Scout on studio", "Scout on laptop", "Scout on mini"])
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
 
         // A selected machine with no credential to use ends here, without being revoked.
         let studio = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))

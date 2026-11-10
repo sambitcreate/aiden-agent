@@ -26,9 +26,9 @@ enum AidenAppRoute: Hashable, Codable {
     init?(
         request: AidenNavigationRequest,
         installations: [AidenInstallation],
-        activeInstanceId: String?
+        defaultInstanceId: String?
     ) {
-        let instanceId = request.instanceId ?? activeInstanceId
+        let instanceId = request.instanceId ?? defaultInstanceId
         guard let installation = installations.first(where: { $0.id == instanceId }) else { return nil }
         func owned(_ objectId: String) -> AidenHostObjectID {
             AidenHostObjectID(instanceId: installation.id, deviceId: installation.deviceId, objectId: objectId)
@@ -86,8 +86,8 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
     var botsPath: [AidenAppRoute]
     var workspacesPath: [AidenAppRoute]
     /// Where a machine that isn't on a tab's path had got to, by `savedPathKey`.
-    /// Each tab has one path, and the old shell kept one per machine, so this
-    /// is where the others wait instead of being lost.
+    /// Each tab has one path, and v1 kept one per machine, so this is where
+    /// the others wait instead of being lost.
     var savedPaths: [String: [AidenAppRoute]]
 
     init(
@@ -155,9 +155,9 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
 /// The tab shell's routes, in `aiden.product-navigation.v2`. A saved v2 stands
 /// for itself, readable or not: only its absence means v1 hasn't moved yet.
 ///
-/// `AidenProductNavigationStore` keeps `aiden.product-navigation.v1`: the old
-/// shell's preferences stay there for good, and its per-machine paths until the
-/// first v2 write lands.
+/// `AidenProductNavigationStore` keeps `aiden.product-navigation.v1`: the menu
+/// shell's last workspace per machine stays there, and its per-machine paths
+/// until the first v2 write lands.
 struct AidenAppNavigationStore {
     static let snapshotKey = "aiden.product-navigation.v2"
     private static let sizeLimit = 1_048_576
@@ -427,5 +427,150 @@ final class AidenAppNavigation {
         } else {
             path.append(route)
         }
+    }
+}
+
+/// `aiden.product-navigation.v1`, which builds before the tabs wrote.
+/// What's left in it: each machine's last workspace, which a new-chat link or
+/// Shortcut without one still starts in, and the per-machine paths the first v2
+/// write moves out (`AidenAppNavigationStore`). Anything else an older build
+/// saved here is dropped on the next write.
+@Observable
+final class AidenProductNavigationStore {
+    static let shared = AidenProductNavigationStore()
+
+    private struct Snapshot: Codable {
+        var selectedWorkspaceByInstance: [String: String] = [:]
+        var compactWorkspacePathByInstance: [String: [String]] = [:]
+        var compactBotPathByInstance: [String: [String]] = [:]
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            selectedWorkspaceByInstance = try container.decodeIfPresent([String: String].self, forKey: .selectedWorkspaceByInstance) ?? [:]
+            compactWorkspacePathByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .compactWorkspacePathByInstance) ?? [:]
+            compactBotPathByInstance = try container.decodeIfPresent([String: [String]].self, forKey: .compactBotPathByInstance) ?? [:]
+        }
+    }
+
+    private static let snapshotKey = "aiden.product-navigation.v1"
+    @ObservationIgnored private let defaults: UserDefaults
+    private var snapshot: Snapshot
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.snapshotKey),
+           data.count <= 1_048_576,
+           let decoded = try? JSONDecoder().decode(Snapshot.self, from: data) {
+            snapshot = Self.sanitized(decoded)
+        } else {
+            snapshot = Snapshot()
+        }
+    }
+
+    func selectedWorkspace(for instanceID: String?) -> String? {
+        guard let instanceID = Self.safeID(instanceID) else { return nil }
+        return snapshot.selectedWorkspaceByInstance[instanceID]
+    }
+
+    /// What an older build saved. Nothing in this one writes it, except tests.
+    func setSelectedWorkspace(_ workspaceID: String?, for instanceID: String?) {
+        guard let instanceID = Self.safeID(instanceID) else { return }
+        if let workspaceID = Self.safeID(workspaceID) {
+            snapshot.selectedWorkspaceByInstance[instanceID] = workspaceID
+        } else {
+            snapshot.selectedWorkspaceByInstance.removeValue(forKey: instanceID)
+        }
+        persist()
+    }
+
+    func compactWorkspacePath(for instanceID: String?) -> [String] {
+        guard let instanceID = Self.safeID(instanceID) else { return [] }
+        return snapshot.compactWorkspacePathByInstance[instanceID] ?? []
+    }
+
+    /// What an older build saved. Nothing in this one writes it, except tests.
+    func setCompactWorkspacePath(_ path: [String], for instanceID: String?) {
+        setPath(path, in: \Snapshot.compactWorkspacePathByInstance, for: instanceID)
+    }
+
+    func compactBotPath(for instanceID: String?) -> [String] {
+        guard let instanceID = Self.safeID(instanceID) else { return [] }
+        return snapshot.compactBotPathByInstance[instanceID] ?? []
+    }
+
+    /// What an older build saved. Nothing in this one writes it, except tests.
+    func setCompactBotPath(_ path: [String], for instanceID: String?) {
+        setPath(path, in: \Snapshot.compactBotPathByInstance, for: instanceID)
+    }
+
+    /// v2 has these now. Its first saved write calls this.
+    func forgetCompactPaths() {
+        guard !snapshot.compactWorkspacePathByInstance.isEmpty || !snapshot.compactBotPathByInstance.isEmpty else { return }
+        snapshot.compactWorkspacePathByInstance = [:]
+        snapshot.compactBotPathByInstance = [:]
+        persist()
+    }
+
+    func purge(instanceID: String) {
+        snapshot.selectedWorkspaceByInstance.removeValue(forKey: instanceID)
+        snapshot.compactWorkspacePathByInstance.removeValue(forKey: instanceID)
+        snapshot.compactBotPathByInstance.removeValue(forKey: instanceID)
+        persist()
+    }
+
+    private func setPath(
+        _ path: [String],
+        in keyPath: WritableKeyPath<Snapshot, [String: [String]]>,
+        for instanceID: String?
+    ) {
+        guard let instanceID = Self.safeID(instanceID) else { return }
+        let sanitized = Array(path.compactMap(Self.safeID).suffix(16))
+        if sanitized.isEmpty {
+            snapshot[keyPath: keyPath].removeValue(forKey: instanceID)
+        } else {
+            snapshot[keyPath: keyPath][instanceID] = sanitized
+        }
+        persist()
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(snapshot), data.count <= 1_048_576 else { return }
+        defaults.set(data, forKey: Self.snapshotKey)
+    }
+
+    private static func sanitized(_ value: Snapshot) -> Snapshot {
+        let instanceIDs = Set(
+            value.selectedWorkspaceByInstance.keys.compactMap(safeID)
+                + value.compactWorkspacePathByInstance.keys.compactMap(safeID)
+                + value.compactBotPathByInstance.keys.compactMap(safeID)
+        )
+        return instanceIDs.prefix(64).reduce(into: Snapshot()) { result, instanceID in
+            if let workspaceID = safeID(value.selectedWorkspaceByInstance[instanceID]) {
+                result.selectedWorkspaceByInstance[instanceID] = workspaceID
+            }
+            let workspacePath = Array(
+                (value.compactWorkspacePathByInstance[instanceID] ?? []).compactMap(safeID).suffix(16)
+            )
+            if !workspacePath.isEmpty {
+                result.compactWorkspacePathByInstance[instanceID] = workspacePath
+            }
+            let botPath = Array(
+                (value.compactBotPathByInstance[instanceID] ?? []).compactMap(safeID).suffix(16)
+            )
+            if !botPath.isEmpty {
+                result.compactBotPathByInstance[instanceID] = botPath
+            }
+        }
+    }
+
+    private static func safeID(_ value: String?) -> String? {
+        guard let value, !value.isEmpty, value.unicodeScalars.count <= 160,
+              value.unicodeScalars.allSatisfy({ scalar in
+                  CharacterSet.alphanumerics.contains(scalar)
+                      || "._:-".unicodeScalars.contains(scalar)
+              }) else { return nil }
+        return value
     }
 }

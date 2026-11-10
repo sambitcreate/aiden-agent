@@ -398,7 +398,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         coordinator = makeCoordinator([studio])
         await connectAll()
 
-        let labels = try labels(of: AidenBotCreateView(coordinator: coordinator, tabShellEnabled: true), showing: "can’t create Bots")
+        let labels = try labels(of: AidenBotCreateView(coordinator: coordinator), showing: "can’t create Bots")
 
         XCTAssertTrue(labels.contains("Studio can’t create Bots from this phone."), "\(labels)")
     }
@@ -598,11 +598,10 @@ final class AidenNewWorkTargetTests: XCTestCase {
         await assertSettles { flow.pending != nil }
         defer { release() }
 
-        let shown = try XCTUnwrap(flow.shownPending(coordinator: coordinator, tabShellEnabled: true))
+        let shown = try XCTUnwrap(flow.shownPending(coordinator: coordinator))
         XCTAssertEqual(shown.pending.name, "Planner")
         XCTAssertEqual(shown.machine, "Laptop")
         XCTAssertEqual(AidenBotCreateCopy.creating(on: "Laptop"), "Creating on Laptop…")
-        XCTAssertNil(flow.shownPending(coordinator: coordinator, tabShellEnabled: false), "The old shell shows only the selected machine's")
 
         release()
         await making.value
@@ -616,17 +615,18 @@ final class AidenNewWorkTargetTests: XCTestCase {
         await flow.restoreEveryMachine(coordinator: coordinator)
         let failure = try XCTUnwrap(flow.failureToShow(coordinator: coordinator))
 
-        let pairing = try XCTUnwrap(failure.retryPairing(coordinator: coordinator, tabShellEnabled: true))
+        let pairing = try XCTUnwrap(failure.retryPairing(coordinator: coordinator))
         XCTAssertEqual(pairing.instanceId, "laptop")
         XCTAssertEqual(pairing.deviceId, failure.deviceId)
 
         var repaired = failure
         repaired.deviceId = "another-device"
-        XCTAssertNil(repaired.retryPairing(coordinator: coordinator, tabShellEnabled: true), "A new pairing isn't the phone that asked")
+        XCTAssertNil(repaired.retryPairing(coordinator: coordinator), "A new pairing isn't the phone that asked")
 
-        let selected = try XCTUnwrap(failure.retryPairing(coordinator: coordinator, tabShellEnabled: false))
-        XCTAssertEqual(selected.instanceId, "studio", "The old shell still answers for the selected machine")
-        XCTAssertEqual(flow.retry(failure, instanceId: selected.instanceId, deviceId: selected.deviceId), .none, "So another machine's failure waits")
+        XCTAssertEqual(
+            flow.retry(failure, instanceId: "studio", deviceId: failure.deviceId), .none,
+            "Another machine can't answer for this failure"
+        )
         XCTAssertNotNil(flow.failure(instanceId: failure.instanceId, deviceId: failure.deviceId))
     }
 
@@ -813,7 +813,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         coordinator.setDefaultMachine("laptop")
 
         XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         XCTAssertEqual(coordinator.installationStore.activeInstallationId, "laptop", "The saved field keeps its name, so nothing migrates")
     }
 
@@ -897,8 +897,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
             coordinator: coordinator,
             botID: botID,
             composerSession: session,
-            machine: nil,
-            staysOnItsMachine: true
+            machine: nil
         ))
         defer { close(window) }
         await assertSettles({ (session.draftOwner as? AidenBotSessionModel)?.hasLoaded == true }, timeout: 15)
@@ -947,10 +946,10 @@ final class AidenNewWorkTargetTests: XCTestCase {
         )
     }
 
-    /// The menu shell's Bot tools follow the selected machine (no `machine`), so
-    /// moving the default takes Files away. The tab shell keeps them on the Bot's
-    /// machine instead (`testABotsFilesStayWithItsMachineWhenTheDefaultMoves`).
-    func testTheMenuShellsBotFilesFollowTheSelection() async throws {
+    /// Bot tools opened with no `machine` follow the default, so moving it takes
+    /// Files away. A Bot's chat passes its machine instead
+    /// (`testABotsFilesStayWithItsMachineWhenTheDefaultMoves`).
+    func testBotToolsWithNoMachineFollowTheDefault() async throws {
         let responder = AidenDemoResponder()
         self.responder = responder
         coordinator = AidenDemoHosts.coordinator(.four, responder: responder, machinePreferences: preferences)
@@ -996,26 +995,19 @@ final class AidenNewWorkTargetTests: XCTestCase {
 
     // MARK: The Settings row
 
-    private func settingsLabels(tabShellEnabled: Bool) throws -> [String] {
+    private func settingsLabels() throws -> [String] {
         Self.setAccessibilityAutomation(true)
         defer { Self.setAccessibilityAutomation(false) }
-        let window = try showSynchronously(AidenAppSettingsView(
-            coordinator: coordinator,
-            appearance: AidenAppearanceStore(),
-            addInstallation: {},
-            tabShellEnabled: tabShellEnabled
-        ))
+        let window = try showSynchronously(NavigationStack {
+            AidenAppSettingsView(coordinator: coordinator, appearance: AidenAppearanceStore())
+        })
         defer { close(window) }
         _ = runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel?.contains("Appearance") == true } })
         return accessibleElements(in: window).compactMap(\.accessibilityLabel)
     }
 
-    func testSettingsHasADefaultMachineRowBehindTheFlag() throws {
-        XCTAssertTrue(try settingsLabels(tabShellEnabled: true).contains { $0.hasPrefix("Default machine") })
-    }
-
-    func testSettingsHasNoDefaultMachineRowWithTheFlagOff() throws {
-        XCTAssertFalse(try settingsLabels(tabShellEnabled: false).contains { $0.hasPrefix("Default machine") })
+    func testSettingsHasADefaultMachineRow() throws {
+        XCTAssertTrue(try settingsLabels().contains { $0.hasPrefix("Default machine") })
     }
 
     func testTheDefaultRowOffersOfflineMachinesAndKeepsAHiddenDefault() async throws {

@@ -34,8 +34,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     /// The first machine is the selected one.
-    private func connect(_ installations: [AidenInstallation], tabShell: Bool = false) async throws {
-        pair(installations, tabShell: tabShell)
+    private func connect(_ installations: [AidenInstallation]) async throws {
+        pair(installations)
         await launch()
         try await waitUntil("every machine to connect") {
             self.coordinator.hosts.ordered.allSatisfy { $0.connectionState == .connected }
@@ -44,12 +44,11 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
     /// Registers each machine's standard answers, so anything a test wants
     /// instead goes in after this.
-    private func pair(_ installations: [AidenInstallation], tabShell: Bool = false) {
+    private func pair(_ installations: [AidenInstallation]) {
         coordinator = AidenDemoHosts.coordinator(
             installations: installations,
             responder: responder,
-            machinePreferences: AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults()),
-            tabShell: tabShell
+            machinePreferences: AidenMachinePreferencesStore(defaults: AidenDemoHosts.isolatedDefaults())
         )
         scheduler = AidenHostConnectScheduler(
             registry: coordinator.hosts,
@@ -472,8 +471,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
             coordinator: coordinator,
             botID: "bot_scout",
             initialSummary: summary,
-            machine: "laptop",
-            staysOnItsMachine: true
+            machine: "laptop"
         )
         let tools = view.tools
 
@@ -610,7 +608,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(chat.messages.map(\.text), ["from laptop"])
         XCTAssertEqual(owner.instanceId, "laptop")
         XCTAssertEqual(navigation.inboxPath, [.chat(id())])
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertEqual(requests("studio"), studioRequestsBefore, "The selected machine was asked about another's chat")
     }
 
@@ -626,7 +624,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertFalse(requests("studio").contains("POST /chats/c1/triage"))
         XCTAssertNotNil(store.homeModel(for: "laptop")?.chats.first?.inbox.doneAt)
         XCTAssertNil(store.homeModel(for: "studio")?.chats.first?.inbox.doneAt)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         store.stop()
     }
 
@@ -842,7 +840,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(legacy.compactWorkspacePath(for: "studio"), ["workspace_app"])
     }
 
-    func testALaterWriteLeavesTheMenuShellsPathsAlone() {
+    func testALaterWriteLeavesTheOlderSnapshotsPathsAlone() {
         let (store, legacy, _) = routeStores()
         store.save(AidenAppNavigationSnapshot())
         legacy.setCompactBotPath(["chat_9"], for: "studio")
@@ -918,10 +916,10 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let route = try XCTUnwrap(AidenAppRoute(
             request: link,
             installations: coordinator.installationStore.installations,
-            activeInstanceId: coordinator.activeInstanceId
+            defaultInstanceId: coordinator.defaultInstanceId
         ))
         XCTAssertEqual(route, .chat(id()))
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
 
         // A new chat is the one link that writes, so it asks first, and it asks
         // about the machine it names. This is the chain a link takes after
@@ -932,7 +930,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         )))
         XCTAssertFalse(newChat.startsVoice, "A link is never consent to record")
         let consent = AidenNewChatLinkConsent()
-        let target = try XCTUnwrap(coordinator.newChatTarget(for: newChat, startsVoice: false, tabShell: true))
+        let target = try XCTUnwrap(coordinator.newChatTarget(for: newChat, startsVoice: false))
         XCTAssertEqual(target.instanceID, "laptop")
         XCTAssertEqual(target.installationName, "Laptop", "The prompt names the wrong machine")
         XCTAssertEqual(target.workspaceID, "workspace_app")
@@ -945,7 +943,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         XCTAssertEqual(opened?.destination, .chat("c_new"))
         XCTAssertEqual(opened?.instanceId, "laptop")
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertFalse(requests("studio").contains("POST /chats"))
 
         let again = try await consent.perform(id: target.id, isValid: stillValid) { agreed in
@@ -959,18 +957,18 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let link = AidenNavigationRequest(destination: .newChat, instanceId: "laptop", workspaceId: "workspace_app", startsVoice: false)
         try connection("laptop").adopt(connectionState: .connecting)
 
-        XCTAssertNil(coordinator.newChatTarget(for: link, startsVoice: false, tabShell: true))
+        XCTAssertNil(coordinator.newChatTarget(for: link, startsVoice: false))
 
         try connection("laptop").adopt(connectionState: .connected)
         try connection("studio").adopt(connectionState: .connecting)
-        XCTAssertNotNil(coordinator.newChatTarget(for: link, startsVoice: false, tabShell: true))
+        XCTAssertNotNil(coordinator.newChatTarget(for: link, startsVoice: false))
     }
 
     func testANewChatLinkIsNotOfferedInAnArchivedWorkspace() {
         coordinator.workspaceArchiveStore.archive(workspaceID: "workspace_app", instanceID: "laptop")
         let link = AidenNavigationRequest(destination: .newChat, instanceId: "laptop", workspaceId: "workspace_app", startsVoice: false)
 
-        XCTAssertNil(coordinator.newChatTarget(for: link, startsVoice: false, tabShell: true))
+        XCTAssertNil(coordinator.newChatTarget(for: link, startsVoice: false))
 
         XCTAssertNotNil(coordinator.presentedError)
     }
@@ -981,7 +979,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         readOnly.serverCapabilities?.removeAll { $0 == .chatWrite }
         try await connect([studio, readOnly])
         let link = AidenNavigationRequest(destination: .newChat, instanceId: "laptop", workspaceId: "workspace_app", startsVoice: false)
-        let target = try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false, tabShell: true))
+        let target = try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false))
 
         let opened = try await coordinator.createChat(agreedTo: target)
 
@@ -992,7 +990,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
     func testAgreeingCreatesNothingInAWorkspaceArchivedSinceThePrompt() async throws {
         let link = AidenNavigationRequest(destination: .newChat, instanceId: "laptop", workspaceId: "workspace_app", startsVoice: false)
-        let target = try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false, tabShell: true))
+        let target = try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false))
         coordinator.workspaceArchiveStore.archive(workspaceID: "workspace_app", instanceID: "laptop")
 
         let opened = try await coordinator.createChat(agreedTo: target)
@@ -1012,7 +1010,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
             chatObject("c_new", text: "hello", workspace: "workspace_hidden")
         ))
         let link = AidenNavigationRequest(destination: .newChat, instanceId: "laptop", workspaceId: "workspace_home", startsVoice: false)
-        return try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false, tabShell: true))
+        return try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false))
     }
 
     func testAChatStartedUnderChatsLearnsItsHiddenFolder() async throws {
@@ -1040,7 +1038,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
     func testAChatCreatedAsTheAppLeavesTheForegroundIsNotOpened() async throws {
         let link = AidenNavigationRequest(destination: .newChat, instanceId: "laptop", workspaceId: "workspace_app", startsVoice: false)
-        let target = try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false, tabShell: true))
+        let target = try XCTUnwrap(coordinator.newChatTarget(for: link, startsVoice: false))
         responder.reply(instanceId: "laptop", method: "POST", path: "/chats", status: 201, json: json(chatObject("c_new", text: "hello")))
         var isForeground = true
         let release = responder.hold(instanceId: "laptop", path: "/chats")
@@ -1057,7 +1055,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     // I1: a foreground intent goes by its own machine.
 
     private func intents(for instanceId: String?, at now: Date = Date()) -> AidenForegroundIntentRouter {
-        let router = AidenForegroundIntentRouter(queuesActions: true)
+        let router = AidenForegroundIntentRouter()
         router.submit(instanceID: instanceId, workspaceID: "workspace_app", startsVoice: false, now: now)
         return router
     }
@@ -1175,16 +1173,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         XCTAssertEqual(try XCTUnwrap(router.timeUntilNextExpiry(now: start.addingTimeInterval(10))), 50, accuracy: 0.01)
         XCTAssertEqual(router.timeUntilNextExpiry(now: start.addingTimeInterval(70)), 0)
-        XCTAssertNil(AidenForegroundIntentRouter(queuesActions: true).timeUntilNextExpiry())
-    }
-
-    func testTheMenuShellStillTakesOneIntentAtATime() {
-        let router = AidenForegroundIntentRouter(queuesActions: false)
-        router.submit(instanceID: "laptop", workspaceID: nil, startsVoice: false, now: Date().addingTimeInterval(-61))
-
-        router.submit(instanceID: "studio", workspaceID: nil, startsVoice: false)
-
-        XCTAssertEqual(router.pending?.instanceID, "laptop")
+        XCTAssertNil(AidenForegroundIntentRouter().timeUntilNextExpiry())
     }
 
     // I2: what a chat's own workspace allows.
@@ -1280,7 +1269,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         // Nothing on screen names the machine, and the phone doesn't know it.
         XCTAssertEqual(coordinator.presentedError, "That machine is no longer paired. Pair it again to continue.")
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertEqual(requests("gone"), [])
     }
 
@@ -1370,18 +1359,17 @@ final class AidenOwnerRoutingTests: XCTestCase {
         await route.load(coordinator: coordinator)
         guard case .ready = route.state else { return XCTFail("The route gave up on the chat on screen: \(route.state)") }
         XCTAssertNotNil(coordinator.hosts.connection(for: "laptop"), "Purged under the person reading it")
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
 
         model.setViewPresent(false)
 
         try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "laptop") == nil }
         XCTAssertFalse(coordinator.installationStore.installations.contains { $0.id == "laptop" })
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
-    // The tab shell: the selected machine is only the default for new work, so
-    // it gets what any other machine gets. Flag off, `AidenChatDockTests` pins
-    // the old ending.
+    // The default machine is only the default for new work, so it gets what
+    // any other machine gets.
 
     private func sendRefusedByStudio() async throws -> AidenChatViewModel {
         transcript("from studio", on: "studio")
@@ -1403,7 +1391,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     func testARevokedSelectedMachinesChatStaysUntilLeaving() async throws {
-        try await connect([studio, laptop], tabShell: true)
+        try await connect([studio, laptop])
         let model = try await sendRefusedByStudio()
         model.setViewPresent(true)
         let before = model.chat.messages.count
@@ -1416,17 +1404,17 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(model.revokedMachineNotice?.machineName, "Studio")
         XCTAssertThrowsError(try coordinator.remoteClient(for: model.owner), "The credential goes on working")
         XCTAssertTrue(coordinator.installationStore.installations.contains { $0.id == "studio" })
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop", "A revoked machine can't be the default for new work")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop", "A revoked machine can't be the default for new work")
 
         model.setViewPresent(false)
 
         try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "studio") == nil }
         XCTAssertFalse(coordinator.installationStore.installations.contains { $0.id == "studio" })
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
     }
 
     func testARevokedSelectedMachineWithNothingOnScreenPurgesAtOnce() async throws {
-        try await connect([studio, laptop], tabShell: true)
+        try await connect([studio, laptop])
         let model = try await sendRefusedByStudio()
 
         await model.send()
@@ -1436,7 +1424,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     func testAnotherMachinesChatDoesNotHoldBackTheSelectedOnesPurge() async throws {
-        try await connect([studio, laptop], tabShell: true)
+        try await connect([studio, laptop])
         let model = try await sendRefusedByStudio()
         let onLaptop = try chatModel()
         onLaptop.setViewPresent(true)
@@ -1448,7 +1436,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     func testAnOnlyMachineKeepsItsChatOnScreenThenGoesToPairing() async throws {
-        try await connect([studio], tabShell: true)
+        try await connect([studio])
         let model = try await sendRefusedByStudio()
         model.setViewPresent(true)
 
@@ -1466,7 +1454,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     func testConnectingLeavesAHeldOnlyMachineAlone() async throws {
-        try await connect([studio], tabShell: true)
+        try await connect([studio])
         let model = try await sendRefusedByStudio()
         model.setViewPresent(true)
         await model.send()
@@ -1484,11 +1472,11 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     func testSelectingAHeldMachineWaitsForItsChatToLeave() async throws {
-        try await connect([studio, laptop], tabShell: true)
+        try await connect([studio, laptop])
         let model = try await sendRefusedByStudio()
         model.setViewPresent(true)
         await model.send()
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
 
         await coordinator.switchInstallation(to: "studio")
 
@@ -1498,11 +1486,11 @@ final class AidenOwnerRoutingTests: XCTestCase {
         model.setViewPresent(false)
 
         try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "studio") == nil }
-        try await waitUntil("the next machine") { self.coordinator.activeInstanceId == "laptop" }
+        try await waitUntil("the next machine") { self.coordinator.defaultInstanceId == "laptop" }
     }
 
     func testSelectingARevokedMachineWithNothingOnScreenStillPurges() async throws {
-        try await connect([studio, laptop], tabShell: true)
+        try await connect([studio, laptop])
         let laptopChat = try chatModel()
         laptopChat.setViewPresent(true)
         await coordinator.hostConnectionWasRevokedInBackground(try connection("laptop"))
@@ -1511,17 +1499,6 @@ final class AidenOwnerRoutingTests: XCTestCase {
         await coordinator.switchInstallation(to: "laptop")
 
         try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "laptop") == nil }
-    }
-
-    func testTheMenuShellNeverHoldsARevokedChat() async throws {
-        let model = try await sendRefusedByStudio()
-        model.setViewPresent(true)
-
-        await model.send()
-
-        XCTAssertNil(coordinator.hosts.connection(for: "studio"), "Flag off, the selected machine leaves at once")
-        XCTAssertFalse(coordinator.isHoldingRevokedChat)
-        model.setViewPresent(false)
     }
 
     // Killed on a revoked chat: `isPurgePending` is memory only, and the pairing
@@ -1535,7 +1512,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     }
 
     private func relaunch(laptopAnswers: () -> Void) {
-        pair([studio, laptop], tabShell: true)
+        pair([studio, laptop])
         laptopAnswers()
     }
 
@@ -1549,7 +1526,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "laptop") == nil }
         XCTAssertFalse(coordinator.installationStore.installations.contains { $0.id == "laptop" })
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
     func testAChatRestoredOverARevokedMachineShowsTheNoticeAgain() async throws {
@@ -1592,7 +1569,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
     // was anywhere to go, so a launch finds that machine selected only if it's the only one.
 
     private func killedOnStudiosChat(_ installations: [AidenInstallation]) async throws {
-        try await connect(installations, tabShell: true)
+        try await connect(installations)
         let model = try await sendRefusedByStudio()
         model.setViewPresent(true)
         await model.send()
@@ -1601,20 +1578,20 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
     /// `installations` are what's saved at the kill, the selected machine first.
     private func relaunchRefusedByStudio(_ installations: [AidenInstallation]) {
-        pair(installations, tabShell: true)
+        pair(installations)
         responder.reply(instanceId: "studio", path: "/server", status: 401, json: Self.revokedJSON)
     }
 
     func testALaunchAfterBeingKilledOnTheSelectedMachinesChatFinishesThePurge() async throws {
         try await killedOnStudiosChat([studio, laptop])
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
 
         relaunchRefusedByStudio([laptop, studio])
         await launch()
 
         try await waitUntil("the purge") { self.coordinator.hosts.connection(for: "studio") == nil }
         XCTAssertFalse(coordinator.installationStore.installations.contains { $0.id == "studio" })
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
     }
 
     func testAKilledOnlyMachineWithNothingRestoredGoesToPairing() async throws {
@@ -1823,16 +1800,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertNotNil(files.index)
         XCTAssertTrue(requests("laptop").contains("GET /workspaces/workspace_app/files"))
         XCTAssertFalse(requests("studio").contains("GET /workspaces/workspace_app/files"))
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
-    }
-
-    func testTheTabShellOpensForksOfAChatOnAnyMachine() throws {
-        let laptopChat = try chatModel()
-        let studioChat = try chatModel(owner: "studio")
-
-        XCTAssertTrue(laptopChat.opensForks(inTabShell: true))
-        XCTAssertFalse(laptopChat.opensForks(inTabShell: false), "The menu shell would file it under the selected machine")
-        XCTAssertTrue(studioChat.opensForks(inTabShell: false))
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 }
 #endif

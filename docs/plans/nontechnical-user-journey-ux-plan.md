@@ -357,7 +357,7 @@ Paths below are the authoritative audit evidence. Component code takes precedenc
 
 <a id="s16"></a>**S16 — Android pairing:** [pairing and removal screen](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/remote/AidenPairingScreen.kt), [remote client](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/networking/AidenRemoteClient.kt).
 
-<a id="s17"></a>**S17 — Native continuation:** [iOS coordinator](../../ios/AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift), [iOS workspace shell](../../ios/AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift), [Android product shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/remote/AidenProductShellScreen.kt), [Android workspace shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/workspaces/AidenWorkspaceShellScreen.kt).
+<a id="s17"></a>**S17 — Native continuation:** [iOS coordinator](../../ios/AidenOnTheGo/Features/Remote/AidenRemoteCoordinator.swift), [iOS app shell](../../ios/AidenOnTheGo/Features/Shell/AidenAppShellView.swift), [Android product shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/remote/AidenProductShellScreen.kt), [Android workspace shell](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/workspaces/AidenWorkspaceShellScreen.kt).
 
 <a id="s18"></a>**S18 — Voice:** [voice settings](../../renderer/components/settings/voice-settings.tsx), [local voice setup](../../renderer/components/settings/local-voice-settings.tsx), [paired-Mac speech](../aiden-on-the-go-remote-access.md#paired-mac-voice-input).
 

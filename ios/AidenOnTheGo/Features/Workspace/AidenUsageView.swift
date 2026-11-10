@@ -3,68 +3,56 @@ import SwiftUI
 /// Usage before its first read: the dashboard's outline, or an explanation
 /// when the machine can't be reached or the read failed.
 struct AidenUsagePendingView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let isOffline: Bool
     let failed: Bool
     let retry: () -> Void
-    /// True when a stack has pushed this page, so Back replaces Done.
-    var isPushed = false
     var unavailableMessage: LocalizedStringKey = "Usage appears once your machine is reachable."
     var failedMessage: LocalizedStringKey = "Your machine didn't return usage this time."
     var machinePicker: AidenNewWorkMachinePicker?
 
     var body: some View {
-        AidenPresentedStack(isPushed: isPushed) {
-            Group {
-                if isOffline {
-                    ContentUnavailableView(
-                        "Usage unavailable",
-                        systemImage: "chart.bar.xaxis",
-                        description: Text(unavailableMessage)
-                    )
-                } else if failed {
-                    ContentUnavailableView {
-                        Label("Usage couldn't load", systemImage: "chart.bar.xaxis")
-                    } description: {
-                        Text(failedMessage)
-                    } actions: {
-                        Button("Try again", action: retry)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: AidenSpacing.xl) {
-                        HStack(spacing: AidenSpacing.m) {
-                            ForEach(0..<3, id: \.self) { _ in
-                                AidenBotSkeletonBlock(width: nil, height: 72, radius: AidenRadius.card, reduceMotion: reduceMotion)
-                            }
-                        }
-                        AidenBotSkeletonBlock(width: nil, height: 132, radius: AidenRadius.card, reduceMotion: reduceMotion)
-                        ForEach(0..<4, id: \.self) { _ in
-                            AidenBotSkeletonBlock(width: nil, height: 44, radius: AidenRadius.code, reduceMotion: reduceMotion)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(AidenSpacing.xxl)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Loading usage")
+        Group {
+            if isOffline {
+                ContentUnavailableView(
+                    "Usage unavailable",
+                    systemImage: "chart.bar.xaxis",
+                    description: Text(unavailableMessage)
+                )
+            } else if failed {
+                ContentUnavailableView {
+                    Label("Usage couldn't load", systemImage: "chart.bar.xaxis")
+                } description: {
+                    Text(failedMessage)
+                } actions: {
+                    Button("Try again", action: retry)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .safeAreaInset(edge: .top) {
-                machinePicker?.padding(.horizontal, AidenSpacing.l)
-            }
-            .background(palette.canvas.ignoresSafeArea())
-            .navigationTitle("Usage")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if !isPushed {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+            } else {
+                VStack(alignment: .leading, spacing: AidenSpacing.xl) {
+                    HStack(spacing: AidenSpacing.m) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            AidenBotSkeletonBlock(width: nil, height: 72, radius: AidenRadius.card, reduceMotion: reduceMotion)
+                        }
                     }
+                    AidenBotSkeletonBlock(width: nil, height: 132, radius: AidenRadius.card, reduceMotion: reduceMotion)
+                    ForEach(0..<4, id: \.self) { _ in
+                        AidenBotSkeletonBlock(width: nil, height: 44, radius: AidenRadius.code, reduceMotion: reduceMotion)
+                    }
+                    Spacer(minLength: 0)
                 }
+                .padding(AidenSpacing.xxl)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Loading usage")
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .top) {
+            machinePicker?.padding(.horizontal, AidenSpacing.l)
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("Usage")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -137,7 +125,7 @@ final class AidenMachineUsageModel {
     }
 }
 
-/// Usage for one machine at a time, on the tab shell.
+/// Usage for one machine at a time.
 struct AidenMachineUsageView: View {
     private struct LoadID: Equatable {
         let target: AidenNewWorkTarget?
@@ -145,12 +133,9 @@ struct AidenMachineUsageView: View {
     }
 
     @State private var model: AidenMachineUsageModel
-    private let isPushed: Bool
 
-    /// `isPushed` is true when a stack has pushed this page, so Back replaces Done.
-    init(coordinator: AidenRemoteCoordinator, isPushed: Bool = false) {
+    init(coordinator: AidenRemoteCoordinator) {
         _model = State(initialValue: AidenMachineUsageModel(coordinator: coordinator))
-        self.isPushed = isPushed
     }
 
     var body: some View {
@@ -159,7 +144,6 @@ struct AidenMachineUsageView: View {
                 AidenUsageView(
                     usage: usage,
                     providers: model.providers,
-                    isPushed: isPushed,
                     machinePicker: AidenNewWorkMachinePicker(picker: model.picker)
                 )
             } else {
@@ -167,7 +151,6 @@ struct AidenMachineUsageView: View {
                     isOffline: model.isUnreachable || !model.sharesUsage,
                     failed: model.loadFailed,
                     retry: { Task { await model.load() } },
-                    isPushed: isPushed,
                     unavailableMessage: model.sharesUsage
                         ? "Usage appears once this machine is reachable."
                         : "This machine doesn’t share usage with this phone.",
@@ -183,12 +166,9 @@ struct AidenMachineUsageView: View {
 }
 
 struct AidenUsageView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     let usage: AidenUsageSummary
     let providers: [AidenProvider]
-    /// True when a stack has pushed this page, so Back replaces Done.
-    var isPushed = false
     var machinePicker: AidenNewWorkMachinePicker?
 
     private var heatmapDays: [AidenUsageHeatmapDay] {
@@ -214,33 +194,24 @@ struct AidenUsageView: View {
     }
 
     var body: some View {
-        AidenPresentedStack(isPushed: isPushed) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: AidenSpacing.xxl) {
-                    machinePicker
-                    usageHero
-                    overviewGrid
-                    tokenActivitySection
-                    activityInsightsSection
-                    modelSection
-                    privacyNote
-                }
-                .padding(.horizontal, AidenSpacing.xl)
-                .padding(.top, AidenSpacing.m)
-                .padding(.bottom, AidenSpacing.xxxl)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: AidenSpacing.xxl) {
+                machinePicker
+                usageHero
+                overviewGrid
+                tokenActivitySection
+                activityInsightsSection
+                modelSection
+                privacyNote
             }
-            .scrollContentBackground(.hidden)
-            .background(palette.canvas.ignoresSafeArea())
-            .navigationTitle("Usage")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if !isPushed {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
-                }
-            }
+            .padding(.horizontal, AidenSpacing.xl)
+            .padding(.top, AidenSpacing.m)
+            .padding(.bottom, AidenSpacing.xxxl)
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("Usage")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var usageHero: some View {

@@ -55,21 +55,10 @@ struct AidenNotificationTap: Equatable, Sendable {
         instanceID = userInfo[AidenRunAlertNotifier.instanceUserInfoKey] as? String
     }
 
-    /// Under the tab shell, queues a route to the notification's own machine. A
-    /// machine that's gone takes the tap with it, without a word. With the flag
-    /// off, the app's own scheme routes back through `onOpenURL`, which switches
-    /// to the link's paired instance before opening the chat.
+    /// Queues a route to the notification's own machine. A machine that's gone
+    /// takes the tap with it, without a word.
     @MainActor
-    func open(
-        coordinator: AidenRemoteCoordinator,
-        intents: AidenForegroundIntentRouter? = nil,
-        tabShellEnabled: Bool = AppConfig.tabShellEnabled,
-        openLink: @MainActor (URL) -> Void = { UIApplication.shared.open($0) }
-    ) {
-        guard tabShellEnabled else {
-            if let link { openLink(link) }
-            return
-        }
+    func open(coordinator: AidenRemoteCoordinator, intents: AidenForegroundIntentRouter? = nil) {
         guard let route = route(on: coordinator), coordinator.canOpen(route) else { return }
         (intents ?? .shared).submit(route: route)
     }
@@ -81,7 +70,7 @@ struct AidenNotificationTap: Equatable, Sendable {
             return AidenAppRoute(
                 request: request,
                 installations: coordinator.installationStore.installations,
-                activeInstanceId: coordinator.activeInstanceId
+                defaultInstanceId: coordinator.defaultInstanceId
             )
         }
         return instanceID.map { .machine(instanceId: $0) }

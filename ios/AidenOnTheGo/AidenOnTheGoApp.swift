@@ -79,8 +79,8 @@ final class AidenMetricDiagnosticSubscriber: NSObject, MXMetricManagerSubscriber
 struct AidenOnTheGoApp: App {
     @State private var haptics: AidenHapticCenter
     @State private var remoteCoordinator: AidenRemoteCoordinator
-    /// Built here because an app's `init` runs once. Nil with the tab shell off.
-    @State private var inboxStore: AidenUnifiedInboxStore?
+    /// Built here because an app's `init` runs once.
+    @State private var inboxStore: AidenUnifiedInboxStore
     @State private var appearance = AidenAppearanceStore()
 
     init() {
@@ -106,7 +106,7 @@ struct AidenOnTheGoApp: App {
         coordinator = AidenRemoteCoordinator(haptics: haptics)
 #endif
         _remoteCoordinator = State(initialValue: coordinator)
-        _inboxStore = State(initialValue: AppConfig.tabShellEnabled ? AidenUnifiedInboxStore(coordinator: coordinator) : nil)
+        _inboxStore = State(initialValue: AidenUnifiedInboxStore(coordinator: coordinator))
         // A tap can launch the app, so this can't wait for `ContentView`.
         AidenNotificationPresentationDelegate.openTap = { $0.open(coordinator: coordinator) }
         // The unit-test host never touches the device's notifications.

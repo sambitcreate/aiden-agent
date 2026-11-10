@@ -226,9 +226,6 @@ final class AidenRemoteCoordinator {
     /// The views showing each machine's data. A revoked machine keeps its data
     /// until its entry here empties.
     @ObservationIgnored private var onScreenViews: [String: Set<ObjectIdentifier>] = [:]
-    /// The tab shell holds a revoked selected machine for its chat on screen, as
-    /// it does any other machine. The old shell ends it at once.
-    private let holdsRevokedChats: Bool
     private var connectionGeneration: Int {
         selectedConnection?.connectionGeneration ?? 0
     }
@@ -244,7 +241,6 @@ final class AidenRemoteCoordinator {
     init(haptics: (any AidenHapticEmitting)? = nil) {
         let installationStore = AidenInstallationStore()
         self.installationStore = installationStore
-        holdsRevokedChats = AppConfig.tabShellEnabled
         machinePreferences = .shared
         self.haptics = haptics ?? AidenHapticCenter()
         workspaceArchiveStore = AidenWorkspaceArchiveStore()
@@ -276,11 +272,9 @@ final class AidenRemoteCoordinator {
         haptics: (any AidenHapticEmitting)? = nil,
         machinePreferences: AidenMachinePreferencesStore = .shared,
         clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) },
-        probeClientFactory: ClientFactory? = nil,
-        tabShell: Bool = AppConfig.tabShellEnabled
+        probeClientFactory: ClientFactory? = nil
     ) {
         self.installationStore = installationStore
-        holdsRevokedChats = tabShell
         self.machinePreferences = machinePreferences
         self.haptics = haptics ?? AidenHapticCenter()
         self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
@@ -957,11 +951,6 @@ final class AidenRemoteCoordinator {
         installationStore.activeInstallationId
     }
 
-    @available(*, deprecated, renamed: "defaultInstanceId")
-    var activeInstanceId: String? {
-        defaultInstanceId
-    }
-
     /// Moves the default and nothing else. No machine is asked anything, a
     /// connected machine stays connected, and work on an owner context goes on.
     /// Work bound to the selection ends with it, as `isCurrent` has always said.
@@ -1106,7 +1095,7 @@ final class AidenRemoteCoordinator {
     }
 
     private func isHeldForItsChat(_ connection: AidenHostConnection) -> Bool {
-        holdsRevokedChats && connection.isPurgePending && onScreenViews[connection.instanceId] != nil
+        connection.isPurgePending && onScreenViews[connection.instanceId] != nil
     }
 
     /// Records that `view` is or isn't showing `instanceId`'s data. The last
@@ -1450,7 +1439,7 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         // The selected machine is only the default for new work, so a chat of
         // its on screen gets what any machine's does. The selection moves on,
         // if there's anywhere to go, and the purge waits for that chat to leave.
-        if holdsRevokedChats, onScreenViews[connection.instanceId] != nil {
+        if onScreenViews[connection.instanceId] != nil {
             connection.markRevokedWithPurgePending()
             hostConnectionNeedsPairing(connection)
             return

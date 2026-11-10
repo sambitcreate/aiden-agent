@@ -1,18 +1,11 @@
 import SwiftUI
 
 struct AidenAppSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(AidenHapticCenter.self) private var haptics
     @Environment(\.aidenPalette) private var palette
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var appearance: AidenAppearanceStore
-    /// For the installations sheet, which the tab shell has no use for: Machines pairs there.
-    var addInstallation: () -> Void = {}
-    /// True when a stack has pushed this page, so Back replaces Done.
-    var isPushed = false
-    var tabShellEnabled = AppConfig.tabShellEnabled
 
-    @State private var isShowingInstallations = false
     @State private var isShowingAppearance = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var readAloudStatus: AidenReadAloudStatus?
@@ -72,151 +65,125 @@ struct AidenAppSettingsView: View {
     }
 
     var body: some View {
-        AidenPresentedStack(isPushed: isPushed) {
-            Form {
-                Section("Aiden Agent") {
-                    LabeledContent(
-                        "Connected machine",
-                        value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
-                    )
-                    if tabShellEnabled {
-                        NavigationLink(value: AidenAppRoute.machines) {
-                            LabeledContent {
-                                Text(machinesSummary)
-                            } label: {
-                                Label("Machines", systemImage: "desktopcomputer")
-                            }
-                        }
-                        AidenDefaultMachineRow(coordinator: coordinator)
-                    } else {
-                        Button {
-                            isShowingInstallations = true
-                        } label: {
-                            Label("Paired Installations", systemImage: "desktopcomputer")
-                        }
-                    }
-                }
-
-                Section {
-                    Button {
-                        isShowingAppearance = true
+        Form {
+            Section("Aiden Agent") {
+                LabeledContent(
+                    "Connected machine",
+                    value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
+                )
+                NavigationLink(value: AidenAppRoute.machines) {
+                    LabeledContent {
+                        Text(machinesSummary)
                     } label: {
-                        Label("Appearance", systemImage: "circle.lefthalf.filled")
+                        Label("Machines", systemImage: "desktopcomputer")
                     }
-                    Picker("New workspace permission", selection: $defaultWorkspacePermissionRaw) {
-                        ForEach(AidenWorkspacePermission.allCases, id: \.self) { permission in
-                            Text(permission.title).tag(permission.rawValue)
-                        }
-                    }
-                    .aidenPickerThatWrapsWhenLarge()
-                } header: {
-                    Text("Global defaults")
-                } footer: {
-                    Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
                 }
-
-                Section {
-                    NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
-                        Label("Providers", systemImage: "server.rack")
-                    }
-                } footer: { Text("Manage model connections on your paired machine.") }
-
-                Section {
-                    Toggle(
-                        "Use memory",
-                        isOn: Binding(
-                            get: { memorySettings?.enabled ?? true },
-                            set: { updateMemory($0) }
-                        )
-                    )
-                    .disabled(memorySettings == nil || isSavingMemory)
-                    if let memoryError {
-                        Text(memoryError).foregroundStyle(palette.dangerText)
-                    }
-                } header: {
-                    Text("Memory")
-                } footer: {
-                    Text("This controls memory on your paired machine. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
-                }
-
-                Section {
-                    Text(readAloudStatus?.ready == true ? "Ready on your machine" : "Set up on your machine")
-                    if let readAloudError { Text(readAloudError).foregroundStyle(.secondary) }
-                    Button("Refresh status") { Task { await loadReadAloudStatus() } }
-                } header: { Text("Read Aloud") } footer: {
-                    Text(AidenReadAloudStatus.setupGuidance + " Audio is retained only for this session; replay does not generate it again.")
-                }
-
-                Section {
-                    Picker("Transcription", selection: $voiceInputModeRaw) {
-                        ForEach(AidenVoiceInputMode.allCases) { mode in
-                            Text(mode.title).tag(mode.rawValue)
-                        }
-                    }
-                    .aidenPickerThatWrapsWhenLarge()
-                    if voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue {
-                        NavigationLink {
-                            AidenMacTranscriptionSettingsView(coordinator: coordinator)
-                        } label: {
-                            Label("Desktop speech model", systemImage: "desktopcomputer")
-                        }
-                    }
-                } header: {
-                    Text("Voice input")
-                } footer: {
-                    Text(
-                        voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
-                            ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired machine, and not retained. Text appears after you stop recording."
-                            : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
-                    )
-                }
-
-                Section {
-                    Toggle("Interaction haptics", isOn: Binding(
-                        get: { haptics.isEnabled },
-                        set: { haptics.isEnabled = $0 }
-                    ))
-                    .disabled(!haptics.supportsHaptics)
-                } header: {
-                    Text("Feedback")
-                } footer: {
-                    Text(haptics.supportsHaptics
-                        ? "Adds subtle feedback to important actions and confirmed outcomes. Standard controls keep their system feedback."
-                        : "Interaction haptics are not available on this device.")
-                }
-
-                Section("About") {
-                    Link(destination: AppConfig.privacyPolicyURL) {
-                        Label("Privacy policy", systemImage: "hand.raised")
-                    }
-                    Link(destination: AppConfig.supportURL) {
-                        Label("Support", systemImage: "questionmark.circle")
-                    }
-                    LabeledContent("License", value: "MIT")
-                }
+                AidenDefaultMachineRow(coordinator: coordinator)
             }
-            .navigationTitle("App settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if !isPushed {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+
+            Section {
+                Button {
+                    isShowingAppearance = true
+                } label: {
+                    Label("Appearance", systemImage: "circle.lefthalf.filled")
+                }
+                Picker("New workspace permission", selection: $defaultWorkspacePermissionRaw) {
+                    ForEach(AidenWorkspacePermission.allCases, id: \.self) { permission in
+                        Text(permission.title).tag(permission.rawValue)
                     }
                 }
+                .aidenPickerThatWrapsWhenLarge()
+            } header: {
+                Text("Global defaults")
+            } footer: {
+                Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
+            }
+
+            Section {
+                NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
+                    Label("Providers", systemImage: "server.rack")
+                }
+            } footer: { Text("Manage model connections on your paired machine.") }
+
+            Section {
+                Toggle(
+                    "Use memory",
+                    isOn: Binding(
+                        get: { memorySettings?.enabled ?? true },
+                        set: { updateMemory($0) }
+                    )
+                )
+                .disabled(memorySettings == nil || isSavingMemory)
+                if let memoryError {
+                    Text(memoryError).foregroundStyle(palette.dangerText)
+                }
+            } header: {
+                Text("Memory")
+            } footer: {
+                Text("This controls memory on your paired machine. Turning it off stops recall, saving, and indexing without deleting existing approved facts. Workspace overrides are in each workspace’s ••• menu.")
+            }
+
+            Section {
+                Text(readAloudStatus?.ready == true ? "Ready on your machine" : "Set up on your machine")
+                if let readAloudError { Text(readAloudError).foregroundStyle(.secondary) }
+                Button("Refresh status") { Task { await loadReadAloudStatus() } }
+            } header: { Text("Read Aloud") } footer: {
+                Text(AidenReadAloudStatus.setupGuidance + " Audio is retained only for this session; replay does not generate it again.")
+            }
+
+            Section {
+                Picker("Transcription", selection: $voiceInputModeRaw) {
+                    ForEach(AidenVoiceInputMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
+                .aidenPickerThatWrapsWhenLarge()
+                if voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue {
+                    NavigationLink {
+                        AidenMacTranscriptionSettingsView(coordinator: coordinator)
+                    } label: {
+                        Label("Desktop speech model", systemImage: "desktopcomputer")
+                    }
+                }
+            } header: {
+                Text("Voice input")
+            } footer: {
+                Text(
+                    voiceInputModeRaw == AidenVoiceInputMode.pairedMac.rawValue
+                        ? "Microphone audio is sent over Aiden's encrypted pinned connection, processed on-device by your paired machine, and not retained. Text appears after you stop recording."
+                        : "Uses Apple's on-device Speech framework. Microphone audio stays on this device."
+                )
+            }
+
+            Section {
+                Toggle("Interaction haptics", isOn: Binding(
+                    get: { haptics.isEnabled },
+                    set: { haptics.isEnabled = $0 }
+                ))
+                .disabled(!haptics.supportsHaptics)
+            } header: {
+                Text("Feedback")
+            } footer: {
+                Text(haptics.supportsHaptics
+                    ? "Adds subtle feedback to important actions and confirmed outcomes. Standard controls keep their system feedback."
+                    : "Interaction haptics are not available on this device.")
+            }
+
+            Section("About") {
+                Link(destination: AppConfig.privacyPolicyURL) {
+                    Label("Privacy policy", systemImage: "hand.raised")
+                }
+                Link(destination: AppConfig.supportURL) {
+                    Label("Support", systemImage: "questionmark.circle")
+                }
+                LabeledContent("License", value: "MIT")
             }
         }
+        .navigationTitle("App settings")
+        .navigationBarTitleDisplayMode(.inline)
         .task { await loadMemorySettings(); await loadReadAloudStatus() }
         .task(id: scenePhase) { if scenePhase == .active { await loadReadAloudStatus() } }
         .task(id: coordinator.server?.instanceId) { readAloudStatus = nil; await loadReadAloudStatus() }
-        .sheet(isPresented: $isShowingInstallations) {
-            AidenInstallationsView(
-                coordinator: coordinator,
-                addInstallation: {
-                    isShowingInstallations = false
-                    addInstallation()
-                }
-            )
-        }
         .sheet(isPresented: $isShowingAppearance) {
             AidenAppearanceSettingsView(appearance: appearance)
         }

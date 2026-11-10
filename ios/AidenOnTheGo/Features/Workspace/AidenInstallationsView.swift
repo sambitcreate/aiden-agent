@@ -76,7 +76,7 @@ struct AidenInstallationsView: View {
                         }.count > 1
                         Button {
                             Task {
-                                guard coordinator.activeInstanceId != installation.id else {
+                                guard coordinator.defaultInstanceId != installation.id else {
                                     dismiss()
                                     return
                                 }
@@ -105,7 +105,7 @@ struct AidenInstallationsView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(installation.name)
                                         .foregroundStyle(.primary)
-                                    Text("\(AidenInstallationPresentation.reachability(installationID: installation.id, activeInstallationID: coordinator.activeInstanceId, connectionState: coordinator.connectionState)) · \(AidenInstallationPresentation.endpointType(installation.endpoint))")
+                                    Text("\(AidenInstallationPresentation.reachability(installationID: installation.id, activeInstallationID: coordinator.defaultInstanceId, connectionState: coordinator.connectionState)) · \(AidenInstallationPresentation.endpointType(installation.endpoint))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     Text(AidenInstallationPresentation.lastConnection(installation.lastConnectedAt))
@@ -128,7 +128,7 @@ struct AidenInstallationsView: View {
                             : installation.name)
                         .accessibilityValue(AidenInstallationPresentation.accessibilityValue(
                             installationID: installation.id,
-                            activeInstallationID: coordinator.activeInstanceId,
+                            activeInstallationID: coordinator.defaultInstanceId,
                             connectionState: coordinator.connectionState,
                             endpoint: installation.endpoint,
                             lastConnectedAt: installation.lastConnectedAt

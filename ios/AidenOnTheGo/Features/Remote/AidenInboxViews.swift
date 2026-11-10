@@ -187,12 +187,21 @@ struct AidenInboxRowView: View {
         .accessibilityLabel(accessibilityName(status))
     }
 
+    private var isFork: Bool { row.summary.forkedFrom != nil }
+
     private var words: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(row.summary.title)
-                .font(.subheadline.weight(unread ? .semibold : .medium))
-                .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
-                .lineLimit(isStacked ? 3 : 1)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                if isFork {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                }
+                Text(row.summary.title)
+                    .font(.subheadline.weight(unread ? .semibold : .medium))
+                    .foregroundStyle(isDimmed ? palette.secondary : palette.foreground)
+                    .lineLimit(isStacked ? 3 : 1)
+            }
             if machine != nil || detail != nil {
                 AidenInboxRowMachineLine(machine: machine, detail: detail, isStacked: isStacked)
             }
@@ -236,9 +245,11 @@ struct AidenInboxRowView: View {
     }
 
     /// "Title, workspace, status, wait, Unread", as the desktop names it, with the
-    /// machine after the workspace when more than one is listed.
+    /// machine after the workspace when more than one is listed. A fork says so
+    /// first, as its glyph does.
     func accessibilityName(_ status: AidenInboxRowStatus) -> String {
         [
+            isFork ? String(localized: "Fork") : nil,
             row.summary.title, workspaceName, machine?.accessibilityLabel, offlineText,
             isPinned ? String(localized: "Pinned") : nil,
             status.spokenLabel ?? status.label, status.wait, unread ? "Unread" : nil,

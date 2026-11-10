@@ -837,7 +837,7 @@ final class AidenHomeModel {
         return await chatCache.presenting(cached, instanceId: instanceId)
     }
 
-    /// For the Inbox, whose reads are polls: `load` does this for the old shell.
+    /// For the Inbox, whose reads are polls rather than a `load`.
     func prefetchRecentTranscripts(host: any AidenHomeHost) {
         guard let context = contentContext, host.holdsHomeContext(context),
               let client = try? host.homeClient(for: context) else { return }
@@ -925,9 +925,9 @@ final class AidenHomeModel {
     }
 }
 
-/// The machine a Home model reads and writes. The selected machine, through the
-/// coordinator, is what the old shell shows. A connection is one machine, selected
-/// or not, for as long as its pairing lasts.
+/// The machine a Home model reads and writes. The coordinator is the default
+/// machine. A connection is one machine, default or not, for as long as its
+/// pairing lasts.
 @MainActor
 protocol AidenHomeHost: AnyObject {
     var server: AidenServer? { get }
@@ -1022,40 +1022,6 @@ enum AidenReadPresentation: Equatable {
         if hasContent { return .content }
         if failed { return .failed }
         return hasSettled ? .empty : .skeleton
-    }
-}
-
-/// Home's Recents list. Connecting and a first read are unsettled, offline
-/// with nothing saved is a failure, and only a completed read can be empty.
-func aidenHomeChatListPresentation(
-    hasRows: Bool,
-    connectionState: AidenRemoteConnectionState,
-    loadState: AidenHomeModel.ChatListLoadState
-) -> AidenReadPresentation {
-    let loadFailed: Bool
-    if case .failed = loadState { loadFailed = true } else { loadFailed = false }
-    let isOffline: Bool
-    if case .offline = connectionState { isOffline = true } else { isOffline = false }
-    return .of(
-        hasContent: hasRows,
-        hasSettled: loadState == .loaded || connectionState == .needsPairing,
-        failed: loadFailed || (isOffline && loadState != .loaded)
-    )
-}
-
-/// Home's workspace sections. The workspace list is settled only by a live
-/// answer; saved workspaces render while connecting.
-func aidenHomeWorkspaceListPresentation(
-    hasWorkspaces: Bool,
-    connectionState: AidenRemoteConnectionState
-) -> AidenReadPresentation {
-    switch connectionState {
-    case .connected, .needsPairing:
-        .of(hasContent: hasWorkspaces, hasSettled: true, failed: false)
-    case .connecting:
-        .of(hasContent: hasWorkspaces, hasSettled: false, failed: false)
-    case .offline:
-        .of(hasContent: hasWorkspaces, hasSettled: false, failed: true)
     }
 }
 

@@ -133,7 +133,7 @@ final class AidenDemoHostsTests: XCTestCase {
     func testCoordinatorConnectsToTheFirstMachineThroughTheRealLaunchPath() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
 
         await coordinator.start()
 
@@ -160,7 +160,7 @@ final class AidenDemoHostsTests: XCTestCase {
         guard case .offline = coordinator.connectionState else {
             return XCTFail("Expected offline, got \(coordinator.connectionState)")
         }
-        XCTAssertEqual(coordinator.activeInstanceId, "build", "An offline machine stays paired")
+        XCTAssertEqual(coordinator.defaultInstanceId, "build", "An offline machine stays paired")
     }
 
     func testReplyOverridesTheDefaultAndRecordsTheRequest() async throws {

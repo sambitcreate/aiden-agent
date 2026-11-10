@@ -206,6 +206,17 @@ struct AidenSessionSheet: View {
 /// fires: selectable text and the scroll view take the touch first. A UIKit
 /// recogniser that recognises alongside them and lets the touch through still
 /// sees it, so links, buttons and text selection keep working.
+/// Puts the composer's keyboard away. The dock sits in a `safeAreaBar`, which
+/// hosts it apart from its screen, so on iOS 26.5 the screen's `@FocusState`
+/// never learns that the field took focus: it reads false with the keyboard up,
+/// and setting it false changes nothing. The screens still set it, and this
+/// resigns the field in UIKit as well.
+enum AidenComposerKeyboard {
+    @MainActor static func putAway() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
+
 struct AidenTranscriptTap: UIGestureRecognizerRepresentable {
     let onTap: () -> Void
 

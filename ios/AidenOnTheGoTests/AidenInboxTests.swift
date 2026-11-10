@@ -695,7 +695,7 @@ extension AidenInboxTests {
         await model.load(host: try fixture.connection("laptop"))
 
         XCTAssertEqual(model.chats.map(\.id), ["on-laptop"])
-        XCTAssertEqual(fixture.coordinator.activeInstanceId, "studio", "Reading a machine moved the selection")
+        XCTAssertEqual(fixture.coordinator.defaultInstanceId, "studio", "Reading a machine moved the selection")
         XCTAssertEqual(fixture.requests("GET /chat-summaries", on: "studio"), selectedBefore)
     }
 

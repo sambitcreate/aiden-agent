@@ -265,7 +265,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let saved = try XCTUnwrap(coordinator.installationStore.installations.first { $0.id == "laptop" })
         XCTAssertNotNil(saved.lastConnectedAt)
         XCTAssertEqual(try connection("laptop", in: coordinator).server?.instanceId, "laptop")
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertEqual(coordinator.server?.instanceId, "studio")
         XCTAssertEqual(coordinator.workspaces, shown)
         XCTAssertEqual(coordinator.workspaceSnapshotRevision, revision, "The revision describes the selected machine")
@@ -582,7 +582,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertEqual(coordinator.presentedError, "Shown to the person")
         XCTAssertEqual(coordinator.connectionState, .connected)
         XCTAssertNil(coordinator.connectionIssue)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
     func testPairingScreenOnlyShowsWhenNoMachinesRemain() async throws {
@@ -596,7 +596,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         selected.markRevoked()
         await coordinator.refreshWorkspaces()
 
-        XCTAssertEqual(coordinator.activeInstanceId, next.instanceId)
+        XCTAssertEqual(coordinator.defaultInstanceId, next.instanceId)
         XCTAssertNotEqual(coordinator.connectionState, .needsPairing)
         try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }
         XCTAssertEqual(coordinator.server?.instanceId, next.instanceId)
@@ -611,7 +611,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         await coordinator.refreshWorkspaces()
 
         XCTAssertEqual(coordinator.connectionState, .needsPairing)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
     func testAMachineThatNeedsPairingIsNeitherChosenNorRetried() async throws {
@@ -623,8 +623,8 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         let studio = try connection("studio", in: coordinator)
         studio.adopt(connectionState: .needsPairing)
 
-        XCTAssertNotEqual(coordinator.activeInstanceId, "laptop")
-        XCTAssertNotEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertNotEqual(coordinator.defaultInstanceId, "laptop")
+        XCTAssertNotEqual(coordinator.defaultInstanceId, "studio")
         await scheduler(for: coordinator).foregrounded()
         XCTAssertEqual(laptop.connectionState, .needsPairing)
         XCTAssertTrue(responder.requests(instanceId: "laptop").isEmpty)
@@ -673,7 +673,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertNotNil(kept, "Cached rows stay while the chat is on screen")
         XCTAssertNotNil(coordinator.installationStore.installations.first { $0.id == "laptop" })
         XCTAssertNil(coordinator.presentedError)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertEqual(coordinator.connectionState, .connected)
 
         await coordinator.completeRevokedPurge(instanceId: "laptop")?.value
@@ -683,7 +683,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertNil(coordinator.hosts.connection(for: "laptop"))
         let purged = await coordinator.hostConnectionSavedWorkspaces(laptop)
         XCTAssertNil(purged)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertEqual(coordinator.connectionState, .connected)
     }
 
@@ -791,7 +791,9 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         XCTAssertFalse(laptop.isRevoked)
     }
 
-    func testSelectingAMachineRevokedInTheBackgroundMovesOn() async throws {
+    /// A chat on screen holds its revoked machine, selected or not, and the
+    /// machine goes once the chat does.
+    func testSelectingAMachineRevokedInTheBackgroundMovesOnOnceItsChatCloses() async throws {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         await coordinator.start()
         let view = NSObject()
@@ -799,8 +801,10 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         await coordinator.hostConnectionWasRevokedInBackground(try connection("laptop", in: coordinator))
 
         await coordinator.switchInstallation(to: "laptop")
+        XCTAssertNotNil(coordinator.hosts.connection(for: "laptop"), "The chat on screen lost its machine")
 
-        XCTAssertNil(coordinator.hosts.connection(for: "laptop"))
+        coordinator.setOnScreen(false, view: view, instanceId: "laptop")
+        try await waitUntil("the purge") { coordinator.hosts.connection(for: "laptop") == nil }
         XCTAssertNil(coordinator.installationStore.installations.first { $0.id == "laptop" })
         XCTAssertNotEqual(coordinator.connectionState, .needsPairing)
         XCTAssertTrue(coordinator.presentedError?.contains("revoked") == true)
@@ -830,8 +834,10 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         await coordinator.hostConnectionWasRevokedInBackground(laptop)
 
         await coordinator.switchInstallation(to: "laptop")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.path), "The chat on screen lost its files")
 
-        XCTAssertNil(coordinator.hosts.connection(for: "laptop"))
+        coordinator.setOnScreen(false, view: view, instanceId: "laptop")
+        try await waitUntil("the purge") { coordinator.hosts.connection(for: "laptop") == nil }
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
     }
 
@@ -852,7 +858,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         release()
         await attempt.value
 
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         try await waitUntil("the next machine to connect") { coordinator.connectionState == .connected }
     }
 
@@ -902,7 +908,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         try await waitUntil("the next machine's connect") { serverRequests("laptop") == 1 }
 
         try await waitUntil("the revoked machine's attempt to end") { attemptEnded }
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         XCTAssertEqual(coordinator.connectionState, .connecting, "The next machine is still connecting")
         release()
         await attempt.value
@@ -936,8 +942,10 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
 
         // Forgetting the selected machine moves the selection onto laptop.
         await coordinator.removeInstallation("studio")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.path), "The chat on screen lost its files")
 
-        XCTAssertNil(coordinator.hosts.connection(for: "laptop"))
+        coordinator.setOnScreen(false, view: view, instanceId: "laptop")
+        try await waitUntil("the purge") { coordinator.hosts.connection(for: "laptop") == nil }
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyFile.path))
     }
 
@@ -956,7 +964,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
 
         await coordinator.refreshWorkspaces()
 
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertNotEqual(coordinator.connectionState, .needsPairing)
         XCTAssertTrue(isOffline(try connection("studio", in: coordinator)))
     }
@@ -969,7 +977,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
         await coordinator.refreshWorkspaces()
 
         XCTAssertEqual(try connection("studio", in: coordinator).connectionState, .needsPairing)
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
     }
 
     func testPairingARevokedMachineAgainGivesItAWorkingConnection() async throws {
@@ -1083,7 +1091,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
 
         try await holdingThePurge(in: coordinator) {
             let forgetting = Task { await coordinator.removeInstallation("studio") }
-            try await waitUntil("the selection to move") { coordinator.activeInstanceId == next.id }
+            try await waitUntil("the selection to move") { coordinator.defaultInstanceId == next.id }
 
             XCTAssertEqual(coordinator.connectionState, .connected)
             XCTAssertEqual(coordinator.server?.instanceId, next.id)
@@ -1103,7 +1111,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
 
         try await holdingThePurge(in: coordinator) {
             let forgetting = Task { await coordinator.removeInstallation("studio") }
-            try await waitUntil("the selection to move") { coordinator.activeInstanceId == next.id }
+            try await waitUntil("the selection to move") { coordinator.defaultInstanceId == next.id }
 
             XCTAssertEqual(coordinator.connectionState, .connecting)
             XCTAssertNil(coordinator.connectionIssue)
@@ -1123,7 +1131,7 @@ final class AidenHostConnectSchedulerTests: XCTestCase {
 
         try await holdingThePurge(in: coordinator) {
             let revoking = Task { await coordinator.hostConnectionWasRevoked(studio, over: .interactive) }
-            try await waitUntil("the selection to move") { coordinator.activeInstanceId == next.id }
+            try await waitUntil("the selection to move") { coordinator.defaultInstanceId == next.id }
 
             XCTAssertEqual(coordinator.connectionState, .connecting)
             XCTAssertNil(coordinator.connectionIssue)

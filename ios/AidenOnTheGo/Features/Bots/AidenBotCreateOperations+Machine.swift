@@ -2,7 +2,7 @@ import Foundation
 
 extension AidenBotCreateOperations {
     /// The context a New Bot goes out on: a picked machine's own, or the selected
-    /// one's on the old shell. A picked machine that left throws, because the Bot
+    /// one's when none was picked. A picked machine that left throws, because the Bot
     /// must never land on the default instead.
     @MainActor
     static func context(for target: AidenNewWorkTarget?, coordinator: AidenRemoteCoordinator) throws -> AidenRemoteRequestContext {
@@ -64,7 +64,7 @@ extension AidenBotCreateFlow {
         }
     }
 
-    /// The failed create Bots home shows on the tab shell, whichever machine it's for.
+    /// The failed create Bots home shows, whichever machine it's for.
     func failureToShow(coordinator: AidenRemoteCoordinator) -> Failure? {
         guard pending == nil else { return nil }
         return pairings(coordinator).lazy
@@ -81,34 +81,21 @@ extension AidenBotCreateFlow {
     }
 
     /// The Bot on its way that Bots home shows, and its machine when that isn't the
-    /// default. The old shell shows only the selected machine's.
-    func shownPending(
-        coordinator: AidenRemoteCoordinator,
-        tabShellEnabled: Bool = AppConfig.tabShellEnabled
-    ) -> (pending: Pending, machine: String?)? {
+    /// default.
+    func shownPending(coordinator: AidenRemoteCoordinator) -> (pending: Pending, machine: String?)? {
         guard let pending else { return nil }
-        guard tabShellEnabled else {
-            let active = coordinator.installationStore.activeInstallation
-            return pending.instanceId == active?.id && pending.deviceId == active?.deviceId ? (pending, nil) : nil
-        }
         let isElsewhere = pending.instanceId != coordinator.defaultInstanceId
         return (pending, isElsewhere ? coordinator.machineName(of: pending.instanceId) : nil)
     }
 }
 
 extension AidenBotCreateFlow.Failure {
-    /// The pairing Try Again answers for. On the tab shell that's the failure's own,
-    /// while this phone is still paired to it; the old shell's is the active one, so
-    /// `retry` keeps another Mac's failure waiting.
+    /// The pairing Try Again answers for: the failure's own, while this phone is
+    /// still paired to it.
     @MainActor
-    func retryPairing(
-        coordinator: AidenRemoteCoordinator,
-        tabShellEnabled: Bool = AppConfig.tabShellEnabled
-    ) -> (instanceId: String, deviceId: String)? {
-        let installation = tabShellEnabled
-            ? coordinator.hosts.connection(for: instanceId)?.installation
-            : coordinator.installationStore.activeInstallation
-        guard let installation, !tabShellEnabled || installation.deviceId == deviceId else { return nil }
+    func retryPairing(coordinator: AidenRemoteCoordinator) -> (instanceId: String, deviceId: String)? {
+        guard let installation = coordinator.hosts.connection(for: instanceId)?.installation,
+              installation.deviceId == deviceId else { return nil }
         return (installation.id, installation.deviceId)
     }
 
@@ -122,7 +109,7 @@ extension AidenBotCreateFlow.Failure {
 
 /// The machine a Bot page reads and writes. A page opened on a Bot names the
 /// Bot's machine, so it keeps talking to it whatever the default does. Nil is the
-/// selected machine, which the old shell's pages follow.
+/// default machine.
 extension AidenRemoteCoordinator {
     /// An owner context for a named machine, so the page outlives a move of the
     /// default. A named machine that left throws rather than fall back.

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// What the Workspaces list needs from the tab shell.
+/// What the Workspaces list needs from its tab.
 struct AidenWorkspacesTabChrome {
     let route: (AidenWorkspace) -> AidenAppRoute
     let newChat: AidenNewChatFlow
@@ -43,7 +43,7 @@ struct AidenWorkspacesTabView: View {
             sections: store.workspaceSections { archive.isArchived(workspaceID: $1, instanceID: $0) },
             refresh: { [coordinator] in
                 await coordinator.refreshWorkspaces()
-                for instanceId in shown where instanceId != coordinator.activeInstanceId {
+                for instanceId in shown where instanceId != coordinator.defaultInstanceId {
                     try? await coordinator.hosts.connection(for: instanceId)?.refreshWorkspacesForPoll()
                 }
             }
@@ -176,6 +176,33 @@ struct AidenWorkspaceRouteView: View {
                 description: Text(unavailableMessage)
             )
             .background(palette.canvas.ignoresSafeArea())
+        }
+    }
+}
+
+/// A quiet one-line connection status in place of a modal overlay.
+struct AidenConnectingHint: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    let installationName: String?
+    @State private var dimmed = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(palette.accent)
+                .frame(width: 7, height: 7)
+                .opacity(dimmed ? 0.35 : 1)
+            Text(installationName.map { "Connecting to \($0)…" } ?? String(localized: "Connecting to Aiden Agent…"))
+                .lineLimit(1)
+        }
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(palette.secondary)
+        .frame(maxWidth: .infinity, minHeight: 28)
+        .accessibilityElement(children: .combine)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dimmed = true }
         }
     }
 }

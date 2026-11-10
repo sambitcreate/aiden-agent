@@ -3,9 +3,9 @@ import SwiftUI
 struct AidenWorkspacesDirectoryView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Bindable var archiveStore: AidenWorkspaceArchiveStore
-    /// Set in the tab shell, where this list is a tab root: rows push routes and
-    /// the toolbar carries compose.
-    var tabChrome: AidenWorkspacesTabChrome? = nil
+    /// This list is the Workspaces tab's root: rows push routes and the
+    /// toolbar carries compose.
+    let tabChrome: AidenWorkspacesTabChrome
     @Environment(\.aidenPalette) private var palette
     @State private var searchText = ""
     @State private var isShowingFolderBrowser = false
@@ -21,7 +21,7 @@ struct AidenWorkspacesDirectoryView: View {
     @AppStorage(AidenWorkspaceDefaultApplication.permissionKey) private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     private var archivedWorkspaceIDs: Set<String> {
-        archiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
+        archiveStore.archivedWorkspaceIDs(for: coordinator.defaultInstanceId)
     }
 
     // Chats without a workspace live under Chats in the sidebar, not here.
@@ -75,7 +75,7 @@ struct AidenWorkspacesDirectoryView: View {
             if !section.rows.isEmpty {
                 Section {
                     ForEach(section.rows) { row in
-                        if row.id.instanceId == coordinator.activeInstanceId {
+                        if row.id.instanceId == coordinator.defaultInstanceId {
                             interactiveRow(row.workspace, isArchived: false)
                         } else {
                             NavigationLink(value: AidenAppRoute.workspace(row.id)) {
@@ -102,7 +102,7 @@ struct AidenWorkspacesDirectoryView: View {
 
     var body: some View {
         List {
-            if let machines = tabChrome?.machines {
+            if let machines = tabChrome.machines {
                 machineRows(machines)
             } else if filteredWorkspaces.isEmpty {
                 ContentUnavailableView(
@@ -136,16 +136,14 @@ struct AidenWorkspacesDirectoryView: View {
             }
         }
         .listStyle(.plain)
-        .scrollContentBackground(tabChrome == nil ? .automatic : .hidden)
-        .background {
-            if tabChrome != nil { palette.canvas.ignoresSafeArea() }
-        }
+        .scrollContentBackground(.hidden)
+        .background { palette.canvas.ignoresSafeArea() }
         .navigationTitle("Workspaces")
-        .navigationBarTitleDisplayMode(tabChrome == nil ? .inline : .automatic)
+        .navigationBarTitleDisplayMode(.automatic)
         .searchable(text: $searchText, prompt: "Search workspaces")
-        .searchToolbarBehavior(tabChrome == nil ? .automatic : .minimize)
+        .searchToolbarBehavior(.minimize)
         .refreshable {
-            if let machines = tabChrome?.machines {
+            if let machines = tabChrome.machines {
                 await machines.refresh()
             } else {
                 await coordinator.refreshWorkspaces()
@@ -154,15 +152,11 @@ struct AidenWorkspacesDirectoryView: View {
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
         .toolbar {
-            if let tabChrome {
-                DefaultToolbarItem(kind: .search, placement: .primaryAction)
-                ToolbarSpacer(.fixed, placement: .primaryAction)
-                ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }
-                ToolbarSpacer(.fixed, placement: .primaryAction)
-                ToolbarItem(placement: .primaryAction) { AidenNewChatButton(flow: tabChrome.newChat) }
-            } else {
-                ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }
-            }
+            DefaultToolbarItem(kind: .search, placement: .primaryAction)
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            ToolbarItem(placement: .primaryAction) { addWorkspaceMenu }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            ToolbarItem(placement: .primaryAction) { AidenNewChatButton(flow: tabChrome.newChat) }
         }
         .sheet(isPresented: $isShowingFolderBrowser) {
             AidenFolderBrowserView(coordinator: coordinator) { workspace in
@@ -264,7 +258,7 @@ struct AidenWorkspacesDirectoryView: View {
                 archiveStore.acknowledgeDeviceOnlyArchive()
                 archiveStore.archive(
                     workspaceID: workspace.id,
-                    instanceID: coordinator.activeInstanceId
+                    instanceID: coordinator.defaultInstanceId
                 )
                 workspacePendingFirstArchive = nil
             }
@@ -287,7 +281,7 @@ struct AidenWorkspacesDirectoryView: View {
                     if case .success = outcome {
                         archiveStore.forget(
                             workspaceID: workspace.id,
-                            instanceID: coordinator.activeInstanceId
+                            instanceID: coordinator.defaultInstanceId
                         )
                         coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)")
                     } else if outcome.isDefinitiveFailure {
@@ -328,7 +322,7 @@ struct AidenWorkspacesDirectoryView: View {
             coordinator: coordinator,
             workspace: workspace,
             isArchived: isArchived,
-            route: tabChrome?.route(workspace),
+            route: tabChrome.route(workspace),
             onRename: { requestRename(workspace) },
             onToggleArchive: { toggleArchive(workspace, isArchived: isArchived) },
             onRemove: workspace.isManagedWorktree || coordinator.workspaces.count <= 1
@@ -349,12 +343,12 @@ struct AidenWorkspacesDirectoryView: View {
         if isArchived {
             archiveStore.unarchive(
                 workspaceID: workspace.id,
-                instanceID: coordinator.activeInstanceId
+                instanceID: coordinator.defaultInstanceId
             )
         } else if archiveStore.hasAcknowledgedDeviceOnlyArchive {
             archiveStore.archive(
                 workspaceID: workspace.id,
-                instanceID: coordinator.activeInstanceId
+                instanceID: coordinator.defaultInstanceId
             )
         } else {
             workspacePendingFirstArchive = workspace
@@ -413,8 +407,8 @@ private struct AidenWorkspaceInteractiveRow: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
     let isArchived: Bool
-    /// What the row pushes in a stack of routes. Nil pushes the detail itself.
-    let route: AidenAppRoute?
+    /// What the row pushes in the tab's stack of routes.
+    let route: AidenAppRoute
     let onRename: () -> Void
     let onToggleArchive: () -> Void
     let onRemove: (() -> Void)?
@@ -431,17 +425,8 @@ private struct AidenWorkspaceInteractiveRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Unarchives this workspace on this device.")
-            } else if let route {
-                NavigationLink(value: route) {
-                    AidenWorkspaceRow(workspace: workspace)
-                }
             } else {
-                NavigationLink {
-                    AidenDirectoryWorkspaceDetail(
-                        coordinator: coordinator,
-                        workspace: workspace
-                    )
-                } label: {
+                NavigationLink(value: route) {
                     AidenWorkspaceRow(workspace: workspace)
                 }
             }
@@ -496,22 +481,6 @@ private struct AidenWorkspaceInteractiveRow: View {
             named: Text(isArchived ? "Unarchive on this device" : "Archive on this device"),
             onToggleArchive
         )
-    }
-}
-
-private struct AidenDirectoryWorkspaceDetail: View {
-    @Environment(\.dismiss) private var dismiss
-    @Bindable var coordinator: AidenRemoteCoordinator
-    let workspace: AidenWorkspace
-
-    var body: some View {
-        AidenWorkspaceDetailView(
-            coordinator: coordinator,
-            workspace: workspace,
-            owner: nil,
-            onRemoved: { dismiss() }
-        )
-        .id(workspace.revision)
     }
 }
 

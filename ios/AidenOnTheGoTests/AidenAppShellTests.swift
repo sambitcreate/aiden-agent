@@ -24,9 +24,10 @@ final class AidenAppShellTests: XCTestCase {
 
     // MARK: Flag
 
-    func testTabShellFlagFailsClosed() {
+    /// The Bot rollout flag reads this way.
+    func testABuildFlagFailsClosed() {
         let closed: [Any?] = [
-            nil, "", "NO", "no", "0", "false", "maybe", "$(AIDEN_TAB_SHELL_ENABLED)",
+            nil, "", "NO", "no", "0", "false", "maybe", "$(AIDEN_BOT_FIRST_ENABLED)",
             NSNumber(value: false), Date(), ["YES"],
         ]
         for value in closed {
@@ -36,20 +37,6 @@ final class AidenAppShellTests: XCTestCase {
         for value in open {
             XCTAssertTrue(AppConfig.isFlagEnabled(value), "\(String(describing: value))")
         }
-    }
-
-    func testTheTabShellIsOffUnlessADemoRunAsks() {
-        XCTAssertFalse(AppConfig.tabShellEnabled)
-    }
-
-    func testOnlyADemoRunCanOverrideTheFlag() {
-        let demo = ["app", "-AidenDemoScenario", "busy"]
-        XCTAssertEqual(AidenDemoScenario.tabShellOverride(in: demo + ["-AidenDemoTabShell", "YES"]), true)
-        XCTAssertEqual(AidenDemoScenario.tabShellOverride(in: demo + ["-AidenDemoTabShell", "NO"]), false)
-        XCTAssertEqual(AidenDemoScenario.tabShellOverride(in: demo + ["-AidenDemoTabShell", "maybe"]), false)
-        XCTAssertEqual(AidenDemoScenario.tabShellOverride(in: demo + ["-AidenDemoTabShell"]), false)
-        XCTAssertNil(AidenDemoScenario.tabShellOverride(in: demo))
-        XCTAssertNil(AidenDemoScenario.tabShellOverride(in: ["app", "-AidenDemoTabShell", "YES"]))
     }
 
     // MARK: Opening routes
@@ -120,7 +107,7 @@ final class AidenAppShellTests: XCTestCase {
                     startsVoice: false
                 ),
                 installations: [studio, laptop],
-                activeInstanceId: "studio"
+                defaultInstanceId: "studio"
             )
         }
 
@@ -327,7 +314,7 @@ final class AidenAppShellTests: XCTestCase {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         await coordinator.start()
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         let model = AidenChatRouteModel(id: id("chat_laptop_1", on: "laptop"), cache: temporaryCache())
 
         await model.load(coordinator: coordinator)
@@ -339,7 +326,7 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(owner.instanceId, "laptop")
         XCTAssertEqual(owner.scope, .owner)
         XCTAssertTrue(coordinator.isLive(owner))
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertTrue(responder.requests(instanceId: "laptop").contains("GET /chats/chat_laptop_1"))
         XCTAssertFalse(responder.requests(instanceId: "studio").contains { $0.contains("chat_laptop_1") })
     }
@@ -542,7 +529,7 @@ final class AidenAppShellTests: XCTestCase {
 
         XCTAssertEqual(model.state, .session)
         XCTAssertEqual(responder.requests(instanceId: "studio").count, asked)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
     func testABotRouteFromAnOlderPairingStaysClosed() async {
@@ -783,6 +770,37 @@ final class AidenAppShellTests: XCTestCase {
 
     private func workspace(_ id: String, in coordinator: AidenRemoteCoordinator) throws -> AidenWorkspace {
         try XCTUnwrap(coordinator.workspaces.first { $0.id == id })
+    }
+
+    private final class RecordingHaptics: AidenHapticEmitting {
+        private(set) var played: [(AidenHapticEvent, UUID?)] = []
+        func activate(scope: UUID) {}
+        func deactivate(scope: UUID) {}
+        func emit(_ event: AidenHapticEvent, scope: UUID?, dedupeKey: String?) { played.append((event, scope)) }
+    }
+
+    /// A new chat taps success once it opens, and a refused one taps an error,
+    /// both in the flow's own scope, which the shell turns on while it shows.
+    func testANewChatTapsSuccessAndARefusedOneAnError() async throws {
+        let responder = AidenDemoResponder()
+        let haptics = RecordingHaptics()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder, haptics: haptics)
+        await coordinator.start()
+        let home = AidenHomeModel()
+        await home.load(coordinator: coordinator)
+        let flow = flow(coordinator, home: home)
+        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 201, json: try newChatJSON())
+
+        await flow.create(in: try workspace("workspace_app", in: coordinator))
+
+        XCTAssertEqual(haptics.played.map(\.0), [.success])
+        XCTAssertEqual(haptics.played.last?.1, flow.hapticScope)
+
+        responder.reply(instanceId: "studio", method: "POST", path: "/chats", status: 500, json: Data(#"{"error":{"code":"internal","message":"No","requestId":"r1","retryable":false}}"#.utf8))
+        await flow.create(in: try workspace("workspace_app", in: coordinator))
+
+        XCTAssertEqual(haptics.played.map(\.0), [.success, .error])
+        XCTAssertEqual(haptics.played.last?.1, flow.hapticScope)
     }
 
     func testANewChatOpensOnItsOwnMachineFromTheReceipt() async throws {

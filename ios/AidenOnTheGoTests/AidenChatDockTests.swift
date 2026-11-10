@@ -603,7 +603,7 @@ final class AidenChatDockTests: XCTestCase {
         await model.send()
 
         XCTAssertNil(coordinator.hosts.connection(for: "studio"), "The selected machine's data leaves at once")
-        XCTAssertNotEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertNotEqual(coordinator.defaultInstanceId, "studio")
     }
 
     // MARK: - VoiceOver

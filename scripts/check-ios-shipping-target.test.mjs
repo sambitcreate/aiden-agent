@@ -105,7 +105,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Shell/AidenNewWorkMachinePicker.swift",
   "AidenOnTheGo/Features/Shell/AidenNewWorkChatFlow.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCreateOperations+Machine.swift",
-  "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
+  "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
   "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
@@ -133,7 +133,6 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenOnboardingArtwork.swift",
   "AidenOnTheGo/Features/Remote/AidenOnboardingVignettes.swift",
   "AidenOnTheGo/Features/Remote/AidenPairingView.swift",
-  "AidenOnTheGo/Features/Remote/AidenProductShellView.swift",
   "AidenOnTheGo/Features/Remote/AidenProvidersView.swift",
   "AidenOnTheGo/Features/Shell/AidenUnifiedInboxStore.swift",
   "AidenOnTheGo/Features/Shell/AidenInboxTabView.swift",
@@ -148,7 +147,6 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenVisualDocument.swift",
   "AidenOnTheGo/Features/Remote/AidenVisualViewer.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
-  "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkEvaluator.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkMapping.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkSpec.swift",
@@ -227,13 +225,21 @@ async function readChatFeatureSources() {
   return sources.join("\n");
 }
 
-// `AidenWorkspaceShellView.swift` was split into the files below. The source checks that
-// used to read that one file read all of them, in the order the code used to appear.
+// The app shell: the tab shell and the workspace screens it pushes. The source
+// checks below read them as one.
 const workspaceShellSourcePaths = [
-  "AidenOnTheGo/Features/Workspace/AidenChatRowStatusView.swift",
+  "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
+  "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
+  "AidenOnTheGo/Features/Shell/AidenInboxTabView.swift",
+  "AidenOnTheGo/Features/Shell/AidenWorkspacesTabView.swift",
+  "AidenOnTheGo/Features/Shell/AidenBotsTabView.swift",
+  "AidenOnTheGo/Features/Shell/AidenSearchTabView.swift",
+  "AidenOnTheGo/Features/Shell/AidenNewChatFlow.swift",
+  "AidenOnTheGo/Features/Shell/AidenNewWorkChatFlow.swift",
+  "AidenOnTheGo/Features/Shell/AidenUnifiedInboxStore.swift",
+  "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
   "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
-  "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenUsageView.swift",
   "AidenOnTheGo/Features/Workspace/AidenAppSettingsView.swift",
@@ -367,12 +373,13 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
 });
 
 test("the Bot-first mobile rollout flag fails closed across pairing and product routing", async () => {
-  const [project, info, appConfig, remoteClient, productShell, botsHome] = await Promise.all([
+  const [project, info, appConfig, remoteClient, appShell, botsTab, botsHome] = await Promise.all([
     readFile(projectPath, "utf8"),
     readFile(infoPlistPath, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Config/AppConfig.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Networking/AidenRemoteClient.swift`, "utf8"),
-    readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Shell/AidenAppShellView.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Shell/AidenBotsTabView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift`, "utf8"),
   ]);
 
@@ -385,52 +392,32 @@ test("the Bot-first mobile rollout flag fails closed across pairing and product 
     appConfig,
     /botFirstMobileEnabled:[\s\S]*?guard let value = Bundle\.main\.object[\s\S]*?return false/u,
   );
-  // The tab shell ships off until the rollout turns it on.
-  assert.equal([...project.matchAll(/AIDEN_TAB_SHELL_ENABLED = NO;/gu)].length, 2);
-  assert.doesNotMatch(project, /AIDEN_TAB_SHELL_ENABLED = YES;/u);
-  assert.match(
-    info,
-    /<key>AidenTabShellEnabled<\/key>\s*<string>\$\(AIDEN_TAB_SHELL_ENABLED\)<\/string>/u,
-  );
+  // The tab shell is the app: no flag chooses it any more.
+  assert.doesNotMatch(project, /AIDEN_TAB_SHELL_ENABLED/u);
+  assert.doesNotMatch(info, /AidenTabShellEnabled/u);
+  assert.doesNotMatch(appConfig, /tabShellEnabled/u);
   assert.match(
     remoteClient,
     /acceptsBotCapabilities: Bool = AppConfig\.botFirstMobileEnabled[\s\S]*?acceptsBotCapabilities: acceptsBotCapabilities/u,
   );
   assert.match(
-    productShell,
+    appShell,
     /mobileEnabled: Bool = AppConfig\.botFirstMobileEnabled[\s\S]*?guard mobileEnabled else \{ return \.mobileDisabled \}/u,
   );
-  assert.match(productShell, /Bots aren’t available in this version of Aiden On The Go\./u);
+  assert.match(appShell, /Bots aren’t available in this version of Aiden On The Go\./u);
   assert.match(
     botsHome,
-    /isBotSurfaceActive: aidenBotSurfaceIsActive[\s\S]*?guard aidenBotSurfaceAllows[\s\S]*?expectedLoadID\.isBotSurfaceActive else/u,
+    /isBotSurfaceActive: availability\.canOpen[\s\S]*?guard availability\.canOpen, expectedLoadID\.isBotSurfaceActive else/u,
   );
-  assert.equal([...productShell.matchAll(/aidenBotSurfaceAllows\(/gu)].length, 8);
-  assert.equal([...botsHome.matchAll(/aidenBotSurfaceAllows\(/gu)].length, 2);
-  assert.match(
-    productShell,
-    /enum AidenBotSurfaceIngress:[\s\S]*?case homeLoad[\s\S]*?case search[\s\S]*?case openConversation[\s\S]*?case createConversation[\s\S]*?case mutationResolution[\s\S]*?case restoreConversation[\s\S]*?case deepLinkPresentation[\s\S]*?\}/u,
-  );
-  assert.match(
-    productShell,
-    /case \.createConversation, \.mutationResolution:\s*return isActive && availability\.canWrite/u,
-  );
-  const createStart = productShell.indexOf("private func createConversation(");
-  const createEnd = productShell.indexOf("private func allowsMutations(", createStart);
-  assert.ok(createStart >= 0 && createEnd > createStart);
-  const createConversation = productShell.slice(createStart, createEnd);
-  const createAdmission = createConversation.indexOf(
-    "aidenBotSurfaceAllows(\n            .createConversation",
-  );
-  const requestContext = createConversation.indexOf("coordinator.requestContext()");
-  const createMutation = createConversation.indexOf("client.createBotChat(");
+  // A Bot chat is made only while this phone may write Bots, and only then
+  // does it ask the machine.
+  const createStart = botsTab.indexOf("private func createConversation(");
+  assert.ok(createStart >= 0);
+  const createConversation = botsTab.slice(createStart, botsTab.indexOf("\n}\n", createStart));
+  const createAdmission = createConversation.indexOf("guard availability.canWrite");
+  const start = createConversation.indexOf("chatStarter.start(");
   assert.ok(createAdmission >= 0);
-  assert.ok(requestContext > createAdmission);
-  assert.ok(createMutation > requestContext);
-  assert.match(
-    productShell,
-    /switch aidenResolvedChatDestination[\s\S]*?case \.unavailable\(let message\):[\s\S]*?area = \.workspaces/u,
-  );
+  assert.ok(start > createAdmission);
 });
 
 test("Bot Image Playground stays Apple-owned, non-personalized, and availability isolated", async () => {
@@ -495,7 +482,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   const sourceByPath = new Map(sources);
   const allSwift = sources.map(([, source]) => source).join("\n");
   const chat = await readChatFeatureSources();
-  const productShell = sourceByPath.get("AidenOnTheGo/Features/Remote/AidenProductShellView.swift");
+  const botsTab = sourceByPath.get("AidenOnTheGo/Features/Shell/AidenBotsTabView.swift");
   const botSession = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotSessionChatView.swift");
   const botHome = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift");
   const botProfile = sourceByPath.get("AidenOnTheGo/Features/Bots/AidenBotProfileView.swift");
@@ -519,12 +506,9 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     );
   }
   // Bot sessions talk only to the bot-session transport; legacy Bot chats in the
-  // product shell open the same AidenChatDetailView as every other conversation.
+  // Bots tab open the same AidenChatDetailView as every other conversation.
   assert.match(botSession, /AidenBotSessionModel\(\s*botID: botID,\s*transport: client\b/u);
-  assert.match(
-    productShell,
-    /AidenChatDetailView\(\s*coordinator: coordinator,\s*chat: presentation\.chat/u,
-  );
+  assert.match(botsTab, /AidenChatDetailView\(\s*coordinator: coordinator,\s*chat: chat/u);
   assert.match(
     chat,
     /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?runtime = \.readOnlyFixture[\s\S]*?onChatUpdated = \{ _ in \}/u,
@@ -626,7 +610,6 @@ test("iOS bundles every reviewed Aiden provider logo", async () => {
 test("the Aiden home, onboarding, composer, schedules, and activity retain the reviewed product shell", async () => {
   const [
     shell,
-    productShell,
     pairing,
     content,
     chat,
@@ -641,7 +624,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     shippingSources,
   ] = await Promise.all([
     readWorkspaceShellSources(),
-    readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenProductShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/ContentView.swift`, "utf8"),
     readChatFeatureSources(),
@@ -656,32 +638,12 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     Promise.all(appSourcePaths.map((path) => readFile(`${iosRoot}${path}`, "utf8"))),
   ]);
 
-  const scheduledIndex = shell.indexOf('title: "Scheduled Tasks"');
-  const usageIndex = shell.indexOf('title: "Usage"', scheduledIndex);
-  const workspacesIndex = shell.indexOf('title: "Workspaces"', usageIndex);
-  const homeNavigationIndex = shell.indexOf("homeNavigationRows");
-  const sidebarIndex = shell.indexOf(
-    "Text(sidebarOrganizationTitle)",
-    homeNavigationIndex,
-  );
-  assert.ok(scheduledIndex >= 0 && scheduledIndex < usageIndex);
-  assert.ok(usageIndex < workspacesIndex);
-  assert.ok(homeNavigationIndex >= 0 && homeNavigationIndex < sidebarIndex);
-  assert.match(shell, /Label\("By workspace"[\s\S]*?Label\("Recent only"/u);
   assert.match(shell, /enum ChatListLoadState: Equatable/u);
   assert.match(shell, /var chatListLoadState: ChatListLoadState = \.unresolved/u);
   assert.match(shell, /var chatLoadErrorMessage: String\?/u);
   assert.match(
     shell,
     /case \.failure\(let error\):[\s\S]{0,180}chatListLoadState = \.failed\(error\.localizedDescription\)/u,
-  );
-  assert.match(
-    shell,
-    /if chatListUnavailable \{[\s\S]*?Chats Couldn’t Load[\s\S]*?Button\("Try Again"\)/u,
-  );
-  assert.match(
-    shell,
-    /private var chatCreationBlocked:[\s\S]{0,180}homeModel\.chatListLoadState != \.loaded/u,
   );
   assert.match(shell, /private struct LoadAttempt:[\s\S]{0,120}let id = UUID\(\)/u);
   assert.match(shell, /loadingAttempt = attempt/u);
@@ -703,73 +665,21 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     /catch let error where aidenIsCancellation\(error\) \{\s*return\s*\}\s*catch/u,
   );
   assert.doesNotMatch(shell, /loadingContext/u);
-  assert.match(
-    shell,
-    /\.task\(id: AidenHomeLoadID\([\s\S]{0,160}instanceID: coordinator\.activeInstanceId/u,
-  );
-  assert.match(shell, /Text\("Show \\\(remainingChatCount\) more"\)/u);
-  assert.doesNotMatch(shell, /Text\("Show \(remainingChatCount\) more"\)/u);
-  assert.match(shell, /AidenProductSwitcherButton\([\s\S]*?searchChrome/u);
-  assert.match(
-    productShell,
-    /Menu \{[\s\S]*?areaButton\(\.bots\)[\s\S]*?areaButton\(\.workspaces\)[\s\S]*?HStack\(spacing: 4\)[\s\S]*?Image\("AidenAppIcon"\)[\s\S]*?AidenChromeSymbols\.productSwitcherDisclosure/u,
-  );
-  assert.match(
-    productShell,
-    /AidenProductSwitcherGlassModifier[\s\S]*?if reduceTransparency \{[\s\S]*?background\(palette\.raised, in: Capsule\(\)\)[\s\S]*?\} else \{\s*content\.buttonStyle\(\.glass\)/u,
-  );
-  // iOS 26 is the floor: no material fallback and no availability branch remain.
-  const switcherGlass = productShell.slice(
-    productShell.indexOf("struct AidenProductSwitcherGlassModifier"),
-    productShell.indexOf("struct AidenBotSwitcherCoachmarkView"),
-  );
-  assert.ok(switcherGlass.includes("buttonStyle(.glass)"));
-  assert.doesNotMatch(switcherGlass, /Material|#available\(iOS/u);
+  assert.match(shell, /Text\("Show \\\(inbox\.earlierOverflow\) more"\)/u);
+  assert.doesNotMatch(shell, /Text\("Show \(inbox\.earlierOverflow\) more"\)/u);
   for (const source of shippingSources) {
     assert.doesNotMatch(source, /ellipsis\.circle/u);
   }
   assert.match(
-    productShell,
-    /popover\(isPresented: isCoachmarkPresented, arrowEdge: \.top\)[\s\S]*?AidenBotSwitcherCoachmarkView[\s\S]*?presentationCompactAdaptation\(\.popover\)/u,
-  );
-  const coachmark = productShell.match(
-    /private struct AidenBotSwitcherCoachmarkView:[\s\S]*?private struct AidenBotShellView:/u,
-  )?.[0];
-  assert.ok(coachmark, "expected a bounded Bot switcher coachmark");
-  assert.match(coachmark, /Tap the Aiden menu to switch anytime\./u);
-  assert.match(coachmark, /aidenBotSwitcherCoachmarkDetail\(canWrite: canWrite\)/u);
-  assert.doesNotMatch(
-    coachmark,
-    /URLSession|AidenRemoteClient|managed (?:home|workspace)|Git repository/u,
-  );
-  assert.match(
-    productShell,
-    /needsBotSwitcherCoachmark\([\s\S]*?botGate = \.coaching[\s\S]*?isShowingSwitcherCoachmark = true/u,
-  );
-  assert.match(
-    productShell,
-    /completeSwitcherCoachmark\(\)[\s\S]*?navigationStore\.completeBotSwitcherCoachmark\([\s\S]*?prepareBotSurface\(\)/u,
-  );
-  assert.match(productShell, /AidenWorkspaceShellView\([\s\S]*?AidenBotShellView\(/u);
-  assert.match(content, /AidenProductShellView\(/u);
-  assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
-  assert.match(
     shell,
     /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Desktop Folder"/u,
   );
-  assert.match(
-    shell,
-    /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Workspace Chat"\)/u,
-  );
-  assert.match(shell, /content\.buttonStyle\(\.glass\)/u);
   assert.match(shell, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.match(
     shell,
     /case \.existingWorkspace: "Existing Workspace"[\s\S]*?case \.newWorkspace: "New Workspace"[\s\S]*?case \.scratchWorkspace: "Managed Scratch Workspace"/u,
   );
-  assert.match(shell, /aidenChromeGlass\(isInteractive: true, in: Capsule\(\)\)/u);
   assert.match(chromeGlass, /glassEffect\(\.regular\.interactive\(\), in: shape\)/u);
-  assert.match(shell, /contentMargins\(\.bottom, 104, for: \.scrollContent\)/u);
   assert.doesNotMatch(
     shell,
     /safeAreaInset\(edge: \.bottom, spacing: 0\)[\s\S]*?frame\(height: 92\)[\s\S]*?background\(palette\.canvas\)/u,
@@ -780,35 +690,11 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     /AidenUsageView[\s\S]*?overviewGrid[\s\S]*?Token activity[\s\S]*?Activity insights[\s\S]*?Most used models/u,
   );
   assert.match(shell, /AidenUsagePresentation\.heatmapDays[\s\S]*?usage\.days/u);
-  assert.match(
-    shell,
-    /popover\(isPresented: \$isShowingNewAgentChoices, arrowEdge: \.bottom\)[\s\S]*?AidenNewAgentPopover[\s\S]*?presentationCompactAdaptation\(\.popover\)/u,
-  );
   assert.doesNotMatch(shell, /confirmationDialog\([\s\S]{0,120}"Where should this agent work\?"/u);
   assert.doesNotMatch(shell, /messageLabel|chat\.messages\.count/u);
   assert.doesNotMatch(
     shell,
     /count: homeModel\.scheduledTasks\.count|count: coordinator\.workspaces\.count/u,
-  );
-  assert.match(
-    shell,
-    /task\(id: AidenHomeLoadID\([\s\S]*?connectionState: coordinator\.connectionState[\s\S]*?homeModel\.load/u,
-  );
-  assert.match(
-    shell,
-    /AidenNavigationResolutionID\([\s\S]*?connectionState: coordinator\.connectionState[\s\S]*?resolveNavigationRequest/u,
-  );
-  assert.match(
-    shell,
-    /func resolveNavigationRequest\(\)[\s\S]*?coordinator\.connectionState == \.connected[\s\S]*?defer \{ navigationRequest = nil \}[\s\S]*?openChat\(chat, startsVoice: request\.startsVoice\)/u,
-  );
-  assert.match(
-    shell,
-    /func createNewAgentInScratchWorkspace\(\)[\s\S]*?workspaceCreate: \.scratch[\s\S]*?func createNewAgent\([\s\S]*?createChat\(workspaceId: workspace\.id[,)]/u,
-  );
-  assert.match(
-    shell,
-    /navigationDestination\([\s\S]*?get: \{ selectedSidebarChat != nil \}[\s\S]*?set: \{ if !\$0 \{ clearSelectedSidebarChat\(\) \} \}/u,
   );
   assert.match(shell, /final class AidenWorkspaceArchiveStore[\s\S]*?workspaceIDsByInstance/u);
   assert.match(shell, /Archived Workspaces[\s\S]*?hidden only on this device/u);
@@ -825,15 +711,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /if isArchived \{[\s\S]*?Button\(action: onToggleArchive\)/u);
   assert.match(
     shell,
-    /AidenWorkspaceSidebarProjection\.make\([\s\S]*?workspaces: activeWorkspaces[\s\S]*?chats: homeModel\.chats/u,
-  );
-  assert.match(
-    shell,
-    /var chats: \[AidenChatSummary\][\s\S]*?let regularChats = chats[\s\S]*?filter \{ workspaceByID\[\$0\.workspaceId\] != nil \}/u,
-  );
-  assert.match(
-    shell,
-    /archivedWorkspaceIDs\.contains\(chat\.workspaceId\)[\s\S]*?Unarchive it from Workspaces/u,
+    /isArchived\(workspaceID: chat\.workspaceId[\s\S]*?Unarchive it from Workspaces/u,
   );
   assert.match(pairing, /Aiden, wherever you are\./u);
   assert.match(pairing, /task\(id: step\)[\s\S]*?if step == 2[\s\S]*?discovery\.start\(\)/u);
@@ -863,7 +741,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /BOTS AND WORKSPACES/u);
   assert.match(
     pairing,
-    /When Bots are available on your paired desktop[\s\S]*?tap the Aiden logo to switch\./u,
+    /When Bots are available on your paired desktop[\s\S]*?use them as reusable helpers from the Bots tab\./u,
   );
   assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);

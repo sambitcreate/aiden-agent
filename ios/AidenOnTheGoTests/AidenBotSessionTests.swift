@@ -6521,24 +6521,30 @@ extension AidenBotSessionTests {
         await assertSettles({ !session.isRecording })
     }
 
-    func testSwitchingMachinesLeavesABotDraftWithItsMachine() async throws {
+    /// A Bot screen is for the Bot's own machine, so moving the default leaves
+    /// it, its draft and its dictation where they are.
+    func testMovingTheDefaultLeavesAnOpenBotOnItsMachine() async throws {
         let (coordinator, _) = demoCoordinator()
         let voice = AidenComposerFakeVoice()
         let session = AidenComposerSession(voice: voice)
         let (_, window) = try await showBot(session, coordinator: coordinator)
         defer { close(window) }
+        let studio = try XCTUnwrap(model(of: session))
         session.text = "For the studio"
-        await model(of: session)?.waitForDraftPersistence()
+        await studio.waitForDraftPersistence()
         await session.toggleVoice()
         XCTAssertTrue(session.isRecording)
 
         await coordinator.switchInstallation(to: "laptop")
+        await settle()
 
-        await assertSettles({ session.text.isEmpty }, "One machine's words on another's Bot", timeout: 10)
-        XCTAssertFalse(session.isRecording, "A late transcript would land on the other machine's Bot")
-
-        await coordinator.switchInstallation(to: "studio")
-        await assertSettles({ session.text == "For the studio" }, timeout: 10)
+        XCTAssertTrue(model(of: session) === studio, "The screen moved to the new default")
+        XCTAssertEqual(session.text, "For the studio")
+        XCTAssertTrue(session.isRecording, "Moving the default stopped the Bot's own dictation")
+        await session.toggleVoice()
+        await studio.waitForDraftPersistence()
+        let laptop = await savedBotDraft(on: "laptop")
+        XCTAssertEqual(laptop, "", "The studio's words were saved under the laptop")
     }
 
     /// The studio's Bot waits on a step, and the machine refuses the answer.
@@ -6567,13 +6573,13 @@ extension AidenBotSessionTests {
         await assertSettles({ session.text == "Approved, with a note" })
     }
 
-    /// Answers the studio's step, moves the screen to the laptop while the answer
-    /// waits at the gate, then lets the machine refuse it.
+    /// Answers the studio's step, moves the default to the laptop while the
+    /// answer waits at the gate, then lets the machine refuse it.
     private func refuseANoteAcrossASwitch(
         _ session: AidenComposerSession,
         coordinator: AidenRemoteCoordinator,
         responder: AidenDemoResponder
-    ) async throws -> (studio: AidenBotSessionModel, laptop: AidenBotSessionModel, window: UIWindow) {
+    ) async throws -> (studio: AidenBotSessionModel, window: UIWindow) {
         let answer = waitOnAStep(in: responder)
         let release = responder.hold(instanceId: "studio", path: answer)
         let (_, window) = try await showBot(session, coordinator: coordinator)
@@ -6584,16 +6590,14 @@ extension AidenBotSessionTests {
         _ = try XCTUnwrap(element("Send and mark done", in: window)).accessibilityActivate()
         await assertSettles({ responder.requests(instanceId: "studio").contains { $0.contains(answer) } }, "The answer never left")
         await coordinator.switchInstallation(to: "laptop")
-        await assertSettles({ self.model(of: session) !== studio }, "The screen stayed on the studio", timeout: 10)
-        let laptop = try XCTUnwrap(model(of: session))
-        await assertSettles({ laptop.hasLoaded }, "The laptop's Bot never loaded", timeout: 15)
+        await settle()
+        XCTAssertTrue(model(of: session) === studio, "The screen moved to the new default")
 
         release()
         await assertSettles({ studio.errorMessage == AidenBotSessionCopy.handoffNotSent }, "The refusal never came")
         await settle()
         await studio.waitForDraftPersistence()
-        await laptop.waitForDraftPersistence()
-        return (studio, laptop, window)
+        return (studio, window)
     }
 
     private func savedBotDraft(on instanceId: String) async -> String {
@@ -6602,21 +6606,19 @@ extension AidenBotSessionTests {
         return await drafts.load(session: draft) ?? ""
     }
 
-    func testARefusedHandoffNoteStaysOffTheMachineTheScreenMovedTo() async throws {
+    func testARefusedHandoffNoteComesBackWhileTheDefaultMoves() async throws {
         let (coordinator, responder) = demoCoordinator()
         let session = AidenComposerSession(voice: AidenComposerFakeVoice())
-        let (_, _, window) = try await refuseANoteAcrossASwitch(session, coordinator: coordinator, responder: responder)
+        let (_, window) = try await refuseANoteAcrossASwitch(session, coordinator: coordinator, responder: responder)
         defer { close(window) }
 
-        XCTAssertEqual(session.text, "", "The studio's note is on the laptop's Bot")
-        let saved = await savedBotDraft(on: "laptop")
-        XCTAssertEqual(saved, "", "The studio's note is saved under the laptop")
+        await assertSettles({ session.text == "Only for the studio" }, "The note never came back to its composer")
     }
 
     func testARefusedHandoffNoteWaitsUnderItsOwnMachine() async throws {
         let (coordinator, responder) = demoCoordinator()
         let session = AidenComposerSession(voice: AidenComposerFakeVoice())
-        let (_, _, window) = try await refuseANoteAcrossASwitch(session, coordinator: coordinator, responder: responder)
+        let (_, window) = try await refuseANoteAcrossASwitch(session, coordinator: coordinator, responder: responder)
         defer { close(window) }
 
         let studio = await savedBotDraft(on: "studio")

@@ -16,7 +16,7 @@ Branch: `feature/live-activity-freshness`. Plan: `docs/plans/completed/live-acti
 ## Bot deep link
 
 - Link shape: `aiden-otg://bot/{botId}/chat[?instance=]`.
-  - iOS: `AidenDeepLink.botChatURL` and `.botChat` handled in `AidenProductShellView`.
+  - iOS: `AidenDeepLink.botChatURL` and `.botChat` become an `AidenAppRoute.bot` and open on the Bots tab (`Features/Shell/AidenAppShellView.swift`; the menu shell that handled them before was deleted in Task 35).
   - Android: `AidenDeepLink.botChatUrl` and `AidenNavigationDestination.BotChat` handled in `MainActivity`.
 - Resolution: `aidenResolvedBotDeepLink` on both platforms reuses the canonical Bot conversation ordering.
 - A link never creates a chat. With no chat, iOS lands on the Bot with a notice and Android opens BotProfile.

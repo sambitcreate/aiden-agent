@@ -572,3 +572,33 @@ private struct AidenBotAvatarSymbol: View {
             .accessibilityHidden(true)
     }
 }
+
+/// Shaped placeholder rows for a first read of a chat list.
+struct AidenChatListSkeleton: View {
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    let rowCount: Int
+    var accessibilityText: LocalizedStringKey = "Loading chats"
+
+    private static let titleWidths: [CGFloat] = [212, 168, 236, 148, 196, 180]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<rowCount, id: \.self) { index in
+                HStack(spacing: 12) {
+                    AidenBotSkeletonBlock(
+                        width: Self.titleWidths[index % Self.titleWidths.count],
+                        height: 14,
+                        radius: 7,
+                        reduceMotion: reduceMotion
+                    )
+                    Spacer(minLength: 16)
+                    AidenBotSkeletonBlock(width: 44, height: 10, radius: 5, reduceMotion: reduceMotion)
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 52)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(accessibilityText))
+    }
+}

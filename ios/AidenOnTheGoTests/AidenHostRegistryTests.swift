@@ -173,8 +173,8 @@ final class AidenHostRegistryTests: XCTestCase {
         await coordinator.removeInstallation("studio")
 
         XCTAssertNil(coordinator.hosts.connection(for: "studio"))
-        XCTAssertNotNil(coordinator.activeInstanceId)
-        XCTAssertEqual(coordinator.selectedConnection?.instanceId, coordinator.activeInstanceId)
+        XCTAssertNotNil(coordinator.defaultInstanceId)
+        XCTAssertEqual(coordinator.selectedConnection?.instanceId, coordinator.defaultInstanceId)
         XCTAssertFalse(coordinator.isLive(forgotten))
     }
 
@@ -342,7 +342,7 @@ final class AidenHostRegistryTests: XCTestCase {
 
         try await repair("laptop", in: coordinator)
 
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         XCTAssertFalse(coordinator.isLive(laptop))
         XCTAssertTrue(coordinator.isLive(studio))
         XCTAssertFalse(coordinator.isCurrent(studio))

@@ -5,31 +5,21 @@ final class AidenShellUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// Both shells open against every demo scenario. This is the CI smoke test.
+    /// The shell opens against every demo scenario. This is the CI smoke test.
     func testShellLaunchesForEveryScenario() {
-        for shell in AidenStateMatrix.Shell.allCases {
-            for scenario in AidenStateMatrix.Scenario.allCases {
-                let app = AidenStateMatrix.launch(scenario: scenario, shell: shell)
-                XCTAssertTrue(
-                    AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10),
-                    "No first screen for \(scenario.rawValue) in \(shell)"
-                )
-                app.terminate()
-            }
+        for scenario in AidenStateMatrix.Scenario.allCases {
+            let app = AidenStateMatrix.launch(scenario: scenario)
+            XCTAssertTrue(
+                AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10),
+                "No first screen for \(scenario.rawValue)"
+            )
+            app.terminate()
         }
-    }
-
-    /// The flag is off, so nothing but a demo run that asks sees the tabs.
-    func testTheMenuShellStaysTheDefault() {
-        let app = AidenStateMatrix.launch(scenario: .busy)
-        XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10))
-        XCTAssertFalse(app.tabBars.firstMatch.exists, "The tab bar showed with the flag off")
-        app.terminate()
     }
 
     func testAllFourTabsExistInEveryScenario() {
         for scenario in AidenStateMatrix.Scenario.allCases {
-            let app = AidenStateMatrix.launch(scenario: scenario, shell: .tabs)
+            let app = AidenStateMatrix.launch(scenario: scenario)
             XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10), scenario.rawValue)
             for title in ["Bots", "Workspaces", "Search", "Inbox"] {
                 AidenStateMatrix.leaveSearch(in: app)
@@ -45,7 +35,7 @@ final class AidenShellUITests: XCTestCase {
     /// A tab is never hidden, because on iOS 27 a selection pointing at a hidden
     /// tab crashes. Bots stays selectable and says why it has nothing to show.
     func testBotsTabStaysSelectableWhenBotsAreUnavailable() {
-        let app = AidenStateMatrix.launch(scenario: .oldHost, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .oldHost)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
 
         AidenStateMatrix.openArea("Bots", in: app)
@@ -64,7 +54,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testBotsTabDoesNotExplainAnythingWhenBotsAreAvailable() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
 
         AidenStateMatrix.openArea("Bots", in: app)
@@ -75,7 +65,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testOnlyTheSearchTabHasASearchField() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
         XCTAssertFalse(app.searchFields.firstMatch.exists, "Inbox has a search field")
 
@@ -95,7 +85,6 @@ final class AidenShellUITests: XCTestCase {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .pad, "A tab bar minimizes on iPhone")
         let app = AidenStateMatrix.launch(
             scenario: .busy,
-            shell: .tabs,
             contentSize: .accessibilityExtraExtraExtraLarge
         )
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
@@ -114,7 +103,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// Running chats live above the tab bar, and only while there are any.
     func testAccessoryAppearsOnlyWhileRunning() {
-        let busy = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let busy = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: busy).waitForExistence(timeout: 10), "No chat rows in the inbox")
         let accessory = AidenStateMatrix.runningAccessory(in: busy)
         XCTAssertTrue(accessory.waitForExistence(timeout: 10), "No accessory while a chat runs")
@@ -129,7 +118,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(accessory.waitForExistence(timeout: 10), "The accessory did not come back with the Inbox")
         busy.terminate()
 
-        let empty = AidenStateMatrix.launch(scenario: .empty, shell: .tabs)
+        let empty = AidenStateMatrix.launch(scenario: .empty)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: empty).waitForExistence(timeout: 10))
         XCTAssertTrue(empty.staticTexts["No chats yet"].waitForExistence(timeout: 10))
         XCTAssertFalse(AidenStateMatrix.runningAccessory(in: empty).exists, "An accessory with nothing running")
@@ -138,7 +127,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// More than one running chat is a list to choose from.
     func testAccessoryWithSeveralRunningChatsOpensASheet() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         let accessory = AidenStateMatrix.runningAccessory(in: app)
         XCTAssertTrue(accessory.waitForExistence(timeout: 15), "No accessory while chats run")
         XCTAssertTrue(accessory.label.contains("1 more"), "The accessory said \(accessory.label)")
@@ -160,7 +149,7 @@ final class AidenShellUITests: XCTestCase {
     /// Four chats need the person across two machines. Next walks them all, then
     /// says it's finished, and the Inbox is one Back away the whole time.
     func testCatchUpWalksEveryMachineThenFinishes() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         let catchUp = AidenStateMatrix.catchUpRow(in: app)
         XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
         XCTAssertTrue(catchUp.label.contains("4 chats"), "The row said \(catchUp.label)")
@@ -193,7 +182,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testNextShowsOnlyDuringCatchUp() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         let chat = openInbox(in: app)
         XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
         chat.tap()
@@ -218,7 +207,6 @@ final class AidenShellUITests: XCTestCase {
     func testNextAsksBeforeLeavingAttachmentsBehind() {
         let app = AidenStateMatrix.launch(
             scenario: .four,
-            shell: .tabs,
             extraArguments: ["-AidenDemoStagedAttachment", "YES"]
         )
         let catchUp = AidenStateMatrix.catchUpRow(in: app)
@@ -247,7 +235,7 @@ final class AidenShellUITests: XCTestCase {
     /// The words typed last are the ones a timed save would miss.
     func testDraftTextSurvivesNext() {
         let draft = "Keep these words"
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         let catchUp = AidenStateMatrix.catchUpRow(in: app)
         XCTAssertTrue(catchUp.waitForExistence(timeout: 15), "No Catch Up row")
         hideOverlaySidebar(in: app)
@@ -290,7 +278,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// The composer owns the bottom edge of a pushed chat.
     func testAPushedChatHidesTheTabBarUntilItIsLeft() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
         let chat = openInbox(in: app)
         XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
@@ -312,7 +300,7 @@ final class AidenShellUITests: XCTestCase {
     /// its latest words, with nothing left to jump to.
     func testALongChatOpensOnItsLatestWords() {
         let app = AidenStateMatrix.launch(scenario: .busy, contentSize: .accessibilityExtraExtraExtraLarge)
-        XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
         let chat = openInbox(in: app)
         XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
         chat.tap()
@@ -328,7 +316,7 @@ final class AidenShellUITests: XCTestCase {
     /// Following the bottom never pulls a chat shorter than the screen down from the top.
     func testAShortChatStaysAtTheTop() {
         let app = AidenStateMatrix.launch(scenario: .busy)
-        XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
         let chat = openInbox(in: app)
         XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
         chat.tap()
@@ -344,7 +332,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// Needs you above Updates above Earlier, whichever machine a row came from.
     func testInboxShowsNeedsYouUpdatesEarlierInOrder() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
         func heading(_ title: String) -> XCUIElement {
@@ -372,7 +360,7 @@ final class AidenShellUITests: XCTestCase {
     /// A row's menu opens with what its swipes offer, and a row waiting on a
     /// decision offers neither Done nor Snooze either way.
     func testRowMenusMatchTheirSwipes() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         let prompt = openInbox(in: app)
         XCTAssertTrue(prompt.waitForExistence(timeout: 10), "No chat rows in the inbox")
         let idle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Compare two caching strategies")).firstMatch
@@ -404,7 +392,7 @@ final class AidenShellUITests: XCTestCase {
     /// Search comes last, so nothing here reads what Search leaves behind. The
     /// launch also ignores any saved navigation (`AidenStateMatrix.launch`).
     func testCaptureTabShellScreens() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         let chat = openInbox(in: app)
         XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
         AidenStateMatrix.capture("tabs-inbox", in: self)
@@ -434,7 +422,7 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.capture("tabs-search", in: self)
         app.terminate()
 
-        let oldHost = AidenStateMatrix.launch(scenario: .oldHost, shell: .tabs)
+        let oldHost = AidenStateMatrix.launch(scenario: .oldHost)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: oldHost).waitForExistence(timeout: 10))
         AidenStateMatrix.openArea("Bots", in: oldHost)
         XCTAssertTrue(oldHost.staticTexts["Bots unavailable"].waitForExistence(timeout: 10))
@@ -445,7 +433,7 @@ final class AidenShellUITests: XCTestCase {
     /// Every page the tabs reach, for the review of what the tab bar and the
     /// toolbars do on each one.
     func testCaptureTabDestinations() throws {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
         if UIDevice.current.userInterfaceIdiom == .pad {
             try AidenStateMatrix.widenTheWindow(of: app)
@@ -522,7 +510,7 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.capture("tabs-bot-chat", in: self)
         app.terminate()
 
-        let offline = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        let offline = AidenStateMatrix.launch(scenario: .offlineMix)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: offline).waitForExistence(timeout: 10))
         openInboxMenu(in: offline)
         offline.buttons["Settings"].firstMatch.tap()
@@ -559,7 +547,7 @@ final class AidenShellUITests: XCTestCase {
     /// Settings, Scheduled tasks, Usage, Workspaces, Bots and a new chat, all from
     /// the tabs. A destination that cannot be reached fails the test.
     func testEveryOldHomeDestinationIsReachable() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
         for (entry, title) in [("Settings", "App settings"), ("Scheduled tasks", "Scheduled tasks"), ("Usage", "Usage")] {
@@ -621,7 +609,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// Pushed Settings has no sheet of its own for pairing: it asks the shell for one.
     func testPairAMachineOpensFromPushedSettings() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
         openInboxMenu(in: app)
         app.buttons["Settings"].firstMatch.tap()
@@ -637,7 +625,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// Every step is a route: the tab's stack holds nothing else.
     func testAMachineOpensFromSettingsAndBackRetracesTheWay() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
         openInboxMenu(in: app)
         app.buttons["Settings"].firstMatch.tap()
@@ -657,7 +645,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testAPushedRouteHidesTheTabBarAndBackReturnsIt() throws {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         let row = openInbox(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat rows in the inbox")
         if UIDevice.current.userInterfaceIdiom == .pad {
@@ -682,7 +670,7 @@ final class AidenShellUITests: XCTestCase {
     /// A window that changes size class rebuilds the shell. What's open stays open.
     func testAnOpenChatSurvivesAResize() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "A phone's window can't change size")
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         let row = openInbox(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat rows in the inbox")
         try AidenStateMatrix.widenTheWindow(of: app)
@@ -706,7 +694,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testTheInboxSaysWhileItsMachineConnects() {
-        let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs, extraArguments: ["-AidenDemoSlowConnect", "YES"])
+        let app = AidenStateMatrix.launch(scenario: .one, extraArguments: ["-AidenDemoSlowConnect", "YES"])
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
         let hint = app.descendants(matching: .any).matching(
             NSPredicate(format: "label BEGINSWITH %@", "Connecting to Studio Mac")
@@ -716,7 +704,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testAChatWithoutAWorkspaceCanBeDeletedFromTheInbox() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs, extraArguments: ["-AidenDemoNoWorkspaceChat", "YES"])
+        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoNoWorkspaceChat", "YES"])
         let row = openInbox(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat without a workspace in the Inbox")
         hideOverlaySidebar(in: app)
@@ -738,7 +726,7 @@ final class AidenShellUITests: XCTestCase {
     /// The tabs become a sidebar when the window has the width for one.
     func testIPadUsesASidebar() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Needs a regular-width window")
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
         try AidenStateMatrix.widenTheWindow(of: app)
         for title in ["Inbox", "Bots", "Workspaces", "Search"] {
@@ -763,10 +751,33 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// In a regular width, Search with its field up still leaves the way back
+    /// to the other tabs.
+    func testSearchInARegularWidthLeavesAWayBackToTheOtherTabs() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Needs a regular-width window")
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
+        try AidenStateMatrix.widenTheWindow(of: app)
+        search("flaky", in: app)
+        XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No Search results")
+
+        let row = AidenStateMatrix.sidebarRow("Workspaces", in: app)
+        if !row.isHittable {
+            let toggle = app.buttons.matching(NSPredicate(format: "identifier ==[c] %@", "ToggleSidebar")).firstMatch
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5), "Search left no way back to the other tabs")
+            toggle.tap()
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "The sidebar did not come back")
+        AidenStateMatrix.capture("search-ipad-way-back", in: self)
+        row.tap()
+        XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10), "Workspaces did not open from Search")
+        app.terminate()
+    }
+
     /// Size classes pick the layout, never the device: a narrow window on an iPad
     /// gets the same bottom tabs as a phone.
     func testCompactWidthUsesTabs() throws {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
         if UIDevice.current.userInterfaceIdiom == .pad {
             restoreTheWindowAfterwards(of: app)
@@ -796,7 +807,7 @@ final class AidenShellUITests: XCTestCase {
     // MARK: Machines
 
     func testTheStatusItemCountsMachinesAndOpensThem() {
-        let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .offlineMix)
         let item = app.buttons["aiden.machine-status"]
         XCTAssertTrue(item.waitForExistence(timeout: 10), "The Inbox has no status item")
         let settled = NSPredicate(format: "label == %@", "2 of 4 machines online")
@@ -810,7 +821,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testTheStripNarrowsTheInboxToOneMachine() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         let studioRow = openInbox(in: app)
         XCTAssertTrue(studioRow.waitForExistence(timeout: 15), "No chat rows in the Inbox")
         let onStudio = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "On Studio Mac")).firstMatch
@@ -831,7 +842,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testTheMachinePageCountsItsOpenChats() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the Inbox")
         app.buttons["aiden.machine-status"].tap()
         let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac,")).firstMatch
@@ -850,7 +861,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testOneMachineHasNoStrip() {
-        let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .one)
         let row = openInbox(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 15), "No chat rows in the Inbox")
         XCTAssertFalse(app.buttons["All machines"].exists)
@@ -858,7 +869,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testAChatNamesItsMachineWithSeveralMachines() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         let row = openInbox(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 15), "No chat rows in the Inbox")
         row.tap()
@@ -874,7 +885,7 @@ final class AidenShellUITests: XCTestCase {
         for appearance in AidenStateMatrix.Appearance.allCases {
             for size in AidenStateMatrix.ContentSize.allCases {
                 let tag = "\(appearance.rawValue)-\(size.label)"
-                let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, appearance: appearance, contentSize: size)
+                let app = AidenStateMatrix.launch(scenario: .offlineMix, appearance: appearance, contentSize: size)
                 let item = app.buttons["aiden.machine-status"]
                 XCTAssertTrue(item.waitForExistence(timeout: 10))
                 XCTAssertTrue(reconnectButton(in: app).waitForExistence(timeout: 15))
@@ -896,7 +907,7 @@ final class AidenShellUITests: XCTestCase {
                 }
                 app.terminate()
             }
-            let one = AidenStateMatrix.launch(scenario: .one, shell: .tabs, appearance: appearance)
+            let one = AidenStateMatrix.launch(scenario: .one, appearance: appearance)
             XCTAssertTrue(openInbox(in: one).waitForExistence(timeout: 15))
             AidenStateMatrix.capture("machines-one-\(appearance.rawValue)", in: self)
             openInbox(in: one).tap()
@@ -905,7 +916,7 @@ final class AidenShellUITests: XCTestCase {
             AidenStateMatrix.capture("machines-one-chat-\(appearance.rawValue)", in: self)
             one.terminate()
 
-            let four = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance)
+            let four = AidenStateMatrix.launch(scenario: .four, appearance: appearance)
             let row = openInbox(in: four)
             XCTAssertTrue(row.waitForExistence(timeout: 15))
             row.tap()
@@ -925,7 +936,7 @@ final class AidenShellUITests: XCTestCase {
     func testCaptureRunningAccessoryAndCatchUp() {
         for appearance in AidenStateMatrix.Appearance.allCases {
             let tag = appearance.rawValue
-            let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance)
+            let app = AidenStateMatrix.launch(scenario: .four, appearance: appearance)
             let accessory = AidenStateMatrix.runningAccessory(in: app)
             XCTAssertTrue(accessory.waitForExistence(timeout: 15), "No accessory (\(tag))")
             hideOverlaySidebar(in: app)
@@ -983,7 +994,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testSearchFindsAChatAndABotConversationAndOpensTheChat() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
         search("flaky", in: app)
@@ -1004,7 +1015,7 @@ final class AidenShellUITests: XCTestCase {
     /// Chats come from the Inbox store, so a machine that isn't selected has its
     /// chats searched too, and says which machine.
     func testSearchFindsChatsOnAMachineThatIsNotSelected() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
         search("e", in: app)
@@ -1016,7 +1027,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testSearchSaysItCoversLoadedChatsWhenNothingMatches() {
-        let app = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .one)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
         search("zzzz", in: app)
@@ -1046,7 +1057,6 @@ final class AidenShellUITests: XCTestCase {
     func testDraggingTheResultsPutsTheKeyboardAwayAndKeepsTheQuery() {
         let app = AidenStateMatrix.launch(
             scenario: .four,
-            shell: .tabs,
             contentSize: .accessibilityExtraExtraExtraLarge
         )
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
@@ -1063,7 +1073,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     func testTheSearchKeyPutsTheKeyboardAwayAndKeepsTheQuery() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
         search("flaky", in: app, submit: false)
         XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard was not up to begin with")
@@ -1080,7 +1090,7 @@ final class AidenShellUITests: XCTestCase {
     /// A name given on this phone is the name Search shows, for chats and Bots
     /// alike. The demo keeps each launch's machine choices apart.
     func testSearchShowsTheNameThisPhoneGaveTheMachine() {
-        let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 15), "No chat rows in the inbox")
         hideOverlaySidebar(in: app)
         app.buttons["aiden.machine-status"].tap()
@@ -1169,7 +1179,7 @@ final class AidenShellUITests: XCTestCase {
     /// recognizer (`AidenTranscriptTap`) because on iOS 26 a SwiftUI tap gesture
     /// on the transcript never fires.
     func testTheKeyboardGoesAwayInAChatAndKeepsTheDraft() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         let chat = openInbox(in: app)
         XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
         hideOverlaySidebar(in: app)
@@ -1187,7 +1197,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// The same in a Bot's chat.
     func testTheKeyboardGoesAwayInABotChatAndKeepsTheDraft() {
-        let app = AidenStateMatrix.launch(scenario: .busy, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
         AidenStateMatrix.openArea("Bots", in: app)
         let bot = botRow(in: app)
@@ -1208,11 +1218,60 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// With the default machine out of reach, the recovery banner sits above the
+    /// tabs, not over their bars, and still opens connection management. The
+    /// other machines' chats stay in the Inbox under it.
+    func testTheRecoveryBannerSitsAboveTheTabsAndOpensConnections() {
+        let app = AidenStateMatrix.launch(scenario: .four, extraArguments: ["-AidenDemoDefaultOffline"])
+        let switchConnection = app.buttons["Switch connection"].firstMatch
+        XCTAssertTrue(switchConnection.waitForExistence(timeout: 15), "No recovery banner")
+        let inbox = app.navigationBars["Inbox"].firstMatch
+        XCTAssertTrue(inbox.waitForExistence(timeout: 10), "The Inbox went with the default machine")
+        XCTAssertLessThanOrEqual(switchConnection.frame.maxY, inbox.frame.minY + 1, "The banner covers the Inbox's bar")
+        // An Inbox row names its machine as "On Laptop".
+        let laptopRow = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "On Laptop")).firstMatch
+        XCTAssertTrue(laptopRow.waitForExistence(timeout: 10), "The other machines' chats left the Inbox")
+
+        switchConnection.tap()
+        XCTAssertTrue(app.navigationBars["Aiden Installations"].waitForExistence(timeout: 10), "Switch connection opened nothing")
+        app.terminate()
+    }
+
+    /// An approval that arrives while someone types puts the keyboard away, so
+    /// the card isn't left behind it.
+    func testAnApprovalThatArrivesWhileTypingPutsTheKeyboardAway() {
+        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoLateBotApproval"])
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        AidenStateMatrix.openArea("Bots", in: app)
+        let bot = botRow(in: app)
+        XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot on the Bots tab")
+        hideOverlaySidebar(in: app)
+        bot.tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                .waitForExistence(timeout: 10),
+            "The Bot did not open"
+        )
+        let composer = composer(in: app)
+        let keyboard = app.keyboards.firstMatch
+        let card = app.staticTexts["Run this command?"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5), "The Bot chat has no composer")
+        composer.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come up")
+        XCTAssertFalse(card.exists, "The approval came before the keyboard was up")
+
+        XCTAssertTrue(card.waitForExistence(timeout: 30), "The approval never came")
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: keyboard)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "The keyboard stayed up over the approval")
+        AidenStateMatrix.capture("bot-approval-keyboard-away", in: self)
+        app.terminate()
+    }
+
     /// Without a list the empty states still scroll, so none of their words or
     /// the note about unsearched machines can sit behind the field.
     func testTheEmptyStatesScrollClearOfTheField() {
         for size in [AidenStateMatrix.ContentSize.large, .accessibilityExtraExtraExtraLarge] {
-            let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs, contentSize: size)
+            let app = AidenStateMatrix.launch(scenario: .offlineMix, contentSize: size)
             XCTAssertTrue(openOfflineMixInbox(in: app).waitForExistence(timeout: 10), "\(size)")
             search("zzzz", in: app, submit: false)
             let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn’t search")).firstMatch
@@ -1232,7 +1291,6 @@ final class AidenShellUITests: XCTestCase {
 
         let prompt = AidenStateMatrix.launch(
             scenario: .one,
-            shell: .tabs,
             contentSize: .accessibilityExtraExtraExtraLarge
         )
         XCTAssertTrue(openInbox(in: prompt).waitForExistence(timeout: 10))
@@ -1252,7 +1310,7 @@ final class AidenShellUITests: XCTestCase {
 
     /// Home Mini errors, and Laptop and Build Box are offline. Studio's results stay.
     func testSearchNamesTheMachinesItCouldNotSearch() {
-        let app = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        let app = AidenStateMatrix.launch(scenario: .offlineMix)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
         search("flaky", in: app)
@@ -1281,7 +1339,7 @@ final class AidenShellUITests: XCTestCase {
         ]
         for (appearance, size) in variants {
             let tag = "\(appearance.rawValue)-\(size.label)"
-            let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance, contentSize: size)
+            let app = AidenStateMatrix.launch(scenario: .four, appearance: appearance, contentSize: size)
             XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox (\(tag))")
             AidenStateMatrix.openArea("Search", in: app)
             XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10), tag)
@@ -1298,14 +1356,14 @@ final class AidenShellUITests: XCTestCase {
             app.terminate()
         }
 
-        let empty = AidenStateMatrix.launch(scenario: .one, shell: .tabs)
+        let empty = AidenStateMatrix.launch(scenario: .one)
         XCTAssertTrue(openInbox(in: empty).waitForExistence(timeout: 10))
         search("zzzz", in: empty)
         XCTAssertTrue(empty.staticTexts["No results"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("search-no-results", in: self)
         empty.terminate()
 
-        let mixed = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        let mixed = AidenStateMatrix.launch(scenario: .offlineMix)
         XCTAssertTrue(openInbox(in: mixed).waitForExistence(timeout: 10))
         search("flaky", in: mixed)
         XCTAssertTrue(
@@ -1317,7 +1375,6 @@ final class AidenShellUITests: XCTestCase {
 
         let largest = AidenStateMatrix.launch(
             scenario: .offlineMix,
-            shell: .tabs,
             contentSize: .accessibilityExtraExtraExtraLarge
         )
         XCTAssertTrue(openOfflineMixInbox(in: largest).waitForExistence(timeout: 10))
@@ -1328,73 +1385,12 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.capture("search-no-results-failing-machines-accessibilityExtraExtraExtraLarge-scrolled", in: self)
         largest.terminate()
 
-        let noBots = AidenStateMatrix.launch(scenario: .offlineMix, shell: .tabs)
+        let noBots = AidenStateMatrix.launch(scenario: .offlineMix)
         XCTAssertTrue(openInbox(in: noBots).waitForExistence(timeout: 10))
         search("zzzz", in: noBots)
         XCTAssertTrue(noBots.staticTexts["No results"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("search-no-results-failing-machines", in: self)
         noBots.terminate()
-    }
-
-    /// Light, dark and the largest accessibility text, so later work has a
-    /// "before" to compare with. A screen that cannot be reached fails the test
-    /// instead of being skipped.
-    func testCaptureBaselineScreens() {
-        let variants: [(AidenStateMatrix.Appearance, AidenStateMatrix.ContentSize)] = [
-            (.light, .large),
-            (.dark, .large),
-            (.light, .accessibilityExtraExtraExtraLarge),
-        ]
-        for (appearance, size) in variants {
-            let tag = "\(appearance.rawValue)-\(size.label)"
-            let app = AidenStateMatrix.launch(scenario: .busy, appearance: appearance, contentSize: size)
-            XCTAssertTrue(AidenStateMatrix.areaSwitcher(in: app).waitForExistence(timeout: 10), tag)
-
-            // Inbox: the chat list on the Workspaces side of the shell.
-            let firstChat = openInbox(in: app)
-            XCTAssertTrue(firstChat.waitForExistence(timeout: 10), "No chat rows in the inbox (\(tag))")
-            AidenStateMatrix.capture("inbox-\(tag)", in: self)
-
-            // A chat.
-            hideOverlaySidebar(in: app)
-            firstChat.tap()
-            XCTAssertTrue(
-                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Where do we stand?")).firstMatch
-                    .waitForExistence(timeout: 10),
-                "The chat did not open (\(tag))"
-            )
-            AidenStateMatrix.capture("chat-\(tag)", in: self)
-            goBack(in: app)
-
-            // Workspaces: the list behind the "Workspaces" row.
-            let workspacesRow = app.buttons["Workspaces"].firstMatch
-            XCTAssertTrue(workspacesRow.waitForExistence(timeout: 10), "No Workspaces row (\(tag))")
-            workspacesRow.tap()
-            AidenStateMatrix.capture("workspaces-\(tag)", in: self)
-            goBack(in: app)
-
-            // Settings.
-            let profile = app.buttons["Profile and app settings"].firstMatch
-            XCTAssertTrue(profile.waitForExistence(timeout: 10), "No settings button (\(tag))")
-            profile.tap()
-            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10), "Settings did not open (\(tag))")
-            AidenStateMatrix.capture("settings-\(tag)", in: self)
-            dismissSheet(in: app)
-
-            // Bots: the home, then a Bot.
-            AidenStateMatrix.openArea("Bots", in: app)
-            let bot = botRow(in: app)
-            XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot on the Bots home (\(tag))")
-            AidenStateMatrix.capture("bots-\(tag)", in: self)
-            bot.tap()
-            XCTAssertTrue(
-                app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
-                    .waitForExistence(timeout: 10),
-                "The Bot did not open (\(tag))"
-            )
-            AidenStateMatrix.capture("bot-\(tag)", in: self)
-            app.terminate()
-        }
     }
 
     // MARK: Accessibility
@@ -1598,7 +1594,12 @@ final class AidenShellUITests: XCTestCase {
             "machines": (10, [contrast, dynamicType]),
             "machine editor": (9, [contrast, dynamicType]),
             "settings": (13, [contrast, dynamicType]),
-            "search": (2, [hitRegion, dynamicType]),
+            // Re-pinned in Task 35 (`task-35-ipad-shell.log`), from 2: Search now
+            // keeps its bar while the field is up (the only way back to the other
+            // tabs), so the field sits under the title, and the system's Clear text
+            // button and three more Dynamic Type findings on no element or on the
+            // unsearched-machines note come with that layout. No new types.
+            "search": (5, [hitRegion, dynamicType]),
         ]
     }()
 
@@ -1613,7 +1614,7 @@ final class AidenShellUITests: XCTestCase {
         var allowed: [String] = []
         for appearance in AidenStateMatrix.Appearance.allCases {
             // No content size override, so the audit's Dynamic Type checks can change it.
-            let app = AidenStateMatrix.launch(scenario: .four, shell: .tabs, appearance: appearance, contentSize: .system)
+            let app = AidenStateMatrix.launch(scenario: .four, appearance: appearance, contentSize: .system)
             let isWide = AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth
             var audited: [String] = []
             func audit(_ screen: String) throws {
@@ -1733,9 +1734,9 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10), "Settings did not open")
             try audit("settings")
 
-            // Last: in a regular-width window the active search field takes the
-            // tab strip's place and offers no way back to the other tabs, so a
-            // screen audited after Search would still be Search.
+            // Last, because its field stays up: a screen audited after it would
+            // need the way back that `testSearchInARegularWidthLeavesAWayBackToTheOtherTabs`
+            // covers.
             search("flaky", in: app)
             XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No Search results")
             XCTAssertTrue(searchRow("Scout", in: app).waitForExistence(timeout: 10), "No Bot result")
@@ -1778,7 +1779,7 @@ final class AidenShellUITests: XCTestCase {
             for theme in themes {
                 for appearance in AidenStateMatrix.Appearance.allCases {
                     let app = AidenStateMatrix.launch(
-                        scenario: .four, shell: .tabs, appearance: appearance, contentSize: .system,
+                        scenario: .four, appearance: appearance, contentSize: .system,
                         theme: theme, extraArguments: extra
                     )
                     let catchUp = AidenStateMatrix.catchUpRow(in: app)
@@ -1796,7 +1797,7 @@ final class AidenShellUITests: XCTestCase {
 
         for appearance in AidenStateMatrix.Appearance.allCases {
             let app = AidenStateMatrix.launch(
-                scenario: .four, shell: .tabs, appearance: appearance, contentSize: .system, extraArguments: extra
+                scenario: .four, appearance: appearance, contentSize: .system, extraArguments: extra
             )
             let tagged = { (name: String) in save("\(appearance.rawValue)-\(name)") }
             let catchUp = AidenStateMatrix.catchUpRow(in: app)
@@ -1884,6 +1885,12 @@ final class AidenShellUITests: XCTestCase {
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rename the onboarding assets")).firstMatch
         for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No long chat in the inbox")
+        // The list scrolls under the running accessory, and XCUITest calls a row
+        // there hittable, but a tap on it opens the accessory's chat instead.
+        let accessory = app.buttons["aiden.running-accessory"].firstMatch
+        for _ in 0..<4 where accessory.exists && row.frame.maxY > accessory.frame.minY {
+            dragResults(in: app, from: 0.6, to: 0.4)
+        }
         hideOverlaySidebar(in: app)
         row.tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
@@ -1912,16 +1919,9 @@ final class AidenShellUITests: XCTestCase {
 
     // MARK: Navigation
 
-    /// Opens the Inbox and returns the first chat row. In the menu shell that is
-    /// the Workspaces side with its first workspace open.
+    /// Opens the Inbox and returns the first chat row.
     private func openInbox(in app: XCUIApplication) -> XCUIElement {
-        if app.launchArguments.contains("-AidenDemoTabShell") {
-            AidenStateMatrix.openArea("Inbox", in: app)
-        } else {
-            AidenStateMatrix.openArea("Workspaces", in: app)
-            let expand = app.buttons["Expand Aiden Agent"].firstMatch
-            if expand.waitForExistence(timeout: 5) { expand.tap() }
-        }
+        AidenStateMatrix.openArea("Inbox", in: app)
         return app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")
         ).firstMatch
@@ -1988,14 +1988,5 @@ final class AidenShellUITests: XCTestCase {
         let named = app.navigationBars.buttons["BackButton"].firstMatch
         let back = named.waitForExistence(timeout: 2) ? named : app.navigationBars.buttons.firstMatch
         if back.waitForExistence(timeout: 5) { back.tap() }
-    }
-
-    private func dismissSheet(in app: XCUIApplication) {
-        let done = app.buttons["Done"].firstMatch
-        if done.waitForExistence(timeout: 3) {
-            done.tap()
-        } else {
-            app.swipeDown(velocity: .fast)
-        }
     }
 }

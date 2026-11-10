@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The app is now one tab shell: **Inbox**, **Workspaces**, **Bots** and **Search**, each with its own stack, and a sidebar at regular width. Inbox lists every paired machine's chats together. The Aiden-logo menu, its first-run tip and the per-machine sidebar views are gone, along with the build setting that chose between the two shells. Scheduled tasks, Usage, Machines and Settings open as pages in a tab. An open chat stays on its own machine when the default machine changes. A notification for a machine you've removed now does nothing instead of showing an error.
+
 - Behind the scenes, `AidenChatFeature.swift` and `AidenWorkspaceShellView.swift` are now split into focused files under `Features/Chat/` and `Features/Workspace/`. No change to behavior or appearance.
 
 - Aiden On The Go now needs iOS 26 or later (it was iOS 18). iPhones that cannot run iOS 26 stay on the last build they have. The app uses the system Liquid Glass and Image Playground APIs directly, without the older material fallbacks. Reduce Transparency still shows solid surfaces.

@@ -4,7 +4,7 @@ struct AidenWorkspaceDetailView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
     /// The workspace's own machine, which its chats and Settings read and write.
-    /// Nil is the menu shell's: the selected machine.
+    /// Nil is the default machine.
     let owner: AidenRemoteRequestContext?
     let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
@@ -72,8 +72,8 @@ struct AidenWorkspaceDetailView: View {
                 )
             }
         }
-        // A sheet that opened for another machine, or that follows the selection
-        // (the menu shell's, and Git), closes rather than save somewhere new.
+        // A sheet that opened for another machine, or that follows the default
+        // (Git), closes rather than save somewhere new.
         .onChange(of: owner) { _, _ in isShowingSettings = false }
         .onChange(of: coordinator.defaultInstanceId) { old, _ in
             guard let settingsContext else { return }
@@ -86,8 +86,7 @@ struct AidenWorkspaceDetailView: View {
 
 extension AidenWorkspaceDetailView {
     /// Settings save on the workspace's own machine, through its owner context.
-    /// The menu shell's, with no owner, go to the selected machine and stop once
-    /// it changes.
+    /// With no owner they go to the default machine and stop once it changes.
     @MainActor
     static func settingsContext(
         owner: AidenRemoteRequestContext?,

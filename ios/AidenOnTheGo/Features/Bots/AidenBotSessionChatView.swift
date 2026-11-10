@@ -59,21 +59,19 @@ struct AidenBotSessionChatView: View {
         botID: String,
         initialSummary: AidenBotSummary? = nil,
         composerSession: AidenComposerSession? = nil,
-        machine: String?,
-        staysOnItsMachine: Bool = AppConfig.tabShellEnabled
+        machine: String?
     ) {
         self.coordinator = coordinator
         self.botID = botID
         self.initialSummary = initialSummary
         _composerSession = State(initialValue: composerSession ?? AidenComposerSession())
         // A Bot opened from a list stays on the machine it's on; otherwise the default's.
-        _openedOn = State(initialValue: staysOnItsMachine ? machine ?? coordinator.defaultInstanceId : nil)
+        _openedOn = State(initialValue: machine ?? coordinator.defaultInstanceId)
     }
 
     private var bot: AidenBotSummary? { summary ?? initialSummary }
 
-    /// The machine the chat opened on, so moving the default leaves it there. The
-    /// old shell's chat follows the selection instead.
+    /// The machine the chat opened on, so moving the default leaves it there.
     @State private var openedOn: String?
     private var machineID: String { openedOn ?? coordinator.defaultInstanceId ?? "" }
 
@@ -103,7 +101,7 @@ struct AidenBotSessionChatView: View {
         ownerConnection?.connectionState == .connected && canCompose
     }
 
-    /// The chat's own machine; the old shell's chat asks the selected one.
+    /// The chat's own machine; with none known, the selected one.
     private var supportsSpending: Bool {
         (openedOn == nil ? coordinator.server : ownerConnection?.server)?.supportsSpendingLimits == true
     }
@@ -267,6 +265,7 @@ struct AidenBotSessionChatView: View {
         .onChange(of: dockContent.keepsComposer) { _, keepsComposer in
             guard !keepsComposer else { return }
             composerFocused = false
+            AidenComposerKeyboard.putAway()
             attachmentPicker.dismiss()
         }
         // The last-known capabilities stand in until the Mac answers (R21).
@@ -487,6 +486,7 @@ struct AidenBotSessionChatView: View {
                 .onChange(of: model.approval?.waitId) { _, waitId in
                     guard waitId != nil else { return }
                     composerFocused = false
+                    AidenComposerKeyboard.putAway()
                     followIfAtEnd(proxy)
                 }
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
@@ -1149,6 +1149,7 @@ struct AidenBotSessionChatView: View {
         }
         guard model.canAttach else { return }
         composerFocused = false
+        AidenComposerKeyboard.putAway()
         attachmentPicker.openMenu()
     }
 
@@ -1916,7 +1917,7 @@ struct AidenBotBusyPill<ModeMenu: View>: View {
 }
 
 /// Where a Bot chat's tools go. Profile, Advanced, Files and Delete all read and
-/// write `machine`, the chat's own; nil is the menu shell's selected machine.
+/// write `machine`, the chat's own; nil is the selected machine.
 @MainActor
 struct AidenBotSessionTools {
     let coordinator: AidenRemoteCoordinator

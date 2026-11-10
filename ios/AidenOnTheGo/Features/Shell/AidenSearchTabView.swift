@@ -39,6 +39,9 @@ struct AidenSearchTabView: View {
             .navigationTitle("Search")
             // Each change of the trimmed query searches again.
             .searchable(text: $model.query, placement: fieldPlacement, prompt: "Chats and Bots")
+            // A regular width's active field otherwise hides the bar, and the
+            // sidebar button with it, which is the only way back to the other tabs.
+            .searchPresentationToolbarBehavior(horizontalSizeClass == .regular ? .avoidHidingContent : .automatic)
             .searchFocused($searchIsFocused)
             .task(id: model.trimmedQuery) { await model.run() }
     }
@@ -243,7 +246,7 @@ private struct AidenSearchBotRowView: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: AidenSpacing.m) {
-            Image(systemName: AidenProductArea.bots.symbol)
+            Image(systemName: AidenChromeSymbols.bots)
                 .foregroundStyle(palette.secondary)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: AidenSpacing.xs) {

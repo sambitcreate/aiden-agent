@@ -54,11 +54,7 @@ struct AidenBotsTabView: View {
         } else {
             AidenBotsHomeView(
                 coordinator: coordinator,
-                area: .bots,
                 availability: availability,
-                navigationStore: .shared,
-                isShowingSwitcherCoachmark: .constant(false),
-                onSelectArea: { _ in },
                 onOpenConversation: { conversation in
                     if let id = route(botID: conversation.botId) { navigation.open(.bot(id)) }
                 },
@@ -68,10 +64,9 @@ struct AidenBotsTabView: View {
                     onOpenBot(id, bot)
                     navigation.open(.bot(id))
                 },
-                isInTabShell: true,
                 machines: machines
             )
-            .onChange(of: coordinator.activeInstanceId) { _, _ in
+            .onChange(of: coordinator.defaultInstanceId) { _, _ in
                 chatStarter.forgetAttempt()
             }
             .task(id: machines?.roster.tabMachines.map(\.instanceId)) {
@@ -379,8 +374,7 @@ struct AidenBotRouteView: View {
                     coordinator: coordinator,
                     botID: model.id.objectId,
                     initialSummary: initialSummary,
-                    machine: model.id.instanceId,
-                    staysOnItsMachine: true
+                    machine: model.id.instanceId
                 )
                 .id("\(model.id.instanceId)-\(model.id.objectId)")
             case .chat(let chat, let allowsMutations):
@@ -564,5 +558,179 @@ struct AidenMachineSectionStatus: View {
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
         }
+    }
+}
+
+/// A rejected response may have lost to a newer snapshot or deletion. Use the
+/// currently cached chat for navigation, and never republish the rejected one.
+@MainActor
+func aidenPersistBotChatForPresentation(
+    _ chat: AidenChat,
+    context: AidenRemoteRequestContext,
+    coordinator: AidenRemoteCoordinator,
+    cache: AidenChatCache = .shared,
+    writeToken: UInt64? = nil
+) async -> AidenChat? {
+    let writeToken = writeToken ?? cache.reserveChatWrite()
+    var candidate: AidenChat?
+    let retained = await coordinator.withRetainedInstallationData(for: context) {
+        _ = try? await cache.saveChat(chat, instanceId: context.instanceId, writeToken: writeToken)
+        candidate = await cache.admittedChat(instanceId: context.instanceId, chatId: chat.id)
+    }
+    guard retained, coordinator.holds(context),
+          let candidate, candidate.id == chat.id, candidate.botId == chat.botId else { return nil }
+    return candidate
+}
+
+/// A Bot chat accepts messages from this phone only when the phone may write
+/// Bots and the Bot still exists. What the Bot may use is decided on the Mac.
+func aidenBotChatAllowsMutations(canWrite: Bool, botHealth: AidenBotHealth) -> Bool {
+    _ = botHealth
+    return canWrite
+}
+
+/// Only an exact, Mac-authored Bot chat may cross the fast local-cache path.
+/// The optional Bot identity is supplied by inbox navigation; restored paths
+/// still require the cached chat to carry an authoritative Bot identity.
+func aidenAdmittedCachedBotChat(
+    _ chat: AidenChat?,
+    chatID: String,
+    botID: String? = nil
+) -> AidenChat? {
+    guard let chat,
+          chat.id == chatID,
+          chat.isBotChat,
+          botID == nil || chat.botId == botID else { return nil }
+    return chat
+}
+
+/// Matches the stable Bot chat chrome closely enough that a cache miss does
+/// not cause a blank screen or layout jump while the Mac returns the chat.
+struct AidenBotChatSkeletonView: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(spacing: 5) {
+                    AidenBotSkeletonBlock(
+                        width: 60,
+                        height: 60,
+                        radius: 30,
+                        reduceMotion: reduceMotion
+                    )
+                    AidenBotSkeletonBlock(
+                        width: 118,
+                        height: 30,
+                        radius: 15,
+                        reduceMotion: reduceMotion
+                    )
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 16)
+
+                AidenBotSkeletonBlock(
+                    width: 206,
+                    height: 48,
+                    radius: 20,
+                    reduceMotion: reduceMotion
+                )
+                AidenBotSkeletonBlock(
+                    width: 252,
+                    height: 70,
+                    radius: 20,
+                    reduceMotion: reduceMotion
+                )
+                HStack {
+                    Spacer(minLength: 72)
+                    AidenBotSkeletonBlock(
+                        width: 164,
+                        height: 48,
+                        radius: 20,
+                        reduceMotion: reduceMotion
+                    )
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 104)
+
+            HStack(spacing: 10) {
+                AidenBotSkeletonBlock(
+                    width: 46,
+                    height: 46,
+                    radius: 23,
+                    reduceMotion: reduceMotion
+                )
+                AidenBotSkeletonBlock(
+                    width: nil,
+                    height: 64,
+                    radius: 24,
+                    reduceMotion: reduceMotion
+                )
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Image(systemName: AidenChromeSymbols.overflowMenu)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Bot conversation")
+    }
+}
+
+struct AidenBotConversationCreateAttempt: Equatable {
+    let context: AidenRemoteRequestContext
+    let botID: String
+    let request: AidenBotChatCreateRequest
+    let idempotencyKey: UUID
+}
+
+func aidenBotConversationCreateAttempt(
+    retaining existing: AidenBotConversationCreateAttempt?,
+    context: AidenRemoteRequestContext,
+    botID: String,
+    request: AidenBotChatCreateRequest,
+    makeKey: () -> UUID = UUID.init
+) -> AidenBotConversationCreateAttempt {
+    if let existing,
+       existing.context == context,
+       existing.botID == botID,
+       existing.request == request {
+        return existing
+    }
+    return .init(
+        context: context,
+        botID: botID,
+        request: request,
+        idempotencyKey: makeKey()
+    )
+}
+
+func aidenBotConversationCreateFailureIsAmbiguous(_ error: Error) -> Bool {
+    if error is CancellationError || error is URLError { return true }
+    guard let remoteError = error as? AidenRemoteClientError else { return true }
+    switch remoteError {
+    case .invalidResponse:
+        return true
+    case let .server(statusCode, _), let .unexpectedStatus(statusCode):
+        return (200..<300).contains(statusCode)
+            || statusCode == 408
+            || statusCode == 429
+            || statusCode >= 500
+    case .invalidEndpoint, .missingCredential,
+         .missingTrustConfiguration, .installationChanged:
+        return false
     }
 }

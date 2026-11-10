@@ -168,8 +168,9 @@ final class AidenUnifiedInboxStore {
     // MARK: The Bots and Workspaces tabs
 
     /// The Inbox doesn't poll a machine hidden from it, but the Bots tab still
-    /// lists that machine's Bots. Reads them once for each connected one, for the
-    /// Bots tab to call when it shows and when it's pulled.
+    /// lists that machine's Bots. Reads them once for each connected one. The
+    /// Bots tab calls this when it shows and when the machines it lists change;
+    /// the Bots home has no pull to refresh, so nothing else does.
     func readHiddenMachinesBots() async {
         var reads: [Task<Void, Never>] = []
         for connection in hosts.ordered

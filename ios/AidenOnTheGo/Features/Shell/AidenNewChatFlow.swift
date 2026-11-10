@@ -55,7 +55,7 @@ final class AidenNewChatFlow {
     private var activeWorkspaces: [AidenWorkspace] {
         AidenNoWorkspace.unarchived(
             coordinator.workspaces,
-            archivedIDs: coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
+            archivedIDs: coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: coordinator.defaultInstanceId)
         )
     }
 
@@ -225,15 +225,9 @@ final class AidenNewChatFlow {
     }
 
     private func applyGlobalDefaults(to workspace: AidenWorkspace) async -> AidenWorkspaceDefaultApplication {
-        let raw = UserDefaults.standard.string(forKey: "aiden.defaults.workspacePermission")
+        let raw = UserDefaults.standard.string(forKey: AidenWorkspaceDefaultApplication.permissionKey)
         let permission = raw.flatMap(AidenWorkspacePermission.init(rawValue:)) ?? .ask
-        guard permission != workspace.permission else {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .success)
-        }
-        guard let updated = await coordinator.updateWorkspace(workspace, permission: permission) else {
-            return AidenWorkspaceDefaultApplication(workspace: workspace, feedback: .warning)
-        }
-        return AidenWorkspaceDefaultApplication(workspace: updated, feedback: .success)
+        return await .applying(permission, to: workspace) { await self.coordinator.updateWorkspace(workspace, permission: $0) }
     }
 }
 
@@ -327,5 +321,25 @@ extension View {
     /// What a compose button opens, wherever in the shell it was tapped.
     func aidenNewChatPresentation(_ flow: AidenNewChatFlow) -> some View {
         modifier(AidenNewChatPresentation(flow: flow))
+    }
+}
+
+private struct AidenLiquidGlassCapsuleModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let tint: Color
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(tint, in: Capsule())
+        } else {
+            content.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
+        }
+    }
+}
+
+extension View {
+    func aidenLiquidGlassCapsule(tint: Color) -> some View {
+        modifier(AidenLiquidGlassCapsuleModifier(tint: tint))
     }
 }

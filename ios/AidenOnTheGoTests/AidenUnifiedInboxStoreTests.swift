@@ -1282,7 +1282,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
     func testADeletedChatLeavesAtOnceOverItsOwnMachine() async throws {
         let (coordinator, store, loose) = try await noWorkspaceMachine()
-        let selected = coordinator.activeInstanceId
+        let selected = coordinator.defaultInstanceId
         let release = responder.hold(instanceId: "laptop", path: "/chats/loose")
         let studioRequests = responder.requests(instanceId: "studio").count
 
@@ -1298,7 +1298,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
         let removal = try XCTUnwrap(requests.firstIndex(of: "DELETE /chats/loose"))
         XCTAssertLessThan(read, removal)
         XCTAssertEqual(requests.last, "GET /workspaces", "The chat's hidden folder stayed listed")
-        XCTAssertEqual(coordinator.activeInstanceId, selected, "Deleting moved the selection")
+        XCTAssertEqual(coordinator.defaultInstanceId, selected, "Deleting moved the selection")
         XCTAssertFalse(responder.requests(instanceId: "studio").dropFirst(studioRequests).contains { $0.contains("loose") })
         store.stop()
     }
@@ -1436,7 +1436,7 @@ final class AidenUnifiedInboxStoreTests: XCTestCase {
 
         await waitUntil("the machine to go") { store.snapshots["studio"] == nil }
         await waitUntil("the app-wide notice") { coordinator.presentedError?.contains("revoked") == true }
-        XCTAssertEqual(coordinator.activeInstanceId, "laptop")
+        XCTAssertEqual(coordinator.defaultInstanceId, "laptop")
         store.stop()
     }
 

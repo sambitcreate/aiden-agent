@@ -344,12 +344,6 @@ extension AidenChatViewModel {
         offersSimulators ? try? coordinator.remoteClient(for: owner) : nil
     }
 
-    /// The old shell files every chat under the selected machine, so it opens
-    /// forks only from there. The tab shell's routes carry their machine.
-    func opensForks(inTabShell: Bool = AppConfig.tabShellEnabled) -> Bool {
-        inTabShell || coordinator.activeInstanceId == owner.instanceId
-    }
-
     /// Revision 49: a Workspace chat's background jobs, once this phone holds
     /// `chat:jobs`. The owner's, for the same reason as `spendingTransport`.
     var backgroundJobsTransport: AidenBackgroundJobTransport? {

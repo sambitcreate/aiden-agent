@@ -186,7 +186,7 @@ final class AidenForegroundIntentRouter {
         let createdAt: Date
     }
 
-    /// A place waiting for the tab shell. `startsVoice` rides beside the route,
+    /// A place waiting for the shell. `startsVoice` rides beside the route,
     /// because routes are saved between launches and this must never be. Queued,
     /// it's only a request: `takeRoutes` decides whether it still stands.
     struct QueuedRoute: Equatable {
@@ -198,41 +198,20 @@ final class AidenForegroundIntentRouter {
     static let shared = AidenForegroundIntentRouter()
     private(set) var actions: [Action] = []
     /// Kept until the shell takes them, so a tap or an intent can arrive before
-    /// it mounts. The tab shell is the only reader.
+    /// it mounts.
     private(set) var routes: [QueuedRoute] = []
     var pending: Action? { actions.first }
 
-    /// False keeps the shipping rule: one intent at a time, and any other
-    /// arriving meanwhile is ignored.
-    @ObservationIgnored private let queuesActions: Bool
     @ObservationIgnored private var isOpeningChats = false
 
-    init(queuesActions: Bool = AppConfig.tabShellEnabled) {
-        self.queuesActions = queuesActions
-    }
-
     func submit(instanceID: String?, workspaceID: String?, startsVoice: Bool, now: Date = Date()) {
-        guard queuesActions || actions.isEmpty else { return }
         actions.append(Action(instanceID: instanceID, workspaceID: workspaceID, startsVoice: startsVoice, createdAt: now))
-    }
-
-    func take(now: Date = Date()) -> Action? {
-        guard !actions.isEmpty else { return nil }
-        let action = actions.removeFirst()
-        return Self.isFresh(action.createdAt, now: now) ? action : nil
     }
 
     /// For what ends an intent's claim on the foreground. Routes stay: they only
     /// say where to go, and a tap is still owed its screen.
     func discardActions() {
         actions = []
-    }
-
-    /// The tab shell keeps an intent that hasn't started: its minute still runs
-    /// out, and nothing is created until the app is back in front of the person.
-    /// With the flag off, going to the background ends it as it always has.
-    func handleSuspend() {
-        if !queuesActions { discardActions() }
     }
 
     func submit(route: AidenAppRoute, startsVoice: Bool = false, requestedAt: Date = Date()) {
@@ -265,7 +244,7 @@ final class AidenForegroundIntentRouter {
         actions.removeAll { machine(for: $0, on: coordinator) == nil }
     }
 
-    /// The tab shell's way through the queue. Each chat is created on the
+    /// The way through the queue. Each chat is created on the
     /// intent's own machine, one at a time and in order, and leaves a route.
     /// The selection never moves. An intent whose machine is still connecting
     /// stays queued and holds up nobody else.
@@ -319,7 +298,7 @@ final class AidenForegroundIntentRouter {
 
     /// Nil once the intent's machine has been forgotten or revoked.
     private func machine(for action: Action, on coordinator: AidenRemoteCoordinator) -> AidenHostConnection? {
-        guard let instanceID = action.instanceID ?? coordinator.activeInstanceId,
+        guard let instanceID = action.instanceID ?? coordinator.defaultInstanceId,
               let connection = coordinator.hosts.connection(for: instanceID),
               !connection.isRevoked else { return nil }
         return connection

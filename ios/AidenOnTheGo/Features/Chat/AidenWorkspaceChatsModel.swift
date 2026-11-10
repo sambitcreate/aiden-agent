@@ -8,7 +8,7 @@ import Observation
 final class AidenWorkspaceChatsModel {
     private var presentationGenerations: [String: UInt64] = [:]
     private let coordinator: AidenRemoteCoordinator
-    /// The workspace's machine. Nil follows the selected machine, as the old shell does.
+    /// The workspace's machine. Nil follows the default machine.
     private let owner: AidenRemoteRequestContext?
     private let workspaceId: String
     private let cache: AidenChatCache

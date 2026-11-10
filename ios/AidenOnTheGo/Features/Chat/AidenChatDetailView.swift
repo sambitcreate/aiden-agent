@@ -86,7 +86,7 @@ struct AidenChatDetailView: View {
     /// Opens a chat this one was forked into. Nil hides the fork actions,
     /// for surfaces that cannot navigate to a new Workspace chat.
     private let onOpenChat: (@MainActor (AidenChat) -> Void)?
-    /// The machine this chat stays on when the default moves. Nil on the old shell.
+    /// The machine this chat stays on when the default moves.
     private let pinnedOwner: String?
 
     init(
@@ -127,7 +127,7 @@ struct AidenChatDetailView: View {
         _ owner: AidenRemoteRequestContext?,
         coordinator: AidenRemoteCoordinator
     ) -> AidenRemoteRequestContext {
-        owner ?? (try? coordinator.ownerContext(for: coordinator.activeInstanceId ?? "")) ?? .noMachine
+        owner ?? (try? coordinator.ownerContext(for: coordinator.defaultInstanceId ?? "")) ?? .noMachine
     }
 
 #if DEBUG
@@ -189,6 +189,7 @@ struct AidenChatDetailView: View {
         .onChange(of: model.pendingQuestion?.id) { _, id in
             guard id != nil else { return }
             composerIsFocused = false
+            AidenComposerKeyboard.putAway()
             attachmentPicker.dismiss()
         }
         .onChange(of: model.isStreaming) { _, isStreaming in
@@ -198,6 +199,7 @@ struct AidenChatDetailView: View {
         .onChange(of: dockContent.keepsComposer) { _, keepsComposer in
             guard !keepsComposer else { return }
             composerIsFocused = false
+            AidenComposerKeyboard.putAway()
             attachmentPicker.dismiss()
         }
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
@@ -466,6 +468,7 @@ struct AidenChatDetailView: View {
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
                 guard approvalID != nil else { return }
                 composerIsFocused = false
+                AidenComposerKeyboard.putAway()
                 followLatest(proxy, animated: true)
             }
         }
@@ -537,7 +540,6 @@ struct AidenChatDetailView: View {
                 summaryFocus: focus
             ) else { return }
             // The fork lives on this chat's machine, and goes on opening there.
-            guard model.opensForks() else { return }
             onOpenChat(forked)
         }
     }
@@ -612,7 +614,7 @@ struct AidenChatDetailView: View {
                     dockNotices.disabled(model.isReadOnlyPresentation)
                 },
                 footer: {
-                    if AppConfig.tabShellEnabled, let notice = model.revokedMachineNotice {
+                    if let notice = model.revokedMachineNotice {
                         AidenRevokedMachineNoticeRow(notice: notice) { dismissChat() }
                     }
                 },
@@ -741,6 +743,7 @@ struct AidenChatDetailView: View {
     private func toggleAttachmentPicker() {
         guard canToggleAttachmentPicker else { return }
         composerIsFocused = false
+        AidenComposerKeyboard.putAway()
         if attachmentPicker.isPresented {
             attachmentPicker.dismiss()
         } else {

@@ -33,17 +33,6 @@ enum AidenDemoScenario: String, CaseIterable {
         }
         return scenario
     }
-
-    static let tabShellArgument = "-AidenDemoTabShell"
-
-    /// What a demo run asks of the tab shell flag. Nil unless it's a demo run that
-    /// asks. Only a clear yes turns the shell on.
-    static func tabShellOverride(in arguments: [String]) -> Bool? {
-        guard arguments.contains(launchArgument),
-              let flag = arguments.firstIndex(of: tabShellArgument) else { return nil }
-        let value = arguments.indices.contains(flag + 1) ? arguments[flag + 1] : nil
-        return AppConfig.isFlagEnabled(value)
-    }
 }
 
 /// Answers every request the demo clients make. Register answers with `reply`,
@@ -412,7 +401,7 @@ enum AidenDemoHosts {
         let laptop = machine("laptop", "Laptop", rows: 3, start: 4)
         let mini = machine("mini", "Home Mini", rows: 2, start: 4)
 
-        let machines: [Machine]
+        var machines: [Machine]
         switch scenario {
         case .one:
             machines = [machine("studio", "Studio Mac", rows: 4)]
@@ -442,6 +431,7 @@ enum AidenDemoHosts {
                 rowCount: 4
             )]
         }
+        if AidenDemoRunOptions.defaultMachineIsOffline, !machines.isEmpty { machines[0].isOnline = false }
         return makeCoordinator(machines, responder: responder, haptics: haptics, machinePreferences: machinePreferences)
     }
 
@@ -456,8 +446,7 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)? = nil,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared,
-        tabShell: Bool = AppConfig.tabShellEnabled
+        machinePreferences: AidenMachinePreferencesStore = .shared
     ) -> AidenRemoteCoordinator {
         makeCoordinator(
             installations.map { Machine(installation: $0, rowCount: 4) },
@@ -465,8 +454,7 @@ enum AidenDemoHosts {
             haptics: haptics,
             keychain: keychain,
             workspaceEnvironmentCache: workspaceEnvironmentCache,
-            machinePreferences: machinePreferences,
-            tabShell: tabShell
+            machinePreferences: machinePreferences
         )
     }
 
@@ -479,8 +467,7 @@ enum AidenDemoHosts {
         haptics: (any AidenHapticEmitting)?,
         keychain: (any KeychainStoring)? = nil,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache? = nil,
-        machinePreferences: AidenMachinePreferencesStore = .shared,
-        tabShell: Bool = AppConfig.tabShellEnabled
+        machinePreferences: AidenMachinePreferencesStore = .shared
     ) -> AidenRemoteCoordinator {
         let store = AidenInstallationStore(keychain: keychain ?? AidenDemoMemoryKeychain())
         let cacheRoot = FileManager.default.temporaryDirectory
@@ -540,8 +527,7 @@ enum AidenDemoHosts {
                     credential: credential,
                     session: responder.session
                 )
-            },
-            tabShell: tabShell
+            }
         )
     }
 
@@ -620,6 +606,11 @@ enum AidenDemoHosts {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
             responder.reply(instanceId: id, path: botPath, status: 200, json: AidenDemoContent.botDetailJSON())
             responder.reply(instanceId: id, path: "\(botPath)/session", status: 200, json: AidenDemoContent.botSessionJSON())
+            if AidenDemoRunOptions.raisesALateBotApproval {
+                responder.reply(instanceId: id, path: "\(botPath)/session/events", status: 200) { _ in
+                    AidenDemoContent.botSessionEventsBody(withApproval: AidenDemoRunOptions.lateApprovalIsDue())
+                }
+            }
             let fails = machine.botSearchFails
             responder.reply(instanceId: id, path: "/bot-conversations", status: fails ? 503 : 200) { url in
                 fails ? AidenDemoContent.notFound() : AidenDemoContent.botConversationsJSON(for: url)
@@ -866,8 +857,38 @@ private enum AidenDemoContent {
     }
 
     static func botSessionJSON() -> Data {
+        data(botSessionObject())
+    }
+
+    /// One connection of `GET …/session/events`: a snapshot frame, then the end,
+    /// so the client reconnects and reads the next one.
+    static func botSessionEventsBody(withApproval: Bool) -> Data {
+        var session = botSessionObject()
+        if withApproval {
+            session["seq"] = 5
+            session["approval"] = [
+                "waitId": "8d1e2f3a-4b5c-4d6e-9f70-a1b2c3d4e5f6",
+                "toolCallId": "call_demo_1",
+                "toolName": "run_command",
+                "summary": "npm run build",
+                "canAllow": true,
+            ]
+        }
+        let frame: [String: Any] = [
+            "protocolVersion": 1,
+            "botId": botId,
+            "epoch": session["epoch"] as Any,
+            "seq": session["seq"] as Any,
+            "type": "snapshot",
+            "payload": ["session": session],
+        ]
+        let json = String(decoding: data(frame), as: UTF8.self)
+        return Data("data: \(json)\n\n".utf8)
+    }
+
+    private static func botSessionObject() -> [String: Any] {
         let now = Date()
-        return data([
+        return [
             "botId": botId,
             "epoch": "epoch_demo_01",
             "seq": 4,
@@ -887,7 +908,7 @@ private enum AidenDemoContent {
             "hasOlder": false,
             "question": NSNull(),
             "approval": NSNull(),
-        ])
+        ]
     }
 
     static func notFound() -> Data {
@@ -1021,6 +1042,30 @@ enum AidenDemoRunOptions {
     /// Each machine's first chat sits under No workspace, and can be deleted.
     static var hasNoWorkspaceChat: Bool {
         ProcessInfo.processInfo.arguments.contains("-AidenDemoNoWorkspaceChat")
+    }
+
+    /// The scenario's first machine, the default, can't be reached.
+    static var defaultMachineIsOffline: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoDefaultOffline")
+    }
+
+    /// Scout asks to run a command a while after its chat first listens, so a
+    /// test can have the keyboard up when the approval arrives.
+    static var raisesALateBotApproval: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoLateBotApproval")
+    }
+
+    static let lateApprovalDelay: TimeInterval = 12
+    nonisolated(unsafe) private static var firstListen: Date?
+    private static let firstListenLock = NSLock()
+
+    /// True from `lateApprovalDelay` after the chat's first listen.
+    static func lateApprovalIsDue(now: Date = Date()) -> Bool {
+        firstListenLock.lock()
+        defer { firstListenLock.unlock() }
+        let start = firstListen ?? now
+        firstListen = start
+        return now.timeIntervalSince(start) >= lateApprovalDelay
     }
 }
 

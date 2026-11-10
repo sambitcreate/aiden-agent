@@ -102,7 +102,7 @@ struct AidenWorkspaceChatsView: View {
         .overlay { if model.isLoading && model.chats.isEmpty { ProgressView() } }
         .refreshable { await model.load() }
         // An owned workspace's chats don't follow the selection.
-        .task(id: owner == nil ? coordinator.activeInstanceId : owner?.instanceId) { await model.load() }
+        .task(id: owner == nil ? coordinator.defaultInstanceId : owner?.instanceId) { await model.load() }
         .navigationDestination(isPresented: Binding(
             get: { createdChat != nil },
             set: { if !$0 { createdChat = nil } }

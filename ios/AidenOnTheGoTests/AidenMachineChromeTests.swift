@@ -279,6 +279,24 @@ final class AidenMachineChromeTests: XCTestCase {
         XCTAssertFalse(spoken(machine: nil, isDimmed: false).contains("On "))
     }
 
+    /// An Inbox row for a fork says it is one, as the old home's rows did.
+    func testAForkedRowSaysItIsAFork() {
+        let placement = AidenInboxPlacement(section: .updates, tier: 0, sortAt: Date())
+        let lineage = AidenChatForkLineage(chatId: "parent", messageId: "m1", position: .after, at: Date())
+        func spoken(_ summary: AidenChatSummary) -> String {
+            let row = AidenInboxProjection.Row(summary: summary, placement: placement)
+            return AidenInboxRowView(
+                row: row,
+                section: .updates,
+                workspaceName: "Website",
+                palette: AidenThemeCatalog.palette(preset: .aiden, scheme: .light)
+            ).accessibilityName(AidenInboxRowStatus.make(row, section: .updates, now: Date()))
+        }
+
+        XCTAssertTrue(spoken(summary(forkedFrom: lineage)).hasPrefix("Fork, Deploy the pricing page"))
+        XCTAssertFalse(spoken(summary()).contains("Fork"))
+    }
+
     func testABotRowSaysItsMachineAndThatItIsOfflineToVoiceOver() throws {
         let bot = try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: [
             "id": "bot_scout", "name": "Scout", "purpose": "",
@@ -693,11 +711,11 @@ final class AidenMachineChromeTests: XCTestCase {
 
     // MARK: Drawing
 
-    private func summary(done: Bool = false) -> AidenChatSummary {
+    private func summary(done: Bool = false, forkedFrom: AidenChatForkLineage? = nil) -> AidenChatSummary {
         AidenChatSummary(
             id: "chat", workspaceId: "web", title: "Deploy the pricing page", titlePending: false,
             createdAt: Date(), updatedAt: Date(), revision: "r", activity: .idle, rowState: nil,
-            unread: false, lastRunFailed: false,
+            unread: false, lastRunFailed: false, forkedFrom: forkedFrom,
             inbox: AidenChatInboxSignals(doneAt: done ? Date() : nil)
         )
     }

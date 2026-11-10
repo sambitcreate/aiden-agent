@@ -96,12 +96,12 @@ final class AidenMachineDetailTests: XCTestCase {
 
     func testForgettingTheSelectedMachineSelectsAnotherOne() async throws {
         let (model, coordinator, _) = makeModel(.four)
-        XCTAssertEqual(coordinator.activeInstanceId, "studio")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio")
 
         let outcome = await model.forget("studio")
 
         guard case .success = outcome else { return XCTFail("Got \(outcome)") }
-        let selected = try XCTUnwrap(coordinator.activeInstanceId)
+        let selected = try XCTUnwrap(coordinator.defaultInstanceId)
         XCTAssertNotEqual(selected, "studio")
         XCTAssertTrue(pairedIDs(coordinator).contains(selected))
         XCTAssertEqual(model.rows.filter(\.isSelected).map(\.id), [selected])
@@ -116,7 +116,7 @@ final class AidenMachineDetailTests: XCTestCase {
 
         guard case .success = outcome else { return XCTFail("Got \(outcome)") }
         XCTAssertTrue(pairedIDs(coordinator).isEmpty)
-        XCTAssertNil(coordinator.activeInstanceId)
+        XCTAssertNil(coordinator.defaultInstanceId)
         XCTAssertEqual(coordinator.connectionState, .needsPairing)
         XCTAssertTrue(model.rows.isEmpty)
         XCTAssertTrue(model.hasNoMachines)
@@ -174,7 +174,7 @@ final class AidenMachineDetailTests: XCTestCase {
         for instanceId in others {
             XCTAssertEqual(responder.requests(instanceId: instanceId).count, before[instanceId], instanceId)
         }
-        XCTAssertEqual(coordinator.activeInstanceId, "studio", "Retrying a machine never changes the selected one")
+        XCTAssertEqual(coordinator.defaultInstanceId, "studio", "Retrying a machine never changes the selected one")
         XCTAssertEqual(model.row("build")?.status, .offline)
     }
 
@@ -191,7 +191,7 @@ final class AidenMachineDetailTests: XCTestCase {
         let outcome = await model.select("mini")
 
         guard case .success = outcome else { return XCTFail("Got \(outcome)") }
-        XCTAssertEqual(coordinator.activeInstanceId, "mini")
+        XCTAssertEqual(coordinator.defaultInstanceId, "mini")
         XCTAssertEqual(model.rows.filter(\.isSelected).map(\.id), ["mini"])
     }
 
@@ -384,29 +384,20 @@ final class AidenMachineDetailTests: XCTestCase {
         )
     }
 
-    // MARK: Behind the flag
+    // MARK: Settings
 
-    private func settingsLabels(tabShellEnabled: Bool) throws -> [String] {
+    private func settingsLabels() throws -> [String] {
         let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
-        let window = try show(AidenAppSettingsView(
-            coordinator: coordinator,
-            appearance: AidenAppearanceStore(),
-            addInstallation: {},
-            tabShellEnabled: tabShellEnabled
-        ))
+        let window = try show(NavigationStack {
+            AidenAppSettingsView(coordinator: coordinator, appearance: AidenAppearanceStore())
+        })
         defer { close(window) }
         _ = runMainLoop(until: { accessibleElements(in: window).contains { $0.accessibilityLabel?.contains("Appearance") == true } })
         return accessibleElements(in: window).compactMap(\.accessibilityLabel)
     }
 
-    func testSettingsKeepsTheInstallationsButtonWhileTheTabShellIsOff() throws {
-        let labels = try settingsLabels(tabShellEnabled: false)
-        XCTAssertTrue(labels.contains { $0.contains("Paired Installations") }, "\(labels)")
-        XCTAssertFalse(labels.contains { $0.hasPrefix("Machines") }, "\(labels)")
-    }
-
-    func testSettingsLinksTheMachinesPageWhileTheTabShellIsOn() throws {
-        let labels = try settingsLabels(tabShellEnabled: true)
+    func testSettingsLinksTheMachinesPage() throws {
+        let labels = try settingsLabels()
         XCTAssertTrue(labels.contains { $0.hasPrefix("Machines") }, "\(labels)")
         XCTAssertFalse(labels.contains { $0.contains("Paired Installations") }, "\(labels)")
     }
@@ -669,7 +660,7 @@ private struct AidenMachinesInATabStack: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            AidenMachinesView(coordinator: coordinator, preferences: preferences, pushesAppRoutes: true, addMachine: {})
+            AidenMachinesView(coordinator: coordinator, preferences: preferences, addMachine: {})
                 .navigationDestination(for: AidenAppRoute.self) { route in
                     if case .machine(let instanceId) = route {
                         AidenMachineDetailView(instanceId: instanceId, coordinator: coordinator, preferences: preferences)

@@ -146,7 +146,7 @@ struct AidenMachineDetailView: View {
     let preferences: AidenMachinePreferencesStore
 
     @Environment(\.dismiss) private var dismiss
-    /// Nil in the menu shell, which has no Inbox store to count from.
+    /// Nil where nothing put an Inbox store in the environment, such as a preview.
     @Environment(AidenUnifiedInboxStore.self) private var inboxStore: AidenUnifiedInboxStore?
     @State private var model: AidenMachinesModel
     @State private var draftName = ""
