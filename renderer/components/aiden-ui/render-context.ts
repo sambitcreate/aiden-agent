@@ -1,7 +1,8 @@
 import * as React from "react";
 import { evaluate, type AidenUiScope } from "../../shared/aiden-ui/evaluate";
 import { ownRecord } from "../../shared/aiden-ui/own";
-import type { AidenUiActionV1, AidenUiExprV1, AidenUiNodeV1, AidenUiPropValueV1 } from "../../shared/aiden-ui/types";
+import { asString, isAction, isExpr } from "../../shared/aiden-ui/props";
+import type { AidenUiActionV1, AidenUiNodeV1 } from "../../shared/aiden-ui/types";
 
 /** What a catalog component may ask the block to do. */
 export interface AidenUiRenderContext {
@@ -21,13 +22,7 @@ export interface AidenUiRenderContext {
 
 export const AidenUiContext = React.createContext<AidenUiRenderContext | null>(null);
 
-export function isExpr(value: AidenUiPropValueV1 | undefined): value is AidenUiExprV1 {
-  return Boolean(value) && typeof value === "object" && "op" in value;
-}
-
-export function isAction(value: AidenUiPropValueV1 | undefined): value is AidenUiActionV1 {
-  return Boolean(value) && typeof value === "object" && "act" in value;
-}
+export { asString, isAction, isExpr };
 
 /** Reads a prop of `node` in `scope`. */
 export function readProp(node: AidenUiNodeV1, name: string, scope: AidenUiScope): unknown {
@@ -35,13 +30,6 @@ export function readProp(node: AidenUiNodeV1, name: string, scope: AidenUiScope)
   return isExpr(value) ? evaluate(value, scope) : undefined;
 }
 
-export function asString(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
-  if (typeof value === "boolean") return value ? "true" : "false";
-  return "";
-}
 
 export function asNumber(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;

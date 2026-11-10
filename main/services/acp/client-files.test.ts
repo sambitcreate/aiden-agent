@@ -155,3 +155,27 @@ test("an ancestor of the folder swapped after the turn started cannot move file 
   assert.deepEqual(readdirSync(path.join(outside, "ws")), ["notes.txt"]);
   assert.equal(readFileSync(path.join(outside, "ws", "notes.txt"), "utf8"), "outside");
 });
+
+test("writes never change hook or agent settings files, even through a symlinked folder", async () => {
+  const { root } = workspace();
+  mkdirSync(path.join(root, ".claude"));
+  writeFileSync(path.join(root, ".claude", "settings.json"), '{"hooks":{}}');
+  symlinkSync(path.join(root, ".claude"), path.join(root, "claude-link"));
+  const refusal = /cannot change hook or agent settings files/u;
+  for (const target of [
+    path.join(root, ".claude", "settings.json"),
+    path.join(root, "claude-link", "settings.json"),
+    path.join(root, ".aiden", "hooks.json"),
+    path.join(root, ".codex", "hooks", "run.sh"),
+  ]) {
+    await assert.rejects(writeClientTextFile({ path: target, content: "{}" }, writable([root])), refusal, target);
+  }
+  assert.equal(readFileSync(path.join(root, ".claude", "settings.json"), "utf8"), '{"hooks":{}}');
+  assert.deepEqual(readdirSync(root).sort(), [".claude", "a.txt", "claude-link"]);
+  assert.equal(
+    (await readClientTextFile({ path: path.join(root, ".claude", "settings.json") }, writable([root]))).content,
+    '{"hooks":{}}',
+  );
+  await writeClientTextFile({ path: path.join(root, ".claude", "skills", "x", "SKILL.md"), content: "# x" }, writable([root]));
+  assert.equal(readFileSync(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"), "# x");
+});

@@ -53,12 +53,18 @@ function regionEntry(element: HTMLElement): HTMLElement | null {
   return candidates.find((candidate): candidate is HTMLElement => candidate !== null && shown(candidate)) ?? null;
 }
 
+/** Where focus would land in `region` (its entry point), if the area is on screen. */
+export function focusRegionEntry(region: FocusRegion, root: ParentNode = document): HTMLElement | null {
+  const element = focusRegionElement(region, root);
+  return element ? regionEntry(element) : null;
+}
+
 /** Move focus into `region`. False when the page has no such area or it holds nothing to focus. */
 export function focusRegion(region: FocusRegion, root: ParentNode = document): boolean {
-  const element = focusRegionElement(region, root);
-  const entry = element ? regionEntry(element) : null;
+  const entry = focusRegionEntry(region, root);
   if (!entry) return false;
-  entry.focus({ preventScroll: entry === element });
+  // The area itself as its entry keeps its scroll; an inner control scrolls into view.
+  entry.focus({ preventScroll: entry.hasAttribute("data-focus-region") });
   const doc = (root as Node).nodeType === Node.DOCUMENT_NODE ? (root as Document) : null;
   return doc ? doc.activeElement === entry : true;
 }

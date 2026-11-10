@@ -318,6 +318,78 @@ test("an interrupted incarnation commit recovers exactly the published generatio
   );
 });
 
+test("an unchanged incarnation reconcile answers without reading the rollback authority", async (t) => {
+  const root = await temporaryRoot(t);
+  const anchor = memoryAnchor();
+  let authorityReads = 0;
+  const loadAnchor = anchor.load.bind(anchor);
+  const loadMarker = anchor.marker.load.bind(anchor.marker);
+  anchor.load = async () => {
+    authorityReads += 1;
+    return loadAnchor();
+  };
+  anchor.marker.load = async () => {
+    authorityReads += 1;
+    return loadMarker();
+  };
+  const store = protectedStore(root, anchor);
+  await store.initialize();
+  const resources = [
+    { sourceId: "server-one", credentialSignature: digest("one") },
+    { sourceId: "server-two", credentialSignature: digest("two") },
+  ];
+  const minted = await store.reconcileNamespace("mcp", resources);
+  const committedAnchor = anchor.value;
+  const committedHead = await readHead(root);
+
+  // Every catalog snapshot reconciles each namespace, and almost always finds
+  // nothing new. On macOS each authority read is a `security` subprocess.
+  authorityReads = 0;
+  for (let refresh = 0; refresh < 3; refresh += 1) {
+    assert.deepEqual(await store.reconcileNamespace("mcp", resources), minted);
+  }
+  assert.equal(authorityReads, 0);
+  assert.equal(anchor.value, committedAnchor);
+  assert.deepEqual(await readHead(root), committedHead);
+
+  // A rotated credential and a removed resource still commit through the authority.
+  const [rotated] = await store.reconcileNamespace("mcp", [
+    { sourceId: "server-one", credentialSignature: digest("rotated") },
+  ]);
+  assert.ok(authorityReads > 0);
+  assert.notEqual(rotated?.credentialIncarnation, minted[0]?.credentialIncarnation);
+  assert.equal(rotated?.resourceIncarnation, minted[0]?.resourceIncarnation);
+  assert.notEqual(anchor.value, committedAnchor);
+  const [returned] = await store.reconcileNamespace("mcp", resources.slice(1));
+  assert.notEqual(returned?.resourceIncarnation, undefined);
+  const restarted = protectedStore(root, anchor);
+  await restarted.initialize();
+  assert.deepEqual(
+    await restarted.reconcileNamespace("mcp", resources.slice(1)),
+    [returned],
+  );
+});
+
+test("an unchanged incarnation reconcile still refuses after an uncertain commit", async (t) => {
+  const root = await temporaryRoot(t);
+  const anchor = memoryAnchor();
+  const store = protectedStore(root, anchor);
+  await store.initialize();
+  const resources = [{ sourceId: "skill-one", credentialSignature: digest("one") }];
+  await store.reconcileNamespace("skill", resources);
+  anchor.failNextStore = true;
+  await assert.rejects(
+    store.reconcileNamespace("skill", [{ sourceId: "skill-one", credentialSignature: digest("two") }]),
+    BotCapabilityCommitUncertainError,
+  );
+  await assert.rejects(
+    store.reconcileNamespace("skill", resources),
+    (error: unknown) =>
+      error instanceof BotCapabilityUnavailableError &&
+      /uncertain commit/u.test(error.message),
+  );
+});
+
 test("initial bootstrap supports clean and one-time legacy profiles but rejects unknown inventory", async (t) => {
   const root = await temporaryRoot(t);
   const anchor = memoryAnchor();

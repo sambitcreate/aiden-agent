@@ -1,6 +1,7 @@
 import { evaluate, formatValue, truthy, type AidenUiScope } from "./evaluate.js";
 import { ownRecord } from "./own.js";
-import { AIDEN_UI_LIMITS, type AidenUiExprV1, type AidenUiNodeV1, type AidenUiPropValueV1 } from "./types.js";
+import { isExpr } from "./props.js";
+import { AIDEN_UI_LIMITS, type AidenUiNodeV1 } from "./types.js";
 
 /**
  * Plain-text rendering of a visual at its initial state: Markdown-ish lines
@@ -62,9 +63,6 @@ class FallbackLines {
   }
 }
 
-function isExpr(value: AidenUiPropValueV1 | undefined): value is AidenUiExprV1 {
-  return Boolean(value) && "op" in (value as object);
-}
 
 function prop(node: AidenUiNodeV1, name: string, scope: AidenUiScope): unknown {
   const value = node.p?.[name];
