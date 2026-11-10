@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **2026-11-06 — "By voice" label (Remote revision 60, provisional).** A chat message Aiden Live sent on the Mac shows a small "By voice" label with a microphone under it. The host marks it with `inputSource: "voice"` on user messages only; the app ignores any other value or a marker on a reply. Older hosts send no marker, so nothing changes there. The revision is re-claimed at merge.
+- **2026-11-06 — "By voice" label (Remote revision 60).** A chat message Aiden Live sent on the Mac shows a small "By voice" label with a microphone under it. The host marks it with `inputSource: "voice"` on user messages only; the app ignores any other value or a marker on a reply. Older hosts send no marker, so nothing changes there.
 
 - **2026-11-05 — Remote revision 59 reconciliation.** Main now uses revision 58 for connected-chat live-history checkpoints. Continuity watches, Open work, routine models and approved Bot peers therefore enter the combined release at revision 59. Earlier dated revision assignments remain historical; messaging/access/plans/allowed thresholds remain 54–57.
 

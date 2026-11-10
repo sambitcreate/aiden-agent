@@ -54,7 +54,7 @@ The four PRs build on one shared base:
 
 Live sends what you ask to the open chat right away (1a, with a "By voice" label), reads the reply back, and can be turned off with "Let Live use the open chat" (2a).
 
-Status: built on `claude/project-thread-kc0y85-live-chat` (2026-11-06), not merged. Remote revision 60 is provisional and is re-claimed at merge, after whatever `main` holds then.
+Status: built on `claude/project-thread-kc0y85-live-chat` (2026-11-06), not merged. Remote revision 60 (claimed 2026-11-10, when main was at 59).
 
 ### What Live can do
 
@@ -84,7 +84,7 @@ Only chats Live sent to or started in this session are watched. When one finishe
 
 ### "By voice"
 
-Messages Live sends carry `inputSource: "voice"`, saved with the message (including the saved intent a lost steer is retried from). Desktop shows a small "By voice" label under them, also while a new worktree is being made for a first message. Editing a queued voice message drops the label, since the text is then the person's. It is a shared transcript contract: the Remote chat projection carries it on user messages (revision 60, `AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION`, fixture `voiceInput`), and iOS and Android show the same label. Older clients ignore the key. See [the Remote API](../aiden-remote-api-v1.md#voice-input-label-revision-60-provisional).
+Messages Live sends carry `inputSource: "voice"`, saved with the message (including the saved intent a lost steer is retried from). Desktop shows a small "By voice" label under them, also while a new worktree is being made for a first message. Editing a queued voice message drops the label, since the text is then the person's. It is a shared transcript contract: the Remote chat projection carries it on user messages (revision 60, `AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION`, fixture `voiceInput`), and iOS and Android show the same label. Older clients ignore the key. See [the Remote API](../aiden-remote-api-v1.md#voice-input-label-revision-60).
 
 ### Settings and notice
 

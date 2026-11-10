@@ -1308,9 +1308,9 @@ On either run event route, a reader may send the header `Aiden-Run-Checkpoint: 1
 
 The optional `replyText` and `replyReasoning` strings each contain the complete displayable stream through that cursor, including an empty string before output begins. Each is omitted if it exceeds 32,768 UTF-16 code units. The optional `timeline` holds the latest public activity timeline when its JSON fits in 128 KiB. A reset starts these values over. The usual grant-filtered pending prompts accompany the snapshot. If the complete frame would exceed the 1 MiB SSE limit, the host uses the original replay path. Completed replies are read from the chat's message window.
 
-## Voice input label, revision 60 (provisional)
+## Voice input label, revision 60
 
-Revision 60 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION`). There is no new capability or `/server` feature token.
+Revision 60 was claimed on 2026-11-10, when `main` was at 59. The host keeps it in one constant (`AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION`). There is no new capability or `/server` feature token.
 
 A user message may carry an optional `inputSource: "voice"`. The host sets it only on a user message that Aiden Live sent to a chat on the person's behalf (a send, steer or queued follow-up made with Live's chat tools), and never on assistant messages, notices or Bot chats. Clients show a small "By voice" label under that message. The key is absent on every typed message, so older hosts stay valid. `"voice"` is the only value; clients treat any other value, or the key on a non-user message, as typed and show nothing. Older clients ignore the unknown key.
 

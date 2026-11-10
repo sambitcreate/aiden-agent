@@ -108,7 +108,7 @@ Live can read, send to and stop the open chat, find and open another regular
 chat, and start a new one. Main declares the tools and forwards each call to
 the window, which reuses the chat pane's own send, steer, queue and stop paths.
 Live's sends carry `inputSource: "voice"` and show a "By voice" label (Remote
-revision 60, provisional). Settings → Aiden Live → **Let Live use the open
+revision 60). Settings → Aiden Live → **Let Live use the open
 chat** (on by default) and `AIDEN_EXPERIMENTAL_GEMINI_LIVE_CHAT=0` turn the
 tools off. No chat tool can answer an approval. Chat text and titles reach
 Live as untrusted data, and a send, stop or new chat with text needs speech
