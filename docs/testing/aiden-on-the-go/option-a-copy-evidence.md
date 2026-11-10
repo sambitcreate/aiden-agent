@@ -128,8 +128,8 @@ The 92 rows are 87 copy strings, 2 `Info.plist` permission prompts, and 3 commen
 | `Features/Simulators/AidenSimulatorViewer.swift:336` | On your Mac (device section) | Keep: simulators |
 | `Features/Remote/AidenProductShellView.swift:251` | …allow it on your Mac. (coachmark detail) | Keep: old-shell coachmark, deleted in Task 35 |
 | `Features/Remote/AidenWorkspaceShellView.swift:523` | Can’t Reach Your Mac | Keep: old shell only (built from `AidenProductShellView` with the flag off), deleted in Task 35. The new shell says "Can’t reach your machine" (`AidenInboxTabView.swift`). |
-| `Features/Remote/AidenWorkspaceShellView.swift:559` | Waiting for your Mac… | Keep: old shell only, deleted in Task 35. The new shell's copy is in `AidenNewChatFlow.swift`. |
-| `Features/Remote/AidenWorkspaceShellView.swift:580` | Your Mac isn’t reachable right now. Try again once it’s connected. | Keep: old shell only, deleted in Task 35. The new shell's copy is in `AidenNewChatFlow.swift`. |
+| `Features/Remote/AidenWorkspaceShellView.swift:559` | Waiting for your Mac… | Keep: old shell only, deleted in Task 35. The new shell's copy was in `AidenNewChatFlow.swift`, since folded into `AidenNewWorkChatFlow.swift` (final review I2). |
+| `Features/Remote/AidenWorkspaceShellView.swift:580` | Your Mac isn’t reachable right now. Try again once it’s connected. | Keep: old shell only, deleted in Task 35. The new shell's copy was in `AidenNewChatFlow.swift`, since folded into `AidenNewWorkChatFlow.swift` (final review I2). |
 | `Features/Remote/Demo/AidenDemoHosts.swift:411, 418, 429, 431, 441` | Studio Mac | Keep: demo machine name (5 lines, counted as 5) |
 | `Features/Remote/Demo/AidenDemoHosts.swift:862` | Can use your Mac, shell, enabled connections, and skills. | Keep: stands in for text the host sends |
 | `Features/Remote/Demo/AidenDemoHosts.swift:896` | The Mac does not serve that path. | Keep: stands in for a host error message |

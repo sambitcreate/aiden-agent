@@ -22,7 +22,7 @@ Each full run is `AidenOnTheGoTests` 1,339 passed and 7 skipped, plus `AidenOnTh
 | `AidenUsageView.swift` | 494 | `AidenUsagePendingView`, `AidenUsageView`, `AidenUsageHeatmapDay`, `AidenUsagePresentation`, the usage card style |
 | `AidenAppSettingsView.swift` | 197 | `AidenAppSettingsView` |
 | `AidenMacTranscriptionSettingsView.swift` | 114 | `AidenMacTranscriptionSettingsView` |
-| `AidenInstallationsView.swift` | 197 | `AidenInstallationPresentation`, `AidenInstallationsView` |
+| `AidenInstallationsView.swift` | 197 | `AidenInstallationPresentation`, `AidenInstallationsView` (the view was deleted in the final review's fix, I4; what's left of the presentation is in `AidenMachinesView.swift`) |
 | `AidenWorkspaceDirectoryView.swift` | 459 | the directory, archived list, interactive row, directory detail and workspace row |
 | `AidenWorkspaceDetailView.swift` | 64 | `AidenWorkspaceDetailView` |
 | `AidenWorkspaceSettingsView.swift` | 162 | `AidenWorkspaceSettingsView` |
