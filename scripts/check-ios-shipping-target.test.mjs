@@ -924,8 +924,11 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(
     chat,
-    /scrollDismissesKeyboard\(\.interactively\)[\s\S]*?\.gesture\(AidenTranscriptTap \{ composerSession\.putAwayKeyboard\(\) \}\)/u,
+    /scrollDismissesKeyboard\(\.interactively\)[\s\S]*?\.gesture\(AidenTranscriptTap \{\s*composerSession\.putAwayKeyboard\(\)/u,
   );
+  // A message's footer shows on tap, through a UIKit tap that lets the touch through.
+  assert.match(chat, /\.gesture\(AidenMessageTap \{ onTapMessage\?\(\) \}\)/u);
+  assert.match(chat, /if showsFooter, footerRevealed \|\| readAloudActive \{/u);
   // The composer's own field carries out a keyboard ask, never the whole app.
   assert.match(
     chat,
