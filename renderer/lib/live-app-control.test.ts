@@ -8,7 +8,7 @@ function setup() {
   const bus = new LiveSessionBus();
   const activity = new LiveActivityStore();
   const controller = new LiveAppControlController({ bus, activity, lingerMs: 0, confirmTimeoutMs: 5_000 });
-  const context = (abort = new AbortController()) => ({ sessionId: "s1", signal: abort.signal });
+  const context = (abort = new AbortController()) => ({ sessionId: "s1", signal: abort.signal, commit: () => {} });
   return { bus, activity, controller, context };
 }
 
