@@ -11,6 +11,21 @@ final class AidenDesignTokenTests: XCTestCase {
         }
     }
 
+    /// The Inbox section headers and their counts are footnote text in
+    /// `secondary`, on the canvas in both widths, and secondary text also sits on
+    /// raised rows. Weight doesn't change contrast, so the colour has to pass.
+    func testSecondaryTextMeetsFourPointFiveToOneOnTheListGrounds() {
+        for (name, p) in allPalettes() {
+            for ground in [p.canvasHex, p.raisedHex] {
+                XCTAssertGreaterThanOrEqual(
+                    p.contrastRatio(foregroundHex: p.secondaryHex, backgroundHex: ground),
+                    4.5,
+                    "\(name): \(p.secondaryHex) on \(ground)"
+                )
+            }
+        }
+    }
+
     func testStatusTextMeetsFourPointFiveToOneInEveryTheme() {
         for preset in AidenThemePresetID.allCases { for scheme in [ColorScheme.light, .dark] {
             let p = AidenThemeCatalog.palette(preset: preset, scheme: scheme)

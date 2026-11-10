@@ -94,7 +94,6 @@ struct AidenInboxRowStatus: Equatable {
     }
 }
 
-/// One compact Inbox row: title, workspace, status and wait.
 /// The chip and the workspace under a row's title. Without colour the chip shows
 /// the machine's name, so a "·" keeps it from running into the workspace's.
 struct AidenInboxRowMachineLine: View {
@@ -126,6 +125,7 @@ struct AidenInboxRowMachineLine: View {
     }
 }
 
+/// One compact Inbox row: title, workspace, status and wait.
 struct AidenInboxRowView: View {
     let row: AidenInboxProjection.Row
     let section: AidenInboxSection
@@ -358,8 +358,10 @@ struct AidenInboxSectionHeader: View {
             Text(section.title)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(palette.secondary)
-            // In the title's weight: a lone regular-weight digit read under 4.5:1
-            // in the iPad layout's audit, in the same colour as the title.
+            // The title's colour and weight. Weight doesn't change contrast: the
+            // colour itself holds 4.5:1 on the canvas in every theme
+            // (`AidenDesignTokenTests`). The audit read a lone regular-weight digit
+            // under that in the iPad layout, which the weight only stopped.
             Text("\(count)")
                 .font(.footnote.weight(.semibold).monospacedDigit())
                 .foregroundStyle(palette.secondary)

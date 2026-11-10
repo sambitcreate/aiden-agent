@@ -106,10 +106,6 @@ struct AidenMachineChipImage: View {
     }
 }
 
-// MARK: Machine page
-
-/// One machine: its name, symbol and colour, whether it shows in the Inbox, its
-/// connection, and forgetting it. Edits save as they are made.
 /// One symbol in the editor's grid. The fill says which is picked. Without colour,
 /// an outline does, as on the colours.
 struct AidenMachineSymbolTileFace: View {
@@ -140,6 +136,10 @@ struct AidenMachineSymbolTileFace: View {
     }
 }
 
+// MARK: Machine page
+
+/// One machine: its name, symbol and colour, whether it shows in the Inbox, its
+/// connection, and forgetting it. Edits save as they are made.
 struct AidenMachineDetailView: View {
     let instanceId: String
     let coordinator: AidenRemoteCoordinator
