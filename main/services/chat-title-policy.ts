@@ -2,6 +2,7 @@
 // persistence and background title generation.
 
 import type { Attachment, ChatMessage } from "./types.js";
+import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 
 /**
@@ -149,7 +150,8 @@ export function buildChatTitlePrompt(input: {
  */
 export function buildChatRenamePrompt(messages: ChatMessage[]): string {
   const conversational = messages.filter(
-    (message) => message.role === "user" || message.role === "assistant",
+    (message) =>
+      (message.role === "user" || message.role === "assistant") && !isHookBlockedPrompt(message),
   );
   const firstUserIndex = conversational.findIndex((message) => message.role === "user");
   const originalMessage = conversational[firstUserIndex >= 0 ? firstUserIndex : 0];

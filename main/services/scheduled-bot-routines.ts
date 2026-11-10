@@ -16,6 +16,8 @@ import { redactCredentialTokens } from "../shared/redaction.js";
 import { botRoutineRetryRequestId } from "./schedule-store-core.js";
 import { BOT_ROUTINE_NOTES_HEADER } from "./bot-routine-notes.js";
 import type { BotDeliveryFunnel } from "./bot-delivery/funnel.js";
+import { botSurfaceHooks } from "./agent-surface-hooks.js";
+import type { HookDispatcher } from "./hooks/hook-types.js";
 import type { BotRoutinePorts, BotRoutineTiming } from "./bot-routines-port.js";
 import type { BotRoutineInputOrigin } from "./bot-runtime/bot-input-entry.js";
 import { UnclaimableScheduledFire, type ScheduledRunTrigger } from "./schedule-service-core.js";
@@ -143,6 +145,10 @@ export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   checkClaims?(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
   /** Why a spending limit stopped the run serving `requestId`, if one did. */
   spendingStop?(botId: string, requestId: string): string | undefined;
+  /** The Bot's folder, where its `RoutineRun` and `RoutineFailed` hooks run. No folder, no hooks. */
+  hookCwd?(botId: string): Promise<string>;
+  /** Where those hooks' messages and Aiden's notices go: the person's log, never the Bot's context. */
+  hookReport?(botId: string, lines: string[]): void;
 }
 
 export interface BotRoutineExecutorDependencies {
@@ -167,7 +173,58 @@ export interface BotRoutineExecutorDependencies {
    * failure here never changes the run that was recorded.
    */
   afterRun?(task: ScheduledTask, run: ScheduledRun, trigger: ScheduledRunTrigger): Promise<{ retrying?: boolean } | void>;
+  /** The hook dispatcher for `RoutineRun` / `RoutineFailed`; the process-wide one by default. */
+  hookDispatcher?: () => HookDispatcher;
   now?: () => number;
+}
+
+/**
+ * `RoutineRun` after a run that finished (success or silent), `RoutineFailed`
+ * after one that failed (docs/plans/aiden-hooks-plan.md §6). Observe-only and
+ * never awaited: a slow, failing or missing hook never delays the routine,
+ * changes its recorded result or its delivery. Skipped and blocked runs
+ * (paused, duplicate, cancelled, uncertain) fire neither.
+ */
+function observeRoutineHooks(
+  ports: () => BotRoutineExecutorPorts | Promise<BotRoutineExecutorPorts>,
+  dispatcher: (() => HookDispatcher) | undefined,
+  task: ScheduledTask & { botId: string },
+  run: ScheduledRun,
+  trigger: ScheduledRunTrigger,
+  retrying: boolean,
+): void {
+  const event = run.result === "error" ? "RoutineFailed" : run.result === "success" || run.result === "silent" ? "RoutineRun" : undefined;
+  if (!event) return;
+  void (async () => {
+    const { hookCwd, hookReport } = await ports();
+    if (!hookCwd) return;
+    const cwd = await hookCwd(task.botId);
+    const hooks = botSurfaceHooks(task.botId, cwd, dispatcher, {
+      report: (lines) => {
+        try {
+          hookReport?.(task.botId, lines);
+        } catch {
+          // Reporting is best effort.
+        }
+      },
+    });
+    hooks.observe(event, {
+      bot_id: task.botId,
+      routine_id: task.id,
+      routine_name: task.name?.trim() || "Routine",
+      run_id: run.id,
+      result: run.result,
+      trigger: trigger.kind,
+      ...(event === "RoutineFailed"
+        ? {
+            // Already credential-redacted when the run was recorded.
+            error: run.error ?? "",
+            failure_kind: run.failure?.kind ?? "other",
+            will_retry: retrying,
+          }
+        : {}),
+    }, { idempotencyKey: `${event}:${task.id}:${run.id}` });
+  })().catch(() => undefined);
 }
 
 interface BotRoutineOutcome {
@@ -604,6 +661,14 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       } catch {
         // Healing is advisory; the recorded run and its delivery stand.
       }
+      observeRoutineHooks(
+        () => ports ?? dependencies.ports(),
+        dependencies.hookDispatcher,
+        { ...task, botId: task.botId },
+        run,
+        trigger,
+        retrying,
+      );
       // A failure that will be tried again is not the last word: only the
       // final attempt (or the success) reaches the person.
       if (outcome.surface && !retrying) {

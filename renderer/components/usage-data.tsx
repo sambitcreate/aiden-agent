@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { analyticsApi } from "../lib/ipc";
 import { cn } from "../lib/ui-utils";
+import { LiveGuard } from "./live-guard";
 import type {
   AnalyticsNoticeChoice,
   AnalyticsPropertyView,
@@ -274,36 +275,40 @@ export function UsageDataNotice() {
     });
   };
 
+  // Answering the usage-data notice is the person's choice: Aiden Live never does.
   return (
-    <div
-      role="region"
-      aria-labelledby={titleId}
-      data-state="open"
-      className="usage-data-notice fixed bottom-4 right-4 z-[45] w-[min(360px,calc(100vw-32px))] rounded-card bg-popover p-4 shadow-modal"
-    >
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h2 id={titleId} className="text-strong text-primary">
-            Aiden now shares anonymous usage data
-          </h2>
-          <p className="mt-1 text-small text-secondary">
-            {USAGE_DATA_SUMMARY} You can turn it off anytime in Settings → About.
-          </p>
-          <UsageDataSheetLink className="mt-2" />
+    <LiveGuard guard="you" wrap={false}>
+      <div
+        role="region"
+        data-live-guard="you"
+        aria-labelledby={titleId}
+        data-state="open"
+        className="usage-data-notice fixed bottom-4 right-4 z-[45] w-[min(360px,calc(100vw-32px))] rounded-card bg-popover p-4 shadow-modal"
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="text-strong text-primary">
+              Aiden now shares anonymous usage data
+            </h2>
+            <p className="mt-1 text-small text-secondary">
+              {USAGE_DATA_SUMMARY} You can turn it off anytime in Settings → About.
+            </p>
+            <UsageDataSheetLink className="mt-2" />
+          </div>
+          <Button variant="transparent" size="small" iconOnly aria-label="Dismiss" onClick={() => answer("ok")}>
+            <X />
+          </Button>
         </div>
-        <Button variant="transparent" size="small" iconOnly aria-label="Dismiss" onClick={() => answer("ok")}>
-          <X />
-        </Button>
+        <div className="mt-3 flex justify-end gap-2">
+          <Button variant="filled" size="small" onClick={() => answer("turn-off")}>
+            Turn off
+          </Button>
+          <Button variant="accent" size="small" onClick={() => answer("ok")}>
+            OK
+          </Button>
+        </div>
       </div>
-      <div className="mt-3 flex justify-end gap-2">
-        <Button variant="filled" size="small" onClick={() => answer("turn-off")}>
-          Turn off
-        </Button>
-        <Button variant="accent" size="small" onClick={() => answer("ok")}>
-          OK
-        </Button>
-      </div>
-    </div>
+    </LiveGuard>
   );
 }
 
@@ -331,6 +336,7 @@ export function UsageDataSettings() {
         }
       >
         <Switch
+          data-live-guard="you"
           aria-label={USAGE_DATA_LABEL}
           checked={Boolean(status?.enabled && !status.envDisabled)}
           disabled={!status || status.envDisabled}
@@ -376,6 +382,7 @@ export function UsageDataOnboardingRow({ onDisplay }: { onDisplay?: (enabled: bo
         <UsageDataSheetLink layer="onboarding" className="mt-1" />
       </div>
       <Switch
+        data-live-guard="you"
         aria-label={USAGE_DATA_LABEL}
         checked={Boolean(status?.enabled && !status.envDisabled)}
         disabled={!status || status.envDisabled}

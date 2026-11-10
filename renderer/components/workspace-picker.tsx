@@ -50,6 +50,7 @@ import {
   PopoverTrigger,
   toast,
 } from "./ui";
+import { LiveGuard } from "./live-guard";
 
 /** Ask an already mounted picker to open (a new `nonce` each time). */
 export interface WorkspaceMenuRequest {
@@ -185,23 +186,26 @@ export function WorkspacePicker({
           }}
         >
           {view === "clone" ? (
-            <CloneView
-              ref={cloneRef}
-              onBack={() => setView("list")}
-              onCloningChange={setCloning}
-              onCloned={async (workspace) => {
-                try {
-                  await onSelectWorkspace(workspace.id);
-                } catch (error) {
-                  toast.info(
-                    error instanceof Error
-                      ? `The repository was cloned, but this chat could not move to it: ${error.message}`
-                      : "The repository was cloned, but this chat could not move to it.",
-                  );
-                }
-                close();
-              }}
-            />
+            // Cloning fetches from a URL onto this computer: the person's to start, never Aiden Live's.
+            <LiveGuard guard="you">
+              <CloneView
+                ref={cloneRef}
+                onBack={() => setView("list")}
+                onCloningChange={setCloning}
+                onCloned={async (workspace) => {
+                  try {
+                    await onSelectWorkspace(workspace.id);
+                  } catch (error) {
+                    toast.info(
+                      error instanceof Error
+                        ? `The repository was cloned, but this chat could not move to it: ${error.message}`
+                        : "The repository was cloned, but this chat could not move to it.",
+                    );
+                  }
+                  close();
+                }}
+              />
+            </LiveGuard>
           ) : (
             <WorkspaceListView
               workspaces={workspaces}

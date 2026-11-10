@@ -1,7 +1,7 @@
 import { ClassifierApproval } from "./classifier-approval";
 import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
-import { CalendarClock, ChevronDown, FilePen, FilePlus, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
+import { CalendarClock, ChevronDown, FilePen, FilePlus, Hand, Mic, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
 import {
   Button,
   DropdownMenu,
@@ -23,6 +23,8 @@ import {
   subagentMcpMutationAllowLabel,
 } from "./subagent-mcp-mutation-approval";
 import { SubagentShellApproval } from "./subagent-shell-approval";
+import { HOOK_PROPOSAL_APPROVAL_FOOTER, HookProposalApproval, hookProposalHeadline } from "./hook-proposal-approval";
+import { HOOK_PROPOSAL_APPROVAL_KIND, isHookProposalApprovalDetails } from "../shared/hook-proposal-approval";
 import { SubagentRunGrantApproval } from "./subagent-run-grant-approval";
 import { FormFillApproval } from "./form-fill-approval";
 import { SCHEDULE_APPROVAL_FOOTER, ScheduledTaskApproval, scheduleApprovalHeadline } from "./scheduled-task-approval";
@@ -44,6 +46,7 @@ import {
   type ToolApprovalScope,
 } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
+import { LiveGuard } from "./live-guard";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -56,6 +59,7 @@ const TOOL_LABELS: Record<string, string> = {
   agent_tool: "Agent tool",
   computer_use: "Computer Use",
   form_fill: "Form fill",
+  workspace_artifact: "Artifact",
 };
 
 /** A tool's name as an approval heading: known labels, otherwise sentence case. */
@@ -269,6 +273,23 @@ function rememberScopeHint(
     : `Won't ask again for ${target} until Aiden quits.`;
 }
 
+/** The quiet line Aiden Live adds while it is on an approval. */
+function LiveVoiceApprovalHint({ mode }: { mode: "voice" | "tap" }) {
+  const Icon = mode === "voice" ? Mic : Hand;
+  return (
+    <Text
+      variant="small"
+      color="secondary"
+      as="p"
+      role="note"
+      className="mt-1.5 flex shrink-0 items-center justify-center gap-1.5 text-center"
+    >
+      <Icon aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
+      {mode === "voice" ? "Live is listening. Say “allow” or “deny”." : "Live can’t answer this one. Tap to choose."}
+    </Text>
+  );
+}
+
 export interface ChatApprovalDecisionOptions {
   formFillExcludedOrders?: number[];
   scope?: ToolApprovalScope;
@@ -298,6 +319,7 @@ export function ChatApprovalCard({
   pendingCount = 1,
   computerUseHost = "local",
   keyboardShortcuts = false,
+  liveVoice = null,
 }: {
   pending: ApprovalPrompt;
   deciding: boolean;
@@ -318,6 +340,11 @@ export function ChatApprovalCard({
    * chat's own card takes them, so one key never answers two approvals.
    */
   keyboardShortcuts?: boolean;
+  /**
+   * Aiden Live is on this approval: "voice" takes a spoken allow or deny,
+   * "tap" means this one needs a button.
+   */
+  liveVoice?: "voice" | "tap" | null;
 }) {
   const details = pending.details as unknown;
   const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
@@ -326,6 +353,7 @@ export function ChatApprovalCard({
   const pendingShell = isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingRunGrant = isSubagentRunGrantApprovalDetails(pending.details) ? pending.details : undefined;
   const pendingFormFill = isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingHook = isHookProposalApprovalDetails(details) ? details : undefined;
   const pendingClassifier = classifierApprovalState(pending.toolName, details);
   const invalidPendingPrivilegedApproval =
     (claimsKind(details, "scheduled-task") && !schedule) ||
@@ -335,7 +363,8 @@ export function ChatApprovalCard({
     (claimsKind(details, "subagent-mcp-mutation") && pendingMcpMutation === undefined) ||
     (claimsKind(details, "subagent-shell") && pendingShell === undefined) ||
     (claimsKind(details, "subagent-run-grant") && pendingRunGrant === undefined) ||
-    (claimsKind(details, "form-fill-batch") && pendingFormFill === undefined);
+    (claimsKind(details, "form-fill-batch") && pendingFormFill === undefined) ||
+    (claimsKind(details, HOOK_PROPOSAL_APPROVAL_KIND) && pendingHook === undefined);
   const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
   React.useEffect(() => {
     setFormFillExcludedOrders([]);
@@ -344,7 +373,7 @@ export function ChatApprovalCard({
   // Only plain workspace writes and shell commands can be remembered; the main
   // process offers scopes solely for those, and specialized cards keep once.
   const pendingRememberScopes =
-    !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
+    !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant && !pendingHook
       ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
       : [];
   const computerUseAccess = isComputerUseAccessApprovalDetails(details);
@@ -385,16 +414,18 @@ export function ChatApprovalCard({
   // and invalid approvals keep their own review bodies.
   const plainApproval =
     !invalidPendingPrivilegedApproval && pendingCanAllow && !schedule && !pendingClassifier.details &&
-    !pendingWorkspaceWrite && !pendingMcpMutation && !pendingShell && !pendingRunGrant && !pendingFormFill;
+    !pendingWorkspaceWrite && !pendingMcpMutation && !pendingShell && !pendingRunGrant && !pendingFormFill && !pendingHook;
   const plainPreview = plainApproval ? pending.preview : undefined;
   const plainCommand = plainApproval ? approvalCommand(pending) : undefined;
 
   return (
+    // Approvals are the user's: Aiden Live can never press Allow, Always allow or their menu.
+    <LiveGuard guard="you">
     <div className="flex min-h-0 flex-col">
       <p className="sr-only" role="status">
         {invalidPendingPrivilegedApproval
           ? "Invalid privileged approval blocked"
-          : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}`}
+          : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}${liveVoice === "voice" && !disabledReason ? ". Live is listening: say allow or deny" : ""}`}
       </p>
       <section
         ref={cardRef}
@@ -426,7 +457,9 @@ export function ChatApprovalCard({
                     ? `${pendingShell.childLabel} wants to run a full-host command`
                     : pendingRunGrant
                       ? `Allow ${pendingRunGrant.lane === "write" ? "writes" : "shell"} for ${pendingRunGrant.childLabel}`
-                      : schedule
+                      : pendingHook && pendingCanAllow
+                        ? hookProposalHeadline(pendingHook)
+                        : schedule
                         ? scheduleApprovalHeadline(schedule)
                         : approvalHeadline(pending)}
             {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
@@ -449,6 +482,8 @@ export function ChatApprovalCard({
           <SubagentShellApproval details={pendingShell} descriptionId={summaryId} />
         ) : pendingRunGrant ? (
           <SubagentRunGrantApproval details={pendingRunGrant} descriptionId={summaryId} />
+        ) : pendingHook ? (
+          <HookProposalApproval details={pendingHook} descriptionId={summaryId} />
         ) : pendingFormFill ? (
           <FormFillApproval
             details={pendingFormFill}
@@ -481,7 +516,9 @@ export function ChatApprovalCard({
                   ? "Review this one exact full-host command before Aiden continues."
                   : pendingRunGrant
                     ? "Review this grant for the entire subagent run."
-                    : schedule
+                    : pendingHook && pendingCanAllow
+                      ? HOOK_PROPOSAL_APPROVAL_FOOTER
+                      : schedule
                       ? SCHEDULE_APPROVAL_FOOTER
                       : approvalMeta(plainPreview)}
         </Text>
@@ -490,6 +527,7 @@ export function ChatApprovalCard({
             {disabledReason}
           </Text>
         ) : null}
+        {liveVoice && !disabledReason ? <LiveVoiceApprovalHint mode={liveVoice} /> : null}
         <div className="@container mt-3.5 flex shrink-0 gap-2">
           <Button
             ref={denyRef}
@@ -555,5 +593,6 @@ export function ChatApprovalCard({
         </div>
       </section>
     </div>
+    </LiveGuard>
   );
 }

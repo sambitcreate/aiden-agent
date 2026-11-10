@@ -4,6 +4,7 @@
 // message and never stops a reply that is already running.
 
 import * as React from "react";
+import { LiveGuard } from "./live-guard";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Folder, MoreHorizontal, Plug, SlidersHorizontal, Wand2 } from "lucide-react";
@@ -150,7 +151,9 @@ export function WorkspaceSettingsDialog() {
     if (open && workspaces.isSuccess && !workspace) setOpen(false);
   }, [open, workspace, workspaces.isSuccess]);
 
+  // Folder access, memory, skills and connectors are the user's to change.
   return (
+    <LiveGuard guard="you" wrap={false}>
     <Dialog
       open={open && Boolean(workspace)}
       onOpenChange={setOpen}
@@ -182,6 +185,7 @@ export function WorkspaceSettingsDialog() {
         <WorkspaceSettingsBody workspace={workspace} tab={tab} onTabChange={setTab} onClose={() => setOpen(false)} />
       ) : null}
     </Dialog>
+    </LiveGuard>
   );
 }
 

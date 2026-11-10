@@ -648,8 +648,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     </div>
   );
 
+  // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.
   return shell(
-    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6">
+    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6" data-live-content="chat">
       {live.stream === "waiting" ? (
         <Text as="p" variant="small" color="tertiary" role="status" className="text-center">
           Reconnecting to {hostName}…

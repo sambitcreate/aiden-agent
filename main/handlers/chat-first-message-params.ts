@@ -9,7 +9,7 @@ import {
 
 const KEYS = new Set([
   "draftId", "workspaceId", "providerId", "model", "title",
-  "turnId", "message", "skillInvocation", "worktree",
+  "turnId", "message", "skillInvocation", "worktree", "inputSource",
 ]);
 
 export interface ParsedChatFirstMessage extends ParsedChatAppend {
@@ -54,6 +54,7 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     model: create.model,
     autoTitle: true,
     skillInvocation: record.skillInvocation,
+    ...(record.inputSource !== undefined ? { inputSource: record.inputSource } : {}),
   });
   if (!append.content.trim() && !append.attachments?.length) {
     throw new Error("Add a message or attachment before sending.");

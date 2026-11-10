@@ -1,4 +1,5 @@
 import type { Attachment, Chat, ChatMessage } from "../types";
+import { parseChatInputSource } from "../../shared/chat-input-source";
 import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
 import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
@@ -108,6 +109,8 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
     if (attachments.length > 0) message.attachments = attachments;
     if (placements.length > 0) message.imagePlacements = placements;
   }
+  // Contract revision 60: a message Aiden Live sent on the host shows "By voice".
+  if (role === "user" && parseChatInputSource(input.inputSource)) message.inputSource = "voice";
   const failure = mapOutcome(input.outcome);
   if (failure) message.providerFailure = failure;
   if (role === "assistant") {

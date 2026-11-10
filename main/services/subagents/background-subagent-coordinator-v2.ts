@@ -92,6 +92,19 @@ function terminal(run: BackgroundSubagentRunV2): boolean {
   return TERMINAL.has(run.snapshot.state);
 }
 
+interface BackgroundInstallationV2<Child> {
+  prepared: PreparedBackgroundSubagentRunV2;
+  settled: Promise<void>;
+  child?: { value: Child };
+  childStopped?: boolean;
+  invalidated?: Error;
+}
+
+interface BackgroundInvalidationV2 {
+  matches: (entry: { prepared: PreparedBackgroundSubagentRunV2 }) => boolean;
+  reason: Error;
+}
+
 /**
  * App-lifetime background executor with no parent-generation signal. The
  * lifecycle remains the sole durable authority; this class only owns live
@@ -99,6 +112,10 @@ function terminal(run: BackgroundSubagentRunV2): boolean {
  */
 export class BackgroundSubagentCoordinatorV2<Child> {
   private readonly active = new Map<string, ActiveBackgroundRunV2<Child>>();
+  /** Launches whose run is not in `active` yet. Registered before acceptance. */
+  private readonly installing = new Map<string, BackgroundInstallationV2<Child>>();
+  /** Invalidations still scanning. A launch one covers is refused, not accepted. */
+  private readonly invalidations = new Set<BackgroundInvalidationV2>();
 
   constructor(
     private readonly lifecycle: BackgroundSubagentLifecycleV2,
@@ -116,30 +133,50 @@ export class BackgroundSubagentCoordinatorV2<Child> {
     state: "queued";
   }> {
     const prepared = immutablePrepared(value);
-    if (this.active.has(prepared.snapshot.runId)) {
+    const { runId } = prepared.snapshot;
+    if (this.active.has(runId) || this.installing.has(runId)) {
       throw new Error("Background subagent is already active.");
     }
+    for (const invalidation of this.invalidations) {
+      if (invalidation.matches({ prepared })) throw invalidation.reason;
+    }
+    // Registered before the run is visible anywhere, so a request that learns
+    // of it waits here and an invalidation can reach its child.
+    let settle!: () => void;
+    const installation: BackgroundInstallationV2<Child> = {
+      prepared,
+      settled: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    this.installing.set(runId, installation);
+    const finished = () => {
+      this.installing.delete(runId);
+      settle();
+    };
+    try {
+      return await this.acceptAndInstall(prepared, installation, finished);
+    } finally {
+      finished();
+    }
+  }
+
+  private async acceptAndInstall(
+    prepared: PreparedBackgroundSubagentRunV2,
+    installation: BackgroundInstallationV2<Child>,
+    releaseWaiters: () => void,
+  ): Promise<{ accepted: true; runId: string; revision: number; state: "queued" }> {
     const accepted = await this.lifecycle.accept(prepared);
+    if (installation.invalidated) {
+      await this.recordLaunchFailed(prepared, accepted.revision).catch(() => undefined);
+      throw installation.invalidated;
+    }
     let child: Child;
     try {
       child = this.dependencies.createChild(prepared);
     } catch (error) {
       try {
-        const acceptedRun = await this.lifecycle.manage({
-          version: 2,
-          action: "status",
-          runId: prepared.snapshot.runId,
-          chatId: prepared.authority.chatId,
-          workspaceId: prepared.authority.workspaceId,
-          ownerDocumentId: prepared.authority.ownerDocumentId,
-          authorityRevision: prepared.authority.authorityRevision,
-          expectedRevision: accepted.revision,
-        });
-        await this.lifecycle.transition(
-          statusProof(acceptedRun),
-          "failed",
-          "Background child could not be created.",
-        );
+        await this.recordLaunchFailed(prepared, accepted.revision);
       } catch (recordError) {
         // Report why the child is missing; the recording failure is the cause
         // the run is still queued until startup reconciliation settles it.
@@ -153,6 +190,15 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       }
       throw error;
     }
+    installation.child = { value: child };
+    await this.install(installation, child, accepted.revision, releaseWaiters);
+    return accepted;
+  }
+
+  private async recordLaunchFailed(
+    prepared: PreparedBackgroundSubagentRunV2,
+    acceptedRevision: number,
+  ): Promise<void> {
     const acceptedRun = await this.lifecycle.manage({
       version: 2,
       action: "status",
@@ -161,8 +207,56 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       workspaceId: prepared.authority.workspaceId,
       ownerDocumentId: prepared.authority.ownerDocumentId,
       authorityRevision: prepared.authority.authorityRevision,
-      expectedRevision: accepted.revision,
+      expectedRevision: acceptedRevision,
     });
+    await this.lifecycle.transition(
+      statusProof(acceptedRun),
+      "failed",
+      "Background child could not be created.",
+    );
+  }
+
+  /** Releases a created child exactly once, whoever gets here first. */
+  private stopInstalling(installation: BackgroundInstallationV2<Child>, reason: Error): void {
+    if (!installation.child || installation.childStopped) return;
+    installation.childStopped = true;
+    try {
+      this.dependencies.stopChild?.(installation.child.value, reason);
+    } catch {
+      // The failure that brought us here is the one worth reporting.
+    }
+  }
+
+  private async install(
+    installation: BackgroundInstallationV2<Child>,
+    child: Child,
+    acceptedRevision: number,
+    releaseWaiters: () => void,
+  ): Promise<void> {
+    const { prepared } = installation;
+    let acceptedRun: BackgroundSubagentRunV2;
+    try {
+      acceptedRun = await this.lifecycle.manage({
+        version: 2,
+        action: "status",
+        runId: prepared.snapshot.runId,
+        chatId: prepared.authority.chatId,
+        workspaceId: prepared.authority.workspaceId,
+        ownerDocumentId: prepared.authority.ownerDocumentId,
+        authorityRevision: prepared.authority.authorityRevision,
+        expectedRevision: acceptedRevision,
+      });
+    } catch (error) {
+      // The run moved on or its state is unreadable: this child has no owner.
+      this.stopInstalling(installation, new Error("Background subagent could not start."));
+      throw error;
+    }
+    // The read may predate an invalidation that already released the child. If
+    // its scan missed this run, nothing else would take it out of queued.
+    if (installation.invalidated) {
+      await this.recordLaunchFailed(prepared, acceptedRevision).catch(() => undefined);
+      throw installation.invalidated;
+    }
     const entry: ActiveBackgroundRunV2<Child> = {
       prepared,
       child,
@@ -173,16 +267,23 @@ export class BackgroundSubagentCoordinatorV2<Child> {
       tail: Promise.resolve(),
     };
     this.active.set(prepared.snapshot.runId, entry);
-    void this.execute(entry);
+    // Requests already waiting queue on this entry before it starts, so a Stop
+    // sent during launch is judged against the revision its sender saw.
+    releaseWaiters();
+    queueMicrotask(() => void this.execute(entry));
     reportAnalyticsEvent("subagent_launched", { role: prepared.snapshot.role });
-    return accepted;
   }
 
   async manage(value: unknown): Promise<BackgroundSubagentRunV2> {
     const request = parseBackgroundSubagentManagementRequestV2(value);
-    const entry = this.active.get(request.runId);
-    if (!entry) {
+    let entry: ActiveBackgroundRunV2<Child> | undefined;
+    for (;;) {
+      await this.installing.get(request.runId)?.settled;
+      entry = this.active.get(request.runId);
+      if (entry) break;
       const current = await this.lifecycle.manage(asStatus(request));
+      // A launch that began during that read owns the answer now.
+      if (this.installing.has(request.runId) || this.active.has(request.runId)) continue;
       if (
         request.action === "status" ||
         request.action === "wait" ||
@@ -224,47 +325,65 @@ export class BackgroundSubagentCoordinatorV2<Child> {
   }
 
   async chatDeleted(chatId: string): Promise<number> {
-    const count = await this.lifecycle.chatDeleted(chatId);
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.chatDeleted(chatId),
       (entry) => entry.prepared.authority.chatId === chatId,
       new Error("Background subagent chat was deleted."),
       "stopped",
     );
-    return count;
   }
 
   async workspaceRevoked(workspaceId: string): Promise<number> {
-    const count = await this.lifecycle.workspaceRevoked(workspaceId);
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.workspaceRevoked(workspaceId),
       (entry) => entry.prepared.authority.workspaceId === workspaceId,
       new Error("Background subagent workspace access was revoked."),
       "stopped",
     );
-    return count;
   }
 
   async shutdown(): Promise<number> {
-    const count = await this.lifecycle.shutdown();
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.shutdown(),
       () => true,
       new Error("Background subagent runtime is shutting down."),
       "interrupted",
     );
-    return count;
   }
 
   /** Startup is reconciliation-only: persisted work is never recreated. */
   async reconcileStartup(): Promise<number> {
-    const count = await this.lifecycle.reconcileStartup();
-    this.abortMatching(
+    return this.invalidate(
+      () => this.lifecycle.reconcileStartup(),
       () => true,
       new Error("Background subagent was interrupted at startup."),
       "interrupted",
     );
-    return count;
+  }
+
+  private async invalidate(
+    scan: () => Promise<number>,
+    matches: (entry: { prepared: PreparedBackgroundSubagentRunV2 }) => boolean,
+    reason: Error,
+    state: "stopped" | "interrupted",
+  ): Promise<number> {
+    // Held for both scans, so no launch can start behind the last snapshot. A
+    // launch already registered is reached by abortMatching and the second scan.
+    const invalidation = { matches, reason };
+    this.invalidations.add(invalidation);
+    try {
+      const count = await scan();
+      this.abortMatching(matches, reason, state);
+      // The scan reads one snapshot, and aborting only ends a run in memory. A run
+      // that went live after that read is durably terminal only after a second pass.
+      return count + await scan();
+    } finally {
+      this.invalidations.delete(invalidation);
+    }
   }
 
   private async execute(entry: ActiveBackgroundRunV2<Child>): Promise<void> {
+    let childStarted = false;
     try {
       await this.enqueue(entry, async () => {
         entry.run = await this.lifecycle.transition(
@@ -280,6 +399,7 @@ export class BackgroundSubagentCoordinatorV2<Child> {
           "Running in the background.",
         );
       });
+      childStarted = true;
       await this.dependencies.startChild(entry.child, {
         task: entry.prepared.task,
         signal: entry.cancellation.signal,
@@ -315,6 +435,10 @@ export class BackgroundSubagentCoordinatorV2<Child> {
         }
       }
     } finally {
+      // A run that moved on before its child started still owns that child.
+      if (!childStarted && !entry.cancellation.signal.aborted) {
+        this.abortEntry(entry, new Error("Background subagent could not start."));
+      }
       this.active.delete(entry.prepared.snapshot.runId);
       this.notifyTerminal(entry);
     }
@@ -379,10 +503,15 @@ export class BackgroundSubagentCoordinatorV2<Child> {
   }
 
   private abortMatching(
-    matches: (entry: ActiveBackgroundRunV2<Child>) => boolean,
+    matches: (entry: { prepared: PreparedBackgroundSubagentRunV2 }) => boolean,
     reason: Error,
     state: "stopped" | "interrupted",
   ): void {
+    for (const installation of this.installing.values()) {
+      if (!matches(installation)) continue;
+      installation.invalidated ??= reason;
+      this.stopInstalling(installation, reason);
+    }
     for (const entry of this.active.values()) {
       if (!matches(entry)) continue;
       if (!terminal(entry.run)) {

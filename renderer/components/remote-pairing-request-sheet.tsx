@@ -6,6 +6,7 @@ import { aidenRemoteApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import type { AidenRemotePairingRequestPrompt } from "../shared/aiden-remote";
+import { LiveGuard } from "./live-guard";
 
 /** Six digits shown as two groups of three, which are easier to compare aloud. */
 export function formatPairingMatchCode(code: string): string {
@@ -201,7 +202,9 @@ export function PairingRequestSheet() {
   const shown = current ?? lastShown.current;
   if (!shown) return null;
   const busyAllowing = current !== null && busy && pending?.decision !== "deny";
+  // Pairing is the user's decision: Aiden Live never answers it.
   return (
+    <LiveGuard guard="you" wrap={false}>
     <Dialog
       open={current !== null}
       cancelRef={denyRef}
@@ -226,5 +229,6 @@ export function PairingRequestSheet() {
         waiting={waiting}
       />
     </Dialog>
+    </LiveGuard>
   );
 }

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { LiveGuard } from "../../components/live-guard";
 import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Button, Callout, Dialog, FieldLabel, Input, Text, Textarea } from "../../components/ui";
@@ -299,7 +300,8 @@ export function BotCreateFlow({
   ) : null;
 
   return (
-    <>
+    // Making a Bot sets what it may reach: the user's to do, never Aiden Live's.
+    <LiveGuard guard="you" wrap={false}>
       <Dialog
         open={open}
         onOpenChange={onOpenChange}
@@ -388,6 +390,6 @@ export function BotCreateFlow({
         )}
       </Dialog>
       {connectionSetup.dialog}
-    </>
+    </LiveGuard>
   );
 }

@@ -44,7 +44,19 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let appPanels: [AidenAppControlPanel]?
     let outcome: AidenMessageOutcome?
     let timeline: AidenGenerationTimeline?
+    /// Additive in contract revision 60: `"voice"` on a user message Aiden Live
+    /// sent for the person on the Mac. Any other value, or one on an assistant
+    /// message, is ignored.
+    let inputSource: String?
     let createdAt: Date
+
+    /// The label drawn under a message Aiden Live sent ("By voice").
+    static let voiceInputLabel = "By voice"
+
+    /// Aiden Live sent this message for the person on the Mac.
+    var isByVoice: Bool {
+        role == .user && inputSource == "voice"
+    }
 
     init(
         id: String,
@@ -57,6 +69,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         appPanels: [AidenAppControlPanel]? = nil,
         outcome: AidenMessageOutcome? = nil,
         timeline: AidenGenerationTimeline? = nil,
+        inputSource: String? = nil,
         createdAt: Date
     ) {
         self.id = id
@@ -69,6 +82,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.appPanels = appPanels
         self.outcome = outcome
         self.timeline = timeline
+        self.inputSource = role == .user && inputSource == "voice" ? inputSource : nil
         self.createdAt = createdAt
     }
 
@@ -104,6 +118,10 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
             from: values,
             forKey: .timeline
         )
+        // Lenient: only "voice" on a user message is kept; anything else is dropped
+        // without rejecting the message.
+        let source = try? values.decodeIfPresent(String.self, forKey: .inputSource)
+        inputSource = role == .user && source == "voice" ? source : nil
         createdAt = try values.decode(Date.self, forKey: .createdAt)
     }
 
@@ -126,7 +144,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, reasoning, attachments, htmlArtifacts, visuals, appPanels, outcome, timeline, createdAt
+        case id, role, text, reasoning, attachments, htmlArtifacts, visuals, appPanels, outcome, timeline, inputSource, createdAt
     }
 }
 
@@ -3113,7 +3131,10 @@ enum AidenRunInputPresentation {
                 return String(localized: "Saved to the chat — the run was cancelled before it could use it")
             case .capacity:
                 return String(localized: "Saved to the chat — the run queue was full")
-            case .runNotActive, .invalid, .none:
+            case .invalid:
+                // A hook refused it, so it's kept in the chat but never queued.
+                return String(localized: "Saved to the chat — it wasn't sent to the run")
+            case .runNotActive, .none:
                 return String(localized: "Saved to the chat — the run ended before it could use it")
             }
         }

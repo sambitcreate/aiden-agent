@@ -1,4 +1,5 @@
 import type { McpExposure } from "../shared/mcp-exposure";
+import type { AidenLiveSettingsFields } from "../shared/aiden-live-settings";
 import type { McpPreset } from "../shared/connector-catalog";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
@@ -665,6 +666,10 @@ export interface ChatMessage {
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
   notice?: import("../shared/agent-notices").AgentNoticeV1;
+  /** Aiden Live sent this user message for the person ("By voice"). */
+  inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
+  /** Set when a UserPromptSubmit hook refused this message; it never reached a model. */
+  hookBlocked?: { reason: string };
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;
@@ -936,7 +941,7 @@ export interface AssistantConfigSnapshot {
   hotkeyActive: boolean;
 }
 
-export interface AppSettings {
+export interface AppSettings extends AidenLiveSettingsFields {
   appControlPolicy?: import("../shared/app-controls").AppControlPolicy;
   remoteAppControlsEnabled?: boolean;
   compactionEngine?: CompactionEngine;

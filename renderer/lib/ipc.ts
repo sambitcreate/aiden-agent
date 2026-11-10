@@ -1,4 +1,5 @@
 import { parseBotRoutineModelDirectory } from "../shared/bot-routine-model-directory";
+import type { ChatInputSourceV1 } from "../shared/chat-input-source";
 import { createBotPeerApi } from "./bot-peers-api";
 import { parseBotExecutionResumeStatus } from "../shared/bot-execution-resume";
 import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, type BotRoutineModelSave } from "../shared/bot-routine-models";
@@ -29,6 +30,16 @@ import {
   type SpendingStatusView,
 } from "../shared/spending";
 import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
+import {
+  HOOKS_CHANGED_CHANNEL,
+  isHooksOverview,
+  type HookListing,
+  type HookRunRecord,
+  type HookSaveRequest,
+  type HooksChangedEvent,
+  type HooksOverview,
+  type HookTestResult,
+} from "../shared/hooks-settings";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -163,6 +174,12 @@ import type {
   RendererDiagnosticPolicy,
   RendererDiagnosticReport,
 } from "../shared/diagnostics";
+import type {
+  StorageCleanupPreview,
+  StorageCleanupRequest,
+  StorageCleanupResult,
+  StorageReport,
+} from "../shared/storage";
 import type { BotSessionState } from "../../main/services/bot-runtime/bot-session-service";
 import type {
   BotCreateInput,
@@ -308,7 +325,9 @@ import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../share
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
 import type {
   WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactImportPreview,
   WorkspaceArtifactV1,
+  WorkspaceArtifactRevisionSummary,
   WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
@@ -563,6 +582,13 @@ export const assistantLiveApi = {
     invoke<boolean>("assistant-live:display-release", { bindingId }),
   sendFrame: (sessionId: string, frame: Uint8Array) =>
     invoke<boolean>("assistant-live:frame", { sessionId, frame }),
+  toolResult: (sessionId: string, requestId: string, response: Record<string, unknown>) =>
+    invoke<boolean>("assistant-live:tool-result", { sessionId, requestId, response }),
+  note: (sessionId: string, text: string, options?: { awaitDelivery?: boolean }) =>
+    invoke<boolean>(
+      "assistant-live:note",
+      options?.awaitDelivery ? { sessionId, text, awaitDelivery: true } : { sessionId, text },
+    ),
   onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>
     onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
 };
@@ -655,6 +681,43 @@ export const spendingApi = {
   onChanged: (handler: (event: SpendingChangedEvent) => void) =>
     onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
       if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
+    }),
+};
+
+type HookIpcResult<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+function unwrapHookResult<T>(result: HookIpcResult<T>): T {
+  if (!result.ok) throw new Error(result.reason);
+  return result.value;
+}
+
+export const hooksApi = {
+  list: async (): Promise<HooksOverview> => {
+    const overview = await invoke<unknown>("hooks:list");
+    if (!isHooksOverview(overview)) throw new Error("Aiden could not read your hooks.");
+    return overview;
+  },
+  approveProposal: async (proposalId: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:approveProposal", proposalId)),
+  rejectProposal: (proposalId: string) => invoke<boolean>("hooks:rejectProposal", proposalId),
+  save: async (request: HookSaveRequest) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:save", request)),
+  /** Approve exactly the digest the owner saw; a hook that changed since is refused. */
+  approveDigest: async (hookId: string, digest: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing>>("hooks:approveDigest", hookId, digest)),
+  setEnabled: (hookId: string, enabled: boolean) => invoke<boolean>("hooks:setEnabled", hookId, enabled),
+  delete: async (hookId: string) => unwrapHookResult(await invoke<HookIpcResult<void>>("hooks:delete", hookId)),
+  setPaused: (paused: boolean) => invoke<boolean>("hooks:setPaused", paused),
+  /**
+   * Runs the hook's command against a sample payload. Only from an explicit Test press,
+   * and only the version with `digest` (the one on screen); a hook that changed since is refused.
+   */
+  test: async (hookId: string, digest: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookTestResult>>("hooks:test", hookId, digest)),
+  runLog: (hookId: string) => invoke<HookRunRecord[]>("hooks:runLog", hookId),
+  onChanged: (handler: (event: HooksChangedEvent) => void) =>
+    onNotification<HooksChangedEvent>(HOOKS_CHANGED_CHANNEL, (event) => {
+      if (event && typeof event.reason === "string") handler(event);
     }),
 };
 
@@ -790,6 +853,20 @@ export const diagnosticsApi = {
     invoke<{ enabled: boolean; expiresAt: null; disablesOnRestart: true }>(
       "diagnostics:mode-enable",
     ),
+};
+
+// ── Settings → Storage (disk usage and cleanup) ───────────────────────
+export const storageApi = {
+  /** The cached inventory; a stale one refreshes in the background. */
+  report: () => invoke<StorageReport>("storage:report"),
+  /** Wait for a fresh scan (the page's Refresh button). */
+  refresh: () => invoke<StorageReport>("storage:refresh"),
+  preview: (request: StorageCleanupRequest) =>
+    invoke<StorageCleanupPreview>("storage:preview", request),
+  cleanup: (request: StorageCleanupRequest) =>
+    invoke<StorageCleanupResult>("storage:cleanup", request),
+  onChange: (handler: (event: { kind: "scan-started" | "scan-finished" }) => void) =>
+    onNotification<{ kind: "scan-started" | "scan-finished" }>("storage:changed", handler),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────
@@ -1454,8 +1531,9 @@ export const workspaceArtifactsApi = {
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:rename", workspaceId, artifactId, title),
   delete: (workspaceId: string, artifactId: string) =>
     invoke<{ removed: boolean }>("workspaces:artifacts:delete", workspaceId, artifactId),
-  saveState: (workspaceId: string, artifactId: string, state: Record<string, unknown>) =>
-    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, state),
+  /** `revision` is the one the person was looking at; state from a page since replaced is dropped. */
+  saveState: (workspaceId: string, artifactId: string, revision: number, state: Record<string, unknown>) =>
+    invoke<void>("workspaces:artifacts:saveState", workspaceId, artifactId, revision, state),
   approve: (workspaceId: string, artifactId: string, digest: string) =>
     invoke<WorkspaceArtifactV1>("workspaces:artifacts:approve", workspaceId, artifactId, digest),
   /** Re-reads the page's sources in the workspace folder; every window gets a "refreshed" change. */
@@ -1464,6 +1542,23 @@ export const workspaceArtifactsApi = {
   /** Runs one of the page's buttons; main fills in the saved command. */
   run: (workspaceId: string, artifactId: string, action: string, args: unknown[], digest: string) =>
     invoke<{ ok: boolean; output: string }>("workspaces:artifacts:run", workspaceId, artifactId, action, args, digest),
+  /** The page's kept earlier versions, newest first. */
+  history: (workspaceId: string, artifactId: string) =>
+    invoke<WorkspaceArtifactRevisionSummary[]>("workspaces:artifacts:history", workspaceId, artifactId),
+  /** Brings back an earlier version; commands that differ from the approved ones need allowing again. */
+  restore: (workspaceId: string, artifactId: string, revision: number) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:restore", workspaceId, artifactId, revision),
+  /** Saves the page as a file the person picks; main reads the page and leaves out approval, ids and data. */
+  exportPage: (workspaceId: string, artifactId: string) =>
+    invoke<{ status: "saved" | "cancelled" }>("workspaces:artifacts:export", workspaceId, artifactId),
+  /** Reads a page file the person picks and holds it in main until confirmed or discarded. */
+  importPreview: (workspaceId: string) =>
+    invoke<WorkspaceArtifactImportPreview>("workspaces:artifacts:importPreview", workspaceId),
+  /** Adds the previewed page, never approved, under a free name. */
+  importConfirm: (workspaceId: string, token: string) =>
+    invoke<WorkspaceArtifactV1>("workspaces:artifacts:importConfirm", workspaceId, token),
+  importDiscard: (workspaceId: string, token: string) =>
+    invoke<{ discarded: boolean }>("workspaces:artifacts:importDiscard", workspaceId, token),
   onChanged: (handler: (event: WorkspaceArtifactsChangedEvent) => void) =>
     onNotification<WorkspaceArtifactsChangedEvent>("workspaces:artifacts-changed", handler),
 };
@@ -1610,6 +1705,8 @@ export const chatsApi = {
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
+    /** Aiden Live sent this first message for the person ("By voice"). */
+    inputSource?: ChatInputSourceV1;
   }) => invokeChatMutation<Chat>("chats:createWithFirstMessage", input),
   /**
    * First send with New worktree. Main creates (or, for the same draft,
@@ -1627,6 +1724,7 @@ export const chatsApi = {
     turnId: string;
     message: { role: "user"; content: string; attachments?: Attachment[] };
     skillInvocation?: SkillInvocationV1;
+    inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
   }) => invokeChatMutation<FirstMessageWorktreeResult<Chat>>("chats:createWithFirstMessage", input),
   /** Progress of the caller's own first-send worktree (fetching → creating → ready). */
@@ -1727,6 +1825,8 @@ export const chatsApi = {
       autoTitle?: boolean;
       turnId: string;
       skillInvocation?: SkillInvocationV1;
+      /** Aiden Live sent this message for the person ("By voice"). */
+      inputSource?: ChatInputSourceV1;
     },
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (
@@ -2112,7 +2212,7 @@ export function stopDetachedGeneration(streamId: string): Promise<boolean> {
  */
 export function admitChatRunInput(
   streamId: string,
-  input: { mode: ChatRunInputMode; text: string },
+  input: { mode: ChatRunInputMode; text: string; inputSource?: ChatInputSourceV1 },
 ): Promise<ChatRunInputAdmissionResult> {
   return invoke<ChatRunInputAdmissionResult>("chat:admitRunInput", streamId, input);
 }
@@ -2148,6 +2248,8 @@ export interface StreamCallbacks {
   onRetrying?: (retry: ModelCallRetryView) => void;
   /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
   onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
+  /** Hook `systemMessage` text, hook notices and a hook's stop reason; never model context. */
+  onHookMessages?: (messages: string[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
 }
 

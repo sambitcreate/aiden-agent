@@ -45,6 +45,8 @@ import type {
   AssistantLiveSnapshot,
 } from "../../shared/assistant-live.js";
 import type { ComputerUseStatus } from "../../lib/types.js";
+import { liveSessionBus, type LiveVoiceInput } from "../../lib/live-session-bus.js";
+import { matchLiveVoicePhrase } from "../../shared/live-voice-phrases.js";
 import {
   assistantLiveRuntimeErrorDetail,
   assistantLiveStartErrorDetail,
@@ -82,8 +84,13 @@ class FakeAudioNode {
 
 class FakeTrack {
   stopped = false;
+  /** Input latency the browser reports for this microphone, if any. */
+  latency: number | undefined;
   stop(): void {
     this.stopped = true;
+  }
+  getSettings(): { latency?: number } {
+    return this.latency === undefined ? {} : { latency: this.latency };
   }
 }
 
@@ -102,6 +109,8 @@ class FakeCaptureContext {
   readonly gain = Object.assign(new FakeAudioNode(), { gain: { value: 1 } });
   closed = false;
   resumed = false;
+  /** The capture clock, in seconds; tests move it by hand. */
+  currentTime = 0;
   createMediaStreamSource(): MediaStreamAudioSourceNode {
     return this.source as unknown as MediaStreamAudioSourceNode;
   }
@@ -991,6 +1000,208 @@ test("local microphone activity keeps decaying while four audio sends are backpr
   await fixture.unmount();
 });
 
+test("a muted microphone sends Live silence and shows no level until unmuted, and a new session starts unmuted", async () => {
+  let snapshot: AssistantLiveSnapshot = { available: true, reason: "available", model: "gemini-live-test", state: "idle" };
+  const sent: Uint8Array[] = [];
+  let starts = 0;
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      start: async () => {
+        snapshot = { ...snapshot, sessionId: `mute-${++starts}`, state: "open" };
+        return snapshot;
+      },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async (_session, pcm) => {
+        sent.push(Uint8Array.from(pcm));
+        return true;
+      },
+      onEvent: () => () => undefined,
+    },
+  });
+  await fixture.controller().start();
+  const loud = () => {
+    const data = new ArrayBuffer(640);
+    const view = new DataView(data);
+    for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, 8_192, true);
+    return data;
+  };
+  fixture.controller().setMicrophoneMuted(true);
+  await settle();
+  assert.equal(fixture.controller().microphoneMuted, true);
+  fixture.worklets[0]?.emit({ type: "pcm", data: loud() });
+  await settle();
+  assert.equal(sent.length, 1, "Live keeps receiving audio so it hears the user stop");
+  assert.ok(sent[0]!.every((byte) => byte === 0), "muted audio is silence");
+  assert.equal(fixture.controller().microphoneLevel, 0);
+
+  fixture.controller().setMicrophoneMuted(false);
+  await settle();
+  // The level is published every fourth frame.
+  for (let frame = 0; frame < 3; frame += 1) fixture.worklets[0]?.emit({ type: "pcm", data: loud() });
+  await settle();
+  assert.ok(sent[1]!.some((byte) => byte !== 0));
+  assert.ok(fixture.controller().microphoneLevel > 0.7);
+
+  fixture.controller().setMicrophoneMuted(true);
+  await fixture.controller().stop();
+  await fixture.controller().start();
+  assert.equal(fixture.controller().microphoneMuted, false);
+  await fixture.unmount();
+});
+
+test("a faster speaking speed shortens what plays without dropping the barge-in flush", async () => {
+  const played: number[] = [];
+  let ended: (() => void) | null = null;
+  let stops = 0;
+  const context = {
+    state: "running",
+    currentTime: 2,
+    destination: {},
+    resume: async () => undefined,
+    close: async () => undefined,
+    createBuffer: (_channels: number, length: number) => {
+      played.push(length);
+      return { copyToChannel: () => undefined };
+    },
+    createBufferSource: () => {
+      const source = {
+        buffer: null,
+        connect: () => undefined,
+        disconnect: () => undefined,
+        onended: null as (() => void) | null,
+        start: () => {
+          ended = () => source.onended?.();
+        },
+        stop: () => {
+          stops += 1;
+        },
+      };
+      return source;
+    },
+  } as unknown as AudioContext;
+  const tone = (samples: number) => {
+    const pcm = new Uint8Array(samples * 2);
+    const view = new DataView(pcm.buffer);
+    for (let n = 0; n < samples; n += 1) view.setInt16(n * 2, Math.round(8_000 * Math.sin((2 * Math.PI * 220 * n) / 24_000)), true);
+    return pcm;
+  };
+  const player = new PcmPlayer(() => context);
+  player.setSpeed(2);
+  for (let index = 0; index < 4; index += 1) player.enqueue(tone(4_800));
+  player.endOfReply();
+  for (let guard = 0; guard < 20 && !player.idle; guard += 1) {
+    await settle();
+    const finish = ended as (() => void) | null;
+    ended = null;
+    finish?.();
+  }
+  const total = played.reduce((sum, length) => sum + length, 0);
+  // About half the input; the last few milliseconds the stretcher held back play as they are.
+  assert.ok(total > 9_000 && total < 9_600 + 1_000, `played ${total} of 19200 samples at 2×`);
+
+  player.enqueue(tone(4_800));
+  player.enqueue(tone(4_800));
+  await settle();
+  player.flush();
+  assert.equal(stops, 1, "the playing reply stops at once");
+  assert.equal(player.idle, true, "nothing queued or held back survives the flush");
+  assert.equal(player.bargeInCount, 1);
+  player.pauseAndFlush();
+  assert.equal(player.bargeInCount, 1, "a resumption's flush is not the user talking over Live");
+  await player.close();
+});
+
+function fakePlaybackContext() {
+  const played: number[] = [];
+  let ended: (() => void) | null = null;
+  const context = {
+    state: "running",
+    currentTime: 2,
+    destination: {},
+    resume: async () => undefined,
+    close: async () => undefined,
+    createBuffer: (_channels: number, length: number) => {
+      played.push(length);
+      return { copyToChannel: () => undefined };
+    },
+    createBufferSource: () => {
+      const source = {
+        buffer: null,
+        connect: () => undefined,
+        disconnect: () => undefined,
+        onended: null as (() => void) | null,
+        start: () => {
+          ended = () => source.onended?.();
+        },
+        stop: () => undefined,
+      };
+      return source;
+    },
+  } as unknown as AudioContext;
+  return {
+    context,
+    played,
+    total: () => played.reduce((sum, length) => sum + length, 0),
+    /** Lets whatever is playing finish. */
+    finishPlaying() {
+      const finish = ended as (() => void) | null;
+      ended = null;
+      finish?.();
+    },
+  };
+}
+
+function speechTone(samples: number, offset = 0) {
+  const pcm = new Uint8Array(samples * 2);
+  const view = new DataView(pcm.buffer);
+  for (let n = 0; n < samples; n += 1) {
+    view.setInt16(n * 2, Math.round(8_000 * Math.sin((2 * Math.PI * 220 * (n + offset)) / 24_000)), true);
+  }
+  return pcm;
+}
+
+test("a reply that streams in small pieces with gaps keeps its speaking speed", async () => {
+  const audio = fakePlaybackContext();
+  const player = new PcmPlayer(() => audio.context);
+  player.setSpeed(1.5);
+  const chunk = 480; // 20 ms, arriving one at a time, each played before the next lands
+  for (let index = 0; index < 60; index += 1) {
+    player.enqueue(speechTone(chunk, index * chunk));
+    await settle();
+    audio.finishPlaying();
+    await settle();
+  }
+  player.endOfReply();
+  for (let guard = 0; guard < 20 && !player.idle; guard += 1) {
+    await settle();
+    audio.finishPlaying();
+  }
+  assert.equal(player.idle, true);
+  const speed = (60 * chunk) / audio.total();
+  assert.ok(speed > 1.4 && speed < 1.6, `effective speed ${speed.toFixed(2)}×`);
+  await player.close();
+});
+
+test("audio that stops arriving lets the held tail play without an end-of-reply mark", async () => {
+  const audio = fakePlaybackContext();
+  const player = new PcmPlayer(() => audio.context);
+  player.setSpeed(1.5);
+  player.enqueue(speechTone(4_800));
+  await settle();
+  audio.finishPlaying();
+  await settle();
+  assert.equal(player.idle, false, "the stretcher still holds the reply's last moments");
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  audio.finishPlaying();
+  await settle();
+  assert.equal(player.idle, true);
+  await player.close();
+});
+
 test("provider turn boundaries seal same-speaker transcript turns exactly once", async () => {
   const fixture = await mountHook();
   await fixture.controller().start();
@@ -1322,7 +1533,7 @@ test("final input receipt sequence advances synchronously at event delivery", as
   await fixture.unmount();
 });
 
-test("batched finalized input events retain every approval receipt in FIFO order", async () => {
+test("batched finalized utterances retain every approval receipt in FIFO order", async () => {
   const fixture = await mountHook();
   await fixture.controller().start();
   fixture.emitBatch([
@@ -1333,6 +1544,7 @@ test("batched finalized input events retain every approval receipt in FIFO order
       text: "Allow once",
       final: true,
     },
+    { type: "turn", sessionId: "session-1", state: "turn_complete" },
     {
       type: "caption",
       sessionId: "session-1",
@@ -1340,6 +1552,7 @@ test("batched finalized input events retain every approval receipt in FIFO order
       text: "Deny",
       final: true,
     },
+    { type: "turn", sessionId: "session-1", state: "turn_complete" },
   ]);
   assert.deepEqual(fixture.controller().voiceApprovalReceipts, [
     { id: 1, text: "Allow once" },
@@ -1360,13 +1573,17 @@ test("a pending exact voice approval survives bounded receipt eviction", async (
       text: "Allow once.",
       final: true,
     },
-    ...Array.from({ length: 300 }, (_, index) => ({
-      type: "caption" as const,
-      sessionId: "session-1",
-      direction: "input" as const,
-      text: `noise ${index}`,
-      final: true,
-    })),
+    { type: "turn", sessionId: "session-1", state: "turn_complete" },
+    ...Array.from({ length: 300 }, (_, index): AssistantLiveRendererEvent[] => [
+      {
+        type: "caption",
+        sessionId: "session-1",
+        direction: "input",
+        text: `noise ${index}`,
+        final: true,
+      },
+      { type: "turn", sessionId: "session-1", state: "turn_complete" },
+    ]).flat(),
   ]);
   assert.equal(fixture.controller().voiceApprovalReceipts.length, 256);
   assert.deepEqual(fixture.controller().voiceApprovalReceipts[0], {
@@ -1374,6 +1591,302 @@ test("a pending exact voice approval survives bounded receipt eviction", async (
     text: "Allow once.",
   });
   await fixture.unmount();
+});
+
+function hearUser(text: string, extra: Partial<Extract<AssistantLiveRendererEvent, { type: "caption" }>> = {}): AssistantLiveRendererEvent {
+  return { type: "caption", sessionId: "session-1", direction: "input", text, final: true, ...extra };
+}
+
+async function listenToVoiceInput(
+  overrides: Partial<AssistantLiveDependencies> = {},
+): Promise<{ fixture: HookFixture; heard: string[]; stop(): Promise<void> }> {
+  const fixture = await mountHook(overrides);
+  await fixture.controller().start();
+  const heard: string[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input: LiveVoiceInput) => heard.push(input.text));
+  return {
+    fixture,
+    heard,
+    async stop() {
+      unsubscribe();
+      await fixture.unmount();
+    },
+  };
+}
+
+test("speech that arrives in pieces is heard as one utterance, so a phrase inside it does not count", async () => {
+  const { fixture, heard, stop } = await listenToVoiceInput();
+  fixture.emit(hearUser("Don't"));
+  fixture.emit(hearUser(" allow"));
+  fixture.emit(hearUser(" this"));
+  assert.deepEqual(heard, [], "nothing is heard while the user may still be talking");
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(heard, ["Don't allow this"]);
+  assert.equal(matchLiveVoicePhrase(heard[0]!), null);
+  assert.deepEqual(
+    fixture.controller().voiceApprovalReceipts.map((receipt) => receipt.text),
+    ["Don't allow this"],
+  );
+  await stop();
+});
+
+function micPacket(
+  fixture: { worklets: Array<{ emit(message: unknown): void }> },
+  sample: number,
+  capturedUntil?: number,
+): void {
+  // 20 ms of 16 kHz audio at a constant level.
+  const data = new ArrayBuffer(640);
+  const view = new DataView(data);
+  for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, sample, true);
+  fixture.worklets[0]!.emit({ type: "pcm", data, ...(capturedUntil === undefined ? {} : { capturedUntil }) });
+}
+
+test("a microphone's reported input latency widens what counts as spoken before a fence", async () => {
+  const fixture = await mountHook({
+    getUserMedia: async () => {
+      const track = new FakeTrack();
+      track.latency = 3;
+      return { getTracks: () => [track] } as unknown as MediaStream;
+    },
+  });
+  await fixture.controller().start();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  fixture.contexts[0]!.currentTime = 50;
+  const fence = liveSessionBus.voiceInputFence();
+  // Rendered 3.2 s after the fence, but this headset delays sound by 3 s.
+  // A long reported delay is used in full, never cut short.
+  for (let index = 0; index < 15; index += 1) micPacket(fixture, 8_192, 53.2 + index * 0.01);
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0, 53.4 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  // Well after that, a real answer.
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 56 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  unsubscribe();
+  assert.ok(inputs[0]!.startedAt <= fence, "within the headset's latency of the fence");
+  assert.ok(inputs[1]!.startedAt > fence, "spoken after the fence");
+  await fixture.unmount();
+});
+
+test("a fence taken before the microphone starts lets the first stamped speech after it count", async () => {
+  const fixture = await mountHook();
+  // An approval arms while Live is still setting up the microphone.
+  const fence = liveSessionBus.voiceInputFence();
+  await fixture.controller().start();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  // Capture begins after the fence; the person answers at once.
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 0.02 * (index + 1));
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow"]);
+  assert.ok(inputs[0]!.startedAt > fence, "everything this microphone captured came after the fence");
+  await fixture.unmount();
+});
+
+test("speech captured before a fence but handled long after it stays before the fence", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  fixture.contexts[0]!.currentTime = 30;
+  // A confirmation prompt is delivered while a second of audio is still queued.
+  const fence = liveSessionBus.voiceInputFence();
+  for (let index = 0; index < 40; index += 1) micPacket(fixture, 0, 29 + index * 0.02);
+  for (let index = 0; index < 15; index += 1) micPacket(fixture, 8_192, 29.8 + index * 0.01);
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0, 30.1 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  // Then the person really answers.
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192, 32 + index * 0.02);
+  fixture.emit(hearUser("Yes do it", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Yes do it", "Yes do it"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "captured before the fence, past the handled-audio guard");
+  assert.ok(inputs[1]!.startedAt > fence, "captured after the fence");
+  await stop();
+});
+
+test("an utterance keeps the start mark of its first caption, so speech begun before a fence stays before it", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  fixture.emit(hearUser("Al", { final: false }));
+  // An approval arms here, while the user is already mid-word.
+  const fence = liveSessionBus.voiceInputFence();
+  fixture.emit(hearUser("Allow"));
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  for (let index = 0; index < 300; index += 1) micPacket(fixture, 0);
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  fixture.emit(hearUser("Allow"));
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "begun before the fence, finished after it");
+  assert.ok(inputs[1]!.startedAt > fence, "begun after the fence");
+  await stop();
+});
+
+test("a fresh utterance right after a finished one lands after a fence taken between them", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0);
+  fixture.emit(hearUser("What was that", { finished: true }));
+  // An approval arms a moment later, well inside the caption lag window.
+  const fence = liveSessionBus.voiceInputFence();
+  // Past the guard for audio that may have been captured before the fence.
+  for (let index = 0; index < 30; index += 1) micPacket(fixture, 0);
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["What was that", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence);
+  assert.ok(inputs[1]!.startedAt > fence, "the second utterance began after the fence");
+  await stop();
+});
+
+test("speech whose onset the microphone cannot vouch for never lands after a fence", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  // "Allow" said before the approval armed...
+  for (let index = 0; index < 20; index += 1) micPacket(fixture, 8_192);
+  const fence = liveSessionBus.voiceInputFence();
+  // ...but its first caption arrives only after the onset has aged out.
+  for (let index = 0; index < 400; index += 1) micPacket(fixture, 0);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  // Speech too quiet for the microphone to mark, captioned after the fence.
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "a caption later than the onset window stays before the fence");
+  assert.ok(inputs[1]!.startedAt <= fence, "speech the microphone never marked stays before the fence");
+  await stop();
+});
+
+test("speech heard at the microphone before a fence keeps that start even when its first caption comes after", async () => {
+  const { fixture, stop } = await listenToVoiceInput();
+  const inputs: LiveVoiceInput[] = [];
+  const unsubscribe = liveSessionBus.onVoiceInput((input) => inputs.push(input));
+  const packet = (sample: number) => {
+    // 20 ms of 16 kHz audio at a constant level.
+    const data = new ArrayBuffer(640);
+    const view = new DataView(data);
+    for (let offset = 0; offset < data.byteLength; offset += 2) view.setInt16(offset, sample, true);
+    fixture.worklets[0]!.emit({ type: "pcm", data });
+  };
+  for (let index = 0; index < 20; index += 1) packet(8_192);
+  // An approval arms here, after the person said "allow" but before Live transcribed it.
+  const fence = liveSessionBus.voiceInputFence();
+  for (let index = 0; index < 50; index += 1) packet(0);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  // Well after that speech, quiet, then a fresh "allow".
+  for (let index = 0; index < 300; index += 1) packet(0);
+  for (let index = 0; index < 20; index += 1) packet(8_192);
+  fixture.emit(hearUser("Allow", { finished: true }));
+  unsubscribe();
+  assert.deepEqual(inputs.map((input) => input.text), ["Allow", "Allow"]);
+  assert.ok(inputs[0]!.startedAt <= fence, "spoken before the fence, captioned after it");
+  assert.ok(inputs[1]!.startedAt > fence, "spoken after the fence");
+  await stop();
+});
+
+test("a phrase split across pieces is heard whole and still matches", async () => {
+  const { fixture, heard, stop } = await listenToVoiceInput();
+  fixture.emit(hearUser("Allow"));
+  fixture.emit(hearUser("."));
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(heard, ["Allow."]);
+  assert.equal(matchLiveVoicePhrase(heard[0]!)?.kind, "allow");
+  await stop();
+});
+
+test("the user's turn ends once, at whichever comes first: Live's reply, a finished mark, or silence", async () => {
+  const replying = await listenToVoiceInput();
+  replying.fixture.emit(hearUser("Bye"));
+  replying.fixture.emit({ type: "caption", sessionId: "session-1", direction: "output", text: "Goodbye", final: true });
+  replying.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(replying.heard, ["Bye"], "Live's first words end the turn, and the later turn end adds nothing");
+  replying.fixture.emit({ type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 });
+  assert.deepEqual(replying.heard, ["Bye"]);
+  await replying.stop();
+
+  const audio = await listenToVoiceInput();
+  audio.fixture.emit(hearUser("Deny"));
+  audio.fixture.emit({ type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 });
+  assert.deepEqual(audio.heard, ["Deny"], "Live's first sound ends the turn");
+  await audio.stop();
+
+  const marked = await listenToVoiceInput();
+  marked.fixture.emit(hearUser("Allow"));
+  marked.fixture.emit(hearUser(" once", { finished: true }));
+  assert.deepEqual(marked.heard, ["Allow once"]);
+  marked.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.deepEqual(marked.heard, ["Allow once"]);
+  await marked.stop();
+
+  const quiet = await listenToVoiceInput({ utteranceQuietMs: 20 });
+  quiet.fixture.emit(hearUser("Yes,"));
+  quiet.fixture.emit(hearUser(" do it"));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(quiet.heard, ["Yes, do it"], "silence ends a turn Live has not answered");
+  await quiet.stop();
+});
+
+test("talking over Live keeps one utterance through the cut-off reply's leftovers", async () => {
+  const { fixture, heard, stop } = await listenToVoiceInput({ utteranceQuietMs: 40 });
+  const liveAudio: AssistantLiveRendererEvent = { type: "audio", sessionId: "session-1", pcm: new Uint8Array(4), sampleRate: 24_000 };
+  fixture.emit(liveAudio); // Live is speaking
+  fixture.emit(hearUser("Don't"));
+  fixture.emit({ type: "playback_flush", sessionId: "session-1" });
+  fixture.emit({ type: "caption", sessionId: "session-1", direction: "output", text: "and then I", final: true });
+  fixture.emit(liveAudio);
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  fixture.emit(hearUser(" allow once"));
+  assert.deepEqual(heard, [], "the cut-off reply's leftovers do not end the user's turn");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(heard, ["Don't allow once"]);
+  assert.equal(matchLiveVoicePhrase(heard[0]!), null);
+
+  // Google's finished mark still ends speech over a reply at once.
+  fixture.emit(liveAudio);
+  fixture.emit(hearUser("Deny", { finished: true }));
+  assert.deepEqual(heard, ["Don't allow once", "Deny"]);
+
+  // Once Live's reply has ended, its next reply ends the user's turn at once.
+  fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  fixture.emit(hearUser("Allow once"));
+  fixture.emit(liveAudio);
+  assert.deepEqual(heard, ["Don't allow once", "Deny", "Allow once"]);
+  await stop();
+});
+
+test("words still pending when Live ends are dropped, and an utterance begun before an approval stays fenced", async () => {
+  const ended = await listenToVoiceInput({ utteranceQuietMs: 20 });
+  ended.fixture.emit(hearUser("Allow"));
+  ended.fixture.emit({
+    type: "snapshot",
+    snapshot: { available: true, reason: "available", sessionId: "session-1", state: "closed" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(ended.heard, []);
+  await ended.stop();
+
+  const fenced = await listenToVoiceInput();
+  fenced.fixture.emit(hearUser("Allow"));
+  // An approval prompt appearing now takes this baseline.
+  const baseline = fenced.fixture.controller().latestVoiceApprovalReceiptId();
+  fenced.fixture.emit(hearUser(" once"));
+  fenced.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  const [receipt] = fenced.fixture.controller().voiceApprovalReceipts;
+  assert.equal(receipt?.text, "Allow once");
+  assert.ok(receipt!.id <= baseline, "speech that began before the prompt cannot answer it");
+  fenced.fixture.emit(hearUser("Allow once"));
+  fenced.fixture.emit({ type: "turn", sessionId: "session-1", state: "turn_complete" });
+  assert.ok(fenced.fixture.controller().voiceApprovalReceipts[1]!.id > baseline);
+  await fenced.stop();
 });
 
 test("caption turns preserve a long response beyond the former fragment cap", () => {

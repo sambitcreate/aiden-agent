@@ -38,7 +38,7 @@ async function loadComposer() {
     "../lib/use-voice-recorder":
       "export const useVoiceRecorder=()=>({liveTranscript:{committed:\"\",tentative:\"\"}});",
     "../lib/queries":
-      "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
+      "export const useSettings=()=>({ data: globalThis.__composerSettings }); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
     "../lib/command-system":
       "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false,binding:()=>null}); export const useCommandHandler=()=>{};",
     "../lib/ipc":
@@ -720,6 +720,61 @@ test("a blocked Composer shows its readiness message exactly once", async () => 
     await loaded.cleanup();
     mounted.restore();
     Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+  }
+});
+
+test("with Let Live use the open chat off, the composer and Send are the user's alone", async () => {
+  const mounted = installDom();
+  Object.assign(globalThis, {
+    __composerAttachmentFixture: {
+      api: {
+        pickAndRead: async () => ({ attachments: [], skipped: 0 }),
+        readDroppedFiles: async () => [],
+        readClipboardImages: async () => [],
+      },
+    },
+  });
+  const loaded = await loadComposer();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(mounted.container);
+  // The guard main reads: the nearest data-live-guard on the element or an ancestor.
+  const guardOf = (element: Element | undefined): string | null => {
+    for (let node: Element | null = element ?? null; node; node = node.parentNode as Element | null) {
+      const guard = node.getAttribute?.("data-live-guard");
+      if (guard) return guard;
+    }
+    return null;
+  };
+  const composer = (chatAccess: boolean | undefined) => {
+    Object.assign(globalThis, { __composerSettings: chatAccess === undefined ? undefined : { aidenLiveChatAccess: chatAccess } });
+    return (
+      <loaded.Composer
+        key={String(chatAccess)}
+        chatId="live-chat"
+        ready
+        hasMessages
+        inputRef={React.createRef<HTMLTextAreaElement>()}
+        isGenerating={false}
+        onStop={() => {}}
+        onSend={async () => {}}
+      />
+    );
+  };
+  try {
+    await React.act(async () => root.render(composer(false)));
+    assert.equal(guardOf(mounted.container.getElementsByTagName("textarea")[0]), "you");
+    assert.equal(guardOf(button(mounted.container, "Send message")), "you");
+    for (const chatAccess of [true, undefined]) {
+      await React.act(async () => root.render(composer(chatAccess)));
+      assert.equal(guardOf(mounted.container.getElementsByTagName("textarea")[0]), null, `chat access ${chatAccess}`);
+      assert.equal(guardOf(button(mounted.container, "Send message")), null, `chat access ${chatAccess}`);
+    }
+  } finally {
+    await React.act(async () => root.unmount());
+    await loaded.cleanup();
+    mounted.restore();
+    Reflect.deleteProperty(globalThis, "__composerAttachmentFixture");
+    Reflect.deleteProperty(globalThis, "__composerSettings");
   }
 });
 

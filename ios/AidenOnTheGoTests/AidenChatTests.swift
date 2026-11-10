@@ -33,6 +33,29 @@ final class AidenChatTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Contract revision 60: a user message Aiden Live sent on the Mac reads as
+    /// "By voice"; the key on an assistant message, or a value this version does
+    /// not know, is ignored without rejecting the message.
+    func testVoiceInputMarksOnlyUserMessagesAidenLiveSent() throws {
+        let fixtureURL = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any]
+        )
+        let voiceInput = try XCTUnwrap(root["voiceInput"] as? [String: Any])
+        let chatData = try JSONSerialization.data(withJSONObject: try XCTUnwrap(voiceInput["chat"]))
+        let chat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: chatData)
+        let expected = try XCTUnwrap(voiceInput["voiceMessageIds"] as? [String])
+
+        XCTAssertEqual(chat.messages.count, 3)
+        XCTAssertEqual(chat.messages.filter(\.isByVoice).map(\.id), expected)
+        XCTAssertNil(chat.messages[1].inputSource, "an assistant message never reads as By voice")
+        XCTAssertNil(chat.messages[2].inputSource, "an unknown value is dropped")
+
+        let typed = AidenChatMessage(id: "typed", role: .user, text: "Hi", createdAt: Date())
+        XCTAssertFalse(typed.isByVoice)
+        XCTAssertEqual(AidenChatMessage.voiceInputLabel, "By voice")
+    }
+
     @MainActor
     func testRestoredRunInputRetryKeepsOriginalStreamAndLaterDraft() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -13088,6 +13111,12 @@ final class AidenAppearanceTests: XCTestCase {
                 for: runInputResult(status: .rejected, reason: .runNotActive, committed: true)
             ),
             "Saved to the chat — the run ended before it could use it"
+        )
+        XCTAssertEqual(
+            AidenRunInputPresentation.receipt(
+                for: runInputResult(status: .rejected, reason: .invalid, committed: true)
+            ),
+            "Saved to the chat — it wasn't sent to the run"
         )
         XCTAssertNil(AidenRunInputPresentation.receipt(
             for: runInputResult(status: .rejected, reason: .capacity, committed: false)

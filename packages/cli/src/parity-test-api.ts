@@ -69,6 +69,8 @@ export { capturePersistedSubagentContext } from "../../../main/services/subagent
 export { createAdvisorInlineExtension } from "./extensions/advisor.ts";
 export { LAUNCHD_LABEL, chooseNetwork, installService, launchdPlist, parseInstallFlags, reachableNetwork, releaseTailscaleRoute, restoreService, runsUnderServiceManager, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
 export { formatChecklist, looksLikeCloudServer, networkQuestion, probeAidenHealth, readSystemTailscaleFacts, readTailscaleFacts, recommendNetwork, remoteCheckCommand, serverChecklist, tailscaleChecklist, tailscaleReady, waitForTailscaleAddress } from "./reachability.ts";
+export { hooksCommand, hooksAdminCommand, startCliHooks, stopCliHooks } from "./hooks.ts";
+export { createCliChatForks } from "./daemon-forks.ts";
 export { AIDEN_REMOTE_LEGACY_CAPABILITIES, AIDEN_REMOTE_HOST_CAPABILITIES } from "../../../main/services/aiden-remote-protocol.js";
 
 export { projectBotTranscript } from "../../../main/services/bot-runtime/live-projection.js";

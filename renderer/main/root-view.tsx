@@ -22,6 +22,7 @@ import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
 import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
+import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
 import { subscribeWorkspaceFilesSync } from "../lib/workspace-files-sync";
@@ -33,6 +34,7 @@ import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../l
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
+import { LiveChatToolsHost } from "./live-chat-tools-host";
 import { KeyboardRegions } from "../components/keyboard-regions";
 import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
 import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
@@ -358,7 +360,8 @@ function RootContent() {
             .catch(() => undefined);
           if (git?.isRepo && !git.unborn) gitMode = "worktree";
         }
-        await openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
+        // The draft's id, or undefined when nothing opened (navigation blocked).
+        return openNewChatIn(workspaceId, options?.initialText || undefined, gitMode ? { gitMode } : {});
       },
       openFolderForNewChat,
       cloneRepositoryForNewChat,
@@ -637,7 +640,9 @@ function RootContent() {
           onOpenBotChat={(botId) => void navigate({ to: "/bots/$botId/chat", params: { botId } })}
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
+        <LiveAppControlLayer />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <LiveChatToolsHost navigationBlockedReason={navigationBlockedReason} />
         <WindowControls />
         <KeyboardRegions />
         <KeyboardShortcutsDialog />

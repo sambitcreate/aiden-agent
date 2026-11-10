@@ -1,3 +1,4 @@
+import { parseAidenLiveSettingsPatch } from "../../renderer/shared/aiden-live-settings.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
@@ -456,6 +457,7 @@ export function registerProviderHandlers(): void {
       if (typeof p[key] !== "boolean") throw new Error("Invalid Aiden Live setting.");
       next[key] = p[key];
     }
+    Object.assign(next, parseAidenLiveSettingsPatch(p as Record<string, unknown>));
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
       next.skillsEnabled = p.skillsEnabled;

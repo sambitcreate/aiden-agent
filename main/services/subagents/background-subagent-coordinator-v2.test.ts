@@ -165,6 +165,8 @@ async function until(
   throw new Error(`Timed out waiting for ${description}.`);
 }
 
+type Coordinator = ReturnType<typeof harness>["coordinator"];
+
 function harness() {
   const store = new MemoryStore();
   let clock = 20;
@@ -285,6 +287,277 @@ test("a creation failure that cannot be recorded still reports the creation fail
     "the recording failure is kept as the cause",
   );
   assert.equal(coordinator.activeCount, 0);
+});
+
+function holdStatusAfterCreate(
+  store: MemoryStore,
+  order: readonly string[],
+  action: () => Promise<void>,
+) {
+  const reached = deferred();
+  const original = store.get.bind(store);
+  let armed = true;
+  store.get = async (runId) => {
+    if (armed && order.includes(`create:${runId}`)) {
+      armed = false;
+      reached.resolve();
+      await action();
+    }
+    return original(runId);
+  };
+  return reached;
+}
+
+test("a Stop during launch ends the run instead of acknowledging it as queued", async () => {
+  const { store, children, order, coordinator } = harness();
+  const release = deferred();
+  const reached = holdStatusAfterCreate(store, order, () => release.promise);
+  const launching = coordinator.launch(prepared("run-early-stop"));
+  await reached.promise;
+
+  const stopping = coordinator.manage(
+    management(store.records.get("run-early-stop")!, "stop"),
+  );
+  release.resolve();
+  await launching;
+  const stopped = await stopping;
+
+  assert.equal(stopped.snapshot.state, "stopped");
+  assert.equal(store.records.get("run-early-stop")?.snapshot.state, "stopped");
+  await until("the launch to finish", () => coordinator.activeCount === 0);
+  assert.equal(children.get("run-early-stop")?.start, undefined, "The child never started");
+  assert.match(children.get("run-early-stop")?.stopped?.message ?? "", /stopped by its owner/u);
+});
+
+test("a Stop sent the moment a run is accepted cannot pass the launch", async () => {
+  const { store, children, coordinator } = harness();
+  const put = store.put.bind(store);
+  let stopping: Promise<unknown> | undefined;
+  // The sender learns the run from the durable record, before launch resumes.
+  store.put = async (run, expectedRevision) => {
+    const saved = await put(run, expectedRevision);
+    if (expectedRevision === null) {
+      stopping = coordinator.manage(management(store.records.get(run.snapshot.runId)!, "stop"));
+    }
+    return saved;
+  };
+  await coordinator.launch(prepared("run-instant-stop"));
+  const stopped = await stopping as { snapshot: { state: string } };
+  assert.equal(stopped.snapshot.state, "stopped");
+  await until("the launch to finish", () => coordinator.activeCount === 0);
+  assert.equal(children.get("run-instant-stop")?.start, undefined);
+});
+
+test("an invalidation that beats durable acceptance leaves no queued run behind", async () => {
+  const { store, children, coordinator } = harness();
+  const put = store.put.bind(store);
+  const reached = deferred();
+  const release = deferred();
+  let held = false;
+  store.put = async (run, expectedRevision) => {
+    if (!held && expectedRevision === null) {
+      held = true;
+      reached.resolve();
+      await release.promise;
+    }
+    return put(run, expectedRevision);
+  };
+  const launching = coordinator.launch(prepared("run-late-accept"));
+  await reached.promise;
+  await coordinator.chatDeleted("chat-background");
+  release.resolve();
+  await assert.rejects(launching, /chat was deleted/u);
+  assert.equal(store.records.get("run-late-accept")?.snapshot.state, "failed");
+  assert.equal(children.has("run-late-accept"), false, "No child is created for a dead run");
+});
+
+/** Holds a launch at durable acceptance, so it starts before the invalidation does. */
+function holdAcceptance(store: MemoryStore) {
+  const put = store.put.bind(store);
+  const reached = deferred();
+  const release = deferred();
+  let held = false;
+  store.put = async (run, expectedRevision) => {
+    if (!held && expectedRevision === null) {
+      held = true;
+      reached.resolve();
+      await release.promise;
+    }
+    return put(run, expectedRevision);
+  };
+  return { reached, release };
+}
+
+/** Holds the nth `store.list` after it has taken its snapshot. */
+function holdScan(store: MemoryStore, nth: number) {
+  const list = store.list.bind(store);
+  const scanned = deferred();
+  const release = deferred();
+  let calls = 0;
+  store.list = async () => {
+    const runs = await list();
+    calls += 1;
+    if (calls === nth) {
+      scanned.resolve();
+      await release.promise;
+    }
+    return runs;
+  };
+  return { scanned, release };
+}
+
+test("a run accepted after an invalidation read the store is not left queued", async () => {
+  const { store, order, coordinator } = harness();
+  const acceptance = holdAcceptance(store);
+  const scan = holdScan(store, 1);
+  const statusRead = deferred();
+  const releaseStatus = deferred();
+  const get = store.get.bind(store);
+  let armed = true;
+  store.get = async (runId) => {
+    const answer = await get(runId);
+    if (armed && order.includes(`create:${runId}`)) {
+      armed = false;
+      statusRead.resolve();
+      await releaseStatus.promise;
+    }
+    return answer;
+  };
+  const launching = coordinator.launch(prepared("run-after-scan"));
+  await acceptance.reached.promise;
+  const invalidating = coordinator.chatDeleted("chat-background");
+  await scan.scanned.promise;
+  acceptance.release.resolve();
+  await statusRead.promise;
+  scan.release.resolve();
+  await invalidating;
+  releaseStatus.resolve();
+  await assert.rejects(launching, /chat was deleted/u);
+  assert.equal(store.records.get("run-after-scan")?.snapshot.state, "stopped");
+});
+
+const invalidations = [
+  ["chat deletion", "stopped", /chat was deleted/u, (c: Coordinator) => c.chatDeleted("chat-background")],
+  ["workspace revocation", "stopped", /workspace access was revoked/u, (c: Coordinator) => c.workspaceRevoked("workspace-background")],
+  ["shutdown", "interrupted", /shutting down/u, (c: Coordinator) => c.shutdown()],
+  ["startup reconciliation", "interrupted", /interrupted at startup/u, (c: Coordinator) => c.reconcileStartup()],
+] as const;
+
+test("a run already running when a stale invalidation scan resumes still ends durably", async () => {
+  for (const [name, state, , invalidate] of invalidations) {
+    const { store, children, coordinator } = harness();
+    const acceptance = holdAcceptance(store);
+    const scan = holdScan(store, 1);
+    const launching = coordinator.launch(prepared("run-after-stale-scan"));
+    await acceptance.reached.promise;
+    const invalidating = invalidate(coordinator);
+    await scan.scanned.promise;
+    acceptance.release.resolve();
+    await launching;
+    await until(`${name}: the child to start`, () => Boolean(children.get("run-after-stale-scan")?.start));
+    assert.equal(store.records.get("run-after-stale-scan")?.snapshot.state, "running", name);
+    scan.release.resolve();
+    await invalidating;
+    assert.equal(store.records.get("run-after-stale-scan")?.snapshot.state, state, name);
+    assert.ok(children.get("run-after-stale-scan")?.stopped, `${name} stops the child`);
+    children.get("run-after-stale-scan")?.done.resolve();
+    await until(`${name} to settle`, () => coordinator.activeCount === 0);
+  }
+});
+
+test("a launch during either invalidation scan leaves no run for the last scan to miss", async () => {
+  for (const [name, , refusal, invalidate] of invalidations) {
+    for (const nth of [1, 2]) {
+      const { store, children, coordinator } = harness();
+      const scan = holdScan(store, nth);
+      const invalidating = invalidate(coordinator);
+      await scan.scanned.promise;
+      await assert.rejects(coordinator.launch(prepared("run-during-scan")), refusal, name);
+      scan.release.resolve();
+      await invalidating;
+      assert.equal(store.records.has("run-during-scan"), false, `${name} scan ${nth}`);
+      assert.equal(children.has("run-during-scan"), false, `${name} scan ${nth}`);
+    }
+  }
+});
+
+test("an invalidation refuses only what it covers, and only until it ends", async () => {
+  const { store, children, coordinator } = harness();
+  const scan = holdScan(store, 1);
+  const invalidating = coordinator.chatDeleted("another-chat");
+  await scan.scanned.promise;
+  await coordinator.launch(prepared("run-other-chat"));
+  scan.release.resolve();
+  await invalidating;
+  assert.notEqual(store.records.get("run-other-chat")?.snapshot.state, "stopped");
+
+  store.list = async () => {
+    throw new Error("The store is unreadable.");
+  };
+  await assert.rejects(coordinator.chatDeleted("chat-background"), /unreadable/u);
+  await coordinator.launch(prepared("run-after-failed-scan"));
+  assert.ok(children.has("run-after-failed-scan"));
+});
+
+test("two launches of one run cannot both own it", async () => {
+  const { children, coordinator } = harness();
+  const first = coordinator.launch(prepared("run-twice"));
+  await assert.rejects(coordinator.launch(prepared("run-twice")), /already active/u);
+  await first;
+  await until("the child to start", () => Boolean(children.get("run-twice")?.start));
+  children.get("run-twice")?.done.resolve();
+  await until("the launch to finish", () => coordinator.activeCount === 0);
+});
+
+test("a child created for a launch that then fails is stopped, not abandoned", async () => {
+  const { store, children, order, coordinator } = harness();
+  holdStatusAfterCreate(store, order, async () => {
+    throw new Error("store unavailable");
+  });
+  await assert.rejects(coordinator.launch(prepared("run-orphan")), /store unavailable/u);
+  assert.equal(coordinator.activeCount, 0);
+  assert.equal(children.get("run-orphan")?.start, undefined);
+  assert.ok(children.get("run-orphan")?.stopped, "The created child is released");
+});
+
+test("an invalidation that lands during launch still stops the created child", async () => {
+  const invalidations = [
+    ["chat deletion", (c: Coordinator) => c.chatDeleted("chat-background")],
+    ["workspace revocation", (c: Coordinator) => c.workspaceRevoked("workspace-background")],
+    ["shutdown", (c: Coordinator) => c.shutdown()],
+    ["startup reconciliation", (c: Coordinator) => c.reconcileStartup()],
+  ] as const;
+  for (const [name, invalidate] of invalidations) {
+    const { store, children, order, coordinator } = harness();
+    const release = deferred();
+    const reached = deferred();
+    const original = store.get.bind(store);
+    let armed = true;
+    // The status read has its answer, and delivers it after the run has moved on.
+    store.get = async (runId) => {
+      const answer = await original(runId);
+      if (armed && order.includes(`create:${runId}`)) {
+        armed = false;
+        reached.resolve();
+        await release.promise;
+      }
+      return answer;
+    };
+    const launching = coordinator.launch(prepared("run-invalidated"));
+    await reached.promise;
+    await invalidate(coordinator);
+    // The install is still stalled, so this is the invalidation's own work.
+    assert.ok(children.get("run-invalidated")?.stopped, `${name} stops the child before it returns`);
+    let stops = 0;
+    const child = children.get("run-invalidated")!;
+    Object.defineProperty(child, "stopped", { set: () => { stops += 1; } });
+    release.resolve();
+    await assert.rejects(launching);
+    await until(`${name} to settle`, () => coordinator.activeCount === 0);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(child.start, undefined, name);
+    assert.equal(stops, 0, `${name} stops the child once`);
+  }
 });
 
 test("wait observes terminal work or times out, and steering is delivered only at a safe boundary", async () => {

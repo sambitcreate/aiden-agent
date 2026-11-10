@@ -331,7 +331,6 @@ test("removing a workspace drops its artifacts, and a failure there does not und
       actions: [],
       refresh: { onOpen: true },
     },
-    { approved: false },
   );
   const application = fixture();
   (application.deps as { workspaceArtifacts?: unknown }).workspaceArtifacts = store;

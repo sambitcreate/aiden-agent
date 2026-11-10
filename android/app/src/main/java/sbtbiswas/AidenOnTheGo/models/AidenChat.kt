@@ -870,8 +870,19 @@ data class AidenChatMessage(
     val visuals: List<AidenChatVisual>? = null,
     val outcome: AidenMessageOutcome? = null,
     val timeline: AidenGenerationTimeline? = null,
+    /**
+     * Additive in contract revision 60: `"voice"` on a user message Aiden Live
+     * sent for the person on the Mac. Kept as a plain string so a value this
+     * version does not know never rejects the message; [isByVoice] reads it.
+     */
+    @Serializable(with = AidenTolerantStringSerializer::class)
+    val inputSource: String? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant
 ) {
+    /** Aiden Live sent this message for the person on the Mac ("By voice"). */
+    val isByVoice: Boolean
+        get() = role == AidenChatRole.USER && inputSource == VOICE_INPUT_SOURCE
+
     /**
      * Assistant output the host counts toward `lastAssistantAt`
      * (`chat-store-core.ts` `metaOf`): visible text, attachments, artifacts,
@@ -899,7 +910,12 @@ data class AidenChatMessage(
                 (visuals?.all { it.isWireSafe } ?: true) &&
                 (outcome?.isWireSafe ?: true) &&
                 (timeline?.isRendererSafe(text.length, reasoning?.length) ?: true)
+
+    companion object {
+        const val VOICE_INPUT_SOURCE = "voice"
+    }
 }
+
 
 @Serializable
 @Immutable
@@ -1703,8 +1719,10 @@ object AidenRunInputPresentation {
                     "Saved to the chat — the run was cancelled before it could use it"
                 AidenStreamInputRejectionReason.CAPACITY ->
                     "Saved to the chat — the run queue was full"
-                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE,
-                AidenStreamInputRejectionReason.INVALID, null ->
+                // A hook refused it, so it's kept in the chat but never queued.
+                AidenStreamInputRejectionReason.INVALID ->
+                    "Saved to the chat — it wasn't sent to the run"
+                AidenStreamInputRejectionReason.RUN_NOT_ACTIVE, null ->
                     "Saved to the chat — the run ended before it could use it"
             }
         }

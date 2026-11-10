@@ -122,6 +122,8 @@ export interface ActiveWorktreeSend {
   draftId: string;
   text: string;
   attachments: readonly Attachment[];
+  /** "voice" when Aiden Live sent this first message ("By voice"). */
+  inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
   view: WorktreeSendView;
   /** Answer a failure. Ignored unless the send is waiting for one. */
   decide(decision: WorktreeSendDecision): void;
@@ -158,7 +160,11 @@ export function startWorktreeFirstSend<Input, C>(options: {
   input: Input;
   worktree: FirstMessageWorktreeRequest;
   /** What the progress view shows as the user's message. */
-  message: { text: string; attachments: readonly Attachment[] };
+  message: {
+    text: string;
+    attachments: readonly Attachment[];
+    inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
+  };
   onView?: (view: WorktreeSendView) => void;
 }): WorktreeFirstSend<C> {
   const { api, input, onView, message } = options;

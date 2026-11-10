@@ -49,6 +49,7 @@ import {
   useWindowChrome,
 } from "../lib/window-chrome";
 import { windowControlsApi } from "../lib/ipc";
+import { useLiveGuardAttributes } from "./live-guard";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -92,6 +93,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       ref={ref}
       type={asChild ? undefined : type}
       data-slot="button"
+      // Aiden Live asks the user before pressing a destructive button.
+      data-live-guard={variant === "destructive" ? "confirm" : undefined}
       className={cn(
         "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border-0 text-strong outline-none transition-[background-color,color,box-shadow,opacity,transform,scale,translate] duration-(--motion-duration) ease-standard focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 motion-reduce:transform-none [&_svg:not([class*='size-'])]:size-4",
         pressFeedback && "button-press-feedback",
@@ -1648,6 +1651,8 @@ type DialogProps = React.PropsWithChildren<{
   description?: React.ReactNode;
   confirmLabel?: string;
   confirmDisabled?: boolean;
+  /** Id of the text that says why confirm is off, read with the button. */
+  confirmDescribedBy?: string;
   confirmHidden?: boolean;
   cancelRef?: React.RefObject<HTMLButtonElement | null>;
   dismissDisabled?: boolean;
@@ -1683,6 +1688,7 @@ export function Dialog({
   description,
   confirmLabel = "Done",
   confirmDisabled,
+  confirmDescribedBy,
   confirmHidden,
   cancelRef,
   dismissDisabled,
@@ -1701,6 +1707,7 @@ export function Dialog({
   onEscapeKeyDown,
   children,
 }: DialogProps) {
+  const liveGuard = useLiveGuardAttributes();
   const dismissBlocked = Boolean(
     dismissDisabled || cancelDisabled || (busy && !allowCancelWhileBusy),
   );
@@ -1718,6 +1725,7 @@ export function Dialog({
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <DialogPrimitive.Content
+          {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy || undefined}
           onCloseAutoFocus={(event) => {
@@ -1800,6 +1808,7 @@ export function Dialog({
                 variant="accent"
                 className={actionClassName}
                 disabled={confirmDisabled || busy}
+                aria-describedby={confirmDescribedBy}
                 onClick={() => void onConfirm?.()}
               >
                 {confirmLabel}
@@ -1824,9 +1833,9 @@ export function AlertDialog({
   returnFocus,
   onConfirm,
   layer = "default",
+  children,
 }: Omit<
   DialogProps,
-  | "children"
   | "size"
   | "confirmDisabled"
   | "confirmHidden"
@@ -1841,6 +1850,7 @@ export function AlertDialog({
   busy?: boolean;
   keepOpenOnConfirm?: boolean;
 }) {
+  const liveGuard = useLiveGuardAttributes();
   // Remember what had focus when the dialog opened so closing can return there.
   const openerRef = React.useRef<HTMLElement | null>(null);
   React.useLayoutEffect(() => {
@@ -1870,6 +1880,7 @@ export function AlertDialog({
           className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <AlertDialogPrimitive.Content
+          {...liveGuard}
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
@@ -1897,6 +1908,9 @@ export function AlertDialog({
             <AlertDialogPrimitive.Description asChild>
               <div className="mt-2 text-regular text-secondary">{description}</div>
             </AlertDialogPrimitive.Description>
+          ) : null}
+          {children ? (
+            <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
           ) : null}
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialogPrimitive.Cancel asChild>
@@ -1931,6 +1945,7 @@ export const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
 >(function Content({ className, sideOffset = 6, onCloseAutoFocus, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
@@ -1943,6 +1958,7 @@ export const DropdownMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
         onCloseAutoFocus={(event) => {
           onCloseAutoFocus?.(event);
           // An item that opened a dialog has already moved focus into it. Sending
@@ -1982,6 +1998,7 @@ export const DropdownMenuItem = React.forwardRef<
   return (
     <DropdownMenuPrimitive.Item
       ref={ref}
+      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
       className={cn(menuItemClass, color === "red" && "text-red",
         color === "status-red" && "text-status-red",
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
@@ -2012,6 +2029,7 @@ export const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
 >(function SubContent({ className, sideOffset = 4, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.SubContent
@@ -2024,6 +2042,7 @@ export const DropdownMenuSubContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </DropdownMenuPrimitive.Portal>
   );
@@ -2086,6 +2105,7 @@ export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(function PopoverContent({ className, sideOffset = 6, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
@@ -2098,6 +2118,7 @@ export const PopoverContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </PopoverPrimitive.Portal>
   );
@@ -2109,6 +2130,7 @@ export const HoverCardContent = React.forwardRef<
   React.ElementRef<typeof HoverCardPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Content>
 >(function HoverCardContent({ className, sideOffset = 8, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content
@@ -2121,6 +2143,7 @@ export const HoverCardContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </HoverCardPrimitive.Portal>
   );
@@ -2132,6 +2155,7 @@ export const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(function ContextContent({ className, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -2143,6 +2167,7 @@ export const ContextMenuContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -2163,6 +2188,7 @@ export const ContextMenuItem = React.forwardRef<
   return (
     <ContextMenuPrimitive.Item
       ref={ref}
+      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
       className={cn(menuItemClass, color === "red" && "text-red",
         color === "status-red" && "text-status-red",
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
@@ -2187,6 +2213,7 @@ export const ContextMenuSubContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
 >(function ContextSubContent({ className, sideOffset = 4, ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.SubContent
@@ -2199,6 +2226,7 @@ export const ContextMenuSubContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -2242,6 +2270,7 @@ export const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(function SelectContent({ className, children, position = "popper", ...props }, ref) {
+  const liveGuard = useLiveGuardAttributes(props);
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -2254,6 +2283,7 @@ export const SelectContent = React.forwardRef<
           className,
         )}
         {...props}
+        {...liveGuard}
       >
         <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>
       </SelectPrimitive.Content>

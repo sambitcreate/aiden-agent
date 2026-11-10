@@ -3,6 +3,13 @@ import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
 import { appControlsService } from "./app-controls-main.js";
+import {
+  decideGenerationTerminal,
+  runAdmittedGeneration,
+  runEveryStep,
+  settleGenerationOwnership,
+  type GenerationOwnershipEntry,
+} from "./generation-settlement.js";
 import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
@@ -136,6 +143,9 @@ import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
+import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
+import { HOOKS_TOOL_NAME, createHooksTool, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
+import { getHookService } from "./hooks/hook-service-main.js";
 import { DESIGN_CANVAS_SKILLS } from "./design-canvas/skill.js";
 import {
   assistantTurnTextSeparator,
@@ -191,6 +201,17 @@ import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.j
 import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
 import { MAX_CUT_OFF_CONTINUATIONS } from "./cut-off-reply.js";
+import {
+  MAX_STOP_HOOK_CONTINUATIONS,
+  createRunInputContexts,
+  createWorkspaceChatHooks,
+  endWorkspaceChatSession,
+  markWorkspaceChatCompacted,
+  preCompactSummaryInstructions,
+  runPromptIntakeHooks,
+  screenRunInputWithHooks,
+} from "./workspace-chat-hooks.js";
+import { chatSurfaceHooks } from "./agent-surface-hooks.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
   authorizeAllowedComputerUseAction,
@@ -211,7 +232,7 @@ import {
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
-import { toolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -381,6 +402,7 @@ import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import {
   createChatRunInputAdmission,
+  type ChatRunInputHooks,
   type ChatRunInputAdmissionRequest,
   type ChatRunInputAdmissionResult,
 } from "./chat-run-input-admission.js";
@@ -399,6 +421,7 @@ import {
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
+  type PiRuntimeStopEvent,
 } from "./pi-agent-runtime-harness.js";
 import {
   MEMORY_EXTENSION_ID,
@@ -625,31 +648,39 @@ interface ActiveGeneration {
   releaseBotAuthority: () => void;
   /** A steered send stops this run's still-running subagents. */
   stopSubagentsForGuidance?: () => void;
+  /** UserPromptSubmit for mid-flight input, in a chat that runs hooks. */
+  inputHooks?: ChatRunInputHooks;
 }
 
 const active = new Map<string, ActiveGeneration>();
 const CHAT_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
 const WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
-const initializing = new Map<
-  string,
-  {
-    chatId: string;
-    owner: ChatGenerationOwner;
-    removeOwnerInvalidation: () => void;
-    stopCacheWarming?: () => void;
-    workspaceId?: string;
-    cancelRequested: boolean;
-    cancellationOrigin?: GenerationCancellationOrigin;
-    rendererDetached: boolean;
-    promptsUnattended: boolean;
-    controller: AbortController;
-    computerUse?: ComputerUseController;
-    formFill?: FormFillService;
-    loadMonitor?: LoadMonitorState;
-    releaseSkillReservation: () => void;
-    releaseBotAuthority: () => void;
-  }
->();
+/** What must happen if the current step of a run's start throws. */
+interface GenerationEscape {
+  settle(): Promise<void>;
+}
+
+interface InitializingGeneration {
+  chatId: string;
+  owner: ChatGenerationOwner;
+  removeOwnerInvalidation: () => void;
+  stopCacheWarming?: () => void;
+  workspaceId?: string;
+  cancelRequested: boolean;
+  cancellationOrigin?: GenerationCancellationOrigin;
+  rendererDetached: boolean;
+  promptsUnattended: boolean;
+  controller: AbortController;
+  computerUse?: ComputerUseController;
+  formFill?: FormFillService;
+  loadMonitor?: LoadMonitorState;
+  releaseSkillReservation: () => void;
+  releaseBotAuthority: () => void;
+  skillInvocation?: PreparedSkillInvocation;
+  skillPrompt?: string;
+}
+
+const initializing = new Map<string, InitializingGeneration>();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
@@ -720,18 +751,6 @@ function cancelChatGenerations(chatId: string, origin: GenerationCancellationOri
     if (entry.chatId === chatId) llmClient.cancel(streamId, origin);
   }
   subagentRuntimeRegistry.abortChat(chatId);
-}
-
-function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
-  const release = entry.releaseSkillReservation;
-  entry.releaseSkillReservation = () => {};
-  release();
-}
-
-function releaseGenerationBotAuthority(entry: { releaseBotAuthority: () => void }): void {
-  const release = entry.releaseBotAuthority;
-  entry.releaseBotAuthority = () => {};
-  release();
 }
 
 function botWorkspacePromptAuthority(
@@ -840,6 +859,22 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
 }
 
 const deltaCoalescer = new GenerationDeltaCoalescer();
+
+/** End this entry's ownership. Repeat calls for the same entry do nothing. */
+function settleGeneration<Entry extends GenerationOwnershipEntry>(
+  streamId: string,
+  params: { chatId: string; workspaceId?: string },
+  entry: Entry,
+  owners: Map<string, Entry>,
+): void {
+  settleGenerationOwnership(streamId, entry, owners, {
+    forgetApprovedArtifacts: () => approvedWorkspaceArtifactCalls.delete(streamId),
+    releaseApprovals: () => approvals.releaseStream(streamId),
+    releaseQuestionnaires: () => questionnaires.releaseStream(streamId),
+    broadcastSettled: () =>
+      broadcastChatSettled(streamId, params.chatId, entry.workspaceId, params.workspaceId),
+  });
+}
 
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const chatId = active.get(streamId)?.chatId ?? initializing.get(streamId)?.chatId;
@@ -1370,6 +1405,37 @@ async function prepareGeneration(
     botContext && !botContext.admission.authority.files.botHome
       ? []
       : inheritedSubagentReadToolCeiling(options.excludeToolNames);
+  // The chats whose own turns run hooks (the same gate as `chatHooks` in
+  // runChat); Bots wire their own.
+  const subagentRunsChatHooks = runsWorkspaceChatHooks({
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    bot: botBound,
+    assistant: assistantMode,
+    harnessProvider: isAcpHarnessProvider(runtime.provider.id),
+  });
+  // A subagent's approval card fires Notification like the chat's own cards.
+  const notifySubagentApproval =
+    subagentRunsChatHooks && folderPath
+      ? (() => {
+          const hooks = createWorkspaceChatHooks(
+            {
+              chatId: params.chatId,
+              ...(workspace?.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+            },
+            undefined,
+            {
+              // Shown in the chat while its turn is live, else logged; never the model's.
+              onMessages: (messages) => {
+                const live = active.has(streamId) || initializing.has(streamId);
+                if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
+                logger.warn("hooks", `Notification hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+              },
+            },
+          );
+          return () => hooks.notify("Aiden needs your permission for a subagent", "permission_prompt");
+        })()
+      : undefined;
   let subagentProjector: SubagentEventProjector | undefined;
   const subagentPersistence =
     allowSubagents && workspace && folderPath
@@ -1391,10 +1457,12 @@ async function prepareGeneration(
           shellEnabled: subagentShellEnabled,
           shellBinary: subagentShellEnabled ? subagentShellBinary : undefined,
           delegationEnabled: subagentDelegationEnabled,
-          requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) =>
-            approvals
+          requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) => {
+            notifySubagentApproval?.();
+            return approvals
               .request(descriptor, approvalSignal, approvalOwnerDocumentId)
-              .then((outcome) => outcome === "allowed"),
+              .then((outcome) => outcome === "allowed");
+          },
           currentWorkspace: async (workspaceId) =>
             botContext && workspaceId === workspace.id
               ? { ...workspace }
@@ -1538,6 +1606,27 @@ async function prepareGeneration(
           modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
           projector: subagentProjector,
+          // SubagentStop for the chats whose own turns run hooks.
+          ...(subagentRunsChatHooks
+            ? {
+                stopHooks: chatSurfaceHooks(
+                  {
+                    chatId: params.chatId,
+                    cwd: folderPath,
+                    ...(workspace.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+                  },
+                  undefined,
+                  {
+                    // Shown in the chat while its turn is live, else logged; never the model's.
+                    report: (messages) => {
+                      const live = active.has(streamId) || initializing.has(streamId);
+                      if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
+                      logger.warn("hooks", `SubagentStop hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+                    },
+                  },
+                ),
+              }
+            : {}),
         })
       : undefined;
   // Assistant modes use positive allowlists: the dock gets safe metadata plus
@@ -1574,6 +1663,22 @@ async function prepareGeneration(
     !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
   if (skillSnapshot && !offerWorkspaceArtifacts) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
+  }
+  // The agent's hooks tool and its skill: where workspace chat hooks run, and
+  // only while the owner can answer its card on this computer (not on an
+  // unattended or a phone- or paired-Mac-driven turn).
+  const offerHooksTool = hostPlatformCapabilities().hooks && offersHooksTool({
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    bot: Boolean(botContext),
+    assistant: assistantMode,
+    harnessProvider: isAcpHarnessProvider(runtime.provider.id),
+    unattended: options.unattended === true,
+    remoteAudience: options.visualAudience === "remote",
+    excludedToolNames: options.excludeToolNames,
+  });
+  if (skillSnapshot && !offerHooksTool) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_HOOK_SKILLS);
   }
   if (skillSnapshot && !designCanvasOffered && !designModeToolOffered) {
     skillSnapshot = withoutSkills(skillSnapshot, DESIGN_CANVAS_SKILLS);
@@ -2201,6 +2306,16 @@ async function prepareGeneration(
           takeApprovedDigest: (toolCallId) => takeApprovedWorkspaceArtifactCall(streamId, toolCallId),
           refresh: (artifact, refreshSignal) =>
             workspaceArtifactRunner.refresh(workspace.id, artifact.id, { folderPath, permission }, refreshSignal),
+          runAction: (artifactId, actionName, args, expectedDigest, runSignal) =>
+            workspaceArtifactRunner.runAction(
+              workspace.id,
+              artifactId,
+              actionName,
+              args,
+              { folderPath, permission },
+              runSignal,
+              expectedDigest,
+            ),
           workspaceExists: async () => Boolean(await configStore.getWorkspace(workspace.id)),
           onChanged: notifyWorkspaceArtifactsChanged,
         }),
@@ -2380,6 +2495,7 @@ async function prepareGeneration(
     botContext,
     botApprovedRoots,
     botMutatingToolNames,
+    offerHooksTool,
   };
 }
 
@@ -2387,6 +2503,9 @@ const acpScratch = createAcpScratchDirectories({
   root: () => join(app.getPath("userData"), "acp", "scratch"),
   onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
 });
+
+/** Keeps the admitted half of `start` out of reach of anything but `start`. */
+const runAdmittedStart = Symbol("runAdmittedStart");
 
 export const llmClient = {
   /**
@@ -2433,21 +2552,14 @@ export const llmClient = {
       }
       throw error;
     }
-    const initialization = {
+    const initialization: InitializingGeneration = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
-      stopCacheWarming: undefined as (() => void) | undefined,
-      workspaceId: undefined as string | undefined,
       cancelRequested: false,
-      cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
       rendererDetached: false,
       promptsUnattended: Boolean(options.unattended),
       controller: new AbortController(),
-      computerUse: undefined as ComputerUseController | undefined,
-      loadMonitor: undefined as LoadMonitorState | undefined,
-      skillInvocation: undefined as PreparedSkillInvocation | undefined,
-      skillPrompt: undefined as string | undefined,
       releaseSkillReservation: () => {},
       releaseBotAuthority: () => {},
     };
@@ -2472,11 +2584,46 @@ export const llmClient = {
         );
     } catch (error) {
       if (turnId) chatTurnAdmission.releaseMatching(params.chatId, turnId, owner.documentId);
+      // Registration can fail after publishing the run; nothing else ends it.
+      if (initializing.get(streamId) === initialization) {
+        settleGeneration(streamId, params, initialization, initializing);
+      }
       throw error;
     }
     if (!handedOff) {
       throw new Error("This message turn expired before generation could start.");
     }
+    const escape: GenerationEscape = {
+      settle: async () => {
+        endLoadMonitor(initialization, streamId, false);
+        settleGeneration(streamId, params, initialization, initializing);
+      },
+    };
+    return runAdmittedGeneration(
+      () => llmClient[runAdmittedStart](
+        streamId,
+        params,
+        owner,
+        options,
+        initialization,
+        computerUseGateSnapshot,
+        escape,
+      ),
+      () => escape.settle(),
+      (error) => logger.error("pi", `Could not settle failed start of stream ${streamId}.`, error),
+    );
+  },
+
+  /** The start of an admitted run, up to the point its completion task owns it. */
+  async [runAdmittedStart](
+    streamId: string,
+    params: ChatStartParams,
+    owner: ChatGenerationOwner,
+    options: GenerationExecutionOptions,
+    initialization: InitializingGeneration,
+    computerUseGateSnapshot: ReturnType<ComputerUseGenerationGate["snapshot"]>,
+    escape: GenerationEscape,
+  ): Promise<boolean> {
     options.onTurnAccepted?.();
     if (options.unattended) {
       // Nobody is there to answer: every approval or question this turn would
@@ -2518,6 +2665,15 @@ export const llmClient = {
             terminalError,
           ),
       });
+    };
+    escape.settle = async () => {
+      const cancelled = initialization.cancelRequested || initialization.controller.signal.aborted;
+      await persistInitializationTerminal(
+        cancelled ? "cancelled" : "failed",
+        cancelled ? initialization.cancellationOrigin : undefined,
+      );
+      endLoadMonitor(initialization, streamId, false);
+      settleGeneration(streamId, params, initialization, initializing);
     };
     try {
       const chat = await chatStore.get(params.chatId);
@@ -2683,30 +2839,11 @@ export const llmClient = {
           cancelled: true,
           cancellationOrigin: initialization.cancellationOrigin,
         });
-        releaseGenerationSkillReservation(initialization);
-        releaseGenerationBotAuthority(initialization);
-        approvedWorkspaceArtifactCalls.delete(streamId);
-        initializing.delete(streamId);
-        initialization.removeOwnerInvalidation();
-        approvals.releaseStream(streamId);
-        questionnaires.releaseStream(streamId);
-        broadcastChatSettled(
-          streamId,
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        settleGeneration(streamId, params, initialization, initializing);
         return false;
       }
       await persistInitializationTerminal("failed");
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
     const generationChat = authoritativeChat;
@@ -2724,7 +2861,7 @@ export const llmClient = {
       permission,
       folderPath,
       git,
-      tools,
+      tools: setupTools,
       generationExtensions,
       modelImageReferences,
       lateMcpDiscovery,
@@ -2742,7 +2879,7 @@ export const llmClient = {
       computerUse,
       formFill,
       googleWorkspaceSnapshot,
-      skillSnapshot,
+      skillSnapshot: setupSkillSnapshot,
       workspaceId,
       noWorkspace,
       subagentSupervisor,
@@ -2754,6 +2891,7 @@ export const llmClient = {
       botContext: preparedBotContext,
       botApprovedRoots,
       botMutatingToolNames,
+      offerHooksTool,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
@@ -2766,6 +2904,71 @@ export const llmClient = {
     // Agent-backed providers (ACP harnesses) own their conversation context:
     // Aiden neither trims nor compacts the transcript they receive.
     const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
+    // Aiden hooks run for ordinary desktop chats only. Bot chats (policy-owned
+    // hooks arrive with Bots), Design Studio runs, the attended Assistant,
+    // routines, Telegram and side questions (their usage source is not
+    // "chat") and ACP harness providers (the agent runs its own tools) start
+    // none; title generation, probes, catalogs and subagents never come
+    // through here.
+    const chatHooks =
+      runsWorkspaceChatHooks({
+        usageSource: options.usageSource,
+        bot: Boolean(preparedBotContext || authoritativeBot),
+        assistant: attendedAssistant,
+        harnessProvider,
+      })
+        ? createWorkspaceChatHooks(
+            {
+              chatId: params.chatId,
+              ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+            },
+            undefined,
+            {
+              // Hook messages reach the person as notices, never the model.
+              onMessages: (messages) => {
+                sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages });
+              },
+            },
+          )
+        : undefined;
+    // The agent's hooks tool (plan §9) where chat hooks run on an attended
+    // turn. A proposal waits for the owner's card on this Mac, raised from
+    // inside the tool so Full access and remembered approvals never answer it.
+    const hooksTool =
+      chatHooks && offerHooksTool
+        ? createHooksTool({
+            chatId: params.chatId,
+            ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+            service: getHookService,
+            requestApproval: async (toolCallId, card, approvalSignal) => {
+              timeline.toolAwaitingApproval(toolCallId);
+              const publicToolCallId = timeline.publicToolCallId(toolCallId);
+              if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
+              chatHooks.notify("Aiden needs your permission to save a hook", "permission_prompt");
+              try {
+                return await approvals.request(
+                  {
+                    streamId,
+                    toolCallId: publicToolCallId,
+                    toolName: HOOKS_TOOL_NAME,
+                    summary: card.summary,
+                    details: card.details,
+                  },
+                  approvalSignal,
+                  owner.documentId,
+                );
+              } finally {
+                timeline.toolRunning(toolCallId);
+              }
+            },
+          })
+        : undefined;
+    const tools = hooksTool ? [...setupTools, hooksTool] : setupTools;
+    const skillSnapshot =
+      hooksTool || !setupSkillSnapshot ? setupSkillSnapshot : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
+    let hookTurnContext: string | undefined;
+    // Mid-flight input's UserPromptSubmit context, on that input's message only.
+    const hookInputContexts = createRunInputContexts();
     // Each response's price counts toward the chat's limit (a Bot chat's, its
     // month). A sign-in or a model on this Mac counts as $0.
     const spendingOwner: SpendingOwner = authoritativeBot
@@ -2829,6 +3032,7 @@ export const llmClient = {
           status: (statusOptions) => computerUseStatus.status(statusOptions),
           requestAccess: async (toolCallId, approvalSignal) => {
             timeline.toolAwaitingApproval(toolCallId);
+            chatHooks?.notify("Aiden needs your permission to use Computer Use", "permission_prompt");
             const publicToolCallId = timeline.publicToolCallId(toolCallId);
             if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
             const outcome = await approvals.request(
@@ -3242,6 +3446,20 @@ export const llmClient = {
             // Journalless runs must not offer VCC recall over an empty
             // in-memory journal; history recall would be dishonest.
             ...(piJournalless ? [] : [recallExtension]),
+            // The person's hooks: PostToolUse feedback on tool results and the
+            // SessionStart/UserPromptSubmit context for this turn only.
+            ...(chatHooks
+              ? [
+                  chatHooks.extension({
+                    promptTimestamp: () =>
+                      currentPromptMessage && "timestamp" in currentPromptMessage
+                        ? currentPromptMessage.timestamp
+                        : undefined,
+                    turnContext: () => hookTurnContext,
+                    inputContext: hookInputContexts.lookup,
+                  }),
+                ]
+              : []),
           ];
       const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
         "",
@@ -3359,6 +3577,7 @@ export const llmClient = {
                 computerUse: hostPlatformCapabilities().computerUse,
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
+                hooks: hostPlatformCapabilities().hooks,
               }),
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
@@ -3480,6 +3699,9 @@ export const llmClient = {
           );
           activeCompactionStepId = undefined;
         }
+        // A completed compaction makes the chat's next turn a SessionStart
+        // `compact` turn, like Claude Code's compact source.
+        if (chatHooks && event.result && !event.aborted) markWorkspaceChatCompacted(params.chatId);
         logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
           aborted: event.aborted,
           tokensBefore: event.result?.tokensBefore,
@@ -3516,6 +3738,15 @@ export const llmClient = {
         },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
+        // PreCompact: every compaction inside a turn (threshold, overflow and
+        // the emergency checkpoint) is "auto"; hook context becomes summary
+        // instructions, bounded by each hook's timeout, and errors add none.
+        ...(chatHooks
+          ? {
+              summaryInstructions: (reason: string, compactionSignal: AbortSignal) =>
+                preCompactSummaryInstructions(chatHooks, { trigger: "auto", reason, signal: compactionSignal }),
+            }
+          : {}),
       };
 
       const currentUser = [...generationChat.messages]
@@ -3524,6 +3755,22 @@ export const llmClient = {
       const priorVisibleMessages = currentUser
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
+      // SessionStart, then UserPromptSubmit, before the model sees the turn.
+      // Their context rides this turn only (the `aiden.hooks` extension) and
+      // is never saved as the person's words. A SessionStart `continue: false`
+      // or a refused prompt throws here, so the turn ends with no model call.
+      // A retried prompt that was blocked before loses its mark, on
+      // `currentUser` too, so the journal takes it in order below.
+      hookTurnContext = await runPromptIntakeHooks({
+        target: chatHooks?.target ?? { chatId: params.chatId },
+        ...(chatHooks ? { dispatch: chatHooks.dispatch } : {}),
+        hasPriorMessages: priorVisibleMessages.length > 0,
+        prompt: currentUser,
+        store: chatStore,
+        idempotencyKeys: { userPromptSubmit: `UserPromptSubmit:${params.chatId}:${streamId}` },
+        signal: initialization.controller.signal,
+        onStoreError: (message, error) => logger.error("hooks", message, error),
+      });
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
       // A forked chat's summary of where its source went after the fork
       // point sits right after the last copied message.
@@ -3883,12 +4130,52 @@ export const llmClient = {
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let formFillApproval: FormFillApprovalDescriptor | undefined;
-          /** Commands digest an allowed workspace_artifact card showed. */
+          /** What an allowed workspace_artifact card covers (see `workspaceArtifactCallApproval`). */
           let artifactApprovalDigest: string | undefined;
+          /** The resolved command a workspace_artifact run card shows. */
+          let artifactApprovalPreview: ToolApprovalPreview | undefined;
           let attendedScheduleApproval = false;
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
           let scopedRuleTarget: ToolApprovalRuleTarget | undefined;
+          // PreToolUse hooks (docs/plans/aiden-hooks-plan.md §5): deny blocks,
+          // ask forces a card without a remember offer, and allow may only skip
+          // a card a remembered approval scope could already skip.
+          let hookAsk: string | undefined;
+          let hookAllow = false;
+          const runPreToolUseHooks = async () => {
+            if (!chatHooks) return undefined;
+            const hook = await chatHooks.preToolUse({
+              toolCallId: context.toolCall.id,
+              toolName: context.toolCall.name,
+              args: context.args,
+              tools: context.context.tools,
+              signal,
+            });
+            if (hook.kind === "block") {
+              if (!signal?.aborted) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+              }
+              return { block: true, reason: hook.reason };
+            }
+            if (hook.kind === "ask") hookAsk = hook.reason;
+            else if (hook.kind === "allow") hookAllow = true;
+            return undefined;
+          };
+          const notifyApprovalWaiting = () =>
+            chatHooks?.notify(
+              `Aiden needs your permission to use ${context.toolCall.name}`,
+              "permission_prompt",
+            );
+          // Computer Use and Form Fill check the chat's access first.
+          if (
+            context.toolCall.name !== COMPUTER_USE_TOOL_NAME &&
+            context.toolCall.name !== FORM_FILL_TOOL_NAME
+          ) {
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
+          }
           if (
             context.toolCall.name === "browser_open" ||
             context.toolCall.name === "browser_navigate"
@@ -3930,6 +4217,28 @@ export const llmClient = {
             }
             const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
             if (!access.allowed) return blockComputerUse(access.reason);
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
+            if (hookAsk) {
+              // A hook asked: this one action needs its own card.
+              const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+              if (!toolCallId) return blockComputerUse("The tool approval step was not initialized.");
+              timeline.toolAwaitingApproval(context.toolCall.id);
+              notifyApprovalWaiting();
+              const hookOutcome = await approvals.request(
+                {
+                  streamId,
+                  toolCallId,
+                  toolName: context.toolCall.name,
+                  summary: `${summarizeToolCall(context.toolCall.name, context.args)}\n\n${hookAsk}`,
+                },
+                signal,
+                owner.documentId,
+              );
+              if (hookOutcome !== "allowed") {
+                return blockComputerUse(toolApprovalBlockReason(hookOutcome, false));
+              }
+            }
             // The chat is allowed, so input actions run without a per-action card.
             try {
               await authorizeAllowedComputerUseAction(
@@ -3963,6 +4272,9 @@ export const llmClient = {
               }
               return { block: true, reason: access.reason };
             }
+            // Form Fill always shows its card; a hook's ask adds its reason there.
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
             try {
               const descriptor = await formFill.approvalFor(context.args, signal);
               formFillApproval = descriptor;
@@ -3999,6 +4311,7 @@ export const llmClient = {
               try {
                 artifactApproval = await workspaceArtifactCallApproval(context.args, {
                   workspaceId,
+                  hasFolder: Boolean(folderPath),
                   permission: permission === "read-only" ? "none" : permission,
                   store: workspaceArtifactStore,
                 });
@@ -4011,7 +4324,10 @@ export const llmClient = {
                 };
               }
             }
-            if (artifactApproval?.required) artifactApprovalDigest = artifactApproval.digest;
+            if (artifactApproval?.required) {
+              artifactApprovalDigest = artifactApproval.digest;
+              artifactApprovalPreview = artifactApproval.preview;
+            }
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             let preparedStandardScheduleSummary: string | undefined;
             if (
@@ -4021,15 +4337,22 @@ export const llmClient = {
               !memoryApproval &&
               !botMcpApproval &&
               !artifactApproval?.required &&
-              !browserFileApproval?.requiresApproval
+              !browserFileApproval?.requiresApproval &&
+              !hookAsk
             ) {
+              // The question card itself is the wait; hooks hear about it.
+              if (context.toolCall.name === ASK_USER_QUESTION_TOOL_NAME) {
+                chatHooks?.notify("Aiden is asking you a question", "elicitation_dialog");
+              }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
             // Only the parent's plain workspace tools can be remembered, and
             // never for Bot-bound turns whose authority is policy-owned.
+            // A hook's ask never offers or uses a remembered approval.
             if (
               workspaceApproval &&
+              !hookAsk &&
               !preparedBotContext &&
               APPROVAL_TOOL_NAMES.has(context.toolCall.name)
             ) {
@@ -4038,6 +4361,11 @@ export const llmClient = {
                 context.args,
                 workspaceId,
               );
+              if (scopedRuleTarget && hookAllow && !signal?.aborted) {
+                // A remembered scope could cover this call, so a hook may too.
+                timeline.toolRunning(context.toolCall.id);
+                return undefined;
+              }
               if (scopedRuleTarget) {
                 let remembered: "chat" | "always" | undefined;
                 try {
@@ -4118,18 +4446,21 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
+              let memoryCardShown = false;
               const requestMemoryApproval = async (
                 summary: string,
                 approvalSignal?: AbortSignal,
               ) => {
                 const toolCallId = timeline.publicToolCallId(context.toolCall.id);
                 if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+                memoryCardShown = true;
+                notifyApprovalWaiting();
                 return approvals.request(
                   {
                     streamId,
                     toolCallId,
                     toolName: context.toolCall.name,
-                    summary,
+                    summary: hookAsk ? `${summary}\n\n${hookAsk}` : summary,
                     details: approvalDetails,
                   },
                   approvalSignal,
@@ -4161,6 +4492,20 @@ export const llmClient = {
                   block: true,
                   reason: memoryDecision.reason,
                 };
+              }
+              if (hookAsk && !memoryCardShown) {
+                // Memory allowed this without asking; the hook's ask still shows a card.
+                const hookOutcome = await requestMemoryApproval(
+                  summarizeToolCall(context.toolCall.name, context.args),
+                  signal,
+                );
+                if (hookOutcome !== "allowed") {
+                  if (!signal?.aborted) {
+                    deniedToolCalls.add(context.toolCall.id);
+                    timeline.toolFinished(context.toolCall.id, "blocked");
+                  }
+                  return { block: true, reason: toolApprovalBlockReason(hookOutcome, false) };
+                }
               }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
@@ -4236,7 +4581,9 @@ export const llmClient = {
               };
             }
           }
+          if (hookAsk) summary = `${summary}\n\n${hookAsk}`;
           timeline.toolAwaitingApproval(context.toolCall.id);
+          notifyApprovalWaiting();
           const approvalOutcome = await approvals.request(
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
@@ -4248,7 +4595,9 @@ export const llmClient = {
                 summary,
                 details: approvalDetails,
                 ...(() => {
-                  const preview = approvalDetails ? undefined : toolApprovalPreview(context.toolCall.name, context.args);
+                  const preview = approvalDetails
+                    ? undefined
+                    : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
@@ -4604,44 +4953,18 @@ export const llmClient = {
           cancelled: true,
           cancellationOrigin: initialization.cancellationOrigin,
         });
-        releaseGenerationSkillReservation(initialization);
-        releaseGenerationBotAuthority(initialization);
-        approvedWorkspaceArtifactCalls.delete(streamId);
-        initializing.delete(streamId);
-        initialization.removeOwnerInvalidation();
-        approvals.releaseStream(streamId);
-        questionnaires.releaseStream(streamId);
-        broadcastChatSettled(
-          streamId,
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        settleGeneration(streamId, params, initialization, initializing);
         return false;
       }
       await persistInitializationTerminal("failed");
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw error;
     }
     const agent = candidate;
     if (!agent || !piSession) {
       await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
-      releaseGenerationSkillReservation(initialization);
-      releaseGenerationBotAuthority(initialization);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      initializing.delete(streamId);
-      initialization.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
+      settleGeneration(streamId, params, initialization, initializing);
       throw new Error("Could not initialize the generation agent.");
     }
     const piJournal = piSession;
@@ -4809,6 +5132,35 @@ export const llmClient = {
       promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
+      ...(chatHooks
+        ? {
+            inputHooks: {
+              screen: async ({ text, messageId }) => {
+                try {
+                  const screening = await screenRunInputWithHooks({
+                    dispatch: chatHooks.dispatch,
+                    text,
+                    idempotencyKey: `UserPromptSubmit:${params.chatId}:${streamId}:${messageId}`,
+                    signal: initialization.controller.signal,
+                  });
+                  if ("blocked" in screening) {
+                    sendGeneration(streamId, "chat:status", {
+                      streamId,
+                      phase: "hook_messages",
+                      messages: [screening.blocked],
+                    });
+                  }
+                  return screening;
+                } catch (error) {
+                  // The same as a failed dispatch at the start of a turn: no outcome.
+                  logger.error("hooks", "UserPromptSubmit for run input failed.", error);
+                  return {};
+                }
+              },
+              attachContext: hookInputContexts.attach,
+            },
+          }
+        : {}),
       ...(subagentSupervisor
         ? {
             stopSubagentsForGuidance: () => {
@@ -4829,40 +5181,48 @@ export const llmClient = {
     // cannot fall into a map-transition gap and leave a privileged run alive.
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
+    let promotedRunAbandoned: Promise<void> | undefined;
+    const abandonPromotedRun = (status: "failed" | "cancelled"): Promise<void> => {
+      // One teardown per run: the escape path may follow a teardown that failed.
+      promotedRunAbandoned ??= (async () => {
+        await persistInitializationTerminal(status, activeGeneration.cancellationOrigin);
+        await piTurnLease?.rollback().catch((error) => {
+          logger.error(
+            "pi",
+            `Could not roll back the ${status} Pi turn for stream ${streamId}.`,
+            error,
+          );
+        });
+        try {
+          runEveryStep([
+            () => cacheWarmer?.dispose(),
+            () => visualDrafts.dispose(),
+            () => resetGenerationAgent(agent, streamId),
+            () => endLoadMonitor(activeGeneration, streamId, false),
+            () => formFill?.revoke(),
+          ]);
+        } finally {
+          await computerUse?.close().catch(() => {});
+        }
+      })();
+      return promotedRunAbandoned;
+    };
+    escape.settle = async () => {
+      try {
+        await abandonPromotedRun(activeGeneration.cancelRequested ? "cancelled" : "failed");
+      } finally {
+        settleGeneration(streamId, params, activeGeneration, active);
+      }
+    };
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
-      await persistInitializationTerminal("cancelled", activeGeneration.cancellationOrigin);
-      await piTurnLease?.rollback().catch((error) => {
-        logger.error(
-          "pi",
-          `Could not roll back the cancelled Pi turn for stream ${streamId}.`,
-          error,
-        );
-      });
-      cacheWarmer?.dispose();
-      visualDrafts.dispose();
-      resetGenerationAgent(agent, streamId);
-      endLoadMonitor(activeGeneration, streamId, false);
-      formFill?.revoke();
-      await computerUse?.close().catch(() => {});
+      await abandonPromotedRun("cancelled");
       sendGeneration(streamId, "chat:done", {
         streamId,
         content: "",
         cancelled: true,
         cancellationOrigin: activeGeneration.cancellationOrigin,
       });
-      releaseGenerationSkillReservation(activeGeneration);
-      releaseGenerationBotAuthority(activeGeneration);
-      approvedWorkspaceArtifactCalls.delete(streamId);
-      active.delete(streamId);
-      activeGeneration.removeOwnerInvalidation();
-      approvals.releaseStream(streamId);
-      questionnaires.releaseStream(streamId);
-      broadcastChatSettled(
-        streamId,
-        params.chatId,
-        activeGeneration.workspaceId,
-        params.workspaceId,
-      );
+      settleGeneration(streamId, params, activeGeneration, active);
       return false;
     }
 
@@ -4942,6 +5302,8 @@ export const llmClient = {
             }),
           )
         : undefined;
+    // The completion task below ends the run on every path from here.
+    escape.settle = async () => {};
     const completion = (async () => {
       try {
         const fullLengthBeforeAttempt = full.length;
@@ -5006,6 +5368,19 @@ export const llmClient = {
             onContinue: () => {
               continuingCutOffReply = true;
             },
+            // A Stop hook may keep the person's turn going, at most
+            // MAX_STOP_HOOK_CONTINUATIONS times. The harness never asks after
+            // an abort, an error or the person's Stop; a spending block wins.
+            ...(chatHooks
+              ? {
+                  onStop: async (event: PiRuntimeStopEvent) => {
+                    await spendingMeter.settled();
+                    if (await spending.block(spendingOwner).catch(() => undefined)) return undefined;
+                    return chatHooks.onStop(event);
+                  },
+                  maxStopContinuations: MAX_STOP_HOOK_CONTINUATIONS,
+                }
+              : {}),
           },
         );
         pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
@@ -5038,50 +5413,40 @@ export const llmClient = {
           }
         }
         const emergencyError = generationEmergencyUserError(runtimeOutcome.emergencyProjection);
-        const spendingError = runtimeOutcome.kind === "provider_failed" ? dispatchSpendingRefusal : undefined;
-        const finalError =
-          emergencyError ?? spendingError ??
-          (runtimeOutcome.kind === "provider_failed"
-            ? runtimeOutcome.reason === "output-limit"
-              ? "The model reached its output limit."
-              : runtimeOutcome.reason === "context-overflow"
-                ? "The model context was too large to recover safely."
-                : runtimeOutcome.reason === "compaction-failed"
-                  ? "The model context could not be compacted safely."
-                  : runtimeOutcome.reason === "interrupted"
-                    ? "The provider interrupted the response."
-                    : "The model could not complete this response."
-            : runtimeOutcome.kind === "host_failed"
-              ? "The local agent runtime could not complete this response safely."
-              : null);
-        if (finalError) {
+        const terminal = decideGenerationTerminal({
+          runtime: runtimeOutcome,
+          emergencyError,
+          spendingRefusal: dispatchSpendingRefusal,
+          wasCancelled,
+          hasVisibleOutput: () => generationHasVisibleOutput(
+            full,
+            uniqueResponseImages(sharedImages, displayedImages).length +
+              displayedHtmlArtifacts.length +
+              displayedUiVisuals.length,
+          ),
+        });
+        if (terminal.kind === "failed") {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(
             full,
             reasoning,
             finalTimeline,
-            runtimeOutcome.kind === "provider_failed" && !spendingError ? runtimeOutcome.providerFailure : undefined,
+            terminal.attachProviderFailure && runtimeOutcome.kind === "provider_failed"
+              ? runtimeOutcome.providerFailure
+              : undefined,
           );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", withUndeliveredGuidance({
             streamId,
             message: persisted.error
-              ? `${finalError} The partial response could not be saved: ${persisted.error}`
-              : finalError,
+              ? `${terminal.message} The partial response could not be saved: ${persisted.error}`
+              : terminal.message,
             content: full || undefined,
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           }));
-        } else if (
-          !generationHasVisibleOutput(
-            full,
-            uniqueResponseImages(sharedImages, displayedImages).length +
-              displayedHtmlArtifacts.length +
-              displayedUiVisuals.length,
-          ) &&
-          !wasCancelled
-        ) {
+        } else if (terminal.kind === "empty") {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
@@ -5098,7 +5463,7 @@ export const llmClient = {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
             timeline.finish(
-              wasCancelled ? "cancelled" : "completed",
+              terminal.timeline,
               wasCancelled ? activeGeneration.cancellationOrigin : undefined,
             ),
             full,
@@ -5152,22 +5517,15 @@ export const llmClient = {
         } finally {
           // A run that ended for any reason (failure included) owns no more
           // child work; nothing may keep acting for it after it settles.
-          subagentRuntimeRegistry.abortGeneration(streamId);
-          unregisterAcpHost?.();
-          invalidateChatContextJournal(params.chatId);
-          releaseGenerationSkillReservation(activeGeneration);
-          releaseGenerationBotAuthority(activeGeneration);
-          approvedWorkspaceArtifactCalls.delete(streamId);
-          active.delete(streamId);
-          activeGeneration.removeOwnerInvalidation();
-          approvals.releaseStream(streamId);
-          questionnaires.releaseStream(streamId);
-          broadcastChatSettled(
-            streamId,
-            params.chatId,
-            activeGeneration.workspaceId,
-            params.workspaceId,
-          );
+          try {
+            runEveryStep([
+              () => subagentRuntimeRegistry.abortGeneration(streamId),
+              () => unregisterAcpHost?.(),
+              () => invalidateChatContextJournal(params.chatId),
+            ]);
+          } finally {
+            settleGeneration(streamId, params, activeGeneration, active);
+          }
         }
       }
     })();
@@ -5395,6 +5753,10 @@ export const llmClient = {
 
   /** Remove a deleted chat's agent scratch directory. Never throws. */
   forgetDeletedChat(chatId: string): Promise<void> {
+    // SessionEnd for a chat whose hooks ran in this process; never awaited.
+    endWorkspaceChatSession(chatId, undefined, {
+      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
+    });
     return acpScratch.forget(chatId);
   },
 

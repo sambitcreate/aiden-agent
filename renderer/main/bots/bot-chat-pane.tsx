@@ -87,6 +87,7 @@ import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usag
 import { useSpendingStatus } from "../../lib/use-spending-status";
 import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
 import { spendingNotice } from "../../shared/spending";
+import { LiveGuard } from "../../components/live-guard";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -231,7 +232,8 @@ export function BotApprovalCard({
         iconTone="warning"
         title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
         actions={
-          <>
+          // Approvals are the user's: Aiden Live can never answer them by pressing.
+          <LiveGuard guard="you">
             <Button
               variant="transparent"
               size="small"
@@ -259,7 +261,7 @@ export function BotApprovalCard({
                 {hint("allow")}
               </Button>
             )}
-          </>
+          </LiveGuard>
         }
       >
         {prompt.always ? <p className="text-tertiary">{`You’ve allowed this ${prompt.always.count} times in the last 2 weeks.`}</p> : null}
@@ -1742,8 +1744,9 @@ export function BotChatPane({ botId }: { botId: string }) {
     </div>
   );
 
+  // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.
   return shell(
-    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6">
+    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6" data-live-content="chat">
       {live.failed && live.stale ? (
         <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
           <Text variant="small" color="red">
