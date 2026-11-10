@@ -99,6 +99,20 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertEqual(self.picker().target, AidenNewWorkTarget(instanceId: "laptop"))
     }
 
+    /// The picker names and draws a machine as the Inbox does, so two machines
+    /// with one name read apart here too.
+    func testThePickerNamesMachinesAsTheInboxDoes() async throws {
+        await connectAll()
+        preferences.update("laptop") { $0.nameOverride = "Studio"; $0.symbol = .laptop }
+
+        let machines = picker().machines
+        let labels = AidenMachineLabel.labels(connections: coordinator.hosts.ordered, preferences: preferences)
+
+        XCTAssertEqual(machines.map(\.name), ["studio", "laptop", "mini"].map { labels[$0]?.name })
+        XCTAssertNotEqual(machines[0].name, machines[1].name, "Two machines called Studio read apart")
+        XCTAssertEqual(machines[1].symbol, .laptop)
+    }
+
     func testThePickerStaysOnAnOfflineDefaultAndSaysItCantBeUsed() async throws {
         await connectAll()
         try await takeOffline("studio")

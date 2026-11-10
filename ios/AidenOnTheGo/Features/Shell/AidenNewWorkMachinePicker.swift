@@ -74,12 +74,15 @@ struct AidenNewWorkMachine: Identifiable, Equatable {
     }
 
     let id: String
-    let name: String
-    let symbol: AidenMachineSymbol
+    /// Named and drawn as the Inbox draws it, so two machines with one name
+    /// read apart here too.
+    let label: AidenMachineLabel
     let isDefault: Bool
     let isOffline: Bool
     let refusal: Refusal?
 
+    var name: String { label.name }
+    var symbol: AidenMachineSymbol { label.symbol }
     var canBePicked: Bool { refusal == nil }
 
     /// The second line of the row, when it has anything to say.
@@ -121,8 +124,9 @@ final class AidenNewWorkPicker {
     /// Every machine that could take the work, in pairing order, including the
     /// offline ones that can't right now.
     var machines: [AidenNewWorkMachine] {
-        Self.visibleConnections(coordinator: coordinator, preferences: preferences, keeping: pinnedMachine).map { connection in
-            Self.machine(connection, coordinator: coordinator, preferences: preferences, refusal: refusal(of: connection))
+        let labels = Self.labels(coordinator: coordinator, preferences: preferences)
+        return Self.visibleConnections(coordinator: coordinator, preferences: preferences, keeping: pinnedMachine).map { connection in
+            Self.machine(connection, label: labels[connection.instanceId], coordinator: coordinator, refusal: refusal(of: connection))
         }
     }
 
@@ -176,8 +180,9 @@ final class AidenNewWorkPicker {
         preferences: AidenMachinePreferencesStore? = nil
     ) -> [AidenNewWorkMachine] {
         let preferences = preferences ?? coordinator.machinePreferences
+        let labels = Self.labels(coordinator: coordinator, preferences: preferences)
         return visibleConnections(coordinator: coordinator, preferences: preferences, keeping: coordinator.defaultInstanceId).map {
-            machine($0, coordinator: coordinator, preferences: preferences, refusal: nil)
+            machine($0, label: labels[$0.instanceId], coordinator: coordinator, refusal: nil)
         }
     }
 
@@ -194,17 +199,29 @@ final class AidenNewWorkPicker {
         }
     }
 
+    /// Every paired machine's label, as the Inbox makes them, so a shared name gets
+    /// the same suffix here as there.
+    private static func labels(
+        coordinator: AidenRemoteCoordinator,
+        preferences: AidenMachinePreferencesStore
+    ) -> [String: AidenMachineLabel] {
+        AidenMachineLabel.labels(connections: coordinator.hosts.ordered, preferences: preferences)
+    }
+
     private static func machine(
         _ connection: AidenHostConnection,
+        label: AidenMachineLabel?,
         coordinator: AidenRemoteCoordinator,
-        preferences: AidenMachinePreferencesStore,
         refusal: AidenNewWorkMachine.Refusal?
     ) -> AidenNewWorkMachine {
-        let saved = preferences.saved(for: connection.instanceId)
-        return AidenNewWorkMachine(
+        AidenNewWorkMachine(
             id: connection.instanceId,
-            name: saved?.nameOverride ?? connection.installation.name,
-            symbol: saved?.symbol ?? .desktop,
+            label: label ?? AidenMachineLabel(
+                instanceId: connection.instanceId,
+                name: connection.installation.name,
+                symbol: .desktop,
+                color: .slate
+            ),
             isDefault: connection.instanceId == coordinator.defaultInstanceId,
             isOffline: connection.isKnownOffline,
             refusal: refusal
@@ -221,20 +238,6 @@ extension AidenRemoteCoordinator {
 }
 
 // MARK: Views
-
-/// The machine's name and symbol. Task 27's `AidenMachineLabel` replaces this.
-private struct AidenNewWorkMachineLabel: View {
-    let machine: AidenNewWorkMachine
-
-    /// In this order a menu row shows the name, a line under it, and the symbol.
-    var body: some View {
-        Text(machine.name)
-        if let detail = machine.detail {
-            Text(detail)
-        }
-        Image(systemName: machine.symbol.systemName)
-    }
-}
 
 /// Chooses the machine for one piece of work. With one machine to offer there is
 /// no choice to show, only the reason it can't take the work.
@@ -257,20 +260,23 @@ struct AidenNewWorkMachinePicker: View {
             VStack(alignment: .leading, spacing: AidenSpacing.xs) {
                 Menu {
                     ForEach(picker.machines) { machine in
+                        // In this order a menu row shows the name, a line under it, and the symbol.
                         Toggle(isOn: isPicked(machine)) {
-                            AidenNewWorkMachineLabel(machine: machine)
+                            Text(machine.label.name)
+                            if let detail = machine.detail {
+                                Text(detail)
+                            }
+                            Image(systemName: machine.label.symbol.systemName)
                         }
                         .disabled(!machine.canBePicked)
                     }
                 } label: {
                     HStack(spacing: AidenSpacing.s) {
                         if let picked = picker.pickedMachine {
-                            Image(systemName: picked.symbol.systemName)
-                                .foregroundStyle(palette.accent)
-                                .frame(width: 24)
+                            AidenMachineChip(label: picked.label)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 0) {
-                                Text(picked.name)
+                                Text(picked.label.name)
                                     .font(.body.weight(.semibold))
                                     .foregroundStyle(palette.foreground)
                                     .lineLimit(1)
@@ -338,7 +344,7 @@ struct AidenDefaultMachineRow: View {
         if machines.count > 1 {
             Picker("Default machine", selection: selection) {
                 ForEach(machines) { machine in
-                    Label(machine.name, systemImage: machine.symbol.systemName).tag(machine.id)
+                    Label(machine.label.name, systemImage: machine.label.symbol.systemName).tag(machine.id)
                 }
             }
             .accessibilityHint("New work starts here. You can pick another machine each time.")

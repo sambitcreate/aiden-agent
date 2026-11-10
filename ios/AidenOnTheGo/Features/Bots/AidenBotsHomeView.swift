@@ -733,7 +733,7 @@ struct AidenBotsHomeView: View {
                 Text(
                     coordinator.connectionState == .connected
                         ? "A Bot is a helper you can chat with anytime."
-                        : "Connect to your Mac to see your Bots."
+                        : "Connect to your machine to see your Bots."
                 )
             } actions: {
                 if canOpenNewBot {
@@ -773,9 +773,7 @@ struct AidenBotsHomeView: View {
         if let shown = shownPendingCreate {
             AidenBotPendingCreateRow(pending: shown.pending, machine: shown.machine)
         }
-        let sections = machines.sections.map { section in
-            AidenMachineSection(instanceId: section.instanceId, rows: section.rows.filter(matchesQuery))
-        }
+        let sections = AidenMachineSection.searched(machines.sections, filter: machines.filter.wrappedValue, matching: matchesQuery)
         if sections.allSatisfy(\.rows.isEmpty) {
             if normalizedQuery.isEmpty {
                 ContentUnavailableView(

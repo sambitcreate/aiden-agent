@@ -469,219 +469,230 @@ struct AidenQuestionCard: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "questionmark.bubble")
-                        .font(.system(size: min(headerGlyphSize, 24), weight: .semibold))
-                        .foregroundStyle(palette.accent)
-                        .frame(width: min(headerBadgeSize, 52), height: min(headerBadgeSize, 52))
-                        .background(palette.accent.opacity(0.12), in: Circle())
-                        .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "questionmark.bubble")
+                            .font(.system(size: min(headerGlyphSize, 24), weight: .semibold))
+                            .foregroundStyle(palette.accent)
+                            .frame(width: min(headerBadgeSize, 52), height: min(headerBadgeSize, 52))
+                            .background(palette.accent.opacity(0.12), in: Circle())
+                            .accessibilityHidden(true)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Aiden needs your input")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(palette.foreground)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Aiden needs your input")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(palette.foreground)
 
-                        Text(hint)
-                            .font(.caption)
-                            .foregroundStyle(palette.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
-                    if let stopButton {
-                        stopButton
-                    } else if let stop {
-                        // The card greys out while an answer is on its way. The run
-                        // can still be stopped, so Stop answers only to itself.
-                        AidenComposerStopButton(label: stop.label, isEnabled: stop.isEnabled, action: stop.action)
-                            .environment(\.isEnabled, true)
-                    }
-                }
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(Array(prompt.questions.enumerated()), id: \.offset) { index, question in
-                            Button { draft.move(to: index, questions: prompt.questions) } label: {
-                                Text("\(index + 1). \(question.header)")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(index == draft.activeIndex ? palette.foreground : palette.secondary)
-                                    .padding(.horizontal, 12)
-                                    .frame(minHeight: 44)
-                                    .background(index == draft.activeIndex ? palette.canvas : .clear,
-                                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityAddTraits(index == draft.activeIndex ? .isSelected : [])
-                            .accessibilityLabel("Question \(index + 1) of \(prompt.questions.count), \(question.header)")
-                        }
-                    }
-                }
-                ForEach(Array(prompt.questions.enumerated()).filter { $0.offset == draft.activeIndex }, id: \.offset) { index, question in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Text(question.header)
-                                .font(.caption2.weight(.semibold))
+                            Text(hint)
+                                .font(.caption)
                                 .foregroundStyle(palette.secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(palette.canvas, in: Capsule())
-                            if question.multiSelect {
-                                Text("Select all that apply")
-                                    .font(.caption2)
-                                    .foregroundStyle(palette.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        if let stopButton {
+                            stopButton
+                        } else if let stop {
+                            // The card greys out while an answer is on its way. The run
+                            // can still be stopped, so Stop answers only to itself.
+                            AidenComposerStopButton(label: stop.label, isEnabled: stop.isEnabled, action: stop.action)
+                                .environment(\.isEnabled, true)
+                        }
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(Array(prompt.questions.enumerated()), id: \.offset) { index, question in
+                                Button { draft.move(to: index, questions: prompt.questions) } label: {
+                                    Text("\(index + 1). \(question.header)")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(index == draft.activeIndex ? palette.foreground : palette.secondary)
+                                        .padding(.horizontal, 12)
+                                        .frame(minHeight: 44)
+                                        .background(index == draft.activeIndex ? palette.canvas : .clear,
+                                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityAddTraits(index == draft.activeIndex ? .isSelected : [])
+                                .accessibilityLabel("Question \(index + 1) of \(prompt.questions.count), \(question.header)")
                             }
                         }
-                        .accessibilityHidden(true)
-
-                        Text(question.question)
-                            .font(.callout.weight(.medium))
-                            .foregroundStyle(palette.foreground)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        ForEach(question.options, id: \.label) { option in
-                            let selected = draft.selections[index]?.contains(option.label) == true
-                            let label = AidenQuestionAnswerDraft.recommendedLabel(option.label)
-                            Button {
-                                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
-                                    draft.toggle(option.label, questions: prompt.questions)
+                    }
+                    ForEach(Array(prompt.questions.enumerated()).filter { $0.offset == draft.activeIndex }, id: \.offset) { index, question in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Text(question.header)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(palette.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(palette.canvas, in: Capsule())
+                                if question.multiSelect {
+                                    Text("Select all that apply")
+                                        .font(.caption2)
+                                        .foregroundStyle(palette.secondary)
                                 }
-                            } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: question.multiSelect
-                                          ? (selected ? "checkmark.square.fill" : "square")
-                                          : (selected ? "checkmark.circle.fill" : "circle"))
-                                        .font(.system(size: min(choiceGlyphSize, 28)))
-                                        .foregroundStyle(selected ? palette.accent : palette.secondary)
-                                        .frame(width: min(choiceGlyphWidth, 34))
-                                        .accessibilityHidden(true)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        HStack(spacing: 6) {
-                                            Text(label.text)
-                                                .font(.callout)
-                                                .foregroundStyle(palette.foreground)
-                                            if label.recommended {
-                                                Text("Recommended")
-                                                    .font(.caption2.weight(.semibold))
-                                                    .foregroundStyle(palette.accent)
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 2)
-                                                    .background(palette.accent.opacity(0.12), in: Capsule())
-                                            }
-                                        }
-                                        Text(option.description)
-                                            .font(.caption)
-                                            .foregroundStyle(palette.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .accessibilityHidden(true)
+
+                            Text(question.question)
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(palette.foreground)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            ForEach(question.options, id: \.label) { option in
+                                let selected = draft.selections[index]?.contains(option.label) == true
+                                let label = AidenQuestionAnswerDraft.recommendedLabel(option.label)
+                                Button {
+                                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+                                        draft.toggle(option.label, questions: prompt.questions)
                                     }
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .background(
-                                selected ? palette.accent.opacity(0.10) : palette.canvas,
-                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            )
-                            .accessibilityLabel(label.recommended
-                                ? String(localized: "\(label.text), recommended")
-                                : label.text)
-                            .accessibilityValue(selected
-                                ? String(localized: "Selected")
-                                : String(localized: "Not selected"))
-                            .accessibilityHint(option.description)
-                            .accessibilityAddTraits(selected ? .isSelected : [])
-                        }
-
-                        if draft.customOpen.contains(index) {
-                            TextField(
-                                String(localized: "Type your answer"),
-                                text: binding(for: index),
-                                axis: .vertical
-                            )
-                                .font(.callout)
-                                .lineLimit(1...4)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .accessibilityLabel(String(localized: "Custom answer"))
-                                .accessibilityHint(String(localized: "Overrides the selected options for this question"))
-                        } else {
-                            Button {
-                                draft.customOpen.insert(index)
-                            } label: {
-                                Label("Type something.", systemImage: "text.cursor")
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(palette.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                } label: {
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Image(systemName: question.multiSelect
+                                              ? (selected ? "checkmark.square.fill" : "square")
+                                              : (selected ? "checkmark.circle.fill" : "circle"))
+                                            .font(.system(size: min(choiceGlyphSize, 28)))
+                                            .foregroundStyle(selected ? palette.accent : palette.secondary)
+                                            .frame(width: min(choiceGlyphWidth, 34))
+                                            .accessibilityHidden(true)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 6) {
+                                                Text(label.text)
+                                                    .font(.callout)
+                                                    .foregroundStyle(palette.foreground)
+                                                if label.recommended {
+                                                    Text("Recommended")
+                                                        .font(.caption2.weight(.semibold))
+                                                        .foregroundStyle(palette.accent)
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 2)
+                                                        .background(palette.accent.opacity(0.12), in: Capsule())
+                                                }
+                                            }
+                                            Text(option.description)
+                                                .font(.caption)
+                                                .foregroundStyle(palette.secondary)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 8)
                                     .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .background(
+                                    selected ? palette.accent.opacity(0.10) : palette.canvas,
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                )
+                                .accessibilityLabel(label.recommended
+                                    ? String(localized: "\(label.text), recommended")
+                                    : label.text)
+                                .accessibilityValue(selected
+                                    ? String(localized: "Selected")
+                                    : String(localized: "Not selected"))
+                                .accessibilityHint(option.description)
+                                .accessibilityAddTraits(selected ? .isSelected : [])
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityHint(String(localized: "Shows a field for a custom answer"))
-                        }
-                    }
-                    .accessibilityElement(children: .contain)
-                }
 
-                if !prompt.canRespond {
-                    Label("This paired device cannot respond to prompts.", systemImage: "lock.fill")
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
-                } else {
-                    HStack(spacing: 8) {
-                        Spacer(minLength: 0)
-
-                        Button {
-                            onSubmit(AidenQuestionRespondRequest(cancelled: true, answers: []))
-                        } label: {
-                            Text("Skip")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.foreground)
-                                .padding(.horizontal, 13)
-                                .frame(height: 34)
-                                .aidenApprovalActionGlass()
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
-                        .accessibilityHint(String(localized: "Dismisses the prompt without answers"))
-
-                        Button {
-                            if draft.activeIndex < prompt.questions.count - 1 {
-                                draft.move(to: draft.activeIndex + 1, questions: prompt.questions)
+                            if draft.customOpen.contains(index) {
+                                TextField(
+                                    String(localized: "Type your answer"),
+                                    text: binding(for: index),
+                                    axis: .vertical
+                                )
+                                    .font(.callout)
+                                    .lineLimit(1...4)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .accessibilityLabel(String(localized: "Custom answer"))
+                                    .accessibilityHint(String(localized: "Overrides the selected options for this question"))
                             } else {
-                                onSubmit(AidenQuestionRespondRequest(cancelled: false, answers: answers))
+                                Button {
+                                    draft.customOpen.insert(index)
+                                } label: {
+                                    Label("Type something.", systemImage: "text.cursor")
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(palette.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 8)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityHint(String(localized: "Shows a field for a custom answer"))
                             }
-                        } label: {
-                            Text(draft.activeIndex < prompt.questions.count - 1 ? "Next" : "Submit")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.onFillAccent)
-                                .padding(.horizontal, 13)
-                                .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.fillAccent)
                         }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
-                        .disabled(draft.activeIndex == prompt.questions.count - 1 && answers.isEmpty)
-                        .opacity(draft.activeIndex == prompt.questions.count - 1 && answers.isEmpty ? 0.5 : 1)
-                        .accessibilityHint(draft.activeIndex < prompt.questions.count - 1
-                            ? String(localized: "Moves to the next question and keeps your answers")
-                            : answers.isEmpty
-                            ? String(localized: "Select an option or type an answer first")
-                            : String(localized: "Sends your answers to your Mac"))
+                        .accessibilityElement(children: .contain)
                     }
                 }
+                .padding(12)
             }
-            .padding(12)
+            .scrollBounceBehavior(.basedOnSize)
+            // Skip and Submit sit under the scroll area, so a long question never
+            // pushes them out of the card.
+            actions
+                .padding(.horizontal, AidenSpacing.m)
+                .padding(.bottom, AidenSpacing.m)
         }
         .frame(maxHeight: 360)
         .aidenComposerGlass()
         .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if !prompt.canRespond {
+            Label("This paired device cannot respond to prompts.", systemImage: "lock.fill")
+                .font(.caption)
+                .foregroundStyle(palette.secondary)
+        } else {
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+
+                Button {
+                    onSubmit(AidenQuestionRespondRequest(cancelled: true, answers: []))
+                } label: {
+                    Text("Skip")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+                        .padding(.horizontal, 13)
+                        .frame(height: 34)
+                        .aidenApprovalActionGlass()
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 5)
+                .accessibilityHint(String(localized: "Dismisses the prompt without answers"))
+
+                Button {
+                    if draft.activeIndex < prompt.questions.count - 1 {
+                        draft.move(to: draft.activeIndex + 1, questions: prompt.questions)
+                    } else {
+                        onSubmit(AidenQuestionRespondRequest(cancelled: false, answers: answers))
+                    }
+                } label: {
+                    Text(draft.activeIndex < prompt.questions.count - 1 ? "Next" : "Submit")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.onFillAccent)
+                        .padding(.horizontal, 13)
+                        .frame(height: 34)
+                        .aidenApprovalActionGlass(tint: palette.fillAccent)
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 5)
+                .disabled(draft.activeIndex == prompt.questions.count - 1 && answers.isEmpty)
+                .opacity(draft.activeIndex == prompt.questions.count - 1 && answers.isEmpty ? 0.5 : 1)
+                .accessibilityHint(draft.activeIndex < prompt.questions.count - 1
+                    ? String(localized: "Moves to the next question and keeps your answers")
+                    : answers.isEmpty
+                    ? String(localized: "Select an option or type an answer first")
+                    : String(localized: "Sends your answers to your machine"))
+            }
+        }
     }
 }
 

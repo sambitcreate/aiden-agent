@@ -658,6 +658,25 @@ final class AidenUnifiedInboxTests: XCTestCase {
         XCTAssertEqual(AidenMachineSection.grouped(machines, filter: .machine("mac-c")).map(\.rows.count), [0])
     }
 
+    /// Under All, a machine with nothing that matches leaves the list whole, so its
+    /// status line and switch never show without its name above them. Under one
+    /// machine its section stays, so the tab can say nothing matched.
+    func testASearchDropsAMachineWithNoMatchUnderAll() {
+        let a = snapshot("mac-a", bots: [bot("bot_old", minutesAgo: 30), bot("bot_new", minutesAgo: 1)])
+        let b = snapshot("mac-b", bots: [bot("bot_old", minutesAgo: 5)])
+        let rows = [a, b].map { (instanceId: $0.instanceId, rows: AidenMachineBotRow.rows(of: $0)) }
+        let all = AidenMachineSection.grouped(rows, filter: .all)
+
+        let searched = AidenMachineSection.searched(all, filter: .all) { $0.bot.id == "bot_new" }
+        XCTAssertEqual(searched.map(\.instanceId), ["mac-a"])
+        XCTAssertEqual(searched.map { $0.rows.map(\.id) }, [[hostID("mac-a", "bot_new")]])
+
+        let one = AidenMachineSection.grouped(rows, filter: .machine("mac-b"))
+        let searchedOne = AidenMachineSection.searched(one, filter: .machine("mac-b")) { $0.bot.id == "bot_new" }
+        XCTAssertEqual(searchedOne.map(\.instanceId), ["mac-b"])
+        XCTAssertEqual(searchedOne.map(\.rows.count), [0])
+    }
+
     func testBotsGroupByMachineNewestFirst() {
         let a = snapshot("mac-a", bots: [bot("bot_old", minutesAgo: 30), bot("bot_new", minutesAgo: 1)])
         let b = snapshot("mac-b", bots: [bot("bot_old", minutesAgo: 5)])

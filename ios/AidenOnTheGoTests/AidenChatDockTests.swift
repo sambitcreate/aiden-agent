@@ -914,6 +914,42 @@ final class AidenChatDockTests: XCTestCase {
         XCTAssertEqual(talked.latestForkableMessageID, "m2")
     }
 
+    /// A question with many long options is taller than the card. Skip and Submit
+    /// still sit inside the card at the default text size, not below the fold.
+    func testALongQuestionKeepsSkipAndSubmitInsideTheCard() throws {
+        let options = (1...7).map { index in
+            AidenRemoteQuestionOption(
+                label: "Option \(index)",
+                description: "A longer description for option \(index), so the list runs well past the height the card allows."
+            )
+        }
+        let question = AidenPendingQuestion(
+            id: "long-question",
+            questions: [AidenRemoteQuestion(question: "Which one should Aiden use?", header: "Pick", multiSelect: false, options: options)],
+            expiresAt: .distantFuture,
+            canRespond: true
+        )
+        let window = try show(
+            VStack(spacing: 0) {
+                AidenQuestionCard(prompt: question, onSubmit: { _ in })
+                Spacer(minLength: 0)
+            }
+        )
+        defer { close(window) }
+
+        XCTAssertTrue(runMainLoop(until: {
+            element("Aiden needs your input", in: window) != nil
+                && element("Skip", in: window) != nil
+                && element("Submit", in: window) != nil
+        }))
+        // The card's top is the header's less the card's 12-point inset.
+        let cardTop = try XCTUnwrap(element("Aiden needs your input", in: window)).accessibilityFrame.minY - 12
+        for label in ["Skip", "Submit"] {
+            let frame = try XCTUnwrap(element(label, in: window)).accessibilityFrame
+            XCTAssertLessThanOrEqual(frame.maxY, cardTop + 360 + 1, "\(label) is below the card's 360-point height")
+        }
+    }
+
     // MARK: - Harness
 
     private static let revokedJSON = Data(

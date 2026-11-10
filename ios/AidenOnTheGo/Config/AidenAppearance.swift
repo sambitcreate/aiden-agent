@@ -265,11 +265,41 @@ struct AidenPalette: Equatable, Sendable {
     let sidebarHex: String
     let raisedHex: String
     let foregroundHex: String
-    let secondaryHex: String
+    private(set) var secondaryHex: String
     let accentHex: String
     let successHex: String
     let warningHex: String
     let dangerHex: String
+    /// Status colours safe for text, worked out once here so rows only read them.
+    let successTextHex: String
+    let warningTextHex: String
+    let dangerTextHex: String
+
+    init(
+        canvasHex: String,
+        sidebarHex: String,
+        raisedHex: String,
+        foregroundHex: String,
+        secondaryHex: String,
+        accentHex: String,
+        successHex: String,
+        warningHex: String,
+        dangerHex: String
+    ) {
+        self.canvasHex = canvasHex
+        self.sidebarHex = sidebarHex
+        self.raisedHex = raisedHex
+        self.foregroundHex = foregroundHex
+        self.secondaryHex = secondaryHex
+        self.accentHex = accentHex
+        self.successHex = successHex
+        self.warningHex = warningHex
+        self.dangerHex = dangerHex
+        let grounds = [canvasHex, raisedHex]
+        successTextHex = Self.textSafeHex(successHex, on: grounds)
+        warningTextHex = Self.textSafeHex(warningHex, on: grounds)
+        dangerTextHex = Self.textSafeHex(dangerHex, on: grounds)
+    }
 
     var canvas: Color { Color(aidenHex: canvasHex) }
     var sidebar: Color { Color(aidenHex: sidebarHex) }
@@ -301,17 +331,10 @@ struct AidenPalette: Equatable, Sendable {
         let delta = Double(contrast - baseline)
         let secondaryTarget = delta > 0 ? foregroundHex : canvasHex
         let fraction = min(abs(delta) / 100 * (delta > 0 ? 0.7 : 0.25), 0.7)
-        return AidenPalette(
-            canvasHex: canvasHex,
-            sidebarHex: sidebarHex,
-            raisedHex: raisedHex,
-            foregroundHex: foregroundHex,
-            secondaryHex: Color.mixHex(secondaryHex, secondaryTarget, fraction: fraction),
-            accentHex: accentHex,
-            successHex: successHex,
-            warningHex: warningHex,
-            dangerHex: dangerHex
-        )
+        // Only the secondary text moves, so the status colours carry over as they are.
+        var adjusted = self
+        adjusted.secondaryHex = Color.mixHex(secondaryHex, secondaryTarget, fraction: fraction)
+        return adjusted
     }
 }
 
@@ -363,14 +386,10 @@ struct AidenSolidFill: Equatable, Sendable {
 /// Text moves each one away from the ground (toward black on a light theme,
 /// toward white on a dark one) one percent at a time, only as far as 4.5:1
 /// needs on both the canvas and the raised surface. A hex that already passes
-/// does not move. Derived from the palette on read, so a new theme or a
-/// contrast adjustment needs no extra constants.
+/// does not move. Derived when the palette is made, so a new theme or a
+/// contrast adjustment needs no extra constants and a read costs nothing.
 extension AidenPalette {
     static let minimumTextContrast = 4.5
-
-    var successTextHex: String { textSafeHex(successHex) }
-    var warningTextHex: String { textSafeHex(warningHex) }
-    var dangerTextHex: String { textSafeHex(dangerHex) }
 
     var successText: Color { Color(aidenHex: successTextHex) }
     var warningText: Color { Color(aidenHex: warningTextHex) }
@@ -380,15 +399,24 @@ extension AidenPalette {
         Color.contrastRatio(foregroundHex, backgroundHex)
     }
 
-    private func textSafeHex(_ statusHex: String) -> String {
-        let grounds = [canvasHex, raisedHex]
+    #if DEBUG
+    /// How many status colours have been worked out, so a test can tell a read
+    /// from a resolve.
+    nonisolated(unsafe) static var statusTextResolutionCount = 0
+    #endif
+
+    /// `grounds` is the canvas then the raised surface.
+    fileprivate static func textSafeHex(_ statusHex: String, on grounds: [String]) -> String {
+        #if DEBUG
+        statusTextResolutionCount += 1
+        #endif
         func passes(_ hex: String) -> Bool {
             grounds.allSatisfy { Color.contrastRatio(hex, $0) >= Self.minimumTextContrast }
         }
         let base = Color.mixHex(statusHex, statusHex, fraction: 0)
         guard !passes(base) else { return base }
         // Black and white give equal contrast at a luminance of about 0.179.
-        let target = Color.relativeLuminance(canvasHex) > 0.179 ? "#000000" : "#FFFFFF"
+        let target = Color.relativeLuminance(grounds[0]) > 0.179 ? "#000000" : "#FFFFFF"
         for step in 1...100 {
             let moved = Color.mixHex(base, target, fraction: Double(step) / 100)
             if passes(moved) { return moved }

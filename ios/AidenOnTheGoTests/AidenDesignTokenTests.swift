@@ -71,6 +71,21 @@ final class AidenDesignTokenTests: XCTestCase {
         XCTAssertNotEqual(light.warningTextHex, light.warningHex, "light warning needs darkening for text")
     }
 
+    func testStatusTextIsResolvedWhenThePaletteIsMadeNotOnEachRead() {
+        // A contrast setting makes a new palette, as the app does for every scene.
+        let palette = AidenThemeCatalog.palette(preset: .aiden, scheme: .light).applyingContrast(80, baseline: 45)
+        let before = AidenPalette.statusTextResolutionCount
+        for _ in 0..<50 {
+            _ = palette.successTextHex
+            _ = palette.warningText
+            _ = palette.dangerTextHex
+        }
+        XCTAssertEqual(AidenPalette.statusTextResolutionCount, before, "Rows read colours the palette already holds")
+        for ground in [palette.canvasHex, palette.raisedHex] {
+            XCTAssertGreaterThanOrEqual(palette.contrastRatio(foregroundHex: palette.warningTextHex, backgroundHex: ground), 4.5)
+        }
+    }
+
     func testContrastRatioMatchesWCAGReferenceValues() {
         let p = AidenThemeCatalog.palette(preset: .aiden, scheme: .light)
         XCTAssertEqual(p.contrastRatio(foregroundHex: "#000000", backgroundHex: "#FFFFFF"), 21, accuracy: 0.001)

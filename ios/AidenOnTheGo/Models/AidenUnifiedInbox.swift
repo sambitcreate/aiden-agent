@@ -350,6 +350,13 @@ struct AidenMachineSection<Row: Identifiable>: Identifiable {
             machines.filter { $0.instanceId == instanceId }.map { Self(instanceId: $0.instanceId, rows: $0.rows) }
         }
     }
+
+    /// The sections a search leaves, grouped as `grouped` does: under All a machine
+    /// with no match drops out whole, so its status line and switch never show
+    /// without its name above them.
+    static func searched(_ sections: [Self], filter: AidenMachineFilter, matching: (Row) -> Bool) -> [Self] {
+        grouped(sections.map { (instanceId: $0.instanceId, rows: $0.rows.filter(matching)) }, filter: filter)
+    }
 }
 
 /// A workspace as the Workspaces tab lists it, on its own machine.
