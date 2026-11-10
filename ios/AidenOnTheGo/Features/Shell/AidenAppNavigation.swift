@@ -137,10 +137,11 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
         savedPaths = (try? container.decode([String: [AidenAppRoute]].self, forKey: .savedPaths)) ?? [:]
     }
 
-    /// Without this machine's routes. A tab it was on returns to its root.
+    /// Without this machine's routes. A tab it was on goes back to the last
+    /// screen before its first one, so Machines stays when its page goes.
     fileprivate func removing(instanceId: String) -> AidenAppNavigationSnapshot {
         func kept(_ path: [AidenAppRoute]) -> [AidenAppRoute] {
-            path.contains { $0.belongs(to: instanceId) } ? [] : path
+            Array(path.prefix { !$0.belongs(to: instanceId) })
         }
         return AidenAppNavigationSnapshot(
             tab: tab,
@@ -420,10 +421,13 @@ final class AidenAppNavigation {
         Self.show(route, on: &inboxPath)
     }
 
-    /// A tab holding a route to a machine that's gone returns to its root.
+    /// A tab holding a route to a machine that's gone goes back to the last
+    /// screen before it: forgetting a machine from its own page leaves Machines
+    /// showing, and a chat under Settings leaves Settings. A saved per-machine
+    /// path with any such route goes whole.
     func dropRoutes(outside installations: [AidenInstallation]) {
         func reachable(_ path: [AidenAppRoute]) -> [AidenAppRoute] {
-            path.allSatisfy { $0.isReachable(on: installations) } ? path : []
+            Array(path.prefix { $0.isReachable(on: installations) })
         }
         inboxPath = reachable(inboxPath)
         botsPath = reachable(botsPath)

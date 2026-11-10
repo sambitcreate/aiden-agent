@@ -236,7 +236,7 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(restored.inboxPath, [.settings, .chat(id("c1:with:colons"))])
     }
 
-    func testARestoredRouteToARemovedMachineFallsBackToItsTabsRoot() {
+    func testARestoredRouteToARemovedMachineFallsBackToTheScreenBeforeIt() {
         let snapshot = AidenAppNavigationSnapshot(
             tab: .workspaces,
             inboxPath: [.settings, .chat(id("c1", on: "gone"))],
@@ -247,7 +247,7 @@ final class AidenAppShellTests: XCTestCase {
         let restored = AidenAppNavigation(restoring: snapshot, installations: [studio])
 
         XCTAssertEqual(restored.tab, .workspaces)
-        XCTAssertEqual(restored.inboxPath, [])
+        XCTAssertEqual(restored.inboxPath, [.settings])
         XCTAssertEqual(restored.botsPath, [.bot(id("b1", on: "studio"))])
         XCTAssertEqual(restored.workspacesPath, [])
     }
@@ -257,7 +257,21 @@ final class AidenAppShellTests: XCTestCase {
             inboxPath: [.machines, .machine(instanceId: "gone")]
         )
 
-        XCTAssertEqual(AidenAppNavigation(restoring: snapshot, installations: [studio]).inboxPath, [])
+        XCTAssertEqual(AidenAppNavigation(restoring: snapshot, installations: [studio]).inboxPath, [.machines])
+    }
+
+    /// Forgetting a machine from its own page lands back on Machines, and a chat
+    /// deep under a workspace leaves the routes before it.
+    func testForgettingAMachineFromItsPageLeavesMachinesShowing() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.machines)
+        navigation.open(.machine(instanceId: "laptop"))
+        navigation.workspacesPath = [.workspace(id("w1", on: "studio")), .chat(id("c1", on: "laptop"))]
+
+        navigation.dropRoutes(outside: [studio])
+
+        XCTAssertEqual(navigation.inboxPath, [.machines])
+        XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w1", on: "studio"))])
     }
 
     /// Forgetting a machine and pairing it again gives a new device. Routes from

@@ -914,7 +914,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         let left = store.load()
         XCTAssertEqual(left.tab, .workspaces)
-        XCTAssertEqual(left.inboxPath, [])
+        XCTAssertEqual(left.inboxPath, [.settings], "Settings, before the chat, is still there")
         XCTAssertEqual(left.botsPath, [.bot(id("b1", on: "studio"))])
         XCTAssertEqual(left.workspacesPath, [])
         XCTAssertEqual(left.savedPaths, [:])
