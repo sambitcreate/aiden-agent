@@ -74,10 +74,19 @@ extension AidenRemoteCoordinator {
         guard installationStore.installations.contains(where: { $0.id == instanceId }),
               let instanceId,
               hosts.connection(for: instanceId)?.isRevoked != true else {
-            presentedError = String(localized: "This machine is no longer paired. Pair it again to continue.")
+            presentedError = noLongerPairedMessage(for: instanceId)
             return false
         }
         return true
+    }
+
+    /// Nothing on screen says which machine a link was for, so the message names
+    /// it as this phone does, or says "That machine" when the phone doesn't know it.
+    func noLongerPairedMessage(for instanceId: String?) -> String {
+        guard let name = instanceId.flatMap(machineName(of:)) else {
+            return String(localized: "That machine is no longer paired. Pair it again to continue.")
+        }
+        return String(localized: "\(name) is no longer paired. Pair it again to continue.")
     }
 
     /// Whether a link for this machine can go ahead. The tab shell asks that

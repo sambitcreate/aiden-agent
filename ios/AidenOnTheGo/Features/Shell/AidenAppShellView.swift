@@ -374,7 +374,7 @@ struct AidenAppShellView: View {
         ) {
             navigation.open(route, startsVoice: request.startsVoice)
         } else {
-            coordinator.presentedError = String(localized: "This machine is no longer paired. Pair it again to continue.")
+            coordinator.presentedError = coordinator.noLongerPairedMessage(for: request.instanceId)
         }
     }
 }

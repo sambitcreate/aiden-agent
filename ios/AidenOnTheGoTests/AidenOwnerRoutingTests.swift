@@ -1278,7 +1278,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         XCTAssertFalse(coordinator.acceptLink(link))
 
-        XCTAssertEqual(coordinator.presentedError, "This machine is no longer paired. Pair it again to continue.")
+        // Nothing on screen names the machine, and the phone doesn't know it.
+        XCTAssertEqual(coordinator.presentedError, "That machine is no longer paired. Pair it again to continue.")
         XCTAssertEqual(coordinator.activeInstanceId, "studio")
         XCTAssertEqual(requests("gone"), [])
     }
@@ -1293,8 +1294,40 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         XCTAssertFalse(coordinator.acceptLink(link))
 
-        XCTAssertEqual(coordinator.presentedError, "This machine is no longer paired. Pair it again to continue.")
+        XCTAssertEqual(coordinator.presentedError, "Laptop is no longer paired. Pair it again to continue.")
         coordinator.setOnScreen(false, view: view, instanceId: "laptop")
+    }
+
+    /// The name is the one this phone shows, so a renamed machine reads as renamed.
+    func testALinkToARevokedMachineUsesItsNameOnThisPhone() async throws {
+        coordinator.machinePreferences.update("laptop") { $0.nameOverride = "Work laptop" }
+        let view = NSObject()
+        coordinator.setOnScreen(true, view: view, instanceId: "laptop")
+        defer { coordinator.setOnScreen(false, view: view, instanceId: "laptop") }
+        await coordinator.hostConnectionWasRevokedInBackground(try connection("laptop"))
+        let link = try XCTUnwrap(AidenDeepLink.request(from: try XCTUnwrap(
+            AidenDeepLink.chatURL(instanceId: "laptop", chatId: "c1")
+        )))
+
+        XCTAssertFalse(coordinator.acceptLink(link))
+
+        XCTAssertEqual(coordinator.presentedError, "Work laptop is no longer paired. Pair it again to continue.")
+    }
+
+    /// The tab shell's own check, for a link whose route can't be built.
+    func testTheShellNamesAMachineItKnowsAndSaysThatMachineOtherwise() {
+        XCTAssertEqual(
+            coordinator.noLongerPairedMessage(for: "laptop"),
+            "Laptop is no longer paired. Pair it again to continue."
+        )
+        XCTAssertEqual(
+            coordinator.noLongerPairedMessage(for: "gone"),
+            "That machine is no longer paired. Pair it again to continue."
+        )
+        XCTAssertEqual(
+            coordinator.noLongerPairedMessage(for: nil),
+            "That machine is no longer paired. Pair it again to continue."
+        )
     }
 
     func testALinkThatNamesNoMachineOpensOnTheSelectedOne() async throws {
