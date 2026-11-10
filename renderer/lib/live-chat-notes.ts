@@ -122,6 +122,8 @@ export class LiveChatNoteWatcher {
 type TurnMessage = {
   role: string;
   inputSource?: string;
+  /** Set when a UserPromptSubmit hook refused the message; no model read it. */
+  hookBlocked?: unknown;
   notice?: unknown;
   providerFailure?: unknown;
   timeline?: { status?: string };
@@ -148,7 +150,8 @@ export function liveChatTurn(messages: readonly TurnMessage[]): LiveChatTurn {
   }
   if (lastUser < 0) return { byVoice: false, ending: null };
   return {
-    byVoice: messages[lastUser]!.inputSource === "voice",
+    // A message a hook refused was never answered, so no reply after it is Live's.
+    byVoice: messages[lastUser]!.inputSource === "voice" && !messages[lastUser]!.hookBlocked,
     ending: liveChatEnding(messages.slice(lastUser + 1)),
   };
 }

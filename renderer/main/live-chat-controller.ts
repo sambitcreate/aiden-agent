@@ -107,6 +107,8 @@ export function createLiveChatController(read: () => LiveChatPaneState): LiveCha
         }
         if (!receipt) return liveChatFailure(LIVE_CHAT_ERRORS.cannotSteer);
         if (receipt.admitted) return { ok: true, status: "steered", title: state.title };
+        // A UserPromptSubmit hook refused it: saved and marked, never read.
+        if (receipt.committed && receipt.reason === "invalid") return liveChatFailure(LIVE_CHAT_ERRORS.hookBlocked);
         if (receipt.committed) {
           // Saved in the transcript, but the reply ended before it read it.
           return { ok: true, status: "saved_not_read", title: state.title };

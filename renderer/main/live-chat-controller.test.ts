@@ -82,6 +82,12 @@ test("auto steers a working chat and reports what the run did with it", async ()
   working.setSteerReceipt({ admitted: false, committed: true, reason: "run_not_active", messageId: "m2" });
   assert.equal((await working.controller.send("Too late", "steer")).status, "saved_not_read");
 
+  // A hook refused it: saved and marked, so Live must not say the chat has it.
+  working.setSteerReceipt({ admitted: false, committed: true, reason: "invalid", messageId: "m3" });
+  const hookRefused = await working.controller.send("Blocked words", "steer");
+  assert.equal(hookRefused.ok, false);
+  assert.equal((hookRefused.error as { code: string }).code, "hook_blocked");
+
   working.setSteerReceipt({ admitted: false, committed: false, reason: "capacity" });
   const refused = await working.controller.send("More", "steer");
   assert.equal(refused.ok, false);

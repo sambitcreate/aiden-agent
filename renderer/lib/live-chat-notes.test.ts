@@ -114,4 +114,17 @@ test("the latest turn is Live's only when the newest user message came by voice"
     liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "user", notice: { title: "x", summary: "y" } }]),
     { byVoice: true, ending: null },
   );
+  // A hook refused Live's guidance while an earlier reply ran: that reply's end is not news about it.
+  assert.deepEqual(
+    liveChatTurn([
+      { role: "user", inputSource: "voice" },
+      { role: "assistant" },
+      { role: "user", inputSource: "voice", hookBlocked: { reason: "Contains a secret" } },
+    ]),
+    { byVoice: false, ending: null },
+  );
+  assert.deepEqual(
+    liveChatTurn([{ role: "user", inputSource: "voice", hookBlocked: { reason: "x" } }, { role: "assistant" }]),
+    { byVoice: false, ending: "finished" },
+  );
 });

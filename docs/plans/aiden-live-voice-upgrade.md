@@ -77,6 +77,7 @@ Main checks each call's arguments and forwards it to the window over the Live se
 - **Cancels and timeouts.** The main broker sends `tool_cancel` to the window on a timeout as well as on a cancel, and the window checks for the cancel right before it commits. Once a send, stop, chat switch or new chat has been handed to the chat pane or router, its real outcome is reported (`committed: true`). If main gave up on a forwarded mutating call (all of these, `find_and_open_chat` included) and no result came within a short grace period, Live gets `outcome_unknown` ("check the chat before trying again; do not resend it") instead of `cancelled`. An append the composer itself can't confirm, or a steer that fails, also answers `outcome_unknown`.
 - **Stop and the queue.** A voice Stop pauses the chat's queue only when a run was actually stopped. While the queue is paused, Live can still send to an idle chat with nothing queued or steer a running one, but anything that would queue answers `queue_paused`.
 - **Saved, not read.** `saved_not_read` means the message was saved but the run could not start; the tool description tells Live to say so rather than resend.
+- **Refused by a hook.** When one of the person's `UserPromptSubmit` hooks refuses Live's guidance, the message stays in the chat, marked, and Live gets `hook_blocked` instead of `saved_not_read`. A hook-refused message never counts as Live's turn, so the end of an earlier reply sends no spoken update about it.
 
 ### Spoken notes
 

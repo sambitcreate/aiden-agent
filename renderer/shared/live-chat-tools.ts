@@ -70,6 +70,10 @@ export const LIVE_CHAT_ERRORS = {
     message: "Aiden couldn't confirm the guidance. Check the conversation before sending it again; do not resend it.",
   },
   cancelled: { code: "cancelled", message: "The request was cancelled." },
+  hookBlocked: {
+    code: "hook_blocked",
+    message: "One of the person's hooks refused this message. It shows in the chat, marked, and no model will read it.",
+  },
 } as const;
 
 export type LiveChatError = (typeof LIVE_CHAT_ERRORS)[keyof typeof LIVE_CHAT_ERRORS];
