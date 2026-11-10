@@ -76,7 +76,7 @@ struct AidenAppSettingsView: View {
             Form {
                 Section("Aiden Agent") {
                     LabeledContent(
-                        "Connected desktop",
+                        "Connected machine",
                         value: coordinator.installationStore.activeInstallation?.name ?? "Not connected"
                     )
                     if tabShellEnabled {

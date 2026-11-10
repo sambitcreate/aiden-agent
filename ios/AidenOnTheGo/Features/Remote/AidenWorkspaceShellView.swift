@@ -520,7 +520,7 @@ struct AidenWorkspaceShellView: View {
 
     private var unreachableListState: some View {
         ContentUnavailableView {
-            Label("Can’t reach your machine", systemImage: "wifi.slash")
+            Label("Can’t Reach Your Mac", systemImage: "wifi.slash")
         } description: {
             Text("Saved chats appear here after this iPhone has connected once.")
         } actions: {
@@ -556,7 +556,7 @@ struct AidenWorkspaceShellView: View {
     private func awaitChatCreationReady() async -> Bool {
         if coordinator.connectionState == .connected, !chatCreationBlocked { return true }
         let resumedStatus = agentCreationStatus
-        agentCreationStatus = String(localized: "Waiting for your machine…")
+        agentCreationStatus = String(localized: "Waiting for your Mac…")
         defer { agentCreationStatus = resumedStatus }
         let deadline = ContinuousClock.now + .seconds(30)
         while ContinuousClock.now < deadline, !Task.isCancelled {
@@ -577,7 +577,7 @@ struct AidenWorkspaceShellView: View {
     @MainActor
     private func reportChatCreationUnavailable() {
         if case .offline = coordinator.connectionState {
-            coordinator.presentedError = String(localized: "Your machine isn’t reachable right now. Try again once it’s connected.")
+            coordinator.presentedError = String(localized: "Your Mac isn’t reachable right now. Try again once it’s connected.")
         } else {
             coordinator.presentedError = homeModel.chatLoadErrorMessage
                 ?? String(localized: "Chats are unavailable. Try loading them again first.")

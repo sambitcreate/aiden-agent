@@ -8,13 +8,13 @@ Every line under `ios/AidenOnTheGo` and `ios/AidenLiveActivityWidget` with `Mac`
 
 Rules applied:
 
-- **Change** "your Mac" to "your machine", "this Mac" to "this machine", "the Mac" to "the machine" and "on Mac" to "on your machine". This matches the new shell's copy ("Waiting for your machine…", "Can’t reach your machine").
+- **Change** "your Mac" to "your machine", "this Mac" to "your machine" (on a phone, "this machine" reads as the phone), "the Mac" to "the machine" and "on Mac" to "on your machine". This matches the new shell's copy ("Waiting for your machine…", "Can’t reach your machine").
 - **Keep** when the feature runs only on macOS: iOS Simulator sharing needs Xcode, and Computer Use is gated to `darwin` (`main/services/computer-use/platform.ts`).
 - **Keep** text the host sends or that is shared across clients: the Bot activity phase table is pinned to `protocol/aiden-remote/v1/fixtures/contract.json`, which desktop, Android and iOS all draw from. Changing one client would break the contract test (`testThePhaseTableIsTheOneTheMacDraws`).
 - **Keep** demo data: "Studio Mac" is the name of a demo machine, and a real Mac can be called that.
 - **Keep** the old shell's coachmark copy. Task 35 deletes the coachmark, and no test pins it in both shells.
 
-## Changed (94)
+## Changed (92)
 
 | Where (after the change) | Before | After | Decision |
 | --- | --- | --- | --- |
@@ -42,9 +42,9 @@ Rules applied:
 | `Features/Bots/AidenBotAdvancedView.swift:929` | chat on your Mac while it works. Changes save as you pick them. | chat on your machine while it works. Changes save as you pick them. | Change: any paired host |
 | `Features/Bots/AidenBotsHomeView.swift:736` | Connect to your Mac to see your Bots. | Connect to your machine to see your Bots. | Change: any paired host |
 | `Features/Chat/AidenChatViewModel+Fork.swift:95` | This chat changed on your Mac. Try again. | This chat changed on your machine. Try again. | Change: any paired host |
-| `Features/Bots/AidenBotMemoryView.swift:25` | It’s stored on this Mac, and | It’s stored on this machine, and | Change: any paired host |
+| `Features/Bots/AidenBotMemoryView.swift:25` | It’s stored on this Mac, and | It’s stored on your machine, and | Change: any paired host |
 | `Features/Bots/AidenBotProfileView.swift:319` | Connect to your Mac, then try again. | Connect to your machine, then try again. | Change: any paired host |
-| `Features/Chat/AidenChatViewModel.swift:1205` | This device can no longer stop agents on this Mac. | This device can no longer stop agents on this machine. | Change: any paired host |
+| `Features/Chat/AidenChatViewModel.swift:1205` | This device can no longer stop agents on this Mac. | This device can no longer stop agents on your machine. | Change: any paired host |
 | `Features/Chat/AidenChatViewModel.swift:2777` | Refreshing the current request from your Mac. | Refreshing the current request from your machine. | Change: any paired host |
 | `Features/Chat/AidenChatViewModel.swift:2840` | Refreshing the current prompt from your Mac. | Refreshing the current prompt from your machine. | Change: any paired host |
 | `Features/Chat/AidenChatViewModel.swift:925` | Tell the paired Mac which displayed message | Tell the paired machine which displayed message | Comment: quotes or describes changed copy |
@@ -73,6 +73,7 @@ Rules applied:
 | `Features/Chat/AidenChatCards.swift:693` | Sends your answers to your Mac | Sends your answers to your machine | Change: any paired host |
 | `Features/Workspace/AidenAppSettingsView.swift:121` | Manage model connections on your paired Mac. | Manage model connections on your paired machine. | Change: any paired host |
 | `Features/Workspace/AidenAppSettingsView.swift:138` | This controls memory on your paired Mac. | This controls memory on your paired machine. | Change: any paired host |
+| `Features/Workspace/AidenAppSettingsView.swift:142` | Ready on your Mac | Ready on your machine | Change: any paired host |
 | `Features/Workspace/AidenAppSettingsView.swift:142` | Set up on your Mac | Set up on your machine | Change: any paired host |
 | `Features/Workspace/AidenAppSettingsView.swift:167` | processed on-device by your paired Mac, and not retained. | processed on-device by your paired machine, and not retained. | Change: any paired host |
 | `Features/Workspace/AidenWorkspaceSettingsView.swift:75` | Existing memory stays on your Mac. | Existing memory stays on your machine. | Change: any paired host |
@@ -81,18 +82,15 @@ Rules applied:
 | `Features/Workspace/AidenUsageView.swift:15` | Your Mac didn't return usage this time. | Your machine didn't return usage this time. | Change: any paired host |
 | `Features/Remote/AidenProvidersView.swift:27` | Connected to your Mac | Connected to your machine | Change: any paired host |
 | `Features/Remote/AidenProvidersView.swift:28` | Providers and API keys are stored on your paired Mac. | Providers and API keys are stored on your paired machine. | Change: any paired host |
-| `Features/Remote/AidenProvidersView.swift:33` | Connect to an updated Mac with permission to manage workspaces to add providers. | Connect to an updated machine with permission to manage workspaces to add providers. | Change: any paired host |
+| `Features/Remote/AidenProvidersView.swift:33` | Connect to an updated Mac with permission to manage workspaces to add providers. | To add providers, connect to a machine running an updated Aiden Agent, with permission to manage workspaces. | Change: any paired host |
 | `Features/Remote/AidenProvidersView.swift:46` | Connect to your paired Mac. | Connect to your paired machine. | Change: any paired host |
 | `Features/Remote/AidenProvidersView.swift:97` | Local to the Mac | Local to the machine | Change: any paired host |
-| `Features/Remote/AidenWorkspaceShellView.swift:523` | Can’t Reach Your Mac | Can’t reach your machine | Change: any paired host |
-| `Features/Remote/AidenWorkspaceShellView.swift:559` | Waiting for your Mac… | Waiting for your machine… | Change: any paired host |
-| `Features/Remote/AidenWorkspaceShellView.swift:580` | Your Mac isn’t reachable right now. Try again once it’s connected. | Your machine isn’t reachable right now. Try again once it’s connected. | Change: any paired host |
 | `Features/Remote/AidenVisualDocument.swift:132` | Can't reach your Mac. Check the connection and try again. | Can't reach your machine. Check the connection and try again. | Change: any paired host |
 | `Features/Remote/AidenVisualDocument.swift:136` | This visual is no longer available on your Mac. | This visual is no longer available on your machine. | Change: any paired host |
 | `Features/Remote/AidenSpendingNotice.swift:44` | or change the limit on your Mac. | or change the limit on your machine. | Change: any paired host |
 | `Features/Remote/AidenBotChatToolsView.swift:336` | This file changed on your Mac. Reload it before saving again. | This file changed on your machine. Reload it before saving again. | Change: any paired host |
 | `Features/Remote/AidenBotChatToolsView.swift:338` | Something changed on your Mac. Go back to the chat and open Files again. | Something changed on your machine. Go back to the chat and open Files again. | Change: any paired host |
-| `Features/Remote/AidenBotChatToolsView.swift:531` | Reload from Mac | Reload from machine | Change: any paired host |
+| `Features/Remote/AidenBotChatToolsView.swift:531` | Reload from Mac | Reload from your machine | Change: any paired host. The button now shows on a `revision_conflict` flag, not by matching the message (it never showed before). |
 | `Features/Remote/AidenNewWorktree.swift:10` | in its own worktree on your Mac. | in its own worktree on your machine. | Change: any paired host |
 | `Features/Remote/AidenVisualViewer.swift:131` | May be out of date. Your Mac couldn't be reached. | May be out of date. Your machine couldn't be reached. | Change: any paired host |
 | `Models/AidenChat.swift:834` | Watch this recording on your Mac. | Watch this recording on your machine. | Change: any paired host |
@@ -113,9 +111,9 @@ Rules applied:
 | `Resources/Info.plist:55` | transcribed on this device or securely by your paired Mac. | transcribed on this device or securely by your paired machine. | Change: any paired host |
 | `Resources/Info.plist:59` | choose images to send to your paired Mac. | choose images to send to your paired machine. | Change: any paired host |
 
-The 94 rows are 89 copy strings, 2 `Info.plist` permission prompts, and 3 comments that quote changed copy. The 123 matched Swift lines split as: 91 lines of copy changed (89 rows, because the two "Refreshing the current request/prompt" rows each cover two identical lines in `AidenChatViewModel.swift`), 2 comments changed, 18 kept below, and 12 code comments about the host left alone. The third changed comment, `AidenChatViewModel.swift:925`, has no quotes, so the search did not match it.
+The 92 rows are 87 copy strings, 2 `Info.plist` permission prompts, and 3 comments that quote changed copy. The 123 matched Swift lines split as: 88 lines of copy changed (87 rows: the two "Refreshing the current request/prompt" rows each cover two identical lines in `AidenChatViewModel.swift`, and "Ready" and "Set up" share one line; see the two "Refreshing the current request/prompt" the row notes), 2 comments changed, 21 kept below, and 12 code comments about the host left alone. The third changed comment, `AidenChatViewModel.swift:925`, has no quotes, so the search did not match it.
 
-## Kept (18)
+## Kept (21)
 
 | Where | String | Decision |
 | --- | --- | --- |
@@ -129,6 +127,9 @@ The 94 rows are 89 copy strings, 2 `Info.plist` permission prompts, and 3 commen
 | `Features/Simulators/AidenSimulatorViewer.swift:187` | Device tools update with Aiden on your Mac. | Keep: simulators |
 | `Features/Simulators/AidenSimulatorViewer.swift:336` | On your Mac (device section) | Keep: simulators |
 | `Features/Remote/AidenProductShellView.swift:251` | …allow it on your Mac. (coachmark detail) | Keep: old-shell coachmark, deleted in Task 35 |
+| `Features/Remote/AidenWorkspaceShellView.swift:523` | Can’t Reach Your Mac | Keep: old shell only (built from `AidenProductShellView` with the flag off), deleted in Task 35. The new shell says "Can’t reach your machine" (`AidenInboxTabView.swift`). |
+| `Features/Remote/AidenWorkspaceShellView.swift:559` | Waiting for your Mac… | Keep: old shell only, deleted in Task 35. The new shell's copy is in `AidenNewChatFlow.swift`. |
+| `Features/Remote/AidenWorkspaceShellView.swift:580` | Your Mac isn’t reachable right now. Try again once it’s connected. | Keep: old shell only, deleted in Task 35. The new shell's copy is in `AidenNewChatFlow.swift`. |
 | `Features/Remote/Demo/AidenDemoHosts.swift:411, 418, 429, 431, 441` | Studio Mac | Keep: demo machine name (5 lines, counted as 5) |
 | `Features/Remote/Demo/AidenDemoHosts.swift:862` | Can use your Mac, shell, enabled connections, and skills. | Keep: stands in for text the host sends |
 | `Features/Remote/Demo/AidenDemoHosts.swift:896` | The Mac does not serve that path. | Keep: stands in for a host error message |
@@ -144,6 +145,14 @@ Sentence case on the three screens Task 33 tokenised. "Read Aloud" stays as the 
 | `Features/Conversation/AidenComposerSession.swift:57` | …speech model in App Settings… | …speech model in App settings… (names the page) |
 | `Features/Workspace/AidenUsageView.swift` | Usage Unavailable, Usage Couldn't Load, Try Again, Your Activity | Usage unavailable, Usage couldn't load, Try again, Your activity |
 | `Features/Remote/AidenScheduledTasksView.swift` | Scheduled Tasks (title and alert), Schedule Access Required (2), No Scheduled Tasks, Create Manually, Run Now (2), Run History, Task Removed, Connector List Required, Refresh Scheduled Tasks…, Preview Next Runs, Unattended Access, Schedule Write Access Required (3), New Task, Edit Task, Final Review, Review Task, Task Settings | Same words in sentence case |
+
+Three "desktop" strings sat next to new "machine" copy in the same section, so they changed too (review M3). The wider "desktop" wording is parked for its own decision list.
+
+| Where | Before | After |
+| --- | --- | --- |
+| `Config/AidenVoiceInput.swift:10` (Settings, Voice input picker) | Paired desktop | Paired machine |
+| `Features/Workspace/AidenAppSettingsView.swift:79` | Connected desktop | Connected machine |
+| `Features/Workspace/AidenUsageView.swift` privacy note | …recorded by Aiden Agent on your desktop. | …recorded by Aiden Agent on your machine. |
 
 `Paired Installations` in Settings is left as it is. It shows only with the flag off, and `AidenMachineDetailTests` pins it there.
 

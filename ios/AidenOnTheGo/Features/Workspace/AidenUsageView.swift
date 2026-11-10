@@ -471,7 +471,7 @@ struct AidenUsageView: View {
                 .foregroundStyle(palette.accent)
                 .frame(width: 28)
 
-            Text("Privacy-safe aggregates are recorded by Aiden Agent on your desktop. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.")
+            Text("Privacy-safe aggregates are recorded by Aiden Agent on your machine. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.")
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
                 .fixedSize(horizontal: false, vertical: true)

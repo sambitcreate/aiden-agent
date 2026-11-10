@@ -869,7 +869,9 @@ func aidenBotWaitForConnection(_ coordinator: AidenRemoteCoordinator, hold: Dura
 }
 
 
-/// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android.
+/// Copy shared with the desktop page (`bot-chat-activity-page.tsx`) and Android, except
+/// that iOS says "machine" where they say "Mac", until the Android decision
+/// (spec section 11).
 enum AidenBotChatActivityCopy {
     static let title = "Chat activity"
     static let levelTitle = "How much to show"

@@ -1202,7 +1202,7 @@ final class AidenChatViewModel {
             if await coordinator.handleCredentialRevocation(error, context: context) { return false }
             guard !isRemoved, coordinator.isLive(context) else { return false }
             if isProgressAccessDenied(error) {
-                presentedError = String(localized: "This device can no longer stop agents on this machine.")
+                presentedError = String(localized: "This device can no longer stop agents on your machine.")
             } else {
                 presentedError = String(localized: "Stop was not confirmed. Check the agent before trying again.")
             }

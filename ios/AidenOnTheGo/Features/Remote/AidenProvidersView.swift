@@ -30,7 +30,7 @@ struct AidenProvidersView: View {
             Section {
                 Button("Add provider", systemImage: "plus") { showingCreation = true }
                     .disabled(!canCreate)
-                if !canCreate { Text("Connect to an updated machine with permission to manage workspaces to add providers.").font(.footnote).foregroundStyle(.secondary) }
+                if !canCreate { Text("To add providers, connect to a machine running an updated Aiden Agent, with permission to manage workspaces.").font(.footnote).foregroundStyle(.secondary) }
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
                 Button("Refresh providers") { Task { await load() } }
             }

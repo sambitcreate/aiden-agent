@@ -1,4 +1,7 @@
 import CoreHaptics
+#if DEBUG
+import os
+#endif
 import Observation
 import SwiftUI
 import UIKit
@@ -401,14 +404,15 @@ extension AidenPalette {
 
     #if DEBUG
     /// How many status colours have been worked out, so a test can tell a read
-    /// from a resolve.
-    nonisolated(unsafe) static var statusTextResolutionCount = 0
+    /// from a resolve. Locked, since the first palette can be made off the main thread.
+    private static let statusTextResolutions = OSAllocatedUnfairLock(initialState: 0)
+    static var statusTextResolutionCount: Int { statusTextResolutions.withLock { $0 } }
     #endif
 
     /// `grounds` is the canvas then the raised surface.
     fileprivate static func textSafeHex(_ statusHex: String, on grounds: [String]) -> String {
         #if DEBUG
-        statusTextResolutionCount += 1
+        statusTextResolutions.withLock { $0 += 1 }
         #endif
         func passes(_ hex: String) -> Bool {
             grounds.allSatisfy { Color.contrastRatio(hex, $0) >= Self.minimumTextContrast }
