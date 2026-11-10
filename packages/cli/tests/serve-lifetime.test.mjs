@@ -181,6 +181,23 @@ test("the control socket answers one framed request per connection and refuses m
   assert.deepEqual(JSON.parse(await exchange(box.socket, status)), { result: { remote: { on: false } } }, "the server is still healthy");
 });
 
+test("the running daemon answers hook commands over its control socket", posix, async (t) => {
+  const box = sandbox(t), controller = new AbortController(), ready = Promise.withResolvers();
+  const serving = api.serve(box.agentDir, controller.signal, { onReady: ready.resolve });
+  void serving.catch(ready.reject);
+  await ready.promise;
+  t.after(async () => { controller.abort(); await serving; });
+  mkdirSync(join(box.agentDir, ".aiden"));
+  writeFileSync(join(box.agentDir, ".aiden", "hooks.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "true" }] }] } }));
+  await api.remoteDaemonCommand(box.agentDir, "workspace", ["add", box.agentDir]);
+  const listed = await api.remoteDaemonCommand(box.agentDir, "hooks", ["list"]);
+  assert.equal(listed.hooks.length, 1);
+  assert.equal(listed.hooks[0].status, "waiting-for-approval");
+  const approved = await api.hooksAdminCommand(box.agentDir, ["approve", listed.hooks[0].id, listed.hooks[0].digest], { isInteractive: () => true });
+  assert.equal(approved.status, "active");
+  await assert.rejects(api.remoteDaemonCommand(box.agentDir, "hooks", ["nonsense"]), /usage|Usage/u);
+});
+
 test("shutdown keeps the lease until a running control command has answered", posix, async (t) => {
   const box = sandbox(t), controller = new AbortController(), ready = Promise.withResolvers();
   const serving = api.serve(box.agentDir, controller.signal, { onReady: ready.resolve });

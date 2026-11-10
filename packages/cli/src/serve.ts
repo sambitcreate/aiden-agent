@@ -11,6 +11,7 @@ import { workspaceCommand } from "./workspaces.ts";
 import { createCliWorkspaceApplication } from "./workspace-application.ts";
 import { createCliBots } from "./bots.ts";
 import { createCliRemote } from "./remote.ts";
+import { hooksCommand, startCliHooks, stopCliHooks } from "./hooks.ts";
 import { ServeLifetime } from "./serve-lifetime.ts";
 
 type CliRemote = Awaited<ReturnType<typeof createCliRemote>>;
@@ -40,6 +41,8 @@ export async function serve(agentDir: string, signal: AbortSignal, options: { re
   try { await serveOwned(agentDir, signal, options); } finally { stopRecording(); release(); }
 }
 async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void }) {
+  // Hooks first, so every surface below already sees the person's approved hooks.
+  const hooks = await startCliHooks(agentDir);
   const runtime = createCliScheduler(agentDir);
   const chats = createDaemonChats(agentDir);
   chats.assertChatDeletionsReadable();
@@ -83,9 +86,10 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
         try {
           if (!lifetime.acceptsCommands) throw new Error("The Aiden daemon is shutting down.");
           const request = JSON.parse(buffer.slice(0, end));
-          if (!["schedule", "remote", "bots", "workspace", "serve"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
+          if (!["schedule", "remote", "bots", "workspace", "serve", "hooks"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
+          if (request.command === "hooks" && !hooks) throw new Error("Hooks are off on this server: they run only on macOS and Linux, and the hook store must be readable.");
           if (request.command === "remote" && !remote) throw new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls.");
-          const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);
+          const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "hooks" ? await hooksCommand(agentDir, hooks!, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);
           await reply({ result });
         } catch (error) { await reply({ error: error instanceof Error ? error.message : String(error) }); }
       })());
@@ -128,6 +132,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     for (const client of clients) client.destroy();
     await closed;
     rmSync(path, { force: true });
+    await stopCliHooks(hooks).catch((error: unknown) => process.stderr.write(`aiden: Could not save hook state: ${String(error)}\n`));
     for (const result of settled) if (result.status === "rejected") process.stderr.write(`aiden: Daemon shutdown cleanup failed: ${String(result.reason)}\n`);
   }
 }

@@ -250,6 +250,8 @@ export interface GitHubRepositoryStatus {
   /** Epoch ms when a "rate-limited" read may be retried. */
   retryAt?: number;
   repository?: GitHubRepositoryRef;
+  /** The branch name the checked-out branch pushes to; absent for an explicit repository. */
+  headBranch?: string;
 }
 
 export interface GitHubPullRequestCreateInput {
@@ -381,6 +383,8 @@ export interface ChatMessage {
   notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
   /** User messages Aiden Live sent for the person ("By voice"); display-only. */
   inputSource?: import("../../renderer/shared/chat-input-source.js").ChatInputSourceV1;
+  /** Set when a UserPromptSubmit hook blocked this user message; it never reaches a model. */
+  hookBlocked?: import("./hook-blocked-prompt.js").HookBlockedPromptV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Content-free turn duration and provider-reported token totals for the footer. */

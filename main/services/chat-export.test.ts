@@ -114,6 +114,17 @@ test("renderer-facing export failures never reveal the main-owned save path", as
   );
 });
 
+test("suggested export filenames are capped by bytes, not characters, so they always save", () => {
+  const name = safeExportFileName("进".repeat(80));
+  assert.ok(name.startsWith("进"));
+  assert.ok(name.endsWith(".aiden-chat.json"));
+  // 50 whole three-byte characters fit the 150-byte base name.
+  assert.equal(name, `${"进".repeat(50)}.aiden-chat.json`);
+  // Never a split character.
+  assert.equal(safeExportFileName(`${"a".repeat(149)}😀`), `${"a".repeat(149)}.aiden-chat.json`);
+  assert.equal(safeExportFileName("", { fallback: "Aiden page", extension: ".aiden-page.json" }), "Aiden page.aiden-page.json");
+});
+
 test("suggested export filenames stay visible for dotfile and normalized-dot titles", () => {
   for (const [title, expected] of [
     [".env setup", "env setup.aiden-chat.json"],

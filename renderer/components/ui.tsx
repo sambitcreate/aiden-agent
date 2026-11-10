@@ -1648,6 +1648,8 @@ type DialogProps = React.PropsWithChildren<{
   description?: React.ReactNode;
   confirmLabel?: string;
   confirmDisabled?: boolean;
+  /** Id of the text that says why confirm is off, read with the button. */
+  confirmDescribedBy?: string;
   confirmHidden?: boolean;
   cancelRef?: React.RefObject<HTMLButtonElement | null>;
   dismissDisabled?: boolean;
@@ -1683,6 +1685,7 @@ export function Dialog({
   description,
   confirmLabel = "Done",
   confirmDisabled,
+  confirmDescribedBy,
   confirmHidden,
   cancelRef,
   dismissDisabled,
@@ -1800,6 +1803,7 @@ export function Dialog({
                 variant="accent"
                 className={actionClassName}
                 disabled={confirmDisabled || busy}
+                aria-describedby={confirmDescribedBy}
                 onClick={() => void onConfirm?.()}
               >
                 {confirmLabel}
@@ -1824,9 +1828,9 @@ export function AlertDialog({
   returnFocus,
   onConfirm,
   layer = "default",
+  children,
 }: Omit<
   DialogProps,
-  | "children"
   | "size"
   | "confirmDisabled"
   | "confirmHidden"
@@ -1897,6 +1901,9 @@ export function AlertDialog({
             <AlertDialogPrimitive.Description asChild>
               <div className="mt-2 text-regular text-secondary">{description}</div>
             </AlertDialogPrimitive.Description>
+          ) : null}
+          {children ? (
+            <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
           ) : null}
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialogPrimitive.Cancel asChild>

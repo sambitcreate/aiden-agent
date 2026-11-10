@@ -17,6 +17,7 @@ import { registerWorkspaceArtifactHandlers } from "./workspace-artifacts.js";
 import { configStore } from "../services/config-store.js";
 import {
   notifyWorkspaceArtifactsChanged,
+  workspaceArtifactFiles,
   workspaceArtifactRunner,
   workspaceArtifactStore,
 } from "../services/workspace-artifacts/main.js";
@@ -40,6 +41,10 @@ import { registerImageGenerationHandlers } from "./image-generation.js";
 import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerUsageLimitHandlers } from "./usage-limits.js";
 import { registerSpendingHandlers } from "./spending.js";
+import { registerHookHandlers } from "./hooks.js";
+import { getHookService } from "../services/hooks/hook-service-main.js";
+import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
+import { HOOKS_CHANGED_CHANNEL } from "../../renderer/shared/hooks-settings.js";
 import { registerAnalyticsHandlers } from "./analytics.js";
 import { analyticsService } from "../services/analytics/analytics-main.js";
 import { registerDictationHandlers } from "./dictation.js";
@@ -58,6 +63,7 @@ import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerBotComputerHandlers } from "./bot-computers.js";
 import { botComputerHandlerDependencies } from "../services/bot-computers/bot-computers-main.js";
 import { registerDiagnosticHandlers } from "./diagnostics.js";
+import { registerStorageHandlers } from "./storage.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { registerBtwHandlers } from "./btw.js";
 import { registerFollowThroughHandlers } from "./follow-through.js";
@@ -100,6 +106,11 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
     store: workspaceArtifactStore,
     workspaceExists: async (id) => Boolean(await configStore.getWorkspace(id)),
     notify: notifyWorkspaceArtifactsChanged,
+    files: workspaceArtifactFiles,
+    owner: (event) => {
+      const owner = rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Artifacts need the active window."));
+      return `${owner.id}:${owner.documentId}`;
+    },
     runner: workspaceArtifactRunner,
     runInWorkspace: (event, workspaceId, operation) =>
       workspaceEnvironmentApplicationService.run(
@@ -137,6 +148,20 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     spending,
   });
+  registerHookHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    service: getHookService,
+    workspaces: async () =>
+      (await workspaceApplicationService.list()).flatMap((workspace) =>
+        workspace.folderPath && !workspace.noWorkspace ? [{ workspaceRoot: workspace.folderPath, name: workspace.name }] : [],
+      ),
+    broadcast: (change) => ipcMain.broadcast(HOOKS_CHANGED_CHANNEL, change),
+    requireSender: (event) => {
+      const inactive = () => new Error("Hooks settings need the active window.");
+      if (!isMainWindow(event as IpcMainInvokeEvent)) throw inactive();
+      rendererDocumentOwner(event as IpcMainInvokeEvent, inactive);
+    },
+  });
   registerAnalyticsHandlers<IpcMainInvokeEvent>({
     owner: (event) => {
       const inactive = () => new Error("Usage data changes require the active application document.");
@@ -164,6 +189,7 @@ export function registerHandlers(isMainWindow: (event: IpcMainInvokeEvent) => bo
   registerBtwHandlers();
   registerFollowThroughHandlers();
   registerTtsHandlers();
+  registerStorageHandlers();
   registerDeviceHandlers();
   registerCreateImagesIpc();
   registerDesignCanvasIpc();

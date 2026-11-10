@@ -405,6 +405,32 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
     }
   }
 
+  /**
+   * Erase every workspace's scrollback. Each pending entry is dropped before its
+   * in-flight write settles, so a debounced write from the old state can neither
+   * run nor be scheduled again, and no later flush recreates what was removed.
+   */
+  async clearAll(): Promise<void> {
+    const states = [...this.pending.values()];
+    this.pending.clear();
+    for (const state of states) state.cancel();
+    await Promise.all(states.map((state) => state.writeInFlight));
+    let names: string[];
+    try {
+      names = await fs.readdir(this.options.logsDir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!name.endsWith(".log")) continue;
+      try {
+        await fs.unlink(path.join(this.options.logsDir, name));
+      } catch {
+        // A file that vanished concurrently is already gone.
+      }
+    }
+  }
+
   private scheduleDebouncedWrite(workspaceId: string): void {
     const state = this.pending.get(workspaceId);
     if (!state || state.writeScheduled) return;

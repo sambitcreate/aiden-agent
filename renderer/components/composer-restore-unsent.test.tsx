@@ -5,9 +5,9 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Composer } from "./composer";
-import { TooltipProvider } from "./ui";
+import { Toaster, TooltipProvider } from "./ui";
 import { CommandSystemProvider } from "../lib/command-system";
-import { restoreUnsentMessage, takeComposerAttachmentSeed } from "../lib/composer-draft-store";
+import { restoreUnsentMessage, stageComposerText, takeComposerAttachmentSeed } from "../lib/composer-draft-store";
 import type { Attachment, Chat, Workspace } from "../lib/types";
 
 // A cancelled worktree send hands its message back to the draft. The real
@@ -101,6 +101,25 @@ test("an open composer takes back both the text and the attachments of a cancell
   assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).readOnly, false, "cancelling unfreezes it");
   assert.ok(screen.queryAllByText("notes.txt").length > 0, "the attachment is back in the composer");
   assert.equal(takeComposerAttachmentSeed(DRAFT.id), undefined, "nothing is left waiting for a later mount");
+});
+
+test("staged text says a visual added it unless the stager asks for no notice", async () => {
+  render(
+    <>
+      <Harness saving={false} />
+      <Toaster />
+    </>,
+  );
+  await settle();
+  // The person's own New page or Ask Aiden action: the text arrives quietly.
+  await act(async () => stageComposerText(DRAFT.id, "Make a page", { notice: null }));
+  await settle();
+  assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "Make a page");
+  assert.equal(screen.queryByText("A visual added a follow-up to your draft."), null);
+  // A visual's follow-up keeps telling the person where it went.
+  await act(async () => stageComposerText(DRAFT.id, "Drill into EMEA"));
+  await screen.findByText("A visual added a follow-up to your draft.");
+  assert.equal((screen.getByRole("textbox") as HTMLTextAreaElement).value, "Make a page\n\nDrill into EMEA");
 });
 
 test("with no composer open, the message waits for the next one", async () => {

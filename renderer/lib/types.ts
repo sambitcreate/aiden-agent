@@ -668,6 +668,8 @@ export interface ChatMessage {
   notice?: import("../shared/agent-notices").AgentNoticeV1;
   /** Aiden Live sent this user message for the person ("By voice"). */
   inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
+  /** Set when a UserPromptSubmit hook refused this message; it never reached a model. */
+  hookBlocked?: { reason: string };
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;

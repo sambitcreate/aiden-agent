@@ -493,9 +493,10 @@ export function Composer({
   }, [chatId]);
   React.useEffect(
     () =>
-      subscribeStagedComposerText(chatId, (staged) => {
+      subscribeStagedComposerText(chatId, (staged, { notice }) => {
         setText((current) => mergeRestoredGuidance(current, [staged]));
-        toast.info("A visual added a follow-up to your draft.");
+        const message = notice === undefined ? "A visual added a follow-up to your draft." : notice;
+        if (message) toast.info(message);
       }),
     [chatId, setText],
   );

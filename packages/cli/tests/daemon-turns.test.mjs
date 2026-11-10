@@ -41,7 +41,15 @@ const hangAfter = (text) => (response) => { response.write(chunk({ role: "assist
 /** A refusal the session does not retry. */
 const reject = (response) => { response.writeHead(400, { "content-type": "application/json" }); response.end(JSON.stringify({ error: { message: "Rejected" } })); };
 
-async function fixture(t, { access = "full" } = {}) {
+/** Writes a workspace hook file and approves each hook, as the person would at a terminal. */
+async function startHooks(dir, hooks) {
+  mkdirSync(join(dir, ".aiden"), { recursive: true });
+  writeFileSync(join(dir, ".aiden", "hooks.json"), JSON.stringify({ hooks }));
+  for (const { id, digest } of (await api.hooksAdminCommand(dir, ["list"])).hooks) await api.hooksAdminCommand(dir, ["approve", id, digest], { isInteractive: () => true });
+  return api.startCliHooks(dir);
+}
+
+async function fixture(t, { access = "full", hooks } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-turns-"));
   const steps = [], requests = [];
   const server = createServer(async (request, response) => {
@@ -56,9 +64,11 @@ async function fixture(t, { access = "full" } = {}) {
     models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
   const workspace = await api.workspaceCommand(dir, ["add", dir]);
   await api.workspaceCommand(dir, ["access", workspace.id, access]);
+  const hookService = hooks ? await startHooks(dir, hooks) : undefined;
   const daemon = api.createDaemonChats(dir);
   t.after(async () => {
     await daemon.stop();
+    if (hooks) await api.stopCliHooks(hookService);
     server.closeAllConnections(); server.close();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -733,4 +743,75 @@ test("generated event orders keep one holder per chat, capacity, and honest idle
     for (const [chat, lease] of leases) { lease.value.settleAsyncWork(); lease.value.release(); assert.equal(owner.isBusy(chat), false); }
     for (const [chat, run] of runs) { owner.release(chat, run); run.settle(); }
   }
+});
+
+const posix = { skip: process.platform === "win32" };
+const commandHook = (command, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: "command", command }] }];
+const answer = (value) => `printf '%s' '${JSON.stringify(value)}'`;
+const askBeforeListing = { PreToolUse: commandHook(answer({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "Listing needs a look." } }), "LS") };
+/** Holds back the first finish of a turn and lets the continued one end. */
+const keepGoingOnce = { Stop: commandHook(`grep -q '"stop_hook_active":false' && ${answer({ decision: "block", reason: "Run the tests first." })} || true`) };
+
+test("a hook's ask reaches the phone on a full-access chat, and the person's answer decides", posix, async (t) => {
+  const f = await fixture(t, { hooks: askBeforeListing });
+  writeFileSync(join(f.dir, "visible.txt"), "x");
+  const denied = await awaitingApproval(f, "hook-deny");
+  assert.match(denied.approval.summary, /Listing needs a look\./u);
+  assert.match(denied.approval.summary, /List folder: \./u, "the person still sees what would run");
+  assert.equal(f.daemon.llmClient.approve(denied.approval.approvalId, "deny", denied.owner.documentId), true);
+  await f.daemon.llmClient.waitForChatIdle("hook-deny");
+  assert.doesNotMatch(toolResultSeen(f.requests[1]), /visible\.txt/u);
+  const allowed = await awaitingApproval(f, "hook-allow");
+  assert.equal(f.daemon.llmClient.approve(allowed.approval.approvalId, "allow", allowed.owner.documentId), true);
+  await f.daemon.llmClient.waitForChatIdle("hook-allow");
+  assert.match(toolResultSeen(f.requests.at(-1)), /visible\.txt/u);
+});
+
+test("a long hook reason can't push the end of the tool request out of the phone's summary", posix, async (t) => {
+  const reason = "r".repeat(600), path = `${"a".repeat(1_650)}-tail`;
+  const f = await fixture(t, { hooks: { PreToolUse: commandHook(answer({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }), "LS") } });
+  const { approval } = await awaitingApproval(f, "hook-long", { args: { path } });
+  const shownOnPhone = approval.summary.slice(0, 2_000); // Remote's limit on an approval summary.
+  assert.ok(shownOnPhone.includes(path), "the whole request is shown");
+  assert.match(shownOnPhone, /rrr/u, "and so is the start of the reason");
+  assert.equal(f.daemon.llmClient.approveAsHost(approval.approvalId, "deny"), true);
+  await f.daemon.llmClient.waitForChatIdle("hook-long");
+});
+
+test("a hook's ask on a turn nobody attends is refused without a prompt", posix, async (t) => {
+  const f = await fixture(t, { hooks: askBeforeListing });
+  writeFileSync(join(f.dir, "visible.txt"), "x");
+  f.steps.push(callTool("ls", { path: "." }), reply("Finished"));
+  const { owner } = await beginTurn(f, "hook-unattended", { usageSource: "scheduled" });
+  await f.daemon.llmClient.waitForChatIdle("hook-unattended");
+  assert.equal(owner.of("chat:approval").length, 0);
+  const seen = toolResultSeen(f.requests[1]);
+  assert.doesNotMatch(seen, /visible\.txt/u);
+  assert.match(seen, /No one is here to approve it/u);
+});
+
+test("a Stop hook keeps the turn going once, and the chat saves one answer", posix, async (t) => {
+  const f = await fixture(t, { hooks: keepGoingOnce });
+  f.steps.push(reply("First"), reply("Second"));
+  const { owner } = await beginTurn(f, "hook-continue");
+  await f.daemon.llmClient.waitForChatIdle("hook-continue");
+  assert.equal(f.requests.length, 2);
+  assert.match(JSON.stringify(f.requests[1].messages), /Run the tests first\./u);
+  assert.equal(owner.of("chat:done").length, 1);
+  assert.equal((await assistantMessages(f.daemon, "hook-continue")).length, 1);
+  assertSessionReleased(f.daemon, "hook-continue");
+});
+
+test("a stop while a Stop hook runs ends the turn instead of continuing it", posix, async (t) => {
+  const marker = join(mkdtempSync(join(tmpdir(), "aiden-hook-marker-")), "started");
+  t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
+  const f = await fixture(t, { hooks: { Stop: commandHook(`touch '${marker}'; sleep 30; ${answer({ decision: "block", reason: "Keep going." })}`) } });
+  f.steps.push(reply("First"));
+  const { owner } = await beginTurn(f, "hook-stop");
+  await until(() => existsSync(marker), "the Stop hook");
+  await f.daemon.llmClient.cancelChat("hook-stop", "user_stop");
+  await until(() => !f.daemon.llmClient.isChatBusy("hook-stop"), "the stop, well before the hook's own 30 seconds");
+  assert.equal(f.requests.length, 1, "the stopped turn never asks the provider again");
+  assert.equal(owner.of("chat:error")[0]?.cancelled, true);
+  assertSessionReleased(f.daemon, "hook-stop");
 });

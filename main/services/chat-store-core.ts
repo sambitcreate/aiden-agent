@@ -39,6 +39,7 @@ import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { boundedHookBlockedReason, hookBlockedField } from "./hook-blocked-prompt.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { CHAT_IMAGES_DIRECTORY, createChatImageStore, rememberImageHash, type ChatImageStore } from "./chat-image-store.js";
 import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
@@ -972,6 +973,8 @@ export function createChatStore(
           message.role === "user"
             ? parseChatInputSource(message.inputSource)
             : undefined,
+        // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
+        ...hookBlockedField(message),
       };
     });
     if (policy !== "pure") {
@@ -1843,6 +1846,7 @@ export function createChatStore(
               message.role === "user"
                 ? parseChatInputSource(message.inputSource)
                 : undefined,
+            ...hookBlockedField(message),
             providerFailure:
               message.role === "assistant"
                 ? parseProviderFailureV1(message.providerFailure)
@@ -2087,6 +2091,31 @@ export function createChatStore(
     },
 
     /**
+     * Mark a user message as blocked by a UserPromptSubmit hook (reason set)
+     * or clear that mark (reason undefined). A blocked prompt stays visible but
+     * is excluded from every model projection. Returns whether it changed.
+     */
+    async setPromptHookBlock(
+      chatId: string,
+      messageId: string,
+      reason: string | undefined,
+    ): Promise<boolean> {
+      return shared([chatId], true, async () => {
+        const chat = await readChat(chatId, "owner");
+        const message = chat?.messages.find((candidate) => candidate.id === messageId && candidate.role === "user");
+        if (!chat || !message) return false;
+        if (reason === undefined) {
+          if (!message.hookBlocked) return false;
+          delete message.hookBlocked;
+        } else {
+          message.hookBlocked = { reason: boundedHookBlockedReason(reason) };
+        }
+        await writeChatAndMeta(chat);
+        return true;
+      });
+    },
+
+    /**
      * Attach offscreen snapshots of a message's visuals as reserved image
      * attachments. A newer snapshot of the same visual replaces the older one;
      * snapshots that would exceed the per-message attachment limits are
@@ -2222,6 +2251,12 @@ export function createChatStore(
         isCurrent?: () => boolean;
         /** Renderer-authored appends refuse feature-owned (Design Studio) conversations. */
         rejectFeatureOwned?: boolean;
+        /**
+         * Host-only: a user message a UserPromptSubmit hook refused, saved
+         * with its blocked mark in this same write. Never read from the
+         * message itself, so a renderer append can't set it.
+         */
+        hookBlockedReason?: string;
       },
     ): Promise<Chat> {
       return withImageData(await shared([id], true, async () => {
@@ -2305,6 +2340,9 @@ export function createChatStore(
               ? parseSubagentMessageReferenceV1(message.subagents)
               : undefined,
           createdAt: message.createdAt ?? Date.now(),
+          ...(message.role === "user" && meta?.hookBlockedReason !== undefined
+            ? { hookBlocked: { reason: boundedHookBlockedReason(meta.hookBlockedReason) } }
+            : {}),
         };
         const isFirstUserMessage =
           full.role === "user" &&

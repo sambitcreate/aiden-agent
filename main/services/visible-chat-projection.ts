@@ -10,6 +10,7 @@ import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseAgentNoticeV1, type AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
+import { hookBlockedField, type HookBlockedPromptV1 } from "./hook-blocked-prompt.js";
 import {
   parseChatInputSource,
   type ChatInputSourceV1,
@@ -51,6 +52,8 @@ export interface VisibleChatMessage {
   notice?: AgentNoticeV1;
   /** Aiden Live sent this user message for the person ("By voice"). */
   inputSource?: ChatInputSourceV1;
+  /** A UserPromptSubmit hook blocked this prompt; copies keep it out of every model's context. */
+  hookBlocked?: HookBlockedPromptV1;
   providerFailure?: ProviderFailureV1;
 }
 
@@ -222,6 +225,7 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
       message.role === "user"
         ? parseChatInputSource(message.inputSource)
         : undefined,
+    ...hookBlockedField(message),
     providerFailure:
       message.role === "assistant"
         ? parseProviderFailureV1(message.providerFailure)

@@ -54,6 +54,7 @@ export const ON_DEMAND_TOOL_NAMES: ReadonlySet<string> = new Set([
   "device_close",
   "inspect_image",
   "routines",
+  "hooks",
   "design_mode",
 ]);
 
