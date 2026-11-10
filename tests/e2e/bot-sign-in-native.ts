@@ -205,7 +205,7 @@ void app.whenReady().then(async () => {
   const botSees = await call("browser_snapshot", { tabId: heldTab.id });
 
   // 5. The person's own browser never got the Bot's sign-in.
-  const personTab = (await user(PERSON_WORKSPACE, { action: "create", show: false })).tabId!;
+  const personTab = (await user(PERSON_WORKSPACE, { action: "create", show: true })).tabId!;
   await user(PERSON_WORKSPACE, { action: "present", tabId: personTab, visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 } });
   await user(PERSON_WORKSPACE, { action: "navigate", tabId: personTab, url: `https://${SITE}/whoami`, readiness: "load" });
   await new Promise((resolve) => setTimeout(resolve, 200));

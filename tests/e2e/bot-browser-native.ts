@@ -157,7 +157,7 @@ void app.whenReady().then(async () => {
   const navigate = (workspaceId: string, tabId: string, url: string) =>
     user(workspaceId, { action: "navigate", tabId, url, readiness: "load" });
   const opened = async (workspaceId: string, url: string): Promise<string> => {
-    const result: BrowserCommandResult = await user(workspaceId, { action: "create", show: false });
+    const result: BrowserCommandResult = await user(workspaceId, { action: "create", show: true });
     assert.ok(result.tabId);
     await user(workspaceId, { action: "present", tabId: result.tabId, visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 } });
     await navigate(workspaceId, result.tabId, url);

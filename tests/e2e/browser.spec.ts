@@ -6,6 +6,8 @@ import type { Page } from "@playwright/test";
 import type { BrowserCommand, BrowserCommandResult, BrowserState } from "../../renderer/shared/browser";
 import { E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test } from "./fixtures";
 
+import { observeNextBrowserMenu } from "./browser-native-menu";
+
 test.use({ workspaceSeed: true });
 type BrowserTestWindow = Window & { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } };
 
@@ -185,10 +187,6 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     expect((await state(page)).tabs.some(tab => tab.id === tabId)).toBe(true);
     await surface.getByRole("tablist", { name: "Environment views" }).getByRole("tab", { name: "Browser fixture", exact: true }).click();
     await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
-    await surface.getByRole("button", { name: "Browser menu" }).click();
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
-    await page.keyboard.press("Escape");
-    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("browser-light.png") });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
@@ -256,6 +254,57 @@ test("browser user and automation share a sandboxed page, annotations and isolat
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+for (const button of ["Browser menu", "Choose browser profile", "Open tabs"]) {
+  test(`${button} stays above the live responsive browser page`, async ({ aiden }) => {
+    const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
+    const name = "Animated browser fixture";
+    await writeFile(path.join(aiden.workspaceDir, "canvas.html"), `<!doctype html><title>${name}</title>
+      <canvas width="80" height="80"></canvas><script>
+        const ctx = document.querySelector('canvas').getContext('2d');
+        let frames = 0;
+        function draw() { ctx.fillStyle = 'hsl(' + ++frames % 360 + ' 100% 50%)'; ctx.fillRect(0, 0, 80, 80); requestAnimationFrame(draw); }
+        draw();
+      </script>`);
+    const tabId = (await command(page, { action: "open_file", path: "canvas.html" })).tabId!;
+    await command(page, { action: "viewport", tabId, viewport: { mode: "responsive", width: 1280, height: 720 } });
+    const surface = page.getByRole("complementary", { name: "Environment work surface" });
+    await expect.poll(async () => (await state(page)).tabs.find(tab => tab.id === tabId)?.visible).toBe(true);
+
+    // The guest itself must remain attached, visible and painting while the actual OS popup is up.
+    const paintedFrame = () => app.evaluate(async ({ BrowserWindow }, title) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        for (const view of window.contentView.children) {
+          if (!view.getVisible() || !("webContents" in view)) continue;
+          const guest = (view as Electron.WebContentsView).webContents;
+          if (guest.getTitle() === title) return await guest.executeJavaScript("document.visibilityState === 'visible' ? frames : 0") as number;
+        }
+      }
+      return 0;
+    }, name);
+    const menu = await observeNextBrowserMenu(app);
+    const trigger = surface.getByRole("button", { name: button, exact: true });
+    await trigger.focus();
+    await trigger.press("ArrowDown");
+    await menu.waitForOpen();
+    const first = await paintedFrame();
+    expect(first).toBeGreaterThan(0);
+    await expect.poll(paintedFrame).toBeGreaterThan(first);
+    await menu.close(button === "Browser menu" ? "Zoom in" : undefined);
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(trigger).toBeFocused();
+    if (button !== "Browser menu") return;
+    expect((await state(page)).tabs.find(tab => tab.id === tabId)?.zoom).toBe(1.1);
+    const replacement = (await command(page, { action: "create" })).tabId!;
+    const stale = await command(page, { action: "present", tabId, visible: true, bounds: { x: 10, y: 10, width: 200, height: 200 } });
+    expect(stale.state.activeTabId).toBe(replacement);
+    expect(stale.state.tabs.find(tab => tab.id === tabId)?.visible).toBe(false);
+    expect(await paintedFrame()).toBe(0);
+    await command(page, { action: "select", tabId });
+    await expect.poll(paintedFrame).toBeGreaterThan(0);
+  });
+}
 
 test("workspace documents and app links open in the shared browser", async ({ aiden }) => {
   const { page } = aiden;
@@ -562,8 +611,10 @@ test("deleting a browser profile asks first, and a failure shows inside Browser 
     });
   });
 
+  const profileMenu = await observeNextBrowserMenu(app);
   await surface.getByRole("button", { name: "Choose browser profile" }).click();
-  await page.getByRole("menuitem", { name: "Browser settings…" }).click();
+  await profileMenu.waitForOpen();
+  await profileMenu.close("Browser settings…");
   const settings = page.getByRole("dialog", { name: "Browser settings" });
   await settings.getByRole("combobox", { name: "Manage profile" }).selectOption({ label: "Work" });
   const remove = settings.getByRole("button", { name: "Delete Work profile" });
