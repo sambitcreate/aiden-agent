@@ -165,4 +165,17 @@ Settings, Scheduled Tasks and Usage now take spacing and radius from `AidenSpaci
 
 ## Results
 
-Filled in after the full run.
+| Run | Scope | Passed | Skipped | Failed |
+| --- | --- | --- | --- | --- |
+| iOS 27.0, Aiden Lane text sim (Xcode 27.1), at `b074d94b7` | full run, unit | 2,212 | 7 | 2 |
+| same | full run, UI | 45 | 2 | 0 |
+| iOS 27.0, Aiden Lane text sim, at `32844f546` | unit bundle rerun | 2,214 | 7 | 0 |
+
+The two unit failures at `b074d94b7` were pinned strings this task changed, not app faults: `testPhotoLibraryUsageDescriptionCoversPickerAndSaveActions` looked for "paired Mac" in the photo permission prompt, and `AidenBackgroundJobsTests.testTheWordsMatchTheMac` pinned "on your Mac" after job addresses. `32844f546` updates both, and the unit bundle was run again. `npm run test:ios-release`, which includes `scripts/check-ios-shipping-target.test.mjs`, passed 32 of 32.
+
+New tests, each seen failing first (`task-33-red.log`):
+
+- `AidenChatDockTests.testALongQuestionKeepsSkipAndSubmitInsideTheCard`: Skip and Submit were 836 points down a card that ends at 423.
+- `AidenDesignTokenTests.testStatusTextIsResolvedWhenThePaletteIsMadeNotOnEachRead`: 150 reads made 150 resolves.
+- `AidenUnifiedInboxTests.testASearchDropsAMachineWithNoMatchUnderAll`: a machine with no match stayed in the list under All.
+- `AidenNewWorkTargetTests.testThePickerNamesMachinesAsTheInboxDoes`: two machines both read "Studio" in the picker.
