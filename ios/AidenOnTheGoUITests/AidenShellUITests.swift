@@ -1218,6 +1218,43 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// An approval for a chat the person isn't looking at leaves their keyboard
+    /// alone. Here the chat sits under its Bot's profile, still listening, while
+    /// the person types the Bot's name; the approval arrives under the sheet.
+    func testAnApprovalUnderASheetLeavesTheSheetsKeyboardUp() {
+        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoLateBotApproval"])
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        AidenStateMatrix.openArea("Bots", in: app)
+        let bot = botRow(in: app)
+        XCTAssertTrue(bot.waitForExistence(timeout: 10), "No Bot on the Bots tab")
+        hideOverlaySidebar(in: app)
+        bot.tap()
+        let opened = Date()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                .waitForExistence(timeout: 10),
+            "The Bot did not open"
+        )
+        let card = app.staticTexts["Run this command?"]
+        XCTAssertFalse(card.exists, "The approval came too soon to test")
+
+        app.buttons["Scout"].firstMatch.tap()
+        let name = app.textFields["Name"].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "The profile did not open")
+        name.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come up")
+
+        // The approval is due 12 s after the chat first listened.
+        let due = opened.addingTimeInterval(16).timeIntervalSinceNow
+        if due > 0 { Thread.sleep(forTimeInterval: due) }
+        XCTAssertTrue(keyboard.exists, "The approval under the sheet put the profile's keyboard away")
+
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "The approval never came, so the test proved nothing")
+        app.terminate()
+    }
+
     /// With the default machine out of reach, the recovery banner sits above the
     /// tabs, not over their bars, and still opens connection management. The
     /// other machines' chats stay in the Inbox under it.
@@ -1264,6 +1301,58 @@ final class AidenShellUITests: XCTestCase {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: keyboard)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "The keyboard stayed up over the approval")
         AidenStateMatrix.capture("bot-approval-keyboard-away", in: self)
+        app.terminate()
+    }
+
+    /// The same in a workspace chat: its run asks for approval while the person
+    /// types, and the keyboard goes.
+    func testAnApprovalThatArrivesWhileTypingInAChatPutsTheKeyboardAway() {
+        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoLateChatApproval"])
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        hideOverlaySidebar(in: app)
+        chat.tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Where do we stand?")).firstMatch
+                .waitForExistence(timeout: 10),
+            "The chat did not open"
+        )
+        let composer = composer(in: app)
+        let keyboard = app.keyboards.firstMatch
+        let card = app.staticTexts["Run this command?"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5), "The chat has no composer")
+        composer.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard did not come up")
+        XCTAssertFalse(card.exists, "The approval came before the keyboard was up")
+
+        XCTAssertTrue(card.waitForExistence(timeout: 30), "The approval never came")
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: keyboard)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "The keyboard stayed up over the approval")
+        AidenStateMatrix.capture("chat-approval-keyboard-away", in: self)
+        app.terminate()
+    }
+
+    /// Ask About This puts the message in the composer and brings the keyboard
+    /// up to finish the question.
+    func testAskingAboutAMessageBringsTheKeyboardUp() {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        let chat = openInbox(in: app)
+        XCTAssertTrue(chat.waitForExistence(timeout: 10), "No chat rows in the inbox")
+        hideOverlaySidebar(in: app)
+        chat.tap()
+        let message = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Where do we stand?")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 10), "The chat did not open")
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertFalse(keyboard.exists, "The keyboard was up before asking")
+
+        message.press(forDuration: 1.2)
+        let ask = app.buttons["Ask About This"].firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 5), "The message has no Ask About This")
+        ask.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "Asking about the message left the keyboard down")
+        let draft = composer(in: app).value as? String ?? ""
+        XCTAssertTrue(draft.contains("Where do we stand?"), "The message isn't in the composer: \(draft)")
+        clearTheDraft(in: app)
         app.terminate()
     }
 
@@ -1596,9 +1685,11 @@ final class AidenShellUITests: XCTestCase {
             "settings": (13, [contrast, dynamicType]),
             // Re-pinned in Task 35 (`task-35-ipad-shell.log`), from 2: Search now
             // keeps its bar while the field is up (the only way back to the other
-            // tabs), so the field sits under the title, and the system's Clear text
-            // button and three more Dynamic Type findings on no element or on the
-            // unsearched-machines note come with that layout. No new types.
+            // tabs). The two it had stay: the system field's Clear text button and
+            // the unsearched-machines note, a footnote that grows and is pushed under
+            // the keyboard (the compact rule's "below the screen"). The three new
+            // ones are Dynamic Type on no element, which came with the bar and its
+            // system controls. No new types.
             "search": (5, [hitRegion, dynamicType]),
         ]
     }()
@@ -1891,9 +1982,17 @@ final class AidenShellUITests: XCTestCase {
         for _ in 0..<4 where accessory.exists && row.frame.maxY > accessory.frame.minY {
             dragResults(in: app, from: 0.6, to: 0.4)
         }
+        if accessory.exists {
+            XCTAssertLessThanOrEqual(row.frame.maxY, accessory.frame.minY, "The long chat's row is still under the running accessory")
+        }
         hideOverlaySidebar(in: app)
         row.tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+        let title = "Rename the onboarding assets"
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { app.navigationBars[title].exists || app.navigationBars.staticTexts[title].exists },
+            "The tap opened another chat, not the long one"
+        )
     }
 
     private func loadEarlierButton(in app: XCUIApplication) -> XCUIElement {

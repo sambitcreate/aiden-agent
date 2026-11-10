@@ -122,6 +122,22 @@ final class AidenComposerSurfaceTests: XCTestCase {
         XCTAssertTrue(session.holdsAttachments)
     }
 
+    // MARK: - The keyboard
+
+    func testEveryAskForTheKeyboardIsANewRequest() {
+        let session = AidenComposerSession()
+        XCTAssertNil(session.keyboardRequest)
+
+        session.putAwayKeyboard()
+        let first = session.keyboardRequest
+        session.putAwayKeyboard()
+
+        XCTAssertEqual(first?.raises, false)
+        XCTAssertNotEqual(session.keyboardRequest, first, "A second put-away must still reach the field")
+        session.raiseKeyboard()
+        XCTAssertEqual(session.keyboardRequest?.raises, true)
+    }
+
     // MARK: - Words go to whoever saves them
 
     func testASessionWithoutAnOwnerKeepsItsOwnWords() {

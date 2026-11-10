@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// What a composer offers. Everything that changes with the conversation's
 /// moment-to-moment state is in `AidenComposerControls`.
@@ -106,12 +107,10 @@ struct AidenComposerSurface<
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @AidenComposerActionSize private var actionSize
     @ScaledMetric(relativeTo: .body) private var lineHeight: CGFloat = 22
-    @FocusState private var ownFocus: Bool
     @Bindable private var session: AidenComposerSession
 
     private let config: AidenComposerConfig
     private let controls: AidenComposerControls
-    private let focus: FocusState<Bool>.Binding?
     private let onSend: () -> Void
     private let onStop: (() -> Void)?
     private let onToggleVoice: (() -> Void)?
@@ -125,7 +124,6 @@ struct AidenComposerSurface<
         session: AidenComposerSession,
         config: AidenComposerConfig,
         controls: AidenComposerControls = AidenComposerControls(),
-        focus: FocusState<Bool>.Binding? = nil,
         onSend: @escaping () -> Void,
         onStop: (() -> Void)?,
         onToggleVoice: (() -> Void)? = nil,
@@ -138,7 +136,6 @@ struct AidenComposerSurface<
         self.session = session
         self.config = config
         self.controls = controls
-        self.focus = focus
         self.onSend = onSend
         self.onStop = onStop
         self.onToggleVoice = onToggleVoice
@@ -257,7 +254,7 @@ struct AidenComposerSurface<
         let verticalInset = isStacked ? AidenSpacing.s : AidenSpacing.m
         return TextField(config.placeholder, text: $session.text, axis: .vertical)
             .lineLimit(AidenComposerLayout.lineRange(maxLines: config.maxLines))
-            .focused(focus ?? $ownFocus)
+            .background(AidenComposerFieldReach(request: session.keyboardRequest))
             .padding(.horizontal, isStacked ? AidenSpacing.m : AidenSpacing.xs)
             .padding(.leading, !isStacked && !config.showsAttachments ? AidenSpacing.s : 0)
             .padding(.vertical, verticalInset)
@@ -599,5 +596,65 @@ private struct AidenKeepsPlaceOnPrepend: ViewModifier {
                 try? await Task.sleep(for: .seconds(1))
                 if !Task.isCancelled { anchorID = nil }
             }
+    }
+}
+
+/// Raises or puts away the keyboard of the composer field it sits behind, and no
+/// other. On iOS 26.5 a `@FocusState` bound to a field in the dock's
+/// `safeAreaBar` is cut off from the field, inside the bar as well as on the
+/// screen: it reads false with the keyboard up, and setting it changes nothing.
+/// So this works in UIKit. It looks for the field under its own view
+/// controller's view only, where the field is the text input that covers this
+/// view, so a chat that isn't showing (on another tab, or under a sheet) can't
+/// touch a keyboard in Search, in a sheet or in another chat.
+///
+/// An ask from before this view appeared is never carried out: the composer
+/// coming back after a question card mustn't raise a keyboard nobody asked for.
+struct AidenComposerFieldReach: UIViewRepresentable {
+    let request: AidenComposerKeyboardRequest?
+
+    func makeUIView(context: Context) -> ReachView {
+        let view = ReachView()
+        view.handled = request
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        return view
+    }
+
+    func updateUIView(_ view: ReachView, context: Context) {
+        guard let request, request != view.handled else { return }
+        view.handled = request
+        // After this update's layout, so the field is where it will be.
+        DispatchQueue.main.async { view.carryOut(request) }
+    }
+
+    final class ReachView: UIView {
+        var handled: AidenComposerKeyboardRequest?
+
+        func carryOut(_ request: AidenComposerKeyboardRequest) {
+            guard let field = ownField() else { return }
+            if request.raises {
+                if !field.isFirstResponder { field.becomeFirstResponder() }
+            } else if field.isFirstResponder {
+                field.resignFirstResponder()
+            }
+        }
+
+        /// The text input under this view's own view controller that covers it.
+        private func ownField() -> UIView? {
+            guard let window else { return nil }
+            var root: UIView = self
+            while let parent = root.superview, !(root.next is UIViewController) { root = parent }
+            let area = convert(bounds, to: window)
+            return Self.textInputs(in: root).first { input in
+                input.window === window && input.convert(input.bounds, to: window).intersects(area)
+            }
+        }
+
+        private static func textInputs(in view: UIView) -> [UIView] {
+            if view is UITextView || view is UITextField { return [view] }
+            return view.subviews.flatMap(textInputs(in:))
+        }
     }
 }

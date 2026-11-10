@@ -808,6 +808,26 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(restored.selectedWorkspace(for: "studio"), "workspace_app", "v1 holds more than paths")
     }
 
+    /// A link or Shortcut that starts a chat without naming a workspace reads
+    /// v1's last workspace, so opening one on the Workspaces tab keeps it there,
+    /// for its own machine, and going back to the list leaves it.
+    func testOpeningAWorkspaceMakesItTheMachinesLastWorkspace() throws {
+        let (store, legacy, defaults) = routeStores()
+        legacy.setSelectedWorkspace("workspace_old", for: "laptop")
+        var snapshot = store.load(installations: [studio, laptop], selected: "studio")
+
+        snapshot.workspacesPath = [.workspace(id("workspace_app", on: "studio")), .chat(id("chat_1", on: "studio"))]
+        store.save(snapshot)
+
+        XCTAssertEqual(legacy.selectedWorkspace(for: "studio"), "workspace_app")
+        XCTAssertEqual(legacy.selectedWorkspace(for: "laptop"), "workspace_old", "Another machine's workspace changed")
+        XCTAssertEqual(AidenProductNavigationStore(defaults: defaults).selectedWorkspace(for: "studio"), "workspace_app", "It wasn't saved")
+
+        snapshot.workspacesPath = []
+        store.save(snapshot)
+        XCTAssertEqual(legacy.selectedWorkspace(for: "studio"), "workspace_app", "Going back to the list forgot it")
+    }
+
     /// `set` that goes nowhere: the write a full disk or a locked file would lose.
     private final class RefusingDefaults: UserDefaults {
         override func set(_ value: Any?, forKey defaultName: String) {}

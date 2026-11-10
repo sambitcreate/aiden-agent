@@ -155,8 +155,8 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
 /// The tab shell's routes, in `aiden.product-navigation.v2`. A saved v2 stands
 /// for itself, readable or not: only its absence means v1 hasn't moved yet.
 ///
-/// `AidenProductNavigationStore` keeps `aiden.product-navigation.v1`: the menu
-/// shell's last workspace per machine stays there, and its per-machine paths
+/// `AidenProductNavigationStore` keeps `aiden.product-navigation.v1`: each
+/// machine's last workspace stays there, and the menu shell's per-machine paths
 /// until the first v2 write lands.
 struct AidenAppNavigationStore {
     static let snapshotKey = "aiden.product-navigation.v2"
@@ -191,13 +191,28 @@ struct AidenAppNavigationStore {
     }
 
     /// The first write to land is the one that replaces v1's paths. One that
-    /// doesn't land, whether too big or refused, leaves them where they are.
+    /// doesn't land, whether too big or refused, leaves v1 as it was.
+    ///
+    /// A write that lands also keeps the workspace open deepest on the
+    /// Workspaces tab in v1, as its machine's last workspace: a new-chat link or
+    /// Shortcut that names no workspace starts there.
     func save(_ snapshot: AidenAppNavigationSnapshot) {
         guard let data = try? JSONEncoder().encode(snapshot), data.count <= Self.sizeLimit else { return }
         let isFirstWrite = defaults.object(forKey: Self.snapshotKey) == nil
         defaults.set(data, forKey: Self.snapshotKey)
-        guard isFirstWrite, defaults.data(forKey: Self.snapshotKey) == data else { return }
-        legacy.forgetCompactPaths()
+        guard defaults.data(forKey: Self.snapshotKey) == data else { return }
+        rememberTheOpenWorkspace(in: snapshot)
+        if isFirstWrite { legacy.forgetCompactPaths() }
+    }
+
+    private func rememberTheOpenWorkspace(in snapshot: AidenAppNavigationSnapshot) {
+        for route in snapshot.workspacesPath.reversed() {
+            guard case .workspace(let id) = route else { continue }
+            if legacy.selectedWorkspace(for: id.instanceId) != id.objectId {
+                legacy.setSelectedWorkspace(id.objectId, for: id.instanceId)
+            }
+            return
+        }
     }
 
     /// Takes a forgotten machine's routes out of what's saved. Before the first
@@ -474,7 +489,8 @@ final class AidenProductNavigationStore {
         return snapshot.selectedWorkspaceByInstance[instanceID]
     }
 
-    /// What an older build saved. Nothing in this one writes it, except tests.
+    /// `AidenAppNavigationStore.save` writes it when a workspace is open on the
+    /// Workspaces tab.
     func setSelectedWorkspace(_ workspaceID: String?, for instanceID: String?) {
         guard let instanceID = Self.safeID(instanceID) else { return }
         if let workspaceID = Self.safeID(workspaceID) {

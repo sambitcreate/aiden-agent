@@ -74,6 +74,7 @@ final class AidenDemoResponder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var outcomes: [Route: Outcome] = [:]
+    private var delays: [HoldKey: @Sendable () -> TimeInterval] = [:]
     private var holds: [HoldKey: Hold] = [:]
     private var log: [String: [String]] = [:]
     private var keyLog: [String: [String]] = [:]
@@ -147,6 +148,14 @@ final class AidenDemoResponder: @unchecked Sendable {
         }
     }
 
+    /// Answers each request to `path` once `wait` has passed, which it works
+    /// out when the request arrives.
+    func delay(instanceId: String, path: String, by wait: @escaping @Sendable () -> TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        delays[HoldKey(instanceId: instanceId, path: path)] = wait
+    }
+
     /// `"METHOD /path"` for every request the machine received, oldest first.
     /// Query strings are left out so assertions do not depend on page size.
     func requests(instanceId: String) -> [String] {
@@ -187,7 +196,14 @@ final class AidenDemoResponder: @unchecked Sendable {
             lock.unlock()
             return
         }
+        let delay = delays[HoldKey(instanceId: instanceId, path: path)]
         lock.unlock()
+        if let wait = delay?(), wait > 0 {
+            DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [self] in
+                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
+            }
+            return
+        }
         deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
     }
 
@@ -367,6 +383,13 @@ enum AidenDemoHosts {
         )
         installation.serverCapabilities = AidenRemoteCapability.v1Known
         installation.serverFeatures = AidenDemoContent.features
+        if AidenDemoRunOptions.raisesALateChatApproval {
+            // A chat can only watch a run the phone didn't start on a Mac that
+            // offers it, and with the grant to.
+            installation.deviceCapabilities += [.runsObserve, .runsControl]
+            installation.serverCapabilities? += [.runsObserve, .runsControl]
+            installation.serverFeatures.append(AidenServer.phoneRunControlFeature)
+        }
         return installation
     }
 
@@ -576,6 +599,16 @@ enum AidenDemoHosts {
                 status: 200,
                 json: AidenDemoContent.chatJSON(row: row, index: index)
             )
+        }
+        if AidenDemoRunOptions.raisesALateChatApproval,
+           let row = rows.first(where: { $0["title"] as? String == AidenDemoContent.lateApprovalChatTitle }),
+           let chatId = row["id"] as? String {
+            // The run behind the chat asks for approval a while after the chat
+            // first looks for it, then stays waiting.
+            let current = "/chats/\(chatId)/runs/current/events"
+            responder.delay(instanceId: id, path: current) { AidenDemoRunOptions.secondsUntilTheLateChatApproval() }
+            responder.reply(instanceId: id, path: current, status: 200, json: AidenDemoContent.lateApprovalRunBody(chatId: chatId))
+            _ = responder.hold(instanceId: id, path: "/runs/\(AidenDemoContent.lateApprovalRunId)/events")
         }
         // Compose, and a fork of each chat.
         responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
@@ -911,6 +944,33 @@ private enum AidenDemoContent {
         ]
     }
 
+    static let lateApprovalChatTitle = "Fix the flaky upload test"
+    static let lateApprovalRunId = "run_demo_late_approval"
+    static let lateApprovalSummary = "npm run test:upload"
+
+    /// `GET /chats/{id}/runs/current/events` for a run that has just asked for
+    /// approval: it started, it's running, it waits. Nothing ends it.
+    static func lateApprovalRunBody(chatId: String) -> Data {
+        let now = Date()
+        let events: [(String, [String: Any])] = [
+            ("run.started", ["runId": lateApprovalRunId, "chatId": chatId, "origin": "remote"]),
+            ("status", ["state": "running"]),
+            // The phone's projection of an approval (`AidenRemoteRunApproval`).
+            ("approval_required", [
+                "approvalId": "approval_demo_late", "summary": lateApprovalSummary,
+                "toolCallId": "call_demo_late", "toolName": "run_command", "canAllow": true,
+            ]),
+        ]
+        let frames = events.enumerated().map { index, event in
+            let frame: [String: Any] = [
+                "protocolVersion": 1, "streamId": lateApprovalRunId, "sequence": index + 1,
+                "timestamp": timestamp(now), "type": event.0, "terminal": false, "payload": event.1,
+            ]
+            return "id: \(index + 1)\nevent: \(event.0)\ndata: \(String(decoding: data(frame), as: UTF8.self))\n\n"
+        }
+        return Data(frames.joined().utf8)
+    }
+
     static func notFound() -> Data {
         data(["error": [
             "code": "not_found",
@@ -1053,6 +1113,24 @@ enum AidenDemoRunOptions {
     /// test can have the keyboard up when the approval arrives.
     static var raisesALateBotApproval: Bool {
         ProcessInfo.processInfo.arguments.contains("-AidenDemoLateBotApproval")
+    }
+
+    /// The same for the Inbox's "Fix the flaky upload test": its run asks for
+    /// approval `lateApprovalDelay` after the chat first looks for it.
+    static var raisesALateChatApproval: Bool {
+        ProcessInfo.processInfo.arguments.contains("-AidenDemoLateChatApproval")
+    }
+
+    nonisolated(unsafe) private static var firstChatLook: Date?
+
+    /// How long the chat's first look at its run still has to wait. Later
+    /// looks wait for the same moment.
+    static func secondsUntilTheLateChatApproval(now: Date = Date()) -> TimeInterval {
+        firstListenLock.lock()
+        defer { firstListenLock.unlock() }
+        let start = firstChatLook ?? now
+        firstChatLook = start
+        return lateApprovalDelay - now.timeIntervalSince(start)
     }
 
     static let lateApprovalDelay: TimeInterval = 12

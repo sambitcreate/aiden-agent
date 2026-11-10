@@ -2,7 +2,9 @@ import Foundation
 import XCTest
 @testable import AidenOnTheGo
 
-final class AidenProductShellTests: XCTestCase {
+/// The Bots tab's home and availability, each machine's saved place, and the
+/// shell's overflow symbol.
+extension AidenAppShellTests {
     func testTheOverflowSymbolIsPlain() {
         XCTAssertEqual(AidenChromeSymbols.overflowMenu, "ellipsis")
         XCTAssertFalse(AidenChromeSymbols.overflowMenu.contains("circle"))
@@ -139,7 +141,7 @@ final class AidenProductShellTests: XCTestCase {
     /// What an older build left in v1, read per machine.
     @MainActor
     func testEachInstallationKeepsItsOwnSavedNavigation() throws {
-        let suiteName = "AidenProductShellTests.\(UUID().uuidString)"
+        let suiteName = "AidenAppShellTests.bots.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = AidenProductNavigationStore(defaults: defaults)
@@ -161,7 +163,7 @@ final class AidenProductShellTests: XCTestCase {
 
     @MainActor
     func testNavigationPurgeRemovesOnlyTheUnpairedInstallation() throws {
-        let suiteName = "AidenProductShellTests.\(UUID().uuidString)"
+        let suiteName = "AidenAppShellTests.bots.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = AidenProductNavigationStore(defaults: defaults)

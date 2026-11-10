@@ -44,7 +44,6 @@ struct AidenBotSessionChatView: View {
     @State private var ownSendScroll = 0
     @State private var spending = AidenSpendingNoticeModel()
     @Environment(\.aidenReduceMotion) private var reduceMotion
-    @FocusState private var composerFocused: Bool
     /// The workspace chat's + picker (Files, Camera, Photos), reused as is (revision 33).
     @State private var attachmentPicker = AidenAttachmentPickerState()
     @State private var isFileImporterPresented = false
@@ -264,8 +263,7 @@ struct AidenBotSessionChatView: View {
         }
         .onChange(of: dockContent.keepsComposer) { _, keepsComposer in
             guard !keepsComposer else { return }
-            composerFocused = false
-            AidenComposerKeyboard.putAway()
+            composerSession.putAwayKeyboard()
             attachmentPicker.dismiss()
         }
         // The last-known capabilities stand in until the Mac answers (R21).
@@ -480,13 +478,12 @@ struct AidenBotSessionChatView: View {
                     for: .sizeChanges
                 )
                 .scrollDismissesKeyboard(.interactively)
-                .gesture(AidenTranscriptTap { composerFocused = false })
+                .gesture(AidenTranscriptTap { composerSession.putAwayKeyboard() })
                 .aidenReportsTranscriptFit(to: follow)
                 .aidenOnComposerInsetChange { followIfAtEnd(proxy) }
                 .onChange(of: model.approval?.waitId) { _, waitId in
                     guard waitId != nil else { return }
-                    composerFocused = false
-                    AidenComposerKeyboard.putAway()
+                    composerSession.putAwayKeyboard()
                     followIfAtEnd(proxy)
                 }
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
@@ -721,7 +718,7 @@ struct AidenBotSessionChatView: View {
                             // The words go back in the composer; the files are picked again.
                             if let text = model.reattach(message.id, into: composerSession.text) {
                                 composerSession.text = text
-                                composerFocused = true
+                                composerSession.raiseKeyboard()
                             }
                         } else {
                             Task { await model.retrySend(message.id) }
@@ -1048,7 +1045,6 @@ struct AidenBotSessionChatView: View {
             session: composerSession,
             config: config,
             controls: model.composerControls(connection: ownerConnection, hasContent: composerSession.hasContent),
-            focus: $composerFocused,
             onSend: { submit(model, whenBusy: nil) },
             onStop: model.isRunning ? { Task { await model.stop() } } : nil,
             accessory: {
@@ -1148,8 +1144,7 @@ struct AidenBotSessionChatView: View {
             return
         }
         guard model.canAttach else { return }
-        composerFocused = false
-        AidenComposerKeyboard.putAway()
+        composerSession.putAwayKeyboard()
         attachmentPicker.openMenu()
     }
 

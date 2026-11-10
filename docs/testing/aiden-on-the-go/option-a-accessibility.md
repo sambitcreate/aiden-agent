@@ -2,6 +2,8 @@
 
 Evidence for Task 34, "Accessibility gate". Branch `ios/option-a-lane-text`, base `e7f79ff39`. Everything here ran on the tab shell (`AIDEN_TAB_SHELL_ENABLED`, `-AidenDemoTabShell YES`) against the `four` demo scenario: four machines, one offline, running and waiting chats, a Bot.
 
+Task 35 removed that flag and the launch argument: the tab shell is now the only shell, so the gate runs on it without either.
+
 ## The gate
 
 `AidenShellUITests.testEveryMainScreenPassesTheAudit` replaces `testRecordAccessibilityAuditBaseline`. It runs `performAccessibilityAudit` on eight screens, in light and then in dark, in this order:
@@ -62,9 +64,11 @@ On "Aiden Lane iPad" (834 pt wide) the same audit runs, but no rule applies. Eac
 | machines | 10 | contrast, Dynamic Type |
 | machine editor | 9 | contrast, Dynamic Type |
 | settings | 13 | contrast, Dynamic Type |
-| search | 2 | hit area, Dynamic Type |
+| search | 5 (2 before Task 35) | hit area, Dynamic Type |
 
 The contrast, hit area and clipped text findings there are the kinds the compact rules explain (Form secondary text, the filter strip, transcript text, the composer, message times, glass). The Dynamic Type findings are the open work: "partially unsupported" with no element on Inbox, Machines, the machine editor and Settings, and on transcript text in the chat and the Bot chat. Clearing them is parked; until then the baseline only stops the count rising.
+
+Search went from 2 to 5 in Task 35 (`task-35-ipad-shell.log`), when it started keeping its bar while its field is up (check N1). The two it had are unchanged: the system field's Clear text button (hit area) and the unsearched-machines note, which is the same growing footnote the compact rule excuses, pushed under the keyboard rather than below the screen. The three new ones are Dynamic Type "partially unsupported" on no element. They came with the bar, whose controls (the tabs and the sidebar button the field used to hide) are the system's and the likeliest owners, but the audit names no element, so that isn't proven. They join the parked findings below.
 
 ## What the audit found, and what changed
 
@@ -127,7 +131,7 @@ Simulator "Aiden Lane text" (iPhone, iOS 27). The screenshots are in the task's 
 ## Parked, not for Task 36
 
 - The regular-width layout's Dynamic Type findings (above). The baseline holds the line; clearing them needs its own task.
-- In a regular-width window the Search tab's active field replaces the tab strip, and the UI test found no element to get back to the other tabs (no Close or Cancel button; Escape in the field didn't bring the tabs back). The gate audits Search last for that reason. Whether a person can leave Search there without clearing it is for the iPad pass.
+- ~~In a regular-width window the Search tab's active field replaces the tab strip~~ Fixed in Task 35 (check N1): Search keeps its bar in a regular width, and `testSearchInARegularWidthLeavesAWayBackToTheOtherTabs` opens Workspaces from the sidebar with the field up. The gate still audits Search last.
 
 ## Run record
 

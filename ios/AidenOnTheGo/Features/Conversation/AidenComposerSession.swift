@@ -81,6 +81,13 @@ protocol AidenComposerAttachmentOwner: AnyObject {
     func cancelAttachmentPreparation()
 }
 
+/// An ask for a composer's keyboard. Each ask has its own `id`, so asking twice
+/// in a row still reaches the field.
+struct AidenComposerKeyboardRequest: Equatable {
+    let id: Int
+    let raises: Bool
+}
+
 /// What the person is doing in a composer, kept apart from the view that shows
 /// it. The conversation's detail view owns this, so a question card replacing
 /// the composer leaves dictation and attachment preparation running.
@@ -124,6 +131,20 @@ final class AidenComposerSession {
 
     var attachments: [AidenAttachmentReference] {
         attachmentOwner?.pendingAttachments ?? localAttachments
+    }
+
+    /// The latest ask to raise or put away this composer's keyboard. The
+    /// composer's own field carries it out (`AidenComposerFieldReach`), so an
+    /// ask from a chat that isn't showing touches only that chat's field, never
+    /// a keyboard somewhere else.
+    private(set) var keyboardRequest: AidenComposerKeyboardRequest?
+
+    func raiseKeyboard() { askForKeyboard(raised: true) }
+
+    func putAwayKeyboard() { askForKeyboard(raised: false) }
+
+    private func askForKeyboard(raised: Bool) {
+        keyboardRequest = AidenComposerKeyboardRequest(id: (keyboardRequest?.id ?? 0) + 1, raises: raised)
     }
 
     /// Words or attachments: either is a message.

@@ -31,7 +31,6 @@ struct AidenComposerView: View {
     @Bindable var model: AidenChatViewModel
     let session: AidenComposerSession
     let autoStartVoice: Bool
-    let composerFocus: FocusState<Bool>.Binding
     @Bindable var attachmentPicker: AidenAttachmentPickerState
     let motionNamespace: Namespace.ID
     let canToggleAttachments: Bool
@@ -43,7 +42,6 @@ struct AidenComposerView: View {
             session: session,
             config: config,
             controls: Self.controls(for: model),
-            focus: composerFocus,
             onSend: { Task { await model.send() } },
             onStop: model.isStreaming ? { Task { await model.stop() } } : nil,
             onToggleVoice: { Task { await toggleVoice() } },

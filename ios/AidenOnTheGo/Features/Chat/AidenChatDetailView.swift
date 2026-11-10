@@ -66,7 +66,6 @@ struct AidenChatDetailView: View {
     @State private var attachmentPicker = AidenAttachmentPickerState()
     @State private var isFileImporterPresented = false
     @State private var attachmentButtonCenter: CGPoint?
-    @FocusState private var composerIsFocused: Bool
     @Namespace private var attachmentMotionNamespace
     @State private var coordinator: AidenRemoteCoordinator?
     @State private var forkSummaryRequest: AidenForkSummaryRequest?
@@ -188,8 +187,7 @@ struct AidenChatDetailView: View {
         }
         .onChange(of: model.pendingQuestion?.id) { _, id in
             guard id != nil else { return }
-            composerIsFocused = false
-            AidenComposerKeyboard.putAway()
+            composerSession.putAwayKeyboard()
             attachmentPicker.dismiss()
         }
         .onChange(of: model.isStreaming) { _, isStreaming in
@@ -198,8 +196,7 @@ struct AidenChatDetailView: View {
         }
         .onChange(of: dockContent.keepsComposer) { _, keepsComposer in
             guard !keepsComposer else { return }
-            composerIsFocused = false
-            AidenComposerKeyboard.putAway()
+            composerSession.putAwayKeyboard()
             attachmentPicker.dismiss()
         }
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
@@ -437,7 +434,7 @@ struct AidenChatDetailView: View {
             .aidenReportsTranscriptFit(to: follow)
             .aidenKeepsPlaceOnPrepend(anchorID: $keptPlaceID, proxy: proxy)
             .aidenOnComposerInsetChange { followLatest(proxy, animated: false) }
-            .gesture(AidenTranscriptTap { composerIsFocused = false })
+            .gesture(AidenTranscriptTap { composerSession.putAwayKeyboard() })
             .background {
                 // A leaf reads the per-tick trigger, so a reveal tick re-snaps
                 // a following reader without re-running this screen.
@@ -467,8 +464,7 @@ struct AidenChatDetailView: View {
             }
             .onChange(of: model.pendingApproval?.id) { _, approvalID in
                 guard approvalID != nil else { return }
-                composerIsFocused = false
-                AidenComposerKeyboard.putAway()
+                composerSession.putAwayKeyboard()
                 followLatest(proxy, animated: true)
             }
         }
@@ -504,7 +500,7 @@ struct AidenChatDetailView: View {
                 imageArrivalRevealIDs: model.imageArrivalRevealGenerationIDs,
                 appControlsAvailable: model.canReadAppControls,
                 onAskAbout: model.isReadOnlyPresentation ? nil : { selection in
-                    if model.askAbout(selection) { composerIsFocused = true }
+                    if model.askAbout(selection) { composerSession.raiseKeyboard() }
                 },
                 forkAvailability: onOpenChat == nil ? nil : model.forkAvailability,
                 onFork: onOpenChat == nil ? nil : { messageID, action in
@@ -642,7 +638,6 @@ struct AidenChatDetailView: View {
                         model: model,
                         session: composerSession,
                         autoStartVoice: autoStartVoice,
-                        composerFocus: $composerIsFocused,
                         attachmentPicker: attachmentPicker,
                         motionNamespace: attachmentMotionNamespace,
                         canToggleAttachments: canToggleAttachmentPicker,
@@ -742,8 +737,7 @@ struct AidenChatDetailView: View {
 
     private func toggleAttachmentPicker() {
         guard canToggleAttachmentPicker else { return }
-        composerIsFocused = false
-        AidenComposerKeyboard.putAway()
+        composerSession.putAwayKeyboard()
         if attachmentPicker.isPresented {
             attachmentPicker.dismiss()
         } else {

@@ -292,7 +292,7 @@ const testSources = [
   "AidenNativeIntegrationTests.swift",
   "AidenNetworkPathTests.swift",
   "AidenOnboardingArtTests.swift",
-  "AidenProductShellTests.swift",
+  "AidenAppShellTests+Bots.swift",
   "AidenRemoteClientTests.swift",
   "AidenRemoteContractFixture.swift",
   "AidenRemotePhase0Tests.swift",
@@ -893,12 +893,14 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(
     chat,
-    /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?\.gesture\(AidenTranscriptTap \{ composerIsFocused = false \}\)/u,
+    /scrollDismissesKeyboard\(\.interactively\)[\s\S]*?\.gesture\(AidenTranscriptTap \{ composerSession\.putAwayKeyboard\(\) \}\)/u,
   );
+  // The composer's own field carries out a keyboard ask, never the whole app.
   assert.match(
     chat,
-    /composerFocus: \$composerIsFocused[\s\S]*?focus: composerFocus[\s\S]*?\.focused\(focus \?\? \$ownFocus\)/u,
+    /\.background\(AidenComposerFieldReach\(request: session\.keyboardRequest\)\)[\s\S]*?struct AidenComposerFieldReach: UIViewRepresentable/u,
   );
+  assert.doesNotMatch(chat, /sendAction\(#selector\(UIResponder\.resignFirstResponder\)/u);
   assert.match(
     chat,
     /candidate\.thinkingLevels[\s\S]*?Menu \{[\s\S]*?ForEach\(levels[\s\S]*?thinkingLevel: level/u,

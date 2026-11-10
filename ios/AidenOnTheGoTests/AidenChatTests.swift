@@ -10725,7 +10725,6 @@ private struct AidenChatComposerSwapHost: View {
     let model: AidenChatViewModel
     let session: AidenComposerSession
     let swap: AidenChatComposerSwap
-    @FocusState private var focus: Bool
     @Namespace private var motion
     @State private var picker = AidenAttachmentPickerState()
 
@@ -10735,7 +10734,6 @@ private struct AidenChatComposerSwapHost: View {
                 model: model,
                 session: session,
                 autoStartVoice: false,
-                composerFocus: $focus,
                 attachmentPicker: picker,
                 motionNamespace: motion,
                 canToggleAttachments: true,
@@ -15571,11 +15569,17 @@ final class AidenCacheFirstHomeTests: XCTestCase {
         // The previous Mac answered with no chats.
         home.chatListLoadState = .loaded
 
+        let inbox = AidenUnifiedInboxStore(coordinator: coordinator)
+        XCTAssertNotEqual(inbox.listState, .noChats, "The Inbox said it was empty before the Mac was reached")
+        inbox.start()
+        defer { inbox.stop() }
+
         await home.load(coordinator: coordinator)
 
         XCTAssertTrue(home.chats.isEmpty)
         // While this Mac is still being reached, nothing has said it is empty.
         XCTAssertNotEqual(home.chatListLoadState, .loaded)
+        XCTAssertNotEqual(inbox.listState, .noChats, "The Inbox says there are no chats on a Mac it hasn't reached")
     }
 
     func testOpeningASavedRecentUsesItsTranscriptWithoutTheNetwork() async throws {
