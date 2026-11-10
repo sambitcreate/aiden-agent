@@ -91,10 +91,10 @@ Messages Live sends carry `inputSource: "voice"`, saved with the message (includ
 
 Settings → Voice & Speech → Aiden Live has a "Chats" group with **Let Live use the open chat**, on by default. The first chat tool use shows "Live can read and send to your chats. You can turn this off in Settings." once, with a Settings action, and saves `aidenLiveChatAccessNoticeShown`.
 
-### Open items
+### Done before merge
 
-- Re-claim the Remote revision against `main` at merge and update the iOS, Android and fixture contracts together.
-- iOS and Android unit tests were written but not run in the build environment; run them before merge.
+- Remote revision 60 was claimed on 2026-11-10, when `main` was at 59; the iOS, Android and fixture contracts use it.
+- CI runs the iOS and Android unit tests for the label (iOS simulator tests and the Android `testDebugUnitTest` step).
 
 ## PR 3: approvals by voice
 
