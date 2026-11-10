@@ -179,8 +179,8 @@ Settings, Scheduled Tasks and Usage now take spacing and radius from `AidenSpaci
 | iOS 27.0, Aiden Lane text sim (Xcode 27.1), at `b074d94b7` | full run, unit | 2,212 | 7 | 2 |
 | same | full run, UI | 45 | 2 | 0 |
 | iOS 27.0, Aiden Lane text sim, at `32844f546` | unit bundle rerun | 2,214 | 7 | 0 |
-| iOS 27.0, Aiden Lane text sim, at `c86090797` (review fix round 1) | full run, unit | 2,214 | 7 | 0 |
-| same | full run, UI | 45 | 2 | 0 |
+| iOS 27.0, Aiden Lane text sim, at `c86090797` (review fix round 1) | full run, unit | 2,221 | 7 | 0 |
+| same | full run, UI | 47 | 2 | 0 |
 
 The two unit failures at `b074d94b7` were pinned strings this task changed, not app faults: `testPhotoLibraryUsageDescriptionCoversPickerAndSaveActions` looked for "paired Mac" in the photo permission prompt, and `AidenBackgroundJobsTests.testTheWordsMatchTheMac` pinned "on your Mac" after job addresses. `32844f546` updates both, and the unit bundle was run again. `npm run test:ios-release`, which includes `scripts/check-ios-shipping-target.test.mjs`, passed 32 of 32, and again after fix round 1.
 
