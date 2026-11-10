@@ -20,6 +20,12 @@ export interface LiveRendererToolContext {
    * cancel answered first, or a session that changed) or main refuses it.
    */
   afterReport?(listener: () => void): void;
+  /**
+   * Runs `listener` once the bus is done with this result, whether it went
+   * out or not: after any `afterReport` listeners, or when the result was
+   * dropped, refused or never sent.
+   */
+  afterSettled?(listener: () => void): void;
 }
 
 export type LiveRendererToolHandler = (
@@ -165,7 +171,33 @@ export class LiveSessionBus {
       committed: false,
       reported: false,
       afterReport: [] as Array<() => void>,
+      afterSettled: [] as Array<() => void>,
     };
+    try {
+      await this.runAndReport(transport, request, handler, entry);
+    } finally {
+      for (const listener of entry.afterSettled) {
+        try {
+          listener();
+        } catch {
+          // One listener's failure does not skip the others.
+        }
+      }
+    }
+  }
+
+  private async runAndReport(
+    transport: LiveSessionTransport,
+    request: { sessionId: string; requestId: string; name: string; args: Record<string, unknown> },
+    handler: LiveRendererToolHandler | undefined,
+    entry: {
+      abort: AbortController;
+      committed: boolean;
+      reported: boolean;
+      afterReport: Array<() => void>;
+      afterSettled: Array<() => void>;
+    },
+  ): Promise<void> {
     this.inFlight.set(request.requestId, entry);
     let response: LiveRendererToolResult;
     try {
@@ -178,6 +210,9 @@ export class LiveSessionBus {
             },
             afterReport: (listener) => {
               entry.afterReport.push(listener);
+            },
+            afterSettled: (listener) => {
+              entry.afterSettled.push(listener);
             },
           })
         : toolError("tool_unavailable", "That part of Aiden is not open right now.");

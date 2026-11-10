@@ -160,6 +160,7 @@ export function createLiveChatToolHandlers(
   const guarded =
     (run: (args: Record<string, unknown>, context: LiveRendererToolContext) => Promise<LiveRendererToolResult> | LiveRendererToolResult): LiveRendererToolHandler =>
     (args, context) => {
+      let handedOff: Promise<void> = Promise.resolve();
       const next = tail.then(async () => {
         if (!deps.enabled()) return liveChatFailure(LIVE_CHAT_ERRORS.off);
         if (context.signal.aborted) return cancelled();
@@ -173,10 +174,17 @@ export function createLiveChatToolHandlers(
         if (result.untrusted_chat_content !== undefined) {
           deps.requests.exposed();
           context.afterReport?.(() => deps.requests.exposed());
+          // The next chat tool waits until this result's hand-off is over, so
+          // it can't use speech from before that second fence.
+          const settle = context.afterSettled;
+          if (settle) handedOff = new Promise<void>((resolve) => settle(resolve));
         }
         return result;
       });
-      tail = next.catch(() => undefined);
+      tail = next.then(
+        () => handedOff,
+        () => undefined,
+      );
       return next;
     };
 
