@@ -104,6 +104,7 @@ struct AidenConnectionNotice: View {
                 .background(palette.raised)
                 .accessibilityElement(children: .combine)
             } else if showsConnecting {
+                // Shown only on the single-machine list, whose one machine is the selected one.
                 AidenConnectingHint(installationName: coordinator.installationStore.activeInstallation?.name)
             }
         }

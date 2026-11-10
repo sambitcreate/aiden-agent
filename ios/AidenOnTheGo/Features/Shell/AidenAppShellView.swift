@@ -146,6 +146,9 @@ struct AidenAppShellView: View {
         }
     }
 
+    /// The default machine's: it explains an empty single-machine Bots page and
+    /// gates that page's writes. With several machines each row and New Bot ask
+    /// their own machine.
     private var botsAvailability: AidenBotsAvailability {
         AidenBotsAvailability.resolve(coordinator.installationStore.activeInstallation)
     }
@@ -159,6 +162,7 @@ struct AidenAppShellView: View {
     }
 
     /// A machine that can't report usage leaves nothing to open, as on the old home.
+    /// Usage is the default machine's page, as the rest of the More menu is.
     private var usageUnavailable: Bool {
         !AidenHomeLoadPlan(installation: coordinator.installationStore.activeInstallation).loadsUsage
     }

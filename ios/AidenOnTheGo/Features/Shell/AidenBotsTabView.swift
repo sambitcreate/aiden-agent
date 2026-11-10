@@ -23,6 +23,8 @@ struct AidenBotsTabView: View {
     @Environment(\.aidenPalette) private var palette
     @State private var chatStarter = AidenBotChatStarter()
 
+    /// A Bot on the selected (default) machine. Only the single-machine page and
+    /// a Bot made on the default reach this; a grouped row carries its own id.
     private func route(botID: String) -> AidenHostObjectID? {
         guard let installation = coordinator.installationStore.activeInstallation else { return nil }
         return AidenHostObjectID(instanceId: installation.id, deviceId: installation.deviceId, objectId: botID)
