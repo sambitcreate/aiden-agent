@@ -48,7 +48,7 @@ export function WorkspaceToolLauncher({
   canOpenTerminal: boolean;
   subagents: boolean;
   devices: boolean;
-  /** The workspace has at least one artifact; the tool is not offered before that. */
+  /** The workspace's artifact list has loaded; with no pages yet the tab offers New page. */
   artifacts?: boolean;
   busy: boolean;
   onOpen: (tab: EnvironmentPanelTab) => void;

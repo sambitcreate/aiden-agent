@@ -9,6 +9,8 @@ export interface AppCapabilities {
   computerUse: boolean;
   /** A macOS VM per Bot (Apple silicon only). */
   botComputers: boolean;
+  /** Settings → Hooks (macOS and Linux). */
+  hooks: boolean;
   dockIcon: boolean;
   /** A Needs you count on the app icon (Dock on macOS, launcher on Linux). */
   badgeCount: boolean;
@@ -34,6 +36,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   appUpdates: false,
   computerUse: false,
   botComputers: false,
+  hooks: false,
   dockIcon: false,
   badgeCount: false,
   accessibilityPaste: false,
@@ -62,6 +65,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     appUpdates: record.appUpdates === true,
     computerUse: record.computerUse === true,
     botComputers: record.botComputers === true,
+    hooks: record.hooks === true,
     dockIcon: record.dockIcon === true,
     badgeCount: record.badgeCount === true,
     accessibilityPaste: record.accessibilityPaste === true,

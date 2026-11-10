@@ -605,7 +605,7 @@ export function WorkspaceToolButtons({
   useCommandHandler(
     "tools.artifacts",
     () => panel.showTools("artifacts"),
-    commandReady("artifacts") && panel.artifacts.views.length > 0,
+    commandReady("artifacts") && panel.artifactsOffered,
   );
   const menuTools: EnvironmentPanelTab[] = hasWorkspace
     ? [...(compact ? buttons : []), "context", ...(available("subagents") ? (["subagents"] as const) : [])]

@@ -303,6 +303,40 @@ test("run input admission reports committed-but-capacity when the queue fills du
   });
 });
 
+test("a chat deletion that starts during persistence stops the input reaching the run", async () => {
+  const app = fixture();
+  app.setAfterAppend(() => {
+    app.deleting.add("chat-1");
+  });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "steer",
+    text: "sent as the chat was deleted",
+  });
+  assert.deepEqual(result, {
+    admitted: false,
+    reason: "cancelled",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
+  assert.equal(app.steered.length, 0);
+});
+
+test("a chat deletion that starts before the save lands leaves the draft unconsumed", async () => {
+  const app = fixture();
+  app.setDuringAppend(() => {
+    app.deleting.add("chat-1");
+  });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "deleted first",
+  });
+  assert.deepEqual(result, { admitted: false, reason: "cancelled", committed: false });
+  assert.equal(app.appended.length, 0);
+  assert.equal(app.followedUp.length, 0);
+});
+
 test("run input admission maps the isCurrent cancel race to cancelled without committing", async () => {
   const app = fixture();
   app.setDuringAppend(() => {
@@ -424,4 +458,29 @@ test("run input admission reports committed cancellation when the run is cancell
   });
   assert.equal(app.appended.length, 1);
   assert.equal(app.followedUp.length, 0);
+});
+
+test("input whose run is stopped, ended or filled while its hooks run is not saved, so the draft stays", async () => {
+  const cases: Array<[string, (f: ReturnType<typeof fixture>) => void, string]> = [
+    ["cancelled", (f) => (f.generation.cancelRequested = true), "cancelled"],
+    ["ended", (f) => f.active.delete("stream-1"), "run_not_active"],
+    ["full", (f) => f.setProbe("capacity"), "capacity"],
+  ];
+  for (const [label, during, reason] of cases) {
+    const f = fixture();
+    f.generation.inputHooks = {
+      screen: async () => {
+        during(f);
+        return {};
+      },
+      attachContext: () => assert.fail("nothing is queued"),
+    };
+    assert.deepEqual(
+      await f.admission.admit({ streamId: "stream-1", mode: "steer", text: "use the staging db", ownerDocumentId: "doc-1" }),
+      { admitted: false, reason, committed: false },
+      label,
+    );
+    assert.equal(f.appended.length, 0, label);
+    assert.equal(f.steered.length, 0, label);
+  }
 });

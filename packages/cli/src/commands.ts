@@ -34,6 +34,7 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       result = await (await import("./session-import.ts")).exportSessionFile(agentDir, source, rest[1] ?? `${source}.aiden-chat.json`); break;
     }
     case "mcp": result = await (await import("./mcp.ts")).mcpCommand(agentDir, rest); break;
+    case "hooks": result = await (await import("./hooks.ts")).hooksAdminCommand(agentDir, rest); break;
     case "auth": result = await (await import("./auth.ts")).authCommand(agentDir, rest); break;
     case "catalog": result = await (await import("./providers.ts")).catalogCommand(agentDir, rest); break;
     case "insights": result = await (await import("./providers.ts")).insightsCommand(agentDir, rest); break;

@@ -4,6 +4,7 @@ import {
   workspaceArtifactDataJson,
   workspaceArtifactSourceAccess,
   type WorkspaceArtifactSourceAccess,
+  type WorkspaceArtifactRevisionSummary,
   type WorkspaceArtifactsChangedEvent,
   type WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
@@ -18,12 +19,40 @@ export function workspaceArtifactPage(view: WorkspaceArtifactView): ChatUiVisual
 
 type ArtifactWorkspace = { permission: WorkspacePermission; folderPath?: string } | null;
 
+function workspaceAccess(workspace: ArtifactWorkspace) {
+  return { permission: workspace?.permission ?? "none", hasFolder: Boolean(workspace?.folderPath) };
+}
+
 function accessInputs(view: WorkspaceArtifactView, workspace: ArtifactWorkspace) {
-  return {
-    permission: workspace?.permission ?? "none",
-    hasFolder: Boolean(workspace?.folderPath),
-    approved: view.artifact.approvedDigest === view.digest,
-  };
+  return { ...workspaceAccess(workspace), approved: view.artifact.approvedDigest === view.digest };
+}
+
+/**
+ * Whether restoring an earlier version would leave its commands waiting for
+ * the person to allow them. Only Ask waits: Full runs them and Off, or a
+ * workspace without a folder, runs nothing either way.
+ */
+export function workspaceArtifactRevisionWaitsForApproval(
+  entry: WorkspaceArtifactRevisionSummary,
+  workspace: ArtifactWorkspace,
+): boolean {
+  const { permission, hasFolder } = workspaceAccess(workspace);
+  return entry.needsApproval && workspaceArtifactCommandAccess(permission, hasFolder, false) === "needs-approval";
+}
+
+/**
+ * What an imported page's commands would do once added here. An import is
+ * never approved, so under Ask they wait to be allowed and Full runs them.
+ * Nothing runs when access is off or the workspace has no folder; the two
+ * are told apart because the person fixes them differently.
+ */
+export type WorkspaceArtifactImportAccess = "needs-approval" | "run" | "off" | "no-folder";
+
+export function workspaceArtifactImportAccess(workspace: ArtifactWorkspace): WorkspaceArtifactImportAccess {
+  const { permission, hasFolder } = workspaceAccess(workspace);
+  if (!hasFolder) return "no-folder";
+  if (permission === "none") return "off";
+  return workspaceArtifactCommandAccess(permission, hasFolder, false) === "run" ? "run" : "needs-approval";
 }
 
 /**
@@ -93,4 +122,28 @@ export function revealsWorkspaceArtifact(
 /** Text staged in the composer by "Ask Aiden to change this". */
 export function workspaceArtifactChangeRequest(view: WorkspaceArtifactView): string {
   return `Update the "${view.artifact.visual.title}" artifact (id ${view.artifact.id}): `;
+}
+
+/** A New page suggestion: the chip's label, and the words it puts in the field. */
+export interface WorkspaceArtifactPageIdea {
+  label: string;
+  subject: string;
+}
+
+/** Ideas the New page dialog offers. Each subject reads naturally after "shows". */
+export const WORKSPACE_ARTIFACT_PAGE_IDEAS: readonly WorkspaceArtifactPageIdea[] = [
+  { label: "Open pull requests", subject: "this repository's open pull requests" },
+  { label: "CI status on main", subject: "CI status on main" },
+  { label: "TODO board from TODO.md", subject: "a TODO board from TODO.md" },
+  { label: "Release checklist", subject: "a release checklist" },
+];
+
+/**
+ * The chat request a New page dialog drafts from what the person wants the
+ * page to show, in their own words. Empty when there is nothing to ask for.
+ */
+export function workspaceArtifactNewPageRequest(subject: string): string {
+  const words = subject.trim();
+  if (!words) return "";
+  return `Make a workspace artifact page that shows ${words}${/[.?!]$/u.test(words) ? "" : "."}`;
 }

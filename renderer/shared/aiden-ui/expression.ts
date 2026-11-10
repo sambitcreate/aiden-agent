@@ -6,7 +6,11 @@ import type { AidenUiActionV1, AidenUiExprV1, AidenUiFunctionName } from "./type
  * are no assignments, loops, arrow functions, or arithmetic beyond `+`.
  */
 
-const FUNCTIONS = new Set<AidenUiFunctionName>(["fmt", "len", "sum", "max", "min", "round", "filter", "sort"]);
+export const AIDEN_UI_FUNCTIONS: ReadonlySet<string> = new Set<AidenUiFunctionName>(["fmt", "len", "sum", "max", "min", "round", "filter", "sort"]);
+/** Binary operators the parser emits (`===` and `!==` become `==` and `!=`). */
+export const AIDEN_UI_BINARY_OPERATORS: ReadonlySet<string> = new Set(["||", "&&", "==", "!=", "<", "<=", ">", ">=", "+"]);
+/** What a `$name` or bare name may be. */
+export const AIDEN_UI_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const ACTIONS = new Set(["sendPrompt", "setState", "openUrl", "copy", "compose", "run"]);
 const MAX_SOURCE_CHARS = 16_384;
 
@@ -251,7 +255,7 @@ class Parser {
         if (token.value === "null") return { op: "lit", v: null };
         if (this.isPunct("(")) {
           if (ACTIONS.has(token.value)) throw new ExpressionError(`${token.value}() is only allowed as a whole action`);
-          if (!FUNCTIONS.has(token.value as AidenUiFunctionName)) {
+          if (!AIDEN_UI_FUNCTIONS.has(token.value as AidenUiFunctionName)) {
             throw new ExpressionError(`Unknown function ${token.value}()`);
           }
           this.index += 1;

@@ -359,6 +359,9 @@ export function committedRunInputNotice(reason: ChatRunInputRejectionReason | un
       return "Saved to the chat — the run was cancelled before it could use it";
     case "capacity":
       return "Saved to the chat — the run queue was full";
+    case "invalid":
+      // A UserPromptSubmit hook refused it; the chat shows the hook's reason.
+      return "Saved to the chat — it wasn't sent to the run";
     default:
       return "Saved to the chat — the run ended before it could use it";
   }

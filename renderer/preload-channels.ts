@@ -23,6 +23,7 @@ export const INVOKE_PREFIXES = [
   "exa:",
   "formFill:",
   "git:",
+  "hooks:",
   "imageGeneration:",
   "imageWorkflows:",
   "localModels:",
@@ -40,6 +41,7 @@ export const INVOKE_PREFIXES = [
   "settings:",
   "shortcut:",
   "skills:",
+  "storage:",
   "telegram:",
   "subagents:",
   "terminal:",
@@ -176,9 +178,13 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "terminal:exit",
   "telegram:model-selection-changed",
   "tts:event",
+  /** Settings → Storage's background scan started or finished: `{ kind }`. */
+  "storage:changed",
   /** The replies waiting for a usage limit changed: `UsageLimitsChangedEvent`. */
   "usageLimits:changed",
   "spending:changed",
+  /** Hooks, hook proposals, a hook run or an auto-disable changed: `HooksChangedEvent`. */
+  "hooks:changed",
   "voice:stream-text",
   "workspaces:changed",
   /** An agent tool may have changed files in this workspace's folder: `{ workspaceId }`. */
