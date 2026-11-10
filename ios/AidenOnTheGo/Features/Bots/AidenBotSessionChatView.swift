@@ -73,6 +73,10 @@ struct AidenBotSessionChatView: View {
     /// The machine the chat opened on, so moving the default leaves it there.
     @State private var openedOn: String
     private var machineID: String { openedOn }
+    /// This screen while it shows `openedOn`'s chat. A machine that revokes this
+    /// phone keeps its data until the screen goes, as a chat's does, so the
+    /// draft isn't purged from under the person.
+    @State private var onScreen = AidenBotChatOnScreen()
 
     /// The machine this chat belongs to.
     private var ownerConnection: AidenHostConnection? {
@@ -170,10 +174,12 @@ struct AidenBotSessionChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .aidenStopDictationForReadAloud)) { _ in
             composerSession.stopVoice()
         }
+        .onAppear { coordinator.setOnScreen(true, view: onScreen, instanceId: openedOn) }
         .onDisappear {
             attachmentPicker.reset()
             composerSession.stopVoice()
             composerSession.discardAttachments()
+            coordinator.setOnScreen(false, view: onScreen, instanceId: openedOn)
         }
         .background(palette.canvas.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -1909,6 +1915,9 @@ struct AidenBotBusyPill<ModeMenu: View>: View {
         .accessibilityHint("Touch and hold to choose Steer or Queue")
     }
 }
+
+/// Who the coordinator counts as showing a Bot chat's machine.
+private final class AidenBotChatOnScreen {}
 
 /// Where a Bot chat's tools go. Profile, Advanced, Files and Delete all read and
 /// write `machine`, the chat's own.

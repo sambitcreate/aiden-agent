@@ -6374,6 +6374,35 @@ extension AidenBotSessionTests {
         await assertSettles({ returned.text == "Finish this later" }, timeout: 15)
     }
 
+    /// A machine that revokes this phone while its Bot chat is open keeps its
+    /// data until the chat goes, as a chat's machine does: the words being
+    /// written aren't purged from under the person.
+    func testARevokedMachineWaitsForItsOpenBotChatToGo() async throws {
+        let (coordinator, _) = demoCoordinator()
+        let session = AidenComposerSession(voice: AidenComposerFakeVoice())
+        let (host, window) = try await showBot(session, coordinator: coordinator)
+        defer { close(window) }
+        let studio = try XCTUnwrap(coordinator.hosts.connection(for: "studio"))
+        let json = Data("""
+        {"error":{"code":"credential_revoked","message":"Pair this device again.",
+        "requestId":"request-revoked","retryable":false}}
+        """.utf8)
+        let body = try AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: json).error
+
+        let handled = await coordinator.handleCredentialRevocation(
+            AidenRemoteClientError.server(statusCode: 401, body: body),
+            context: try coordinator.ownerContext(for: "studio")
+        )
+        await settle()
+
+        XCTAssertTrue(handled)
+        XCTAssertTrue(studio.isPurgePending, "The open Bot chat holds the purge")
+        XCTAssertNotNil(coordinator.hosts.connection(for: "studio"))
+
+        host.showsBot = false
+        await assertSettles({ coordinator.hosts.connection(for: "studio") == nil }, "Leaving the chat ends the wait", timeout: 15)
+    }
+
     func testTheBotScreenShowsAWorkingMic() async throws {
         let (coordinator, _) = demoCoordinator()
         let voice = AidenComposerFakeVoice()
