@@ -1026,12 +1026,10 @@ final class AidenNewWorkTargetTests: XCTestCase {
     func testMovingTheDefaultLeavesAnOpenChatsToolsAlone() async throws {
         await connectAll()
         let before = AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: "studio")
-        let selected = AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: nil)
 
         coordinator.setDefaultMachine("laptop")
 
         XCTAssertEqual(AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: "studio"), before, "Read aloud keeps going")
-        XCTAssertNotEqual(AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: nil), selected, "The old shell's chat follows the selection")
     }
 
     func testAnOpenChatsToolsStopWhenItsOwnMachineChanges() async throws {

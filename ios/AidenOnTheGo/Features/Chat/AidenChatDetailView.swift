@@ -93,7 +93,7 @@ struct AidenChatDetailView: View {
     init(
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
-        owner: AidenRemoteRequestContext? = nil,
+        owner: AidenRemoteRequestContext,
         autoStartVoice: Bool = false,
         allowsMutations: Bool = true,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
@@ -103,11 +103,11 @@ struct AidenChatDetailView: View {
     ) {
         _coordinator = State(initialValue: coordinator)
         self.onOpenChat = onOpenChat
-        pinnedOwner = owner?.instanceId
+        pinnedOwner = owner.instanceId
         let model = AidenChatViewModel(
             coordinator: coordinator,
             chat: chat,
-            owner: Self.owner(owner, coordinator: coordinator),
+            owner: owner,
             allowsMutations: allowsMutations,
             onChatUpdated: onChatUpdated,
             onChatActivityChanged: onChatActivityChanged
@@ -117,18 +117,10 @@ struct AidenChatDetailView: View {
             initialValue: composerSession ?? AidenComposerSession(draftOwner: model, attachmentOwner: model)
         )
         _botToolsModel = State(initialValue: chat.botId.map {
-            AidenBotChatToolsModel(chatID: chat.id, botID: $0, machine: owner?.instanceId)
+            AidenBotChatToolsModel(chatID: chat.id, botID: $0, machine: owner.instanceId)
         })
         self.autoStartVoice = autoStartVoice
         self.allowsMutations = allowsMutations
-    }
-
-    /// The machine the chat was opened for, or else the selected one.
-    static func owner(
-        _ owner: AidenRemoteRequestContext?,
-        coordinator: AidenRemoteCoordinator
-    ) -> AidenRemoteRequestContext {
-        owner ?? (try? coordinator.ownerContext(for: coordinator.defaultInstanceId ?? "")) ?? .noMachine
     }
 
 #if DEBUG
@@ -150,7 +142,8 @@ struct AidenChatDetailView: View {
     }
 
     private var botToolsSessionIdentity: AidenBotChatToolsSessionIdentity? {
-        coordinator.map { AidenBotChatToolsSessionIdentity(coordinator: $0, owner: pinnedOwner) }
+        guard let coordinator, let pinnedOwner else { return nil }
+        return AidenBotChatToolsSessionIdentity(coordinator: coordinator, owner: pinnedOwner)
     }
 
     private var botPrimarySupportsImages: Bool? {

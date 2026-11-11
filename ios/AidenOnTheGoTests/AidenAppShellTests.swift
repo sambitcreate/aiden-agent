@@ -422,13 +422,25 @@ final class AidenAppShellTests: XCTestCase {
         guard case .unavailable = model.state else { return XCTFail("\(model.state)") }
     }
 
-    func testAPushedChatKeepsTheOwnerItWasGiven() async throws {
-        let coordinator = AidenDemoHosts.coordinator(.four, responder: AidenDemoResponder())
+    /// A Bot's legacy chat route runs its chat on the Bot's own machine. Once
+    /// that machine is revoked there is no owner, and the route says the machine
+    /// is gone: it never falls back to the default machine's context.
+    func testABotChatRouteHasNoOwnerOnceItsMachineIsRevoked() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.four, responder: responder)
         await coordinator.start()
-        let laptop = try coordinator.ownerContext(for: "laptop")
+        let laptop = try XCTUnwrap(coordinator.hosts.connection(for: "laptop"))
+        let id = AidenHostObjectID(instanceId: "laptop", deviceId: laptop.installation.deviceId, objectId: "bot_demo")
+        XCTAssertNotEqual(coordinator.defaultInstanceId, "laptop")
 
-        XCTAssertEqual(AidenChatDetailView.owner(laptop, coordinator: coordinator), laptop)
-        XCTAssertEqual(AidenChatDetailView.owner(nil, coordinator: coordinator).instanceId, "studio")
+        XCTAssertEqual(AidenBotRouteModel.chatOwner(for: id, coordinator: coordinator)?.instanceId, "laptop")
+
+        laptop.markRevoked()
+        XCTAssertNil(
+            AidenBotRouteModel.chatOwner(for: id, coordinator: coordinator),
+            "A revoked machine's chat has no owner, not the default machine's"
+        )
+        XCTAssertEqual(AidenBotRouteModel.machineGoneMessage, "This machine is no longer paired. Pair it again to open this Bot.")
     }
 
     func testABotChatOnAChatRouteAsksForItsBotRoute() async throws {

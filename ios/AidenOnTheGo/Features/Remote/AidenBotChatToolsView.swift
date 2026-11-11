@@ -20,9 +20,10 @@ struct AidenBotChatToolsSessionIdentity: Equatable {
     let capabilities: String
 
     /// `owner` is the machine an open chat stays on, so the default moving leaves
-    /// this alone. Nil follows the selected machine.
+    /// this alone. There is no "selected machine" form: a chat whose machine is
+    /// gone reads that machine's absence, never another machine's state.
     @MainActor
-    init(coordinator: AidenRemoteCoordinator, owner: String? = nil) {
+    init(coordinator: AidenRemoteCoordinator, owner: String) {
         let installation = coordinator.botInstallation(on: owner)
         instanceID = installation?.id
         deviceID = installation?.deviceId

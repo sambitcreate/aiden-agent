@@ -192,6 +192,12 @@ final class AidenBotRouteModel {
         return connection
     }
 
+    /// The context a legacy chat route's chat runs on: its own machine's, or nil
+    /// once that machine is revoked or paired again. Never the default machine's.
+    static func chatOwner(for id: AidenHostObjectID, coordinator: AidenRemoteCoordinator) -> AidenRemoteRequestContext? {
+        try? connection(for: id, coordinator: coordinator)?.requestContext(scope: .owner)
+    }
+
     static let machineGoneMessage = String(localized: "This machine is no longer paired. Pair it again to open this Bot.")
 
     func accept(_ chat: AidenChat) {
@@ -380,14 +386,25 @@ struct AidenBotRouteView: View {
                 )
                 .id("\(model.id.instanceId)-\(model.id.objectId)")
             case .chat(let chat, let allowsMutations):
-                AidenChatDetailView(
-                    coordinator: coordinator,
-                    chat: chat,
-                    owner: try? connection?.requestContext(scope: .owner),
-                    allowsMutations: allowsMutations,
-                    onChatUpdated: { model.accept($0) }
-                )
-                .id("\(model.id.instanceId)-\(chat.id)")
+                // The chat's own machine, or nothing: once it is revoked the chat
+                // says so instead of falling back to the default machine.
+                if let owner = AidenBotRouteModel.chatOwner(for: model.id, coordinator: coordinator) {
+                    AidenChatDetailView(
+                        coordinator: coordinator,
+                        chat: chat,
+                        owner: owner,
+                        allowsMutations: allowsMutations,
+                        onChatUpdated: { model.accept($0) }
+                    )
+                    .id("\(model.id.instanceId)-\(chat.id)")
+                } else {
+                    ContentUnavailableView(
+                        "Bot unavailable",
+                        systemImage: "exclamationmark.bubble",
+                        description: Text(AidenBotRouteModel.machineGoneMessage)
+                    )
+                    .background(palette.canvas.ignoresSafeArea())
+                }
             case .noChat(let name, let canStart):
                 ContentUnavailableView {
                     Label("No chat yet", systemImage: "bubble.left.and.bubble.right")

@@ -1128,7 +1128,7 @@ private struct AidenChatDetailHostView: View {
     var body: some View {
         NavigationStack {
             if host.showsChat {
-                AidenChatDetailView(coordinator: coordinator, chat: chat, composerSession: host.session)
+                AidenChatDetailView(coordinator: coordinator, chat: chat, owner: .noMachine, composerSession: host.session)
             } else {
                 Text("Chats")
             }
